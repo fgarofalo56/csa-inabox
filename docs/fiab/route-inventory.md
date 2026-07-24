@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1638 |
+| Total routes | 1643 |
 | Public (no session) | 116 |
 | Session-only | 575 |
-| Owner-scoped | 679 |
-| Admin | 268 |
+| Owner-scoped | 680 |
+| Admin | 272 |
 | Gated (backend config) | 528 |
 | Areas | 117 |
 
@@ -112,6 +112,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/capacity/guardrails/route.ts` | GET PUT | admin |  | — |
 | `admin/capacity/utilization/route.ts` | POST | admin |  | Azure Monitor |
 | `admin/capacity/viz-config/route.ts` | GET | admin |  | — |
+| `admin/chaos/dependency/route.ts` | GET POST | admin |  | — |
 | `admin/chargeback/attribution/route.ts` | GET | admin |  | — |
 | `admin/chargeback/route.ts` | GET | admin |  | Azure Monitor, Cosmos |
 | `admin/chargeback/workspaces/route.ts` | GET | admin |  | Azure Monitor |
@@ -966,6 +967,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/canvas-presence/route.ts` | GET POST DELETE | owner-scoped |  | — |
 | `items/[type]/[id]/canvas-suggest/route.ts` | POST | owner-scoped | ● | — |
 | `items/[type]/[id]/classifications/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
+| `items/[type]/[id]/collab/stream/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/comments/route.ts` | GET POST PATCH DELETE | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/endorsement/route.ts` | GET PATCH | admin |  | — |
 | `items/[type]/[id]/explain/route.ts` | POST | session-only | ● | — |
@@ -2231,8 +2233,11 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `workspaces/[id]/agent-config/route.ts` | GET PUT | owner-scoped |  | — |
+| `workspaces/[id]/clone/route.ts` | POST | admin |  | Cosmos |
+| `workspaces/[id]/export/route.ts` | GET | admin |  | — |
 | `workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | Cosmos |
 | `workspaces/[id]/image/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
+| `workspaces/[id]/import/route.ts` | POST | admin |  | Cosmos |
 | `workspaces/[id]/items/[itemId]/route.ts` | PATCH DELETE | owner-scoped |  | Cosmos |
 | `workspaces/[id]/items/route.ts` | GET POST | admin |  | Cosmos |
 | `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
