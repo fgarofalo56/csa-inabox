@@ -109,6 +109,17 @@ param purviewEnabled = false              // Atlas on AKS instead
 param atlasOnAksEnabled = true
 param storageRequireCmk = true            // IL5 mandated
 param keyVaultHsmIsolated = true          // IL5 mandated
+// CMK1 — Cosmos CMK-at-rest is likewise IL5-MANDATED, and rides the drConfig
+// bag (256-param cap: never a new top-level param). It needs two estate-
+// specific values that only exist once the IL5 Key Vault + UAMI are
+// provisioned, so it cannot be hard-coded here — at deploy time pass:
+//   drConfig={cosmosRequireCmk:true,
+//             cosmosCmkKeyUri:'<VERSIONLESS https://<vault>.vault.usgovcloudapi.net/keys/<key>>',
+//             cosmosCmkIdentityId:'<UAMI resource id w/ Key Vault Crypto Service Encryption User>'}
+// (az deployment sub create … -p il5.bicepparam -p drConfig=@drconfig.json).
+// Applies to the hub Console store + every DLZ state/graph/vector account; the
+// svc-dr-restore-posture audit row then asserts it via live ARM
+// (LOOM_COSMOS_REQUIRE_CMK=true).
 
 // OpenAI (Gov endpoints + region constraints)
 param openaiLocation = 'usgovvirginia'

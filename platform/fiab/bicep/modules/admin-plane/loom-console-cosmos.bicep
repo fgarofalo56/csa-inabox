@@ -53,12 +53,45 @@ param defaultConsistency string = 'Session'
 @allowed(['Continuous7Days', 'Continuous30Days'])
 param cosmosBackupTier string = 'Continuous30Days'
 
+// ── CMK1 — customer-managed-key at-rest encryption (opt-in; IL5 mandate) ──
+// Mirrors landing-zone/storage.bicep (requireCmk/cmkKeyUri/cmkIdentityId) and
+// landing-zone/cosmos.bicep. Learn-grounded (verified 2026-07-24,
+// cosmos-db/how-to-setup-customer-managed-keys):
+//   - keyVaultKeyUri MUST be VERSIONLESS at account create (no key version, no
+//     trailing slash) — rotation auto-tracks the latest enabled version, so
+//     there is deliberately NO cmkKeyVersion param (unlike storage.bicep).
+//   - This account runs Continuous (PITR) backup, which does NOT support the
+//     Cosmos first-party identity for CMK — a user-assigned managed identity
+//     must be the account's defaultIdentity (…#use-customer-managed-keys-with-
+//     continuous-backup), hence the identity + defaultIdentity shape below.
+//   - Enabling CMK on an EXISTING account is a supported hot update
+//     (how-to-setup-customer-managed-keys-existing-accounts): add the UAMI +
+//     set defaultIdentity first, THEN set --key-uri; document ids must be
+//     ≤990 bytes before migration. Rides drConfig.cosmosRequireCmk /
+//     cosmosCmkKeyUri / cosmosCmkIdentityId from the orchestrator (R0 bag —
+//     admin-plane/main.bicep is param-cap ratcheted).
+@description('Require CMK at-rest on the Console Loom-store Cosmos account (CMK1). Default OFF = service-managed keys, unchanged. Requires cmkKeyUri + cmkIdentityId.')
+param requireCmk bool = false
+
+@description('VERSIONLESS Key Vault key URI (https://<vault>.vault.azure.<suffix>/keys/<key> — no key version, no trailing slash). Required when requireCmk.')
+param cmkKeyUri string = ''
+
+@description('RESOURCE ID of the user-assigned managed identity holding "Key Vault Crypto Service Encryption User" on the key vault. Required when requireCmk (continuous-backup accounts must use a managed identity as defaultIdentity for CMK).')
+param cmkIdentityId string = ''
+
 resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: accountName
   location: location
   tags: complianceTags
   kind: 'GlobalDocumentDB'
-  identity: { type: 'SystemAssigned' }
+  // CMK1 — the UAMI must be assigned at create so it can serve as
+  // defaultIdentity for Key Vault access (system-assigned stays on).
+  identity: requireCmk ? {
+    type: 'SystemAssigned,UserAssigned'
+    userAssignedIdentities: {
+      '${cmkIdentityId}': {}
+    }
+  } : { type: 'SystemAssigned' }
   properties: {
     databaseAccountOfferType: 'Standard'
     // SERVERLESS — the Console BFF lazily createIfNotExists()'s well over 25
@@ -85,6 +118,14 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
       continuousModeProperties: { tier: cosmosBackupTier }
     }
     minimalTlsVersion: 'Tls12'
+    // CMK1 — CMK-at-rest (null = service-managed keys, the default). The key
+    // URI is VERSIONLESS (auto-rotate); defaultIdentity is the UAMI because
+    // continuous-backup accounts do not support the first-party identity for
+    // CMK (see the param-block Learn notes). The DR-posture audit row
+    // (svc-dr-restore-posture / probe-dr-restore-posture) live-ARM-verifies
+    // this via properties.keyVaultKeyUri when LOOM_COSMOS_REQUIRE_CMK=true.
+    keyVaultKeyUri: requireCmk ? cmkKeyUri : null
+    defaultIdentity: requireCmk ? 'UserAssignedIdentity=${cmkIdentityId}' : null
   }
 }
 

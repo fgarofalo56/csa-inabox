@@ -38,6 +38,36 @@ param complianceTags object
 @allowed(['Strong', 'BoundedStaleness', 'Session', 'ConsistentPrefix', 'Eventual'])
 param defaultConsistency string = 'Session'
 
+// ── CMK1 — customer-managed-key at-rest encryption (opt-in; IL5 mandate) ──
+// Mirrors landing-zone/storage.bicep (requireCmk/cmkKeyUri/cmkIdentityId).
+// Learn-grounded (verified 2026-07-24, cosmos-db/how-to-setup-customer-managed-keys):
+//   - keyVaultKeyUri MUST be VERSIONLESS at account create ("The key itself must
+//     be passed with no versions and no trailing backslashes") — rotation then
+//     auto-tracks the latest enabled key version, so there is deliberately NO
+//     cmkKeyVersion param here (unlike storage.bicep, whose ARM schema has a
+//     separate keyversion field).
+//   - This account runs Continuous (PITR) backup, and "to use continuous
+//     backups on an account where customer-managed keys are enabled, you must
+//     use a system-assigned or user-assigned managed identity" — the first-party
+//     identity is NOT supported, and "currently, only user-assigned managed
+//     identity is supported for CREATING continuous backup accounts" with CMK.
+//     Hence defaultIdentity = the UAMI below.
+//   - Enabling CMK on an EXISTING account is a supported hot update
+//     (how-to-setup-customer-managed-keys-existing-accounts): for a
+//     continuous-backup account, first add the UAMI + set it as defaultIdentity
+//     (az cosmosdb update --default-identity UserAssignedIdentity=<id>), THEN
+//     set the key (az cosmosdb update --key-uri <versionless-uri>). Flipping
+//     requireCmk=true on an already-provisioned estate follows that same
+//     two-step ARM path; document-id ≤990 bytes is a migration prerequisite.
+@description('Require CMK at-rest on this Cosmos account (CMK1). Default OFF = service-managed keys, unchanged. Requires cmkKeyUri + cmkIdentityId.')
+param requireCmk bool = false
+
+@description('VERSIONLESS Key Vault key URI (https://<vault>.vault.azure.<suffix>/keys/<key> — no key version, no trailing slash). Required when requireCmk.')
+param cmkKeyUri string = ''
+
+@description('RESOURCE ID of the user-assigned managed identity holding "Key Vault Crypto Service Encryption User" on the key vault. Required when requireCmk (continuous-backup accounts must use a managed identity as defaultIdentity for CMK).')
+param cmkIdentityId string = ''
+
 // NOTE: a former `zoneRedundant` param was removed — this account runs in
 // Serverless capacity mode, which mandates a single (non-zone-redundant) write
 // region, so the option no longer applies. No caller passed it.
@@ -53,7 +83,15 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   location: location
   tags: complianceTags
   kind: 'GlobalDocumentDB'
-  identity: { type: 'SystemAssigned' }
+  // CMK1 — the UAMI must be assigned at create so it can serve as
+  // defaultIdentity for Key Vault access (system-assigned stays on for the
+  // non-CMK consumers of this account's identity).
+  identity: requireCmk ? {
+    type: 'SystemAssigned,UserAssigned'
+    userAssignedIdentities: {
+      '${cmkIdentityId}': {}
+    }
+  } : { type: 'SystemAssigned' }
   properties: {
     databaseAccountOfferType: 'Standard'
     // SERVERLESS — this account hosts the Console's `loom` database, whose
@@ -82,6 +120,12 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
       continuousModeProperties: { tier: 'Continuous7Days' }
     }
     minimalTlsVersion: 'Tls12'
+    // CMK1 — CMK-at-rest (null = service-managed keys, the default). The key
+    // URI is VERSIONLESS (auto-rotate); defaultIdentity is the UAMI because
+    // continuous-backup accounts do not support the first-party identity for
+    // CMK (see the param-block Learn notes).
+    keyVaultKeyUri: requireCmk ? cmkKeyUri : null
+    defaultIdentity: requireCmk ? 'UserAssignedIdentity=${cmkIdentityId}' : null
   }
 }
 
