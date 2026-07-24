@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1618 |
+| Total routes | 1623 |
 | Public (no session) | 116 |
 | Session-only | 574 |
-| Owner-scoped | 668 |
+| Owner-scoped | 673 |
 | Admin | 260 |
 | Gated (backend config) | 524 |
-| Areas | 110 |
+| Areas | 111 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -747,6 +747,13 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `duckdb/capabilities/route.ts` | GET | owner-scoped |  | — |
 | `duckdb/query/route.ts` | POST | owner-scoped |  | — |
 
+## embed
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `embed/query/route.ts` | POST | owner-scoped |  | — |
+| `embed/token/route.ts` | POST | owner-scoped |  | Cosmos |
+
 ## estate
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -1099,6 +1106,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/batch-pool/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/batch-pool/tasks/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/by-type/route.ts` | GET | admin |  | Cosmos |
+| `items/code-report/[id]/content/route.ts` | GET PUT | owner-scoped |  | — |
+| `items/code-report/[id]/render/route.ts` | POST | owner-scoped |  | Cosmos |
+| `items/code-report/validate/route.ts` | POST | owner-scoped |  | — |
 | `items/compute/[id]/route.ts` | GET DELETE | session-only |  | — |
 | `items/compute/[id]/start/route.ts` | POST | session-only |  | — |
 | `items/compute/[id]/stop/route.ts` | POST | session-only |  | — |

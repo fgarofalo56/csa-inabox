@@ -327,12 +327,28 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'POST /api/metrics/query + report metric wells + Copilot metric grounding',
   },
   {
+    id: 'n18-embedded-analytics',
+    label: 'Embedded analytics SDK (embed tokens + RLS)',
+    description:
+      'The N18 Fabric-free embedded-analytics story: POST /api/embed/token mints short-lived HMAC-signed embed tokens carrying an effective identity + row-level-security claims, and POST /api/embed/query serves a governed metric to the <loom-report> web component / @csa-loom/embed React wrapper with RLS enforced at QUERY TIME via the N15 metric compiler (a bound WHERE predicate keyed on the token identity — engine-level, never client-side row hiding). OFF makes BOTH endpoints return a guided "turned off" gate on the very next call (no roll) — already-issued tokens stop resolving; the N15 metrics layer, the report designer, and Copilot grounding are unaffected. No Power BI Embedded, no Fabric F-SKU either way — identical on every cloud (this IS the Gov embed story).',
+    ownerItem: 'N18',
+    surface: 'POST /api/embed/token + POST /api/embed/query + <loom-report> / @csa-loom/embed',
+  },
+  {
     id: 'n7d-data-quality-diff',
     label: 'Data-quality depth — runner checks + data-diff',
     description:
       'The N7d surfaces on the data-quality editor: the "Runner checks" tab (rule-builder checks executed on the N4 transform runner with anomaly baselines) and the "Data diff" tab (Delta-version / cross-env row+column diff computed through the N2 DuckDB engine). OFF hides both tabs on the next render — the existing ADX/Databricks/Synapse rule-run tabs, the /api/items/data-quality/** routes, already-emitted findings, and N17\'s incident console are all unaffected. Use it to withdraw the depth surfaces without redeploying.',
     ownerItem: 'N7d',
     surface: 'Data-quality editor → Runner checks + Data diff tabs',
+  },
+  {
+    id: 'n16-code-report',
+    label: 'Code report (BI-as-code item type)',
+    description:
+      'The N16 `code-report` item type: a dashboard authored as ONE versionable Markdown + SQL document (fenced `sql` / `sql loom` query blocks + `{visual}` directives), rendered on real Synapse-serverless / ADX backends with governed-metric blocks resolving through the N15 metrics layer. OFF makes the render + validate endpoints (POST /api/items/code-report/[id]/render, POST /api/items/code-report/validate) return a guided "turned off" gate on the next call — the editor still opens and saves source, and every already-created report and other surface is unaffected. No roll needed.',
+    ownerItem: 'N16',
+    surface: 'Code report editor (preview) + POST /api/items/code-report/[id]/render + …/validate',
   },
 ];
 

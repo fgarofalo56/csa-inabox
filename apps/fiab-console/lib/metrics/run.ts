@@ -45,6 +45,13 @@ export interface GovernedMetricRequest {
   metric: string;
   dimensions?: string[];
   filters?: MetricFilter[];
+  /**
+   * Row-level-security predicates keyed on an embed-token effective identity
+   * (N18). ANDed into the compiled WHERE at the engine BEFORE `filters`, and
+   * folded into the cache key so two identities never share a cached result.
+   * Undefined/empty for a normal owner-scoped query (report / NL / API caller).
+   */
+  rls?: MetricFilter[];
   grain?: string;
   engine?: MetricEngine;
 }
@@ -122,6 +129,7 @@ export async function runGovernedMetricQuery(
       metric,
       dimensions: req.dimensions,
       filters: req.filters,
+      rls: req.rls,
       grain: req.grain,
       engine,
     });
@@ -149,6 +157,13 @@ export async function runGovernedMetricQuery(
     metric,
     dimensions: req.dimensions ?? [],
     filters: req.filters ?? [],
+    // RLS MUST be in the key: for the T-SQL engines the SQL text is identical
+    // across identities (values bind as @p params), so keying on `sql` alone
+    // would let identity A serve identity B's cached rows. Fold in both the RLS
+    // predicates and the bound params so every distinct identity gets its own
+    // cache slot.
+    rls: req.rls ?? [],
+    params: compiled.params,
     grain: req.grain ?? null,
     engine,
     sql: compiled.sql,
@@ -193,7 +208,16 @@ export async function runGovernedMetricQuery(
     );
 
     // Audited data-access row (best-effort — never blocks the read).
-    void writeMetricAudit(actor, { metric, engine, dimensions: req.dimensions ?? [], rowCount: value.rowCount, cached: meta.hit });
+    void writeMetricAudit(actor, {
+      metric,
+      engine,
+      dimensions: req.dimensions ?? [],
+      rowCount: value.rowCount,
+      cached: meta.hit,
+      // Provenance: how many RLS predicates the token identity applied (0 for a
+      // normal owner-scoped query). `actor.who` carries the embed identity.
+      rlsPredicates: req.rls?.length ?? 0,
+    });
 
     return { ok: true, result: { ...value, cached: meta.hit } };
   } catch (e) {
@@ -221,7 +245,7 @@ export async function runGovernedMetricQuery(
 /** Authoritative data-access audit row + SIEM fan-out (best-effort, non-blocking). */
 async function writeMetricAudit(
   actor: MetricActor,
-  detail: { metric: string; engine: string; dimensions: string[]; rowCount: number; cached: boolean },
+  detail: { metric: string; engine: string; dimensions: string[]; rowCount: number; cached: boolean; rlsPredicates?: number },
 ): Promise<void> {
   const at = new Date().toISOString();
   // SIEM fan-out fires SYNCHRONOUSLY first — it must run even if writeMetricAudit
