@@ -26,6 +26,7 @@
 import { ClientSecretCredential, type TokenCredential } from '@azure/identity';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { getEnvironment, dataverseConfigGate } from '@/lib/azure/powerplatform-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const DATAVERSE_API = 'v9.2';
 
@@ -57,7 +58,9 @@ export function formatKeyValue(value: unknown): string {
   if (typeof value === 'boolean') return String(value);
   // String (and everything else) — single-quote and URL-encode, doubling any
   // embedded single quote per OData literal rules.
-  const s = String(value).replace(/'/g, "''");
+  // OData $filter single-quote doubling is byte-identical to the SQL rule, so
+  // reuse the central escaper (sql-quoting guard RULE A forbids inline copies).
+  const s = escapeSqlLiteral(String(value));
   return `'${encodeURIComponent(s)}'`;
 }
 

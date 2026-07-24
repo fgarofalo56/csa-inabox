@@ -114,7 +114,7 @@ export async function executeActivationRun(
     runs: nextRuns,
     ...(typeof outcome.lastSyncedVersion === 'number' ? { lastSyncedVersion: outcome.lastSyncedVersion } : {}),
   };
-  await updateOwnedItem(itemId, ACTIVATION_ITEM_TYPE, session.claims.oid, { state: nextSpec as Record<string, unknown> });
+  await updateOwnedItem(itemId, ACTIVATION_ITEM_TYPE, session.claims.oid, { state: nextSpec as unknown as Record<string, unknown> });
 
   await writeAudit(session, item.workspaceId, itemId, run).catch(() => { /* audit is best-effort */ });
 

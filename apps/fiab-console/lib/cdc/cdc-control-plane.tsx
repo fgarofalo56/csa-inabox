@@ -43,7 +43,9 @@ const useStyles = makeStyles({
     textAlign: 'left', border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer',
   },
-  connBtnActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
+  // full `border` shorthand (not `borderColor` longhand) — griffel/makeStyles forbids
+  // mixing the shorthand used in `connBtn` with a longhand override in the same call.
+  connBtnActive: { border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
   tableWrap: { overflowX: 'auto', border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
   kpiRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   kpi: {

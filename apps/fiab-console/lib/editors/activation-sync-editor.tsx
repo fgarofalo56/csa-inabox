@@ -486,7 +486,7 @@ export function ActivationSyncEditor({ item, id }: { item: FabricItemType; id: s
   useEffect(() => {
     if (cosmosItem?.state) {
       const s = cosmosItem.state as ActivationSyncSpec;
-      setDraft({ mapping: [], mode: 'full', ...s, runs: s.runs || [] });
+      setDraft({ ...s, mapping: s.mapping ?? [], mode: s.mode ?? 'full', runs: s.runs || [] });
       setRuns(s.runs || []);
     }
   }, [cosmosItem]);

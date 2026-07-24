@@ -30,6 +30,7 @@
  * disconnected path, so checks run fully in an air-gapped enclave.
  */
 
+import { bracket } from '@/lib/sql/quoting';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import type { GeneratedFile } from '@/lib/transform/transform-codegen';
 import { generateTransformProject } from '@/lib/transform/transform-codegen';
@@ -96,7 +97,7 @@ function quoteIdentFor(dialect: CheckDialect, name: string): string {
   const s = assertIdent(name, 'identifier');
   if (dialect === 'spark') return '`' + s.replace(/`/g, '``') + '`';
   if (dialect === 'duckdb') return `"${s.replace(/"/g, '""')}"`;
-  return `[${s.replace(/]/g, ']]')}]`; // tsql
+  return bracket(s); // tsql — central `[...]` identifier quoting (sql-quoting guard RULE B)
 }
 
 /** dbt singular-test file basename → the check id (the parse join key). */

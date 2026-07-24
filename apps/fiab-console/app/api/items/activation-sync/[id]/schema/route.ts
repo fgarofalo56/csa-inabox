@@ -8,9 +8,8 @@
  * a freeform text box. Owner-scoped; honest gates when a backend is unset.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { jerr, loadOwnedItem } from '../../../_lib/item-crud';
+import { NextResponse } from 'next/server';
+import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
 import { duckdbQueryJson, isDuckDbConfigured, buildLakeScanSql } from '@/lib/azure/duckdb-client';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { getTableSchema, dataverseConfigGate } from '@/lib/azure/powerplatform-client';
@@ -18,15 +17,9 @@ import { getTableSchema, dataverseConfigGate } from '@/lib/azure/powerplatform-c
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ITEM_TYPE = 'activation-sync';
-
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const { id } = await ctx.params;
-  const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid, { allowReadRoles: true });
-  if (!item) return jerr('not found', 404);
-
+// Read-only schema fetch for the mapping dropdowns → allowReadRoles so a shared
+// Viewer can populate the pickers; withWorkspaceOwner 404s a non-member.
+export const GET = withWorkspaceOwner('activation-sync', { allowReadRoles: true }, async (req) => {
   const url = new URL(req.url);
   const container = url.searchParams.get('container')?.trim();
   const path = url.searchParams.get('path')?.trim();
@@ -77,4 +70,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 
   return NextResponse.json(out);
-}
+});

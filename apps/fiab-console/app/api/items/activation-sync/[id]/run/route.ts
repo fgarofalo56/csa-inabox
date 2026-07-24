@@ -12,9 +12,9 @@
  * lake read runs on the in-boundary DuckDB tier (honest 503 gate when unset).
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { jerr, loadOwnedItem } from '../../../_lib/item-crud';
+import { NextResponse } from 'next/server';
+import { jerr } from '../../../_lib/item-crud';
+import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
 import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import { executeActivationRun } from '@/lib/activation/run-service';
 import type { ActivationMode } from '@/lib/activation/types';
@@ -22,20 +22,14 @@ import type { ActivationMode } from '@/lib/activation/types';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-
+// withWorkspaceOwner does the owner-scoped load (404 if not owned) at the boundary;
+// the run service re-resolves ownership too. `id` comes from the resolved params.
+export const POST = withWorkspaceOwner('activation-sync', async (req, { session, params }) => {
   if (!(await runtimeFlag('n7c-activation-sync', { default: true }))) {
     return jerr('Activation sync is disabled by the n7c-activation-sync runtime flag (Admin → Runtime flags).', 403);
   }
 
-  const { id } = await ctx.params;
-  // Owner-scoped authorization (write-scoped) BEFORE any work — the run service
-  // re-resolves ownership too, but the guard belongs at the route boundary.
-  const owned = await loadOwnedItem(id, 'activation-sync', session.claims.oid);
-  if (!owned) return jerr('not found', 404);
-
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
   const mode: ActivationMode = body?.mode === 'incremental' ? 'incremental' : 'full';
 
@@ -51,4 +45,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return jerr(e?.message || String(e), 502);
   }
-}
+});

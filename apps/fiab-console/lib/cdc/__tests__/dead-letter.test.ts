@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Replace the native-backed ADLS client BEFORE importing the reader so vitest
 // never loads the azure SDK chain.
-const listPaths = vi.fn();
-const downloadFile = vi.fn();
+// vi.hoisted: vi.mock is hoisted above const declarations, so the mock fns must be
+// declared in a hoisted block or the factory hits "Cannot access before initialization".
+const { listPaths, downloadFile } = vi.hoisted(() => ({ listPaths: vi.fn(), downloadFile: vi.fn() }));
 vi.mock('@/lib/azure/adls-client', () => ({ listPaths, downloadFile }));
 
 import { readDeadLetter, toRelativePrefix } from '../dead-letter';
