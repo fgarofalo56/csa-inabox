@@ -29,7 +29,7 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Stop20Regular, MathFormula20Regular, Flowchart20Regular,
   DataBarVertical20Regular, ArrowImport20Regular, Eye20Regular, Form20Regular,
-  History20Regular, MoreHorizontal20Regular, Copy20Regular,
+  History20Regular, MoreHorizontal20Regular, Copy20Regular, PlugConnected20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from '../components/model-view-canvas';
 import { EditorResultsSplit } from '../components/editor-results-split';
@@ -64,7 +64,13 @@ import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { QueryParamsBar, substituteSynapse, type QueryParam } from '../components/query-params';
 import { ResultVisualize } from '../components/result-visualize';
 import { SqlMigrationWizard } from '../sql-migration-wizard';
+// N3 — the shared Connect tab (ADBC / Arrow Flight SQL / JDBC).
+import { ConnectTab } from '@/lib/components/shared/connect-tab';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { useStyles } from './styles';
+
+/** Warehouse editor tab ids (N3 adds 'connect'). */
+type WarehouseEditorTab = 'query' | 'model' | 'monitoring' | 'migrate' | 'time-travel' | 'connect';
 
 interface WHQueryResult {
   ok: boolean;
@@ -171,7 +177,14 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // Fabric/Power BI model view (table cards + relationship lines + measures),
   // with NO Power BI dependency. Monitoring shows the query-load chart + recent
   // requests on real sys.dm_pdw_exec_requests via the dedicated pool.
-  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'migrate' | 'time-travel'>('query');
+  const [editorTab, setEditorTab] = useState<WarehouseEditorTab>('query');
+  // FLAG0 (n3-connect-tab) — default-ON kill switch for the N3 Connect tab
+  // (ADBC / Arrow Flight SQL / JDBC snippets + short-lived ticket minting).
+  const connectTabOn = useRuntimeFlag('n3-connect-tab');
+  useEffect(() => {
+    // Flipped OFF while the tab was open: fall back to Query so the pane is never blank.
+    if (!connectTabOn && editorTab === 'connect') setEditorTab('query');
+  }, [connectTabOn, editorTab]);
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
@@ -665,12 +678,13 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'migrate' | 'time-travel')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as WarehouseEditorTab)}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
             <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
             <Tab value="time-travel" icon={<History20Regular />}>Time travel</Tab>
             <Tab value="migrate" icon={<ArrowImport20Regular />}>Migrate</Tab>
+            {connectTabOn && <Tab value="connect" icon={<PlugConnected20Regular />}>Connect</Tab>}
           </TabList>
           {/* SC-6 — teaching banner: real backend + how the tabs relate. */}
           <TeachingBanner
@@ -681,6 +695,11 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             learnMoreHref={loomDocUrl('fiab/parity/warehouse')}
           />
           {editorTab === 'migrate' && <SqlMigrationWizard />}
+          {/* N3 — Connect: ADBC / Arrow Flight SQL / JDBC access to the same
+              Arrow batches the engine produced, behind a short-lived ticket. */}
+          {editorTab === 'connect' && connectTabOn && (
+            <ConnectTab surface="this warehouse" itemId={id} sampleSql={sqlText} />
+          )}
           {editorTab === 'time-travel' && (
             isNew
               ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Clone, time travel, restore points, COPY INTO, and snapshots activate once the warehouse item is saved.</MessageBarBody></MessageBar>

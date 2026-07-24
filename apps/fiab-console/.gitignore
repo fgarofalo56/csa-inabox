@@ -1,6 +1,9 @@
 
 # Monaco assets copied at build time by scripts/copy-monaco-assets.mjs
 public/monaco/
+# duckdb-wasm engine assets copied at build time by scripts/copy-duckdb-assets.mjs
+# (self-hosted so the in-browser query tier never reaches a CDN — N2a)
+public/duckdb/
 .auth/
 # Patterns in this nested .gitignore are relative to apps/fiab-console/,
 # so the path must be relative (not repo-rooted) to actually match.

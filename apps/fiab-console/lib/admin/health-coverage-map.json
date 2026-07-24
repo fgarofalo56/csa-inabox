@@ -580,6 +580,8 @@
       ]
     },
     "iceberg-catalog-client": { "checks": ["svc-iceberg-catalog"] },
+    "duckdb-client": { "checks": ["svc-loom-duckdb"] },
+    "flight-sql-client": { "checks": ["svc-flight-sql"] },
     "loom-onelake-client": {
       "checks": [
         "svc-loom-onelake"

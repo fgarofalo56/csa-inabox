@@ -43,6 +43,38 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-directlake + shared Redis) + modules/compute/loom-directlake-app.bicep (out-of-band) → LOOM_DIRECTLAKE_URL on the Console app',
     role: 'Storage Blob Data Reader (uami-loom-directlake) on the DLZ lake; Redis Data Contributor on the shared cache (wired by hband-shared.bicep)',
   },
+  // ── N2b — DuckDB serving tier (the interactive fast path BELOW Spark) ──
+  {
+    id: 'svc-loom-duckdb', category: 'data-plane', title: 'SQL Lab serving tier (embedded DuckDB Container App)', severity: 'optional',
+    required: ['LOOM_DUCKDB_URL'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail:
+      'SQL Lab is fully functional unset: the identical statement executes on Synapse Serverless and the status bar names the engine that answered. Deploying the DuckDB tier changes latency (sub-second cold start instead of a Serverless round-trip) and unlocks the Arrow transport that the in-browser Local analysis tab reuses — it never changes results.',
+    remediation:
+      'Set LOOM_DUCKDB_URL to the internal-ingress FQDN of the loom-duckdb Container App (embedded DuckDB with the azure/httpfs/delta/iceberg extensions, reading Delta/Iceberg/Parquet in place on the DLZ lake through its own managed identity). Deploy platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep, then set the var on the Console app. Optional knobs: LOOM_DUCKDB_MAX_ROWS (per-response row cap, default 200000) and LOOM_FLIGHT_ROW_THRESHOLD (rows past which Loom grids switch to the Arrow transport, default 5000). The tier is NEVER public — every query goes through the audited BFF at /api/duckdb/query.',
+    docs: 'https://duckdb.org/docs/stable/core_extensions/delta',
+    provisionedBy: 'modules/data-plane/duckdb-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_DUCKDB_URL on the Console app',
+    role: 'Storage Blob Data Reader (uami-loom-duckdb) on the DLZ lake — declared in the module. The engine is read-only by construction; the Console UAMI needs no new role (the BFF proxies).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'DuckDB is a single embedded OSS binary and its extensions are baked into the image at build time, so the tier runs disconnected in an IL5 / air-gapped enclave against in-boundary storage. No SaaS query service is in the path.',
+    },
+  },
+  // ── N3 — Arrow Flight SQL serving wire (ADBC / JDBC clients) ──
+  {
+    id: 'svc-flight-sql', category: 'data-plane', title: 'Arrow Flight SQL wire (ADBC / JDBC serving)', severity: 'optional',
+    required: ['LOOM_FLIGHTSQL_URL'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail:
+      'The Connect tab renders fully unset: Loom still streams the identical Arrow RecordBatches over the audited HTTP tier once a result crosses the Arrow threshold, and the tab explains the endpoint state honestly instead of printing an unreachable address. Wiring the Flight wire removes one hop for external ADBC / JDBC clients.',
+    remediation:
+      'Set LOOM_FLIGHTSQL_URL to the Flight gRPC endpoint of the loom-duckdb Container App (grpc://<fqdn>:8815 — the same module deploys it, additionalPortMappings). Set LOOM_FLIGHTSQL_PUBLIC_URL as well when you publish an externally reachable listener, so the Connect tab can hand out a directly usable URI instead of explaining that the endpoint is in-VNet only. Set LOOM_FLIGHT_TICKET_SECRET (Key Vault secretRef, on BOTH the Console and the loom-duckdb app) so minted tickets are cryptographically verified rather than accepted on in-VNet trust.',
+    docs: 'https://arrow.apache.org/docs/format/FlightSql.html',
+    provisionedBy: 'modules/data-plane/duckdb-aca.bicep (flightEnabled, default true) → LOOM_FLIGHTSQL_URL on the Console app',
+    role: 'No extra Azure role. Access is a short-lived, Entra-scoped ticket minted by the audited BFF (/api/flightsql/session) and verified by the serving tier.',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'gRPC/HTTP2 on Container Apps is available in Commercial and Gov; in IL5 the wire stays internal-ingress and tickets are minted in-boundary by this console, so the capability runs disconnected.',
+    },
+  },
   // ── N1 — Iceberg REST Catalog (the zero-copy external-engine bridge) ──
   {
     id: 'svc-iceberg-catalog', category: 'data-plane', title: 'Iceberg REST Catalog (Unity Catalog OSS container)', severity: 'optional',

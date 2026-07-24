@@ -216,4 +216,17 @@ export const dataEngineeringItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-explorer/"
     } },
+  // N2b — SQL Lab (DuckDB): the interactive tier BELOW Spark.
+  { slug: 'sql-lab', displayName: 'SQL Lab (DuckDB)', restType: 'SqlLab', category: 'Data Engineering', noRestApi: true,
+    description: 'Interactive read-only SQL over Delta, Iceberg and Parquet read in place on your own ADLS Gen2 by an embedded DuckDB — sub-second, no Spark session. Falls back to Synapse Serverless when the tier is not deployed. Slice the result again in your browser for free, and connect ADBC / Flight SQL / JDBC clients to the same engine.',
+    learnContent: {
+      "overview": "SQL Lab is Loom's fast path below Spark. An embedded DuckDB running as an internal-ingress Container App reads Delta (delta_scan), Iceberg (iceberg_scan) and Parquet (read_parquet) IN PLACE on your own ADLS Gen2, authenticating with a managed identity that holds Storage Blob Data READER — so it can query everything and change nothing. A Spark session costs 1-5 minutes to start; this tier answers in under a second, which is why interactive analysis belongs here and large joins, writes and ML belong on Spark. When LOOM_DUCKDB_URL is unset the identical statement runs on Synapse Serverless, so the surface is never blocked — only faster once the tier is deployed. Every execution is written to the audit trail with the principal, the statement and the engine that answered. 100% Azure-native and OSS: no Microsoft Fabric, no OneLake, no Power BI, and nothing SaaS in the query path — the whole capability runs disconnected in an air-gapped enclave.",
+      "steps": [
+        { "title": "Query the lake in place", "body": "Write read-only SQL against delta_scan('abfss://...'), read_parquet('abfss://.../*.parquet') or iceberg_scan('abfss://...'). Nothing is copied or imported, and write/DDL statements are refused by the engine's read-only guard." },
+        { "title": "Read the status bar", "body": "Every run prints the row count, the engine's own execution time, the round-trip time, and WHICH engine answered (DuckDB or the Synapse Serverless fallback). No claim is made that was not measured." },
+        { "title": "Slice it again for free", "body": "The Local analysis tab fetches the result's Arrow stream once, then runs further SQL on duckdb-wasm inside your browser: zero server cost, zero network requests, and a timing bar that proves it." },
+        { "title": "Connect your own tools", "body": "The Connect tab mints a short-lived, scoped access ticket and hands you ADBC / Arrow Flight SQL / JDBC snippets. Those clients stream the same Arrow RecordBatches the engine produced instead of serializing rows one at a time over ODBC." }
+      ],
+      "docsUrl": "https://duckdb.org/docs/stable/core_extensions/delta"
+    } },
 ];

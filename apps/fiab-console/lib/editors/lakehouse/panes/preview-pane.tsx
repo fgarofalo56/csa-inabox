@@ -4,8 +4,11 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
+import { useMemo } from 'react';
 import { ArrowSync20Regular, Eye20Regular } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { clientFetch } from '@/lib/client-fetch';
+import { LocalAnalysisPanel, type LocalArrowSource } from '@/lib/components/shared/local-analysis-panel';
 import { DeltaPreviewGrid } from '../../components/delta-preview-grid';
 import { useStyles, leafName, formatBytes } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
@@ -17,6 +20,42 @@ export function PreviewPane() {
     activePath, preview, previewLoading, previewMode, setPreviewMode, setTab,
     columnStats, statsLoading, statsError, activeContainer, settings,
   } = ctx;
+
+  /**
+   * N2a — the free tier on top of this preview. The Arrow stream is fetched
+   * ONCE from the DuckDB serving tier (which resolves the storage account
+   * server-side from the container + path Loom already knows), and every
+   * further slice runs in the browser. The OPENROWSET preview above is
+   * untouched: this is an accelerator, and it says so when it cannot run.
+   */
+  const localSource: LocalArrowSource = useMemo(() => {
+    const container = activeContainer || '';
+    const path = activePath && !activePath.isDirectory ? activePath.name : '';
+    return {
+      label: path ? leafName(path) : 'this file',
+      ready: !!container && !!path,
+      unavailableNote:
+        'Select a file in the Files tab to bring its rows into this tab for local analysis.',
+      fetchArrow: async () => {
+        const started = performance.now();
+        const res = await clientFetch('/api/duckdb/query?format=arrow', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ source: { container, path, limit: 200_000 } }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error || `Arrow fetch failed (HTTP ${res.status})`);
+        }
+        const buffer = await res.arrayBuffer();
+        return {
+          arrow: new Uint8Array(buffer),
+          fetchMs: performance.now() - started,
+          rows: Number(res.headers.get('x-loom-row-count') || 0),
+        };
+      },
+    };
+  }, [activeContainer, activePath]);
 
   return (
     <>
@@ -87,6 +126,8 @@ export function PreviewPane() {
               />
             )
           )}
+          {/* N2a — slice this result again for free, in the browser. */}
+          <LocalAnalysisPanel source={localSource} sizingKey="lakehouse.preview-local" />
         </>
       )}
     </>

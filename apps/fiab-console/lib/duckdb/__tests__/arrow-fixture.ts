@@ -1,0 +1,28 @@
+/**
+ * A REAL Apache Arrow IPC **stream** — four rows of (product, region, amount),
+ * produced by `pyarrow.ipc.new_stream` (see temp/gen_arrow_fixture.py) and
+ * committed as base64 so the local-analysis specs exercise the actual bytes the
+ * loom-duckdb serving tier returns, not a hand-waved placeholder.
+ *
+ * Schema: product utf8, region utf8, amount int64.
+ * Rows:   (widget,east,100) (gadget,west,250) (widget,east,75) (sprocket,north,410)
+ */
+export const ARROW_IPC_BASE64 =
+  '/////9gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAB8AAAAQAAAAAQAAACg'
+  + '////AAABAhAAAAAgAAAABAAAAAAAAAAGAAAAYW1vdW50AAAIAAwACAAHAAgAAAAAAAABQAAAANj///8AAAEFEAAAABgA'
+  + 'AAAEAAAAAAAAAAYAAAByZWdpb24AAMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAHAAAAAQAAAAAAAAABwAA'
+  + 'AHByb2R1Y3QABAAEAAQAAAD/////CAEAABQAAAAAAAAADAAWAAYABQAIAAwADAAAAAADBAAYAAAAiAAAAAAAAAAAAAoA'
+  + 'GAAMAAQACAAKAAAAnAAAABAAAAAEAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAY'
+  + 'AAAAAAAAABoAAAAAAAAAOAAAAAAAAAAAAAAAAAAAADgAAAAAAAAAFAAAAAAAAABQAAAAAAAAABEAAAAAAAAAaAAAAAAA'
+  + 'AAAAAAAAAAAAAGgAAAAAAAAAIAAAAAAAAAAAAAAAAwAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAA'
+  + 'AAAAAAAAAAAAAAAAAAAAAAAGAAAADAAAABIAAAAaAAAAAAAAAHdpZGdldGdhZGdldHdpZGdldHNwcm9ja2V0AAAAAAAA'
+  + 'AAAAAAQAAAAIAAAADAAAABEAAAAAAAAAZWFzdHdlc3RlYXN0bm9ydGgAAAAAAAAAZAAAAAAAAAD6AAAAAAAAAEsAAAAA'
+  + 'AAAAmgEAAAAAAAD/////AAAAAA==';
+
+/** The fixture as bytes. */
+export function arrowFixture(): Uint8Array {
+  return Uint8Array.from(Buffer.from(ARROW_IPC_BASE64, 'base64'));
+}
+
+/** Byte length of the fixture — pinned so a truncated paste fails loudly. */
+export const ARROW_FIXTURE_BYTES = 640;

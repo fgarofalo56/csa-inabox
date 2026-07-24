@@ -44,7 +44,7 @@ import {
   Add20Regular, CloudLink20Regular, ErrorCircle20Filled,
   FolderArrowUp20Regular, ShieldTask20Regular,
   Wrench20Regular, History20Regular, Copy20Regular, Sparkle20Regular,
-  MoreHorizontal20Regular, DatabaseLink20Regular,
+  MoreHorizontal20Regular, DatabaseLink20Regular, PlugConnected20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
@@ -55,6 +55,7 @@ import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-d
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
 import { LoadToTableWizard } from '../components/load-to-table-wizard';
 import { OneLakeSecurityTab } from '../components/onelake-security-tab';
+import { ConnectTab } from '@/lib/components/shared/connect-tab';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useJobsStore } from '@/lib/state/jobs-store';
@@ -140,11 +141,16 @@ export function LakehouseEditor({ item, id }: Props) {
   // Interop tab. OFF hides the tab on the next render; already-emitted Iceberg
   // metadata stays in the lake and external engines keep reading it.
   const interopTabOn = useRuntimeFlag('n1-lakehouse-interop-tab');
+  // FLAG0 (n3-connect-tab) — default-ON kill switch for the N3 Connect tab
+  // (ADBC / Flight SQL / JDBC snippets + short-lived ticket minting). OFF hides
+  // the tab on the next render; already-minted tickets expire on their own.
+  const connectTabOn = useRuntimeFlag('n3-connect-tab');
   useEffect(() => {
     // Kill-switch flipped OFF while the tab was open: fall back to Files so the
     // pane area is never blank.
     if (!interopTabOn && tab === 'interop') setTab('files');
-  }, [interopTabOn, tab]);
+    if (!connectTabOn && tab === 'connect') setTab('files');
+  }, [interopTabOn, connectTabOn, tab]);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMode, setPreviewMode] = useState<'file' | 'table'>('file');
@@ -711,6 +717,7 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'Maintain…', icon: <Wrench20Regular />, onClick: (tab === 'tables' && maintainTable) ? () => setMaintainOpen(true) : undefined, disabled: !(tab === 'tables' && maintainTable), title: !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
         { label: 'OneLake security', icon: <ShieldTask20Regular />, onClick: () => setTab('security'), title: 'Manage OneLake data-access roles + row/column security for this lakehouse' },
         ...(interopTabOn ? [{ label: 'Interop (Iceberg)', icon: <DatabaseLink20Regular />, onClick: () => setTab('interop'), title: 'Expose Delta tables to Trino / Spark / DuckDB / Snowflake as Apache Iceberg — zero copy, same files' }] : []),
+        ...(connectTabOn ? [{ label: 'Connect (ADBC / Flight)', icon: <PlugConnected20Regular />, onClick: () => setTab('connect'), title: 'Mint a short-lived access ticket and get ADBC / Arrow Flight SQL / JDBC snippets — Arrow batches, not row-by-row ODBC' }] : []),
       ] },
       { label: 'AI', actions: [{ label: 'Add to data agent', icon: <Sparkle20Regular />, onClick: () => { void sec.openAddToAgent(); }, title: 'Ground a data agent on this lakehouse (Fabric "Add to AI skill")' }] },
     ] },
@@ -720,7 +727,7 @@ export function LakehouseEditor({ item, id }: Props) {
     notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
     activeContainer, perms.openPerms, settings_.openSettings, tab, maintainTable,
     sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess,
-    interopTabOn,
+    interopTabOn, connectTabOn,
   ]);
 
   // ── Tree renderers ────────────────────────────────────────────────────────
@@ -1054,6 +1061,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 <Tab value="sql" icon={<Play20Regular />}>SQL</Tab>
                 <Tab value="shortcuts" icon={<CloudLink20Regular />}>Shortcuts</Tab>
                 {interopTabOn && <Tab value="interop" icon={<DatabaseLink20Regular />}>Interop</Tab>}
+                {connectTabOn && <Tab value="connect" icon={<PlugConnected20Regular />}>Connect</Tab>}
                 <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
                 <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot</Tab>
               </TabList>
@@ -1068,6 +1076,13 @@ export function LakehouseEditor({ item, id }: Props) {
               {tab === 'schemas' && <SchemasPane />}
               {tab === 'shortcuts' && <ShortcutsPane />}
               {tab === 'interop' && interopTabOn && <InteropPane />}
+              {tab === 'connect' && connectTabOn && (
+                <ConnectTab
+                  surface={`the ${lakehouseName} lakehouse`}
+                  itemId={id}
+                  scope={activeContainer ? [`container:${activeContainer}`] : []}
+                />
+              )}
               {tab === 'security' && <OneLakeSecurityTab itemId={id} itemType="lakehouse" container={activeContainer || 'gold'} />}
               {tab === 'copilot' && (
                 <CopilotBuilderPane
