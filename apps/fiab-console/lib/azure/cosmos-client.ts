@@ -41,6 +41,8 @@ import { LAKEHOUSE_INTEROP_CONTAINER } from '@/lib/azure/lakehouse-interop-model
 import '@/lib/azure/transform-plan-model';
 // N5 — loom-assets doc shape + MIG1 registration (LEAF: cosmos-migrations only).
 import { ASSET_REGISTRY_CONTAINER } from '@/lib/azure/asset-registry-model';
+// N6 — loom-data-contracts doc shape + MIG1 migrator registration (LEAF).
+import { DATA_CONTRACT_CONTAINER } from '@/lib/azure/data-contract-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -497,6 +499,12 @@ let _lakehouseInterop: Container | null = null;
 // binding + reconciler watermarks; the graph itself is always DERIVED from
 // unified-lineage). PK /tenantId, no TTL. Shape + MIG1: ./asset-registry-model.
 let _assets: Container | null = null;
+// N6 — ODCS 3.1 data contracts ENFORCED at ingestion. One doc per registered
+// `data-contract` item: ODCS JSON + enforcement posture (default-ON, SAFE
+// warn-quarantine) + ingestion bindings + bounded run trend. PK /tenantId (both
+// the registry list and the enforcement hot-path lookup are single-partition).
+// Shapes/MIG1: data-contract-model.ts; store: data-contract-store.ts.
+let _dataContracts: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1294,6 +1302,10 @@ async function ensure() {
     (await database.containers.createIfNotExists({
       id: ASSET_REGISTRY_CONTAINER, partitionKey: { paths: ['/tenantId'] },
     })).container, ASSET_REGISTRY_CONTAINER,
+  // N6 — ODCS data contracts. PK /tenantId; withMigrations wraps reads (MIG1).
+  _dataContracts = withMigrations(
+    (await database.containers.createIfNotExists({ id: DATA_CONTRACT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
+    DATA_CONTRACT_CONTAINER,
   );
   _ensured = true;
 }
@@ -1449,6 +1461,8 @@ export async function graphRagIndexContainer(): Promise<Container> { await ensur
 export async function lakehouseInteropContainer(): Promise<Container> { await ensure(); return _lakehouseInterop!; }
 /** N5 — software-defined-asset registry (freshness policy + materializer + watermarks), PK /tenantId. */
 export async function assetsContainer(): Promise<Container> { await ensure(); return _assets!; }
+/** N6 — ODCS 3.1 data contracts + enforcement posture + bindings + run trend, PK /tenantId. */
+export async function dataContractsContainer(): Promise<Container> { await ensure(); return _dataContracts!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

@@ -270,6 +270,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N5',
     surface: 'Scheduled asset-reconciler pass (loom-asset-reconciler ACA Job → /api/internal/assets/reconcile)',
   },
+  {
+    id: 'n6-data-contracts',
+    label: 'Data contracts — governance registry',
+    description:
+      'The N6 Governance → Data contracts registry (ODCS 3.1 contracts, their ingestion bindings, and the pass/fail enforcement trend). OFF makes /governance/data-contracts render an honest "turned off" state on the next load and the registry API return an empty payload. It does NOT stop enforcement: contracts already bound to the mirroring engine, pipeline sinks, and eventstream keep quarantining violating rows to the Bronze `_rejected` dead-letter path and alerting — disable enforcement per contract (Enforcement → off) if that is what you need.',
+    ownerItem: 'N6',
+    surface: '/governance/data-contracts (registry page + /api/governance/data-contracts)',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
