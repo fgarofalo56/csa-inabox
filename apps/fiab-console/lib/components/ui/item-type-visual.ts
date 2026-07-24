@@ -229,6 +229,7 @@ const REGISTRY: Record<string, Entry> = {
   'dashboard':          { icon: Gauge24Regular,            family: 'powerbi', label: 'Dashboard' },
   'paginated-report':   { icon: DocumentBulletList24Regular, family: 'powerbi', label: 'Paginated Report' },
   'scorecard':          { icon: DataTreemap24Regular,      family: 'powerbi', label: 'Scorecard' },
+  'code-report':        { icon: Code24Regular,             family: 'powerbi', label: 'Code Report' },
 
   // ── APIs / functions ─────────────────────────────────────────────
   'graphql-api':        { icon: Globe24Regular,         family: 'api', label: 'GraphQL API' },

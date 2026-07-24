@@ -334,6 +334,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N7d',
     surface: 'Data-quality editor → Runner checks + Data diff tabs',
   },
+  {
+    id: 'n16-code-report',
+    label: 'Code report (BI-as-code item type)',
+    description:
+      'The N16 `code-report` item type: a dashboard authored as ONE versionable Markdown + SQL document (fenced `sql` / `sql loom` query blocks + `{visual}` directives), rendered on real Synapse-serverless / ADX backends with governed-metric blocks resolving through the N15 metrics layer. OFF makes the render + validate endpoints (POST /api/items/code-report/[id]/render, POST /api/items/code-report/validate) return a guided "turned off" gate on the next call — the editor still opens and saves source, and every already-created report and other surface is unaffected. No roll needed.',
+    ownerItem: 'N16',
+    surface: 'Code report editor (preview) + POST /api/items/code-report/[id]/render + …/validate',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
