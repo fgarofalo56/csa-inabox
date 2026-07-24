@@ -712,13 +712,13 @@ function validateQuality(
     }
     for (const k of ['name', 'description', 'unit', 'query', 'engine', 'implementation'] as const) {
       const v = str(item[k]);
-      if (v) (rule as Record<string, unknown>)[k] = v;
+      if (v) (rule as unknown as Record<string, unknown>)[k] = v;
     }
     for (const k of ['mustBe', 'mustBeGreaterThan', 'mustBeLessThan', 'mustBeGreaterOrEqualTo', 'mustBeLessOrEqualTo'] as const) {
       if (item[k] === undefined) continue;
       const n = Number(item[k]);
       if (!Number.isFinite(n)) { errors.push({ path: `${p}.${k}`, message: `must be a number (got ${JSON.stringify(item[k])})` }); return; }
-      (rule as Record<string, unknown>)[k] = n;
+      (rule as unknown as Record<string, unknown>)[k] = n;
     }
     if (item.validValues !== undefined) {
       if (!Array.isArray(item.validValues)) { errors.push({ path: `${p}.validValues`, message: 'must be an array' }); return; }
@@ -841,7 +841,7 @@ export function validateOdcs(input: unknown): OdcsValidationResult {
               for (const flag of ['required', 'unique', 'primaryKey', 'partitioned', 'criticalDataElement'] as const) {
                 if (rawProp[flag] === undefined) continue;
                 if (typeof rawProp[flag] !== 'boolean') { errors.push({ path: `${pp}.${flag}`, message: `must be a boolean (got ${JSON.stringify(rawProp[flag])})` }); return; }
-                (prop as Record<string, unknown>)[flag] = rawProp[flag];
+                (prop as unknown as Record<string, unknown>)[flag] = rawProp[flag];
               }
               if (rawProp.primaryKeyPosition !== undefined) {
                 const n = Number(rawProp.primaryKeyPosition);

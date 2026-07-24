@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1590 |
+| Total routes | 1599 |
 | Public (no session) | 116 |
 | Session-only | 572 |
-| Owner-scoped | 642 |
+| Owner-scoped | 651 |
 | Admin | 260 |
-| Gated (backend config) | 519 |
-| Areas | 105 |
+| Gated (backend config) | 521 |
+| Areas | 106 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -409,6 +409,16 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `ask/route.ts` | POST | owner-scoped | ● | — |
+
+## assets
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `assets/freshness/route.ts` | GET PUT | owner-scoped |  | — |
+| `assets/lineage/route.ts` | GET | owner-scoped |  | — |
+| `assets/materialize/route.ts` | POST | owner-scoped | ● | — |
+| `assets/route.ts` | GET | owner-scoped |  | — |
+| `assets/status/route.ts` | GET | owner-scoped |  | — |
 
 ## attribute-groups
 
@@ -830,6 +840,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `governance/classification-types/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
 | `governance/classifications/route.ts` | GET | owner-scoped |  | Cosmos |
 | `governance/classifications/system/route.ts` | GET | session-only |  | Purview |
+| `governance/data-contracts/route.ts` | GET | owner-scoped |  | — |
 | `governance/dlp/library/route.ts` | GET POST | admin | ● | — |
 | `governance/dlp/meta/route.ts` | GET | owner-scoped |  | — |
 | `governance/dlp/restrict/route.ts` | POST | owner-scoped | ● | ADLS, Cosmos |
@@ -884,6 +895,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `internal/assets/reconcile/route.ts` | POST | owner-scoped |  | — |
 | `internal/copilot/eval-probe/route.ts` | GET POST | public |  | — |
 | `internal/copilot/memory/consolidate/route.ts` | GET POST | public |  | — |
 | `internal/copilot/search-probe/route.ts` | POST | public | ● | — |
@@ -1110,6 +1122,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/data-agent/[id]/route.ts` | GET PATCH DELETE | owner-scoped | ● | — |
 | `items/data-agent/[id]/source-schema/route.ts` | GET | owner-scoped |  | — |
 | `items/data-agent/route.ts` | GET POST | owner-scoped |  | — |
+| `items/data-contract/[id]/introspect/route.ts` | POST | owner-scoped | ● | ADX |
+| `items/data-contract/[id]/odcs/route.ts` | GET POST PUT PATCH | owner-scoped |  | — |
 | `items/data-contract/[id]/quality/route.ts` | GET POST | owner-scoped | ● | ADX |
 | `items/data-contract/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/data-pipeline/[id]/approval-logicapp/route.ts` | GET | owner-scoped | ● | Cosmos |

@@ -1302,6 +1302,7 @@ async function ensure() {
     (await database.containers.createIfNotExists({
       id: ASSET_REGISTRY_CONTAINER, partitionKey: { paths: ['/tenantId'] },
     })).container, ASSET_REGISTRY_CONTAINER,
+  );
   // N6 — ODCS data contracts. PK /tenantId; withMigrations wraps reads (MIG1).
   _dataContracts = withMigrations(
     (await database.containers.createIfNotExists({ id: DATA_CONTRACT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
