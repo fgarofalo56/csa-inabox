@@ -34,7 +34,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSwap24Regular, DatabaseArrowRight20Regular, Search20Regular, CheckmarkCircle20Regular,
-  Warning20Regular, DatabasePlug20Regular, ArrowSync20Regular, TableSimple20Regular,
+  Warning20Regular, ArrowSync20Regular, TableSimple20Regular,
 } from '@fluentui/react-icons';
 import {
   MIGRATION_SOURCE_LABELS, effortBadgeColor,
@@ -141,7 +141,7 @@ export default function MigratePage() {
       <div className={styles.root}>
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'assess' | 'copy' | 'translate')}>
           <Tab value="assess" icon={<ArrowSwap24Regular />}>Assess</Tab>
-          <Tab value="copy" icon={<DatabasePlug20Regular />}>Copy in</Tab>
+          <Tab value="copy" icon={<DatabaseArrowRight20Regular />}>Copy in</Tab>
           <Tab value="translate">Translate</Tab>
         </TabList>
 
@@ -270,7 +270,7 @@ function ReportView({ report, onCopyIn }: { report: ReadinessReport; onCopyIn: (
       <div className={styles.section}>
         <div className={styles.badgeRow}>
           <Subtitle2>Loom item types</Subtitle2>
-          <Button appearance="primary" size="small" icon={<DatabasePlug20Regular />} onClick={onCopyIn}
+          <Button appearance="primary" size="small" icon={<DatabaseArrowRight20Regular />} onClick={onCopyIn}
             style={{ marginInlineStart: 'auto' }}>Copy the data in →</Button>
         </div>
         {itemTypeEntries.length ? (
@@ -391,10 +391,10 @@ function CopyInTab({ report, onGoAssess }: { report?: ReadinessReport; onGoAsses
   if (!report) {
     return (
       <EmptyState
-        icon={<DatabasePlug20Regular />}
+        icon={<DatabaseArrowRight20Regular />}
         title="Assess a source estate first"
         body="Copy-in works from a migration-readiness report. Run an assessment on the Assess tab, then return here to land its tables into your lake."
-        primaryAction={<Button appearance="primary" onClick={onGoAssess}>Go to Assess</Button>}
+        primaryAction={{ label: 'Go to Assess', onClick: onGoAssess }}
       />
     );
   }
@@ -447,7 +447,7 @@ function CopyInTab({ report, onGoAssess }: { report?: ReadinessReport; onGoAsses
           <div className={styles.badgeRow}>
             <TableSimple20Regular />
             <Subtitle2>Copy plan</Subtitle2>
-            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <DatabasePlug20Regular />}
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <DatabaseArrowRight20Regular />}
               onClick={start} disabled={busy || plan.totals.copyable === 0} style={{ marginInlineStart: 'auto' }}>
               {busy ? 'Starting…' : 'Start copy-in'}
             </Button>

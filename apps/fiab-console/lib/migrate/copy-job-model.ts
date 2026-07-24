@@ -24,7 +24,7 @@
  * deployment's VNet → the deployment's own ADLS Bronze); nothing here leaves the
  * boundary.
  */
-import { registerMigrator, type DocMigrator } from './cosmos-migrations';
+import { registerMigrator, type DocMigrator } from '../azure/cosmos-migrations';
 import type { CopyTargetKind } from './copy-plan';
 
 export const COPY_JOB_CONTAINER = 'migration-copy-jobs';

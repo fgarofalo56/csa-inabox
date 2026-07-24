@@ -77,6 +77,8 @@ const useStyles = makeStyles({
   },
   pane: { display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 },
   constructReason: { color: tokens.colorNeutralForeground3, fontSize: '12px', overflowWrap: 'anywhere' },
+  reasonList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  inlineIcon: { verticalAlign: 'middle' },
   actions: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
 });
 
@@ -268,6 +270,7 @@ function ReviewDiff({
   emitMsg: string | null;
 }) {
   const supported = artifact.status === 'supported';
+  const unsupportedConstructs = artifact.constructs.filter((c) => !c.supported);
   return (
     <div className={styles.section}>
       <div className={styles.header}>
@@ -307,15 +310,15 @@ function ReviewDiff({
       </div>
 
       {/* Per-construct reason list (accessible, non-truncated). */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-        {artifact.constructs.filter((c) => !c.supported).map((c, i) => (
+      <div className={styles.reasonList}>
+        {unsupportedConstructs.map((c, i) => (
           <Body1 key={`r-${i}`} className={styles.constructReason}>
-            <Warning20Regular style={{ verticalAlign: 'middle' }} /> <strong>{c.construct}:</strong> {c.reason}
+            <Warning20Regular className={styles.inlineIcon} /> <strong>{c.construct}:</strong> {c.reason}
           </Body1>
         ))}
       </div>
 
-      {(artifact.draftItem || artifact.metricDraft) && <Divider />}
+      {(artifact.draftItem || artifact.metricDraft) ? <Divider /> : null}
 
       {artifact.draftItem && (
         <div className={styles.actions}>
