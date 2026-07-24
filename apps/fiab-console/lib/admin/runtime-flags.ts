@@ -279,6 +279,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/governance/data-contracts (registry page + /api/governance/data-contracts)',
   },
   {
+    id: 'n7b-cdc-control-plane',
+    label: 'CDC connectors — Debezium control plane',
+    description:
+      'The N7b CDC control plane on /cdc: the dropdown-only source-connector wizard (SQL Server / PostgreSQL / MySQL / MongoDB / Oracle → the Azure-native mirror engine\'s config, secrets as Key Vault references) and the live connector monitor (initial-snapshot % → streaming lag, source-DDL schema-change feed, and the N6 dead-letter list read from the Bronze `_rejected` tree). OFF renders /cdc as a guided "turned off" notice and makes the list/monitor APIs return an empty payload on the next load — the seconds-fast revert for a rendering regression on the new surface. It does NOT stop replication: connectors already Started keep snapshotting/streaming into ADLS Bronze via the mirror engine, and N6 enforcement keeps quarantining violating rows. No Microsoft Fabric.',
+    ownerItem: 'N7b',
+    surface: 'CDC connectors control plane (/cdc) + /api/cdc/connectors/**',
+  },
+  {
     id: 'n2a-duckdb-wasm-preview',
     label: 'Local analysis — in-browser SQL over a fetched Arrow result',
     description:

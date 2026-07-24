@@ -588,6 +588,11 @@ for (const p of SHARED_BACKEND_ITEM_ROUTES) {
 // paginated-report, semantic-model/build) is a Power BI workspace id, not a Loom
 // Cosmos partition — an assertOwner check would be wrong there.
 const SHARED_BACKEND_TYPE_ROUTES = [
+  // N7b CDC control plane: pre-create source-table enumerator over the SHARED
+  // source (SQL catalog / PostgreSQL information_schema) resolved by the coords
+  // the caller supplies — the connector doesn't exist yet, so there is no
+  // per-tenant Cosmos ownership to scope (same shape as mirrored-database/source-tables).
+  'apps/fiab-console/app/api/cdc/connectors/source-tables/route.ts',
   'apps/fiab-console/app/api/items/adf-dataset/route.ts',
   'apps/fiab-console/app/api/items/adf-pipeline/route.ts',
   'apps/fiab-console/app/api/items/adf-trigger/route.ts',
