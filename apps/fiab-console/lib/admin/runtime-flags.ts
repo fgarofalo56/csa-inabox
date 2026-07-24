@@ -319,6 +319,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Streaming SQL editor (/items/streaming-sql/[id])',
   },
   {
+    id: 'n7e-trino-federation',
+    label: 'Federated SQL (Trino) engine option',
+    description:
+      'The N7e "Federated SQL (Trino)" engine choice in the SQL Lab engine picker — the ONE opt-in carve-out of the program. This flag DEFAULTS OFF (default:false, the documented exception to loom_default_on_opt_out) because Trino is a heavy-infra additive engine that requires a private AKS cluster; SQL Lab is fully functional without it on the DEFAULT DuckDB tier. Turn it ON to expose the Trino option in the engine dropdown (it still honest-gates until LOOM_TRINO_URL is wired). OFF hides the option entirely — DuckDB / Synapse Serverless are unaffected and remain the default.',
+    ownerItem: 'N7e',
+    surface: 'SQL Lab editor (/items/sql-lab/[id]) → engine picker',
+  },
+  {
     id: 'n7c-activation-sync',
     label: 'Activation sync (reverse ETL)',
     description:

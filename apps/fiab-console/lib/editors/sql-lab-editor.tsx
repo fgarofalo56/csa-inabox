@@ -29,11 +29,12 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2, Tab, TabList,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Play20Regular, Flash20Regular, PlugConnected20Regular, Database20Regular,
-  DocumentTable20Regular,
+  DocumentTable20Regular, BranchFork20Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -55,6 +56,20 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 /** FLAG0 runtime kill-switch id (registered in lib/admin/runtime-flags.ts). */
 export const SQL_LAB_FLAG_ID = 'n2b-sql-lab-duckdb';
+
+/**
+ * N7e FLAG0 id for the OPT-IN "Federated SQL (Trino)" engine choice. Declared as
+ * a plain string here (NOT imported from lib/azure/trino-client, which is
+ * server-only) so this client editor never pulls the server bundle. DEFAULT OFF
+ * — the documented exception to loom_default_on_opt_out (heavy AKS carve-out);
+ * DuckDB stays the default engine either way.
+ */
+export const TRINO_FLAG_ID = 'n7e-trino-federation';
+/** The Trino gate id (mirrors svc-loom-trino in the gate registry). */
+const TRINO_GATE_ID = 'svc-loom-trino';
+
+/** Which engine the query toolbar runs against. DuckDB/Serverless is the default. */
+type SqlEngine = 'default' | 'trino';
 
 const SAMPLE_SQL = [
   '-- DuckDB reads your lake in place — no copy, no import, no Spark session.',
@@ -88,14 +103,19 @@ const useStyles = makeStyles({
 interface SqlLabResponse {
   ok: boolean;
   error?: string;
-  engine?: 'duckdb' | 'synapse-serverless';
+  engine?: 'duckdb' | 'synapse-serverless' | 'trino';
   columns?: { name: string; type: string }[];
   rows?: unknown[][];
   rowCount?: number;
   elapsedMs?: number;
   totalMs?: number;
   truncated?: boolean;
+  /** N7e — distinct Trino catalogs the planner touched (federation receipt). */
+  catalogs?: string[];
   note?: string;
+  /** WS-D2 gate envelope when the opt-in Trino engine is not wired. */
+  gated?: boolean;
+  gate?: { id: string; title?: string; remediation?: string; fixItHref?: string; missing?: string[] };
 }
 
 interface CapabilitiesResponse {
@@ -121,11 +141,15 @@ async function fetchCapabilities(): Promise<CapabilitiesResponse> {
 export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const enabled = useRuntimeFlag(SQL_LAB_FLAG_ID);
+  // N7e — the opt-in Federated SQL (Trino) engine choice. DEFAULT OFF.
+  const trinoEnabled = useRuntimeFlag(TRINO_FLAG_ID, false);
 
   const [tab, setTab] = useState<'query' | 'local' | 'connect'>('query');
   const [sql, setSql] = useState(SAMPLE_SQL);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<SqlLabResponse | null>(null);
+  // Engine picker: DuckDB/Serverless (default) or the opt-in Trino federation.
+  const [engine, setEngine] = useState<SqlEngine>('default');
 
   const capsQ = useQuery({
     queryKey: ['sql-lab-capabilities'],
@@ -136,20 +160,34 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
   const run = useCallback(async () => {
     setRunning(true);
     setResult(null);
+    // The DEFAULT engine hits the DuckDB edge (with the Synapse Serverless
+    // fallback). The opt-in Trino engine hits its own audited edge, which returns
+    // the honest opt-in gate envelope when LOOM_TRINO_URL is unset. A disabled
+    // FLAG0 can never route to Trino — DuckDB stays the default either way.
+    const useTrino = engine === 'trino' && trinoEnabled;
+    const endpoint = useTrino ? '/api/sql/trino' : '/api/duckdb/query';
     try {
-      const res = await clientFetch('/api/duckdb/query', {
+      const res = await clientFetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql, maxRows: 5000, itemId: id }),
       });
       const json = (await res.json().catch(() => ({}))) as SqlLabResponse;
-      setResult(res.ok && json.ok ? json : { ok: false, error: json.error || `HTTP ${res.status}` });
+      if (res.ok && json.ok) {
+        setResult(json);
+      } else if (json.gated && json.gate) {
+        // Preserve the gate envelope so the surface renders the Fix-it wizard
+        // (Trino discloses the AKS cost) instead of a bare error.
+        setResult({ ok: false, gated: true, gate: json.gate, error: json.error });
+      } else {
+        setResult({ ok: false, error: json.error || `HTTP ${res.status}` });
+      }
     } catch (e) {
       setResult({ ok: false, error: e instanceof Error ? e.message : String(e) });
     } finally {
       setRunning(false);
     }
-  }, [id, sql]);
+  }, [engine, trinoEnabled, id, sql]);
 
   const preview: PreviewData | null = useMemo(() => {
     if (!result?.ok) return null;
@@ -290,6 +328,33 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
             <>
               <div className={s.toolbar}>
                 <Body1>Read-only SQL over your lake</Body1>
+                {/* Engine picker — DuckDB is ALWAYS the default; Trino is the
+                    additive opt-in federation choice, shown only when its FLAG0
+                    is on (default OFF). */}
+                <Field label="Engine" orientation="horizontal">
+                  <Dropdown
+                    size="small"
+                    value={engine === 'trino' ? 'Federated SQL (Trino)' : 'DuckDB / Serverless (default)'}
+                    selectedOptions={[engine]}
+                    onOptionSelect={(_, d) => setEngine((d.optionValue as SqlEngine) || 'default')}
+                    aria-label="SQL Lab engine"
+                    style={{ minWidth: 0 }}
+                  >
+                    <Option value="default" text="DuckDB / Serverless (default)">
+                      DuckDB / Serverless (default)
+                    </Option>
+                    {trinoEnabled && (
+                      <Option value="trino" text="Federated SQL (Trino)">
+                        Federated SQL (Trino) — opt-in
+                      </Option>
+                    )}
+                  </Dropdown>
+                </Field>
+                {engine === 'trino' && (
+                  <Badge appearance="tint" color="informative" icon={<BranchFork20Regular />}>
+                    cross-source join
+                  </Badge>
+                )}
                 <Button
                   appearance="primary"
                   icon={running ? <Spinner size="tiny" /> : <Play20Regular />}
@@ -317,7 +382,18 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
                 results={
                   <>
                     {running && <Spinner size="small" label="Executing…" labelPosition="after" />}
-                    {!running && result && !result.ok && (
+                    {/* N7e opt-in gate — the Trino engine is not wired. Render the
+                        shared Fix-it (discloses the AKS cost) instead of an error;
+                        DuckDB stays selectable and fully functional. */}
+                    {!running && result && !result.ok && result.gated && result.gate && (
+                      <HonestGate
+                        gateId={result.gate.id || TRINO_GATE_ID}
+                        gate={result.gate}
+                        surface="Federated SQL (Trino)"
+                        onResolved={() => void run()}
+                      />
+                    )}
+                    {!running && result && !result.ok && !result.gated && (
                       <MessageBar intent="error" layout="multiline">
                         <MessageBarBody>
                           <MessageBarTitle>Query failed</MessageBarTitle>

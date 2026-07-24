@@ -97,6 +97,17 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
       'Unset → Delta↔Iceberg dual metadata still writes real Iceberg V2 metadata into your own ADLS Gen2 (the Interop tab keeps working and hands you the metadata path). The catalog adds discovery + credential vending on top; it is never on the data path.',
     legacyCodes: ['iceberg_catalog_not_configured'],
   },
+  // ── N7e — Trino Federated SQL (the ONE opt-in carve-out; gates NO feature) ──
+  'svc-loom-trino': {
+    surfaces: [
+      { path: '/items/sql-lab', label: 'SQL Lab → engine picker: "Federated SQL (Trino)"' },
+      { path: '/api/sql/trino', label: 'Federated SQL execution edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'OPT-IN by design — this is the single non-default engine in the program. Unset → SQL Lab runs on the DEFAULT DuckDB tier (svc-loom-duckdb) with the identical result surface; only the additive "Federated SQL (Trino)" choice is gated. Deploying loom-trino-aks.bicep stands up a private AKS cluster (real, disclosed cost) that can join a Loom Iceberg table with an external Postgres table in one statement. Its absence removes no capability, so it never breaches loom_default_on_opt_out.',
+    legacyCodes: ['trino_not_configured'],
+  },
   'svc-cosmos-control': {
     surfaces: [
       { path: '/admin/scaling', label: 'Cosmos account scaling' },

@@ -253,7 +253,14 @@ describe('admin/env-config registry', () => {
     // honestly gated), so it counts as one new editable var: 181 → 182. Its
     // DATABASE/USER/PASSWORD knobs are runtime-only (allowlisted in check-env-sync,
     // not ENV_CHECKS specs), so they do not enter EDITABLE_ENV.
-    expect(EDITABLE_ENV.length).toBe(182);
+    // Bumped to 183 by N7e (Trino Federated SQL — the single opt-in carve-out):
+    // svc-loom-trino adds LOOM_TRINO_URL. Opt-in like M1 (NOT optionalDefault:
+    // the /api/sql/trino route is honestly gated when the cluster is absent, and
+    // the default DuckDB engine keeps SQL Lab functional), so it counts as one
+    // new editable var: 182 → 183. The sibling knobs (LOOM_TRINO_ICEBERG_CATALOG,
+    // LOOM_TRINO_AUDIENCE, LOOM_TRINO_TOKEN) are runtime-only code defaults /
+    // secretRefs and deliberately NOT part of the spec.
+    expect(EDITABLE_ENV.length).toBe(183);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
