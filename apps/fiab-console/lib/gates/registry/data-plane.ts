@@ -62,6 +62,12 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'OFF by default (the intended production posture). Enable only for a non-prod resilience drill: LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN on the tenant-admin request.',
   },
+  // ── CH1 — dependency-fault chaos harness (Cosmos / AOAI / ADX / KV) ──
+  'svc-dependency-chaos-drill': {
+    surfaces: [{ path: '/admin/health?tab=chaos', label: 'Dependency chaos harness (Health & Reliability → Chaos)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'OFF by default (the intended production posture — no fault injection). Enable only for a non-prod resilience drill: the ch1-dependency-chaos runtime flag ON + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN; every armed fault auto-expires (≤5 min).',
+  },
   // ── N2b — DuckDB serving tier (interactive fast path below Spark) ──
   'svc-loom-duckdb': {
     surfaces: [
