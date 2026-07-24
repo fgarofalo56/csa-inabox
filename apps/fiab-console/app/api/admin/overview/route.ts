@@ -37,6 +37,7 @@ import {
   attributeGroupsContainer,
   labelAssignmentsContainer,
   costAnomalyRulesContainer,
+  lakehouseInteropContainer,
 } from '@/lib/azure/cosmos-client';
 import type { SqlParameter } from '@azure/cosmos';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
@@ -66,7 +67,8 @@ export type OverviewTileKey =
   | 'workspaces' | 'domains' | 'items' | 'auditEvents' | 'permissions'
   | 'attributeGroups' | 'labeledItems' | 'tenantSettings'
   | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels'
-  | 'runtimeFlags' | 'rumClientErrors' | 'diagnostics' | 'finops';
+  | 'runtimeFlags' | 'rumClientErrors' | 'diagnostics' | 'finops'
+  | 'icebergTables';
 
 export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 
@@ -261,7 +263,7 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors, diagnostics, finops,
+    runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
@@ -288,12 +290,14 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
     tile(() => blockedGateCount(), COSMOS_HINT),
     // C4 — enabled cost-anomaly watch rules (the FinOps hub's C3 monitor).
     tile(() => finopsRulesCount(), COSMOS_HINT),
+    // N1 — tables exposed to external engines as Iceberg (Delta ✓ + Iceberg ✓).
+    tile(() => icebergExposedTableCount(tenantId), COSMOS_HINT),
   ]);
 
   return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors, diagnostics, finops,
+    runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables,
   };
 }
 
@@ -304,4 +308,27 @@ async function finopsRulesCount(): Promise<number> {
     .query<number>({ query: "SELECT VALUE COUNT(1) FROM c WHERE c.docType = 'cost-anomaly-rule' AND (NOT IS_DEFINED(c.enabled) OR c.enabled = true)" })
     .fetchAll();
   return Number(resources?.[0] ?? 0);
+}
+
+/**
+ * N1 — count the Delta tables this tenant has ALSO exposed as Apache Iceberg.
+ * Single-partition read of loom-lakehouse-interop; the rows are the real state
+ * the Interop tab writes, so the tile can never show a fabricated number.
+ */
+async function icebergExposedTableCount(tenantId: string): Promise<number> {
+  const c = await lakehouseInteropContainer();
+  const { resources } = await c.items
+    .query<{ tables?: Array<{ iceberg?: boolean }> }>(
+      {
+        query: "SELECT c.tables FROM c WHERE c.tenantId = @t AND c.docType = 'lakehouse-interop'",
+        parameters: [{ name: '@t', value: tenantId }],
+      },
+      { partitionKey: tenantId },
+    )
+    .fetchAll();
+  let n = 0;
+  for (const doc of resources || []) {
+    for (const t of doc?.tables || []) if (t?.iceberg) n += 1;
+  }
+  return n;
 }

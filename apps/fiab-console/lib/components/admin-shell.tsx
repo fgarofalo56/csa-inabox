@@ -22,6 +22,7 @@ import {
   ToggleLeft24Regular,
   DocumentBriefcase24Regular,
   TargetArrow24Regular,
+  DatabaseLink24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -43,6 +44,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular, description: 'One-click support bundle: export a point-in-time, secret-scrubbed JSON of the deployment posture — version + ACA revision, gate-registry state, masked env posture, live probes, last synthetic run, and recent audit rows — to attach to an incident.' },
   { href: '/admin/readiness', label: 'Readiness', icon: GaugeRegular, description: 'Capability dependency graph + workload readiness scorecard (Ready / Partial / Blocked go/no-go) computed from live gate + probe state — each capability’s backends, env vars, RBAC role, bicep module, and probe status, with a one-click Fix it and a ready-to-run tenant profile export (JSON + report).' },
   { href: '/admin/api-management', label: 'API Management', icon: Settings24Regular, description: 'Manage APIM APIs, products, subscriptions, policies, named values, backends — full marketplace administration.' },
+  { href: '/admin/catalog', label: 'Catalog federation', icon: DatabaseLink24Regular, description: 'N1 — what EXTERNAL engines see: every Apache Iceberg namespace + table the self-hosted Iceberg REST Catalog serves, format badges (Delta ✓ / Iceberg ✓), the Unity Catalog grant mapping, and copy-paste connect strings for Trino / Spark / DuckDB / Snowflake / Databricks. Zero copy — the same Parquet files in your own ADLS Gen2, no export, no Fabric, no SaaS catalog.' },
   { href: '/admin/domains', label: 'Domains', icon: Organization24Regular, description: 'Organize workspaces into business domains and subdomains.' },
   { href: '/admin/attribute-groups', label: 'Custom attributes', icon: TagMultiple24Regular, description: 'Define per-domain attribute schemas (text, number, date, single-select) that appear in the Create wizard and item Edit dialogs.' },
   { href: '/admin/deploy-planner', label: 'Deployment planner', icon: CloudArrowUp24Regular, description: 'Visually plan what deploys to which subscription and domain; generate the bicepparam for az deployment.' },

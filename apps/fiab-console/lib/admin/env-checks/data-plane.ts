@@ -43,6 +43,22 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-directlake + shared Redis) + modules/compute/loom-directlake-app.bicep (out-of-band) → LOOM_DIRECTLAKE_URL on the Console app',
     role: 'Storage Blob Data Reader (uami-loom-directlake) on the DLZ lake; Redis Data Contributor on the shared cache (wired by hband-shared.bicep)',
   },
+  // ── N1 — Iceberg REST Catalog (the zero-copy external-engine bridge) ──
+  {
+    id: 'svc-iceberg-catalog', category: 'data-plane', title: 'Iceberg REST Catalog (Unity Catalog OSS container)', severity: 'optional',
+    required: ['LOOM_ICEBERG_CATALOG_URL'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail:
+      'Delta↔Iceberg dual metadata still works unset: the lakehouse Interop tab writes real Iceberg V2 metadata into your own ADLS Gen2 beside the Delta log, and any engine can be pointed straight at that metadata folder. Setting LOOM_ICEBERG_CATALOG_URL adds CATALOG-based discovery (namespaces, table listing, credential vending) so Trino/Spark/DuckDB/Snowflake can browse instead of being handed paths.',
+    remediation:
+      'Set LOOM_ICEBERG_CATALOG_URL to the internal-ingress FQDN of the iceberg-catalog Container App (Unity Catalog OSS serving the standard Apache Iceberg REST Catalog surface). Deploy platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep, then set the var on the Console app. Optional overrides: LOOM_ICEBERG_CATALOG_WAREHOUSE (default "loom"), LOOM_ICEBERG_CATALOG_PREFIX (default /api/2.1/unity-catalog/iceberg), LOOM_ICEBERG_CATALOG_AUDIENCE (default api://<LOOM_MSAL_CLIENT_ID>). The catalog is NEVER public — external engines reach it through the audited Loom proxy at /api/catalog/iceberg with a scoped Loom API token.',
+    docs: 'https://iceberg.apache.org/docs/latest/rest-catalog-spec/',
+    provisionedBy: 'modules/data-plane/iceberg-catalog-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_ICEBERG_CATALOG_URL on the Console app',
+    role: 'Storage Blob Data Reader (uami-loom-iceberg-catalog) on the DLZ lake — declared in the module; the Console UAMI needs no new role (the BFF proxies).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Self-hosted OSS container on the deployment\'s own Container Apps environment reading the deployment\'s own ADLS Gen2 — no SaaS catalog (no Tabular, no Snowflake Open Catalog, no Databricks-hosted Unity Catalog) is in the path, so the full capability runs disconnected in an IL5 / air-gapped enclave.',
+    },
+  },
   {
     id: 'svc-cosmos-control', category: 'data-plane', title: 'Cosmos DB control plane (versions / scaling / CMK)', severity: 'optional',
     required: ['LOOM_COSMOS_ACCOUNT'], anyOf: [['LOOM_DLZ_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,

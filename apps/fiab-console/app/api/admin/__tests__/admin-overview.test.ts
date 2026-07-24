@@ -57,6 +57,7 @@ const containers = {
   attributeGroups: makeContainer(),
   labelAssignments: makeContainer(),
   costAnomalyRules: makeContainer(),
+  lakehouseInterop: makeContainer(),
 };
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -68,6 +69,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   attributeGroupsContainer: async () => containers.attributeGroups,
   labelAssignmentsContainer: async () => containers.labelAssignments,
   costAnomalyRulesContainer: async () => containers.costAnomalyRules,
+  lakehouseInteropContainer: async () => containers.lakehouseInterop,
 }));
 
 // --------------------------------------------------------------------------
@@ -111,6 +113,12 @@ function seedHappyCosmos() {
   containers.tenantSettings._seed('tenant-oid', 'tenant-oid', { settings: { a: true, b: false, c: true } });
   // C4 — finops tile: enabled cost-anomaly watch rules (SELECT VALUE COUNT(1)).
   containers.costAnomalyRules._setQuery(() => [2]);
+  // N1 — icebergTables tile: Delta tables ALSO exposed as Apache Iceberg.
+  // Two interop docs (two lakehouse containers); 3 of the 4 rows are exposed.
+  containers.lakehouseInterop._setQuery(() => [
+    { tables: [{ iceberg: true }, { iceberg: false }] },
+    { tables: [{ iceberg: true }, { iceberg: true }] },
+  ]);
 }
 
 beforeEach(() => {
@@ -152,7 +160,7 @@ describe('/api/admin/overview', () => {
     const j = await (await GET()).json();
     expect(j.ok).toBe(true);
     const t = j.tiles;
-    expect(Object.keys(t)).toHaveLength(16);
+    expect(Object.keys(t)).toHaveLength(17);
     expect(t.workspaces).toEqual({ count: 4, gated: false });
     expect(t.items).toEqual({ count: 42, gated: false });
     expect(t.domains).toEqual({ count: 2, gated: false });
@@ -169,6 +177,8 @@ describe('/api/admin/overview', () => {
     expect(t.rumClientErrors).toEqual({ count: 5, gated: false });
     // C4 — finops tile: enabled cost-anomaly watch rules.
     expect(t.finops).toEqual({ count: 2, gated: false });
+    // N1 — catalog-federation tile: tables external engines can read as Iceberg.
+    expect(t.icebergTables).toEqual({ count: 3, gated: false });
     // DIAG1 — diagnostics tile: blocked-gate census (in-process gate registry;
     // env-dependent count, so assert shape not an exact number).
     expect(t.diagnostics.gated).toBe(false);

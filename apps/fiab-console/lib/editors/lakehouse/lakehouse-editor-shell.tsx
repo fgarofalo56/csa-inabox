@@ -44,7 +44,7 @@ import {
   Add20Regular, CloudLink20Regular, ErrorCircle20Filled,
   FolderArrowUp20Regular, ShieldTask20Regular,
   Wrench20Regular, History20Regular, Copy20Regular, Sparkle20Regular,
-  MoreHorizontal20Regular,
+  MoreHorizontal20Regular, DatabaseLink20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
@@ -58,6 +58,7 @@ import { OneLakeSecurityTab } from '../components/onelake-security-tab';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useJobsStore } from '@/lib/state/jobs-store';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
   useStyles, leafName, collectEntries, formatCell, parseJsonOrError, FileGlyph,
@@ -80,6 +81,7 @@ import { SqlPane } from './panes/sql-pane';
 import { HistoryPane } from './panes/history-pane';
 import { SchemasPane } from './panes/schemas-pane';
 import { ShortcutsPane } from './panes/shortcuts-pane';
+import { InteropPane } from './panes/interop-pane';
 // ── Dialogs ──────────────────────────────────────────────────────────────────
 import {
   ContextMenu, LabelDialog, ReferencePickerDialog, PropertiesDialog,
@@ -134,6 +136,15 @@ export function LakehouseEditor({ item, id }: Props) {
   const [openPrefixes, setOpenPrefixes] = useState<Record<string, PathEntry[] | 'loading' | { error: string }>>({});
   const [activePath, setActivePath] = useState<PathEntry | null>(null);
   const [tab, setTab] = useState<string>('files');
+  // FLAG0 (n1-lakehouse-interop-tab) — default-ON kill switch for the N1
+  // Interop tab. OFF hides the tab on the next render; already-emitted Iceberg
+  // metadata stays in the lake and external engines keep reading it.
+  const interopTabOn = useRuntimeFlag('n1-lakehouse-interop-tab');
+  useEffect(() => {
+    // Kill-switch flipped OFF while the tab was open: fall back to Files so the
+    // pane area is never blank.
+    if (!interopTabOn && tab === 'interop') setTab('files');
+  }, [interopTabOn, tab]);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewMode, setPreviewMode] = useState<'file' | 'table'>('file');
@@ -699,6 +710,7 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'Share', icon: <Add20Regular />, onClick: activeContainer ? () => { sec.setShareError(null); sec.setShareSuccess(null); sec.setShareOpen(true); } : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
         { label: 'Maintain…', icon: <Wrench20Regular />, onClick: (tab === 'tables' && maintainTable) ? () => setMaintainOpen(true) : undefined, disabled: !(tab === 'tables' && maintainTable), title: !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY' },
         { label: 'OneLake security', icon: <ShieldTask20Regular />, onClick: () => setTab('security'), title: 'Manage OneLake data-access roles + row/column security for this lakehouse' },
+        ...(interopTabOn ? [{ label: 'Interop (Iceberg)', icon: <DatabaseLink20Regular />, onClick: () => setTab('interop'), title: 'Expose Delta tables to Trino / Spark / DuckDB / Snowflake as Apache Iceberg — zero copy, same files' }] : []),
       ] },
       { label: 'AI', actions: [{ label: 'Add to data agent', icon: <Sparkle20Regular />, onClick: () => { void sec.openAddToAgent(); }, title: 'Ground a data agent on this lakehouse (Fabric "Add to AI skill")' }] },
     ] },
@@ -708,6 +720,7 @@ export function LakehouseEditor({ item, id }: Props) {
     notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
     activeContainer, perms.openPerms, settings_.openSettings, tab, maintainTable,
     sec.openAddToAgent, sec.setShareOpen, sec.setShareError, sec.setShareSuccess,
+    interopTabOn,
   ]);
 
   // ── Tree renderers ────────────────────────────────────────────────────────
@@ -1040,6 +1053,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 <Tab value="preview" icon={<Eye20Regular />}>Preview</Tab>
                 <Tab value="sql" icon={<Play20Regular />}>SQL</Tab>
                 <Tab value="shortcuts" icon={<CloudLink20Regular />}>Shortcuts</Tab>
+                {interopTabOn && <Tab value="interop" icon={<DatabaseLink20Regular />}>Interop</Tab>}
                 <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
                 <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot</Tab>
               </TabList>
@@ -1053,6 +1067,7 @@ export function LakehouseEditor({ item, id }: Props) {
               {tab === 'history' && <HistoryPane />}
               {tab === 'schemas' && <SchemasPane />}
               {tab === 'shortcuts' && <ShortcutsPane />}
+              {tab === 'interop' && interopTabOn && <InteropPane />}
               {tab === 'security' && <OneLakeSecurityTab itemId={id} itemType="lakehouse" container={activeContainer || 'gold'} />}
               {tab === 'copilot' && (
                 <CopilotBuilderPane

@@ -92,6 +92,76 @@ describe('buildMaintenancePlan', () => {
     const plan = buildMaintenancePlan({ container: 'b', tableName: 't', pool: 'p', compaction: true, vacuumRetentionHours: 0, zorderColumns: [] });
     expect(plan).toEqual(['OPTIMIZE']);
   });
+
+  // N1 — Delta↔Iceberg dual metadata rides the SAME maintenance job.
+  it('lists the Iceberg emit/disable op', () => {
+    const base = { container: 'b', tableName: 't', pool: 'p', compaction: false, vacuumRetentionHours: 0, zorderColumns: [] };
+    expect(buildMaintenancePlan({ ...base, icebergMetadata: true }))
+      .toEqual(['EMIT ICEBERG METADATA (UniForm / XTable)']);
+    expect(buildMaintenancePlan({ ...base, icebergMetadata: false }))
+      .toEqual(['DISABLE ICEBERG METADATA']);
+    // Unset leaves the plan (and the generated job) exactly as before N1.
+    expect(buildMaintenancePlan({ ...base, compaction: true })).toEqual(['OPTIMIZE']);
+  });
+});
+
+describe('N1 — Iceberg dual metadata on the maintenance job', () => {
+  it('accepts an Iceberg-only request (the Interop tab submits exactly that)', () => {
+    const r = validateMaintenanceRequest({
+      container: 'gold', tableName: 'orders', pool: 'loompool',
+      compaction: false, vacuumRetentionHours: 0, zorderColumns: [], icebergMetadata: true,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.icebergMetadata).toBe(true);
+  });
+
+  it('still rejects a request with nothing at all to do', () => {
+    const r = validateMaintenanceRequest({
+      container: 'gold', tableName: 'orders', pool: 'loompool',
+      compaction: false, vacuumRetentionHours: 0, zorderColumns: [],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('emits the UniForm enable AFTER compaction, against the same table URI', () => {
+    const { code, ops } = buildMaintenancePySpark(
+      {
+        container: 'gold', tableName: 'orders', pool: 'loompool',
+        compaction: true, vacuumRetentionHours: 0, zorderColumns: [], icebergMetadata: true,
+      },
+      'loomdlz01',
+    );
+    const uri = 'abfss://gold@loomdlz01.dfs.core.windows.net/Tables/orders';
+    expect(code).toContain(`_ice_uri = ${JSON.stringify(uri)}`);
+    expect(code).toContain("'delta.universalFormat.enabledFormats' = 'iceberg'");
+    // Ordering matters: the registered Iceberg snapshot must point at the
+    // freshly bin-packed files, so OPTIMIZE precedes the Iceberg step.
+    expect(code.indexOf('OPTIMIZE delta.')).toBeLessThan(code.indexOf('_ice_uri ='));
+    expect(ops).toEqual(['OPTIMIZE', 'EMIT ICEBERG METADATA (UniForm / XTable)']);
+  });
+
+  it('generates the disable statement without touching data or the Delta log', () => {
+    const { code } = buildMaintenancePySpark(
+      {
+        container: 'gold', tableName: 'orders', pool: 'loompool',
+        compaction: false, vacuumRetentionHours: 0, zorderColumns: [], icebergMetadata: false,
+      },
+      'loomdlz01',
+    );
+    expect(code).toContain("UNSET TBLPROPERTIES IF EXISTS ('delta.universalFormat.enabledFormats')");
+    expect(code).not.toContain('VACUUM delta.');
+    expect(code).not.toContain('OPTIMIZE delta.');
+  });
+
+  it('leaves the pre-N1 job byte-identical when icebergMetadata is unset', () => {
+    const req = {
+      container: 'gold', tableName: 'orders', pool: 'loompool',
+      compaction: true, vacuumRetentionHours: 168, zorderColumns: ['order_date'],
+    };
+    const { code } = buildMaintenancePySpark(req, 'loomdlz01');
+    expect(code).not.toContain('_ice_uri');
+    expect(code).not.toContain('loom-iceberg-metadata');
+  });
 });
 
 describe('buildMaintenancePySpark', () => {

@@ -39,6 +39,53 @@ export interface IcebergEndpoint {
   azureMetadataFolder: string; format: 'iceberg-v2'; via: 'delta-uniform';
 }
 
+// ---- N1 Interop (Delta ↔ Iceberg dual metadata) ----
+/** One table's interop row as returned by GET/PUT /api/lakehouse/interop. */
+export interface InteropTableRow {
+  table: string;
+  namespace: string;
+  delta: true;
+  iceberg: boolean;
+  via: 'delta-uniform' | 'xtable' | 'none';
+  metadataLocation?: string;
+  tableRootUri?: string;
+  metadataFiles?: number;
+  registeredInCatalog?: boolean;
+  lastJobId?: string;
+  lastJobState?: 'starting' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  lastDetail?: string;
+  updatedAt: string;
+  updatedBy: string;
+  /** Bare Iceberg table id (last path segment) — added by the BFF. */
+  icebergTableName?: string;
+}
+
+/** The gate block the shared HonestGate renderer consumes. */
+export interface InteropGateBlock {
+  id: string; title?: string; remediation?: string; fixItHref?: string; missing?: string[];
+  state?: 'blocked' | 'cloud-unavailable'; fallbackNote?: string;
+}
+
+/** GET/PUT /api/lakehouse/interop response envelope. */
+export interface InteropResponse {
+  ok: boolean;
+  error?: string;
+  container?: string;
+  account?: string | null;
+  accountGate?: string;
+  storeError?: string;
+  catalogNote?: string;
+  pool?: string;
+  defaultPool?: string;
+  catalog?: {
+    configured: boolean;
+    uri: string;
+    warehouse: string;
+    gate?: InteropGateBlock;
+  };
+  tables?: InteropTableRow[];
+}
+
 // ---- Data Agent ----
 export interface DaAgentRow { id: string; displayName: string; state?: { sources?: unknown[] } }
 

@@ -219,7 +219,14 @@ describe('admin/env-config registry', () => {
     // (multi-hop traversal depth, code default 2, clamp [1,4]) +
     // LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS (bounded repair attempts, code default 2,
     // clamp [0,5]) — both optional tuning knobs with safe code defaults.
-    expect(EDITABLE_ENV.length).toBe(176);
+    // Bumped to 177 by N1 (Iceberg REST catalog + Delta↔Iceberg dual metadata):
+    // LOOM_ICEBERG_CATALOG_URL (svc-iceberg-catalog — optionalDefault, because the
+    // lakehouse Interop tab still writes real Iceberg metadata into the customer's
+    // own ADLS Gen2 when it is unset; only CATALOG DISCOVERY is absent). The
+    // sibling LOOM_ICEBERG_CATALOG_{PREFIX,WAREHOUSE,AUDIENCE} knobs are
+    // runtime-only code defaults and deliberately NOT part of the spec, so the
+    // editable count rises by exactly one.
+    expect(EDITABLE_ENV.length).toBe(177);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -318,6 +325,11 @@ describe('admin/env-config registry', () => {
       // (GraphRAG grounding still runs, just at the default hop budget).
       'LOOM_GRAPHRAG_MAX_HOPS',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
+      // N1 svc-iceberg-catalog — unset is fully functional: the lakehouse Interop
+      // tab still emits real Delta↔Iceberg dual metadata into the customer's own
+      // lake and any engine can be pointed at that metadata folder. Deploying the
+      // catalog adds discovery + credential vending, never the data path.
+      'LOOM_ICEBERG_CATALOG_URL',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE',
       // N12 — bounded NL2SQL repair attempts; unset = code default 2 (the
       // self-healing loop still repairs, just within the default budget).

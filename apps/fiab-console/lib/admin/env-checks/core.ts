@@ -116,6 +116,8 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_KUSTO_DEFAULT_DB: 'loomdb-default',
   LOOM_EVENTHUB_NAMESPACE: '<eventhubs-namespace>',
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
+  // N1 — Iceberg REST Catalog (internal-ingress Unity Catalog OSS container).
+  LOOM_ICEBERG_CATALOG_URL: 'https://iceberg-catalog.internal.<cae-default-domain>  (unset = dual metadata still emitted to your lake; no catalog discovery)',
   LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
