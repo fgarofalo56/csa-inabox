@@ -423,6 +423,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N8',
     surface: 'S3 gateway editor (/items/s3-gateway/[id])',
   },
+  // ── EXP1 — workspace portability (§P2 completeness gap 8) ──
+  {
+    id: 'exp1-workspace-portability',
+    label: 'Workspace export / import / clone (.loomws)',
+    description:
+      'The EXP1 whole-workspace portability surface: the workspace Settings → Portability tab (.loomws bundle export download, import wizard with collision strategy, one-click clone) and its /api/workspaces/[id]/export|import|clone routes. OFF makes the three routes refuse with `flag_disabled` (naming this flag) and the tab surface a guided notice on the next request — no roll required. Existing workspaces, items, and the app-scoped .loomapp export/import are unaffected.',
+    ownerItem: 'EXP1',
+    surface: 'Workspace settings → Portability tab + /api/workspaces/[id]/{export,import,clone}',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
