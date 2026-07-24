@@ -38,7 +38,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .connectors import CONNECTORS, ConnectorError, ConnectorGate
+from .connectors import CONNECTORS, ConnectorError, ConnectorGateError
 
 logging.basicConfig(level=os.environ.get("LOOM_MIGRATE_LOG_LEVEL", "INFO"))
 log = logging.getLogger("loom-migrate")
@@ -82,7 +82,7 @@ def enumerate_estate(body: EnumerateRequest) -> JSONResponse:
         )
     try:
         inventory = fn(body.connection or {})
-    except ConnectorGate as gate:
+    except ConnectorGateError as gate:
         # Honest connection gate — reader reachable, source needs credentials.
         return JSONResponse(
             {"ok": False, "gated": True, "gate": {"prerequisite": gate.prerequisite, "message": gate.message}},

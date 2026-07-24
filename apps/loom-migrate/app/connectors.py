@@ -30,7 +30,6 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ── canonical output shapes (mirror lib/migrate/assessment.ts) ────────────────
 
 
@@ -70,7 +69,7 @@ class Inventory:
         }
 
 
-class ConnectorGate(Exception):
+class ConnectorGateError(Exception):
     """Raised when a source's connection prerequisite is missing (honest gate)."""
 
     def __init__(self, prerequisite: list[str], message: str) -> None:
@@ -93,7 +92,7 @@ class ConnectorError(Exception):
 def _get_json(url: str, token: str, timeout: int = 45) -> Any:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — https source URL
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # pragma: no cover - network
         body = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
@@ -115,7 +114,7 @@ def _post_json(url: str, token: str, payload: dict[str, Any], timeout: int = 45)
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — https source URL
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # pragma: no cover - network
         body = exc.read().decode("utf-8", "replace")[:300] if exc.fp else ""
@@ -143,7 +142,7 @@ def enumerate_databricks_uc(conn: dict[str, Any]) -> Inventory:
     host = _norm_host(str(conn.get("host") or ""))
     token = str(conn.get("token") or "")
     if not host or not token:
-        raise ConnectorGate(
+        raise ConnectorGateError(
             ["host", "token"],
             "Provide the Databricks workspace URL (host) and a personal access token (token, stored as a Key Vault secret) to enumerate Unity Catalog.",
         )
@@ -206,7 +205,7 @@ def enumerate_fabric(conn: dict[str, Any]) -> Inventory:
     ws = str(conn.get("workspaceId") or "").strip()
     token = str(conn.get("token") or "")
     if not ws or not token:
-        raise ConnectorGate(
+        raise ConnectorGateError(
             ["workspaceId", "token"],
             "Provide the Fabric workspace id (workspaceId) and a Fabric-scoped bearer token (token, stored as a Key Vault secret) to enumerate the workspace as a migration source.",
         )
@@ -234,7 +233,7 @@ def enumerate_powerbi(conn: dict[str, Any]) -> Inventory:
     ws = str(conn.get("workspaceId") or "").strip()
     token = str(conn.get("token") or "")
     if not ws or not token:
-        raise ConnectorGate(
+        raise ConnectorGateError(
             ["workspaceId", "token"],
             "Provide the Power BI workspace (group) id (workspaceId) and a Power BI-scoped bearer token (token, stored as a Key Vault secret) to enumerate the workspace as a migration source.",
         )
@@ -270,7 +269,7 @@ def enumerate_snowflake(conn: dict[str, Any]) -> Inventory:
     token = str(conn.get("token") or "")
     database = str(conn.get("catalog") or "").strip()
     if not host or not token or not database:
-        raise ConnectorGate(
+        raise ConnectorGateError(
             ["host", "token", "catalog"],
             "Provide the Snowflake account URL (host), an OAuth/key-pair bearer token (token, stored as a Key Vault secret), and the database to enumerate (catalog).",
         )
