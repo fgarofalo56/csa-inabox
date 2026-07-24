@@ -173,6 +173,7 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   'adf-dataset':                 (p) => <Table20Regular style={{ color: p.color }} />,
   'adf-trigger':                 (p) => <Pulse20Regular style={{ color: p.color }} />,
   'stream-analytics-job':        (p) => <Pulse20Regular style={{ color: p.color }} />,
+  'streaming-sql':               (p) => <DataLine20Regular style={{ color: p.color }} />,
 
   // AI Foundry
   'ai-foundry-hub':         (p) => <Cube20Regular style={{ color: p.color }} />,

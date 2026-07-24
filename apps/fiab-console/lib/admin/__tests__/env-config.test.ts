@@ -247,7 +247,13 @@ describe('admin/env-config registry', () => {
     // LOOM_MIGRATE_URL — the loom-migrate estate-assessment reader. Opt-in (NOT
     // optionalDefault: with the reader absent the assess route is honestly
     // gated), so it counts as one new editable var: 180 → 181.
-    expect(EDITABLE_ENV.length).toBe(181);
+    // Bumped to 182 by N7a (streaming-SQL tier): svc-loom-risingwave adds
+    // LOOM_RISINGWAVE_URL — the RisingWave stateful-streaming Container App.
+    // Opt-in (NOT optionalDefault: with the tier absent /api/streaming-sql/* is
+    // honestly gated), so it counts as one new editable var: 181 → 182. Its
+    // DATABASE/USER/PASSWORD knobs are runtime-only (allowlisted in check-env-sync,
+    // not ENV_CHECKS specs), so they do not enter EDITABLE_ENV.
+    expect(EDITABLE_ENV.length).toBe(182);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

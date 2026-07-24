@@ -130,4 +130,16 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
       'Opt-in on-ramp: /admin/migrate renders fully (guided empty state) with LOOM_MIGRATE_URL unset. Set it to the internal-ingress loom-migrate reader to enumerate a Snowflake / Databricks-UC / Fabric / Power BI estate. Each source still needs its own connection (URL + a Key-Vault-stored token) supplied per assessment; an unwired connector honest-gates rather than fabricating counts.',
     legacyCodes: ['migrate_not_configured'],
   },
+  // ── N7a — RisingWave stateful streaming-SQL tier (Openness Tier-2 T2-A) ──
+  'svc-loom-risingwave': {
+    surfaces: [
+      { path: '/items/streaming-sql', label: 'Streaming SQL — materialized views over Event Hubs' },
+      { path: '/api/streaming-sql/mv', label: 'Streaming MV authoring edge (audited)' },
+      { path: '/api/streaming-sql/query', label: 'Streaming SQL read edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in stateful-streaming tier: the streaming-sql editor renders fully (guided empty state) with LOOM_RISINGWAVE_URL unset. Set it to the internal-ingress loom-risingwave Container App to author streaming materialized views over Event Hubs sinking to Delta/Iceberg. Azure Stream Analytics (the stream-analytics-job item) still covers simple streaming jobs; RisingWave adds the stateful class (windowed joins, incremental aggregations). ~$150-300/mo/cloud when deployed.',
+    legacyCodes: ['risingwave_not_configured'],
+  },
 };

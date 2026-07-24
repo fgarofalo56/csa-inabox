@@ -255,6 +255,7 @@ const REGISTRY: Record<string, Entry> = {
   'adf-dataset':                 { icon: Table24Regular,      family: 'data-factory', label: 'ADF Dataset' },
   'adf-trigger':                 { icon: Pulse24Regular,      family: 'data-factory', label: 'ADF Trigger' },
   'stream-analytics-job':        { icon: Pulse24Regular,      family: 'rti',          label: 'Stream Analytics Job' },
+  'streaming-sql':               { icon: DataLine24Regular,   family: 'rti',          label: 'Streaming SQL' },
 
   // ── AI Foundry ───────────────────────────────────────────────────
   'ai-foundry-hub':       { icon: Cube24Regular,           family: 'foundry', label: 'AI Foundry Hub' },

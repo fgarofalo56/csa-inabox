@@ -175,6 +175,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
   'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
   'stream-analytics-job':        reg(() => import('./stream-analytics-editor'), 'StreamAnalyticsJobEditor'),
+  // N7a — Streaming SQL (RisingWave): stateful streaming materialized views over
+  // Event Hubs, sinking to Delta/Iceberg or the Postgres wire.
+  'streaming-sql':               reg(() => import('./streaming-sql-editor'), 'StreamingSqlEditor'),
 
   // v1.9 — APIM-first surface (API-first methodology, data product marketplace)
   'apim-api':                    reg(() => import('./apim-editors'),           'ApimApiEditor'),

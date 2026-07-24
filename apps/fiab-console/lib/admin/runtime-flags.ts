@@ -311,6 +311,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Lakehouse / warehouse / SQL Lab editors → Connect tab',
   },
   {
+    id: 'n7a-streaming-sql',
+    label: 'Streaming SQL (RisingWave) editor',
+    description:
+      'The N7a streaming-sql surface: the SQL editor for streaming MATERIALIZED VIEWS over Azure Event Hubs (with the honest gate when LOOM_RISINGWAVE_URL is unset), the live MV status panel (throughput / backfill / row counts read from RisingWave\'s catalog), the source/sink pickers, and the Materialize action. OFF replaces the editor body with a guided notice on the next render — the loom-risingwave Container App, the /api/streaming-sql/** routes, and every already-created item are unaffected. Azure Stream Analytics (stream-analytics-job) is a separate item and is not touched by this flag.',
+    ownerItem: 'N7a',
+    surface: 'Streaming SQL editor (/items/streaming-sql/[id])',
+  },
+  {
     id: 'n7c-activation-sync',
     label: 'Activation sync (reverse ETL)',
     description:
