@@ -183,6 +183,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Mapping data flow editor (/items/mapping-dataflow/[id]) — bottom Debug panel',
   },
   {
+    id: 'u13-pipeline-run-overlay',
+    label: 'Pipeline canvas — in-canvas Debug/Output run overlay',
+    description:
+      'The U13 ADF-pipeline-debug-parity overlay on BOTH pipeline canvases (the data-pipeline editor and the shared PipelineDesigner): per-activity run-status glyphs painted on the nodes, the floating run strip (status / progress / rerun-from-failed), and the eyeglass run-detail dialog (input / output / error JSON from the real queryActivityRuns APIs). OFF reverts the canvases to the pre-U13 glyph-less rendering on the next render — the Output pane, the Debug dispatch, recovery reruns, and every /output & /runs route keep working; only the on-canvas paint is gated.',
+    ownerItem: 'U13',
+    surface: 'Pipeline canvases (/items/data-pipeline/[id] + PipelineDesigner hosts) — run overlay',
+  },
+  {
     id: 'a9-matrix-conditional-format',
     label: 'Report matrix — conditional formatting on cells',
     description:

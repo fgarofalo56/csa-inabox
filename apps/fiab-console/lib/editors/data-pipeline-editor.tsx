@@ -64,6 +64,8 @@ import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
 import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
+import { PipelineOutputDock } from '@/lib/components/pipeline/pipeline-output-dock';
+import { streamDataPipelineRun } from '@/lib/components/pipeline/pipeline-debug-overlay';
 import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
 import { PIPELINE_TEMPLATES, type PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
 import {
@@ -327,6 +329,10 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
 
   // Editor chrome state
   const [topTab, setTopTab] = useState<TopTabId>('pipeline');
+  // U13 — the in-canvas Output dock (ADF's output strip below the canvas).
+  // Opens automatically when a ribbon Debug run starts; user-resizable
+  // (shared ResizableCanvasRegion, persisted) and dismissible.
+  const [outputDockOpen, setOutputDockOpen] = useState(false);
   const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
   // "Explain this step" (W19) — the activity name whose node-scoped Explain
   // drawer is open (null = closed). Set by the canvas node Explain action.
@@ -836,6 +842,18 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     } finally { setRunning(false); }
   }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
+  // U13 — stream a ribbon-dispatched debug run's per-activity receipts onto
+  // the canvas via the shared overlay poller (SAME /output route the Output
+  // pane reads — one run path; rerun callbacks dispatch REAL recovery runs).
+  const streamRunToCanvas = useCallback((initialRunId: string) => {
+    if (!workspaceId || !pipelineId) return;
+    streamDataPipelineRun({
+      workspaceId, pipelineId, runId: initialRunId,
+      notify: (message, intent) =>
+        dispatchToast(<Toast><ToastTitle>{message}</ToastTitle></Toast>, { intent }),
+    });
+  }, [workspaceId, pipelineId, dispatchToast]);
+
   const debug = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setDebugging(true);
@@ -853,10 +871,15 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
       if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Debug run started · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
-        setTopTab('output');
+        // U13 ADF parity — stay ON the canvas: paint per-activity status on
+        // the nodes and open the Output dock below (instead of leaving for
+        // the Output tab, which hid the graph while the run streamed).
+        if (j.runId) streamRunToCanvas(j.runId);
+        setTopTab('pipeline');
+        setOutputDockOpen(true);
       }
     } finally { setDebugging(false); }
-  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf, streamRunToCanvas]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -1131,6 +1154,8 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
         { label: 'Output', actions: [
           { label: outputPinned ? 'Unpin' : 'Pin output', onClick: () => setOutputPinned((v) => !v) },
           { label: 'Open Output tab', onClick: pipelineId ? () => setTopTab('output') : undefined, disabled: !pipelineId },
+          // U13 — toggle the in-canvas Output dock (run receipts + canvas together).
+          { label: outputDockOpen ? 'Hide output dock' : 'Show output dock', onClick: pipelineId ? () => { setOutputDockOpen((v) => !v); setTopTab('pipeline'); } : undefined, disabled: !pipelineId },
         ]},
       ],
     },
@@ -1138,7 +1163,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     canCreate, saving, canSave, save, workspaceId, loadList, canDiscard, dirty, discard,
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
-    pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
+    pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned, outputDockOpen,
     exportPipeline, openManageHub,
   ]);
 
@@ -1504,6 +1529,20 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                         onDelete={() => { if (selected) deleteActivity(selected.name); }}
                       />
                     </div>
+                    {/* U13 — the in-canvas Output dock (ADF's output strip
+                        below the canvas): run receipts + graph together. */}
+                    {outputDockOpen && pipelineId && (
+                      <PipelineOutputDock
+                        workspaceId={workspaceId}
+                        pipelineId={pipelineId}
+                        pipelineParams={parameters}
+                        paramNames={parameters.map((p) => p.name)}
+                        variableNames={variables.map((v) => v.name)}
+                        activityNames={activities.map((a) => a.name)}
+                        onOpenFullTab={() => setTopTab('output')}
+                        onClose={() => setOutputDockOpen(false)}
+                      />
+                    )}
                   </div>
                 </div>
               )}
