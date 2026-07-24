@@ -55,7 +55,14 @@ export const DEFAULT_TICKET_TTL_S = 300;
 export const MAX_TICKET_TTL_S = 3600;
 
 /** Hosts that must never appear in a copy-paste snippet. */
-const INTERNAL_HOST_RE = /(\.internal\.[a-z0-9-]+\.azurecontainerapps\.(io|us)|\.svc\.cluster\.local|^localhost$|^127\.)/i;
+// NOTE the `[a-z0-9.-]+` (dots ALLOWED) between `.internal.` and
+// `.azurecontainerapps.`: a real ACA internal FQDN is
+// `<app>.internal.<env>.<region>.azurecontainerapps.io` — TWO labels, not one.
+// A single-label pattern (`[a-z0-9-]+`) silently fails to match, which would
+// classify an internal container address as `published` and print it to users
+// as a connect target (leaking internal topology + handing out a URI that can
+// never resolve for them). Same `.internal.` CAE gotcha bitten before.
+const INTERNAL_HOST_RE = /(\.internal\.[a-z0-9.-]+\.azurecontainerapps\.(io|us)|\.svc\.cluster\.local|^localhost$|^127\.)/i;
 
 /** Honest config signal — the missing env var, or null when the wire is wired. */
 export function flightSqlConfigGate(): { missing: string } | null {

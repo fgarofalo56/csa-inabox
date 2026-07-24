@@ -91,7 +91,9 @@ describe('SqlLabEditor — DuckDB tier wired', () => {
 
     await waitFor(() =>
       expect(screen.getByText('2 rows · 12 ms engine · 48 ms round-trip · duckdb')).toBeInTheDocument());
-    expect(screen.getByText(/reading your lake in place/)).toBeInTheDocument();
+    // getAllByText: the engine note renders in both the status bar and the
+    // results header, so uniqueness is the wrong assertion — presence is.
+    expect(screen.getAllByText(/reading your lake in place/).length).toBeGreaterThan(0);
 
     const run = calls.find((c) => c.url.includes('/api/duckdb/query'));
     expect(run).toBeTruthy();

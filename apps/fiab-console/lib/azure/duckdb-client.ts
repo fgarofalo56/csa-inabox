@@ -9,7 +9,7 @@
  * Delta, Iceberg and Parquet IN PLACE on the deployment's own ADLS Gen2 through
  * a user-assigned managed identity holding *Storage Blob Data Reader*:
  *
- *   SELECT * FROM delta_scan('abfss://gold@<acct>.dfs.core.windows.net/sales')
+ *   SELECT * FROM delta_scan('abfss://gold@<acct>.dfs.core.windows.net/sales')  // cloud-endpoint-literal-ok: illustrative doc comment, not a runtime host
  *
  * It is the fast path BELOW Spark — sub-second cold start where a Spark session
  * costs 1–5 minutes — and it is an ACCELERATOR, never a dependency.
@@ -38,6 +38,7 @@
  */
 
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
@@ -313,7 +314,9 @@ export function buildLakeScanSql(account: string, source: LakeSource): string {
     );
   }
   const format = source.format || inferLakeFormat(path);
-  const uri = `abfss://${container}@${account}.dfs.core.windows.net/${path}`;
+  // dfsSuffix(): the DFS host differs per sovereign cloud (Gov is
+  // .dfs.core.usgovcloudapi.net) — a hardcoded Commercial host silently breaks Gov.
+  const uri = `abfss://${container}@${account}.${dfsSuffix()}/${path}`;
   const limit = Math.max(1, Math.min(Math.floor(source.limit ?? 100_000), 200_000));
   return `SELECT * FROM ${READER[format](uri)} LIMIT ${limit}`;
 }

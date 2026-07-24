@@ -74,7 +74,7 @@ export const POST = withSession(async (req, { session }) => {
   if (!sql) {
     return apiError(
       'A SQL statement is required. SQL Lab runs read-only queries — try '
-      + "SELECT * FROM delta_scan('abfss://gold@<account>.dfs.core.windows.net/<table>') LIMIT 100.",
+      + "SELECT * FROM delta_scan('abfss://gold@<account>.dfs.core.windows.net/<table>') LIMIT 100.", // cloud-endpoint-literal-ok: illustrative example in an error message, not a runtime host
       400,
     );
   }

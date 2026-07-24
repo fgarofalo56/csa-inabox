@@ -64,8 +64,10 @@ describe('ConnectTab — published endpoint', () => {
     installFetchMock({ '/api/flightsql/connect': () => PUBLISHED });
     renderWithProviders(<ConnectTab surface="SQL Lab" />);
 
-    await waitFor(() => expect(screen.getByText('ADBC (Python)')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('ADBC (Python)'));
+    // getAllByText: the engine label appears in BOTH the selector and its snippet
+    // body, so getByText's uniqueness requirement false-fails. [0] is the selector.
+    await waitFor(() => expect(screen.getAllByText('ADBC (Python)').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByText('ADBC (Python)')[0]);
     await waitFor(() => expect(screen.getByText(/flight_sql\.connect/)).toBeInTheDocument());
     expect(screen.getByText(/LOOM_FLIGHT_TICKET/)).toBeInTheDocument();
   });
@@ -107,7 +109,7 @@ describe('ConnectTab — nothing deployed', () => {
     // snippets still render — no empty tab, no red on first open.
     expect(screen.getByText(/not deployed in this environment/i)).toBeInTheDocument();
     expect(screen.getByText('Generate ticket')).toBeInTheDocument();
-    expect(screen.getByText('ADBC (Python)')).toBeInTheDocument();
+    expect(screen.getAllByText('ADBC (Python)').length).toBeGreaterThan(0);
     expect(screen.queryByText(/Connection details unavailable/i)).toBeNull();
   });
 
