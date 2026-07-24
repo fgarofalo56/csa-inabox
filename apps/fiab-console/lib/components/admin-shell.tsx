@@ -24,6 +24,7 @@ import {
   TargetArrow24Regular,
   DatabaseLink24Regular,
   Alert24Regular,
+  ArrowSwap24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -119,6 +120,7 @@ const ADMIN_GROUPS: AdminGroup[] = [
   {
     label: 'Platform (network / updates)',
     items: [
+      { href: '/admin/migrate', label: 'Migrate', icon: ArrowSwap24Regular, description: 'M1 — the inbound-migration on-ramp: point Loom at a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI estate, enumerate its schemas, tables, models, notebooks and reports, and get a migration-readiness report mapping every object to a Loom item type with a 1:1 / needs-review effort flag. A Fabric / Power BI estate is only ever a migration SOURCE — Loom itself needs no Fabric. Real data via the audited loom-migrate reader; unwired source connectors are honestly gated.' },
       { href: '/admin/deploy-planner', label: 'Deployment planner', icon: CloudArrowUp24Regular, description: 'Visually plan what deploys to which subscription and domain; generate the bicepparam for az deployment.' },
       { href: '/admin/landing-zones', label: 'Landing zones', icon: Server24Regular, description: 'See, visualize and manage every Data Landing Zone attached to your hub — and attach new ones (dlz-attach). Inherits the hub boundary, region and coordinates; a second Console cannot be deployed from here.' },
       { href: '/admin/users', label: 'Users & licenses', icon: People24Regular, description: 'Power BI / Fabric license assignments and user inventory.' },

@@ -119,4 +119,15 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → the built-in per-replica in-memory result cache serves everything with zero loss of function.',
   },
+  // ── M1 — estate assessment reader (inbound-migration on-ramp) ──
+  'svc-loom-migrate': {
+    surfaces: [
+      { path: '/admin/migrate', label: 'Estate assessment — migration-readiness report' },
+      { path: '/api/migrate/assess', label: 'Estate enumeration edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in on-ramp: /admin/migrate renders fully (guided empty state) with LOOM_MIGRATE_URL unset. Set it to the internal-ingress loom-migrate reader to enumerate a Snowflake / Databricks-UC / Fabric / Power BI estate. Each source still needs its own connection (URL + a Key-Vault-stored token) supplied per assessment; an unwired connector honest-gates rather than fabricating counts.',
+    legacyCodes: ['migrate_not_configured'],
+  },
 };

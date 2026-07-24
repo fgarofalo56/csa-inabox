@@ -358,6 +358,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N17',
     surface: '/admin/incident-console + /api/observability/monitors + /api/observability/incidents',
   },
+  {
+    id: 'n-m1-estate-assess',
+    label: 'Migration — estate assessment on-ramp',
+    description:
+      'The M1 inbound-migration on-ramp at /admin/migrate: point Loom at a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI estate, enumerate it through the loom-migrate reader, and render the migration-readiness report (per-object → Loom item type + 1:1/needs-review effort). OFF makes /api/migrate/assess return a guided "turned off" 503 and hides the surface\'s function on the next load; nothing else is affected (no roll needed). A Fabric / Power BI estate is only ever a migration SOURCE — Loom itself needs no Fabric.',
+    ownerItem: 'M1',
+    surface: '/admin/migrate + /api/migrate/assess',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

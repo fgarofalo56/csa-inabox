@@ -186,4 +186,22 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'The harness only drives the in-boundary Synapse Livy + warm-pool paths, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
     },
   },
+  // ── M1 — estate assessment reader (the inbound-migration on-ramp) ──
+  //    Opt-in by nature: assessment only runs when you point Loom at a source
+  //    estate to migrate FROM. Unset → /admin/migrate fully renders (guided
+  //    empty state) and the assess route honest-gates with a Fix-it; a Fabric /
+  //    Power BI estate is only ever a migration SOURCE (Loom needs no Fabric).
+  {
+    id: 'svc-loom-migrate', category: 'data-plane', title: 'Estate assessment reader (inbound migration on-ramp)', severity: 'optional',
+    required: ['LOOM_MIGRATE_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_MIGRATE_URL to the internal-ingress FQDN of the loom-migrate Container App (connects to a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI source estate and enumerates its inventory for the /admin/migrate readiness report). Deploy platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep, then set the var on the Console app. The reader is NEVER public — every enumeration goes through the audited BFF at /api/migrate/assess. Each SaaS source still needs its own connection (account/workspace URL + a Key-Vault-stored token) supplied in the surface; until then that connector is honestly gated (never a fabricated count).',
+    docs: 'https://learn.microsoft.com/azure/container-apps/',
+    provisionedBy: 'modules/data-plane/loom-migrate-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_MIGRATE_URL on the Console app',
+    role: 'No new Azure role on the Console UAMI — the BFF proxies to the reader (internal ingress). The reader carries its own UAMI; SaaS-source credentials are Key Vault secrets supplied per connection.',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'The reader runs IN-BOUNDARY on the deployment\'s own Container Apps environment — no SaaS assessment service is in the path, so the on-ramp itself runs disconnected in an IL5 / air-gapped enclave. Individual SaaS-source connectors (Snowflake / Databricks / Fabric / Power BI) reach their own estates and stay honestly gated until their connection prerequisite is provided.',
+    },
+  },
 ];

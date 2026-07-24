@@ -243,7 +243,11 @@ describe('admin/env-config registry', () => {
     // LOOM_FLIGHT_ROW_THRESHOLD, LOOM_DUCKDB_MAX_ROWS) are runtime-only code
     // defaults / secretRefs and deliberately NOT part of the specs, so the
     // editable count rises by exactly two: 178 → 180.
-    expect(EDITABLE_ENV.length).toBe(180);
+    // Bumped to 181 by M1 (inbound-migration on-ramp): svc-loom-migrate adds
+    // LOOM_MIGRATE_URL — the loom-migrate estate-assessment reader. Opt-in (NOT
+    // optionalDefault: with the reader absent the assess route is honestly
+    // gated), so it counts as one new editable var: 180 → 181.
+    expect(EDITABLE_ENV.length).toBe(181);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

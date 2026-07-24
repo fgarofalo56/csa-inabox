@@ -118,6 +118,8 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
   // N1 — Iceberg REST Catalog (internal-ingress Unity Catalog OSS container).
   LOOM_ICEBERG_CATALOG_URL: 'https://iceberg-catalog.internal.<cae-default-domain>  (unset = dual metadata still emitted to your lake; no catalog discovery)',
+  // M1 — estate assessment reader (inbound-migration on-ramp, internal ingress).
+  LOOM_MIGRATE_URL: 'https://loom-migrate.internal.<cae-default-domain>  (unset = /admin/migrate renders but assess honest-gates)',
   LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',

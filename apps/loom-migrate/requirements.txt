@@ -1,0 +1,8 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+# The reader holds no standing source credentials; azure-identity is present so
+# it can acquire its own UAMI token when the BFF passes a KV secret URI to
+# resolve in-boundary. Source REST calls use the Python standard library
+# (urllib) — no third-party HTTP client — so every embed stays license-reviewed.
+azure-identity==1.19.0
