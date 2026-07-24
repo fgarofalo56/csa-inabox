@@ -489,7 +489,7 @@ jobs:
             exit 0
           fi
           HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv | tr -d '\r')
-          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default // masterKey" -o tsv | tr -d '\r')
+          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default || masterKey" -o tsv | tr -d '\r')
           if [ -z "$KEY" ]; then echo "::warning::no function key readable for $FUNC — eval dispatch skipped."; exit 0; fi
           echo "::add-mask::$KEY"
           DISPATCHED=""

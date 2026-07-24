@@ -121,10 +121,14 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv | tr -d '\r')
-          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default // masterKey" -o tsv | tr -d '\r')
-          if [ -z "$KEY" ]; then
-            echo "::warning::could not read a function key for $FUNC — skipping the eval run."
+          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv 2>/dev/null | tr -d '\r' || true)
+          # Tolerate a transient/RBAC/Bad-Request failure on the keys API: the
+          # eval run is an HONEST GATE, so an unreadable key must SKIP (found=false),
+          # never fail the job. `|| true` keeps set -e from aborting before the
+          # empty-key gate below can handle it.
+          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default || masterKey" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$HOST" ] || [ -z "$KEY" ]; then
+            echo "::warning::could not read the host/function key for $FUNC (function may be stopped or the keys API returned an error) — skipping the eval run."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
