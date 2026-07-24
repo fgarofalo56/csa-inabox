@@ -7,8 +7,8 @@
  * `apps/loom-risingwave` is an internal-ingress Container App running a single-
  * node **RisingWave** (Apache-2.0) — the STATEFUL streaming engine ABOVE Azure
  * Stream Analytics. It authors streaming **materialized views** in SQL over
- * **Azure Event Hubs** (consumed through the namespace's Kafka-protocol endpoint,
- * `<namespace>.servicebus.windows.net:9093`) and sinks the continuously-
+ * **Azure Event Hubs** (consumed through the namespace's Kafka-protocol endpoint
+ * on port 9093 — the host is resolved per-cloud, never hardcoded) and sinks the continuously-
  * maintained results to **Delta / Iceberg** on the deployment's own ADLS Gen2
  * (the N1 lake) or serves them over the **Postgres wire**.
  *

@@ -30,7 +30,6 @@ import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2, Tab, TabList,
   Dropdown, Option, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
-  Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {

@@ -69,7 +69,7 @@ describe('StreamingSqlEditor — tier wired', () => {
     await waitFor(() => expect(screen.getByText('RisingWave 2.1.3')).toBeInTheDocument());
     // The primary Materialize button in the toolbar.
     fireEvent.click(screen.getAllByRole('button', { name: /Materialize/ })[0]);
-    await waitFor(() => expect(screen.getByText(/Materialized/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/maintaining it incrementally/)).toBeInTheDocument());
     const post = calls.find((c) => c.url.includes('/api/streaming-sql/mv'));
     expect(post).toBeTruthy();
     expect(JSON.parse(String(post!.init!.body))).toMatchObject({ itemId: 'ss-1' });
