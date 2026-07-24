@@ -25,6 +25,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TranslatePanel } from './translate-panel';
 import {
   makeStyles, tokens, Subtitle2, Caption1, Body1, Badge, Spinner, Dropdown, Option,
   Button, Input, Field, MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
@@ -90,7 +91,7 @@ async function assess(sourceType: MigrationSourceType, connection: Record<string
 
 export default function MigratePage() {
   const styles = useStyles();
-  const [tab, setTab] = useState<'assess' | 'copy'>('assess');
+  const [tab, setTab] = useState<'assess' | 'copy' | 'translate'>('assess');
 
   // Assess state
   const [sourceType, setSourceType] = useState<MigrationSourceType>('snowflake');
@@ -138,9 +139,10 @@ export default function MigratePage() {
       }}
     >
       <div className={styles.root}>
-        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'assess' | 'copy')}>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'assess' | 'copy' | 'translate')}>
           <Tab value="assess" icon={<ArrowSwap24Regular />}>Assess</Tab>
           <Tab value="copy" icon={<DatabasePlug20Regular />}>Copy in</Tab>
+          <Tab value="translate">Translate</Tab>
         </TabList>
 
         {tab === 'assess' && (
@@ -232,6 +234,7 @@ export default function MigratePage() {
         )}
 
         {tab === 'copy' && <CopyInTab report={state.report} onGoAssess={() => setTab('assess')} />}
+        {tab === 'translate' && <TranslatePanel />}
       </div>
     </AdminShell>
   );

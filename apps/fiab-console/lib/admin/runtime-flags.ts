@@ -374,6 +374,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'M2',
     surface: '/admin/migrate (Copy in) + /api/migrate/copy',
   },
+  {
+    id: 'n-m3-translate',
+    label: 'Migration — code translation (SQL / DAX / report)',
+    description:
+      'The M3 code-translation surface on /admin/migrate (Translate tab): transpile Snowflake / T-SQL views to Loom SQL, DAX measures to N9 semantic-contract measures (reusing the A1/A2/A3 parser + fold), and Power BI / Fabric reports to N16 code-reports (reusing the N16 parser). Every unsupported construct is flagged needs-review with the exact reason (never a fabricated translation); generated artifacts land as draft Loom items. OFF makes POST /api/migrate/translate return a guided "turned off" 503 and hides the Translate tab on the next load; nothing else is affected (no roll needed).',
+    ownerItem: 'M3',
+    surface: '/admin/migrate (Translate tab) + POST /api/migrate/translate',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
