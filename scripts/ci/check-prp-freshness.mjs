@@ -97,7 +97,7 @@ const FACTS = [
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1575, // 4a boundary re-baseline (Phase-4 trust chain added N9 verified-queries, N13 prompts/[promptId]/budgets routes)
+    stated: 1603, // 4b boundary re-baseline (Phase-4 openness added N1 catalog/iceberg, N4 transform, N5 assets, N6 data-contracts, N2 duckdb, N3 flightsql routes)
     live: countRoutes,
   },
   {
