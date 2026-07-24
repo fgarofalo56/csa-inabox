@@ -79,6 +79,7 @@ export const GOVERNANCE_SECTIONS: GovernanceSectionGroup[] = [
     label: 'Health & quality',
     items: [
       { href: '/governance/data-quality', label: 'Data quality', desc: 'Author rules, run on Kusto/Databricks/Synapse, results + Delta/Lakehouse monitors.' },
+      { href: '/governance/data-contracts', label: 'Data contracts', desc: 'ODCS 3.1 contracts ENFORCED at ingestion — bindings, quarantine-to-dead-letter posture, and the pass/fail trend.' },
       { href: '/governance/mdm', label: 'Master data', desc: 'Golden-record match/merge + reference-data management on Azure-native compute.' },
       { href: '/governance/irm', label: 'Insider risk', desc: 'IRM indicators — unusual volume, off-hours access, privileged access over audit logs + Monitor.' },
       { href: '/governance/insights', label: 'Insights & reports', desc: 'Compliance reports, ownership coverage, endorsement trends.' },

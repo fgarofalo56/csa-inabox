@@ -17,8 +17,8 @@
  *   landing folder), Step 2 is skipped with an honest note — Step 1 still runs.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enableMirroring } from '@/lib/azure/azure-sql-client';
 import { runMirrorSnapshot, type MirrorSource, type MirrorTableSpec, type MirrorTableResult } from '@/lib/azure/mirror-engine';
 import { loadOwnedItem } from '../../../_lib/item-crud';
@@ -30,10 +30,8 @@ export const dynamic = 'force-dynamic';
 // Snapshotting several tables (TDS read + ADLS write each) can take a while.
 export const maxDuration = 300;
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession(async (req, { session, params }) => {
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
   if (!body?.server || !body?.database) {
     return NextResponse.json({ ok: false, error: 'server + database required' }, { status: 400 });
@@ -78,7 +76,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Per-table watermarks from the prior Start drive incremental sync; first run snapshots.
   const prevTableStatus = (Array.isArray(state.mirrorTablesStatus) ? state.mirrorTablesStatus : []) as MirrorTableResult[];
 
-  const run = await runMirrorSnapshot(id, owned.workspaceId, src, prevTableStatus);
+  // N6 — enforce the ODCS contracts bound to this mirror at ingestion.
+  const run = await runMirrorSnapshot(id, owned.workspaceId, src, prevTableStatus, { tenantId: oid });
 
   // Persist the run so the next Start syncs incrementally and the receipt survives.
   try {
@@ -108,4 +107,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       error: run.error,
     },
   });
-}
+});

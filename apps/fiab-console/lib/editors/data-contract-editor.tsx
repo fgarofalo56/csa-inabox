@@ -19,7 +19,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Save20Regular, Table20Regular, ShieldCheckmark20Regular, LinkRegular,
+  Save20Regular, Table20Regular, ShieldCheckmark20Regular, LinkRegular, DatabaseSearch20Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -29,7 +29,8 @@ import { useItemState } from './palantir/shared';
 import {
   DataContractDesigner, ContractQualityRunPanel,
 } from './components/data-contract-designer';
-import { EMPTY_CONTRACT, contractStats, type DataContract } from '@/lib/dataproducts/contract';
+import { DataContractOdcsPanel } from './components/data-contract-odcs-panel';
+import { EMPTY_CONTRACT, contractStats, type ContractColumn, type DataContract } from '@/lib/dataproducts/contract';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -57,6 +58,8 @@ export function DataContractEditor({ item, id }: { item: FabricItemType; id: str
   const [databases, setDatabases] = useState<string[]>([]);
   const [tables, setTables] = useState<string[]>([]);
   const [adxGate, setAdxGate] = useState<string | null>(null);
+  const [deriving, setDeriving] = useState(false);
+  const [deriveMsg, setDeriveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const contract = state.contract ?? EMPTY_CONTRACT;
   const stats = useMemo(() => contractStats(contract), [contract]);
@@ -91,13 +94,53 @@ export function DataContractEditor({ item, id }: { item: FabricItemType; id: str
     if (ok) setSavedVersion((v) => v + 1);
   }, [save]);
 
+  /**
+   * N6 — DERIVE the schema from the bound table. A real ADX read
+   * (`.show table <T> schema as json`), never a hand-typed column list. Columns
+   * the steward already annotated keep their description / classification /
+   * primary-key flag; columns the source dropped are removed; new columns are
+   * appended — so re-deriving after a source change is a diff, not a wipe.
+   */
+  const deriveSchema = useCallback(async () => {
+    setDeriving(true);
+    setDeriveMsg(null);
+    try {
+      const r = await clientFetch(`/api/items/data-contract/${encodeURIComponent(id)}/introspect`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ database: state.databaseName, table: state.databaseTable }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'Could not read the table schema.');
+      const derived: ContractColumn[] = Array.isArray(j.columns) ? j.columns : [];
+      setState((p) => {
+        const prior = new Map((p.contract?.schema || []).map((c) => [c.name, c]));
+        const merged: ContractColumn[] = derived.map((d) => {
+          const keep = prior.get(d.name);
+          return keep
+            ? { ...d, description: keep.description ?? d.description, classification: keep.classification, primaryKey: keep.primaryKey, nullable: keep.nullable }
+            : d;
+        });
+        return { ...p, contract: { ...(p.contract ?? EMPTY_CONTRACT), schema: merged } };
+      });
+      setDeriveMsg({ intent: 'success', text: `Derived ${derived.length} column${derived.length === 1 ? '' : 's'} from ${j.database}.${j.table}. Save the contract to persist them.` });
+    } catch (e) {
+      setDeriveMsg({ intent: 'error', text: (e as Error)?.message || 'Could not read the table schema.' });
+    } finally {
+      setDeriving(false);
+    }
+  }, [id, state.databaseName, state.databaseTable, setState]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Contract', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: dirty && !saving ? doSave : undefined, disabled: !dirty || saving },
       ]},
+      { label: 'Schema', actions: [
+        { label: deriving ? 'Deriving…' : 'Derive from table', onClick: !deriving && state.databaseTable ? deriveSchema : undefined, disabled: deriving || !state.databaseTable },
+      ]},
     ]},
-  ], [saving, dirty, doSave]);
+  ], [saving, dirty, doSave, deriving, deriveSchema, state.databaseTable]);
 
   if (id === 'new') {
     return (
@@ -133,6 +176,15 @@ export function DataContractEditor({ item, id }: { item: FabricItemType; id: str
           <Spinner label="Loading data contract…" />
         ) : (
           <>
+            {deriveMsg && (
+              <MessageBar intent={deriveMsg.intent} layout="multiline">
+                <MessageBarBody>
+                  <MessageBarTitle>{deriveMsg.intent === 'success' ? 'Schema derived from the bound table' : 'Could not derive the schema'}</MessageBarTitle>
+                  {deriveMsg.text}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
             <DataContractDesigner value={contract} onChange={(next) => setState((p) => ({ ...p, contract: next }))} />
 
             {/* ── Validation binding (real ADX, dropdown-driven) ────────────── */}
@@ -167,17 +219,28 @@ export function DataContractEditor({ item, id }: { item: FabricItemType; id: str
                   </Dropdown>
                 </Field>
               </div>
+              <div className={s.toolbar}>
+                <Button icon={deriving ? <Spinner size="tiny" /> : <DatabaseSearch20Regular />} disabled={deriving || !state.databaseTable} onClick={deriveSchema}>
+                  {deriving ? 'Deriving…' : 'Derive schema from this table'}
+                </Button>
+                <Caption1 className={s.hint}>Reads the live table schema from Azure Data Explorer and fills the designer — annotations you already wrote are kept.</Caption1>
+              </div>
               <Caption1 className={s.hint}>Save the contract after changing the binding so validation runs against the persisted table.</Caption1>
             </Card>
 
             <ContractQualityRunPanel id={id} endpoint={`/api/items/data-contract/${encodeURIComponent(id)}/quality`} reloadKey={savedVersion} dirty={dirty} />
 
+            {/* ── N6: ODCS 3.1 registration, enforcement posture, bindings ─── */}
+            <DataContractOdcsPanel id={id} reloadKey={savedVersion} />
+
             {/* ── Where this contract is enforced ───────────────────────────── */}
-            <MessageBar intent="info">
+            <MessageBar intent="info" layout="multiline">
               <MessageBarBody>
                 <MessageBarTitle><LinkRegular /> Enforcing this contract</MessageBarTitle>
-                Bind this contract to a data product (set its <code>dataContractId</code> to this item, or fill the product&apos;s inline contract from this one). Its
-                error-severity expectations are then enforced when that product is published — a failing check blocks the publish (BR-CONTRACT-GATE).
+                Bind an ingestion path above (mirroring engine, pipeline sink, or eventstream) and Loom applies this contract to every batch:
+                conforming rows land, violating rows are quarantined to the Bronze <code>_rejected</code> dead-letter path and alerted.
+                Separately, binding this contract to a data product (its <code>dataContractId</code>) enforces the error-severity expectations at
+                that product&apos;s publish time (BR-CONTRACT-GATE).
               </MessageBarBody>
             </MessageBar>
           </>

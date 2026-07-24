@@ -365,6 +365,15 @@ type observabilityConfigT = {
 
   @description('C3 — cron (standard 5-field) for the cost-anomaly evaluation. Default daily 06:00 UTC.')
   costAnomalyCron: string?
+
+  @description('N5 — deploy the asset-reconciler (loom-asset-reconciler Container App Job — data-aware materialization of software-defined assets: observe real Delta commit versions / Event Hubs Capture watermarks, trigger the real Synapse / Databricks / SQLMesh job for upstream-changed or overdue assets, alert via the shared action group). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the runner). Per the estate constraint this is an ACA Job, NOT a Y1 Function. Instant kill without a roll: the n5-asset-reconciler runtime flag.')
+  assetReconcilerEnabled: bool?
+
+  @description('N5 — cron (standard 5-field) for the reconciliation pass. Default every 15 minutes; overlap is harmless (the pass is idempotent and every dispatch is cooldown-guarded).')
+  assetReconcilerCron: string?
+
+  @description('N5 — per-pass dispatch bound (LOOM_ASSET_MAX_TRIGGERS). 0 (default) uses the code default of 25. A pass can never dispatch more materializations than this.')
+  assetReconcilerMaxTriggers: int?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
@@ -463,6 +472,10 @@ var lineageExtractorCron = observabilityConfig.?lineageExtractorCron ?? '*/15 * 
 // C3 (observabilityConfig bag) — cost-anomaly monitor shims (default-ON, opt-out).
 var costAnomalyEnabled = observabilityConfig.?costAnomalyEnabled ?? true
 var costAnomalyCron = observabilityConfig.?costAnomalyCron ?? '0 6 * * *'
+// N5 (observabilityConfig bag) — asset-reconciler shims (default-ON, opt-out).
+var assetReconcilerEnabled = observabilityConfig.?assetReconcilerEnabled ?? true
+var assetReconcilerCron = observabilityConfig.?assetReconcilerCron ?? '*/15 * * * *'
+var assetReconcilerMaxTriggers = observabilityConfig.?assetReconcilerMaxTriggers ?? 0
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -5335,6 +5348,42 @@ module costAnomalyMonitor 'cost-anomaly-monitor-job.bicep' = if (costAnomalyActi
     acrLoginServer: registry.outputs.acrLoginServer
     loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
     cronExpression: costAnomalyCron
+    internalToken: loomInternalToken
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// N5 — asset-reconciler (loom-next-level Phase-4 N5).
+// Scheduled Microsoft.App/jobs (every 15 min, in-VNet, console UAMI) running
+// e2e/run-asset-reconcile.mjs, which POSTs the console's
+// /api/internal/assets/reconcile -- the console then derives the
+// software-defined-asset graph from unified lineage, reads REAL Delta commit
+// versions from `_delta_log` in the customer's own ADLS Gen2 (plus Event Hubs
+// Capture watermarks), runs the pure decision engine (cooldown / in-flight /
+// failure-backoff thrash guards + a hard per-pass dispatch bound), dispatches
+// the REAL Synapse pipeline / Databricks job / SQLMesh-dbt runner, and alerts
+// overdue assets through the shared action group (O1). Default-ON (opt-out via
+// observabilityConfig.assetReconcilerEnabled); instant kill without a roll via
+// the n5-asset-reconciler runtime flag. Runs the loom-uat image (the console
+// image is slimmed of e2e/); until that image is pushed the scheduled execution
+// fails honestly -- build it via deploy-loom-uat-job.sh in the post-deploy app
+// phase. Per the estate constraint this is an ACA Job, NOT a Y1 Function -- and
+// there is NO Dagster runtime anywhere: only its asset semantics are adopted.
+// =====================================================================
+var assetReconcilerActive = assetReconcilerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module assetReconciler 'asset-reconciler-job.bicep' = if (assetReconcilerActive) {
+  name: 'asset-reconciler-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: assetReconcilerCron
+    maxTriggers: assetReconcilerMaxTriggers
     internalToken: loomInternalToken
     complianceTags: complianceTags
   }

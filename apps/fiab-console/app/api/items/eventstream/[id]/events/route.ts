@@ -22,8 +22,8 @@
  *   receive dependency is enabled.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   loadKustoItem, executeQuery, normalizeClusterUri, qName,
   defaultDatabase, KustoError, type KustoItem,
@@ -35,6 +35,8 @@ import {
   EventHubsDataError,
   type SendEvent,
 } from '@/lib/azure/eventhubs-data-client';
+// N6 — ODCS data contracts ENFORCED at ingestion (the eventstream hook).
+import { enforceBeforeLanding } from '@/lib/ingest/contract-enforcement';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -137,13 +139,11 @@ async function peekFromAdxSink(
   });
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req, { session, params }) => {
   const nodeIdx = Number(req.nextUrl.searchParams.get('nodeIdx') ?? '0') || 0;
   const maxEvents = Math.min(100, Math.max(1, Number(req.nextUrl.searchParams.get('maxEvents') ?? '20') || 20));
   try {
-    const id = (await ctx.params).id;
+    const id = params.id;
     const r = await resolveSource(id, session.claims.oid, nodeIdx);
     if (!r.ok) return NextResponse.json({ ok: false, code: r.code, error: r.error }, { status: r.status });
     try {
@@ -212,11 +212,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req, { session, params }) => {
   const body = await req.json().catch(() => ({} as any));
   const nodeIdx = Number.isInteger(body?.nodeIdx) ? body.nodeIdx : 0;
   const partitionKey: string | undefined = typeof body?.partitionKey === 'string' ? body.partitionKey : undefined;
@@ -224,11 +222,53 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     ? body.events
     : [{ body: { hello: 'loom', ts: new Date().toISOString(), test: true } }];
   try {
-    const id = (await ctx.params).id;
+    const id = params.id;
     const r = await resolveSource(id, session.claims.oid, nodeIdx);
     if (!r.ok) return NextResponse.json({ ok: false, code: r.code, error: r.error }, { status: r.status });
-    const out = await sendEvents(r.hub, events, { partitionKey });
-    return NextResponse.json({ ok: true, sent: out.sent, status: out.status, batched: out.batched });
+
+    // ── N6 — ODCS data contracts ENFORCED at ingestion (eventstream path) ──
+    // Every event body is evaluated against the contracts bound to this
+    // eventstream + hub BEFORE anything reaches Event Hubs. Default mode is
+    // warn-quarantine: violating events are written to the Bronze `_rejected`
+    // dead-letter path and an alert fires, while the conforming remainder is
+    // still sent — a bad contract can never silently stop a live stream.
+    // `hard-reject` (per-contract opt-in) blocks the whole send with a 409.
+    const payloads: Record<string, unknown>[] = events.map((e) => {
+      const b = e?.body;
+      return b && typeof b === 'object' && !Array.isArray(b) ? (b as Record<string, unknown>) : { value: b };
+    });
+    const guard = await enforceBeforeLanding({
+      tenantId: session.claims.oid,
+      source: 'eventstream',
+      targetItemId: id,
+      dataset: r.hub,
+      basePath: `eventstreams/${id}`,
+      rows: payloads,
+    });
+    if (guard.blocked) {
+      return NextResponse.json({
+        ok: false,
+        error: guard.note || 'The events violate the bound data contract and the contract is in hard-reject mode.',
+        contract: { itemId: guard.contractItemId, mode: guard.mode, decision: guard.decision, rejected: guard.rejected, deadLetterPath: guard.deadLetterPath },
+      }, { status: 409 });
+    }
+    const conforming = guard.enforced
+      ? events.filter((_e, i) => guard.rows.includes(payloads[i]))
+      : events;
+    if (guard.enforced && !conforming.length) {
+      return NextResponse.json({
+        ok: true, sent: 0, status: 0, batched: false,
+        contract: { itemId: guard.contractItemId, mode: guard.mode, decision: guard.decision, rejected: guard.rejected, deadLetterPath: guard.deadLetterPath, note: guard.note },
+      });
+    }
+
+    const out = await sendEvents(r.hub, conforming, { partitionKey });
+    return NextResponse.json({
+      ok: true, sent: out.sent, status: out.status, batched: out.batched,
+      ...(guard.enforced
+        ? { contract: { itemId: guard.contractItemId, mode: guard.mode, decision: guard.decision, rejected: guard.rejected, deadLetterPath: guard.deadLetterPath, note: guard.note } }
+        : {}),
+    });
   } catch (e: any) {
     if (e instanceof EventHubsDataError) {
       return NextResponse.json({ ok: false, error: e.message }, { status: e.status });
@@ -236,4 +276,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

@@ -87,6 +87,11 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Analyze',
     items: [
       { href: '/thread', label: 'Lineage' },
+      // N5 — the estate as a graph of SOFTWARE-DEFINED ASSETS (freshness
+      // policies + data-aware materialization), derived from the same lineage
+      // /thread draws. It sits beside Lineage because that is the mental model:
+      // lineage is what connects to what; Assets is what is fresh and what runs.
+      { href: '/assets', label: 'Assets' },
       { href: '/monitor', label: 'Monitor' },
       { href: '/org-reports', label: 'Reports' },
       { href: '/scheduler', label: 'Scheduler' },

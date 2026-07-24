@@ -254,6 +254,30 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N4',
     surface: 'Transformation project editor (/items/transformation-project/[id]) — Plan & apply + Model DAG tabs',
   },
+  {
+    id: 'n5-assets-canvas',
+    label: 'Assets — software-defined-asset canvas',
+    description:
+      'The N5 asset graph on /assets: canvas-node-kit nodes with freshness chips, the docked asset inspector, the dropdown-only freshness-policy editor, and the Materialize action that runs the asset\'s real backing job. OFF replaces the canvas with a guided notice on the next load and leaves the KPI band, the late/failing lists, the /api/assets/** endpoints, every saved freshness policy, and the asset-reconciler fully working — the seconds-fast revert for a rendering regression on the new surface.',
+    ownerItem: 'N5',
+    surface: 'Assets page (/assets) — asset graph canvas + inspector',
+  },
+  {
+    id: 'n5-asset-reconciler',
+    label: 'Asset reconciler — data-aware materialization',
+    description:
+      'The N5 scheduled reconciler pass (/api/internal/assets/reconcile, driven by the in-VNet loom-asset-reconciler Container App Job): observe REAL Delta commit versions / Event Hubs Capture watermarks, decide which assets to materialize (upstream-changed or overdue, behind the cooldown / in-flight / failure-backoff thrash guards), dispatch the real Synapse / Databricks / SQLMesh job, and alert overdue assets through the shared action group. OFF turns the very next pass into a no-op in seconds with no revision roll — nothing is dispatched and nothing is alerted, while freshness status, policies, and the manual Materialize button keep working.',
+    ownerItem: 'N5',
+    surface: 'Scheduled asset-reconciler pass (loom-asset-reconciler ACA Job → /api/internal/assets/reconcile)',
+  },
+  {
+    id: 'n6-data-contracts',
+    label: 'Data contracts — governance registry',
+    description:
+      'The N6 Governance → Data contracts registry (ODCS 3.1 contracts, their ingestion bindings, and the pass/fail enforcement trend). OFF makes /governance/data-contracts render an honest "turned off" state on the next load and the registry API return an empty payload. It does NOT stop enforcement: contracts already bound to the mirroring engine, pipeline sinks, and eventstream keep quarantining violating rows to the Bronze `_rejected` dead-letter path and alerting — disable enforcement per contract (Enforcement → off) if that is what you need.',
+    ownerItem: 'N6',
+    surface: '/governance/data-contracts (registry page + /api/governance/data-contracts)',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
