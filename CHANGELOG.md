@@ -25,6 +25,82 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.76.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.75.0...csa-inabox-v0.76.0) (2026-07-24)
+
+
+### Features
+
+* **A6:** report small-multiples — wire Format grid controls to trellis render ([#2460](https://github.com/fgarofalo56/csa-inabox/issues/2460)) ([8921a6e](https://github.com/fgarofalo56/csa-inabox/commit/8921a6e62d6ea2d94a48905feee12e0202c7829f))
+* **A8:** report map — Gov honest-gate + basemap-free choropleth fallback ([#2473](https://github.com/fgarofalo56/csa-inabox/issues/2473)) ([454adb3](https://github.com/fgarofalo56/csa-inabox/commit/454adb34e4977954a46a74dc816c692eb0a6ff24))
+* **A9:** report matrix conditional formatting + CF painter golden harness ([#2476](https://github.com/fgarofalo56/csa-inabox/issues/2476)) ([ed205ea](https://github.com/fgarofalo56/csa-inabox/commit/ed205eadf97c2d31aad7ea3a008c082bfa887e9c))
+* **admin:** DIAG1 — one-click diagnostics / support bundle ([#2474](https://github.com/fgarofalo56/csa-inabox/issues/2474)) ([02ac0d3](https://github.com/fgarofalo56/csa-inabox/commit/02ac0d3a88d38353989c2671c708cca544844f0d))
+* **admin:** E5 — /admin/copilot-quality page (per-surface Copilot eval scores) ([#2469](https://github.com/fgarofalo56/csa-inabox/issues/2469)) ([690dbc1](https://github.com/fgarofalo56/csa-inabox/commit/690dbc10f51c032d552e457974a34415eb158a25))
+* **admin:** SLO1 — unified SLO / error-budget tab on the Health & Reliability hub ([#2464](https://github.com/fgarofalo56/csa-inabox/issues/2464)) ([b26ecb5](https://github.com/fgarofalo56/csa-inabox/commit/b26ecb545fb60d88816fd4cc0392fa6668e4e44e))
+* **copilot-evals:** SRCH1 — federated-search relevance evals + E5 Search tab ([#2481](https://github.com/fgarofalo56/csa-inabox/issues/2481)) ([c8ade9f](https://github.com/fgarofalo56/csa-inabox/commit/c8ade9f229c9bcc60be591c2b554df8fc25d6213))
+* **dataflow:** U7 PR-1 — mapping-dataflow Debug mode held session + per-transform Data Preview ([#2468](https://github.com/fgarofalo56/csa-inabox/issues/2468)) ([8bb4a77](https://github.com/fgarofalo56/csa-inabox/commit/8bb4a77d40b03d502f1c65bab2c6c89c0208e41c))
+* **dataflow:** U7 PR-2 — mapping-dataflow Inspect (schema + drift) + Statistics tabs ([#2478](https://github.com/fgarofalo56/csa-inabox/issues/2478)) ([fc5cda9](https://github.com/fgarofalo56/csa-inabox/commit/fc5cda9e0f6386b2a756db36bc457a419086fd32))
+* **dax:** iterators + RANKX + FLAG0 fold-engine toggle (A3) ([#2479](https://github.com/fgarofalo56/csa-inabox/issues/2479)) ([9db20a4](https://github.com/fgarofalo56/csa-inabox/commit/9db20a48408d9376fec4b655df0bc0c9bf1bb27d))
+* **editors:** R18 — shared useEditorState hook (snapshot-safe editor state) ([#2459](https://github.com/fgarofalo56/csa-inabox/issues/2459)) ([48f8108](https://github.com/fgarofalo56/csa-inabox/commit/48f8108f3edace96ded29d77abe952899641d268))
+* **finops:** C3 — cost-anomaly monitor (in-VNet ACA Job + shared detector + alerts) ([#2471](https://github.com/fgarofalo56/csa-inabox/issues/2471)) ([3da007a](https://github.com/fgarofalo56/csa-inabox/commit/3da007a029af622c7b056e69ed2a2baf26c30566))
+* **finops:** C4 — /admin/finops hub (forecast + anomaly feed/rules + breakdown + audited Budgets CRUD) ([#2482](https://github.com/fgarofalo56/csa-inabox/issues/2482)) ([8f5f78a](https://github.com/fgarofalo56/csa-inabox/commit/8f5f78a5398eb70ffe2dae0cc52812ebbeafabf2))
+* **LIC0:** distribution-license inventory + NOTICE manifest — the gate mandated to precede Phase-4 OSS embeds (retroactive) ([#2506](https://github.com/fgarofalo56/csa-inabox/issues/2506)) ([ee13cce](https://github.com/fgarofalo56/csa-inabox/commit/ee13cce3d3bea780be44d93a4a331c49fd9b4ff2))
+* **lineage:** L3 — ADF/Synapse Copy-activity column lineage (in-VNet ACA job) ([#2467](https://github.com/fgarofalo56/csa-inabox/issues/2467)) ([527b8c9](https://github.com/fgarofalo56/csa-inabox/commit/527b8c9f9c93c1160cc773d1ecf51b8e83aaa158))
+* **lineage:** L4 — Purview column-level lineage push + read (Atlas columnMapping) ([#2477](https://github.com/fgarofalo56/csa-inabox/issues/2477)) ([dcd24ef](https://github.com/fgarofalo56/csa-inabox/commit/dcd24efc371cf4adda14f6d857065ee460c73869))
+* **loom-next-level:** N11 GraphRAG retriever over Weave/AGE + N12 self-healing NL2SQL loop ([#2498](https://github.com/fgarofalo56/csa-inabox/issues/2498)) ([4ce1d50](https://github.com/fgarofalo56/csa-inabox/commit/4ce1d50d296c51b9329a5d2567ea91a2359b9011))
+* **loom-next-level:** Phase-3 Wave-I — I9/E6/X1/L6/L7/Spark-A11-13/I7 (verified batch) ([#2491](https://github.com/fgarofalo56/csa-inabox/issues/2491)) ([e22f607](https://github.com/fgarofalo56/csa-inabox/commit/e22f6073a8e79caf2442c3a5be47699cee2300fd))
+* **loom-next-level:** Phase-3 Wave-II — I6 per-workspace enforce UI + gate (build-only, operator-gated) ([#2493](https://github.com/fgarofalo56/csa-inabox/issues/2493)) ([48a565e](https://github.com/fgarofalo56/csa-inabox/commit/48a565e8d3179f35af89d16a75996cd9481e1959))
+* **loom-next-level:** Phase-4 4a — N13 unified LLMOps (prompt registry + token budgets + E5 panels) ([#2497](https://github.com/fgarofalo56/csa-inabox/issues/2497)) ([32c2443](https://github.com/fgarofalo56/csa-inabox/commit/32c24434dfa181ada3a744d4afb437c3c0e8300f))
+* **loom-next-level:** Phase-4 4a-batch1 — N9 verified semantic contract + N10 answer receipts ([#2496](https://github.com/fgarofalo56/csa-inabox/issues/2496)) ([9cb8957](https://github.com/fgarofalo56/csa-inabox/commit/9cb89579c46b37c6c91fffc852cd3b2e2c7f2367))
+* **loom-next-level:** Phase-4 4b-batch1 — N1 Iceberg REST catalog (flagship) + N4 SQLMesh transform runner ([#2501](https://github.com/fgarofalo56/csa-inabox/issues/2501)) ([e4e4195](https://github.com/fgarofalo56/csa-inabox/commit/e4e41956b441faebdf96f8c3f2a0a00aa5f11e81))
+* **loom-next-level:** Phase-4 4b-batch2 — N5 software-defined assets + N6 ODCS contracts enforced at ingestion ([#2502](https://github.com/fgarofalo56/csa-inabox/issues/2502)) ([711fb3a](https://github.com/fgarofalo56/csa-inabox/commit/711fb3a7fbc829767eca788c3eb3a35097320379))
+* **loom-next-level:** Phase-4 4b-batch3 — N2 DuckDB dual-mode + N3 Arrow Flight SQL/ADBC ([#2503](https://github.com/fgarofalo56/csa-inabox/issues/2503)) ([294ff1f](https://github.com/fgarofalo56/csa-inabox/commit/294ff1f1367f5f96902e3069db973b3c5f42dcf4))
+* **loom-next-level:** Phase-4 4b-batch4 — N7b CDC control plane + N7c reverse-ETL + N7d data-quality/data-diff ([#2508](https://github.com/fgarofalo56/csa-inabox/issues/2508)) ([357e5ee](https://github.com/fgarofalo56/csa-inabox/commit/357e5ee1c832007317b33b3acf70cc64fe846077))
+* **loom-next-level:** Phase-4 4c — N15 headless metrics layer (MetricFlow-spec, native compiler, /api/metrics/query) ([#2511](https://github.com/fgarofalo56/csa-inabox/issues/2511)) ([2eaf865](https://github.com/fgarofalo56/csa-inabox/commit/2eaf8656ccd65eabb4ae57b05fa60b3df3900fa8))
+* **loom-next-level:** Phase-4 4c — N17 OpenLineage incident console (completes pillar-3 core) ([#2515](https://github.com/fgarofalo56/csa-inabox/issues/2515)) ([c90099a](https://github.com/fgarofalo56/csa-inabox/commit/c90099ac3cc72f6b634b9cfaa5c6f956b13522a0))
+* **loom-next-level:** Phase-4 4c-batch2 — N16 code-report + N18 embedded SDK with engine-level RLS ([#2513](https://github.com/fgarofalo56/csa-inabox/issues/2513)) ([81e8edd](https://github.com/fgarofalo56/csa-inabox/commit/81e8edd4445c57d9bcb8ba117538a8edefc60f9f))
+* **loom-next-level:** Phase-4 4d — M1 estate assessment + inventory importer (migration on-ramp) ([#2516](https://github.com/fgarofalo56/csa-inabox/issues/2516)) ([b53afcd](https://github.com/fgarofalo56/csa-inabox/commit/b53afcd0b24c5a9c6732a17515faf8f9202662c8))
+* **loom-next-level:** Phase-4 4d batch2 — M2 migration copy-in + M3 code translation ([#2517](https://github.com/fgarofalo56/csa-inabox/issues/2517)) ([2bf74c2](https://github.com/fgarofalo56/csa-inabox/commit/2bf74c235ba197eec9512d96d874bdcab1493b20))
+* **loom-next-level:** Phase-4 openness tail — N7a RisingWave streaming-SQL + N7e Trino federation (opt-in) + N8 Tier-3 labs ([#2519](https://github.com/fgarofalo56/csa-inabox/issues/2519)) ([b4aac59](https://github.com/fgarofalo56/csa-inabox/commit/b4aac59b268b35e5fd5232cacc9e2b58c69c5861))
+
+
+### Bug Fixes
+
+* **bicep:** Function modules — existingPlanId reuse + AzureServices storage bypass ([#2458](https://github.com/fgarofalo56/csa-inabox/issues/2458)) ([08948b3](https://github.com/fgarofalo56/csa-inabox/commit/08948b363346b33bd36d019c4c0a5a5bd786e356))
+* **build:** bump console Dockerfile build-stage heap 5120→6656 (ACR build V8-OOM'd twice in a row post-Phase-3/4 growth) ([#2512](https://github.com/fgarofalo56/csa-inabox/issues/2512)) ([3b73e56](https://github.com/fgarofalo56/csa-inabox/commit/3b73e566cea04e2327969b0896189dc4b9adeb00))
+* **fresh0:** post-Wave-E aggregate-guard gaps (budgets health-coverage + DAX sql-quoting) + ledger ([#2488](https://github.com/fgarofalo56/csa-inabox/issues/2488)) ([693cb1b](https://github.com/fgarofalo56/csa-inabox/commit/693cb1bf724efbcc6125ab56ba13d10c7281b128))
+
+
+### Code Refactoring
+
+* **editors:** R8 — decompose data-product-editor (pure-move) + ratchet down ([#2461](https://github.com/fgarofalo56/csa-inabox/issues/2461)) ([ff99169](https://github.com/fgarofalo56/csa-inabox/commit/ff99169c2e1da33d2c21e72625e8f6b690ba5d0e))
+* **editors:** R9 — extract notebook-editor dialogs + ratchet down ([#2466](https://github.com/fgarofalo56/csa-inabox/issues/2466)) ([0fc23f6](https://github.com/fgarofalo56/csa-inabox/commit/0fc23f627db60e18046573f9e569e139768ca2fd))
+* **nav:** IA reorg — group admin sidebar, place data-products, disambiguate catalog naming ([#2509](https://github.com/fgarofalo56/csa-inabox/issues/2509)) ([7eb2ee9](https://github.com/fgarofalo56/csa-inabox/commit/7eb2ee9470637130284c386d4c8f18d4769e9257))
+
+
+### Documentation
+
+* **prp:** 1→2 boundary — FRESH0 strict pass + Phase-1 ledger complete ([#2456](https://github.com/fgarofalo56/csa-inabox/issues/2456)) ([cebed61](https://github.com/fgarofalo56/csa-inabox/commit/cebed611a999dc4d151e9b05f57e4ac5e727fd3e))
+* **prp:** DONE-ledger rows for the 6 grep-verified already-built §P2 items ([#2522](https://github.com/fgarofalo56/csa-inabox/issues/2522)) ([1933861](https://github.com/fgarofalo56/csa-inabox/commit/193386108378e36887d7a933792fb696fe1940ae))
+* **prp:** record Wave-E roll receipt (693cb1bf live + UAT-green) ([#2490](https://github.com/fgarofalo56/csa-inabox/issues/2490)) ([9ef039a](https://github.com/fgarofalo56/csa-inabox/commit/9ef039a2b4b75d513ae9f0e6b55337047cccef21))
+* **reconcile:** annotate §P2 tail with grep-verified built/gap status (WS-3) ([#2521](https://github.com/fgarofalo56/csa-inabox/issues/2521)) ([5466166](https://github.com/fgarofalo56/csa-inabox/commit/54661668de5aadb950cdd293668716fc881f896f))
+* **reconcile:** consolidate all not-fully-implemented items across 14 PRPs into one prioritized reconcile PRP ([#2507](https://github.com/fgarofalo56/csa-inabox/issues/2507)) ([62076ea](https://github.com/fgarofalo56/csa-inabox/commit/62076eabe8bf847139fb3d96fc520775323fa255))
+* **reconcile:** mark tier-router/feature-store/RLS-6.3 gaps CLOSED + fix evals CI honest-gate ([#2518](https://github.com/fgarofalo56/csa-inabox/issues/2518)) ([ca1e411](https://github.com/fgarofalo56/csa-inabox/commit/ca1e411d50b42b0405c2d5f9849401c28ed5807c))
+
+
+### Tests
+
+* **A7:** analytics-pane depth — golden numeric harness (FRESH0: already built) ([#2463](https://github.com/fgarofalo56/csa-inabox/issues/2463)) ([54e6cec](https://github.com/fgarofalo56/csa-inabox/commit/54e6cec7b352407533e310c9cfee893b43ad096d))
+
+
+### Miscellaneous
+
+* **fresh0:** 4c/4d/openness Phase-4 completion boundary — re-baseline route-total 1617→1638, toolkit-gap 1343→1338; DONE ledger row ([#2520](https://github.com/fgarofalo56/csa-inabox/issues/2520)) ([b278014](https://github.com/fgarofalo56/csa-inabox/commit/b27801464b70491ba8e5b2e2020d57589f7c21ce))
+* **prp:** FRESH0 2→3 boundary re-baseline (route-total 1552→1567) ([#2489](https://github.com/fgarofalo56/csa-inabox/issues/2489)) ([a6c213d](https://github.com/fgarofalo56/csa-inabox/commit/a6c213da5e90f638c4c5e3743a4aa0acae7b8a35))
+* **prp:** FRESH0 3→4 boundary re-baseline (route-total 1567→1571) + Phase-3 DONE ledger + roll receipt (48a565e8 live) ([#2495](https://github.com/fgarofalo56/csa-inabox/issues/2495)) ([caeede9](https://github.com/fgarofalo56/csa-inabox/commit/caeede9636b36cb090ec821bdc2c95a4f6ff983b))
+* **prp:** FRESH0 4a boundary re-baseline (route-total 1571→1575) + Phase-4 4a trust-chain ledger + roll receipt (4ce1d50d live) ([#2500](https://github.com/fgarofalo56/csa-inabox/issues/2500)) ([68ecd96](https://github.com/fgarofalo56/csa-inabox/commit/68ecd96e761f0cba78a72becca4a6834a92165c6))
+* **prp:** FRESH0 4b boundary re-baseline (route-total 1575→1603) + Phase-4 openness ledger + roll receipt (294ff1f1 live) ([#2505](https://github.com/fgarofalo56/csa-inabox/issues/2505)) ([1c3511d](https://github.com/fgarofalo56/csa-inabox/commit/1c3511d2208e204552a2be2cf61fe1c1ff686285))
+* **prp:** FRESH0 4b-tail boundary (route-total 1603→1617) + N7b/c/d + nav-reorg + LIC0 ledger rows ([#2510](https://github.com/fgarofalo56/csa-inabox/issues/2510)) ([cd96815](https://github.com/fgarofalo56/csa-inabox/commit/cd96815507ddae8cfdf468258223e7137cdc9477))
+
 ## [0.75.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.74.0...csa-inabox-v0.75.0) (2026-07-23)
 
 
