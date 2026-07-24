@@ -204,4 +204,31 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'The reader runs IN-BOUNDARY on the deployment\'s own Container Apps environment — no SaaS assessment service is in the path, so the on-ramp itself runs disconnected in an IL5 / air-gapped enclave. Individual SaaS-source connectors (Snowflake / Databricks / Fabric / Power BI) reach their own estates and stay honestly gated until their connection prerequisite is provided.',
     },
   },
+  // ── N7a — RisingWave stateful streaming-SQL tier (Openness Tier-2 T2-A) ──
+  //    Opt-in stateful-streaming BACKEND (~$150-300/mo/cloud); the streaming-sql
+  //    ITEM TYPE + editor are default-ON and render fully with LOOM_RISINGWAVE_URL
+  //    unset (guided empty state + Fix-it). Azure Stream Analytics stays the LIGHT
+  //    default for simple jobs (the stream-analytics-job item) — this is the
+  //    stateful class (windowed joins, incremental aggregations) ASA can't express.
+  {
+    id: 'svc-loom-risingwave', category: 'data-plane', title: 'Streaming SQL tier (RisingWave Container App)', severity: 'optional',
+    required: ['LOOM_RISINGWAVE_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_RISINGWAVE_URL to the internal-ingress FQDN (optionally host:port) of the loom-risingwave '
+      + 'Container App (single-node RisingWave, Apache-2.0 — authors streaming materialized views in SQL over '
+      + 'Azure Event Hubs via its Kafka endpoint, sinking to Delta/Iceberg on the DLZ lake or the Postgres wire). '
+      + 'Deploy platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep, then set the var on the Console '
+      + 'app. The tier is NEVER public — every statement goes through the audited BFF at /api/streaming-sql/*. It '
+      + 'is an opt-in STATEFUL-streaming tier (~$150-300/mo/cloud); the streaming-sql editor renders fully with '
+      + 'the var unset (Azure Stream Analytics still covers simple jobs). Optional: LOOM_RISINGWAVE_DATABASE '
+      + '(default dev), LOOM_RISINGWAVE_USER (default root), LOOM_RISINGWAVE_PASSWORD (KV secret; single-node '
+      + 'default is in-VNet trust).',
+    docs: 'https://docs.risingwave.com/docs/current/intro/',
+    provisionedBy: 'modules/data-plane/loom-risingwave-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_RISINGWAVE_URL on the Console app',
+    role: 'Storage Blob Data Contributor (uami-loom-risingwave) on the DLZ lake — declared in the module (the streaming sink WRITES Delta/Iceberg). The Console UAMI needs no new role (the BFF proxies over the Postgres wire).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'RisingWave is a self-contained Rust binary with no external control plane; the Event Hubs Kafka endpoint and ADLS Gen2 are both in-boundary and reachable in Azure Government through IL5, so the whole streaming tier runs disconnected in an air-gapped enclave. No SaaS streaming service, no Microsoft Fabric / OneLake is in the path.',
+    },
+  },
 ];

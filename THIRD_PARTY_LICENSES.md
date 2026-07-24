@@ -106,6 +106,7 @@ HTTP client — so every embed here is license-reviewed and permissive.
 | DuckDB embedded binary (N2b) | MIT | `duckdb-aca.bicep` | single embedded engine |
 | DuckDB `azure` / `httpfs` / `delta` / `iceberg` extensions | MIT | baked into `apps/loom-duckdb` image | in-boundary/air-gap-safe (no extension repo at runtime) |
 | Apache XTable / delta-rs (dual-metadata emit path, N1) | Apache-2.0 | Synapse Spark job (N1) | Delta↔Iceberg metadata |
+| RisingWave (streaming-SQL tier, N7a) | Apache-2.0 | `loom-risingwave-aca.bicep` | single-node stateful streaming engine; consumes Event Hubs (Kafka endpoint), sinks Delta/Iceberg; runs in-boundary/air-gap-safe |
 
 ## Deliberately NOT shipped (license posture)
 
