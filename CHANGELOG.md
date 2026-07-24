@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.77.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.76.0...csa-inabox-v0.77.0) (2026-07-24)
+
+
+### Features
+
+* **loom-next-level:** §P2-gaps residual wave — EXP1/A14/CMK1/U8/U9/U13/L5/SC1/CH1 ([#2523](https://github.com/fgarofalo56/csa-inabox/issues/2523)) ([d713354](https://github.com/fgarofalo56/csa-inabox/commit/d713354ed174dbcb1536d816b8c24ccca5e8131f))
+
 ## [0.76.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.75.0...csa-inabox-v0.76.0) (2026-07-24)
 
 
