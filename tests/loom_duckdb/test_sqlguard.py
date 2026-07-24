@@ -9,7 +9,7 @@ sqlguard = load("sqlguard")
 
 
 class TestAdmittedReads:
-    def test_select_is_admitted_and_returned_intact(self):
+    def test_select_is_admitted_and_returned_intact(self) -> None:
         stmts = sqlguard.assert_read_only("SELECT 1 AS n")
         assert stmts == ["SELECT 1 AS n"]
 
@@ -26,10 +26,10 @@ class TestAdmittedReads:
             "(SELECT 1)",
         ],
     )
-    def test_read_shapes(self, sql):
+    def test_read_shapes(self, sql: str) -> None:
         assert sqlguard.assert_read_only(sql)
 
-    def test_multi_statement_read_script_is_admitted_in_order(self):
+    def test_multi_statement_read_script_is_admitted_in_order(self) -> None:
         stmts = sqlguard.assert_read_only("SELECT 1; SELECT 2;")
         assert stmts == ["SELECT 1", "SELECT 2"]
 
@@ -46,36 +46,36 @@ class TestRefusals:
             ("INSTALL httpfs", "INSTALL"),
         ],
     )
-    def test_writes_are_refused_by_name(self, sql, verb):
+    def test_writes_are_refused_by_name(self, sql: str, verb: str) -> None:
         with pytest.raises(sqlguard.SqlNotAllowedError) as err:
             sqlguard.assert_read_only(sql)
         assert verb in str(err.value)
 
-    def test_a_write_hidden_after_a_read_still_refuses_the_whole_script(self):
+    def test_a_write_hidden_after_a_read_still_refuses_the_whole_script(self) -> None:
         with pytest.raises(sqlguard.SqlNotAllowedError) as err:
             sqlguard.assert_read_only("SELECT 1; DROP TABLE sales;")
         assert "DROP" in str(err.value)
 
-    def test_write_hidden_in_a_comment_does_not_smuggle_through(self):
+    def test_write_hidden_in_a_comment_does_not_smuggle_through(self) -> None:
         # The comment is stripped, so only the SELECT remains and is admitted;
         # the point is that the stripping happens BEFORE verb detection.
         assert sqlguard.assert_read_only("SELECT 1 -- DROP TABLE sales") == ["SELECT 1"]
 
-    def test_semicolon_inside_a_literal_is_not_a_statement_break(self):
+    def test_semicolon_inside_a_literal_is_not_a_statement_break(self) -> None:
         stmts = sqlguard.assert_read_only("SELECT 'a;b' AS s")
         assert stmts == ["SELECT 'a;b' AS s"]
 
-    def test_non_introspection_pragma_is_refused(self):
+    def test_non_introspection_pragma_is_refused(self) -> None:
         with pytest.raises(sqlguard.SqlNotAllowedError) as err:
             sqlguard.assert_read_only("PRAGMA enable_profiling")
         assert "introspection pragma" in str(err.value)
 
-    def test_unknown_verb_is_default_denied(self):
+    def test_unknown_verb_is_default_denied(self) -> None:
         with pytest.raises(sqlguard.SqlNotAllowedError) as err:
             sqlguard.assert_read_only("FROBNICATE everything")
         assert "not a recognized read statement" in str(err.value)
 
-    def test_empty_query_is_refused_with_guidance(self):
+    def test_empty_query_is_refused_with_guidance(self) -> None:
         with pytest.raises(sqlguard.SqlNotAllowedError) as err:
             sqlguard.assert_read_only("   \n  ")
         assert "empty" in str(err.value).lower()

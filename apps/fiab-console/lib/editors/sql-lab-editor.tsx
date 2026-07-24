@@ -47,7 +47,11 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import type { EditorProps } from './registry';
+// Props are declared inline (matching WarehouseEditor and every other editor)
+// rather than importing EditorProps from './registry'. registry.ts lazily
+// imports THIS module, so pulling a type back out of it forms a
+// sql-lab-editor → registry cycle that check-circular-deps rejects.
+import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 /** FLAG0 runtime kill-switch id (registered in lib/admin/runtime-flags.ts). */
 export const SQL_LAB_FLAG_ID = 'n2b-sql-lab-duckdb';
@@ -114,7 +118,7 @@ async function fetchCapabilities(): Promise<CapabilitiesResponse> {
   return json;
 }
 
-export function SqlLabEditor({ item, id }: EditorProps) {
+export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const enabled = useRuntimeFlag(SQL_LAB_FLAG_ID);
 
