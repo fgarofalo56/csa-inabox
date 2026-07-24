@@ -39,11 +39,19 @@ export interface NavSection {
 
 /**
  * NAV_SECTIONS — the GROUPED structure that drives the visual left-nav rail.
- * Fabric-style verb sections (Create / Home / Data / Build / Analyze / Govern /
- * Admin) keep the rail to a handful of scannable groups instead of 21 flat rows.
+ * Fabric-style verb sections (Create / Home / Data / Build / Operate / Analyze /
+ * Admin) keep the rail to a handful of scannable groups instead of a flat list.
  * Labels are plain-language (rel-T52): the last internal codename, "Warp", is
  * surfaced as "Orchestration (Warp)" — the plain verb primary with the product
  * codename kept parenthetically.
+ *
+ * IA reorg 2026-07-24 (nav audit): the single-link "Govern" group was noise, so
+ * /governance folded into Data (IA-13); Scheduler moved out of Analyze into the
+ * job-oriented "Operate" group (IA-09); the overloaded 8-item "Build" group was
+ * split, with the platform-meta rows (Deployment / Workload hub) re-homed under
+ * "Operate" (IA-10); /data-products joined Data beside Marketplace (IA-02);
+ * "OneLake catalog" → "Lakehouse catalog" (Azure-native framing, IA-11); and the
+ * federated-search rail label "Catalog (federated search)" → "Search" (IA-05).
  */
 export const NAV_SECTIONS: NavSection[] = [
   // Ungrouped top action — opens the New Item dialog inline (no header).
@@ -59,15 +67,26 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Data',
     items: [
-      { href: '/onelake', label: 'OneLake catalog' },
-      // Re-homed onto the rail (nav-IA reorg 2026-07-22): /catalog is the
-      // federated search surface (Search/Browse/Unity/Metastores/Permissions/
-      // Lineage) — distinct from /governance/catalog (governed inventory). It
-      // had been dropped from the rail without a demoted entry, stranding its
-      // sub-tabs at 3 clicks; on the rail they resolve in 2.
-      { href: '/catalog', label: 'Catalog (federated search)' },
+      // IA-11: Azure-native framing — the lakehouse catalog is ADLS Gen2 + Delta
+      // by default (no-fabric-dependency), so it no longer reads "OneLake".
+      { href: '/onelake', label: 'Lakehouse catalog' },
+      // IA-05: the /catalog rail label is now "Search" — the UNIFIED/federated
+      // search surface (Search/Browse/Unity/Metastores/Permissions/Lineage),
+      // disambiguated from /admin/catalog ("External-engine federation
+      // (Iceberg)") and /governance/catalog ("Governed data catalog"). Re-homed
+      // onto the rail in the 2026-07-22 reorg; it resolves its sub-tabs in 2
+      // clicks instead of 3.
+      { href: '/catalog', label: 'Search' },
       { href: '/marketplace', label: 'Marketplace' },
+      // IA-02: /data-products was a true orphan (reachable only by URL). It
+      // belongs beside Marketplace so it enters the flat NAV_ITEMS the command
+      // palette + Copilot navigate allow-list consume.
+      { href: '/data-products', label: 'Data products' },
       { href: '/connections', label: 'Connections' },
+      // IA-13: the former single-link "Govern" group was collapsed into Data —
+      // a one-item labeled group is nav noise. /governance is unchanged (same
+      // href, same page), it just lives under the Data header now.
+      { href: '/governance', label: 'Governance' },
     ],
   },
   {
@@ -78,9 +97,18 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/experience/warp/home', label: 'Orchestration (Warp)' },
       { href: '/estate', label: 'Estate builder' },
       { href: '/mesh', label: 'Agent Mesh' },
+      { href: '/developer', label: 'Developer' },
+    ],
+  },
+  {
+    // IA-09 + IA-10: job/lifecycle operations. Scheduler (schedules jobs) moved
+    // here out of Analyze; Deployment + Workload hub (platform-meta) split out
+    // of the overloaded Build group.
+    label: 'Operate',
+    items: [
       { href: '/deployment-pipelines', label: 'Deployment' },
       { href: '/workload-hub', label: 'Workload hub' },
-      { href: '/developer', label: 'Developer' },
+      { href: '/scheduler', label: 'Scheduler' },
     ],
   },
   {
@@ -94,13 +122,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/assets', label: 'Assets' },
       { href: '/monitor', label: 'Monitor' },
       { href: '/org-reports', label: 'Reports' },
-      { href: '/scheduler', label: 'Scheduler' },
       { href: '/copilot', label: 'Copilot' },
     ],
-  },
-  {
-    label: 'Govern',
-    items: [{ href: '/governance', label: 'Governance' }],
   },
   {
     label: 'Admin',
@@ -126,11 +149,17 @@ export const DEMOTED_NAV_ITEMS: NavItem[] = [
   // stays reachable via the palette + Copilot allow-list (it was a true orphan
   // before the nav-IA reorg 2026-07-22).
   { href: '/experience', label: 'Experiences' },
-  { href: '/admin/autopilot', label: 'Autopilot (self-driving FinOps)', adminOnly: true },
+  // IA-08: the Copilot Skills Studio was link-only (reachable from inside
+  // /copilot but not from the palette / Copilot navigate allow-list). Demoting
+  // it here makes it Ctrl+K- and Copilot-reachable without adding a thin rail row.
+  { href: '/copilot/skills', label: 'Skills Studio' },
   // N7b — the Debezium CDC connector control plane (source-connector wizard +
   // live snapshot/streaming/dead-letter monitor over the Azure-native mirror
   // engine). Off-rail (single-purpose), reachable via palette + Copilot + URL.
   { href: '/cdc', label: 'CDC connectors' },
+  // NB: /admin/autopilot is intentionally NOT here (IA-12). An /admin/* page
+  // belongs to the Admin portal sidebar (admin-shell.tsx SECTIONS), not the
+  // demoted top-level rail set — it stays fully reachable there.
 ];
 
 /**

@@ -40,8 +40,12 @@ interface TileSpec {
   description: string;
 }
 
-// The section tiles. href + icon mirror lib/components/admin-shell.tsx
-// SECTIONS so the landing grid and the left nav stay one-for-one.
+// The section tiles. Each href + icon mirrors an entry in the grouped
+// lib/components/admin-shell.tsx ADMIN_GROUPS sidebar. This grid is a CURATED
+// SUBSET (the highest-signal, live-count-bearing sections) — NOT a one-for-one
+// mirror of the full admin sidebar, which has more destinations than belong on
+// a landing grid. The IA-01 sidebar grouping is the exhaustive index; this grid
+// is the at-a-glance dashboard.
 const TILE_SPECS: TileSpec[] = [
   { key: 'workspaces', href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular,
     description: 'Tenant-wide workspace inventory' },
@@ -75,7 +79,8 @@ const TILE_SPECS: TileSpec[] = [
   { key: 'rumClientErrors', href: '/admin/rum', label: 'Real-user monitoring', icon: ChartMultiple24Regular,
     description: 'Client errors in the last 24 h' },
   // N1 — Iceberg-exposed tables (Delta ✓ + Iceberg ✓) readable by external engines.
-  { key: 'icebergTables', href: '/admin/catalog', label: 'Catalog federation', icon: DatabaseLink24Regular,
+  // Label tracks the IA-05 rename of the /admin/catalog section.
+  { key: 'icebergTables', href: '/admin/catalog', label: 'External-engine federation', icon: DatabaseLink24Regular,
     description: 'Tables external engines can read' },
   // DIAG1 — one-click support bundle; count = blocked config gates.
   { key: 'diagnostics', href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular,
