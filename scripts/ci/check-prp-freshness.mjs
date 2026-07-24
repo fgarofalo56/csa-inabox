@@ -97,7 +97,7 @@ const FACTS = [
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1603, // 4b boundary re-baseline (Phase-4 openness added N1 catalog/iceberg, N4 transform, N5 assets, N6 data-contracts, N2 duckdb, N3 flightsql routes)
+    stated: 1617, // 4b-tail boundary re-baseline (N7b/c/d cdc/activation-sync/data-quality routes + nav reorg)
     live: countRoutes,
   },
   {
