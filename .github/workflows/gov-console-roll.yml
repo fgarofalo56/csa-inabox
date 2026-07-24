@@ -5,6 +5,19 @@ name: gov-console-roll
 # local interactive Gov az session isn't available. Builds apps/fiab-console at
 # the dispatched ref on the Gov ACR (server-side az acr build) and rolls the
 # loom-console Container App to it, then health-gates. Non-interactive.
+#
+# SC1 supply-chain gate: after the build (while the ACR data plane is still
+# open for the tarball upload), the pushed image is Trivy-scanned (CRITICAL
+# CVEs FAIL the run before anything rolls), cosign-signed keylessly via GitHub
+# Actions OIDC, and the signature is cosign-VERIFIED against the trusted-
+# workflow identity BEFORE the roll step ships it. Sigstore (Fulcio/Rekor) is
+# reached from the GitHub-hosted runner, not from inside the Gov boundary, so
+# this is cloud-invariant. Emergency valve (mirrors loom-roll-and-validate's
+# skip_uat): the `skip_supply_chain` dispatch input skips scan+sign+verify
+# with a loud warning — this workflow is dispatch-only, so the input is always
+# available and no repo-variable valve is needed. The `lastgood` rollback path
+# intentionally stays unverified: it re-ships the image that was already
+# running. See docs/SUPPLY_CHAIN.md §7.
 on:
   workflow_dispatch:
     inputs:
@@ -12,9 +25,16 @@ on:
         description: 'Fallback image tag to roll back to if the new rev is unhealthy'
         required: false
         default: '26e7f3db'
+      skip_supply_chain:
+        description: 'EMERGENCY VALVE — skip the SC1 Trivy CRITICAL gate + cosign sign/verify (mirrors skip_uat semantics). The roll ships WITHOUT supply-chain verification.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  # SC1: keyless cosign signing exchanges the Actions OIDC token for a
+  # short-lived Fulcio certificate.
+  id-token: write
 
 env:
   RG: rg-csa-loom-admin-usgovvirginia
@@ -74,7 +94,71 @@ jobs:
             apps/fiab-console
           q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
           [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
-          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none
+          # NOTE (SC1): the ACR re-lock moved to a dedicated `if: always()` step
+          # below so (a) the supply-chain gate can pull the image + push the
+          # signature while the data plane is still open, and (b) a failed
+          # build/scan no longer leaves the ACR open.
+
+      # ── SC1: supply-chain gate — scan, sign, verify BEFORE the roll ──
+      - name: Supply-chain — resolve image digest
+        id: sc
+        if: ${{ !inputs.skip_supply_chain }}
+        run: |
+          set -euo pipefail
+          az acr login -n "$ACR" >/dev/null
+          DIGEST=$(az acr repository show --name "$ACR" --image "loom-console:$SHA" --query digest -o tsv | tr -d '\r')
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Could not resolve the manifest digest for loom-console:$SHA on $ACR — cannot scan/sign/verify."
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "::notice::loom-console:$SHA → $DIGEST"
+
+      - name: Supply-chain — Trivy gate (fail on CRITICAL CVEs)
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ env.ACR_LOGIN }}/loom-console:${{ env.SHA }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+      - name: Supply-chain — install cosign
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Supply-chain — cosign sign (keyless OIDC) + verify-before-roll
+        if: ${{ !inputs.skip_supply_chain }}
+        run: |
+          set -euo pipefail
+          REF="$ACR_LOGIN/loom-console@${{ steps.sc.outputs.digest }}"
+          echo "Signing $REF keylessly (GitHub Actions OIDC → Fulcio/Rekor) ..."
+          if ! cosign sign --yes "$REF"; then
+            echo "::error::cosign signing FAILED for $REF — refusing to roll an unsigned image. Re-run (transient Sigstore outage) or (emergency only) re-dispatch with skip_supply_chain=true."
+            exit 1
+          fi
+          echo "Verifying $REF before the roll ..."
+          IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
+          if ! cosign verify "$REF" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "$IDENTITY_RE" \
+              --output text; then
+            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — $REF has NO valid cosign signature from a trusted build workflow. Refusing to roll. Emergency only: re-dispatch with skip_supply_chain=true."
+            exit 1
+          fi
+          echo "::notice::SC1 supply-chain gate PASSED — $REF scanned (Trivy CRITICAL), signed, and verified. Proceeding to roll."
+
+      - name: Supply-chain — skip notice
+        if: ${{ inputs.skip_supply_chain }}
+        run: |
+          echo "::warning::skip_supply_chain is set — SKIPPING the SC1 Trivy CRITICAL gate + cosign sign/verify. This roll ships an UNSCANNED, UNSIGNED image; a later commercial-style roll of this tag will be rejected by the verification gates."
+
+      - name: Re-lock ACR (always)
+        if: always()
+        run: |
+          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none || true
+          echo "::notice::Gov ACR $ACR re-locked (private endpoint only)."
 
       - name: Roll loom-console + health-gate
         run: |

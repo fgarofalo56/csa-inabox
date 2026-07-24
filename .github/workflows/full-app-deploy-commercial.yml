@@ -36,10 +36,17 @@ on:
         description: 'Target subscription id (defaults to AZURE_SUBSCRIPTION_ID secret).'
         type: string
         required: false
+      skip_supply_chain:
+        description: 'EMERGENCY VALVE — skip the SC1 Trivy CRITICAL gate + cosign sign/verify (mirrors skip_uat semantics). Images ship WITHOUT supply-chain verification.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   issues: write
+  # SC1: keyless cosign signing exchanges the Actions OIDC token for a
+  # short-lived Fulcio certificate.
+  id-token: write
 
 env:
   AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}
@@ -106,8 +113,13 @@ jobs:
             --public-network-enabled true --default-action Allow \
             --admin-enabled true
           # Disable quarantine + trust policies — they block reads of
-          # newly-pushed unsigned/unscanned images. Operator re-enables
-          # via Bicep after content-signing pipeline is in place.
+          # newly-pushed unsigned/unscanned images. NOTE (SC1): ACR
+          # content-trust is Docker Content Trust (Notary v1) — NOT the
+          # signing scheme Loom enforces. Supply-chain enforcement on this
+          # deploy path is cosign keyless sign (in the build job below) +
+          # cosign verify-before-roll (verify-images job); these registry
+          # policy toggles stay disabled deliberately and are a tracked
+          # drift item for the V5 scheduled what-if lane.
           az acr config content-trust update --registry "$ACR_NAME" --status disabled 2>&1 | tail -3 || true
           # quarantinePolicy can't be toggled via az acr config; via REST:
           ACR_ID=$(az acr show --name "$ACR_NAME" --query id -o tsv)
@@ -265,9 +277,134 @@ jobs:
           scale_down_pool
           echo "::error::$APP ACR build failed after 3 attempts"; exit 1
 
+      # ── SC1: supply-chain gate — Trivy CRITICAL scan + keyless cosign sign ──
+      # Runs while the ACR is still OPEN (open-acr ran; close-acr runs after
+      # the whole build matrix + verify-images). The verify-images job below
+      # re-verifies every image signature before the roll job may proceed.
+      - name: Supply-chain — resolve image digest
+        id: sc
+        if: ${{ !inputs.skip_supply_chain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
+          az acr login --name "$ACR_NAME" >/dev/null
+          DIGEST=$(az acr repository show --name "$ACR_NAME" --image "${{ matrix.app }}:${{ github.sha }}" --query digest -o tsv | tr -d '\r')
+          if [[ -z "$DIGEST" ]]; then
+            echo "::error::Could not resolve the manifest digest for ${{ matrix.app }}:${{ github.sha }} — cannot scan/sign."
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "::notice::${{ matrix.app }}:${{ github.sha }} → $DIGEST"
+
+      - name: Supply-chain — Trivy gate (fail on CRITICAL CVEs)
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:${{ github.sha }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+      - name: Supply-chain — install cosign
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Supply-chain — cosign sign (keyless OIDC)
+        if: ${{ !inputs.skip_supply_chain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}@${{ steps.sc.outputs.digest }}"
+          echo "Signing $REF keylessly (GitHub Actions OIDC → Fulcio/Rekor) ..."
+          if ! cosign sign --yes "$REF"; then
+            echo "::error::cosign signing FAILED for $REF. The image is built but UNSIGNED — the verify-images gate will reject the roll. Re-run (transient Sigstore outage), or (emergency only) re-dispatch with skip_supply_chain=true."
+            exit 1
+          fi
+          echo "::notice::Signed $REF."
+
+      - name: Supply-chain — skip notice
+        if: ${{ inputs.skip_supply_chain }}
+        shell: bash
+        run: |
+          echo "::warning::skip_supply_chain is set — SKIPPING the SC1 Trivy CRITICAL gate + cosign signing for ${{ matrix.app }}. This image is UNSCANNED and UNSIGNED."
+
+  # ── SC1: verify-before-roll — every image the roll will ship must carry a
+  # valid keyless cosign signature from a trusted build workflow before the
+  # roll job may proceed. Runs while the ACR is still open (before close-acr).
+  # `always()` preserves the pre-SC1 lenient behavior for PARTIAL build
+  # failures (fail-fast is off; the roll ships whatever :TAG images exist) —
+  # but each existing :TAG image must verify. When skip_build=true the deploy
+  # rolls pre-existing images and this job is skipped — the roll step emits a
+  # loud warning for that path.
+  verify-images:
+    name: Verify image signatures (cosign)
+    needs: [resolve, build]
+    if: ${{ always() && !inputs.skip_build && needs.resolve.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Install cosign
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: sigstore/cosign-installer@v3.7.0
+      - name: Verify every image the roll ships is signed by a trusted workflow
+        run: |
+          set -uo pipefail
+          if [[ "${{ inputs.skip_supply_chain }}" == "true" ]]; then
+            echo "::warning::skip_supply_chain is set — SKIPPING the SC1 verify-before-roll gate. The roll ships images WITHOUT supply-chain verification."
+            exit 0
+          fi
+          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
+          ACR_LOGIN="${{ needs.resolve.outputs.acr_login_server }}"
+          TAG="${{ inputs.tag || 'v0.1' }}"
+          if ! az acr login --name "$ACR_NAME" >/dev/null; then
+            echo "::error::Cannot reach the ACR data plane on $ACR_NAME even though open-acr ran this run — cannot verify image signatures, refusing to roll blind. Check the ACR network toggle (an Azure Policy may have reverted it), or (emergency only) re-dispatch with skip_supply_chain=true."
+            exit 1
+          fi
+          IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
+          # Keep in sync with the build matrix above. Verify the :TAG refs —
+          # that is exactly what the redeploy-with-apps job rolls.
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb)
+          FAILED=()
+          for APP in "${APPS[@]}"; do
+            DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [[ -z "$DIGEST" ]]; then
+              echo "::warning::$APP:$TAG not found in $ACR_NAME (its build may have failed — fail-fast is off, and the roll step skips apps that are not deployed). Skipping its verification."
+              continue
+            fi
+            REF="$ACR_LOGIN/$APP@$DIGEST"
+            if cosign verify "$REF" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                --certificate-identity-regexp "$IDENTITY_RE" \
+                --output text >/dev/null 2>&1; then
+              echo "✓ $REF signature verified"
+            else
+              echo "::error::$REF ($APP:$TAG) has NO valid cosign signature from a trusted build workflow."
+              FAILED+=("$APP")
+            fi
+          done
+          if (( ${#FAILED[@]} > 0 )); then
+            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — unsigned image(s): ${FAILED[*]}. The roll job is BLOCKED. These :$TAG images were not produced by the gated CI path (or predate SC1, e.g. a failed build leg left a stale pre-SC1 :$TAG behind). Fix: re-run this workflow so the build job scans+signs them (check the per-app 'Cosign sign' step logs), or (emergency only) re-dispatch with skip_supply_chain=true."
+            exit 1
+          fi
+          echo "::notice::SC1 supply-chain gate PASSED — every existing :$TAG image is cosign-signed by a trusted workflow."
+
   close-acr:
     name: Re-lock ACR (private endpoint only)
-    needs: [resolve, build]
+    # verify-images is in `needs` so the re-lock only happens after the
+    # signature pushes + verification reads are done; `always()` still
+    # guarantees the ACR is re-locked even when a gate fails.
+    needs: [resolve, build, verify-images]
     if: always() && !inputs.skip_build
     runs-on: ubuntu-latest
     steps:
@@ -290,8 +427,12 @@ jobs:
 
   redeploy-with-apps:
     name: Roll Container Apps to new image
-    needs: [resolve, close-acr]
-    if: always() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build)
+    needs: [resolve, close-acr, verify-images]
+    # SC1: the roll additionally requires the verify-images gate to have
+    # PASSED (it exits 0 with a loud warning when skip_supply_chain is set,
+    # so the emergency valve still rolls). skip_build rolls pre-existing
+    # images with no verification — the roll step warns loudly for that path.
+    if: always() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build) && (needs.verify-images.result == 'success' || inputs.skip_build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -315,6 +456,9 @@ jobs:
       - name: Roll Container Apps
         run: |
           set -e
+          if [[ "${{ inputs.skip_build }}" == "true" ]]; then
+            echo "::warning::skip_build=true — rolling PRE-EXISTING images that were NOT signature-verified by this run (the SC1 verify-images gate only covers images built in-run). Use loom-roll-and-validate for a verified roll of an existing tag."
+          fi
           RG='${{ needs.resolve.outputs.rg }}'
           ACR='${{ needs.resolve.outputs.acr_login_server }}'
           TAG='${{ inputs.tag || 'v0.1' }}'
