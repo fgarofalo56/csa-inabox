@@ -19,6 +19,9 @@ on:
       - 'apps/fiab-console/package.json'
       - 'apps/fiab-console/pnpm-lock.yaml'
       - 'scripts/ci/check-licenses.mjs'
+      - 'scripts/ci/check-license-inventory.mjs'
+      - 'THIRD_PARTY_LICENSES.md'
+      - 'apps/*/requirements.txt'
       - '.github/workflows/license-scan.yml'
   push:
     branches: [main]
@@ -26,6 +29,9 @@ on:
       - 'apps/fiab-console/package.json'
       - 'apps/fiab-console/pnpm-lock.yaml'
       - 'scripts/ci/check-licenses.mjs'
+      - 'scripts/ci/check-license-inventory.mjs'
+      - 'THIRD_PARTY_LICENSES.md'
+      - 'apps/*/requirements.txt'
   # Also run on every release tag so the published NOTICES reflect the release.
   workflow_dispatch:
 
@@ -63,6 +69,12 @@ jobs:
         # Exits non-zero if any production dependency's license is outside the
         # allowlist in scripts/ci/check-licenses.mjs (GPL/AGPL/unknown → fail).
         run: node scripts/ci/check-licenses.mjs --write THIRD-PARTY-NOTICES.md
+
+      - name: LIC0 distribution-license inventory (Python sidecars + container OSS)
+        # Covers the SHIPPED OSS the npm scan cannot see — the apps/*/requirements.txt
+        # Python sidecars + the container-baked engines — against THIRD_PARTY_LICENSES.md.
+        # Fails on any A?GPL / BSL / SSPL or any un-reviewed new Python embed (loom-next-level LIC0).
+        run: node scripts/ci/check-license-inventory.mjs
 
       - name: Upload THIRD-PARTY-NOTICES
         if: always()
