@@ -319,6 +319,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Activation sync editor (/items/activation-sync/[id])',
   },
   {
+    id: 'n15-metrics-layer',
+    label: 'Headless metrics layer (governed metric query endpoint)',
+    description:
+      'The N15 headless metrics layer: POST /api/metrics/query compiles ONE governed MetricFlow-compatible metric definition natively to SQL/KQL (Synapse serverless / ADX / lakehouse) and serves it to the report designer, the Copilot NL2SQL path, and the SDK/API — the "one metric, one number everywhere" contract. OFF makes the query endpoint return a guided "turned off" gate and the report/NL metric-resolution fall back to their pre-N15 direct compile on the very next call (no roll) — the imported MetricFlow spec, the N9 metric registry, and every other surface are unaffected. There is NO runtime MetricFlow engine either way; Loom\'s own compiler emits the SQL.',
+    ownerItem: 'N15',
+    surface: 'POST /api/metrics/query + report metric wells + Copilot metric grounding',
+  },
+  {
     id: 'n7d-data-quality-diff',
     label: 'Data-quality depth — runner checks + data-diff',
     description:

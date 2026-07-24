@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1617 |
+| Total routes | 1618 |
 | Public (no session) | 116 |
 | Session-only | 574 |
-| Owner-scoped | 667 |
+| Owner-scoped | 668 |
 | Admin | 260 |
 | Gated (backend config) | 524 |
-| Areas | 109 |
+| Areas | 110 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -1808,6 +1808,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `messaging/metrics/route.ts` | GET | session-only | ● | Azure Monitor, Event Hubs, Service Bus |
+
+## metrics
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `metrics/query/route.ts` | POST | owner-scoped |  | — |
 
 ## monitor
 

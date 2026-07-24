@@ -444,6 +444,47 @@ function withMetricGrounding(cfg: DataAgentConfig, metricLabel: string, descript
   return { ...cfg, instructions: [cfg.instructions || '', block].filter(Boolean).join('\n\n') };
 }
 
+/**
+ * N15 — layer the governed metric's NATIVELY-COMPILED SQL onto the agent
+ * instructions so the NL2SQL answer computes the metric through the SAME compiler
+ * the report designer and the /api/metrics/query endpoint use ("one metric, one
+ * number everywhere"). Consumer 2 of the metrics layer. Best-effort + fail-safe:
+ * a missing spec, an unmatched metric (metric-view sourceKind not in the imported
+ * MetricFlow spec), the FLAG0 kill-switch OFF, or ANY error leaves grounding
+ * byte-identical to the pre-N15 path. Lazy-imports keep the module graph light
+ * for agents that never take the metric branch.
+ */
+async function withCompiledMetricGrounding(
+  cfg: DataAgentConfig,
+  tenantId: string | undefined,
+  metricId: string,
+): Promise<DataAgentConfig> {
+  if (!tenantId || !metricId) return cfg;
+  try {
+    const { runtimeFlag } = await import('@/lib/admin/runtime-flags');
+    if (!(await runtimeFlag('n15-metrics-layer', { default: true }))) return cfg;
+    const { getSemanticSpec } = await import('./semantic-contract');
+    const raw = await getSemanticSpec(tenantId);
+    if (!raw) return cfg;
+    const [{ normalizeSpec }, { resolveMetricForNl }] = await Promise.all([
+      import('@/lib/metrics/metricflow-spec'),
+      import('@/lib/metrics/consumers'),
+    ]);
+    const compiled = resolveMetricForNl({ spec: normalizeSpec(raw), metric: metricId, engine: 'synapse' });
+    const block = [
+      '## Governed metric SQL (compiled by the Loom metrics layer)',
+      'Compute this metric with EXACTLY this governed SQL — the same query the report ' +
+        'designer and the POST /api/metrics/query endpoint run — so your number matches everywhere:',
+      '```sql',
+      compiled.sql,
+      '```',
+    ].join('\n');
+    return { ...cfg, instructions: [cfg.instructions || '', block].filter(Boolean).join('\n\n') };
+  } catch {
+    return cfg;
+  }
+}
+
 // ── N11: GraphRAG grounding over the authored Weave/AGE ontology ─────────────
 
 /** Source types that carry an authored ontology / graph binding. */
@@ -1067,6 +1108,9 @@ export async function runReasoningAgent(
   let contractSignal: ContractSignal | undefined;
   if (decision.mode === 'metric') {
     plannerCfg = withMetricGrounding(cfg, decision.metric.label, decision.metric.description, decision.metric.grain);
+    // N15: also ground on the metric's NATIVELY-compiled governed SQL when an
+    // imported MetricFlow spec defines it (fail-safe — unchanged otherwise).
+    plannerCfg = await withCompiledMetricGrounding(plannerCfg, ctx?.tenantId, decision.metric.metricId);
     contractSignal = {
       mode: 'metric-grounded',
       confidence: decision.confidence,
