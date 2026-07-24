@@ -46,6 +46,8 @@ import { DATA_CONTRACT_CONTAINER } from '@/lib/azure/data-contract-model';
 // N7d — loom-dq-findings doc shape + MIG1 migrator registration (LEAF). Findings
 // produced by the data-quality checks + data-diff, consumed by N17's incident console.
 import { DQ_FINDING_CONTAINER } from '@/lib/azure/dq-finding-model';
+// N17 — loom-monitors + loom-incidents doc shapes + MIG1 (LEAF: incident-model imports only cosmos-migrations).
+import { MONITOR_CONTAINER, INCIDENT_CONTAINER } from '@/lib/observability/incident-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -512,6 +514,9 @@ let _dataContracts: Container | null = null;
 // anomaly-baseline outliers, data-diff regressions) emitted for N17's incident
 // console. PK /tenantId (N17 lists a tenant's findings single-partition).
 let _dqFindings: Container | null = null;
+// N17 — observability monitors + incident lifecycle console (PK /tenantId; MIG1: incident-model.ts).
+let _monitors: Container | null = null;
+let _incidents: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1320,6 +1325,9 @@ async function ensure() {
     (await database.containers.createIfNotExists({ id: DQ_FINDING_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
     DQ_FINDING_CONTAINER,
   );
+  // N17 — observability monitors + incidents. PK /tenantId; withMigrations (MIG1).
+  _monitors = withMigrations((await database.containers.createIfNotExists({ id: MONITOR_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container, MONITOR_CONTAINER);
+  _incidents = withMigrations((await database.containers.createIfNotExists({ id: INCIDENT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container, INCIDENT_CONTAINER);
   _ensured = true;
 }
 
@@ -1477,6 +1485,10 @@ export async function assetsContainer(): Promise<Container> { await ensure(); re
 /** N6 — ODCS 3.1 data contracts + enforcement posture + bindings + run trend, PK /tenantId. */
 export async function dataContractsContainer(): Promise<Container> { await ensure(); return _dataContracts!; }
 export async function dqFindingsContainer(): Promise<Container> { await ensure(); return _dqFindings!; }
+/** N17 — observability monitors (freshness/volume/schema-drift), PK /tenantId. */
+export async function monitorsContainer(): Promise<Container> { await ensure(); return _monitors!; }
+/** N17 — incident lifecycle console (open→acknowledged→resolved), PK /tenantId. */
+export async function incidentsContainer(): Promise<Container> { await ensure(); return _incidents!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

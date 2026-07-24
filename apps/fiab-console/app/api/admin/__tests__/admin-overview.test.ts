@@ -58,6 +58,7 @@ const containers = {
   labelAssignments: makeContainer(),
   costAnomalyRules: makeContainer(),
   lakehouseInterop: makeContainer(),
+  incidents: makeContainer(),
 };
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -70,6 +71,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   labelAssignmentsContainer: async () => containers.labelAssignments,
   costAnomalyRulesContainer: async () => containers.costAnomalyRules,
   lakehouseInteropContainer: async () => containers.lakehouseInterop,
+  incidentsContainer: async () => containers.incidents,
 }));
 
 // --------------------------------------------------------------------------
@@ -119,6 +121,8 @@ function seedHappyCosmos() {
     { tables: [{ iceberg: true }, { iceberg: false }] },
     { tables: [{ iceberg: true }, { iceberg: true }] },
   ]);
+  // N17 — openIncidents tile: open data-observability incidents (COUNT(1)).
+  containers.incidents._setQuery(() => [4]);
 }
 
 beforeEach(() => {
@@ -153,14 +157,14 @@ describe('/api/admin/overview', () => {
     expect((await GET()).status).toBe(401);
   });
 
-  it('GET returns all 16 tiles with real counts when every backend resolves', async () => {
+  it('GET returns all 18 tiles with real counts when every backend resolves', async () => {
     process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
     seedHappyCosmos();
     const { GET } = await import('@/app/api/admin/overview/route');
     const j = await (await GET()).json();
     expect(j.ok).toBe(true);
     const t = j.tiles;
-    expect(Object.keys(t)).toHaveLength(17);
+    expect(Object.keys(t)).toHaveLength(18);
     expect(t.workspaces).toEqual({ count: 4, gated: false });
     expect(t.items).toEqual({ count: 42, gated: false });
     expect(t.domains).toEqual({ count: 2, gated: false });
@@ -179,6 +183,8 @@ describe('/api/admin/overview', () => {
     expect(t.finops).toEqual({ count: 2, gated: false });
     // N1 — catalog-federation tile: tables external engines can read as Iceberg.
     expect(t.icebergTables).toEqual({ count: 3, gated: false });
+    // N17 — incident-console tile: open data-observability incidents.
+    expect(t.openIncidents).toEqual({ count: 4, gated: false });
     // DIAG1 — diagnostics tile: blocked-gate census (in-process gate registry;
     // env-dependent count, so assert shape not an exact number).
     expect(t.diagnostics.gated).toBe(false);

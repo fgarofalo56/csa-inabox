@@ -23,6 +23,7 @@ import {
   DocumentBriefcase24Regular,
   TargetArrow24Regular,
   DatabaseLink24Regular,
+  Alert24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -48,6 +49,7 @@ const ADMIN_GROUPS: AdminGroup[] = [
       { href: '/admin/readiness', label: 'Readiness', icon: GaugeRegular, description: 'Capability dependency graph + workload readiness scorecard (Ready / Partial / Blocked go/no-go) computed from live gate + probe state — each capability’s backends, env vars, RBAC role, bicep module, and probe status, with a one-click Fix it and a ready-to-run tenant profile export (JSON + report).' },
       { href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular, description: 'One-click support bundle: export a point-in-time, secret-scrubbed JSON of the deployment posture — version + ACA revision, gate-registry state, masked env posture, live probes, last synthetic run, and recent audit rows — to attach to an incident.' },
       { href: '/admin/parity-autopilot', label: 'Parity Autopilot', icon: Bot24Regular, description: 'WS-10.5 — scheduled Playwright capture → AOAI vision diff against the parity docs → auto-filed gap issues with a proposed plan. Shows the run ledger and the open gap issues; the run is driven by the loom-parity-autopilot workflow.' },
+      { href: '/admin/incident-console', label: 'Incident console', icon: Alert24Regular, description: 'N17 — OpenLineage-backed data observability: per-table freshness / volume / schema-drift monitors (Monte-Carlo style, baselines reuse the anomaly detector — no external ML), an incident timeline (open→acknowledged→resolved, every state change audited), and a downstream-impact panel rendered from the unified lineage graph. Consumes N7d data-quality findings; incident alerts route through the one shared action group. Fully in-boundary (IL5-safe).' },
     ],
   },
   {

@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1623 |
+| Total routes | 1629 |
 | Public (no session) | 116 |
 | Session-only | 574 |
-| Owner-scoped | 673 |
-| Admin | 260 |
+| Owner-scoped | 674 |
+| Admin | 265 |
 | Gated (backend config) | 524 |
-| Areas | 111 |
+| Areas | 112 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -1740,6 +1740,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `lineage/openlineage/export/route.ts` | GET | owner-scoped |  | — |
 | `lineage/openlineage/route.ts` | POST | public |  | Cosmos |
 
 ## loom
@@ -1873,6 +1874,16 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `notifications/route.ts` | GET POST PATCH | owner-scoped |  | Cosmos |
+
+## observability
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `observability/incidents/[id]/route.ts` | GET | admin |  | — |
+| `observability/incidents/[id]/transition/route.ts` | POST | admin |  | — |
+| `observability/incidents/route.ts` | GET POST | admin |  | — |
+| `observability/monitors/[id]/observe/route.ts` | POST | admin |  | — |
+| `observability/monitors/route.ts` | GET POST | admin |  | — |
 
 ## onelake
 
