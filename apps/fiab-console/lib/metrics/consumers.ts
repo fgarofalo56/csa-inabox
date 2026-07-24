@@ -36,6 +36,14 @@ export interface ResolveMetricOptions {
   metric: string;
   dimensions?: string[];
   filters?: CompileMetricArgs['filters'];
+  /**
+   * Row-level-security predicates keyed on an embed-token effective identity
+   * (N18) — ANDed into the compiled WHERE at the engine before the caller's own
+   * `filters`, so the SDK/embed consumer serves identity-scoped rows from the
+   * same governed metric. Empty/undefined for the report + NL consumers (they
+   * resolve as the signed-in owner). See {@link CompileMetricArgs.rls}.
+   */
+  rls?: CompileMetricArgs['rls'];
   grain?: string;
   engine?: MetricEngine;
 }
@@ -51,6 +59,7 @@ export function compileGovernedMetric(opts: ResolveMetricOptions): CompiledMetri
     metric: opts.metric,
     dimensions: opts.dimensions,
     filters: opts.filters,
+    rls: opts.rls,
     grain: opts.grain,
     engine: opts.engine,
   });

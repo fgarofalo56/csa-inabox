@@ -67,6 +67,19 @@ export interface CompileMetricArgs {
   dimensions?: string[];
   /** Structured filter predicates (each whitelisted + bound). */
   filters?: MetricFilter[];
+  /**
+   * ENGINE-LEVEL ROW-LEVEL SECURITY predicates, keyed on the EMBED-TOKEN
+   * effective identity (N18). These are ANDed into the WHERE / `| where` right
+   * after the metric-level filter and BEFORE the caller's own `filters`, so two
+   * different token identities compile to DIFFERENT rows from the SAME governed
+   * metric — enforced at the query engine (a bound TDS parameter / centrally
+   * escaped KQL literal), NEVER by hiding rows client-side. Each predicate is
+   * whitelisted against the model exactly like a requested filter (an RLS claim
+   * on an undeclared dimension REJECTS the query — fail-closed, never all-rows).
+   * A request without an embed identity passes none. RLS narrows only: it is
+   * ANDed, so a viewer can never widen past their claims by adding `filters`.
+   */
+  rls?: MetricFilter[];
   /** Time-grain override for the first time dimension (day|week|month|quarter|year). */
   grain?: string;
   /** Target engine (default `synapse`). */
@@ -237,8 +250,12 @@ function compileTsql(rm: ResolvedMetric, args: CompileMetricArgs, engine: Metric
   // WHERE — metric-level filter + requested filters, all parameterised.
   const params: SynapseQueryParam[] = [];
   const whereParts: string[] = [];
+  // Order is load-bearing for RLS: metric-level filter, then the identity's RLS
+  // predicates, then the caller's own filters. RLS is ANDed in every case so a
+  // requested filter can only NARROW, never widen past the token identity.
   const allFilters: MetricFilter[] = [
     ...(rm.metricFilter ? [rm.metricFilter] : []),
+    ...(args.rls ?? []),
     ...(args.filters ?? []),
   ];
   for (const f of allFilters) {
@@ -329,6 +346,7 @@ function compileKql(rm: ResolvedMetric, args: CompileMetricArgs): CompiledMetric
 
   const allFilters: MetricFilter[] = [
     ...(rm.metricFilter ? [rm.metricFilter] : []),
+    ...(args.rls ?? []),
     ...(args.filters ?? []),
   ];
   const whereParts: string[] = [];
