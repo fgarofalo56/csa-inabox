@@ -157,6 +157,9 @@ const REGISTRY: Record<string, Entry> = {
   'data-quality':         { icon: CheckmarkCircle24Regular, family: 'data-eng', label: 'Data-Quality Check' },
   // N2b — SQL Lab (DuckDB): the interactive tier below Spark.
   'sql-lab':              { icon: Flash24Regular,     family: 'data-eng', label: 'SQL Lab (DuckDB)' },
+  // N8 Openness Tier-3 labs (Preview).
+  'ducklake-catalog':     { icon: Database24Regular,  family: 'data-eng', label: 'DuckLake catalog' },
+  's3-gateway':           { icon: Link24Regular,      family: 'data-eng', label: 'S3-compatible ADLS gateway' },
 
   // ── Data Factory ──────────────────────────────────────────────────
   'data-pipeline':      { icon: Flow24Regular,         family: 'data-factory', label: 'Data Pipeline' },
@@ -255,6 +258,7 @@ const REGISTRY: Record<string, Entry> = {
   'adf-dataset':                 { icon: Table24Regular,      family: 'data-factory', label: 'ADF Dataset' },
   'adf-trigger':                 { icon: Pulse24Regular,      family: 'data-factory', label: 'ADF Trigger' },
   'stream-analytics-job':        { icon: Pulse24Regular,      family: 'rti',          label: 'Stream Analytics Job' },
+  'streaming-sql':               { icon: DataLine24Regular,   family: 'rti',          label: 'Streaming SQL' },
 
   // ── AI Foundry ───────────────────────────────────────────────────
   'ai-foundry-hub':       { icon: Cube24Regular,           family: 'foundry', label: 'AI Foundry Hub' },

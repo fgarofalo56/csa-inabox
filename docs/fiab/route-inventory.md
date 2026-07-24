@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1632 |
+| Total routes | 1638 |
 | Public (no session) | 116 |
-| Session-only | 574 |
-| Owner-scoped | 674 |
+| Session-only | 575 |
+| Owner-scoped | 679 |
 | Admin | 268 |
-| Gated (backend config) | 525 |
-| Areas | 113 |
+| Gated (backend config) | 528 |
+| Areas | 117 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -746,6 +746,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `duckdb/capabilities/route.ts` | GET | owner-scoped |  | — |
 | `duckdb/query/route.ts` | POST | owner-scoped |  | — |
+
+## ducklake
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `ducklake/catalog/route.ts` | GET | owner-scoped |  | — |
 
 ## embed
 
@@ -1994,6 +2000,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `runtime-flags/route.ts` | GET | session-only |  | — |
 
+## s3-gateway
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `s3-gateway/info/route.ts` | GET | session-only |  | — |
+
 ## scheduler
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -2067,6 +2079,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `spark-environment/[id]/publish/route.ts` | POST | owner-scoped |  | Synapse |
 | `spark-environment/[id]/validate/route.ts` | GET POST | owner-scoped |  | Synapse |
 
+## sql
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `sql/trino/route.ts` | POST | owner-scoped | ● | — |
+
 ## sqldb
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -2089,6 +2107,14 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `storage/accounts/route.ts` | GET | session-only |  | — |
+
+## streaming-sql
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `streaming-sql/mv/route.ts` | POST | owner-scoped | ● | — |
+| `streaming-sql/query/route.ts` | POST | owner-scoped | ● | — |
+| `streaming-sql/status/route.ts` | GET | owner-scoped |  | — |
 
 ## synapse
 

@@ -25,13 +25,16 @@
 /**
  * SQL dialects Loom targets. The T-SQL family (`tsql` / `synapse` /
  * `generic-sql`) bracket-quotes identifiers and caps with `TOP n`; PostgreSQL
- * double-quotes; MySQL and Databricks SQL back-tick.
+ * and Trino double-quote (ANSI delimited identifiers); MySQL and Databricks SQL
+ * back-tick. `trino` is the N7e Federated-SQL engine — ANSI/SQL-standard
+ * `"ident"` delimiters and `'literal'` strings, same escaping rule as postgres.
  */
 export type SqlDialect =
   | 'tsql'
   | 'synapse'
   | 'generic-sql'
   | 'postgres'
+  | 'trino'
   | 'mysql'
   | 'databricks-sql';
 
@@ -87,6 +90,8 @@ export function quoteLiteral(
 export function quoteIdent(name: string, dialect?: SqlDialect): string {
   switch (dialect) {
     case 'postgres':
+    case 'trino':
+      // ANSI delimited identifier — double-quote, doubling any embedded ".
       return `"${name.replace(/"/g, '""')}"`;
     case 'mysql':
     case 'databricks-sql':

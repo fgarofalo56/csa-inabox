@@ -97,6 +97,17 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
       'Unset → Delta↔Iceberg dual metadata still writes real Iceberg V2 metadata into your own ADLS Gen2 (the Interop tab keeps working and hands you the metadata path). The catalog adds discovery + credential vending on top; it is never on the data path.',
     legacyCodes: ['iceberg_catalog_not_configured'],
   },
+  // ── N7e — Trino Federated SQL (the ONE opt-in carve-out; gates NO feature) ──
+  'svc-loom-trino': {
+    surfaces: [
+      { path: '/items/sql-lab', label: 'SQL Lab → engine picker: "Federated SQL (Trino)"' },
+      { path: '/api/sql/trino', label: 'Federated SQL execution edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'OPT-IN by design — this is the single non-default engine in the program. Unset → SQL Lab runs on the DEFAULT DuckDB tier (svc-loom-duckdb) with the identical result surface; only the additive "Federated SQL (Trino)" choice is gated. Deploying loom-trino-aks.bicep stands up a private AKS cluster (real, disclosed cost) that can join a Loom Iceberg table with an external Postgres table in one statement. Its absence removes no capability, so it never breaches loom_default_on_opt_out.',
+    legacyCodes: ['trino_not_configured'],
+  },
   'svc-cosmos-control': {
     surfaces: [
       { path: '/admin/scaling', label: 'Cosmos account scaling' },
@@ -119,6 +130,28 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → the built-in per-replica in-memory result cache serves everything with zero loss of function.',
   },
+  // ── N8 lab 1 — DuckLake catalog option (Preview) ──
+  'svc-ducklake-catalog': {
+    surfaces: [
+      { path: '/items/ducklake-catalog', label: 'DuckLake catalog editor — Postgres-backed lakehouse metadata (Preview)' },
+      { path: '/api/ducklake/catalog', label: 'DuckLake catalog listing edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in Preview lab ALONGSIDE the N1 Iceberg REST Catalog. Unset → the DuckLake editor renders a guided empty state and honest-gates; N1\'s IRC (LOOM_ICEBERG_CATALOG_URL) and every other surface are unaffected. Point LOOM_DUCKLAKE_CATALOG_URL at an in-VNet Postgres store to try it.',
+    legacyCodes: ['ducklake_not_configured'],
+  },
+  // ── N8 lab 3 — S3-compatible ADLS gateway (Preview) ──
+  'svc-s3-gateway': {
+    surfaces: [
+      { path: '/items/s3-gateway', label: 'S3-compatible ADLS gateway config (Preview)' },
+      { path: '/api/s3-gateway/info', label: 'S3 gateway connect-info edge' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in Preview lab. Unset → the surface documents that the N1 Iceberg REST Catalog + native ADLS/abfss path already give external engines governed access, so most deployments need no gateway. Set LOOM_S3_GATEWAY_URL only when you deploy an Apache-2.0 s3proxy for s3://-exclusive clients (the AGPL MinIO path is not used).',
+    legacyCodes: ['s3_gateway_not_configured'],
+  },
   // ── M1 — estate assessment reader (inbound-migration on-ramp) ──
   'svc-loom-migrate': {
     surfaces: [
@@ -129,5 +162,17 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     autoResolveNote:
       'Opt-in on-ramp: /admin/migrate renders fully (guided empty state) with LOOM_MIGRATE_URL unset. Set it to the internal-ingress loom-migrate reader to enumerate a Snowflake / Databricks-UC / Fabric / Power BI estate. Each source still needs its own connection (URL + a Key-Vault-stored token) supplied per assessment; an unwired connector honest-gates rather than fabricating counts.',
     legacyCodes: ['migrate_not_configured'],
+  },
+  // ── N7a — RisingWave stateful streaming-SQL tier (Openness Tier-2 T2-A) ──
+  'svc-loom-risingwave': {
+    surfaces: [
+      { path: '/items/streaming-sql', label: 'Streaming SQL — materialized views over Event Hubs' },
+      { path: '/api/streaming-sql/mv', label: 'Streaming MV authoring edge (audited)' },
+      { path: '/api/streaming-sql/query', label: 'Streaming SQL read edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in stateful-streaming tier: the streaming-sql editor renders fully (guided empty state) with LOOM_RISINGWAVE_URL unset. Set it to the internal-ingress loom-risingwave Container App to author streaming materialized views over Event Hubs sinking to Delta/Iceberg. Azure Stream Analytics (the stream-analytics-job item) still covers simple streaming jobs; RisingWave adds the stateful class (windowed joins, incremental aggregations). ~$150-300/mo/cloud when deployed.',
+    legacyCodes: ['risingwave_not_configured'],
   },
 };

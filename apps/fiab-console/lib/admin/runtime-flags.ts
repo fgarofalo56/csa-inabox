@@ -311,6 +311,22 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Lakehouse / warehouse / SQL Lab editors → Connect tab',
   },
   {
+    id: 'n7a-streaming-sql',
+    label: 'Streaming SQL (RisingWave) editor',
+    description:
+      'The N7a streaming-sql surface: the SQL editor for streaming MATERIALIZED VIEWS over Azure Event Hubs (with the honest gate when LOOM_RISINGWAVE_URL is unset), the live MV status panel (throughput / backfill / row counts read from RisingWave\'s catalog), the source/sink pickers, and the Materialize action. OFF replaces the editor body with a guided notice on the next render — the loom-risingwave Container App, the /api/streaming-sql/** routes, and every already-created item are unaffected. Azure Stream Analytics (stream-analytics-job) is a separate item and is not touched by this flag.',
+    ownerItem: 'N7a',
+    surface: 'Streaming SQL editor (/items/streaming-sql/[id])',
+  },
+  {
+    id: 'n7e-trino-federation',
+    label: 'Federated SQL (Trino) engine option',
+    description:
+      'The N7e "Federated SQL (Trino)" engine choice in the SQL Lab engine picker — the ONE opt-in carve-out of the program. This flag DEFAULTS OFF (default:false, the documented exception to loom_default_on_opt_out) because Trino is a heavy-infra additive engine that requires a private AKS cluster; SQL Lab is fully functional without it on the DEFAULT DuckDB tier. Turn it ON to expose the Trino option in the engine dropdown (it still honest-gates until LOOM_TRINO_URL is wired). OFF hides the option entirely — DuckDB / Synapse Serverless are unaffected and remain the default.',
+    ownerItem: 'N7e',
+    surface: 'SQL Lab editor (/items/sql-lab/[id]) → engine picker',
+  },
+  {
     id: 'n7c-activation-sync',
     label: 'Activation sync (reverse ETL)',
     description:
@@ -381,6 +397,31 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The M3 code-translation surface on /admin/migrate (Translate tab): transpile Snowflake / T-SQL views to Loom SQL, DAX measures to N9 semantic-contract measures (reusing the A1/A2/A3 parser + fold), and Power BI / Fabric reports to N16 code-reports (reusing the N16 parser). Every unsupported construct is flagged needs-review with the exact reason (never a fabricated translation); generated artifacts land as draft Loom items. OFF makes POST /api/migrate/translate return a guided "turned off" 503 and hides the Translate tab on the next load; nothing else is affected (no roll needed).',
     ownerItem: 'M3',
     surface: '/admin/migrate (Translate tab) + POST /api/migrate/translate',
+  },
+  // ── N8 — Openness Tier-3 labs (Preview-badged) ──
+  {
+    id: 'n8-modern-query-prql',
+    label: 'SQL Lab — PRQL modern-query mode (Preview)',
+    description:
+      'The N8 "modern query" language toggle in SQL Lab: write PRQL (Pipelined Relational Query Language, Apache-2.0) and Loom transpiles the supported subset to SQL and runs it on the SAME N2 DuckDB engine (with the honest Synapse Serverless fallback). OFF hides the language toggle and reverts SQL Lab to SQL-only on the next render — the DuckDB tier, the /api/duckdb/** routes, and every other tab are unaffected. Unsupported PRQL constructs surface an honest error; Loom never fabricates SQL.',
+    ownerItem: 'N8',
+    surface: 'SQL Lab editor (/items/sql-lab/[id]) — modern-query language toggle',
+  },
+  {
+    id: 'n8-ducklake-catalog',
+    label: 'DuckLake catalog option (Preview)',
+    description:
+      'The N8 DuckLake catalog item + editor: a Postgres-backed lakehouse-metadata catalog option ALONGSIDE the N1 Iceberg REST Catalog (a forward bet on the DuckDB ecosystem). OFF replaces the editor body with a guided notice on the next render — the /api/ducklake/** routes and every other surface are unaffected. Honest-gated on LOOM_DUCKLAKE_CATALOG_URL (the DuckLake Postgres metadata store) — never fabricated catalog contents.',
+    ownerItem: 'N8',
+    surface: 'DuckLake catalog editor (/items/ducklake-catalog/[id])',
+  },
+  {
+    id: 'n8-s3-gateway',
+    label: 'S3-compatible ADLS gateway (Preview)',
+    description:
+      'The N8 S3-compatible gateway config surface: expose an S3-compatible endpoint over ADLS so s3://-native OSS clients connect. OFF replaces the editor body with a guided notice on the next render. Honest-gated on LOOM_S3_GATEWAY_URL (an operator-deployed Apache-2.0 s3proxy in front of ADLS); the surface documents that the N1 IRC + ADLS SDK path already covers most external-engine access without a gateway. No AGPL MinIO dependency.',
+    ownerItem: 'N8',
+    surface: 'S3 gateway editor (/items/s3-gateway/[id])',
   },
 ];
 

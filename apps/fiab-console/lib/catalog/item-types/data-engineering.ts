@@ -229,4 +229,30 @@ export const dataEngineeringItems: FabricItemType[] = [
       ],
       "docsUrl": "https://duckdb.org/docs/stable/core_extensions/delta"
     } },
+  // N8 lab 1 — DuckLake catalog option (Preview; Postgres-backed lakehouse metadata).
+  { slug: 'ducklake-catalog', displayName: 'DuckLake catalog', restType: 'DuckLakeCatalog', category: 'Data Engineering', noRestApi: true, preview: true,
+    description: 'Preview — a Postgres-backed lakehouse-metadata catalog (DuckLake, Apache-2.0) offered ALONGSIDE the Iceberg REST Catalog. The DuckDB engine ATTACHes it and reads Delta/Parquet in place on your own ADLS Gen2. Honest-gated on the Postgres connection. Azure-native — no Fabric.',
+    learnContent: {
+      "overview": "DuckLake is a Preview lab: a catalog format that keeps lakehouse table metadata in a SQL database (Postgres) instead of a metadata-file tree. It is a forward bet on the DuckDB ecosystem, offered ALONGSIDE the Iceberg REST Catalog — not a replacement; pick whichever matches your engine mix. The N2 DuckDB serving tier is the query engine: it ATTACHes the DuckLake catalog and reads the Delta/Parquet data in place on your own ADLS Gen2. It is 100% Azure-native and OSS: the metadata store is an in-VNet Azure Database for PostgreSQL and the engine is the in-boundary DuckDB container — no Microsoft Fabric, no OneLake, nothing SaaS. When LOOM_DUCKLAKE_CATALOG_URL (or the DuckDB tier) is unset the editor renders a guided empty state and honest-gates with a Fix-it — never fabricated catalog contents.",
+      "steps": [
+        { "title": "Point at a Postgres store", "body": "Set LOOM_DUCKLAKE_CATALOG_URL to the connection string of the Postgres database that backs the DuckLake metadata (an in-VNet Azure Database for PostgreSQL flexible server). The editor's Fix-it wizard writes it for you." },
+        { "title": "Deploy the DuckDB tier", "body": "DuckLake needs the N2 DuckDB serving tier to run the ATTACH — set LOOM_DUCKDB_URL (duckdb-aca.bicep) too. The editor names the exact missing var when either is absent." },
+        { "title": "Browse the catalog", "body": "Once wired, the editor lists the real tables the DuckLake catalog exposes — read live from Postgres via the DuckDB tier, with the count shown. Every read is audited." },
+        { "title": "Query in place", "body": "Point SQL Lab at a DuckLake table; the DuckDB engine reads the Delta/Parquet data in place on your ADLS Gen2 — nothing is copied." }
+      ],
+      "docsUrl": "https://ducklake.select/docs/stable/"
+    } },
+  // N8 lab 3 — S3-compatible ADLS gateway (Preview; permissive s3proxy path).
+  { slug: 's3-gateway', displayName: 'S3-compatible ADLS gateway', restType: 'S3Gateway', category: 'Data Engineering', noRestApi: true, preview: true,
+    description: 'Preview — expose an S3-compatible endpoint over your ADLS Gen2 so s3://-native OSS clients connect. Uses an operator-deployed Apache-2.0 s3proxy (never AGPL MinIO). Most engines need no gateway: the Iceberg REST Catalog + native abfss:// path already cover it. Honest-gated. Azure-native — no Fabric.',
+    learnContent: {
+      "overview": "This Preview lab lets s3://-native OSS clients (Trino, Spark, DuckDB's s3 extension) address the deployment's ADLS Gen2 through an S3 API. The MinIO gateway path is deliberately dropped — MinIO's gateway is deprecated AND AGPL-licensed (banned by Loom's permissive-license rule); the permissive path is an operator-deployed Apache-2.0 s3proxy placed in front of ADLS. Loom bundles nothing (no AGPL, no s3proxy in the console image). Crucially, most deployments need NO gateway at all: the N1 Iceberg REST Catalog plus the native abfss:// path already give external engines governed, audited access to the same data — deploy the gateway only for clients that speak S3 exclusively. The surface is honest either way: when LOOM_S3_GATEWAY_URL is unset it documents the IRC/ADLS path and gates the connect panel with a Fix-it; when set it shows the real endpoint + copy-paste connect snippets. Azure-native, in-boundary, IL5-safe — no Microsoft Fabric.",
+      "steps": [
+        { "title": "Consider the native path first", "body": "Point engines at the Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) and read over abfss:// — governed and audited. This covers Trino, Spark, DuckDB and Snowflake without any gateway." },
+        { "title": "Deploy an Apache-2.0 s3proxy (only if needed)", "body": "For s3://-exclusive clients, run an Apache-2.0 s3proxy in front of ADLS on your own Container Apps environment (internal ingress, its own UAMI). Never the AGPL MinIO gateway." },
+        { "title": "Wire the endpoint", "body": "Set LOOM_S3_GATEWAY_URL to the gateway endpoint via the editor's Fix-it wizard. The surface then renders the real endpoint and per-engine connect snippets." },
+        { "title": "Connect s3://-native clients", "body": "Copy the DuckDB / Trino connect snippet from the editor; the client addresses your lake with the S3 API while the data stays in your ADLS Gen2." }
+      ],
+      "docsUrl": "https://github.com/gaul/s3proxy"
+    } },
 ];

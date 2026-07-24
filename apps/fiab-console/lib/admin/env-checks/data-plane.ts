@@ -91,6 +91,27 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'Self-hosted OSS container on the deployment\'s own Container Apps environment reading the deployment\'s own ADLS Gen2 — no SaaS catalog (no Tabular, no Snowflake Open Catalog, no Databricks-hosted Unity Catalog) is in the path, so the full capability runs disconnected in an IL5 / air-gapped enclave.',
     },
   },
+  // ── N7e — Trino / Starburst Federated SQL (THE single opt-in carve-out) ──
+  //    OPT-IN by design (heavy AKS infra): unset → SQL Lab's "Federated SQL
+  //    (Trino)" engine option honest-gates with a Fix-it that discloses the AKS
+  //    cost, while the DEFAULT engine (DuckDB N2b) keeps SQL Lab fully
+  //    functional — so this opt-in posture gates NO feature and does not breach
+  //    loom_default_on_opt_out (round-3 operator decision). NOT optionalDefault:
+  //    the /api/sql/trino route is honestly gated when the cluster is absent, so
+  //    it must not count as configured.
+  {
+    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine — Trino on AKS (opt-in)', severity: 'optional',
+    required: ['LOOM_TRINO_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_TRINO_URL to the INTERNAL-ingress coordinator URL of the opt-in loom-trino AKS cluster (Trino OSS, Apache-2.0, registered against the N1 Iceberg REST Catalog + external connectors). Deploy platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep, then set the var on the Console app. This is the ONE opt-in engine in the program: it stands up a full private AKS cluster (real, disclosed cost ~AKS node pool/mo) so it is NOT default-ON — SQL Lab keeps working on DuckDB / Synapse Serverless meanwhile, and Trino only ADDS the "Federated SQL (Trino)" engine choice that can join a Loom Iceberg table with an external Postgres table in one statement. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), LOOM_TRINO_AUDIENCE (Entra audience), LOOM_TRINO_TOKEN (Key-Vault secretRef bearer). The cluster is NEVER public — every query goes through the audited BFF at /api/sql/trino.',
+    docs: 'https://trino.io/docs/current/connector/iceberg.html',
+    provisionedBy: 'modules/data-plane/loom-trino-aks.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_TRINO_URL on the Console app',
+    role: 'Storage Blob Data Reader (uami-loom-trino) on the DLZ lake — declared in the module; the Trino workload identity reads Iceberg/Delta data files in place. The Console UAMI needs no new role (the BFF proxies).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own AKS cluster inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. SaaS-only external connectors stay honestly gated in IL5. As the opt-in carve-out, its absence removes NO capability — the default DuckDB engine (svc-loom-duckdb) serves SQL Lab in every cloud.',
+    },
+  },
   {
     id: 'svc-cosmos-control', category: 'data-plane', title: 'Cosmos DB control plane (versions / scaling / CMK)', severity: 'optional',
     required: ['LOOM_COSMOS_ACCOUNT'], anyOf: [['LOOM_DLZ_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
@@ -186,6 +207,42 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'The harness only drives the in-boundary Synapse Livy + warm-pool paths, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
     },
   },
+  // ── N8 lab 1 — DuckLake catalog option (Postgres-backed lakehouse metadata) ──
+  //    Preview / opt-in: a forward bet on the DuckDB ecosystem ALONGSIDE N1's
+  //    Iceberg REST Catalog. Unset → the DuckLake editor honest-gates (Fix-it);
+  //    N1's IRC and every other surface are unaffected. Not a Fabric dependency.
+  {
+    id: 'svc-ducklake-catalog', category: 'data-plane', title: 'DuckLake catalog (Postgres-backed lakehouse metadata) — Preview', severity: 'optional',
+    required: ['LOOM_DUCKLAKE_CATALOG_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_DUCKLAKE_CATALOG_URL to the connection string of the Postgres database that backs the DuckLake catalog metadata (postgresql://…/ducklake). DuckLake stores lakehouse table metadata in a SQL database instead of a metadata-file tree; the N2 DuckDB serving tier ATTACHes it (ducklake extension) and reads the Delta/Parquet data in place on your own ADLS Gen2. This is a Preview lab ALONGSIDE the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL), not a replacement — pick the catalog that matches your engine mix. Point it at an existing Azure Database for PostgreSQL flexible server (in-VNet, private endpoint). Unset → the DuckLake catalog editor renders a guided empty state and honest-gates; nothing else changes. No Microsoft Fabric.',
+    docs: 'https://ducklake.select/docs/stable/',
+    provisionedBy: 'operator-provided Azure Database for PostgreSQL flexible server (in-VNet); no new Loom app — the N2 DuckDB tier is the query engine. LOOM_DUCKLAKE_CATALOG_URL set on the Console app.',
+    role: 'The N2 DuckDB tier UAMI reads the lake (Storage Blob Data Reader, already granted); the Postgres connection authenticates per the connection string (AAD token or a Key-Vault-stored credential).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'DuckLake is an Apache-2.0 catalog format; the metadata store is an in-boundary Azure Database for PostgreSQL and the query engine is the in-boundary DuckDB tier — no SaaS catalog is in the path, so the lab runs disconnected in an IL5 / air-gapped enclave. Preview.',
+    },
+  },
+  // ── N8 lab 3 — S3-compatible ADLS gateway (Preview) ──
+  //    Opt-in: expose an S3-compatible endpoint over ADLS for s3://-native OSS
+  //    clients. The MinIO gateway path is DROPPED (AGPL + deprecated); the
+  //    permissive path is an operator-deployed Apache-2.0 s3proxy in front of
+  //    ADLS. Unset → the surface documents that N1's IRC + ADLS SDK path already
+  //    covers most external-engine access without a gateway.
+  {
+    id: 'svc-s3-gateway', category: 'data-plane', title: 'S3-compatible ADLS gateway (Apache-2.0 s3proxy) — Preview', severity: 'optional',
+    required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_S3_GATEWAY_URL to the internal-ingress endpoint of an S3-compatible gateway placed in front of your ADLS Gen2 (an operator-deployed Apache-2.0 s3proxy — the AGPL-licensed MinIO gateway path is NOT used). This lets s3://-native OSS clients (Trino, Spark, DuckDB with the s3 extension) address the lake with an S3 API. In most cases you do NOT need a gateway: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data — deploy the gateway only for clients that speak S3 exclusively. Unset → the S3 gateway editor renders a guided empty state documenting the IRC/ADLS path and honest-gates the connection panel; nothing else changes. No Microsoft Fabric.',
+    docs: 'https://github.com/gaul/s3proxy',
+    provisionedBy: 'operator-deployed Apache-2.0 s3proxy Container App in front of ADLS Gen2 (out-of-band; the N1 IRC + ADLS SDK path is the default and needs no gateway). LOOM_S3_GATEWAY_URL set on the Console app.',
+    role: 'The s3proxy instance carries its own UAMI (Storage Blob Data Reader/Contributor on the lake as needed); the Console only reads the endpoint URL to render connect info.',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 's3proxy is Apache-2.0 and runs in-boundary on the deployment\'s own Container Apps environment; no AGPL MinIO and no SaaS object gateway is in the path, so an IL5 / air-gapped enclave can still expose an S3 face over its own ADLS. Preview.',
+    },
+  },
   // ── M1 — estate assessment reader (the inbound-migration on-ramp) ──
   //    Opt-in by nature: assessment only runs when you point Loom at a source
   //    estate to migrate FROM. Unset → /admin/migrate fully renders (guided
@@ -202,6 +259,33 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'The reader runs IN-BOUNDARY on the deployment\'s own Container Apps environment — no SaaS assessment service is in the path, so the on-ramp itself runs disconnected in an IL5 / air-gapped enclave. Individual SaaS-source connectors (Snowflake / Databricks / Fabric / Power BI) reach their own estates and stay honestly gated until their connection prerequisite is provided.',
+    },
+  },
+  // ── N7a — RisingWave stateful streaming-SQL tier (Openness Tier-2 T2-A) ──
+  //    Opt-in stateful-streaming BACKEND (~$150-300/mo/cloud); the streaming-sql
+  //    ITEM TYPE + editor are default-ON and render fully with LOOM_RISINGWAVE_URL
+  //    unset (guided empty state + Fix-it). Azure Stream Analytics stays the LIGHT
+  //    default for simple jobs (the stream-analytics-job item) — this is the
+  //    stateful class (windowed joins, incremental aggregations) ASA can't express.
+  {
+    id: 'svc-loom-risingwave', category: 'data-plane', title: 'Streaming SQL tier (RisingWave Container App)', severity: 'optional',
+    required: ['LOOM_RISINGWAVE_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_RISINGWAVE_URL to the internal-ingress FQDN (optionally host:port) of the loom-risingwave '
+      + 'Container App (single-node RisingWave, Apache-2.0 — authors streaming materialized views in SQL over '
+      + 'Azure Event Hubs via its Kafka endpoint, sinking to Delta/Iceberg on the DLZ lake or the Postgres wire). '
+      + 'Deploy platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep, then set the var on the Console '
+      + 'app. The tier is NEVER public — every statement goes through the audited BFF at /api/streaming-sql/*. It '
+      + 'is an opt-in STATEFUL-streaming tier (~$150-300/mo/cloud); the streaming-sql editor renders fully with '
+      + 'the var unset (Azure Stream Analytics still covers simple jobs). Optional: LOOM_RISINGWAVE_DATABASE '
+      + '(default dev), LOOM_RISINGWAVE_USER (default root), LOOM_RISINGWAVE_PASSWORD (KV secret; single-node '
+      + 'default is in-VNet trust).',
+    docs: 'https://docs.risingwave.com/docs/current/intro/',
+    provisionedBy: 'modules/data-plane/loom-risingwave-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_RISINGWAVE_URL on the Console app',
+    role: 'Storage Blob Data Contributor (uami-loom-risingwave) on the DLZ lake — declared in the module (the streaming sink WRITES Delta/Iceberg). The Console UAMI needs no new role (the BFF proxies over the Postgres wire).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'RisingWave is a self-contained Rust binary with no external control plane; the Event Hubs Kafka endpoint and ADLS Gen2 are both in-boundary and reachable in Azure Government through IL5, so the whole streaming tier runs disconnected in an air-gapped enclave. No SaaS streaming service, no Microsoft Fabric / OneLake is in the path.',
     },
   },
 ];
