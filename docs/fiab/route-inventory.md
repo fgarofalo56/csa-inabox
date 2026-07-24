@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1630 |
+| Total routes | 1631 |
 | Public (no session) | 116 |
 | Session-only | 574 |
-| Owner-scoped | 674 |
+| Owner-scoped | 675 |
 | Admin | 266 |
-| Gated (backend config) | 525 |
-| Areas | 113 |
+| Gated (backend config) | 526 |
+| Areas | 114 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -2064,6 +2064,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `spark-environment/[id]/libraries/route.ts` | POST DELETE | owner-scoped |  | ADLS |
 | `spark-environment/[id]/publish/route.ts` | POST | owner-scoped |  | Synapse |
 | `spark-environment/[id]/validate/route.ts` | GET POST | owner-scoped |  | Synapse |
+
+## sql
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `sql/trino/route.ts` | POST | owner-scoped | ● | — |
 
 ## sqldb
 

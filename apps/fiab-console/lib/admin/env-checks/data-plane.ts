@@ -91,6 +91,27 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'Self-hosted OSS container on the deployment\'s own Container Apps environment reading the deployment\'s own ADLS Gen2 — no SaaS catalog (no Tabular, no Snowflake Open Catalog, no Databricks-hosted Unity Catalog) is in the path, so the full capability runs disconnected in an IL5 / air-gapped enclave.',
     },
   },
+  // ── N7e — Trino / Starburst Federated SQL (THE single opt-in carve-out) ──
+  //    OPT-IN by design (heavy AKS infra): unset → SQL Lab's "Federated SQL
+  //    (Trino)" engine option honest-gates with a Fix-it that discloses the AKS
+  //    cost, while the DEFAULT engine (DuckDB N2b) keeps SQL Lab fully
+  //    functional — so this opt-in posture gates NO feature and does not breach
+  //    loom_default_on_opt_out (round-3 operator decision). NOT optionalDefault:
+  //    the /api/sql/trino route is honestly gated when the cluster is absent, so
+  //    it must not count as configured.
+  {
+    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine — Trino on AKS (opt-in)', severity: 'optional',
+    required: ['LOOM_TRINO_URL'], warnOnMiss: true,
+    remediation:
+      'Set LOOM_TRINO_URL to the INTERNAL-ingress coordinator URL of the opt-in loom-trino AKS cluster (Trino OSS, Apache-2.0, registered against the N1 Iceberg REST Catalog + external connectors). Deploy platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep, then set the var on the Console app. This is the ONE opt-in engine in the program: it stands up a full private AKS cluster (real, disclosed cost ~AKS node pool/mo) so it is NOT default-ON — SQL Lab keeps working on DuckDB / Synapse Serverless meanwhile, and Trino only ADDS the "Federated SQL (Trino)" engine choice that can join a Loom Iceberg table with an external Postgres table in one statement. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), LOOM_TRINO_AUDIENCE (Entra audience), LOOM_TRINO_TOKEN (Key-Vault secretRef bearer). The cluster is NEVER public — every query goes through the audited BFF at /api/sql/trino.',
+    docs: 'https://trino.io/docs/current/connector/iceberg.html',
+    provisionedBy: 'modules/data-plane/loom-trino-aks.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_TRINO_URL on the Console app',
+    role: 'Storage Blob Data Reader (uami-loom-trino) on the DLZ lake — declared in the module; the Trino workload identity reads Iceberg/Delta data files in place. The Console UAMI needs no new role (the BFF proxies).',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own AKS cluster inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. SaaS-only external connectors stay honestly gated in IL5. As the opt-in carve-out, its absence removes NO capability — the default DuckDB engine (svc-loom-duckdb) serves SQL Lab in every cloud.',
+    },
+  },
   {
     id: 'svc-cosmos-control', category: 'data-plane', title: 'Cosmos DB control plane (versions / scaling / CMK)', severity: 'optional',
     required: ['LOOM_COSMOS_ACCOUNT'], anyOf: [['LOOM_DLZ_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,

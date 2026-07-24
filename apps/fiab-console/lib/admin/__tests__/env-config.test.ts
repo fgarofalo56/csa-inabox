@@ -247,7 +247,14 @@ describe('admin/env-config registry', () => {
     // LOOM_MIGRATE_URL — the loom-migrate estate-assessment reader. Opt-in (NOT
     // optionalDefault: with the reader absent the assess route is honestly
     // gated), so it counts as one new editable var: 180 → 181.
-    expect(EDITABLE_ENV.length).toBe(181);
+    // Bumped to 182 by N7e (Trino Federated SQL — the single opt-in carve-out):
+    // svc-loom-trino adds LOOM_TRINO_URL. Opt-in like M1 (NOT optionalDefault:
+    // the /api/sql/trino route is honestly gated when the cluster is absent, and
+    // the default DuckDB engine keeps SQL Lab functional), so it counts as one
+    // new editable var: 181 → 182. The sibling knobs (LOOM_TRINO_ICEBERG_CATALOG,
+    // LOOM_TRINO_AUDIENCE, LOOM_TRINO_TOKEN) are runtime-only code defaults /
+    // secretRefs and deliberately NOT part of the spec.
+    expect(EDITABLE_ENV.length).toBe(182);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
