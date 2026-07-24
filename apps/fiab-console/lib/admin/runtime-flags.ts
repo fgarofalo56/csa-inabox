@@ -398,6 +398,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'M3',
     surface: '/admin/migrate (Translate tab) + POST /api/migrate/translate',
   },
+  {
+    id: 'a14-collab-push',
+    label: 'Collaboration — push transport (SSE presence + live comments)',
+    description:
+      'The A14 real-time collab push transport: one SSE stream per open editor/canvas (/api/items/[type]/[id]/collab/stream) that pushes presence changes in ~1s and live comment-changed refreshes (canvas stickies + the item review thread), replacing the ~15s poll as the READ path. OFF reverts every surface to the pre-A14 polling heartbeat within seconds — the stream route answers 503, open streams wind down, and presence/comments keep working end-to-end over the poll (degraded latency only, no roll). The Cosmos beacon/comment stores and the heartbeat WRITE path are unaffected either way.',
+    ownerItem: 'A14',
+    surface: 'Canvas presence layers + notebook / report-designer / semantic-model / unified-SQL editor presence + comment panes',
+  },
   // ── N8 — Openness Tier-3 labs (Preview-badged) ──
   {
     id: 'n8-modern-query-prql',
