@@ -114,6 +114,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'report':               reg(() => import('./phase3/report-editor'),          'ReportEditor'),
   'dashboard':            reg(() => import('./phase3/dashboard-editor'),        'DashboardEditor'),
   'paginated-report':     reg(() => import('./phase3/paginated-report-editor'), 'PaginatedReportEditor'),
+  // N16 — BI-as-code "Code report" (Evidence.dev-class), Loom-native.
+  'code-report':          reg(() => import('./code-report-editor'),            'CodeReportEditor'),
   'scorecard':            reg(() => import('./phase3/scorecard-editor'),        'ScorecardEditor'),
 
   // Phase 4 — per-file dynamic imports (barrel kept only for tests). rel-T62.

@@ -18,6 +18,7 @@ import { runItem } from './commands/item.js';
 import { runFind } from './commands/find.js';
 import { runApps } from './commands/apps.js';
 import { runPolicy } from './commands/policy.js';
+import { runReport } from './commands/report.js';
 import { CLI_NAME, CLI_VERSION } from './constants.js';
 
 const HELP = `${CLI_NAME} v${CLI_VERSION} — CSA Loom CLI (wraps the Loom REST API)
@@ -86,11 +87,18 @@ POLICY (Governance-as-Code — WS-10.2)
                                                       configured backend + self-heal
                                                       drift (--yes applies; else dry-run).
 
+REPORT (Code report — BI-as-code CI hook, N16)
+  loom report validate <file> [--engine synapse|lakehouse|adx]
+                                      Parse + dry-compile a code report; exits
+                                      NON-ZERO on any error (CI gate). Metric
+                                      blocks are compiled against your governed spec.
+
 EXAMPLES
   loom auth login --api-url https://loom.example.azurefd.net
   loom workspace create "Analytics" --description "Team WS" --output json
   loom item create <wsId> --type lakehouse --name "Bronze"
   loom find "bronze" --type lakehouse
+  loom report validate reports/revenue.md
 `;
 
 function pickGlobals(flags: Record<string, string | boolean>): GlobalOptions {
@@ -139,6 +147,9 @@ async function main(): Promise<number> {
         return 0;
       case 'policy':
         await runPolicy(sub, rest, opts);
+        return 0;
+      case 'report':
+        await runReport(sub, rest, opts);
         return 0;
       case 'find':
         // `find` is a flat command — the whole query follows the verb (no
