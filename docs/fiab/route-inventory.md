@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1599 |
+| Total routes | 1603 |
 | Public (no session) | 116 |
-| Session-only | 572 |
-| Owner-scoped | 651 |
+| Session-only | 573 |
+| Owner-scoped | 654 |
 | Admin | 260 |
 | Gated (backend config) | 521 |
-| Areas | 106 |
+| Areas | 108 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -730,6 +730,13 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `dq/rules/route.ts` | — | public |  | — |
 | `dq/run/route.ts` | POST | owner-scoped | ● | — |
 
+## duckdb
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `duckdb/capabilities/route.ts` | GET | owner-scoped |  | — |
+| `duckdb/query/route.ts` | POST | owner-scoped |  | — |
+
 ## estate
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -781,6 +788,13 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `feedback/route.ts` | POST | session-only | ● | — |
+
+## flightsql
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `flightsql/connect/route.ts` | GET | session-only |  | — |
+| `flightsql/session/route.ts` | POST | owner-scoped |  | — |
 
 ## foundry
 

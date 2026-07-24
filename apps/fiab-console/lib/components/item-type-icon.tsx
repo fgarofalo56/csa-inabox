@@ -96,6 +96,8 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   'notebook':              (p) => <Notebook20Filled style={{ color: p.color }} />,
   'spark-job-definition':  (p) => <CodeBlock20Regular style={{ color: p.color }} />,
   'environment':           (p) => <Box20Regular style={{ color: p.color }} />,
+  // N2b — SQL Lab (DuckDB): the interactive tier below Spark.
+  'sql-lab':               (p) => <Flash20Filled style={{ color: p.color }} />,
 
   // Data Factory
   'data-pipeline':         (p) => <Flow20Regular style={{ color: p.color }} />,

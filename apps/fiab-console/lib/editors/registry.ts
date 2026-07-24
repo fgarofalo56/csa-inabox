@@ -80,6 +80,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
   // N4 — dbt AND SQLMesh behind one item (backend selector, default dbt).
   'transformation-project': reg(() => import('./transformation-project-editor'), 'TransformationProjectEditor'),
+  // N2b — SQL Lab (DuckDB): the interactive tier below Spark, with the N2a
+  // in-browser local-analysis tab and the N3 Connect (ADBC/Flight/JDBC) tab.
+  'sql-lab':              reg(() => import('./sql-lab-editor'),          'SqlLabEditor'),
   // Data Factory connection objects as first-class creatable items. The
   // standalone editors wrap the shared pipeline gallery / IR manager (read-only)
   // in manage/factory-scoped mode; real ARM via /api/adf (+ /api/synapse).

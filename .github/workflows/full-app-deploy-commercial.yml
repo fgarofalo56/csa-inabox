@@ -190,6 +190,12 @@ jobs:
           # ACR before the admin-plane activates them (dbtRunnerImageReady).
           - app: loom-transform-runner
             ctx: ./apps/loom-transform-runner
+          # N2b/N3 — the DuckDB serving tier + Arrow Flight SQL wire. The image
+          # bakes the azure/httpfs/delta/iceberg extensions in at build time, so
+          # the running container needs no extension repository (IL5). Must be in
+          # ACR before data-plane/duckdb-aca.bicep is deployed out-of-band.
+          - app: loom-duckdb
+            ctx: ./apps/loom-duckdb
     steps:
       - uses: actions/checkout@v4
       - name: Azure login

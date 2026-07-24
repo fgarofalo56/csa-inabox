@@ -638,6 +638,11 @@ const REGISTRY: Record<string, LearnEntry> = {
     summary: 'One SQL model graph, two engines. dbt-core by default (the whole dbt ecosystem, unchanged); switch to SQLMesh for virtual data environments, a Terraform-style plan/apply with real breaking vs non-breaking categorization, and column-level model diff. Runs in-VNet against Synapse, Databricks, or DuckDB — no Fabric, no dbt Cloud, no Tobiko Cloud.',
     docsUrl: 'https://sqlmesh.readthedocs.io/en/stable/concepts/plans/',
   },
+  'sql-lab': {
+    title: 'SQL Lab (DuckDB)',
+    summary: 'Interactive read-only SQL over Delta, Iceberg and Parquet read IN PLACE on your own ADLS Gen2 by an embedded DuckDB — sub-second, no Spark session, no copy. Falls back to Synapse Serverless when the tier is not deployed, and always names the engine that answered. Slice the result again for free in your browser, or connect ADBC / Arrow Flight SQL / JDBC clients to the same Arrow batches.',
+    docsUrl: 'https://duckdb.org/docs/stable/core_extensions/delta',
+  },
   'data-agent': {
     title: 'Data agent',
     summary: 'Conversational Q&A grounded in your warehouse, lakehouse, and semantic models. Built on Foundry prompt-flow + AI Search hybrid retrieval.',
