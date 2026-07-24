@@ -37,7 +37,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # forces earlier GC so the TOTAL stays under the agent limit; paired with
 # experimental.webpackMemoryOptimizations (next.config.mjs) to keep the JS
 # heap itself inside the lower cap.
-ENV NODE_OPTIONS=--max-old-space-size=5120
+# 6656 MiB: the codebase grew enough (Phase-3/4) that the `pnpm build` tsc/next
+# step consistently V8-heap-aborts (SIGABRT ~4.5-5GB) at 5120 — two ACR builds
+# failed in a row (7eb2ee94, 2eaf8656). Safe headroom on the 16 GB loombuild S3
+# pool; this is a V8 heap ceiling, not a cgroup SIGKILL. (memory: csa_loom_acr_build_oom_incident)
+ENV NODE_OPTIONS=--max-old-space-size=6656
 RUN npm install -g pnpm@9 && \
     pnpm build
 
