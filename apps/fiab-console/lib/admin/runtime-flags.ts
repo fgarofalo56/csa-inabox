@@ -464,6 +464,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'U9',
     surface: 'Every xyflow canvas carrying the shared CanvasRightRail (pipeline, eventstream, estate, dataflow, lineage, assets, …)',
   },
+  // ── L5 — Column-level lineage UI ──
+  {
+    id: 'l5-column-lineage-ui',
+    label: 'Lineage canvas — column fan-out + impact analysis',
+    description:
+      'The L5 column-grain layer on the shared lineage canvas: the table→column expand/fan-out affordance, column→column edges, the column-focus highlight, and the column impact-analysis panel/mode. OFF reverts every lineage canvas to the pre-L5 table-grain rendering on the next load (column nodes/edges are simply filtered out client-side) — the L1 column model, the ?columns=true API facet, and all lineage capture keep running either way. No roll required.',
+    ownerItem: 'L5',
+    surface: 'Lineage canvases (Unified Catalog → Lineage, /catalog/lineage, /catalog/[source]/[id])',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
