@@ -31,9 +31,14 @@ import '@/lib/azure/answer-receipts-model';
 // can never cycle back into cosmos-client).
 import '@/lib/azure/prompt-registry-model';
 import '@/lib/azure/token-budget-model';
-// N11 — loom-graphrag-index doc shape + MIG1 migrator registration (module-scope
-// side effect: the chain is live before any read materializes).
+// N11 loom-graphrag-index + N4 loom-transform-plans doc shapes + MIG1 migrator
+// registration (module-scope side effect: live before any read materializes).
 import '@/lib/azure/graphrag-index-model';
+// N1 — loom-lakehouse-interop doc shape + MIG1 migrator registration (LEAF
+// module: imports only cosmos-migrations, so this side-effect import can never
+// cycle back into cosmos-client).
+import { LAKEHOUSE_INTEROP_CONTAINER } from '@/lib/azure/lakehouse-interop-model';
+import '@/lib/azure/transform-plan-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -308,6 +313,7 @@ let _answerReceipts: Container | null = null;
 // layer: lib/azure/prompt-registry-model.ts; store: lib/copilot/prompt-registry.ts.
 // ARM-provisioned in cosmos.bicep's loomContainers; this is the hotfix fallback.
 let _promptRegistry: Container | null = null;
+let _transformPlans: Container | null = null; // N4 plan/apply history, PK /itemId, TTL-enabled; shape+MIG1: ./transform-plan-model
 // N13 — per-workspace / per-agent token budgets (loom-token-budgets). Two doc
 // kinds share the partition: `docType:'budget'` (the configured cap) and
 // `docType:'usage'` (one accumulated-spend row per period, carrying a 400-day
@@ -475,6 +481,16 @@ let _semanticContract: Container | null = null;
 // lib/azure/graphrag-index-model.ts; builder/readers: lib/azure/graphrag-index.ts.
 // Created lazily — a fresh environment needs no extra ARM/Bicep step.
 let _graphRagIndex: Container | null = null;
+// N1 — Delta↔Iceberg interop state (loom-lakehouse-interop). One doc per
+// (tenant, lakehouse container) listing which Delta tables ALSO carry Iceberg
+// metadata, the emit path that produced it, the metadata location in the
+// customer's own ADLS Gen2, and the catalog namespace it is registered under.
+// PK /tenantId so the Interop tab's per-container read and the admin-overview
+// count are both single-partition. No TTL — this is durable table configuration.
+// Doc shapes + MIG1 versioning + the pure state helpers:
+// lib/azure/lakehouse-interop-model.ts. ARM-provisioned in cosmos.bicep's
+// loomContainers; the createIfNotExists below is the hotfix fallback.
+let _lakehouseInterop: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1246,6 +1262,7 @@ async function ensure() {
     })).container,
     'loom-prompt-registry',
   );
+  _transformPlans = withMigrations(await createTtlEnabledContainer(database, 'loom-transform-plans', '/itemId'), 'loom-transform-plans');
   // N13 — per-workspace/per-agent token budgets + usage ledger. PK /scopeKey;
   // defaultTtl -1 = TTL enabled with no blanket expiry (budget docs durable,
   // usage rows carry their own 400-day ttl). withMigrations wraps reads (MIG1).
@@ -1258,6 +1275,14 @@ async function ensure() {
   // N11 — GraphRAG community-summary index. PK /ontologyId; created lazily so a
   // fresh environment needs no extra ARM/Bicep step beyond the account+database.
   _graphRagIndex = await mk('loom-graphrag-index', '/ontologyId');
+  // N1 — Delta↔Iceberg interop state. PK /tenantId; withMigrations wraps reads
+  // (MIG1) so a future shape bump upgrades lazily on read.
+  _lakehouseInterop = withMigrations(
+    (await database.containers.createIfNotExists({
+      id: LAKEHOUSE_INTEROP_CONTAINER, partitionKey: { paths: ['/tenantId'] },
+    })).container,
+    LAKEHOUSE_INTEROP_CONTAINER,
+  );
   _ensured = true;
 }
 
@@ -1372,6 +1397,7 @@ export async function copilotEvalsContainer(): Promise<Container> { await ensure
 export async function answerReceiptsContainer(): Promise<Container> { await ensure(); return _answerReceipts!; }
 /** N13 — LLMOps prompt registry (loom-prompt-registry), PK /promptId. */
 export async function promptRegistryContainer(): Promise<Container> { await ensure(); return _promptRegistry!; }
+export async function transformPlansContainer(): Promise<Container> { await ensure(); return _transformPlans!; }
 /** N13 — per-workspace/per-agent token budgets + usage ledger (loom-token-budgets), PK /scopeKey. */
 export async function tokenBudgetsContainer(): Promise<Container> { await ensure(); return _tokenBudgets!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
@@ -1407,6 +1433,8 @@ export async function costAnomalyRulesContainer(): Promise<Container> { await en
 export async function semanticContractContainer(): Promise<Container> { await ensure(); return _semanticContract!; }
 /** N11 — GraphRAG community-summary index over the Weave/AGE ontology, PK /ontologyId. */
 export async function graphRagIndexContainer(): Promise<Container> { await ensure(); return _graphRagIndex!; }
+/** N1 — Delta↔Iceberg interop state per lakehouse container, PK /tenantId. */
+export async function lakehouseInteropContainer(): Promise<Container> { await ensure(); return _lakehouseInterop!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

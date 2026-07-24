@@ -579,6 +579,7 @@
         "probe-arm-reader"
       ]
     },
+    "iceberg-catalog-client": { "checks": ["svc-iceberg-catalog"] },
     "loom-onelake-client": {
       "checks": [
         "svc-loom-onelake"

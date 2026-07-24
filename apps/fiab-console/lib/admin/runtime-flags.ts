@@ -238,6 +238,22 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N11',
     surface: 'Data-agent test chat + published agent turns (/items/data-agent/[id]) — Graph grounding',
   },
+  {
+    id: 'n1-lakehouse-interop-tab',
+    label: 'Lakehouse — Interop tab (Delta ↔ Iceberg)',
+    description:
+      'The N1 Interop tab on the lakehouse editor: per-table "expose as Iceberg" toggles (a real Synapse Spark job writing Delta UniForm / Apache XTable metadata beside the Delta log), the Iceberg REST Catalog connection string, and the copy-paste connect snippets for Spark / Trino / DuckDB / Snowflake / Databricks. OFF hides the tab on the next render — already-emitted Iceberg metadata stays in the lake and external engines keep reading it (nothing is unregistered or deleted), and every other lakehouse tab is unaffected.',
+    ownerItem: 'N1',
+    surface: 'Lakehouse editor → Interop tab (/items/lakehouse/[id])',
+  },
+  {
+    id: 'n4-transform-plan-apply',
+    label: 'Transformation project — plan/apply wizard + model DAG',
+    description:
+      'The N4 plan/apply surface on the transformation-project editor: the environment picker, the impact-diff grid (model, change type, breaking / non-breaking, downstream, column-level), the apply step (SQLMesh virtual-environment view swap, or `dbt build`), and the software-defined-asset model DAG. OFF hides the wizard + canvas behind a guided notice on the next load and leaves the project authoring, code generation, and file preview fully working — the seconds-fast revert for a rendering regression on the new surface. The loom-transform-runner Container App, the /api/transform/** routes, and the recorded plan history are unaffected.',
+    ownerItem: 'N4',
+    surface: 'Transformation project editor (/items/transformation-project/[id]) — Plan & apply + Model DAG tabs',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

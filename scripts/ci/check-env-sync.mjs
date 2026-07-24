@@ -115,6 +115,10 @@ const ALLOWLIST = new Set([
   'LOOM_ADT_ENDPOINT',
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)
   'LOOM_SPARK_POOL_REAP_GRACE',      // opt-in tune: grace seconds before an untracked Livy session is reaped (default 600)              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
+  'LOOM_ICEBERG_CATALOG_URL',        // N1 opt-in Iceberg REST Catalog service URL (internal-ingress Unity Catalog OSS container). Deployed out-of-band via data-plane/iceberg-catalog-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the lakehouse Interop tab still writes real Delta<->Iceberg dual metadata into the customer's own ADLS Gen2 and every surface renders with an honest Fix-it gate; only catalog DISCOVERY is absent. (LOOM_ICEBERG_CATALOG_TOKEN auto-allowed by /_TOKEN$/.)
+  'LOOM_ICEBERG_CATALOG_PREFIX',     // N1 opt-in IRC path prefix override (code default /api/2.1/unity-catalog/iceberg) — runtime-only knob, never a deploy dependency
+  'LOOM_ICEBERG_CATALOG_WAREHOUSE',  // N1 opt-in IRC warehouse override (code default 'loom') — runtime-only knob, never a deploy dependency
+  'LOOM_ICEBERG_CATALOG_AUDIENCE',   // N1 opt-in Entra audience for the upstream catalog hop (defaults to api://<LOOM_MSAL_CLIENT_ID>) — runtime-only knob
   'LOOM_UNITY_URL',                 // opt-in self-hosted OSS Unity Catalog server URL (GOV-PARITY); the Azure-Government default UC backend (LOOM_UC_BACKEND=oss) since Databricks UC has no Gov endpoint. Deploy compute/loom-unity-app.bicep out-of-band (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the UC client honest-gates (OssUcNotConfiguredError) and Commercial keeps using Databricks UC. (LOOM_UC_BACKEND auto-allowed by /_BACKEND$/; LOOM_UNITY_TOKEN by /_TOKEN$/.)
   'LOOM_POWERBI_USER_PASSTHROUGH',  // opt-out kill switch for Power BI user-passthrough (OBO) auth (#1800 PBI slice; default ON in code — all Power BI tie-ins authenticate as the signed-in user, Synapse-style); set 'false' to revert every Power BI call to the console service principal
   'LOOM_RESULT_CACHE_REDIS_BREAKER_THRESHOLD', // opt-in tune: consecutive Redis-tier failures before the cache circuit breaker opens (default 3 in redis-cache-client.ts)
@@ -240,6 +244,7 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_SCHEMA',         // UC schema default (code default)
   'LOOM_DATABRICKS_SUBSCRIPTIONS',  // opt-in databricks discovery scope
   'LOOM_DBT_RUNNER_AUDIENCE',       // opt-in dbt runner audience
+  'LOOM_TRANSFORM_RUNNER_AUDIENCE', // N4 — opt-in Entra audience for the loom-transform-runner ACA app when Easy Auth is layered on its internal ingress; unset = in-VNet trust (the deployed default). The runner URL itself IS bicep-emitted (LOOM_TRANSFORM_RUNNER_URL).
   'LOOM_DEFAULT_POWERBI_WORKSPACE', // opt-in Power BI workspace (Fabric-family, opt-in)
   'LOOM_PBI_CAPACITY_ID',           // opt-in Fabric/Premium capacity id (Weave→Power BI D2); unset default = the VM on-prem data gateway is used. When set, the Network pane recommends the managed VNet data gateway auto-upgrade (LOOM_PBI_GATEWAY_MODE=auto). Operator provides per D3.
   'LOOM_PBI_WORKSPACE_ID',          // opt-in bound Power BI workspace id (Weave→Power BI D3, real-PBI destination W5); unset default = the real Power BI Service destination honest-gates and the Azure-native/loom-native path is used. Operator provides.

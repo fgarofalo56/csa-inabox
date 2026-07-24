@@ -116,6 +116,8 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_KUSTO_DEFAULT_DB: 'loomdb-default',
   LOOM_EVENTHUB_NAMESPACE: '<eventhubs-namespace>',
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
+  // N1 — Iceberg REST Catalog (internal-ingress Unity Catalog OSS container).
+  LOOM_ICEBERG_CATALOG_URL: 'https://iceberg-catalog.internal.<cae-default-domain>  (unset = dual metadata still emitted to your lake; no catalog discovery)',
   LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
@@ -245,6 +247,9 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_GRAPHRAG_MAX_HOPS: '2   (1–4; ontology traversal depth for GraphRAG grounding)',
   LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS: '2   (0–5; 0 disables the self-healing repair loop)',
   LOOM_DBT_RUNNER_URL: 'https://loom-dbt-runner.<aca-env-domain>',
+  // N4 — the dual-engine (dbt-core + SQLMesh) transformation runtime behind the
+  // transformation-project item's plan / apply / run / diff / environments.
+  LOOM_TRANSFORM_RUNNER_URL: 'https://loom-transform-runner.<aca-env-domain>',
   // L2 — Synapse-Spark OpenLineage ingest (rev-2 security redesign): per-pool
   // Entra bearer (default) or per-workspace minted token; NEVER one global
   // static secret. The endpoint is the in-VNet console URL the pool posts to.

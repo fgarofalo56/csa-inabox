@@ -27,7 +27,7 @@ import {
   ClipboardTask24Regular, Key24Regular, TagMultiple24Regular, Tag24Regular,
   Settings24Regular, People24Regular, Server24Regular, Heart24Regular,
   ShieldCheckmark24Regular, LockClosed16Regular, ToggleLeft24Regular,
-  DocumentBriefcase24Regular, Money24Regular, type FluentIcon,
+  DocumentBriefcase24Regular, Money24Regular, DatabaseLink24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import type { OverviewTileKey, OverviewTiles, TileCount } from '@/app/api/admin/overview/route';
@@ -74,6 +74,9 @@ const TILE_SPECS: TileSpec[] = [
   // RUM1 — real-user monitoring: client JS errors seen in the last 24 h.
   { key: 'rumClientErrors', href: '/admin/rum', label: 'Real-user monitoring', icon: ChartMultiple24Regular,
     description: 'Client errors in the last 24 h' },
+  // N1 — Iceberg-exposed tables (Delta ✓ + Iceberg ✓) readable by external engines.
+  { key: 'icebergTables', href: '/admin/catalog', label: 'Catalog federation', icon: DatabaseLink24Regular,
+    description: 'Tables external engines can read' },
   // DIAG1 — one-click support bundle; count = blocked config gates.
   { key: 'diagnostics', href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular,
     description: 'Support bundle; blocked gates now' },

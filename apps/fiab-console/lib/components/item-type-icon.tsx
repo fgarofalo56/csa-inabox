@@ -105,6 +105,7 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   'mirrored-databricks':   (p) => <ArrowSwap20Regular style={{ color: p.color }} />,
   'mounted-adf':           (p) => <Link20Regular style={{ color: p.color }} />,
   'dbt-job':               (p) => <BranchFork20Regular style={{ color: p.color }} />,
+  'transformation-project':(p) => <BranchFork20Regular style={{ color: p.color }} />,
   'airflow-job':           (p) => <BranchFork20Regular style={{ color: p.color }} />,
 
   // Data Warehouse / Databases

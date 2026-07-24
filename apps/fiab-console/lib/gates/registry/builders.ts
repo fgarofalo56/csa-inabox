@@ -74,6 +74,15 @@ export const BUILDERS_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     legacyCodes: ['dbt_not_configured'],
   },
+  'svc-transform-runner': {
+    surfaces: [
+      { path: '/items/transformation-project', label: 'Transformation project — Plan / Apply / Run' },
+      { path: '/api/transform/*', label: 'Transform BFF (plan, apply, run, diff, environments)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Auto-wired on a push-button deploy once the loom-transform-runner image is in ACR (the dbtRunnerImageReady switch also activates it). Authoring, codegen, and the model DAG work without it.',
+    legacyCodes: ['transform_runner_not_configured'],
+  },
   'svc-approval-logicapp': {
     surfaces: [{ path: '/items/data-pipeline', label: 'Pipeline approval activity' }],
     fixit: { kind: 'env-picker' },

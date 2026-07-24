@@ -14,10 +14,18 @@
  * window shorter than the 168 h default is honored exactly as requested. The UI
  * only offers retention values >= 48 h and recommends 168 h.
  *
+ * N1 extends the same job with an OPTIONAL Delta↔Iceberg DUAL-METADATA step
+ * (`icebergMetadata`), so the one Livy statement that compacts a table can also
+ * emit the Iceberg V2 metadata external engines read — see
+ * ./iceberg-metadata.ts. That path is Synapse-Spark-native: unlike the
+ * pre-existing UniForm toggle in /api/lakehouse/settings (which runs on a
+ * Databricks SQL Warehouse), it works with Databricks entirely unconfigured.
+ *
  * This module is intentionally free of Azure-SDK / next imports so the
  * validation + code generation can be unit-tested in isolation
  * (delta-maintenance.test.ts).
  */
+import { buildIcebergEmitPySpark, buildIcebergDisablePySpark } from './iceberg-metadata';
 
 /** Vacuum retention options surfaced in the UI (hours). Fixed allowlist —
  * never a free-form number, per the no-freeform-config rule. */
@@ -40,6 +48,14 @@ export interface MaintenanceRequest {
   compaction: boolean;
   vacuumRetentionHours: number;
   zorderColumns: string[];
+  /**
+   * N1 — ALSO emit Apache Iceberg V2 metadata beside the Delta log so external
+   * engines (Trino / Spark / DuckDB / Snowflake / Databricks) can read the SAME
+   * Parquet files with zero copy. `true` enables dual metadata, `false`
+   * disables it, `undefined` leaves the table's current setting untouched.
+   * Runs on the SAME Synapse Spark Livy session — no Databricks required.
+   */
+  icebergMetadata?: boolean;
 }
 
 export type ValidationResult =
@@ -90,8 +106,12 @@ export function validateMaintenanceRequest(body: any): ValidationResult {
   if (dedupZ.length > 0 && !compaction) {
     return { ok: false, error: 'ZORDER BY requires compaction (OPTIMIZE) to be enabled' };
   }
-  if (!compaction && !vacuumEnabled) {
-    return { ok: false, error: 'Enable compaction (OPTIMIZE) and/or VACUUM — nothing to do' };
+  // N1 — the Iceberg dual-metadata step is a valid job on its own (the Interop
+  // tab submits ONLY that), so it satisfies the "something to do" requirement.
+  const icebergMetadata =
+    body?.icebergMetadata === true ? true : body?.icebergMetadata === false ? false : undefined;
+  if (!compaction && !vacuumEnabled && icebergMetadata === undefined) {
+    return { ok: false, error: 'Enable compaction (OPTIMIZE), VACUUM, and/or Iceberg metadata — nothing to do' };
   }
 
   return {
@@ -103,6 +123,7 @@ export function validateMaintenanceRequest(body: any): ValidationResult {
       compaction,
       vacuumRetentionHours: vacuumEnabled ? vacuumRetentionHours : 0,
       zorderColumns: dedupZ,
+      ...(icebergMetadata === undefined ? {} : { icebergMetadata }),
     },
   };
 }
@@ -122,6 +143,8 @@ export function buildMaintenancePlan(req: MaintenanceRequest): string[] {
   if (req.vacuumRetentionHours > 0) {
     ops.push(`VACUUM RETAIN ${req.vacuumRetentionHours} HOURS`);
   }
+  if (req.icebergMetadata === true) ops.push('EMIT ICEBERG METADATA (UniForm / XTable)');
+  if (req.icebergMetadata === false) ops.push('DISABLE ICEBERG METADATA');
   return ops;
 }
 
@@ -151,6 +174,15 @@ export function buildMaintenancePySpark(req: MaintenanceRequest, account: string
     const vacSql = 'VACUUM delta.`{_uri}` RETAIN ' + req.vacuumRetentionHours + ' HOURS';
     lines.push('_vac = spark.sql(f' + JSON.stringify(vacSql) + ')');
     lines.push('_results.append({"op": "VACUUM", "files": [r[0] for r in _vac.collect()]})');
+  }
+
+  // N1 — dual metadata. Emitted AFTER compaction so the Iceberg snapshot the
+  // catalog registers points at the freshly bin-packed files, and BEFORE the
+  // result print so its own receipt line is part of the same statement output.
+  if (req.icebergMetadata === true) {
+    lines.push(...buildIcebergEmitPySpark(uri));
+  } else if (req.icebergMetadata === false) {
+    lines.push(...buildIcebergDisablePySpark(uri));
   }
 
   lines.push('import json as _json');

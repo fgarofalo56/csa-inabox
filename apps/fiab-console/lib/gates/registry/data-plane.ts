@@ -62,6 +62,18 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'OFF by default (the intended production posture). Enable only for a non-prod resilience drill: LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN on the tenant-admin request.',
   },
+  // ── N1 — Iceberg REST Catalog (zero-copy external-engine interop) ──
+  'svc-iceberg-catalog': {
+    surfaces: [
+      { path: '/admin/catalog', label: 'Catalog federation — namespaces, formats, connect strings' },
+      { path: '/items/lakehouse', label: 'Lakehouse → Interop tab (expose as Iceberg)' },
+      { path: '/api/catalog/iceberg/*', label: 'Iceberg REST Catalog proxy (external engines)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Unset → Delta↔Iceberg dual metadata still writes real Iceberg V2 metadata into your own ADLS Gen2 (the Interop tab keeps working and hands you the metadata path). The catalog adds discovery + credential vending on top; it is never on the data path.',
+    legacyCodes: ['iceberg_catalog_not_configured'],
+  },
   'svc-cosmos-control': {
     surfaces: [
       { path: '/admin/scaling', label: 'Cosmos account scaling' },

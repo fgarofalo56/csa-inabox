@@ -1,0 +1,17 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+# --- dbt (the ecosystem side of the N4 dual-engine runner) --------------------
+dbt-core==1.8.9
+dbt-synapse==1.8.2
+dbt-databricks==1.8.7
+dbt-duckdb==1.8.4
+dbt-fabric==1.8.7
+# --- SQLMesh (virtual data environments + plan/apply + column-level diff) -----
+# `sqlmesh[web]` is deliberately NOT used: the Loom console IS the UI, and the
+# bundled web app would add a second (unauthenticated) surface inside the VNet.
+sqlmesh==0.132.1
+# SQLMesh reads dbt projects through its dbt adapter shim, so a single project
+# can be planned by either engine (the N4 backend selector).
+sqlmesh[dbt]==0.132.1
+azure-identity==1.19.0

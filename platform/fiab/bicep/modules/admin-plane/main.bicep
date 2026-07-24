@@ -544,6 +544,13 @@ param appImageTags object = {
   // replacement, compute/loom-maps-app.bicep). Serves the MapLibre basemap +
   // vector tiles + maplibre-gl assets in-VNet. Pinned image version.
   mapsTiles: 'v1'
+  // loom-transform-runner — N4 dual-engine transformation runtime
+  // (integration/transform-runner-aca.bicep): dbt-core (default, ecosystem
+  // continuity) AND SQLMesh (virtual data environments + plan/apply +
+  // column-level diff) in one ACA app. Backs the `transformation-project` item.
+  // Pinned image version; read with `?? 'v0.1'` so an operator-supplied bag
+  // that predates N4 keeps deploying.
+  transformRunner: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -628,6 +635,18 @@ var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary 
 
 // dbt-runner Container App is only meaningful on Container Apps + when apps deploy.
 var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// N4 — loom-transform-runner (dbt + SQLMesh) activation.
+// Implemented as a `var` rather than a new top-level `param` because
+// admin-plane/main.bicep sits just under the hard ARM 256-parameter cap (the
+// R0 param-cap rule: NEVER add a new top-level param here). It rides the
+// EXISTING `dbtRunnerEnabled` signal, which the root main.bicep already gates on
+// `dbtRunnerImageReady` — i.e. "the transformation runner images are published
+// to this boundary's ACR". Same activation conditions as the dbt runner
+// (Container Apps + apps deploying); when inactive the Console honestly gates
+// the transformation-project run surface on LOOM_TRANSFORM_RUNNER_URL and the
+// authoring/plan-preview surface still renders in full.
+var transformRunnerActive = dbtRunnerActive
 
 // ── Script-visual executor (wave-4) — deploy toggle ───────────────────────────
 // scriptRunnerEnabled (var, default true): deploys the loom-script-runner ACA app
@@ -3495,6 +3514,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Container App. Empty → the editor surfaces an honest gate naming
             // this var; the Databricks target still works.
             { name: 'LOOM_DBT_RUNNER_URL', value: dbtRunnerActive ? dbtRunner!.outputs.dbtRunnerInternalEndpoint : '' }
+            // N4 — the dual-engine (dbt + SQLMesh) transformation runtime behind
+            // the `transformation-project` item: plan / apply / run / diff /
+            // environments. Empty → the item still authors, generates project
+            // files, and renders the model DAG; only the plan/apply/run calls
+            // honest-gate on this var (gate svc-transform-runner, with a Fix-it).
+            { name: 'LOOM_TRANSFORM_RUNNER_URL', value: transformRunnerActive ? transformRunner!.outputs.transformRunnerInternalEndpoint : '' }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
@@ -4966,6 +4991,35 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
     imageTag: appImageTags.console
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// N4 — loom-transform-runner: the DUAL-ENGINE transformation runtime behind the
+// `transformation-project` item. dbt-core stays the DEFAULT backend (the whole
+// dbt ecosystem, and the `target/manifest.json` artifact L6's lineage parser
+// already consumes); SQLMesh is the opt-in second engine that adds virtual data
+// environments, Terraform-style plan/apply with breaking/non-breaking
+// categorization, and column-level model diff.
+//
+// Additive to the dbt-runner above (which keeps serving the existing dbt-job
+// item). Reuses the Console UAMI — identity-based auth only, no keys/secrets —
+// and is granted Storage Blob Data Contributor on the deployment's ADLS account
+// so run artifacts + plan snapshots outlive the ephemeral container.
+// =====================================================================
+module transformRunner '../integration/transform-runner-aca.bicep' = if (transformRunnerActive) {
+  name: 'transform-runner'
+  params: {
+    location: location
+    caeId: containerPlatformModule.outputs.caeId
+    acrLoginServer: registry.outputs.acrLoginServer
+    imageTag: appImageTags.?transformRunner ?? 'v0.1'
+    uamiId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    uamiPrincipalId: identity.outputs.uamiConsolePrincipalId
+    artifactsStorageAccountName: loomStorageAccount
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

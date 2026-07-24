@@ -100,6 +100,20 @@ export const BUILDERS_ENV_CHECKS: EnvSpec[] = [
     role: 'none (in-VNet HTTP endpoint)',
   },
   {
+    id: 'svc-transform-runner', category: 'builders', title: 'Transformation runner — dbt + SQLMesh (transformation-project items)', severity: 'optional',
+    required: ['LOOM_TRANSFORM_RUNNER_URL'], warnOnMiss: true, derived: true,
+    remediation: 'Auto-wired on a push-button deploy: the loom-transform-runner Container App URL lands in LOOM_TRANSFORM_RUNNER_URL. It backs the transformation-project item\'s plan / apply / run / diff / environments calls for BOTH engines — dbt-core (the default) and SQLMesh (virtual data environments + plan/apply + column-level diff). Authoring, project-file generation, and the model DAG all render without it; only the engine calls are gated. Deploy platform/fiab/bicep/modules/integration/transform-runner-aca.bicep (activated once the loom-transform-runner image is in ACR — the same dbtRunnerImageReady switch), or set the URL directly here.',
+    provisionedBy: 'modules/integration/transform-runner-aca.bicep (activated by admin-plane/main.bicep transformRunnerActive) → apps[] env LOOM_TRANSFORM_RUNNER_URL',
+    role: 'none for the HTTP call (in-VNet internal ingress). The runner authenticates to the warehouse as the Console UAMI, which already holds Synapse SQL / Databricks / ADLS access; the module additionally grants it Storage Blob Data Contributor on the artifacts storage account.',
+    // X2 — both engines are OSS Python on Azure Container Apps + the customer's
+    // own Synapse/Databricks/ADLS. Nothing in the path is cloud-restricted, so
+    // the capability is GA in every boundary, including disconnected IL5.
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'OSS dbt-core + SQLMesh in a Container App inside the deployment\'s own VNet, against customer-owned Synapse / Databricks / ADLS (DuckDB-over-ADLS for a fully disconnected enclave). SQLMesh state lives in the target engine\'s own sqlmesh_state schema. There is NO dbt Cloud and NO Tobiko Cloud in the path, so plan / apply / diff run air-gapped in IL5 with no egress.',
+    },
+  },
+  {
     id: 'svc-approval-logicapp', category: 'builders', title: 'Pipeline approvals — Logic App', severity: 'optional',
     required: ['LOOM_APPROVAL_LOGIC_APP_NAME'], warnOnMiss: true,
     remediation: 'Set LOOM_APPROVAL_LOGIC_APP_NAME (+ LOOM_SUBSCRIPTION_ID) so pipeline approval activities trigger the real approval Logic App (approval_not_configured).',

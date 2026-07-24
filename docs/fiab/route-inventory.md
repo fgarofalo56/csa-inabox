@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1575 |
-| Public (no session) | 112 |
-| Session-only | 571 |
-| Owner-scoped | 633 |
-| Admin | 259 |
-| Gated (backend config) | 516 |
-| Areas | 104 |
+| Total routes | 1590 |
+| Public (no session) | 116 |
+| Session-only | 572 |
+| Owner-scoped | 642 |
+| Admin | 260 |
+| Gated (backend config) | 519 |
+| Areas | 105 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -463,6 +463,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `catalog/domains/route.ts` | GET POST DELETE | session-only |  | Purview |
 | `catalog/find/route.ts` | GET | owner-scoped |  | — |
 | `catalog/glossary/route.ts` | GET POST | session-only |  | Purview |
+| `catalog/iceberg/config/route.ts` | GET | public |  | — |
+| `catalog/iceberg/connect/route.ts` | GET | session-only | ● | — |
+| `catalog/iceberg/namespaces/route.ts` | GET POST | public |  | — |
+| `catalog/iceberg/overview/route.ts` | GET | admin | ● | Cosmos |
+| `catalog/iceberg/table/route.ts` | GET | public |  | — |
+| `catalog/iceberg/tables/route.ts` | GET POST DELETE | public |  | — |
 | `catalog/lineage/item/route.ts` | GET | session-only |  | Purview |
 | `catalog/lineage/route.ts` | GET | session-only |  | Purview |
 | `catalog/metastores/route.ts` | GET POST | owner-scoped | ● | Cosmos, Purview |
@@ -1595,6 +1601,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/tapestry/[id]/timeline/route.ts` | POST | session-only | ● | ADX |
 | `items/tracing/[traceId]/route.ts` | GET | session-only |  | — |
 | `items/tracing/route.ts` | GET | session-only |  | — |
+| `items/transformation-project/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
+| `items/transformation-project/route.ts` | GET POST | owner-scoped |  | — |
 | `items/user-data-function/[id]/invoke/route.ts` | POST | owner-scoped |  | — |
 | `items/user-data-function/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/variable-library/[id]/resolve/route.ts` | POST | owner-scoped |  | — |
@@ -1632,6 +1640,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `lakehouse/containers/route.ts` | GET | session-only |  | ADLS |
 | `lakehouse/download/route.ts` | GET | session-only |  | ADLS |
 | `lakehouse/history/route.ts` | GET POST | session-only | ● | ADLS, Databricks |
+| `lakehouse/interop/route.ts` | GET PUT | owner-scoped | ● | ADLS, Cosmos, Synapse |
 | `lakehouse/load-to-table/route.ts` | POST | session-only | ● | ADLS, Synapse |
 | `lakehouse/maintenance/route.ts` | GET POST | owner-scoped |  | ADLS, Cosmos, Synapse |
 | `lakehouse/path/route.ts` | POST DELETE | session-only |  | ADLS |
@@ -2065,6 +2074,17 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `thread/promote-medallion/route.ts` | POST | owner-scoped |  | — |
 | `thread/publish-as-api/route.ts` | POST | owner-scoped | ● | Synapse SQL |
 | `thread/warehouse-tables/route.ts` | GET | session-only | ● | Synapse SQL |
+
+## transform
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `transform/[id]/apply/route.ts` | POST | owner-scoped |  | — |
+| `transform/[id]/diff/route.ts` | POST | owner-scoped |  | — |
+| `transform/[id]/environments/route.ts` | POST | owner-scoped |  | — |
+| `transform/[id]/history/route.ts` | GET | owner-scoped |  | — |
+| `transform/[id]/plan/route.ts` | POST | owner-scoped |  | — |
+| `transform/[id]/run/route.ts` | POST | owner-scoped |  | — |
 
 ## user-prefs
 
