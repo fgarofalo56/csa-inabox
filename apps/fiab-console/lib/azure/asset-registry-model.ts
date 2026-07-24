@@ -70,7 +70,7 @@ export type AssetKind =
  *   databricks-job     → lib/azure/databricks-client.runJob
  *   none               → no binding yet (Materialize returns an honest gate)
  */
-export type AssetMaterializerKind = 'sqlmesh' | 'dbt' | 'synapse-pipeline' | 'databricks-job' | 'none';
+export type AssetMaterializerKind = 'sqlmesh' | 'dbt' | 'synapse-pipeline' | 'databricks-job' | 'activation-sync' | 'none';
 
 /** Declared refresh cadence. Dropdown-only (loom_no_freeform_config). */
 export type FreshnessCadence = 'none' | '15m' | 'hourly' | '4h' | 'daily' | 'weekly' | 'monthly';
@@ -247,7 +247,7 @@ export function coerceAssetPolicy(raw: unknown): AssetFreshnessPolicy {
 /** Coerce an arbitrary payload into a VALID materializer binding. */
 export function coerceMaterializer(raw: unknown): AssetMaterializerBinding {
   const m = (raw ?? {}) as Partial<AssetMaterializerBinding>;
-  const kinds: AssetMaterializerKind[] = ['sqlmesh', 'dbt', 'synapse-pipeline', 'databricks-job', 'none'];
+  const kinds: AssetMaterializerKind[] = ['sqlmesh', 'dbt', 'synapse-pipeline', 'databricks-job', 'activation-sync', 'none'];
   const kind: AssetMaterializerKind = kinds.includes(m.kind as AssetMaterializerKind)
     ? (m.kind as AssetMaterializerKind)
     : 'none';

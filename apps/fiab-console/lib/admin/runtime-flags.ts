@@ -302,6 +302,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N3',
     surface: 'Lakehouse / warehouse / SQL Lab editors → Connect tab',
   },
+  {
+    id: 'n7c-activation-sync',
+    label: 'Activation sync (reverse ETL)',
+    description:
+      'The N7c activation-sync item: the source/destination/field-mapping editor plus the Run (full + Delta-CDF incremental) surface that pushes a modeled dataset out to Dataverse / webhook / Event Grid / Service Bus. OFF replaces the editor body with a guided notice on the next render — already-created items, the /api/items/activation-sync/** routes and the N5 asset-trigger binding keep working; turn it back on in Admin → Runtime flags to restore the surface.',
+    ownerItem: 'N7c',
+    surface: 'Activation sync editor (/items/activation-sync/[id])',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
