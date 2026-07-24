@@ -237,6 +237,22 @@ Also fixed: a `sql-lab-editor → registry` **import cycle** (editors declare pr
 | WS-5 nav/IA reorg (from the 07-24 audit) | #2509 | 2026-07-24 | 10 of 13 IA items — grouped the flat 46-row admin sidebar into 8 labeled groups; placed the /data-products + /copilot/skills orphans; disambiguated the 3-way "Catalog" naming (Search / External-engine federation (Iceberg) / Governed data catalog); new Operate group; OneLake→Lakehouse. No hrefs removed/duped. The 3 page-fold consolidations (IA-03/04/06) deferred to the reconcile PRP. |
 | LIC0 — distribution-license inventory + NOTICE (retroactive) | #2506 | 2026-07-24 | `THIRD_PARTY_LICENSES.md` (19 embeds / 5 Python sidecars + container OSS, all permissive) + `check-license-inventory.mjs` (hard-block A?GPL/BSL/SSPL + minio/univer; un-reviewed new Python embed fails). Closes the audit's LNL-LIC0 ordering violation. |
 
+## §P2 tail — grep-verified ALREADY BUILT (ledger rows only; 2026-07-24 verification vs main b4aac59b)
+
+These §P2 items were flagged "absent from the DONE ledger" by the 07-24 audit, but the code-level
+verification (reconcile PRP §P2, #2521) found them BUILT — they were shipped as riders on earlier
+waves and never got their own row. Recorded here so the ledger matches reality; no wave needed.
+
+| Item | Where it shipped | Receipt summary |
+|------|------------------|-----------------|
+| C5 — report snapshot delivery | rider (report subscriptions) | `app/api/items/report/[id]/subscriptions/route.ts` + honest `deliveryGate` (names the delivery Logic App infra as the one pending piece — an Azure infra gate per no-vaporware.md, not missing code). |
+| U2 — report designer aux panes | rider (report waves A6–A9) | Bookmarks / Selection / Filters panes live in report-designer. |
+| U11 — px→token drain ratchet | rider (web3 sweeps) | `check-no-raw-px.mjs` shrink-only guard live in the lane (current 18 across 5 files); the remaining drain is opportunistic per the ratchet doctrine. |
+| I4 — PDP shadow-mode UI | rider (I3 shadow) | `lib/components/admin/pdp-shadow-report-card.tsx` on `/admin/permissions` — divergence report card over I3's `identity.shadow` rows. |
+| I8 — limits & quotas doc | rider (docs waves) | `docs/learn/08-reference/limits-quotas` + ADR 0020/0021. |
+| DR4 — DR orchestration + Health-hub tabs | riders (A10/SLO1/DIAG1/V1) | `/admin/health` hub consolidates self-audit + exercise + Journeys + Spark + SLO tabs + `diagnostics/bundle`; dr-drill.yml scenario extensions (DR1–DR3) recorded in Phase 1. |
+| A4 — AAS GA-in-Gov unblock | ground-truth note | AAS **is** GA in Gov (PRP ground-truth correction #1, memory 07-22) — a doc/enablement note, not a build item; X2 availability matrix carries the flip. |
+
 ## Phase boundaries (FRESH0 runs)
 
 | Boundary | Date | Result |
