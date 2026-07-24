@@ -39,6 +39,18 @@ Phase-4 openness:
 | pyarrow | 18.1.0 | Apache-2.0 | Apache-2.0 |
 | azure-identity | 1.19.0 | MIT | MIT |
 
+## Python sidecar — `apps/loom-migrate` (M1 estate-assessment reader)
+
+Source REST calls use the Python standard library (`urllib`) — no third-party
+HTTP client — so every embed here is license-reviewed and permissive.
+
+| Package | Version | License | SPDX |
+|---|---|---|---|
+| fastapi | 0.115.5 | MIT | MIT |
+| uvicorn[standard] | 0.32.1 | BSD-3-Clause | BSD-3-Clause |
+| pydantic | 2.10.3 | MIT | MIT |
+| azure-identity | 1.19.0 | MIT | MIT |
+
 ## Python sidecar — `apps/loom-transform-runner` (N4 SQLMesh + dbt)
 
 | Package | Version | License | SPDX |
