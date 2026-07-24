@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1630 |
+| Total routes | 1632 |
 | Public (no session) | 116 |
 | Session-only | 574 |
 | Owner-scoped | 674 |
-| Admin | 266 |
+| Admin | 268 |
 | Gated (backend config) | 525 |
 | Areas | 113 |
 
@@ -1831,6 +1831,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `migrate/assess/route.ts` | POST | admin | ● | Cosmos |
+| `migrate/copy/route.ts` | GET POST | admin |  | Cosmos |
+| `migrate/translate/route.ts` | POST | admin |  | Cosmos |
 
 ## monitor
 
