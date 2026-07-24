@@ -1135,7 +1135,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   return (
     <>
       <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
-        splitKeyPrefix="report-designer"
+        splitKeyPrefix="report-designer" collabPresence
         leftPanel={leftPanel} main={main} rightPanel={rightPanel} rightPanelLabel="Build" />
 
       <DataSourcePicker
