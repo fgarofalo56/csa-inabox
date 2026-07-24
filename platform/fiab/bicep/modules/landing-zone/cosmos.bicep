@@ -370,6 +370,14 @@ var loomContainers = [
   // without a blanket expiry. createIfNotExists in cosmos-client.ts ensure()
   // remains the hotfix fallback.
   { name: 'loom-token-budgets',    partitionKey: '/scopeKey', ttl: -1 }
+  // N4 — transformation-project PLAN/APPLY history. One `transform-plan` doc per
+  // plan, stamped with the impact rows (incl. the breaking classification) the
+  // operator actually saw and, when applied, the apply outcome — the audit
+  // evidence for "which approved plan changed prod". PK /itemId so a project's
+  // whole history is a single-partition read. Container-level ttl: -1 turns TTL
+  // ON without a blanket expiry; each doc carries its own 365-day `ttl`.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'loom-transform-plans',  partitionKey: '/itemId', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

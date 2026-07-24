@@ -240,6 +240,7 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_SCHEMA',         // UC schema default (code default)
   'LOOM_DATABRICKS_SUBSCRIPTIONS',  // opt-in databricks discovery scope
   'LOOM_DBT_RUNNER_AUDIENCE',       // opt-in dbt runner audience
+  'LOOM_TRANSFORM_RUNNER_AUDIENCE', // N4 — opt-in Entra audience for the loom-transform-runner ACA app when Easy Auth is layered on its internal ingress; unset = in-VNet trust (the deployed default). The runner URL itself IS bicep-emitted (LOOM_TRANSFORM_RUNNER_URL).
   'LOOM_DEFAULT_POWERBI_WORKSPACE', // opt-in Power BI workspace (Fabric-family, opt-in)
   'LOOM_PBI_CAPACITY_ID',           // opt-in Fabric/Premium capacity id (Weave→Power BI D2); unset default = the VM on-prem data gateway is used. When set, the Network pane recommends the managed VNet data gateway auto-upgrade (LOOM_PBI_GATEWAY_MODE=auto). Operator provides per D3.
   'LOOM_PBI_WORKSPACE_ID',          // opt-in bound Power BI workspace id (Weave→Power BI D3, real-PBI destination W5); unset default = the real Power BI Service destination honest-gates and the Azure-native/loom-native path is used. Operator provides.

@@ -164,6 +164,7 @@ const REGISTRY: Record<string, Entry> = {
   'mirrored-databricks':{ icon: ArrowSwap24Regular,    family: 'data-factory', label: 'Mirrored Databricks' },
   'mounted-adf':        { icon: Link24Regular,         family: 'data-factory', label: 'Mounted ADF' },
   'dbt-job':            { icon: BranchFork24Regular,   family: 'data-factory', label: 'dbt Job' },
+  'transformation-project': { icon: BranchFork24Regular, family: 'data-factory', label: 'Transformation Project' },
   'airflow-job':        { icon: BranchFork24Regular,   family: 'data-factory', label: 'Airflow Job' },
   'linked-service':     { icon: Link24Regular,          family: 'data-factory', label: 'Linked Service' },
   'integration-runtime':{ icon: Toolbox24Regular,       family: 'data-factory', label: 'Integration Runtime' },

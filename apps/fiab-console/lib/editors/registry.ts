@@ -78,6 +78,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
   'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
+  // N4 — dbt AND SQLMesh behind one item (backend selector, default dbt).
+  'transformation-project': reg(() => import('./transformation-project-editor'), 'TransformationProjectEditor'),
   // Data Factory connection objects as first-class creatable items. The
   // standalone editors wrap the shared pipeline gallery / IR manager (read-only)
   // in manage/factory-scoped mode; real ARM via /api/adf (+ /api/synapse).

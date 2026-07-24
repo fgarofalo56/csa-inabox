@@ -212,6 +212,34 @@ export const dataFactoryItems: FabricItemType[] = [
       ],
       "docsUrl": "https://docs.getdbt.com/docs/build/projects"
     } },
+  { slug: 'transformation-project', displayName: 'Transformation project', restType: 'TransformationProject', category: 'Data Factory',
+    description: 'Model your warehouse with dbt or SQLMesh — same project, either engine. Preview a Terraform-style plan (breaking vs non-breaking, column-level, downstream blast radius) before anything is applied.',
+    learnContent: {
+      "overview": "A transformation project is a governed SQL model graph with a BACKEND SELECTOR. dbt-core is the default so the whole dbt ecosystem — adapters, packages, generic tests, docs, and the manifest that feeds Loom's column lineage — keeps working unchanged. Switch the same project to SQLMesh and you additionally get virtual data environments (a dev environment is a view swap over shared physical tables, not a rebuild), Terraform-style plan/apply with real BREAKING / NON-BREAKING categorization, and column-level model diff between environments. Both engines run in the loom-transform-runner Container App inside your VNet against Synapse, Databricks, or DuckDB-over-ADLS — no Microsoft Fabric, no dbt Cloud, no Tobiko Cloud.",
+      "steps": [
+        {
+          "title": "Pick the engine",
+          "body": "Choose dbt (default — continuity with your existing project and packages) or SQLMesh (virtual environments + plan/apply + column diff). The model graph is identical either way; only the generated project files differ."
+        },
+        {
+          "title": "Build the model DAG",
+          "body": "Add source and model nodes on the canvas, wire ref()/source() lineage, pick a materialization, and attach column tests. Every node is a software-defined asset with an owner, tags, and a refresh cadence."
+        },
+        {
+          "title": "Plan before you apply",
+          "body": "Choose the target environment and run Plan. The impact grid shows every changed model, whether the change is breaking or non-breaking, the column-level diff, and the downstream models it propagates to. Nothing is written."
+        },
+        {
+          "title": "Apply",
+          "body": "Apply executes the plan: on SQLMesh that is a virtual-environment view swap plus only the intervals that need backfilling; on dbt it is dbt build over the modified models and their downstream. Applying to production requires an explicit second confirmation, and the plan you approved is recorded to the audit trail."
+        },
+        {
+          "title": "Diff two environments",
+          "body": "For a SQLMesh project, diff one model between two environments to see exactly which columns were added, removed, or retyped — and how the row counts compare."
+        }
+      ],
+      "docsUrl": "https://sqlmesh.readthedocs.io/en/stable/concepts/plans/"
+    } },
   { slug: 'airflow-job', displayName: 'Apache Airflow job', restType: 'ApacheAirflowJob', category: 'Data Factory', preview: true,
     description: 'Managed Airflow DAGs synced from a Git repo (preview).',
     learnContent: {

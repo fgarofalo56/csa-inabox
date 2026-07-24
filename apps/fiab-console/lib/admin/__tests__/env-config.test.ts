@@ -219,7 +219,13 @@ describe('admin/env-config registry', () => {
     // (multi-hop traversal depth, code default 2, clamp [1,4]) +
     // LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS (bounded repair attempts, code default 2,
     // clamp [0,5]) — both optional tuning knobs with safe code defaults.
-    expect(EDITABLE_ENV.length).toBe(176);
+    // Bumped to 177 by N4 (SQLMesh alongside dbt): svc-transform-runner adds
+    // LOOM_TRANSFORM_RUNNER_URL — the loom-transform-runner Container App that
+    // executes a transformation-project with EITHER engine (dbt-core default,
+    // SQLMesh opt-in). `derived` (bicep auto-wires it on a push-button deploy),
+    // NOT optionalDefault: with the runner absent the plan/apply/run calls are
+    // honestly gated, so it must not count as configured.
+    expect(EDITABLE_ENV.length).toBe(177);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
