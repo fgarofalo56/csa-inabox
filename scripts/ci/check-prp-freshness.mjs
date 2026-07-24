@@ -97,7 +97,7 @@ const FACTS = [
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1638, // 4c/4d/openness boundary re-baseline (N16/17/18 + M1/M2/M3 migrate + N7a streaming-sql / N7e trino / N8 labs routes)
+    stated: 1643, // §P2-gaps wave re-baseline (EXP1 workspace export/import/clone + A14 collab/stream + U8 kql-dashboard depth routes)
     live: countRoutes,
   },
   {
