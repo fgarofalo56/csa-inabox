@@ -77,6 +77,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'environment':          reg(() => import('./phase2-misc-editors'),      'EnvironmentEditor'),
   'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
   'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
+  // N7c — reverse ETL / activation sync (Dataverse-first + webhook/EG/SB).
+  'activation-sync':      reg(() => import('./activation-sync-editor'),   'ActivationSyncEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
   // N4 — dbt AND SQLMesh behind one item (backend selector, default dbt).
   'transformation-project': reg(() => import('./transformation-project-editor'), 'TransformationProjectEditor'),
