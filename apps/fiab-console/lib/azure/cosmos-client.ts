@@ -38,6 +38,9 @@ import '@/lib/azure/graphrag-index-model';
 // module: imports only cosmos-migrations, so this side-effect import can never
 // cycle back into cosmos-client).
 import { LAKEHOUSE_INTEROP_CONTAINER } from '@/lib/azure/lakehouse-interop-model';
+// M2 — migration copy-in job store. Importing the constant also runs the
+// model's registerCopyJobMigrators() at module scope (MIG1) before any read.
+import { COPY_JOB_CONTAINER } from '@/lib/migrate/copy-job-model';
 import '@/lib/azure/transform-plan-model';
 // N5 — loom-assets doc shape + MIG1 registration (LEAF: cosmos-migrations only).
 import { ASSET_REGISTRY_CONTAINER } from '@/lib/azure/asset-registry-model';
@@ -95,6 +98,9 @@ let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
 let _dataproductJobs: Container | null = null;
 let _appInstallJobs: Container | null = null;
+// M2 — migration copy-in jobs (PK /tenantId). One doc per copy run; the
+// /admin/migrate "Copy in" monitor polls a single partition.
+let _migrationCopyJobs: Container | null = null;
 let _labelPropagation: Container | null = null;
 let _postureAggregates: Container | null = null;
 let _recommendedActions: Container | null = null;
@@ -921,6 +927,11 @@ async function ensure() {
   // the install dialog's 5s poll hits a single physical partition. Created lazily
   // (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers.
   _appInstallJobs = await mk('app-install-jobs', '/tenantId');
+  // M2 — migration copy-in jobs. PK /tenantId so the "Copy in" monitor's poll
+  // hits a single physical partition. withMigrations (MIG1) wraps reads. Created
+  // lazily (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's
+  // loomContainers.
+  _migrationCopyJobs = await mk(COPY_JOB_CONTAINER, '/tenantId');
   // Sensitivity-label downstream propagation state (F15). One row per item
   // (id = 'prop:<itemId>'), written by the label-propagation timer Function
   // and read live-overlaid by the lineage view. PK /tenantId so the governance
@@ -1345,6 +1356,7 @@ export async function landingZonesContainer(): Promise<Container> { await ensure
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 export async function appInstallJobsContainer(): Promise<Container> { await ensure(); return _appInstallJobs!; }
+export async function migrationCopyJobsContainer(): Promise<Container> { await ensure(); return _migrationCopyJobs!; }
 export async function labelPropagationContainer(): Promise<Container> { await ensure(); return _labelPropagation!; }
 export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
 export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }

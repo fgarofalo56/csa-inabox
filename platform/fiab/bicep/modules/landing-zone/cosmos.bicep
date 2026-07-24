@@ -408,6 +408,13 @@ var loomContainers = [
   // its enforcement history are durable governance evidence. createIfNotExists
   // in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-data-contracts',   partitionKey: '/tenantId' }
+  // M2 — inbound-migration copy-in jobs. One doc per copy run (id
+  // 'copy:<migrationId>') holding the authored ADF Copy pipeline + run id and
+  // the per-object copy status + real row counts the /admin/migrate "Copy in"
+  // monitor renders. PK /tenantId so the monitor's poll hits a single physical
+  // partition. createIfNotExists in cosmos-client.ts ensure() remains the hotfix
+  // fallback. No TTL — a migration copy record is durable evidence.
+  { name: 'migration-copy-jobs',   partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

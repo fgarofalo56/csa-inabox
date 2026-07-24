@@ -366,6 +366,22 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'M1',
     surface: '/admin/migrate + /api/migrate/assess',
   },
+  {
+    id: 'n-m2-copy-in',
+    label: 'Migration — schema + data copy-in',
+    description:
+      'The M2 copy-in step on /admin/migrate ("Copy in" tab): build a copy plan from the M1 readiness report and land each assessed table into ADLS Bronze via a REAL Azure Data Factory Copy pipeline (the mirror substrate in reverse), then optionally materialize managed Delta in the target Loom lakehouse. OFF makes /api/migrate/copy return a guided "turned off" 503 and hides the tab\'s function on the next load; assessment, in-flight pipelines, and every other surface are unaffected (no roll needed). ADF runs in-boundary; a Fabric / Power BI estate is only ever a migration SOURCE — Loom itself needs no Fabric.',
+    ownerItem: 'M2',
+    surface: '/admin/migrate (Copy in) + /api/migrate/copy',
+  },
+  {
+    id: 'n-m3-translate',
+    label: 'Migration — code translation (SQL / DAX / report)',
+    description:
+      'The M3 code-translation surface on /admin/migrate (Translate tab): transpile Snowflake / T-SQL views to Loom SQL, DAX measures to N9 semantic-contract measures (reusing the A1/A2/A3 parser + fold), and Power BI / Fabric reports to N16 code-reports (reusing the N16 parser). Every unsupported construct is flagged needs-review with the exact reason (never a fabricated translation); generated artifacts land as draft Loom items. OFF makes POST /api/migrate/translate return a guided "turned off" 503 and hides the Translate tab on the next load; nothing else is affected (no roll needed).',
+    ownerItem: 'M3',
+    surface: '/admin/migrate (Translate tab) + POST /api/migrate/translate',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
