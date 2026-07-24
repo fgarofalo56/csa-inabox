@@ -82,8 +82,10 @@ describe('/admin/catalog — configured', () => {
     renderWithProviders(<AdminCatalogPage />);
 
     await waitFor(() => expect(screen.getByText('Connect an external engine')).toBeInTheDocument());
-    expect(screen.getByText('Apache Spark')).toBeInTheDocument();
-    expect(screen.getByText('Trino')).toBeInTheDocument();
+    // getAllByText: an engine name appears in both the selector label and its
+    // note/snippet — the assertion is "offered", not "appears exactly once".
+    expect(screen.getAllByText('Apache Spark').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Trino').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/spark\.sql\.catalog\.loom\.type=rest/).length).toBeGreaterThan(0);
   });
 });

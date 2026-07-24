@@ -66,8 +66,17 @@ describe('buildIcebergEmitPySpark', () => {
     const evil = 'abfss://c@a.dfs.core.windows.net/Tables/x"; import os; os.system("rm -rf /") #';
     const line = buildIcebergEmitPySpark(evil).find((l) => l.startsWith('_ice_uri ='))!;
     expect(line).toBe(`_ice_uri = ${JSON.stringify(evil)}`);
-    // The dangerous characters are escaped inside the literal, never raw code.
-    expect(line).not.toContain('"; import os');
+    // The security property is that the payload can never ESCAPE the string
+    // literal — i.e. every `"` inside the literal body is backslash-escaped, so
+    // Python reads the whole thing as ONE string. (A naive
+    // `not.toContain('"; import os')` false-fails here: correctly-escaped output
+    // is `x\"; import os`, which still contains that substring verbatim.)
+    const body = line.slice('_ice_uri = '.length);
+    expect(body.startsWith('"') && body.endsWith('"')).toBe(true);
+    const inner = body.slice(1, -1);
+    // No unescaped quote anywhere inside → the literal cannot be terminated early.
+    expect(/(^|[^\\])"/.test(inner)).toBe(false);
+    expect(inner).toContain('\\"; import os'); // present, but escaped — inert data
   });
 
   it('prints the parseable receipt marker', () => {

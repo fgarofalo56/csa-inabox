@@ -323,7 +323,10 @@ export function loadTable(namespace: string, table: string): Promise<IrcLoadTabl
  * file (the one UniForm/XTable just wrote into the lake) as a catalog table.
  * This is the zero-copy hand-off: the catalog records a pointer, no data moves.
  */
-export function registerTable(
+// `async` deliberately: the validation below rejects rather than throwing
+// SYNCHRONOUSLY. A Promise-returning function that throws sync would surprise
+// every `registerTable(...).catch(h)` caller with an uncaught error.
+export async function registerTable(
   namespace: string,
   table: string,
   metadataLocation: string,

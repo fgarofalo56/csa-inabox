@@ -106,14 +106,26 @@ describe('InteropPane — configured catalog', () => {
     installFetchMock({ '/api/lakehouse/interop': () => CONFIGURED });
     mount();
 
-    await waitFor(() => expect(screen.getByText('Connect an external engine')).toBeInTheDocument());
+    // Wait for the CONFIGURED signal specifically — "Connect an external engine"
+    // renders in the direct-metadata (unconfigured) state too, so waiting on it
+    // let the assertions run before the catalog payload landed.
+    await waitFor(() =>
+      expect(screen.getByText('https://loom.test/api/catalog/iceberg')).toBeInTheDocument(),
+    );
     for (const engine of ['Apache Spark', 'Trino', 'DuckDB', 'Snowflake', 'Databricks']) {
-      expect(screen.getByText(engine)).toBeInTheDocument();
+      // getAllByText: an engine name legitimately appears more than once (the
+      // selector label AND its snippet/note) — the assertion is "offered", not "unique".
+      expect(screen.getAllByText(engine).length).toBeGreaterThan(0);
     }
     // The default (Spark) snippet is real Iceberg REST catalog configuration
     // pointed at the audited Loom proxy — never at the internal container.
-    expect(screen.getAllByText(/org\.apache\.iceberg\.spark\.SparkCatalog/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/uri=https:\/\/loom\.test\/api\/catalog\/iceberg/).length).toBeGreaterThan(0);
+    // Assert on concatenated textContent, not a single element: the code block
+    // may tokenize a line across spans, which breaks per-element text matching.
+    const rendered = document.body.textContent ?? '';
+    expect(rendered).toContain('org.apache.iceberg.spark.SparkCatalog');
+    // SECURITY: the snippet must point external engines at the AUDITED Loom
+    // proxy, never at the internal-ingress catalog container.
+    expect(rendered).toContain('uri=https://loom.test/api/catalog/iceberg');
   });
 });
 
