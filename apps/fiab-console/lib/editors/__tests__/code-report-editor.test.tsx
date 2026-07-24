@@ -33,7 +33,9 @@ describe('CodeReportEditor', () => {
     try {
       render(<CodeReportEditor item={makeItem('code-report', 'Code report')} id="cr1" />);
       await waitFor(() => expect(screen.getByText(/Author your report as code/i)).toBeInTheDocument(), { timeout: 5000 });
-      expect(screen.getByText(/Start from an example/i)).toBeInTheDocument();
+      // getAllByText: the phrase appears in both the intro copy and the launcher
+      // affordance — the assertion is "the guided launcher is offered", not "unique".
+      expect(screen.getAllByText(/Start from an example/i).length).toBeGreaterThan(0);
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });
