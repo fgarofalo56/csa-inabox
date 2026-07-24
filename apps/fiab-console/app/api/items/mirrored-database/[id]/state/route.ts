@@ -7,9 +7,9 @@
  * ADLS Bronze, and persists real per-table metrics. Stop marks the mirror
  * Stopped (the change feed + landed data remain). See lib/azure/mirror-engine.ts.
  */
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -36,9 +36,7 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
   };
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return apiError('unauthenticated', 401);
+export const POST = withSession(async (req, { session: s, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
   if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('mirrored database not found', 404);
@@ -48,7 +46,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   try {
     const items = await itemsContainer();
-    const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
+    const { resource: existing } = await items.item(params.id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const state = (existing.state || {}) as Record<string, any>;
 
@@ -67,7 +65,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // Per-table watermarks from the prior run let the SQL family sync only the
     // changes since last Start (incremental); the first run has none → snapshot.
     const prevTableStatus = (Array.isArray(state.tablesStatus) ? state.tablesStatus : []) as MirrorTableResult[];
-    const run = await runMirrorSnapshot(existing.id, workspaceId, src, prevTableStatus);
+    // N6 — enforce the ODCS contracts bound to this mirror at ingestion.
+    const run = await runMirrorSnapshot(existing.id, workspaceId, src, prevTableStatus, { tenantId: s.claims.oid });
 
     const mirroringStatus = run.status === 'Running' ? 'Running' : run.status === 'Gated' ? 'NotStarted' : 'Error';
     const next: WorkspaceItem = {
@@ -99,4 +98,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       error: run.error,
     });
   } catch (e: any) { return apiServerError(e); }
-}
+});

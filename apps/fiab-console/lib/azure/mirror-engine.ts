@@ -37,6 +37,10 @@ import {
 } from './adf-client';
 import { dfsSuffix } from './cloud-endpoints';
 import { escapeSqlLiteral, bracket as qbracket } from '@/lib/sql/quoting';
+// N6 — ODCS data contracts ENFORCED at ingestion. Rows are enforced between the
+// source read and the Bronze upload, so a violating row never reaches the clean
+// landing zone. Default = warn-quarantine; hard-reject is a per-contract opt-in.
+import { enforceOrPassThrough } from '@/lib/ingest/contract-enforcement';
 // httpsToAbfss lives in cloud-endpoints (pure, sovereign-aware) so it is unit-
 // testable without this module's mssql/identity native chain; re-exported here
 // for the existing `@/lib/azure/mirror-engine` consumers (Thread edges).
@@ -82,6 +86,13 @@ const MAX_ROWS = Number(process.env.LOOM_MIRROR_MAX_ROWS || 50_000);
 const MAX_TABLES = Number(process.env.LOOM_MIRROR_MAX_TABLES || 50);
 
 export interface MirrorTableSpec { schema: string; table: string }
+
+/**
+ * N6 enforcement context, threaded from the owning route (which holds the
+ * session) to the two Bronze writers. Absent → the mirror runs exactly as it
+ * did before N6 (no contract lookup, no cost).
+ */
+export interface MirrorEnforcementContext { tenantId: string; mirrorId: string }
 
 export interface MirrorSource {
   sourceType: string;
@@ -226,10 +237,16 @@ function pgQuote(ident: string): string {
 async function writeCsvSnapshot(
   basePath: string, schema: string, table: string,
   columns: string[], rows: Record<string, unknown>[], truncated: boolean, lastSync: string,
+  enforce?: MirrorEnforcementContext,
 ): Promise<MirrorTableResult> {
+  // N6 — enforce the bound ODCS contract BEFORE anything reaches Bronze.
+  const guard = await enforceMirrorBatch(enforce, basePath, schema, table, columns, rows);
+  if (guard.blocked) return { schema, table, status: 'error', mode: 'snapshot', rows: 0, bytes: 0, truncated, lastSync, note: guard.note, error: guard.note };
+  const landed = guard.rows;
+
   const lines: string[] = [];
   lines.push(columns.map(csvCell).join(','));
-  for (const r of rows) lines.push(columns.map((c) => csvCell(r[c])).join(','));
+  for (const r of landed) lines.push(columns.map((c) => csvCell(r[c])).join(','));
   const buf = Buffer.from(lines.join('\n'), 'utf-8');
 
   const folder = `${basePath}/${schema}.${table}`;
@@ -249,7 +266,10 @@ async function writeCsvSnapshot(
   const openrowset =
     `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
     `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE)${withClause} AS rows`;
-  return { schema, table, status: 'replicated', mode: 'snapshot', rows: rows.length, bytes: buf.length, truncated, lastSync, path: folderUrl, openrowset };
+  return {
+    schema, table, status: 'replicated', mode: 'snapshot', rows: landed.length,
+    bytes: buf.length, truncated, lastSync, path: folderUrl, openrowset, note: guard.note,
+  };
 }
 
 /**
@@ -262,10 +282,16 @@ async function writeCsvSnapshot(
 async function writeDeltaCsv(
   basePath: string, schema: string, table: string,
   columns: string[], rows: Record<string, unknown>[], lastSync: string,
+  enforce?: MirrorEnforcementContext,
 ): Promise<MirrorTableResult> {
+  // N6 — the incremental path is enforced identically to the snapshot path.
+  const guard = await enforceMirrorBatch(enforce, basePath, schema, table, columns, rows);
+  if (guard.blocked) return { schema, table, status: 'error', mode: 'incremental', rows: 0, bytes: 0, truncated: false, lastSync, note: guard.note, error: guard.note };
+  const landed = guard.rows;
+
   const lines: string[] = [];
   lines.push(columns.map(csvCell).join(','));
-  for (const r of rows) lines.push(columns.map((c) => csvCell(r[c])).join(','));
+  for (const r of landed) lines.push(columns.map((c) => csvCell(r[c])).join(','));
   const buf = Buffer.from(lines.join('\n'), 'utf-8');
 
   const folder = `${basePath}/${schema}.${table}`;
@@ -275,7 +301,25 @@ async function writeDeltaCsv(
   const openrowset =
     `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
     `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
-  return { schema, table, status: 'replicated', mode: 'incremental', rows: rows.length, bytes: buf.length, truncated: false, lastSync, path: folderUrl, openrowset };
+  return {
+    schema, table, status: 'replicated', mode: 'incremental', rows: landed.length,
+    bytes: buf.length, truncated: false, lastSync, path: folderUrl, openrowset, note: guard.note,
+  };
+}
+
+/**
+ * N6 enforcement shim for the two Bronze writers. No bound contract → rows pass
+ * through. warn-quarantine (DEFAULT) → violators go to
+ * `<basePath>/_rejected/<schema>.<table>/rejected-<ts>.jsonl` + alert, the rest
+ * still lands. hard-reject (opt-in) → nothing lands, the table reports `error`.
+ */
+async function enforceMirrorBatch(
+  enforce: MirrorEnforcementContext | undefined,
+  basePath: string, schema: string, table: string,
+  columns: string[], rows: Record<string, unknown>[],
+): Promise<{ rows: Record<string, unknown>[]; blocked: boolean; note?: string }> {
+  if (!enforce?.tenantId || !enforce.mirrorId) return { rows, blocked: false };
+  return enforceOrPassThrough({ tenantId: enforce.tenantId, source: 'mirrored-database', targetItemId: enforce.mirrorId, dataset: `${schema}.${table}`, basePath, columns, rows });
 }
 
 /**
@@ -377,6 +421,7 @@ async function readChangedRows(
  */
 async function snapshotTableIncremental(
   src: MirrorSource, t: MirrorTableSpec, basePath: string, sinceVersion: number, pkCols: string[], lastSync: string,
+  enforce?: MirrorEnforcementContext,
 ): Promise<MirrorTableResult> {
   const { columns, rows } = await readChangedRows(src.server, src.database, t.schema, t.table, sinceVersion, pkCols);
   // Capture the new watermark for the next run (last committed version).
@@ -392,7 +437,7 @@ async function snapshotTableIncremental(
       `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
     return { schema: t.schema, table: t.table, status: 'replicated', mode: 'incremental', rows: 0, bytes: 0, truncated: false, lastSync, path: folderUrl, openrowset, syncVersion: newVersion, note: 'No changes since the last sync.' };
   }
-  const result = await writeDeltaCsv(basePath, t.schema, t.table, columns, rows, lastSync);
+  const result = await writeDeltaCsv(basePath, t.schema, t.table, columns, rows, lastSync, enforce);
   result.syncVersion = newVersion;
   return result;
 }
@@ -486,6 +531,7 @@ function cosmosMaxTs(docs: Record<string, unknown>[]): string {
  */
 async function snapshotTable(
   src: MirrorSource, t: MirrorTableSpec, basePath: string, saved?: MirrorTableResult, forceSnapshot = false,
+  enforce?: MirrorEnforcementContext,
 ): Promise<MirrorTableResult> {
   const lastSync = new Date().toISOString();
   try {
@@ -506,7 +552,7 @@ async function snapshotTable(
               const openrowset = `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
               return { schema: t.schema, table: t.table, status: 'replicated', mode: 'incremental', rows: 0, bytes: 0, truncated: false, lastSync, path: folderUrl, openrowset, watermark: newWatermark, watermarkColumn: col.column, note: 'No changes since the last sync.' };
             }
-            const result = await writeDeltaCsv(basePath, t.schema, t.table, columns, rows, lastSync);
+            const result = await writeDeltaCsv(basePath, t.schema, t.table, columns, rows, lastSync, enforce);
             result.watermark = newWatermark;
             result.watermarkColumn = col.column;
             return result;
@@ -519,7 +565,7 @@ async function snapshotTable(
       const truncated = res.rows.length > MAX_ROWS;
       const sliced = truncated ? res.rows.slice(0, MAX_ROWS) : res.rows;
       const objs = sliced.map((row) => Object.fromEntries(res.columns.map((c, i) => [c, row[i]])));
-      const result = await writeCsvSnapshot(basePath, t.schema, t.table, res.columns, objs, truncated, lastSync);
+      const result = await writeCsvSnapshot(basePath, t.schema, t.table, res.columns, objs, truncated, lastSync, enforce);
       if (!forceSnapshot) {
         try {
           const det = await pgDetectWatermarkColumn(src.server, src.database, t.schema, t.table);
@@ -528,9 +574,9 @@ async function snapshotTable(
             let max = '';
             for (const o of objs) { const v = pgWatermarkValue(o[det.column]); if (v && (max === '' || v > max)) max = v; }
             result.watermark = max;
-            result.note = 'Captured watermark; the next Start will sync only rows where ' + det.column + ' advances (insert/update — physical deletes are a disclosed follow-up).';
+            result.note = [result.note, 'Captured watermark; the next Start will sync only rows where ' + det.column + ' advances (insert/update — physical deletes are a disclosed follow-up).'].filter(Boolean).join(' ');
           } else {
-            result.note = 'No monotonic column (updated-at timestamp or serial id) found; each Start full-snapshots this table. Add an updated-at column to enable incremental sync.';
+            result.note = [result.note, 'No monotonic column (updated-at timestamp or serial id) found; each Start full-snapshots this table. Add an updated-at column to enable incremental sync.'].filter(Boolean).join(' ');
           }
         } catch { /* watermark detection best-effort; absence simply means next run full-snapshots */ }
       }
@@ -558,7 +604,7 @@ async function snapshotTable(
           const colSet = new Set<string>();
           for (const d of rows) for (const k of Object.keys(d)) if (!k.startsWith('_')) colSet.add(k);
           const columns = Array.from(colSet);
-          const result = await writeDeltaCsv(basePath, 'cosmos', t.table, columns, rows, lastSync);
+          const result = await writeDeltaCsv(basePath, 'cosmos', t.table, columns, rows, lastSync, enforce);
           result.watermark = newWatermark;
           return result;
         } catch { /* fall through to a full snapshot below */ }
@@ -571,10 +617,10 @@ async function snapshotTable(
       const colSet = new Set<string>();
       for (const d of rows) for (const k of Object.keys(d)) if (!k.startsWith('_')) colSet.add(k);
       const columns = Array.from(colSet);
-      const result = await writeCsvSnapshot(basePath, 'cosmos', t.table, columns, rows, truncated, lastSync);
+      const result = await writeCsvSnapshot(basePath, 'cosmos', t.table, columns, rows, truncated, lastSync, enforce);
       if (!forceSnapshot) {
         result.watermark = cosmosMaxTs(rows);
-        result.note = 'Captured `_ts` watermark; the next Start syncs only documents changed since (insert/update — physical deletes are a disclosed follow-up).';
+        result.note = [result.note, 'Captured `_ts` watermark; the next Start syncs only documents changed since (insert/update — physical deletes are a disclosed follow-up).'].filter(Boolean).join(' ');
       }
       return result;
     }
@@ -612,7 +658,7 @@ async function snapshotTable(
           if (!pkCols.length) {
             fallbackNote = 'Table has no primary key; incremental sync via CHANGETABLE is unavailable — full snapshot.';
           } else {
-            return await snapshotTableIncremental(src, t, basePath, savedSyncVersion, pkCols, lastSync);
+            return await snapshotTableIncremental(src, t, basePath, savedSyncVersion, pkCols, lastSync, enforce);
           }
         }
       } catch (ie: any) {
@@ -625,9 +671,9 @@ async function snapshotTable(
     const truncated = recordset.length > MAX_ROWS;
     const rows = truncated ? recordset.slice(0, MAX_ROWS) : recordset;
     const cols = rows.length ? Object.keys(rows[0]) : [];
-    const result = await writeCsvSnapshot(basePath, t.schema, t.table, cols, rows, truncated, lastSync);
+    const result = await writeCsvSnapshot(basePath, t.schema, t.table, cols, rows, truncated, lastSync, enforce);
     result.mode = 'snapshot';
-    if (fallbackNote) result.note = fallbackNote;
+    if (fallbackNote) result.note = [result.note, fallbackNote].filter(Boolean).join(' ');
     // Stamp the watermark so the NEXT Start can read only changes since this run.
     // Change Tracking must be ON for the table to produce a watermark; on the very
     // first Start (no saved watermark) it isn't yet, so enable it here — otherwise
@@ -1033,7 +1079,14 @@ export async function runMirrorAdfCopy(
  */
 export async function runMirrorSnapshot(
   mirrorId: string, workspaceId: string, src: MirrorSource, prevTableStatus?: MirrorTableResult[],
+  enforceCtx?: { tenantId: string },
 ): Promise<MirrorRunResult> {
+  // N6 — the ODCS contracts bound to THIS mirror enforce every batch between
+  // the source read and the Bronze upload. Absent tenant scope (a background
+  // caller with no session) simply runs the mirror unenforced, exactly as
+  // before N6 — enforcement never invents an owner.
+  const enforce: MirrorEnforcementContext | undefined =
+    enforceCtx?.tenantId ? { tenantId: enforceCtx.tenantId, mirrorId } : undefined;
   const isSqlFamily = MIRROR_SQL_FAMILY.has(src.sourceType);
   const isPg = MIRROR_PG_FAMILY.has(src.sourceType);
   const isCosmos = MIRROR_COSMOS_FAMILY.has(src.sourceType);
@@ -1217,7 +1270,7 @@ export async function runMirrorSnapshot(
   const results: MirrorTableResult[] = [];
   for (const t of tableSpecs) {
     const saved = prevByKey[`${t.schema}.${t.table}`];
-    results.push(await snapshotTable(src, t, basePath, saved, forceSnapshot));
+    results.push(await snapshotTable(src, t, basePath, saved, forceSnapshot, enforce));
   }
 
   const anyOk = results.some((r) => r.status === 'replicated');
@@ -1635,7 +1688,7 @@ export async function getMirrorStatus(
  * next query rather than physically deleting old files.
  */
 export async function restartMirrorSnapshot(
-  mirrorId: string, workspaceId: string, src: MirrorSource,
+  mirrorId: string, workspaceId: string, src: MirrorSource, enforceCtx?: { tenantId: string },
 ): Promise<MirrorRunResult> {
-  return runMirrorSnapshot(mirrorId, workspaceId, src, /* prevTableStatus = */ []);
+  return runMirrorSnapshot(mirrorId, workspaceId, src, /* prevTableStatus = */ [], enforceCtx);
 }

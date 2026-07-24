@@ -387,6 +387,16 @@ var loomContainers = [
   // ON without a blanket expiry; each doc carries its own 365-day `ttl`.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-transform-plans',  partitionKey: '/itemId', ttl: -1 }
+  // N6 — ODCS 3.1 data contracts ENFORCED at ingestion. One doc per registered
+  // `data-contract` item: the ODCS 3.1 JSON, the enforcement posture
+  // (default-ON in the SAFE warn-quarantine mode — quarantine to the Bronze
+  // `_rejected` dead-letter path, never drop the load), the ingestion bindings
+  // (mirroring engine / pipeline sinks / eventstream), and a bounded pass/fail
+  // run trend. PK /tenantId so BOTH the governance registry list and the
+  // enforcement hot-path lookup are single-partition. NO ttl — a contract and
+  // its enforcement history are durable governance evidence. createIfNotExists
+  // in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'loom-data-contracts',   partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
