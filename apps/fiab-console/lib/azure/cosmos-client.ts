@@ -43,6 +43,9 @@ import '@/lib/azure/transform-plan-model';
 import { ASSET_REGISTRY_CONTAINER } from '@/lib/azure/asset-registry-model';
 // N6 — loom-data-contracts doc shape + MIG1 migrator registration (LEAF).
 import { DATA_CONTRACT_CONTAINER } from '@/lib/azure/data-contract-model';
+// N7d — loom-dq-findings doc shape + MIG1 migrator registration (LEAF). Findings
+// produced by the data-quality checks + data-diff, consumed by N17's incident console.
+import { DQ_FINDING_CONTAINER } from '@/lib/azure/dq-finding-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -505,6 +508,10 @@ let _assets: Container | null = null;
 // the registry list and the enforcement hot-path lookup are single-partition).
 // Shapes/MIG1: data-contract-model.ts; store: data-contract-store.ts.
 let _dataContracts: Container | null = null;
+// N7d — loom-dq-findings: normalized data-quality findings (rule-check failures,
+// anomaly-baseline outliers, data-diff regressions) emitted for N17's incident
+// console. PK /tenantId (N17 lists a tenant's findings single-partition).
+let _dqFindings: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1308,6 +1315,11 @@ async function ensure() {
     (await database.containers.createIfNotExists({ id: DATA_CONTRACT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
     DATA_CONTRACT_CONTAINER,
   );
+  // N7d — data-quality findings for N17. PK /tenantId; withMigrations (MIG1).
+  _dqFindings = withMigrations(
+    (await database.containers.createIfNotExists({ id: DQ_FINDING_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
+    DQ_FINDING_CONTAINER,
+  );
   _ensured = true;
 }
 
@@ -1464,6 +1476,7 @@ export async function lakehouseInteropContainer(): Promise<Container> { await en
 export async function assetsContainer(): Promise<Container> { await ensure(); return _assets!; }
 /** N6 — ODCS 3.1 data contracts + enforcement posture + bindings + run trend, PK /tenantId. */
 export async function dataContractsContainer(): Promise<Container> { await ensure(); return _dataContracts!; }
+export async function dqFindingsContainer(): Promise<Container> { await ensure(); return _dqFindings!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

@@ -318,6 +318,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N7c',
     surface: 'Activation sync editor (/items/activation-sync/[id])',
   },
+  {
+    id: 'n7d-data-quality-diff',
+    label: 'Data-quality depth — runner checks + data-diff',
+    description:
+      'The N7d surfaces on the data-quality editor: the "Runner checks" tab (rule-builder checks executed on the N4 transform runner with anomaly baselines) and the "Data diff" tab (Delta-version / cross-env row+column diff computed through the N2 DuckDB engine). OFF hides both tabs on the next render — the existing ADX/Databricks/Synapse rule-run tabs, the /api/items/data-quality/** routes, already-emitted findings, and N17\'s incident console are all unaffected. Use it to withdraw the depth surfaces without redeploying.',
+    ownerItem: 'N7d',
+    surface: 'Data-quality editor → Runner checks + Data diff tabs',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
