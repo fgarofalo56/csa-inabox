@@ -122,6 +122,14 @@ const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
 const ALLOWLIST = new Map([
+  // N3 Flight SQL connect payload: returns DEPLOYMENT-WIDE connection guidance
+  // only — the Flight endpoint's exposure, the audited ticket-mint URL on the
+  // caller's own origin, and static client snippets that reference the reader's
+  // OWN env var. It reads no tenant data, names no internal host, and carries no
+  // secret (snippetIsSecretFree re-checks every body). There is no per-tenant
+  // resource to own-scope; the credential path itself is POST /api/flightsql/session,
+  // which mints only for the authenticated caller and audits every issuance.
+  ['apps/fiab-console/app/api/flightsql/connect/route.ts', 'deployment-wide connection guidance + secret-free snippets; no per-tenant resource to scope; the ticket-mint half is self-scoped and audited'],
   // RUM1 browser-telemetry ingest: WRITE-ONLY beacon sink (page-load timings /
   // Web Vitals / scrubbed errors → App Insights). There is NO per-tenant
   // resource to own-scope — the route reads nothing back and forwards

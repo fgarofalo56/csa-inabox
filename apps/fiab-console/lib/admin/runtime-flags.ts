@@ -254,6 +254,30 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N4',
     surface: 'Transformation project editor (/items/transformation-project/[id]) — Plan & apply + Model DAG tabs',
   },
+  {
+    id: 'n2a-duckdb-wasm-preview',
+    label: 'Local analysis — in-browser SQL over a fetched Arrow result',
+    description:
+      'The N2a local tier: after a result arrives as an Arrow IPC stream, the Local analysis panel registers it on duckdb-wasm inside the tab and serves every further slice / filter / aggregate on the user\'s own machine — zero server cost, zero network requests, with a measured timing bar. OFF hides the panel on the next render; every query keeps running on the server tier exactly as before, and no data or state is lost (the panel holds nothing the server does not).',
+    ownerItem: 'N2a',
+    surface: 'SQL Lab → Local analysis tab (/items/sql-lab/[id]) and any surface embedding LocalAnalysisPanel',
+  },
+  {
+    id: 'n2b-sql-lab-duckdb',
+    label: 'SQL Lab (DuckDB) editor',
+    description:
+      'The N2b SQL Lab surface: the Monaco query editor over the loom-duckdb serving tier (with the honest Synapse Serverless fallback when LOOM_DUCKDB_URL is unset), the engine/timing status bar, the Local analysis tab and the Connect tab. OFF replaces the editor body with a guided notice on the next render — the loom-duckdb Container App, the /api/duckdb/** routes, the Connect tab on other editors, and every already-created item are unaffected.',
+    ownerItem: 'N2b',
+    surface: 'SQL Lab editor (/items/sql-lab/[id])',
+  },
+  {
+    id: 'n3-connect-tab',
+    label: 'Connect tab — ADBC / Flight SQL / JDBC access',
+    description:
+      'The N3 Connect tab on the lakehouse, warehouse and SQL Lab editors: the Flight SQL endpoint with its honest exposure, the Generate-ticket button (short-lived, Entra-scoped, audited), and the copy-paste client snippets. OFF hides the tab on the next render — already-minted tickets keep working until they expire (minutes), the serving tier is untouched, and every other tab is unaffected. Use it to withdraw the self-service ticket path without redeploying.',
+    ownerItem: 'N3',
+    surface: 'Lakehouse / warehouse / SQL Lab editors → Connect tab',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

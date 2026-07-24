@@ -62,6 +62,29 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'OFF by default (the intended production posture). Enable only for a non-prod resilience drill: LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN on the tenant-admin request.',
   },
+  // ── N2b — DuckDB serving tier (interactive fast path below Spark) ──
+  'svc-loom-duckdb': {
+    surfaces: [
+      { path: '/items/sql-lab', label: 'SQL Lab — interactive SQL over the lake' },
+      { path: '/api/duckdb/query', label: 'SQL Lab execution edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Unset → SQL Lab executes the identical statement on Synapse Serverless and says so in the status bar. Deploying the DuckDB tier changes latency and unlocks the Arrow transport the in-browser Local analysis tab reuses; it never changes results.',
+    legacyCodes: ['duckdb_not_configured'],
+  },
+  // ── N3 — Arrow Flight SQL wire (ADBC / JDBC serving) ──
+  'svc-flight-sql': {
+    surfaces: [
+      { path: '/items/lakehouse', label: 'Lakehouse → Connect tab (ADBC / Flight / JDBC)' },
+      { path: '/items/warehouse', label: 'Warehouse → Connect tab' },
+      { path: '/api/flightsql/session', label: 'Short-lived Flight ticket minting (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Unset → the Connect tab still renders and Loom still streams the same Arrow batches over the audited HTTP tier past the Arrow threshold. The tab reports the endpoint state honestly rather than printing an internal address that would not resolve.',
+    legacyCodes: ['flightsql_not_configured'],
+  },
   // ── N1 — Iceberg REST Catalog (zero-copy external-engine interop) ──
   'svc-iceberg-catalog': {
     surfaces: [

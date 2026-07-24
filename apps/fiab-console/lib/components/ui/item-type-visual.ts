@@ -155,6 +155,8 @@ const REGISTRY: Record<string, Entry> = {
   'batch-pool':           { icon: Grid24Regular,       family: 'data-eng', label: 'Batch Pool' },
   'synthetic-data':       { icon: TableLightning24Regular, family: 'data-eng', label: 'Synthetic Data' },
   'data-quality':         { icon: CheckmarkCircle24Regular, family: 'data-eng', label: 'Data-Quality Check' },
+  // N2b — SQL Lab (DuckDB): the interactive tier below Spark.
+  'sql-lab':              { icon: Flash24Regular,     family: 'data-eng', label: 'SQL Lab (DuckDB)' },
 
   // ── Data Factory ──────────────────────────────────────────────────
   'data-pipeline':      { icon: Flow24Regular,         family: 'data-factory', label: 'Data Pipeline' },

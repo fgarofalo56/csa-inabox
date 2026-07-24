@@ -234,7 +234,16 @@ describe('admin/env-config registry', () => {
     // honestly gated, so it must not count as configured.
     // 4b-batch1 lands BOTH of the above in one wave, so the count rises by two
     // (N1's LOOM_ICEBERG_CATALOG_URL + N4's LOOM_TRANSFORM_RUNNER_URL): 176 → 178.
-    expect(EDITABLE_ENV.length).toBe(178);
+    // Bumped to 180 by N2b + N3 (the DuckDB serving tier + the Arrow Flight SQL
+    // wire): svc-loom-duckdb adds LOOM_DUCKDB_URL and svc-flight-sql adds
+    // LOOM_FLIGHTSQL_URL. BOTH are optionalDefault — unset, SQL Lab executes the
+    // identical statement on Synapse Serverless and the Connect tab still streams
+    // Arrow over the audited HTTP tier, so neither absence removes a capability.
+    // The sibling knobs (LOOM_FLIGHTSQL_PUBLIC_URL, LOOM_FLIGHT_TICKET_SECRET,
+    // LOOM_FLIGHT_ROW_THRESHOLD, LOOM_DUCKDB_MAX_ROWS) are runtime-only code
+    // defaults / secretRefs and deliberately NOT part of the specs, so the
+    // editable count rises by exactly two: 178 → 180.
+    expect(EDITABLE_ENV.length).toBe(180);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -328,7 +337,15 @@ describe('admin/env-config registry', () => {
       // the computed linear/seasonal fallback, honestly labeled).
       'LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD',
       'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
+      // N2b svc-loom-duckdb — unset is fully functional: SQL Lab runs the
+      // identical statement on Synapse Serverless and names the engine that
+      // answered. The DuckDB tier changes latency, never results.
+      'LOOM_DUCKDB_URL',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
+      // N3 svc-flight-sql — unset is fully functional: the Connect tab renders
+      // and Loom still streams the same Arrow batches over the audited HTTP
+      // tier past the Arrow threshold; only the external ADBC/JDBC hop is absent.
+      'LOOM_FLIGHTSQL_URL',
       // N11 svc-graphrag — multi-hop traversal depth; unset = code default 2
       // (GraphRAG grounding still runs, just at the default hop budget).
       'LOOM_GRAPHRAG_MAX_HOPS',
