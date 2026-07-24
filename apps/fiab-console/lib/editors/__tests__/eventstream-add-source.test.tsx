@@ -43,8 +43,14 @@ describe('EventstreamEditor — add source persists (no load-loop revert)', () =
   // the display name, so a settled mount shows a small CONSTANT number of GETs.
   // The load-loop bug made this number GROW after every render/interaction —
   // the regression signal is stability, not an absolute count.
+  // A14's collab push transport opens ONE `/collab/stream` SSE GET under the
+  // same item path — a different subsystem, excluded so this stays a pure
+  // CONFIG-fetch signal.
   const configCalls = () =>
-    calls.filter((c) => c.url.includes('/api/items/eventstream/es-new-fixture') && (!c.init?.method || c.init.method === 'GET')).length;
+    calls.filter((c) =>
+      c.url.includes('/api/items/eventstream/es-new-fixture') &&
+      !c.url.includes('/collab/') &&
+      (!c.init?.method || c.init.method === 'GET')).length;
 
   it('the config fetch settles (the old bug re-fetched on every render)', async () => {
     render(<EventstreamEditor item={makeItem('eventstream', 'Eventstream')} id="es-new-fixture" />);

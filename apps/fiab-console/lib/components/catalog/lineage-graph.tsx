@@ -2,21 +2,41 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 /**
- * LineageGraph — force-directed (radial) lineage visualization. Renders
- * the lineage subgraph returned by /api/catalog/lineage using pure SVG.
+ * LineageGraph — the /catalog lineage host that fetches the federated lineage
+ * subgraph from GET /api/catalog/lineage and renders it on the SHARED
+ * @xyflow/react LineageCanvas (the same canvas the Unified Catalog Lineage
+ * tab, /governance/lineage, and /thread use).
  *
- * We intentionally avoid heavy dependencies (D3, vis-network) — the
- * console already ships Monaco + Fluent UI + MSAL and bundle budget
- * is tight. A simple radial layout from a focus node is sufficient
- * for the lineage we render today; future iterations may swap in d3-force
- * if rich interactivity is needed.
+ * L5 upgraded this surface from the old read-only radial SVG to the full
+ * canvas (ux-baseline: a touched surface is brought up to the canvas
+ * standard), and wired the L1 column facet end-to-end:
+ *   - the request always carries `?columns=true` so the REAL column-grain
+ *     lineage (Databricks `system.access.column_lineage` today; Purview
+ *     columnMapping via L4) rides along;
+ *   - a "Column lineage" toggle shows/hides the column grain (table→column
+ *     fan-out affordances on the canvas — matching the Databricks Catalog
+ *     Explorer "See column lineage" toggle);
+ *   - the canvas toolbar carries the Impact-analysis mode (select a column →
+ *     highlight only its downstream column chain).
+ *
+ * No fabricated data: the graph renders exactly what the BFF returned; an
+ * empty graph renders the honest EmptyState, a configuration gap renders the
+ * MessageBar gate, and zero captured column lineage renders an honest
+ * "nothing captured yet" hint instead of empty fan-outs.
  */
-import { useEffect, useState } from 'react';
-import { Spinner, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Spinner, Caption1, MessageBar, MessageBarBody, Switch, Link as FluentLink,
+  makeStyles, tokens,
+} from '@fluentui/react-components';
 import { BranchFork16Regular } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import {
+  LineageCanvas, type CanvasLineageNode, type CanvasLineageEdge, type LineageSource,
+} from './lineage-canvas';
+import { deriveColumnGraphFromEdges } from './lineage-column-model';
 
-interface Node { id: string; label: string; type?: string; source: string; deleted?: boolean; }
+interface Node { id: string; label: string; type?: string; source: string; deleted?: boolean; columns?: string[]; }
 interface Edge { from: string; to: string; type?: string; }
 
 interface Props {
@@ -27,15 +47,26 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  wrap: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingHorizontalM, position: 'relative' },
+  wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  toolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalM,
+    minWidth: 0,
+  },
+  toolbarSpacer: { flexGrow: 1, flexShrink: 1, flexBasis: '0%' },
 });
 
 export function LineageGraph({ source, id, host, workspaceId }: Props) {
   const s = useStyles();
-  const [data, setData] = useState<{ nodes: Node[]; edges: Edge[] } | null>(null);
+  const [data, setData] = useState<{ nodes: Node[]; edges: Edge[]; columnEdges?: CanvasLineageEdge[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // Column grain shown by default (default-ON, opt-out) — the toggle only
+  // controls rendering; the real column data is always fetched alongside.
+  const [showColumns, setShowColumns] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -43,17 +74,51 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
     const params = new URLSearchParams({ source, id });
     if (host) params.set('host', host);
     if (workspaceId) params.set('workspaceId', workspaceId);
+    // L1/L5: always request the column facet — the payload degrades honestly
+    // (empty columnEdges) when no source captured column-grain lineage.
+    params.set('columns', 'true');
     clientFetch(`/api/catalog/lineage?${params.toString()}`)
       .then((r) => r.json())
       .then((j) => {
         if (!alive) return;
         if (!j.ok) { setError(j.error); setHint(j.hint); return; }
-        setData({ nodes: j.nodes, edges: j.edges });
+        setData({ nodes: j.nodes, edges: j.edges, columnEdges: j.columnEdges });
       })
       .catch((e) => { if (alive) setError(e?.message || String(e)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [source, id, host, workspaceId]);
+
+  // Adapt the BFF payload onto the shared canvas model: table-grain nodes as-is
+  // (focus = the resolved asset), plus — when the toggle is on — the L1 column
+  // nodes derived from the canonical `col:<table>::<column>` edge endpoints,
+  // each anchored to its owning table node for the fan-out grouping.
+  const graph = useMemo(() => {
+    if (!data) return { nodes: [] as CanvasLineageNode[], edges: [] as CanvasLineageEdge[] };
+    const tables: CanvasLineageNode[] = data.nodes.map((n) => ({
+      id: n.id,
+      label: n.label,
+      type: n.type,
+      source: n.source as LineageSource,
+      focus: n.id === id,
+      ...(n.deleted ? { deleted: true } : {}),
+      ...(n.columns?.length ? { columns: n.columns } : {}),
+    }));
+    const edges: CanvasLineageEdge[] = data.edges.map((e) => ({
+      from: e.from, to: e.to, ...(e.type ? { type: e.type } : {}),
+    }));
+    if (!showColumns || !data.columnEdges?.length) return { nodes: tables, edges };
+    const col = deriveColumnGraphFromEdges(tables, data.columnEdges);
+    return {
+      nodes: [...tables, ...(col.nodes as CanvasLineageNode[])],
+      edges: [...edges, ...(col.edges as CanvasLineageEdge[])],
+    };
+  }, [data, id, showColumns]);
+
+  const columnEdgeCount = data?.columnEdges?.length || 0;
+  // The request opted into the column facet but no source has captured
+  // column-grain lineage for this asset yet — honest empty affordance.
+  const columnsEmpty = !!data && Array.isArray(data.columnEdges) && data.columnEdges.length === 0;
 
   if (loading) return <Spinner label="Resolving lineage…" />;
   if (error) return (
@@ -72,63 +137,30 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
     />
   );
 
-  // Radial layout around the focus node (or the first node).
-  const focusIdx = Math.max(0, data.nodes.findIndex((n) => n.id === id));
-  const others = data.nodes.filter((_, i) => i !== focusIdx);
-  const cx = 280, cy = 200, r = 140;
-  const positions = new Map<string, { x: number; y: number }>();
-  positions.set(data.nodes[focusIdx].id, { x: cx, y: cy });
-  others.forEach((n, i) => {
-    const angle = (i / Math.max(1, others.length)) * 2 * Math.PI;
-    positions.set(n.id, { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
-  });
-
   return (
     <div className={s.wrap}>
-      <svg width="560" height="400" role="img" aria-label="Lineage graph">
-        {data.edges.map((e, i) => {
-          const a = positions.get(e.from); const b = positions.get(e.to);
-          if (!a || !b) return null;
-          return (
-            <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-              stroke={tokens.colorNeutralStroke1} strokeWidth="1.5" markerEnd="url(#arr)"
-            />
-          );
-        })}
-        <defs>
-          <marker id="arr" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill={tokens.colorNeutralStroke1} />
-          </marker>
-        </defs>
-        {data.nodes.map((n) => {
-          const p = positions.get(n.id);
-          if (!p) return null;
-          const isFocus = n.id === id;
-          // Deleted-in-Loom node (LIN-GC-3): dashed, muted circle + struck-through
-          // label so a metadata-plane leftover never reads as a live asset.
-          const deleted = !!n.deleted;
-          return (
-            <g key={n.id} transform={`translate(${p.x}, ${p.y})`} opacity={deleted ? 0.55 : 1}>
-              <circle
-                r={isFocus ? 12 : 8}
-                fill={deleted ? tokens.colorNeutralBackground3 : (isFocus ? tokens.colorBrandBackground : tokens.colorNeutralBackground3)}
-                stroke={deleted ? tokens.colorNeutralStroke2 : tokens.colorBrandStroke1}
-                strokeWidth="1.5"
-                strokeDasharray={deleted ? '3 2' : undefined}
-              />
-              <text
-                x="14" y="4" fontSize="11"
-                fill={deleted ? tokens.colorNeutralForeground3 : tokens.colorNeutralForeground1}
-                textDecoration={deleted ? 'line-through' : undefined}
-              >
-                {n.label.slice(0, 32)}{deleted ? ' (deleted)' : ''}
-              </text>
-              <title>{`${deleted ? 'DELETED · ' : ''}${n.source} · ${n.type || '?'} · ${n.id}`}</title>
-            </g>
-          );
-        })}
-      </svg>
-      <Caption1>{data.nodes.length} nodes · {data.edges.length} edges</Caption1>
+      <div className={s.toolbar}>
+        <Switch
+          checked={showColumns}
+          onChange={(_, d) => setShowColumns(!!d.checked)}
+          label="Column lineage"
+          aria-label="Show column-level lineage"
+        />
+        {showColumns && columnsEmpty && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }} data-testid="columns-empty-hint">
+            No column-level lineage captured yet for this asset. Column lineage flows in from
+            Databricks jobs (Unity Catalog), Spark runs (OpenLineage), and Weave transforms —{' '}
+            <FluentLink href="/governance/lineage">open the lineage hub</FluentLink> to see what each
+            source is contributing.
+          </Caption1>
+        )}
+        <div className={s.toolbarSpacer} />
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          {data.nodes.length} nodes · {data.edges.length} edges
+          {columnEdgeCount > 0 ? ` · ${columnEdgeCount} column edges` : ''}
+        </Caption1>
+      </div>
+      <LineageCanvas nodes={graph.nodes} edges={graph.edges} focusId={id} />
     </div>
   );
 }

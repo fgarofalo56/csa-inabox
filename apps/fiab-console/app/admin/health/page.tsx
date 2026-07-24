@@ -15,6 +15,9 @@ export default async function AdminHealthPage() {
   const autorecoverEnabled = await runtimeFlag('a11-spark-autorecover');
   // SLO1: 'slo1-slo-tab' OFF hides the SLO / error-budget tab (surface-only revert).
   const sloEnabled = await runtimeFlag('slo1-slo-tab');
+  // CH1: 'ch1-dependency-chaos' — deliberately OPT-IN (default:false). ON reveals
+  // the dependency-fault chaos tab; arming a fault is still triple-gated server-side.
+  const chaosEnabled = await runtimeFlag('ch1-dependency-chaos', { default: false });
   return (
     <AdminShell
       sectionTitle="Health & Reliability"
@@ -30,10 +33,11 @@ export default async function AdminHealthPage() {
           'Journeys: a red J1 with every other journey green means SIGN-IN is broken while the app is healthy — rotate/verify the MSAL client secret first (the 2026-07-19 outage class).',
           'Spark pools: a pool can report Succeeded and still be unable to launch any application (FAULTED). A "Suspect — breaker armed" badge or leak candidates mean follow the spark-pools runbook: delete + recreate, and if sessions still wedge, a NEW pool name.',
           'SLO & error budgets: each SLI shows objective vs 28-day attainment vs error-budget burn. A red "2×+ burn" badge on an availability or latency SLI means the budget is being spent twice as fast as allowed — a P2 has already paged; follow the slo-error-budget runbook. The cache-hit SLI is an efficiency floor and never pages.',
+          'Dependency chaos: a deliberately opt-in resilience DRILL tab (default hidden). Arm a Cosmos/Azure OpenAI/ADX/Key Vault fault against this replica to prove a surface degrades to serve-stale or an honest gate — never a crash. It is triple-gated (flag + LOOM_DEPENDENCY_CHAOS_ENABLED + internal token) and every fault auto-expires; keep it OFF in production.',
         ],
       }}
     >
-      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} autorecoverEnabled={autorecoverEnabled} sloEnabled={sloEnabled} />
+      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} autorecoverEnabled={autorecoverEnabled} sloEnabled={sloEnabled} chaosEnabled={chaosEnabled} />
     </AdminShell>
   );
 }

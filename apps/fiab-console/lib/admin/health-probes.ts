@@ -702,21 +702,28 @@ async function probeCopilotCorpus(h: ProbeHelpers): Promise<CheckResult> {
   }
 }
 
-/** DR0 — restore posture (live ARM). Verifies the estate is actually
- *  restorable, not just configured: (a) the Loom-store Cosmos account runs
- *  Continuous (PITR) backup — reports the tier (Continuous7Days is the
- *  documented-preview tier; Continuous30Days is the GA default the bicep now
- *  ships); (b) the DLZ lake has blob + container soft delete and change feed
- *  enabled. Blob versioning is reported honestly: it is "Not yet supported" on
- *  HNS (ADLS Gen2) accounts per the Learn feature matrix, so on the lake the
- *  supported restore path is soft delete + change feed + Delta time travel —
- *  a false isVersioningEnabled is NOT a defect there. */
+/** DR0 + CMK1 — restore/at-rest posture (live ARM). Verifies the estate is
+ *  actually restorable AND honestly reports encryption-at-rest, not just
+ *  configured: (a) the Loom-store Cosmos account runs Continuous (PITR) backup
+ *  — reports the tier (Continuous7Days is the documented-preview tier;
+ *  Continuous30Days is the GA default the bicep now ships); (b) CMK-at-rest —
+ *  reads properties.keyVaultKeyUri from the same ARM shape. When the deploy
+ *  declares the CMK mandate (LOOM_COSMOS_REQUIRE_CMK=true, wired from
+ *  drConfig.cosmosRequireCmk), a missing key URI is flagged as a posture GAP;
+ *  otherwise the service-managed default is reported honestly (CMK stays an
+ *  opt-in, IL5-mandated posture — see loom-console-cosmos.bicep); (c) the DLZ
+ *  lake has blob + container soft delete and change feed enabled. Blob
+ *  versioning is reported honestly: it is "Not yet supported" on HNS (ADLS
+ *  Gen2) accounts per the Learn feature matrix, so on the lake the supported
+ *  restore path is soft delete + change feed + Delta time travel — a false
+ *  isVersioningEnabled is NOT a defect there. */
 async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
-  const base = { id: 'probe-dr-restore-posture', category: 'data-plane' as const, title: 'DR restore posture — Cosmos continuous backup + lake recovery (live ARM)', severity: 'optional' as const };
+  const base = { id: 'probe-dr-restore-posture', category: 'data-plane' as const, title: 'DR restore posture — Cosmos continuous backup + CMK-at-rest + lake recovery (live ARM)', severity: 'optional' as const };
   const good: string[] = [];
   const bad: string[] = [];
   let probed = false;
   // (a) Cosmos — Continuous (PITR) backup on the Loom store.
+  // (b) Cosmos — CMK-at-rest (CMK1), from the same account-management read.
   try {
     const { cosmosConfigGate, getAccountManagement } = await import('@/lib/azure/cosmos-account-client');
     if (!cosmosConfigGate()) {
@@ -728,12 +735,20 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
       } else {
         bad.push(`Cosmos "${env('LOOM_COSMOS_ACCOUNT')}" backup mode is "${bp?.type || 'unknown'}" — expected Continuous (PITR). Switch it (hot, in-place): az cosmosdb update --backup-policy-type Continuous --continuous-tier Continuous30Days, or set drConfig.cosmosBackupTier + redeploy.`);
       }
+      const cmkRequired = /^(1|true)$/i.test(env('LOOM_COSMOS_REQUIRE_CMK'));
+      if (mgmt?.keyVaultKeyUri) {
+        good.push(`CMK-at-rest ON (keyVaultKeyUri ${mgmt.keyVaultKeyUri}${mgmt.defaultIdentity ? `, defaultIdentity ${mgmt.defaultIdentity}` : ''})`);
+      } else if (cmkRequired) {
+        bad.push(`Cosmos "${env('LOOM_COSMOS_ACCOUNT')}" has NO customer-managed key (keyVaultKeyUri unset) but this deploy mandates CMK-at-rest (LOOM_COSMOS_REQUIRE_CMK=true). Enable it (supported hot update, two steps on a continuous-backup account): az cosmosdb update --default-identity UserAssignedIdentity=<uami-resource-id>, then az cosmosdb update --key-uri <versionless-kv-key-uri> — or set drConfig.cosmosRequireCmk/cosmosCmkKeyUri/cosmosCmkIdentityId + redeploy loom-console-cosmos.bicep.`);
+      } else {
+        good.push('CMK-at-rest: service-managed keys (the default; customer-managed keys are the opt-in IL5 posture via drConfig.cosmosRequireCmk + cosmosCmkKeyUri + cosmosCmkIdentityId)');
+      }
     }
   } catch (e: any) {
     probed = true;
     bad.push(`Cosmos backup-policy read failed: ${e?.message || String(e)}${DENIED.test(e?.message || '') ? ' — grant the Console UAMI "DocumentDB Account Contributor" (or Reader) on the account.' : ''}`);
   }
-  // (b) Lake — soft delete + change feed on the DLZ ADLS account (blobServices).
+  // (c) Lake — soft delete + change feed on the DLZ ADLS account (blobServices).
   try {
     if (has('LOOM_ADLS_ACCOUNT')) {
       probed = true;
@@ -768,7 +783,7 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
     return {
       ...base, status: 'warn',
       detail: `Restore posture gaps: ${bad.join(' ')}${good.length ? ` (healthy: ${good.join('; ')})` : ''}`,
-      remediation: 'Bring the estate back to the restorable baseline: Cosmos Continuous (PITR) backup — hot in-place tier switch via the Cosmos account-management surface or drConfig.cosmosBackupTier — and lake soft delete + change feed via modules/landing-zone/storage.bicep.',
+      remediation: 'Bring the estate back to the restorable baseline: Cosmos Continuous (PITR) backup — hot in-place tier switch via the Cosmos account-management surface or drConfig.cosmosBackupTier — CMK-at-rest where the deploy mandates it (drConfig.cosmosRequireCmk + cosmosCmkKeyUri + cosmosCmkIdentityId, or the two-step az cosmosdb update), and lake soft delete + change feed via modules/landing-zone/storage.bicep.',
       redeploy: true,
       docs: 'https://learn.microsoft.com/azure/cosmos-db/continuous-backup-restore-introduction',
     };

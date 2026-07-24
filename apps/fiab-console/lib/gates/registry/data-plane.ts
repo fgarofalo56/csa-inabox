@@ -33,14 +33,14 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → the AAS fast-path or Synapse-Serverless cold path serves DAX-class queries unchanged.',
   },
-  // ── DR0 — restore posture (verified live by probe-dr-restore-posture) ──
+  // ── DR0 + CMK1 — restore/at-rest posture (verified live by probe-dr-restore-posture) ──
   'svc-dr-restore-posture': {
     surfaces: [{ path: '/admin/health', label: 'DR restore posture (Health & Reliability)' }],
     fixit: {
       kind: 'wizard',
-      grantNote: 'The Cosmos side is fixable in-product: Admin → the Cosmos account-management surface PATCHes backupPolicy (Continuous tier switch is a hot in-place ARM update). The lake side is bicep-provisioned (recycleRetentionDays soft delete + change feed); blob versioning cannot be enabled on an HNS account (platform limitation).',
+      grantNote: 'The Cosmos side is fixable in-product: Admin → the Cosmos account-management surface PATCHes backupPolicy (Continuous tier switch is a hot in-place ARM update). CMK-at-rest (CMK1) is a bicep/ARM posture: opt in via drConfig.cosmosRequireCmk + cosmosCmkKeyUri + cosmosCmkIdentityId (or the documented two-step az cosmosdb update — default-identity first, then --key-uri — on an existing continuous-backup account); the probe asserts it only where LOOM_COSMOS_REQUIRE_CMK=true. The lake side is bicep-provisioned (recycleRetentionDays soft delete + change feed); blob versioning cannot be enabled on an HNS account (platform limitation).',
     },
-    autoResolveNote: 'A push-button deploy ships the full posture by default: Cosmos Continuous backup (drConfig.cosmosBackupTier, default Continuous30Days) + lake soft-delete/change-feed (recycleRetentionDays).',
+    autoResolveNote: 'A push-button deploy ships the full posture by default: Cosmos Continuous backup (drConfig.cosmosBackupTier, default Continuous30Days) + lake soft-delete/change-feed (recycleRetentionDays). CMK-at-rest stays service-managed unless the deploy mandates customer-managed keys (drConfig.cosmosRequireCmk — the IL5 posture), and the row reports whichever is live honestly.',
   },
   'perf-spark-warm-pool-store': {
     surfaces: [{ path: '/items/notebook', label: 'Warm Spark pool — cross-replica leases' }],
@@ -61,6 +61,12 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     surfaces: [{ path: '/admin/health', label: 'Spark chaos-drill harness (Health & Reliability → Spark pools)' }],
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'OFF by default (the intended production posture). Enable only for a non-prod resilience drill: LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN on the tenant-admin request.',
+  },
+  // ── CH1 — dependency-fault chaos harness (Cosmos / AOAI / ADX / KV) ──
+  'svc-dependency-chaos-drill': {
+    surfaces: [{ path: '/admin/health?tab=chaos', label: 'Dependency chaos harness (Health & Reliability → Chaos)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'OFF by default (the intended production posture — no fault injection). Enable only for a non-prod resilience drill: the ch1-dependency-chaos runtime flag ON + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN; every armed fault auto-expires (≤5 min).',
   },
   // ── N2b — DuckDB serving tier (interactive fast path below Spark) ──
   'svc-loom-duckdb': {

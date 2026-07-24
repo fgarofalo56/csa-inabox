@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import type { CanvasCommentColor, CanvasCommentKind, CanvasCommentView } from './canvas-comment-model';
+import { COLLAB_COMMENTS_EVENT, type CollabCommentsEventDetail } from './collab-stream-model';
 
 export interface UseCanvasCommentsResult {
   comments: CanvasCommentView[];
@@ -64,6 +65,20 @@ export function useCanvasComments(
   }, [itemType, itemId, canvasKey]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // A14 push transport: when the item's collab stream reports the canvas
+  // stickies changed (a peer added/edited/resolved one), re-pull the list so
+  // session B sees session A's comment without waiting for a reload. Additive:
+  // with push off nothing dispatches and behavior is exactly pre-A14.
+  useEffect(() => {
+    if (!itemId || typeof window === 'undefined') return;
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent<CollabCommentsEventDetail>).detail;
+      if (detail?.itemId === itemId && detail.scope === 'canvas' && detail.canvasKey === canvasKey) refresh();
+    };
+    window.addEventListener(COLLAB_COMMENTS_EVENT, onChanged);
+    return () => window.removeEventListener(COLLAB_COMMENTS_EVENT, onChanged);
+  }, [itemId, canvasKey, refresh]);
 
   const add = useCallback<UseCanvasCommentsResult['add']>(async (input) => {
     if (!itemId) return null;

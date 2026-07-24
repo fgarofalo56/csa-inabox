@@ -17,6 +17,7 @@ This document is the single place to look when answering:
 | CycloneDX + SPDX SBOM (Python + images) | `.github/workflows/sbom.yml`            | Workflow artifacts + Release assets | SOC, customers, auditors |
 | CVE scanning (CRITICAL gate)            | `.github/workflows/trivy.yml`           | PR comment, Code Scanning SARIF     | Reviewers                |
 | SLSA Level 3 build provenance           | `.github/workflows/slsa-provenance.yml` | Signed `*.intoto.jsonl` on Release  | Downstream consumers     |
+| Loom image sign + verify-before-roll    | `build-fiab-images-acr-tasks.yml`, `loom-roll-and-validate.yml`, `gov-console-roll.yml`, `full-app-deploy-commercial.yml` | Keyless cosign signatures in ACR (see §7) | SOC, deploy operators |
 | Weekly dependency upgrades              | `.github/dependabot.yml`                | PRs labeled `dependencies`          | Maintainers              |
 
 ## 1. Regenerating the lock files
@@ -279,7 +280,88 @@ Within 2 weeks of remediation, open an ADR covering:
 - Any changes to the supply-chain pipeline to catch the next one
   earlier.
 
-## 7. Responsible disclosure
+## 7. CSA Loom image signing + verify-before-roll (SC1)
+
+The Loom container images that **actually run** (the `loom-*` Container Apps)
+do not ship through GHCR/releases — they are built server-side into a
+private-endpoint Azure Container Registry by `az acr build` and rolled onto
+Azure Container Apps. SC1 wires enforcement into that REAL deploy path:
+
+| Stage      | Workflow                                                                | What happens                                                                                      |
+| ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Build gate | `build-fiab-images-acr-tasks.yml`, `full-app-deploy-commercial.yml`, `gov-console-roll.yml` | Trivy image scan (CRITICAL CVEs **fail the build**, `--ignore-unfixed`), then keyless cosign sign of the manifest digest |
+| Roll gate  | `loom-roll-and-validate.yml` (Commercial), `gov-console-roll.yml` (Gov), `full-app-deploy-commercial.yml` (`verify-images` job) | `cosign verify` of the exact digest being rolled, **before** `az containerapp update` — unsigned/unknown-identity images are refused with an actionable error |
+
+### Key management: keyless (none to manage)
+
+Signing is **keyless** via GitHub Actions OIDC → Sigstore Fulcio (short-lived
+signing certificate) + Rekor (transparency log). There is **no long-lived
+signing key** to store, rotate, or leak. The workflows carry
+`permissions: id-token: write` for the OIDC exchange. Verification pins:
+
+- `--certificate-oidc-issuer https://token.actions.githubusercontent.com`
+- `--certificate-identity-regexp` matching ONLY the three trusted build
+  workflows in this repository
+  (`build-fiab-images-acr-tasks.yml | full-app-deploy-commercial.yml | gov-console-roll.yml`).
+
+Because signing happens strictly AFTER the Trivy CRITICAL gate in the same
+job, a valid signature also attests "scanned at build time".
+
+### Manual verification
+
+```bash
+az acr login --name <acr>           # data plane must be reachable (see below)
+DIGEST=$(az acr repository show --name <acr> --image loom-console:<sha> --query digest -o tsv)
+cosign verify "<acr>.azurecr.io/loom-console@${DIGEST}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp \
+  '^https://github\.com/<owner>/<repo>/\.github/workflows/(build-fiab-images-acr-tasks\.yml|full-app-deploy-commercial\.yml|gov-console-roll\.yml)@'
+```
+
+### Private-registry mechanics
+
+The Loom ACRs are `publicNetworkAccess=Disabled` at rest. Signatures are OCI
+artifacts stored **in the same registry** as the image, so both signing and
+verification are data-plane operations:
+
+- The build workflows sign inside their existing temporary-open window
+  (`acr_enable` → build → sign → `acr_restore`).
+- `loom-roll-and-validate` opens the ACR only if it is locked, verifies, and
+  re-locks **only if it opened it** (never clobbering a concurrent build's
+  window). If the data plane stays unreachable it degrades to a **loud
+  warning** — unreachable ≠ unsigned, and an infra hiccup must never
+  permanently block an emergency roll.
+- The ACR `content-trust` (Docker Content Trust / Notary v1) and quarantine
+  policies remain **disabled** — they are a different, legacy signing scheme
+  that cosign does not use. The "ACR temporarily allows unsigned" toggle is a
+  tracked drift item for the V5 scheduled what-if lane.
+
+### Emergency valves (mirror `skip_uat`)
+
+| Workflow                        | Dispatch input           | Repo variable                   | Effect                                       |
+| ------------------------------- | ------------------------ | ------------------------------- | -------------------------------------------- |
+| `build-fiab-images-acr-tasks`   | `skip_supply_chain`      | `LOOM_BUILD_SKIP_SUPPLY_CHAIN`  | Skip scan+sign (image is UNSIGNED)           |
+| `loom-roll-and-validate`        | `skip_signature_verify`  | `LOOM_ROLL_SKIP_VERIFY`         | Skip verify-before-roll                      |
+| `gov-console-roll`              | `skip_supply_chain`      | — (dispatch-only workflow)      | Skip scan+sign+verify                        |
+| `full-app-deploy-commercial`    | `skip_supply_chain`      | — (dispatch-only workflow)      | Skip scan+sign+verify                        |
+
+Every skip emits a loud `::warning::`. An image built with the build valve is
+unsigned and will be **refused** by the roll gates unless their valve is also
+used — the two valves are deliberately independent.
+
+### IL5 design note (in-enclave ACR, offline verification)
+
+In an IL5/air-gapped enclave the runner cannot reach public Sigstore
+(Fulcio/Rekor). The design there is: (1) sign at build time **outside** the
+enclave (or on the connected side of a cross-domain transfer) and import the
+image + its `.sig` OCI artifact together; (2) verify **offline** against the
+bundled signature with `cosign verify --insecure-ignore-tlog` pinned to an
+enclave-held trusted root, or switch to **key-based** signing with the key in
+the enclave's Key Vault (`cosign sign --key azurekms://…`, Gov/IL5 KMS URI)
+so no transparency-log egress is needed. The verify-before-roll step shape is
+identical — only the trust material changes.
+
+## 8. Responsible disclosure
 
 If you believe you have found a vulnerability in CSA-in-a-Box itself
 (not a dependency), report it privately per `.github/SECURITY.md`. Do

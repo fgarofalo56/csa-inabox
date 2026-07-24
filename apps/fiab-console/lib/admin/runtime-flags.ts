@@ -90,6 +90,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Query↔results panes of the 11 Monaco-based query editors',
   },
   {
+    id: 'u8-kql-dashboard-depth',
+    label: 'KQL dashboard — pages, text tiles & page drill-through',
+    description:
+      'The U8 Real-Time Dashboard depth surface: multi-page tile containers with the page strip, markdown text tiles, and drill-through that navigates to a target page after injecting the clicked value. OFF reverts the editor to the pre-U8 single-page canvas on the next load — saved pages and text tiles are preserved (every tile renders on one canvas; text tiles keep rendering their content) and drill-through falls back to same-page cross-filtering. Nothing is deleted.',
+    ownerItem: 'U8',
+    surface: 'Real-Time Dashboard editor (/items/kql-dashboard/[id])',
+  },
+  {
     id: 'v1-journeys-tab',
     label: 'Health hub — Journeys tab',
     description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',
@@ -173,6 +181,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The U7 ADF-Studio-parity Debug experience on the mapping-dataflow designer: the held debug-session lifecycle, the per-transform Data Preview / Inspect (schema + drift) / Statistics tabs, and the preview-grid quick-actions. OFF reverts the mapping-dataflow editor to the pre-U7 single-stream inline preview on the next load — the real ADF data-flow debug session, factory, and authoring path are unaffected; only the richer bottom Debug panel is hidden. Data preview / debug still require a data-flow-capable Azure Integration Runtime either way (honest gate).',
     ownerItem: 'U7',
     surface: 'Mapping data flow editor (/items/mapping-dataflow/[id]) — bottom Debug panel',
+  },
+  {
+    id: 'u13-pipeline-run-overlay',
+    label: 'Pipeline canvas — in-canvas Debug/Output run overlay',
+    description:
+      'The U13 ADF-pipeline-debug-parity overlay on BOTH pipeline canvases (the data-pipeline editor and the shared PipelineDesigner): per-activity run-status glyphs painted on the nodes, the floating run strip (status / progress / rerun-from-failed), and the eyeglass run-detail dialog (input / output / error JSON from the real queryActivityRuns APIs). OFF reverts the canvases to the pre-U13 glyph-less rendering on the next render — the Output pane, the Debug dispatch, recovery reruns, and every /output & /runs route keep working; only the on-canvas paint is gated.',
+    ownerItem: 'U13',
+    surface: 'Pipeline canvases (/items/data-pipeline/[id] + PipelineDesigner hosts) — run overlay',
   },
   {
     id: 'a9-matrix-conditional-format',
@@ -398,6 +414,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'M3',
     surface: '/admin/migrate (Translate tab) + POST /api/migrate/translate',
   },
+  {
+    id: 'a14-collab-push',
+    label: 'Collaboration — push transport (SSE presence + live comments)',
+    description:
+      'The A14 real-time collab push transport: one SSE stream per open editor/canvas (/api/items/[type]/[id]/collab/stream) that pushes presence changes in ~1s and live comment-changed refreshes (canvas stickies + the item review thread), replacing the ~15s poll as the READ path. OFF reverts every surface to the pre-A14 polling heartbeat within seconds — the stream route answers 503, open streams wind down, and presence/comments keep working end-to-end over the poll (degraded latency only, no roll). The Cosmos beacon/comment stores and the heartbeat WRITE path are unaffected either way.',
+    ownerItem: 'A14',
+    surface: 'Canvas presence layers + notebook / report-designer / semantic-model / unified-SQL editor presence + comment panes',
+  },
   // ── N8 — Openness Tier-3 labs (Preview-badged) ──
   {
     id: 'n8-modern-query-prql',
@@ -422,6 +446,41 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The N8 S3-compatible gateway config surface: expose an S3-compatible endpoint over ADLS so s3://-native OSS clients connect. OFF replaces the editor body with a guided notice on the next render. Honest-gated on LOOM_S3_GATEWAY_URL (an operator-deployed Apache-2.0 s3proxy in front of ADLS); the surface documents that the N1 IRC + ADLS SDK path already covers most external-engine access without a gateway. No AGPL MinIO dependency.',
     ownerItem: 'N8',
     surface: 'S3 gateway editor (/items/s3-gateway/[id])',
+  },
+  // ── EXP1 — workspace portability (§P2 completeness gap 8) ──
+  {
+    id: 'exp1-workspace-portability',
+    label: 'Workspace export / import / clone (.loomws)',
+    description:
+      'The EXP1 whole-workspace portability surface: the workspace Settings → Portability tab (.loomws bundle export download, import wizard with collision strategy, one-click clone) and its /api/workspaces/[id]/export|import|clone routes. OFF makes the three routes refuse with `flag_disabled` (naming this flag) and the tab surface a guided notice on the next request — no roll required. Existing workspaces, items, and the app-scoped .loomapp export/import are unaffected.',
+    ownerItem: 'EXP1',
+    surface: 'Workspace settings → Portability tab + /api/workspaces/[id]/{export,import,clone}',
+  },
+  {
+    id: 'u9-canvas-fullscreen',
+    label: 'Canvas full-screen mode (shared kit)',
+    description:
+      'The U9 maximize control on the shared CanvasRightRail: expands the canvas host to a fixed viewport overlay (chrome covered, canvas state / undo-redo / palette preserved; Esc, F11 or the rail button exits; focus-trapped and screen-reader announced). OFF hides the maximize button on every canvas rail on the next render — a canvas ALREADY maximized keeps its exit button + Esc/F11 so nobody is stranded. Session-scoped by design: nothing persists either way.',
+    ownerItem: 'U9',
+    surface: 'Every xyflow canvas carrying the shared CanvasRightRail (pipeline, eventstream, estate, dataflow, lineage, assets, …)',
+  },
+  // ── L5 — Column-level lineage UI ──
+  {
+    id: 'l5-column-lineage-ui',
+    label: 'Lineage canvas — column fan-out + impact analysis',
+    description:
+      'The L5 column-grain layer on the shared lineage canvas: the table→column expand/fan-out affordance, column→column edges, the column-focus highlight, and the column impact-analysis panel/mode. OFF reverts every lineage canvas to the pre-L5 table-grain rendering on the next load (column nodes/edges are simply filtered out client-side) — the L1 column model, the ?columns=true API facet, and all lineage capture keep running either way. No roll required.',
+    ownerItem: 'L5',
+    surface: 'Lineage canvases (Unified Catalog → Lineage, /catalog/lineage, /catalog/[source]/[id])',
+  },
+  // ── CH1 — Dependency-fault chaos harness (deliberately OPT-IN, default OFF) ──
+  {
+    id: 'ch1-dependency-chaos',
+    label: 'Health hub — Dependency chaos tab (fault injection)',
+    description:
+      'The CH1 dependency-fault chaos harness tab on /admin/health: arm a Cosmos-429, Azure OpenAI 429/timeout, ADX cold-start, or Key Vault throttle fault against THIS replica to PROVE the surface degrades to serve-stale / an honest gate — never a crash. This is the ONE deliberately OPT-IN switch of the health hub (default OFF, read with default:false) because chaos is operator-INITIATED. Turning it ON only reveals the tab; a fault still requires the triple-gated route (tenant admin + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN) to arm, and every armed fault auto-expires (≤5 min) so a forgotten drill self-heals. OFF hides the tab and the arming route rejects — the seconds-fast kill switch for the whole harness.',
+    ownerItem: 'CH1',
+    surface: '/admin/health?tab=chaos + POST /api/admin/chaos/dependency',
   },
 ];
 

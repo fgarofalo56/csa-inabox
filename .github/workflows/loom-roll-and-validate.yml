@@ -26,6 +26,19 @@ name: loom-roll-and-validate
 # loud warning is emitted. A loom-uat job that is simply not deployed in this
 # estate is treated the same way (loud warning, gate skipped) for the same
 # reason.
+#
+# SC1 SUPPLY-CHAIN GATE (verify-before-roll): before anything ships, the image
+# digest is cosign-VERIFIED against the keyless GitHub-Actions identity of the
+# trusted build workflows (build-fiab-images-acr-tasks / full-app-deploy-
+# commercial / gov-console-roll). An image that was not built+signed by that
+# gated CI path (or that skipped its Trivy CRITICAL scan via the build valve)
+# is REFUSED with a loud actionable error BEFORE the roll. Mirroring skip_uat,
+# the `skip_signature_verify` dispatch input OR repo variable
+# `LOOM_ROLL_SKIP_VERIFY=true` is the emergency valve. If the ACR data plane
+# is unreachable (network-locked and the temporary open fails), the gate
+# degrades to a loud warning — unreachable is not the same as unsigned, and an
+# infra hiccup must never permanently block an emergency roll (same policy as
+# the missing-loom-uat case). See docs/SUPPLY_CHAIN.md §7.
 
 on:
   workflow_dispatch:
@@ -45,6 +58,10 @@ on:
         default: 'https://csa-loom.limitlessdata.ai'
       skip_uat:
         description: 'EMERGENCY VALVE — skip the test gates (vitest confirmation + in-VNet UAT). The roll ships WITHOUT test verification; live-URL validation + auto-rollback remain.'
+        type: boolean
+        default: false
+      skip_signature_verify:
+        description: 'EMERGENCY VALVE — skip the SC1 cosign signature verification gate (mirrors skip_uat). The roll ships an image WITHOUT supply-chain verification.'
         type: boolean
         default: false
       uat_timeout_minutes:
@@ -153,6 +170,15 @@ jobs:
           fi
           echo "skip_uat=$SKIP_UAT" >> "$GITHUB_OUTPUT"
 
+          # SC1 emergency valve: skip the cosign signature verification gate
+          # when the dispatch input OR the repo variable LOOM_ROLL_SKIP_VERIFY
+          # is set true (mirrors skip_uat).
+          SKIP_VERIFY="false"
+          if [[ "${{ inputs.skip_signature_verify }}" == "true" || "${{ vars.LOOM_ROLL_SKIP_VERIFY }}" == "true" ]]; then
+            SKIP_VERIFY="true"
+          fi
+          echo "skip_verify=$SKIP_VERIFY" >> "$GITHUB_OUTPUT"
+
       - name: Gate — require vitest (node 20) success for the rolled commit
         id: vitest_gate
         env:
@@ -199,6 +225,78 @@ jobs:
             echo "::error::'vitest (node 20)' concluded '$CONCL' (not success) for $SHA — refusing to roll a failing commit. Fix CI or (emergency only) dispatch with skip_uat=true."
             exit 1
           fi
+
+      - name: Install cosign
+        if: steps.vars.outputs.skip_verify != 'true'
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Gate — cosign signature verify (SC1 supply chain)
+        id: sigverify
+        # Verify-before-roll: the image must carry a keyless cosign signature
+        # from a trusted build workflow (which only signs AFTER its Trivy
+        # CRITICAL gate passed). Unsigned/unknown-identity images are REFUSED
+        # before anything ships. The ACR is publicNetworkAccess=Disabled at
+        # rest, and both the digest resolution and the cosign signature fetch
+        # are data-plane calls — so the gate temporarily opens the ACR (same
+        # toggle the image-build workflow uses) and the restore step below
+        # re-locks it ONLY if this step opened it (never clobbering a
+        # concurrent build's open window; rolls auto-trigger after builds
+        # complete, so overlap is rare by construction).
+        if: steps.vars.outputs.skip_verify != 'true'
+        run: |
+          set -e
+          TAG="${{ steps.vars.outputs.tag }}"
+          echo "acr_opened=false" >> "$GITHUB_OUTPUT"
+
+          # Reach the ACR data plane; open it temporarily if network-locked.
+          if ! az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then
+            PNA=$(az acr show -n "${{ env.ACR_NAME }}" --query publicNetworkAccess -o tsv | tr -d '\r')
+            echo "ACR data plane unreachable (publicNetworkAccess=$PNA) — opening temporarily for signature verification ..."
+            az acr update --name "${{ env.ACR_NAME }}" --public-network-enabled true --default-action Allow -o none
+            echo "acr_opened=true" >> "$GITHUB_OUTPUT"
+            REACHABLE=false
+            for i in $(seq 1 18); do
+              if az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then REACHABLE=true; echo "ACR reachable after $i attempt(s)."; break; fi
+              sleep 10
+            done
+            if [[ "$REACHABLE" != "true" ]]; then
+              # Unreachable ≠ unsigned. Same policy as a missing loom-uat job:
+              # loud warning, gate skipped — an infra hiccup must never
+              # permanently block an emergency roll.
+              echo "::warning::Could not reach the ACR data plane after ~3 min — CANNOT verify the image signature. SKIPPING the SC1 gate for this roll (the image may or may not be signed). Investigate the ACR network toggle (an Azure Policy may be reverting it)."
+              exit 0
+            fi
+          fi
+
+          DIGEST=$(az acr repository show --name "${{ env.ACR_NAME }}" --image "${{ env.APP_NAME }}:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          if [[ -z "$DIGEST" ]]; then
+            echo "::error::Could not resolve a manifest digest for ${{ env.APP_NAME }}:$TAG in ${{ env.ACR_NAME }} — the tag does not exist. Nothing to roll; check the image_tag input."
+            exit 1
+          fi
+          REF="${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}@$DIGEST"
+          echo "Verifying cosign signature on $REF ..."
+          IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
+          if cosign verify "$REF" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp "$IDENTITY_RE" \
+              --output text; then
+            echo "::notice::SC1 supply-chain gate PASSED — $REF is cosign-signed by a trusted build workflow (Trivy CRITICAL gate passed at build time)."
+          else
+            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — ${{ env.APP_NAME }}:$TAG ($DIGEST) has NO valid cosign signature from a trusted build workflow. This image was NOT produced by the gated CI path (or was built with skip_supply_chain, or predates SC1). Fix: rebuild the commit via build-fiab-images-acr-tasks (which scans + signs), then re-roll. Emergency only: re-dispatch this roll with skip_signature_verify=true or set repo variable LOOM_ROLL_SKIP_VERIFY=true."
+            exit 1
+          fi
+
+      - name: Skip notice — signature verification
+        if: steps.vars.outputs.skip_verify == 'true'
+        run: |
+          echo "::warning::skip_signature_verify/LOOM_ROLL_SKIP_VERIFY is set — SKIPPING the SC1 cosign verification gate. This roll ships an image WITHOUT supply-chain verification."
+
+      - name: Restore ACR network lock (post-verify)
+        if: always() && steps.sigverify.outputs.acr_opened == 'true'
+        run: |
+          az acr update --name "${{ env.ACR_NAME }}" --default-action Deny -o none || true
+          az acr update --name "${{ env.ACR_NAME }}" --public-network-enabled false -o none || true
+          echo "::notice::ACR ${{ env.ACR_NAME }} re-locked after signature verification."
 
       - name: Roll Container App to new image
         id: roll
@@ -369,7 +467,7 @@ jobs:
                 `New revision (rolled back): \`${{ steps.roll.outputs.new_revision }}\``,
                 `URL probed: ${{ steps.vars.outputs.url }}`,
                 ``,
-                `Check the workflow run for which gate failed (vitest confirmation / health / version / build-marker / notebook page / data-pipeline page / copilot tools / in-VNet UAT).`,
+                `Check the workflow run for which gate failed (vitest confirmation / cosign signature verify / health / version / build-marker / notebook page / data-pipeline page / copilot tools / in-VNet UAT).`,
               ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,

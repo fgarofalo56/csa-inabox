@@ -14,6 +14,8 @@ import { clientFetch } from '@/lib/client-fetch';
  *   - Spark       → SparkComputePane (attached Spark pools)
  *   - Sensitivity → WorkspaceSensitivitySection (MIP label taxonomy from Graph;
  *                   labels are applied per-item, not per workspace)
+ *   - Portability → WorkspacePortabilitySection (EXP1 .loomws export /
+ *                   import-with-collision-strategy / clone)
  *   - Danger zone → DELETE /api/workspaces/[id]
  */
 
@@ -43,6 +45,7 @@ import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { WorkspaceImageEditor } from '@/lib/components/workspace-image-editor';
+import { WorkspacePortabilitySection } from '@/lib/components/workspace-portability';
 
 interface Props {
   workspace: Workspace;
@@ -72,7 +75,7 @@ const useStyles = makeStyles({
   },
 });
 
-type TabId = 'general' | 'image' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'powerbi' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'image' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'powerbi' | 'sensitivity' | 'portability' | 'danger';
 
 // ---------------------------------------------------------------------------
 // Orphaned-resource disclosure (rel-T101)
@@ -160,6 +163,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             <Tab value="spark">Spark compute</Tab>
             <Tab value="powerbi">Power BI</Tab>
             <Tab value="sensitivity">Sensitivity</Tab>
+            <Tab value="portability">Portability</Tab>
             <Tab value="danger">Danger zone</Tab>
           </TabList>
           <div style={{ marginTop: tokens.spacingVerticalL }}>
@@ -173,6 +177,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             {tab === 'spark' && <SparkComputePane workspaceId={workspace.id} />}
             {tab === 'powerbi' && <PowerBiMappingSection workspace={workspace} />}
             {tab === 'sensitivity' && <WorkspaceSensitivitySection workspaceId={workspace.id} />}
+            {tab === 'portability' && <WorkspacePortabilitySection workspace={workspace} />}
             {tab === 'danger' && <DangerSection workspace={workspace} onDeleted={() => { setOpen(false); router.push('/workspaces'); }} />}
           </div>
         </DrawerBody>

@@ -1471,7 +1471,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
 
   return (
     <ItemEditorChrome splitKeyPrefix={item.slug}
-      item={item} id={id} ribbon={ribbon}
+      item={item} id={id} ribbon={ribbon} collabPresence
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2>Active connection</Subtitle2>

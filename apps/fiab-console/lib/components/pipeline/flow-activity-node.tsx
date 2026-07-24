@@ -34,10 +34,13 @@
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Badge, Button, Tooltip, tokens } from '@fluentui/react-components';
-import { Edit16Regular } from '@fluentui/react-icons';
+import { Edit16Regular, Glasses16Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType, totalInnerCount, branchesOf, miniPreviewSections } from './drill-path';
+import {
+  runStatusToNodeStatus, runStatusDetail, type ActivityRunOverlayRow,
+} from './pipeline-debug-overlay';
 import {
   CanvasNode,
   CANVAS_NODE_WIDTH,
@@ -45,6 +48,7 @@ import {
   portStyle,
   standardNodeActions,
   type CanvasNodeStatus,
+  type NodeAction,
   type PortKind,
 } from '@/lib/components/canvas/canvas-node-kit';
 import type { PipelineActivity } from './types';
@@ -109,6 +113,15 @@ export interface ActivityNodeData {
    * lineage neighbors). Wired by the canvas; absent → no Explain action.
    */
   onExplain?: (name: string) => void;
+  /**
+   * U13 — this activity's live/last run receipt (published by the Debug /
+   * Monitor surfaces through the pipeline-debug-overlay store). When present
+   * the header StatusChip paints the RUN status (ADF debug-canvas parity) and
+   * the eyeglass action drills into the run detail.
+   */
+  run?: ActivityRunOverlayRow;
+  /** Open the run-monitoring detail (eyeglass) for this activity. */
+  onInspectRun?: (name: string) => void;
   [key: string]: unknown;
 }
 
@@ -120,12 +133,29 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
   const isContainer = isContainerType(activity.type);
   const innerCount = isContainer ? totalInnerCount(activity) : 0;
 
-  const actionBar = standardNodeActions({
+  const actionBar: NodeAction[] = standardNodeActions({
     onExplain: nodeData.onExplain ? () => nodeData.onExplain!(activity.name) : undefined,
     onViewJson: nodeData.onViewJson ? () => nodeData.onViewJson!(activity.name) : undefined,
     onClone: nodeData.onClone ? () => nodeData.onClone!(activity.name) : undefined,
     onDelete: nodeData.onDelete ? () => nodeData.onDelete!(activity.name) : undefined,
   });
+  // U13 — the ADF eyeglass: when this activity has a run receipt, lead the
+  // action bar with "View run details" (drills to input/output/error JSON).
+  if (nodeData.run && nodeData.onInspectRun) {
+    actionBar.unshift({
+      key: 'inspect-run',
+      icon: <Glasses16Regular />,
+      label: 'View run details',
+      onClick: (e) => { e.stopPropagation(); nodeData.onInspectRun!(activity.name); },
+    });
+  }
+
+  // Run receipt wins the header StatusChip while an overlay is published
+  // (ADF debug-canvas parity); otherwise any host-supplied status shows.
+  const runStatus: CanvasNodeStatus | undefined = nodeData.run
+    ? runStatusToNodeStatus(nodeData.run.status)
+    : undefined;
+  const statusDetail = nodeData.run ? runStatusDetail(nodeData.run) : nodeData.statusDetail;
 
   return (
     <CanvasNode
@@ -134,8 +164,8 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
       visual={visual}
       typeLabel={def?.label || activity.type || 'Unknown'}
       selected={selected}
-      status={nodeData.status}
-      statusDetail={nodeData.statusDetail}
+      status={runStatus ?? nodeData.status}
+      statusDetail={statusDetail}
       actionBar={actionBar.length > 0 ? actionBar : undefined}
       description={activity.description as string | undefined}
       framed={isContainer}

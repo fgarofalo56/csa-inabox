@@ -263,7 +263,11 @@ describe('admin/env-config registry', () => {
     // Bumped to 185 by the N8 Openness Tier-3 labs: svc-ducklake-catalog adds
     // LOOM_DUCKLAKE_CATALOG_URL and svc-s3-gateway adds LOOM_S3_GATEWAY_URL —
     // both opt-in Preview labs (honest-gated when unset), +2: 183 → 185.
-    expect(EDITABLE_ENV.length).toBe(185);
+    // Bumped to 186 by CH1: svc-dependency-chaos-drill adds
+    // LOOM_DEPENDENCY_CHAOS_ENABLED (optionalDefault — OFF by default, the
+    // fully-functional prod posture; enabled only for a non-prod resilience
+    // drill), mirroring A13's LOOM_SPARK_CHAOS_ENABLED: 185 → 186.
+    expect(EDITABLE_ENV.length).toBe(186);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -356,6 +360,10 @@ describe('admin/env-config registry', () => {
       // (unset → 30-day horizon, method 'auto' = real Forecast API first with
       // the computed linear/seasonal fallback, honestly labeled).
       'LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD',
+      // CH1 svc-dependency-chaos-drill — OFF by default (the fully-functional
+      // prod posture: no fault injection); enabled only for a non-prod
+      // resilience drill, mirroring A13's LOOM_SPARK_CHAOS_ENABLED.
+      'LOOM_DEPENDENCY_CHAOS_ENABLED',
       'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       // N2b svc-loom-duckdb — unset is fully functional: SQL Lab runs the
       // identical statement on Synapse Serverless and names the engine that

@@ -234,6 +234,15 @@ type drConfigT = {
 
   @description('DR0 — declarative blob versioning + point-in-time-restore posture for the DLZ lake. Default true, but currently guarded OFF on the lake because versioning/PITR are "Not yet supported" on HNS (ADLS Gen2) accounts per the Learn feature matrix — the supported lake restore baseline is soft-delete + change feed + Delta time travel (see modules/landing-zone/storage.bicep).')
   enableBlobPitr: bool?
+
+  @description('CMK1 — require customer-managed-key (CMK) at-rest encryption on EVERY Loom Cosmos account (hub Console store + DLZ state account + graph/vector accounts). Default false = service-managed keys (unchanged). IL5 mandates true. Rides to admin-plane (loom-console-cosmos.bicep) and every landing-zone call (cosmos.bicep + cosmos-graph-vector.bicep). Requires cosmosCmkKeyUri + cosmosCmkIdentityId.')
+  cosmosRequireCmk: bool?
+
+  @description('CMK1 — VERSIONLESS Key Vault key URI for the Cosmos CMK (https://<vault>.vault.azure.<suffix>/keys/<key> — NO key version, no trailing slash: Cosmos rejects a versioned URI at account create; rotation then auto-tracks the latest enabled version). Required when cosmosRequireCmk.')
+  cosmosCmkKeyUri: string?
+
+  @description('CMK1 — RESOURCE ID of the user-assigned managed identity that holds "Key Vault Crypto Service Encryption User" on the key vault (mirrors storage.bicep cmkIdentityId). Required when cosmosRequireCmk: Cosmos continuous-backup (PITR) accounts do not support the first-party identity for CMK, so the accounts are created with this UAMI as defaultIdentity (Learn: cosmos-db/how-to-setup-customer-managed-keys#use-customer-managed-keys-with-continuous-backup).')
+  cosmosCmkIdentityId: string?
 }
 
 @description('DR settings bag (R0/DR0) — rides to admin-plane (cosmosBackupTier → loom-console-cosmos.bicep) and to every landing-zone call (enableBlobPitr → storage.bicep). Add future DR/drill settings as typed properties here — NEVER as new scalar top-level params (256-param ARM cap; scripts/ci/check-bicep-param-cap.mjs).')
@@ -1033,9 +1042,15 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
     recycleRetentionDays: recycleRetentionDays
-    // DR0 — narrowed to the hub-relevant property (enableBlobPitr rides the
-    // landing-zone calls instead; admin-plane's typed bag only knows the tier).
-    drConfig: { cosmosBackupTier: drConfig.?cosmosBackupTier }
+    // DR0/CMK1 — narrowed to the hub-relevant properties (enableBlobPitr rides
+    // the landing-zone calls instead; admin-plane's typed bag knows the tier +
+    // the Cosmos CMK opt-in trio for the Console store).
+    drConfig: {
+      cosmosBackupTier: drConfig.?cosmosBackupTier
+      cosmosRequireCmk: drConfig.?cosmosRequireCmk
+      cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri
+      cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId
+    }
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     contentSafetyEnabled: contentSafetyEnabled
@@ -1511,6 +1526,12 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
     enableBlobPitr: drConfig.?enableBlobPitr ?? true
+    // CMK1 — Cosmos CMK-at-rest opt-in trio (drConfig bag; default OFF =
+    // service-managed keys). Applies to the DLZ state account AND the
+    // graph/vector accounts in this landing zone.
+    cosmosRequireCmk: drConfig.?cosmosRequireCmk ?? false
+    cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri ?? ''
+    cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId ?? ''
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI (Real-Time Intelligence) opt-out flags + existing-namespace reuse.
@@ -1609,6 +1630,12 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
     enableBlobPitr: drConfig.?enableBlobPitr ?? true
+    // CMK1 — Cosmos CMK-at-rest opt-in trio (drConfig bag; default OFF =
+    // service-managed keys). Applies to the DLZ state account AND the
+    // graph/vector accounts in this landing zone.
+    cosmosRequireCmk: drConfig.?cosmosRequireCmk ?? false
+    cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri ?? ''
+    cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId ?? ''
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
@@ -1757,6 +1784,12 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
     enableBlobPitr: drConfig.?enableBlobPitr ?? true
+    // CMK1 — Cosmos CMK-at-rest opt-in trio (drConfig bag; default OFF =
+    // service-managed keys). Applies to the DLZ state account AND the
+    // graph/vector accounts in this landing zone.
+    cosmosRequireCmk: drConfig.?cosmosRequireCmk ?? false
+    cosmosCmkKeyUri: drConfig.?cosmosCmkKeyUri ?? ''
+    cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId ?? ''
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // AAS opt-out honored on the attached DLZ. Azure Analysis Services is NOT

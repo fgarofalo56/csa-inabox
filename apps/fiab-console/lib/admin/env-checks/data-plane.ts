@@ -134,17 +134,17 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/compute/hband-shared.bicep (shared Redis) → LOOM_RESULT_CACHE_REDIS on the Console app',
     role: 'Redis access key from Key Vault (LOOM_RESULT_CACHE_REDIS_PASSWORD secretRef) or AAD data-plane per module wiring',
   },
-  // ── DR0 — restore posture (loom-next-level ws-verification-dr) ──
+  // ── DR0 + CMK1 — restore/at-rest posture (loom-next-level ws-verification-dr) ──
   {
-    id: 'svc-dr-restore-posture', category: 'data-plane', title: 'DR restore posture — Cosmos PITR + lake recovery', severity: 'optional',
+    id: 'svc-dr-restore-posture', category: 'data-plane', title: 'DR restore posture — Cosmos PITR + CMK-at-rest + lake recovery', severity: 'optional',
     anyOf: [['LOOM_COSMOS_ACCOUNT', 'LOOM_ADLS_ACCOUNT']], warnOnMiss: true,
-    remediation: 'Set LOOM_COSMOS_ACCOUNT (+ LOOM_COSMOS_ACCOUNT_RG) and/or LOOM_ADLS_ACCOUNT (+ LOOM_DLZ_RG) so the restore-posture probe can read live ARM and verify the estate is restorable: the Loom-store Cosmos account on Continuous (PITR) backup, and the lake with blob + container soft delete and change feed on. A push-button deploy ships both by default (drConfig.cosmosBackupTier, default Continuous30Days; recycleRetentionDays soft delete). NOTE: blob versioning / blob PITR are "Not yet supported" on HNS (ADLS Gen2) accounts per the Learn feature matrix — the supported lake restore path is soft delete + change feed + Delta time travel, and that is what this row verifies.',
+    remediation: 'Set LOOM_COSMOS_ACCOUNT (+ LOOM_COSMOS_ACCOUNT_RG) and/or LOOM_ADLS_ACCOUNT (+ LOOM_DLZ_RG) so the restore-posture probe can read live ARM and verify the estate is restorable: the Loom-store Cosmos account on Continuous (PITR) backup, and the lake with blob + container soft delete and change feed on. A push-button deploy ships both by default (drConfig.cosmosBackupTier, default Continuous30Days; recycleRetentionDays soft delete). CMK1: the same probe reports encryption-at-rest — when the deploy mandates customer-managed keys (LOOM_COSMOS_REQUIRE_CMK=true, wired from drConfig.cosmosRequireCmk; IL5 mandate, opt-in elsewhere) a Cosmos account without properties.keyVaultKeyUri is flagged as a posture gap; otherwise the service-managed default is reported honestly. NOTE: blob versioning / blob PITR are "Not yet supported" on HNS (ADLS Gen2) accounts per the Learn feature matrix — the supported lake restore path is soft delete + change feed + Delta time travel, and that is what this row verifies.',
     docs: 'https://learn.microsoft.com/azure/cosmos-db/continuous-backup-restore-introduction',
-    provisionedBy: 'modules/admin-plane/loom-console-cosmos.bicep (backupPolicy Continuous, drConfig.cosmosBackupTier) + modules/landing-zone/storage.bicep (soft delete + change feed; versioning/PITR HNS-guarded)',
+    provisionedBy: 'modules/admin-plane/loom-console-cosmos.bicep (backupPolicy Continuous, drConfig.cosmosBackupTier; CMK via drConfig.cosmosRequireCmk/cosmosCmkKeyUri/cosmosCmkIdentityId → keyVaultKeyUri + LOOM_COSMOS_REQUIRE_CMK) + modules/landing-zone/cosmos.bicep + cosmos-graph-vector.bicep (same CMK trio) + modules/landing-zone/storage.bicep (soft delete + change feed; versioning/PITR HNS-guarded)',
     role: 'DocumentDB Account Contributor (Console UAMI, already granted) on the Cosmos account + Reader on the DLZ storage account (ARM reads)',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
-      fallbackNote: 'Cosmos continuous backup (PITR) and blob/container soft delete + change feed are GA in Azure Government through IL5 — the whole posture stays in-boundary. Blob versioning is a platform-wide HNS limitation (all clouds), not a sovereign gap.',
+      fallbackNote: 'Cosmos continuous backup (PITR), Cosmos customer-managed keys (keyVaultKeyUri + UAMI defaultIdentity), and blob/container soft delete + change feed are GA in Azure Government through IL5 — the whole posture stays in-boundary (key vault + key + UAMI are all in-enclave resources). Blob versioning is a platform-wide HNS limitation (all clouds), not a sovereign gap.',
     },
   },
   {
@@ -205,6 +205,21 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'The harness only drives the in-boundary Synapse Livy + warm-pool paths, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
+    },
+  },
+  // ── CH1 — Dependency-fault chaos harness (default OFF in prod) ───────────────
+  {
+    id: 'svc-dependency-chaos-drill', category: 'data-plane', title: 'Dependency-fault chaos harness (Cosmos / AOAI / ADX / KV)', severity: 'optional',
+    required: ['LOOM_DEPENDENCY_CHAOS_ENABLED'],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'the dependency-fault chaos harness is OFF by default (the fully-functional production posture — no fault injection). It is a tenant-admin, triple-gated (the ch1-dependency-chaos runtime flag ON + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN) resilience-DRILL tool that injects real faults (Cosmos-429, Azure OpenAI 429/timeout, ADX cold-start 503, Key Vault throttle) against a replica so the serve-stale / honest-gate / breaker paths can be proven end-to-end in a non-prod environment. Every armed fault auto-expires (≤5 min). Unset/false = disabled, which is the intended default.',
+    remediation: 'The dependency-fault chaos harness (POST /api/admin/chaos/dependency) is OFF by default and MUST stay off in production. To run a resilience drill in a non-prod deployment, enable the ch1-dependency-chaos runtime flag, set LOOM_DEPENDENCY_CHAOS_ENABLED=true AND present a valid LOOM_INTERNAL_TOKEN on the request (in addition to a tenant-admin session). It injects real dependency faults to verify the getOrComputeCached serve-stale, aoai-chat-client fallback, and honest-error paths degrade gracefully — never a crash or dark render.',
+    docs: 'https://github.com/fgarofalo56/csa-inabox/blob/main/docs/fiab/resilience-matrix.md',
+    provisionedBy: 'in-Console route (app/api/admin/chaos/dependency) gated by the ch1-dependency-chaos flag + LOOM_DEPENDENCY_CHAOS_ENABLED + LOOM_INTERNAL_TOKEN (already wired by admin-plane/main.bicep) — no new Azure resource',
+    role: 'Tenant admin (session) + the internal trust token — the drill arms an in-process fault registry the live cosmos-client / fetch-with-timeout chokepoints consult; no Azure permission is exercised by arming',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'The harness only drives in-process fault injection at the Console\'s own transport chokepoints, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
     },
   },
   // ── N8 lab 1 — DuckLake catalog option (Postgres-backed lakehouse metadata) ──
