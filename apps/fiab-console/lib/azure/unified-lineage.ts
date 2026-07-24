@@ -175,7 +175,10 @@ export function synthesizeColumnGraph(
     const k = `${from}->${to}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    edges.push({ from, to, type: 'column', kind: 'column' });
+    // Carry the declared transform expression onto the edge (L5: the column
+    // detail / impact panel surfaces it). Only spread when present so the
+    // no-transform payload shape stays byte-identical.
+    edges.push({ from, to, type: 'column', kind: 'column', ...(m.transform ? { transform: m.transform } : {}) });
   }
   return { nodes: [...nodes.values()], edges };
 }
@@ -399,7 +402,13 @@ export function mergeGraphs(graphs: SourceGraph[]): {
       const k = `${from}->${to}`;
       if (edgeSeen.has(k)) continue;
       edgeSeen.add(k);
-      edges.push({ from, to, ...(e.type ? { type: e.type } : {}), ...(e.kind ? { kind: e.kind } : {}) });
+      edges.push({
+        from,
+        to,
+        ...(e.type ? { type: e.type } : {}),
+        ...(e.kind ? { kind: e.kind } : {}),
+        ...(e.transform ? { transform: e.transform } : {}),
+      });
     }
   }
 
