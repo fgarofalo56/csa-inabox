@@ -39,6 +39,8 @@ import '@/lib/azure/graphrag-index-model';
 // cycle back into cosmos-client).
 import { LAKEHOUSE_INTEROP_CONTAINER } from '@/lib/azure/lakehouse-interop-model';
 import '@/lib/azure/transform-plan-model';
+// N5 — loom-assets doc shape + MIG1 registration (LEAF: cosmos-migrations only).
+import { ASSET_REGISTRY_CONTAINER } from '@/lib/azure/asset-registry-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -491,6 +493,10 @@ let _graphRagIndex: Container | null = null;
 // lib/azure/lakehouse-interop-model.ts. ARM-provisioned in cosmos.bicep's
 // loomContainers; the createIfNotExists below is the hotfix fallback.
 let _lakehouseInterop: Container | null = null;
+// N5 — software-defined-asset registry SIDECAR (freshness policy + materializer
+// binding + reconciler watermarks; the graph itself is always DERIVED from
+// unified-lineage). PK /tenantId, no TTL. Shape + MIG1: ./asset-registry-model.
+let _assets: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1283,6 +1289,12 @@ async function ensure() {
     })).container,
     LAKEHOUSE_INTEROP_CONTAINER,
   );
+  // N5 — software-defined-asset registry. PK /tenantId; withMigrations (MIG1).
+  _assets = withMigrations(
+    (await database.containers.createIfNotExists({
+      id: ASSET_REGISTRY_CONTAINER, partitionKey: { paths: ['/tenantId'] },
+    })).container, ASSET_REGISTRY_CONTAINER,
+  );
   _ensured = true;
 }
 
@@ -1435,6 +1447,8 @@ export async function semanticContractContainer(): Promise<Container> { await en
 export async function graphRagIndexContainer(): Promise<Container> { await ensure(); return _graphRagIndex!; }
 /** N1 — Delta↔Iceberg interop state per lakehouse container, PK /tenantId. */
 export async function lakehouseInteropContainer(): Promise<Container> { await ensure(); return _lakehouseInterop!; }
+/** N5 — software-defined-asset registry (freshness policy + materializer + watermarks), PK /tenantId. */
+export async function assetsContainer(): Promise<Container> { await ensure(); return _assets!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

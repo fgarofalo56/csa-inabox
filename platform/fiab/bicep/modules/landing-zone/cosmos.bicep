@@ -387,6 +387,17 @@ var loomContainers = [
   // ON without a blanket expiry; each doc carries its own 365-day `ttl`.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-transform-plans',  partitionKey: '/itemId', ttl: -1 }
+  // N5 — SOFTWARE-DEFINED ASSET registry. One `asset` doc per asset key holding
+  // the operator's freshness policy (cadence / grace / auto-or-manual / alert
+  // severity), the materializer binding (SQLMesh-dbt project, Synapse pipeline
+  // or Databricks job), and the run + Delta-version watermarks the
+  // asset-reconciler writes. The asset GRAPH is always DERIVED from
+  // unified-lineage (+ the N4 model DAG) — this container is a sidecar, never a
+  // second source of truth for lineage. PK /tenantId so the whole-estate canvas
+  // read and one reconciler pass are both single-partition. NO ttl — a policy is
+  // durable configuration. createIfNotExists in cosmos-client.ts ensure()
+  // remains the hotfix fallback.
+  { name: 'loom-assets',           partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
