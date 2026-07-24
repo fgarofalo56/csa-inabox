@@ -1,0 +1,28 @@
+# CSA Loom — Trivy CRITICAL-gate baseline (SC1)
+#
+# Every entry here is a KNOWN, REVIEWED finding that the blocking build gate
+# (build-fiab-images-acr-tasks.yml "Trivy gate") ignores, with the reason and
+# the burn-down path. Adding an entry requires the same review a guard-
+# allowlist entry gets. Remove entries as base images are bumped.
+#
+# CVE-2026-59873 — node-tar DoS (gzip bomb). The flagged tar@6.2.1 is the copy
+# VENDORED INSIDE npm in the node:20 base images (loom-console, loom-copilot-maf,
+# loom-mcp-bridge). It is NOT in any app lockfile (verified: no `tar` in
+# apps/fiab-console/pnpm-lock.yaml; copilot-maf deps = @azure/identity only)
+# and the apps never invoke npm at runtime — not app-reachable.
+# BURN-DOWN: bump the node base images when a patched node/npm ships
+# (tracked in the reconcile/apex PRP supply-chain item).
+CVE-2026-59873
+#
+# CVE-2024-47561 — Apache Avro deserialization. Lives in avro-1.11.3.jar
+# vendored inside the upstream Debezium Connect base image (loom-mirroring).
+# Loom does not feed untrusted Avro schemas to the connector (CDC configs are
+# admin-authored via the N7b wizard). BURN-DOWN: bump the debezium/connect
+# base image tag (avro >= 1.11.4).
+CVE-2024-47561
+#
+# CVE-2026-33845 — libgnutls30 in the loom-mcp-bridge OS base layer. No fixed
+# package in the pinned distro release yet at baseline time (gate runs
+# ignore-unfixed=true, but the distro marks it "fixed" in a newer base).
+# BURN-DOWN: bump the mcp-bridge base image.
+CVE-2026-33845

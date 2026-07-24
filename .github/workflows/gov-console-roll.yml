@@ -122,6 +122,11 @@ jobs:
           severity: CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          # Vuln gating only + reviewed baseline (see .trivyignore) — same
+          # posture as build-fiab-images-acr-tasks; secret-scan FPs on minified
+          # bundles are excluded, source secret hygiene has its own lane.
+          scanners: vuln
+          trivyignores: .trivyignore
           format: table
 
       - name: Supply-chain — install cosign

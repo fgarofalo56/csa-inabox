@@ -208,6 +208,13 @@ jobs:
           severity: CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          # Vulnerability gating ONLY: trivy's secret scanner on minified Next.js
+          # bundles flags UI placeholder strings (e.g. the GCS shortcut wizard's
+          # example service-account JSON) as credentials — a known FP class.
+          # Secret hygiene is covered by the repo Secret Scan lane on source.
+          scanners: vuln
+          # Reviewed baseline of base-image/vendored CVEs with burn-down notes.
+          trivyignores: .trivyignore
           format: table
 
       - name: Install cosign
