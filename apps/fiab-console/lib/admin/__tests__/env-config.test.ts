@@ -260,7 +260,10 @@ describe('admin/env-config registry', () => {
     // new editable var: 182 → 183. The sibling knobs (LOOM_TRINO_ICEBERG_CATALOG,
     // LOOM_TRINO_AUDIENCE, LOOM_TRINO_TOKEN) are runtime-only code defaults /
     // secretRefs and deliberately NOT part of the spec.
-    expect(EDITABLE_ENV.length).toBe(183);
+    // Bumped to 185 by the N8 Openness Tier-3 labs: svc-ducklake-catalog adds
+    // LOOM_DUCKLAKE_CATALOG_URL and svc-s3-gateway adds LOOM_S3_GATEWAY_URL —
+    // both opt-in Preview labs (honest-gated when unset), +2: 183 → 185.
+    expect(EDITABLE_ENV.length).toBe(185);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

@@ -130,6 +130,28 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → the built-in per-replica in-memory result cache serves everything with zero loss of function.',
   },
+  // ── N8 lab 1 — DuckLake catalog option (Preview) ──
+  'svc-ducklake-catalog': {
+    surfaces: [
+      { path: '/items/ducklake-catalog', label: 'DuckLake catalog editor — Postgres-backed lakehouse metadata (Preview)' },
+      { path: '/api/ducklake/catalog', label: 'DuckLake catalog listing edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in Preview lab ALONGSIDE the N1 Iceberg REST Catalog. Unset → the DuckLake editor renders a guided empty state and honest-gates; N1\'s IRC (LOOM_ICEBERG_CATALOG_URL) and every other surface are unaffected. Point LOOM_DUCKLAKE_CATALOG_URL at an in-VNet Postgres store to try it.',
+    legacyCodes: ['ducklake_not_configured'],
+  },
+  // ── N8 lab 3 — S3-compatible ADLS gateway (Preview) ──
+  'svc-s3-gateway': {
+    surfaces: [
+      { path: '/items/s3-gateway', label: 'S3-compatible ADLS gateway config (Preview)' },
+      { path: '/api/s3-gateway/info', label: 'S3 gateway connect-info edge' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Opt-in Preview lab. Unset → the surface documents that the N1 Iceberg REST Catalog + native ADLS/abfss path already give external engines governed access, so most deployments need no gateway. Set LOOM_S3_GATEWAY_URL only when you deploy an Apache-2.0 s3proxy for s3://-exclusive clients (the AGPL MinIO path is not used).',
+    legacyCodes: ['s3_gateway_not_configured'],
+  },
   // ── M1 — estate assessment reader (inbound-migration on-ramp) ──
   'svc-loom-migrate': {
     surfaces: [
