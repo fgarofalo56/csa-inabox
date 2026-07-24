@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1630 |
+| Total routes | 1632 |
 | Public (no session) | 116 |
-| Session-only | 574 |
-| Owner-scoped | 674 |
+| Session-only | 575 |
+| Owner-scoped | 675 |
 | Admin | 266 |
 | Gated (backend config) | 525 |
-| Areas | 113 |
+| Areas | 115 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -746,6 +746,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `duckdb/capabilities/route.ts` | GET | owner-scoped |  | — |
 | `duckdb/query/route.ts` | POST | owner-scoped |  | — |
+
+## ducklake
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `ducklake/catalog/route.ts` | GET | owner-scoped |  | — |
 
 ## embed
 
@@ -1991,6 +1997,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `runtime-flags/route.ts` | GET | session-only |  | — |
+
+## s3-gateway
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `s3-gateway/info/route.ts` | GET | session-only |  | — |
 
 ## scheduler
 

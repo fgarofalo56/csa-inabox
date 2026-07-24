@@ -28,6 +28,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2, Tab, TabList,
+  Dropdown, Option, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -35,6 +36,7 @@ import {
   Play20Regular, Flash20Regular, PlugConnected20Regular, Database20Regular,
   DocumentTable20Regular,
 } from '@fluentui/react-icons';
+import { transpilePrqlToSql, PrqlTranspileError, type QueryLanguage } from '@/lib/query/prql-transpile';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EditorResultsSplit } from './components/editor-results-split';
@@ -55,6 +57,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 /** FLAG0 runtime kill-switch id (registered in lib/admin/runtime-flags.ts). */
 export const SQL_LAB_FLAG_ID = 'n2b-sql-lab-duckdb';
+/** N8 lab 2 — the PRQL "modern query" toggle FLAG0 id (default-ON). */
+export const MODERN_QUERY_FLAG_ID = 'n8-modern-query-prql';
 
 const SAMPLE_SQL = [
   '-- DuckDB reads your lake in place — no copy, no import, no Spark session.',
@@ -62,6 +66,16 @@ const SAMPLE_SQL = [
   "-- SELECT * FROM read_parquet('abfss://bronze@<account>.dfs.core.windows.net/events/*.parquet');",
   '',
   'SELECT 1 AS hello',
+].join('\n');
+
+/** N8 lab 2 — a PRQL starter that transpiles to a real SELECT over the engine. */
+const SAMPLE_PRQL = [
+  '# PRQL (Apache-2.0) — a pipelined query language that transpiles to SQL.',
+  '# Each step reads like a pipe; Loom runs the resulting SQL on the DuckDB engine.',
+  '# Point `from` at a real table (or a delta_scan/read_parquet call) to query the lake.',
+  '',
+  'from t',
+  'take 100',
 ].join('\n');
 
 const useStyles = makeStyles({
@@ -82,6 +96,18 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase200,
+  },
+  langPicker: { minWidth: '150px' },
+  genSql: {
+    marginTop: tokens.spacingVerticalXS,
+    padding: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap',
+    overflowX: 'auto',
   },
 });
 
@@ -121,11 +147,22 @@ async function fetchCapabilities(): Promise<CapabilitiesResponse> {
 export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const enabled = useRuntimeFlag(SQL_LAB_FLAG_ID);
+  // N8 lab 2 — the PRQL "modern query" toggle (default-ON, opt-out via FLAG0).
+  const modernQueryEnabled = useRuntimeFlag(MODERN_QUERY_FLAG_ID);
 
   const [tab, setTab] = useState<'query' | 'local' | 'connect'>('query');
   const [sql, setSql] = useState(SAMPLE_SQL);
+  // Separate PRQL buffer so switching languages never clobbers the SQL editor.
+  const [prql, setPrql] = useState(SAMPLE_PRQL);
+  const [lang, setLang] = useState<QueryLanguage>('sql');
+  const [transpiledSql, setTranspiledSql] = useState<string | null>(null);
+  const [transpileError, setTranspileError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<SqlLabResponse | null>(null);
+
+  // When the modern-query flag is OFF, force SQL — the toggle disappears and the
+  // surface reverts to SQL-only (FLAG0 revert story).
+  const activeLang: QueryLanguage = modernQueryEnabled ? lang : 'sql';
 
   const capsQ = useQuery({
     queryKey: ['sql-lab-capabilities'],
@@ -136,11 +173,30 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
   const run = useCallback(async () => {
     setRunning(true);
     setResult(null);
+    setTranspileError(null);
+    setTranspiledSql(null);
+
+    // N8: in PRQL mode transpile FIRST. On any unsupported construct we surface
+    // the honest error and refuse to run — never a fabricated query.
+    let runnableSql = sql;
+    if (activeLang === 'prql') {
+      try {
+        runnableSql = transpilePrqlToSql(prql);
+        setTranspiledSql(runnableSql);
+      } catch (e) {
+        setTranspileError(
+          e instanceof PrqlTranspileError || e instanceof Error ? e.message : String(e),
+        );
+        setRunning(false);
+        return;
+      }
+    }
+
     try {
       const res = await clientFetch('/api/duckdb/query', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sql, maxRows: 5000, itemId: id }),
+        body: JSON.stringify({ sql: runnableSql, maxRows: 5000, itemId: id }),
       });
       const json = (await res.json().catch(() => ({}))) as SqlLabResponse;
       setResult(res.ok && json.ok ? json : { ok: false, error: json.error || `HTTP ${res.status}` });
@@ -149,7 +205,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
     } finally {
       setRunning(false);
     }
-  }, [id, sql]);
+  }, [activeLang, id, prql, sql]);
 
   const preview: PreviewData | null = useMemo(() => {
     if (!result?.ok) return null;
@@ -289,7 +345,31 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
           {tab === 'query' && (
             <>
               <div className={s.toolbar}>
-                <Body1>Read-only SQL over your lake</Body1>
+                <Body1>
+                  {activeLang === 'prql' ? 'Read-only PRQL over your lake' : 'Read-only SQL over your lake'}
+                </Body1>
+                {modernQueryEnabled && (
+                  <Field label="Language" orientation="horizontal">
+                    <Dropdown
+                      className={s.langPicker}
+                      size="small"
+                      selectedOptions={[lang]}
+                      value={lang === 'prql' ? 'PRQL (Preview)' : 'SQL'}
+                      onOptionSelect={(_, d) => {
+                        setLang((d.optionValue as QueryLanguage) || 'sql');
+                        setTranspileError(null);
+                        setTranspiledSql(null);
+                      }}
+                      aria-label="Query language"
+                    >
+                      <Option value="sql" text="SQL">SQL</Option>
+                      <Option value="prql" text="PRQL (Preview)">PRQL (Preview)</Option>
+                    </Dropdown>
+                  </Field>
+                )}
+                {activeLang === 'prql' && (
+                  <Badge appearance="tint" color="warning" size="small">Preview</Badge>
+                )}
                 <Button
                   appearance="primary"
                   icon={running ? <Spinner size="tiny" /> : <Play20Regular />}
@@ -302,20 +382,34 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
               </div>
               <EditorResultsSplit
                 editorKey="sql-lab"
-                active={running || !!result}
+                active={running || !!result || !!transpileError}
                 query={
                   <MonacoTextarea
-                    value={sql}
-                    onChange={setSql}
+                    value={activeLang === 'prql' ? prql : sql}
+                    onChange={activeLang === 'prql' ? setPrql : setSql}
                     language="sql"
                     height={260}
                     minHeight={180}
                     sizingKey="sql-lab.query"
-                    ariaLabel="SQL Lab query editor"
+                    ariaLabel={activeLang === 'prql' ? 'SQL Lab PRQL editor' : 'SQL Lab query editor'}
                   />
                 }
                 results={
                   <>
+                    {transpileError && (
+                      <MessageBar intent="error" layout="multiline">
+                        <MessageBarBody>
+                          <MessageBarTitle>Unsupported PRQL</MessageBarTitle>
+                          {transpileError} No query was run — Loom never fabricates SQL from PRQL it cannot translate.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {activeLang === 'prql' && transpiledSql && !transpileError && (
+                      <div>
+                        <Caption1>Generated SQL (ran on the engine):</Caption1>
+                        <div className={s.genSql}>{transpiledSql}</div>
+                      </div>
+                    )}
                     {running && <Spinner size="small" label="Executing…" labelPosition="after" />}
                     {!running && result && !result.ok && (
                       <MessageBar intent="error" layout="multiline">
@@ -345,11 +439,15 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
                         )}
                       </>
                     )}
-                    {!running && !result && (
+                    {!running && !result && !transpileError && (
                       <EmptyState
                         icon={<Play20Regular />}
                         title="Run a query to see results"
-                        body="Point DuckDB at a Delta table with delta_scan(), a Parquet folder with read_parquet(), or an Iceberg table with iceberg_scan() — all read in place on your own lake."
+                        body={
+                          activeLang === 'prql'
+                            ? 'Write a PRQL pipeline (from … | filter … | derive … | group … | sort … | take …). Loom transpiles the supported subset to SQL and runs it on the same DuckDB engine — the generated SQL is shown above the results.'
+                            : 'Point DuckDB at a Delta table with delta_scan(), a Parquet folder with read_parquet(), or an Iceberg table with iceberg_scan() — all read in place on your own lake.'
+                        }
                         primaryAction={{ label: 'Run query', appearance: 'primary', onClick: () => void run() }}
                       />
                     )}

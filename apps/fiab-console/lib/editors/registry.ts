@@ -85,6 +85,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // N2b — SQL Lab (DuckDB): the interactive tier below Spark, with the N2a
   // in-browser local-analysis tab and the N3 Connect (ADBC/Flight/JDBC) tab.
   'sql-lab':              reg(() => import('./sql-lab-editor'),          'SqlLabEditor'),
+  // N8 Openness Tier-3 labs (Preview): DuckLake catalog + S3-compatible ADLS gateway.
+  'ducklake-catalog':     reg(() => import('./ducklake-catalog-editor'), 'DucklakeCatalogEditor'),
+  's3-gateway':           reg(() => import('./s3-gateway-editor'),       'S3GatewayEditor'),
   // Data Factory connection objects as first-class creatable items. The
   // standalone editors wrap the shared pipeline gallery / IR manager (read-only)
   // in manage/factory-scoped mode; real ARM via /api/adf (+ /api/synapse).

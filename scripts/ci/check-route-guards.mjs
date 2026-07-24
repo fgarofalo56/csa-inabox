@@ -130,6 +130,13 @@ const ALLOWLIST = new Map([
   // resource to own-scope; the credential path itself is POST /api/flightsql/session,
   // which mints only for the authenticated caller and audits every issuance.
   ['apps/fiab-console/app/api/flightsql/connect/route.ts', 'deployment-wide connection guidance + secret-free snippets; no per-tenant resource to scope; the ticket-mint half is self-scoped and audited'],
+  // N8 lab 3 — S3-compatible ADLS gateway connect info: deployment-wide config
+  // read (the gateway endpoint from LOOM_S3_GATEWAY_URL + secret-free connect
+  // snippets + the native abfss/IRC path). Reads no tenant data, names no secret
+  // (the snippet tells the user to supply their own key), and has no per-tenant
+  // resource to own-scope — a shared Azure backend resolved by env, like the
+  // flightsql/connect guidance route above.
+  ['apps/fiab-console/app/api/s3-gateway/info/route.ts', 'deployment-wide S3-gateway connect info + secret-free snippets; no per-tenant resource to scope'],
   // RUM1 browser-telemetry ingest: WRITE-ONLY beacon sink (page-load timings /
   // Web Vitals / scrubbed errors → App Insights). There is NO per-tenant
   // resource to own-scope — the route reads nothing back and forwards

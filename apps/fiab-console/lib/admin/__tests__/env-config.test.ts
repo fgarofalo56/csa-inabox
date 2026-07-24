@@ -247,7 +247,10 @@ describe('admin/env-config registry', () => {
     // LOOM_MIGRATE_URL — the loom-migrate estate-assessment reader. Opt-in (NOT
     // optionalDefault: with the reader absent the assess route is honestly
     // gated), so it counts as one new editable var: 180 → 181.
-    expect(EDITABLE_ENV.length).toBe(181);
+    // Bumped to 183 by the N8 Openness Tier-3 labs: svc-ducklake-catalog adds
+    // LOOM_DUCKLAKE_CATALOG_URL and svc-s3-gateway adds LOOM_S3_GATEWAY_URL —
+    // both opt-in Preview labs (honest-gated when unset), +2: 181 → 183.
+    expect(EDITABLE_ENV.length).toBe(183);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
