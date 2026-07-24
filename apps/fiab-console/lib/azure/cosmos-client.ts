@@ -31,13 +31,14 @@ import '@/lib/azure/answer-receipts-model';
 // can never cycle back into cosmos-client).
 import '@/lib/azure/prompt-registry-model';
 import '@/lib/azure/token-budget-model';
-// N11 — loom-graphrag-index doc shape + MIG1 migrator registration (module-scope
-// side effect: the chain is live before any read materializes).
+// N11 loom-graphrag-index + N4 loom-transform-plans doc shapes + MIG1 migrator
+// registration (module-scope side effect: live before any read materializes).
 import '@/lib/azure/graphrag-index-model';
 // N1 — loom-lakehouse-interop doc shape + MIG1 migrator registration (LEAF
 // module: imports only cosmos-migrations, so this side-effect import can never
 // cycle back into cosmos-client).
 import { LAKEHOUSE_INTEROP_CONTAINER } from '@/lib/azure/lakehouse-interop-model';
+import '@/lib/azure/transform-plan-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -312,6 +313,7 @@ let _answerReceipts: Container | null = null;
 // layer: lib/azure/prompt-registry-model.ts; store: lib/copilot/prompt-registry.ts.
 // ARM-provisioned in cosmos.bicep's loomContainers; this is the hotfix fallback.
 let _promptRegistry: Container | null = null;
+let _transformPlans: Container | null = null; // N4 plan/apply history, PK /itemId, TTL-enabled; shape+MIG1: ./transform-plan-model
 // N13 — per-workspace / per-agent token budgets (loom-token-budgets). Two doc
 // kinds share the partition: `docType:'budget'` (the configured cap) and
 // `docType:'usage'` (one accumulated-spend row per period, carrying a 400-day
@@ -1260,6 +1262,7 @@ async function ensure() {
     })).container,
     'loom-prompt-registry',
   );
+  _transformPlans = withMigrations(await createTtlEnabledContainer(database, 'loom-transform-plans', '/itemId'), 'loom-transform-plans');
   // N13 — per-workspace/per-agent token budgets + usage ledger. PK /scopeKey;
   // defaultTtl -1 = TTL enabled with no blanket expiry (budget docs durable,
   // usage rows carry their own 400-day ttl). withMigrations wraps reads (MIG1).
@@ -1394,6 +1397,7 @@ export async function copilotEvalsContainer(): Promise<Container> { await ensure
 export async function answerReceiptsContainer(): Promise<Container> { await ensure(); return _answerReceipts!; }
 /** N13 — LLMOps prompt registry (loom-prompt-registry), PK /promptId. */
 export async function promptRegistryContainer(): Promise<Container> { await ensure(); return _promptRegistry!; }
+export async function transformPlansContainer(): Promise<Container> { await ensure(); return _transformPlans!; }
 /** N13 — per-workspace/per-agent token budgets + usage ledger (loom-token-budgets), PK /scopeKey. */
 export async function tokenBudgetsContainer(): Promise<Container> { await ensure(); return _tokenBudgets!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */

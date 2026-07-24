@@ -633,6 +633,11 @@ const REGISTRY: Record<string, LearnEntry> = {
     summary: 'Run a dbt project (models + tests + docs) against a warehouse/lakehouse. Compiles SQL, materializes models, surfaces test failures.',
     docsUrl: 'https://docs.getdbt.com/docs/introduction',
   },
+  'transformation-project': {
+    title: 'Transformation project',
+    summary: 'One SQL model graph, two engines. dbt-core by default (the whole dbt ecosystem, unchanged); switch to SQLMesh for virtual data environments, a Terraform-style plan/apply with real breaking vs non-breaking categorization, and column-level model diff. Runs in-VNet against Synapse, Databricks, or DuckDB — no Fabric, no dbt Cloud, no Tobiko Cloud.',
+    docsUrl: 'https://sqlmesh.readthedocs.io/en/stable/concepts/plans/',
+  },
   'data-agent': {
     title: 'Data agent',
     summary: 'Conversational Q&A grounded in your warehouse, lakehouse, and semantic models. Built on Foundry prompt-flow + AI Search hybrid retrieval.',

@@ -226,7 +226,15 @@ describe('admin/env-config registry', () => {
     // sibling LOOM_ICEBERG_CATALOG_{PREFIX,WAREHOUSE,AUDIENCE} knobs are
     // runtime-only code defaults and deliberately NOT part of the spec, so the
     // editable count rises by exactly one.
-    expect(EDITABLE_ENV.length).toBe(177);
+    // Bumped to 177 by N4 (SQLMesh alongside dbt): svc-transform-runner adds
+    // LOOM_TRANSFORM_RUNNER_URL — the loom-transform-runner Container App that
+    // executes a transformation-project with EITHER engine (dbt-core default,
+    // SQLMesh opt-in). `derived` (bicep auto-wires it on a push-button deploy),
+    // NOT optionalDefault: with the runner absent the plan/apply/run calls are
+    // honestly gated, so it must not count as configured.
+    // 4b-batch1 lands BOTH of the above in one wave, so the count rises by two
+    // (N1's LOOM_ICEBERG_CATALOG_URL + N4's LOOM_TRANSFORM_RUNNER_URL): 176 → 178.
+    expect(EDITABLE_ENV.length).toBe(178);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

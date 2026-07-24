@@ -182,6 +182,14 @@ jobs:
             ctx: ./apps/copilot-maf
           - app: loom-wrangler-host
             ctx: ./apps/fiab-wrangler-host
+          # dbt execution runtime for the Synapse / opt-in Fabric dbt-job targets.
+          - app: loom-dbt-runner
+            ctx: ./apps/fiab-dbt-runner
+          # N4 — dual-engine transformation runtime (dbt-core + SQLMesh + ODBC 18)
+          # behind the transformation-project item. Both runner images must be in
+          # ACR before the admin-plane activates them (dbtRunnerImageReady).
+          - app: loom-transform-runner
+            ctx: ./apps/loom-transform-runner
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
