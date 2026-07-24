@@ -366,6 +366,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'M1',
     surface: '/admin/migrate + /api/migrate/assess',
   },
+  {
+    id: 'n-m2-copy-in',
+    label: 'Migration — schema + data copy-in',
+    description:
+      'The M2 copy-in step on /admin/migrate ("Copy in" tab): build a copy plan from the M1 readiness report and land each assessed table into ADLS Bronze via a REAL Azure Data Factory Copy pipeline (the mirror substrate in reverse), then optionally materialize managed Delta in the target Loom lakehouse. OFF makes /api/migrate/copy return a guided "turned off" 503 and hides the tab\'s function on the next load; assessment, in-flight pipelines, and every other surface are unaffected (no roll needed). ADF runs in-boundary; a Fabric / Power BI estate is only ever a migration SOURCE — Loom itself needs no Fabric.',
+    ownerItem: 'M2',
+    surface: '/admin/migrate (Copy in) + /api/migrate/copy',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
