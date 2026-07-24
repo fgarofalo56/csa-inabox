@@ -382,9 +382,18 @@ param observabilityConfig observabilityConfigT = {}
 type drConfigT = {
   @description('DR0 — continuous-backup (PITR) tier for the Console Loom store (loom-console-cosmos.bicep). Continuous30Days = GA default with a drill-wide restore window; Continuous7Days is the documented-preview lower tier. Tier switch is a hot in-place ARM update (no recreate/downtime; see the module description for the Learn-cited 7↔30 window semantics).')
   cosmosBackupTier: ('Continuous7Days' | 'Continuous30Days')?
+
+  @description('CMK1 — require customer-managed-key (CMK) at-rest encryption on the Console Loom-store Cosmos account (loom-console-cosmos.bicep). Default false = service-managed keys, unchanged. IL5 mandates true. Requires cosmosCmkKeyUri + cosmosCmkIdentityId. Also emitted as LOOM_COSMOS_REQUIRE_CMK so the svc-dr-restore-posture audit row asserts CMK-at-rest via live ARM.')
+  cosmosRequireCmk: bool?
+
+  @description('CMK1 — VERSIONLESS Key Vault key URI for the Cosmos CMK (https://<vault>.vault.azure.<suffix>/keys/<key>, no key version, no trailing slash — Cosmos rejects a versioned URI at create). Required when cosmosRequireCmk.')
+  cosmosCmkKeyUri: string?
+
+  @description('CMK1 — RESOURCE ID of the user-assigned managed identity holding "Key Vault Crypto Service Encryption User" on the key vault. Required when cosmosRequireCmk (continuous-backup accounts must use a managed identity as defaultIdentity for CMK).')
+  cosmosCmkIdentityId: string?
 }
 
-@description('DR settings bag (R0) — DR0 cosmos continuous-backup tier lands here; DR4 drill flags follow as typed properties. (The DR0 lake blob-versioning/PITR posture rides the landing-zone module — drConfig.enableBlobPitr at the top-level orchestrator — not this hub bag.)')
+@description('DR settings bag (R0) — DR0 cosmos continuous-backup tier + the CMK1 Cosmos CMK-at-rest opt-in trio land here; DR4 drill flags follow as typed properties. (The DR0 lake blob-versioning/PITR posture rides the landing-zone module — drConfig.enableBlobPitr at the top-level orchestrator — not this hub bag.)')
 param drConfig drConfigT = {}
 
 type workspaceIdentityConfigT = {
@@ -425,6 +434,10 @@ var adxAutoscaleMaximum = adxConfig.?adxAutoscaleMaximum ?? 10
 // documented-preview); the live estates run 7-day today, and the 7→30 change is
 // a hot in-place ARM PATCH (Learn: migrate-continuous-backup#change-continuous-mode-tiers).
 var cosmosBackupTier = drConfig.?cosmosBackupTier ?? 'Continuous30Days'
+// CMK1 shim — Cosmos CMK-at-rest opt-in trio (default OFF = service-managed keys).
+var cosmosRequireCmk = drConfig.?cosmosRequireCmk ?? false
+var cosmosCmkKeyUri = drConfig.?cosmosCmkKeyUri ?? ''
+var cosmosCmkIdentityId = drConfig.?cosmosCmkIdentityId ?? ''
 var aasSkuName = aasConfig.?aasSkuName ?? 'S1'
 var existingAasServerName = aasConfig.?existingAasServerName ?? ''
 var existingAasServerRegion = aasConfig.?existingAasServerRegion ?? ''
@@ -2084,6 +2097,10 @@ module consoleCosmos 'loom-console-cosmos.bicep' = if (deployConsoleCosmos && !e
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
     cosmosBackupTier: cosmosBackupTier
+    // CMK1 — Cosmos CMK-at-rest opt-in (drConfig bag; default OFF).
+    requireCmk: cosmosRequireCmk
+    cmkKeyUri: cosmosCmkKeyUri
+    cmkIdentityId: cosmosCmkIdentityId
   }
 }
 
@@ -3704,6 +3721,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_ACCOUNT',     value: effCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: effCosmosRg }
             { name: 'LOOM_COSMOS_ACCOUNT_SUB', value: byoCosmosSub }
+            // CMK1 — declared CMK-at-rest posture for the Loom Cosmos estate
+            // (drConfig.cosmosRequireCmk; 'true' only when the deploy mandates
+            // customer-managed keys, e.g. IL5). The svc-dr-restore-posture
+            // audit row (probe-dr-restore-posture) reads it to decide whether a
+            // missing properties.keyVaultKeyUri on the live account is a
+            // posture GAP (mandated but absent) or the honest service-managed
+            // default. Informational, never a runtime gate.
+            { name: 'LOOM_COSMOS_REQUIRE_CMK', value: cosmosRequireCmk ? 'true' : 'false' }
             // Azure Batch pool/jobs/tasks navigator + BatchExecute pipeline
             // activity (SVC-5). Empty when the opt-in deploy-planner Batch
             // account (batch.bicep) is not wired → the editor honest-gates
