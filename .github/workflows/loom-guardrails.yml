@@ -46,6 +46,8 @@ jobs:
         run: node scripts/ci/check-no-bare-client-fetch.mjs
       - name: route-toolkit (hand-rolled session-route ratchet — loom-next-level R3)
         run: node scripts/ci/check-route-toolkit.mjs
+      - name: breaker-coverage (unbounded-fetch ratchet — loom-next-level CH1)
+        run: node scripts/ci/check-breaker-coverage.mjs
       - name: file-size (monolith-creep ratchet — WS-E E3)
         run: node scripts/ci/check-file-size.mjs
       - name: ws-credential-adoption (credential-factory ratchet — loom-next-level I5)

@@ -207,6 +207,21 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'The harness only drives the in-boundary Synapse Livy + warm-pool paths, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
     },
   },
+  // ── CH1 — Dependency-fault chaos harness (default OFF in prod) ───────────────
+  {
+    id: 'svc-dependency-chaos-drill', category: 'data-plane', title: 'Dependency-fault chaos harness (Cosmos / AOAI / ADX / KV)', severity: 'optional',
+    required: ['LOOM_DEPENDENCY_CHAOS_ENABLED'],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'the dependency-fault chaos harness is OFF by default (the fully-functional production posture — no fault injection). It is a tenant-admin, triple-gated (the ch1-dependency-chaos runtime flag ON + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN) resilience-DRILL tool that injects real faults (Cosmos-429, Azure OpenAI 429/timeout, ADX cold-start 503, Key Vault throttle) against a replica so the serve-stale / honest-gate / breaker paths can be proven end-to-end in a non-prod environment. Every armed fault auto-expires (≤5 min). Unset/false = disabled, which is the intended default.',
+    remediation: 'The dependency-fault chaos harness (POST /api/admin/chaos/dependency) is OFF by default and MUST stay off in production. To run a resilience drill in a non-prod deployment, enable the ch1-dependency-chaos runtime flag, set LOOM_DEPENDENCY_CHAOS_ENABLED=true AND present a valid LOOM_INTERNAL_TOKEN on the request (in addition to a tenant-admin session). It injects real dependency faults to verify the getOrComputeCached serve-stale, aoai-chat-client fallback, and honest-error paths degrade gracefully — never a crash or dark render.',
+    docs: 'https://github.com/fgarofalo56/csa-inabox/blob/main/docs/fiab/resilience-matrix.md',
+    provisionedBy: 'in-Console route (app/api/admin/chaos/dependency) gated by the ch1-dependency-chaos flag + LOOM_DEPENDENCY_CHAOS_ENABLED + LOOM_INTERNAL_TOKEN (already wired by admin-plane/main.bicep) — no new Azure resource',
+    role: 'Tenant admin (session) + the internal trust token — the drill arms an in-process fault registry the live cosmos-client / fetch-with-timeout chokepoints consult; no Azure permission is exercised by arming',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'The harness only drives in-process fault injection at the Console\'s own transport chokepoints, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
+    },
+  },
   // ── N8 lab 1 — DuckLake catalog option (Postgres-backed lakehouse metadata) ──
   //    Preview / opt-in: a forward bet on the DuckDB ecosystem ALONGSIDE N1's
   //    Iceberg REST Catalog. Unset → the DuckLake editor honest-gates (Fix-it);
