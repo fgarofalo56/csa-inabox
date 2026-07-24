@@ -127,6 +127,10 @@ export const DEMOTED_NAV_ITEMS: NavItem[] = [
   // before the nav-IA reorg 2026-07-22).
   { href: '/experience', label: 'Experiences' },
   { href: '/admin/autopilot', label: 'Autopilot (self-driving FinOps)', adminOnly: true },
+  // N7b — the Debezium CDC connector control plane (source-connector wizard +
+  // live snapshot/streaming/dead-letter monitor over the Azure-native mirror
+  // engine). Off-rail (single-purpose), reachable via palette + Copilot + URL.
+  { href: '/cdc', label: 'CDC connectors' },
 ];
 
 /**

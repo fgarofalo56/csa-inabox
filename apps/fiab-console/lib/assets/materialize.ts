@@ -41,7 +41,7 @@ import type { AssetMaterializerBinding } from '@/lib/azure/asset-registry-model'
 export interface MaterializeResult {
   ok: boolean;
   /** Engine that actually ran. */
-  engine: 'sqlmesh' | 'dbt' | 'synapse-pipeline' | 'databricks-job' | 'none';
+  engine: 'sqlmesh' | 'dbt' | 'synapse-pipeline' | 'databricks-job' | 'activation-sync' | 'none';
   /** Backend run identifier (SQLMesh log id, ADF runId, Databricks run_id). */
   runId?: string;
   /** True when the failure is an honest CONFIG gate, not an engine failure. */
@@ -75,6 +75,8 @@ export async function materializeAsset(
       return materializeSynapsePipeline(binding, opts);
     case 'databricks-job':
       return materializeDatabricksJob(binding, opts);
+    case 'activation-sync':
+      return materializeActivationSync(session, binding, opts);
     default:
       return gate(
         'none',
@@ -198,5 +200,46 @@ async function materializeDatabricksJob(
     engine: 'databricks-job',
     runId: String(run.run_id),
     detail: `Databricks job ${binding.jobId} started (run_id ${run.run_id}).`,
+  };
+}
+
+/**
+ * N7c — an asset bound to an activation-sync item runs the reverse-ETL sync when
+ * its source data changes. The N5 reconciler observes the source Delta table's
+ * commit version (asset-signals) and dispatches THIS on a real change, so the
+ * activation rides the existing data-change trigger — no parallel scheduler. A
+ * data-change trigger implies an INCREMENTAL run (Delta CDF); the shared run
+ * service persists the run, advances the watermark, and alerts on failure.
+ */
+async function materializeActivationSync(
+  session: SessionPayload,
+  binding: AssetMaterializerBinding,
+  opts: { assetKey: string; dryRun?: boolean },
+): Promise<MaterializeResult> {
+  if (!binding.itemId) {
+    return gate('activation-sync', 'materializer.itemId', 'No activation-sync item is bound to this asset. Open the asset inspector and bind an Activation sync — a data-change on the source then runs the reverse-ETL sync.');
+  }
+  if (opts.dryRun) {
+    return {
+      ok: false,
+      engine: 'activation-sync',
+      detail: 'An activation sync has no no-write preview — it pushes rows to the destination. Materialize runs the real incremental sync.',
+    };
+  }
+  // Lazy import: run-service pulls in Cosmos + destination clients that must not
+  // load into the reconciler's hot path unless an activation asset is dispatched.
+  const { executeActivationRun } = await import('@/lib/activation/run-service');
+  const res = await executeActivationRun(session, binding.itemId, 'incremental');
+  if (!res.ok && !res.run) {
+    return { ok: false, engine: 'activation-sync', gated: res.status === 503, missing: res.missing, detail: res.error || 'Activation sync failed to start.' };
+  }
+  const run = res.run!;
+  return {
+    ok: run.status === 'succeeded',
+    engine: 'activation-sync',
+    runId: run.runId,
+    detail:
+      `Activation sync ${run.mode} ${run.status} — ${run.upserts} upsert, ${run.deletes} delete, ${run.errors} error`
+      + (run.detail ? ` (${run.detail.slice(0, 160)})` : '') + '.',
   };
 }

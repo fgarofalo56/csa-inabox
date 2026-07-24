@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1603 |
+| Total routes | 1617 |
 | Public (no session) | 116 |
-| Session-only | 573 |
-| Owner-scoped | 654 |
+| Session-only | 574 |
+| Owner-scoped | 667 |
 | Admin | 260 |
-| Gated (backend config) | 521 |
-| Areas | 108 |
+| Gated (backend config) | 524 |
+| Areas | 109 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -489,6 +489,16 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Purview |
 | `catalog/unity/capabilities/route.ts` | GET | session-only | ● | Databricks |
 
+## cdc
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `cdc/connectors/[id]/monitor/route.ts` | GET | owner-scoped |  | — |
+| `cdc/connectors/[id]/route.ts` | GET DELETE | owner-scoped |  | — |
+| `cdc/connectors/[id]/state/route.ts` | POST | owner-scoped |  | Cosmos |
+| `cdc/connectors/route.ts` | GET POST | owner-scoped |  | — |
+| `cdc/connectors/source-tables/route.ts` | POST | session-only |  | — |
+
 ## cloud
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -862,6 +872,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `governance/dlp/schemas/route.ts` | GET | session-only | ● | — |
 | `governance/dlp/violations/route.ts` | GET | owner-scoped |  | — |
 | `governance/domains/route.ts` | GET POST | owner-scoped |  | Cosmos |
+| `governance/dq-findings/route.ts` | GET | owner-scoped |  | — |
 | `governance/govern/actions/route.ts` | GET | admin |  | Cosmos |
 | `governance/govern/copilot/route.ts` | POST | admin |  | — |
 | `governance/govern/embed/route.ts` | GET | admin | ● | — |
@@ -972,6 +983,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | — |
 | `items/[type]/[id]/versions/route.ts` | GET | owner-scoped | ● | — |
 | `items/[type]/[id]/visual-query/route.ts` | POST | owner-scoped |  | Databricks, Synapse SQL, Synapse pool |
+| `items/activation-sync/[id]/bind-trigger/route.ts` | POST | owner-scoped |  | ADLS |
+| `items/activation-sync/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
+| `items/activation-sync/[id]/run/route.ts` | POST | owner-scoped | ● | — |
+| `items/activation-sync/[id]/runs/route.ts` | GET | owner-scoped |  | — |
+| `items/activation-sync/[id]/schema/route.ts` | GET | owner-scoped | ● | ADLS |
+| `items/activation-sync/route.ts` | GET POST | owner-scoped |  | — |
 | `items/activator/[id]/adx-source/route.ts` | GET | owner-scoped | ● | ADX |
 | `items/activator/[id]/history/route.ts` | GET | owner-scoped | ● | Azure Monitor |
 | `items/activator/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
@@ -1165,6 +1182,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/data-product-template/route.ts` | GET POST | owner-scoped |  | — |
 | `items/data-product/[id]/publish-api/route.ts` | POST | owner-scoped | ● | APIM |
 | `items/data-product/[id]/register-purview/route.ts` | POST | owner-scoped | ● | Purview |
+| `items/data-quality/[id]/checks/route.ts` | GET POST | owner-scoped | ● | — |
+| `items/data-quality/[id]/diff/route.ts` | POST | owner-scoped |  | — |
 | `items/data-quality/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/data-quality/[id]/run/route.ts` | GET POST | owner-scoped | ● | — |
 | `items/data-science/home/route.ts` | GET | owner-scoped |  | Cosmos |

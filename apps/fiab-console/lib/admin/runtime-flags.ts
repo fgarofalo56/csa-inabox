@@ -279,6 +279,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/governance/data-contracts (registry page + /api/governance/data-contracts)',
   },
   {
+    id: 'n7b-cdc-control-plane',
+    label: 'CDC connectors — Debezium control plane',
+    description:
+      'The N7b CDC control plane on /cdc: the dropdown-only source-connector wizard (SQL Server / PostgreSQL / MySQL / MongoDB / Oracle → the Azure-native mirror engine\'s config, secrets as Key Vault references) and the live connector monitor (initial-snapshot % → streaming lag, source-DDL schema-change feed, and the N6 dead-letter list read from the Bronze `_rejected` tree). OFF renders /cdc as a guided "turned off" notice and makes the list/monitor APIs return an empty payload on the next load — the seconds-fast revert for a rendering regression on the new surface. It does NOT stop replication: connectors already Started keep snapshotting/streaming into ADLS Bronze via the mirror engine, and N6 enforcement keeps quarantining violating rows. No Microsoft Fabric.',
+    ownerItem: 'N7b',
+    surface: 'CDC connectors control plane (/cdc) + /api/cdc/connectors/**',
+  },
+  {
     id: 'n2a-duckdb-wasm-preview',
     label: 'Local analysis — in-browser SQL over a fetched Arrow result',
     description:
@@ -301,6 +309,22 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The N3 Connect tab on the lakehouse, warehouse and SQL Lab editors: the Flight SQL endpoint with its honest exposure, the Generate-ticket button (short-lived, Entra-scoped, audited), and the copy-paste client snippets. OFF hides the tab on the next render — already-minted tickets keep working until they expire (minutes), the serving tier is untouched, and every other tab is unaffected. Use it to withdraw the self-service ticket path without redeploying.',
     ownerItem: 'N3',
     surface: 'Lakehouse / warehouse / SQL Lab editors → Connect tab',
+  },
+  {
+    id: 'n7c-activation-sync',
+    label: 'Activation sync (reverse ETL)',
+    description:
+      'The N7c activation-sync item: the source/destination/field-mapping editor plus the Run (full + Delta-CDF incremental) surface that pushes a modeled dataset out to Dataverse / webhook / Event Grid / Service Bus. OFF replaces the editor body with a guided notice on the next render — already-created items, the /api/items/activation-sync/** routes and the N5 asset-trigger binding keep working; turn it back on in Admin → Runtime flags to restore the surface.',
+    ownerItem: 'N7c',
+    surface: 'Activation sync editor (/items/activation-sync/[id])',
+  },
+  {
+    id: 'n7d-data-quality-diff',
+    label: 'Data-quality depth — runner checks + data-diff',
+    description:
+      'The N7d surfaces on the data-quality editor: the "Runner checks" tab (rule-builder checks executed on the N4 transform runner with anomaly baselines) and the "Data diff" tab (Delta-version / cross-env row+column diff computed through the N2 DuckDB engine). OFF hides both tabs on the next render — the existing ADX/Databricks/Synapse rule-run tabs, the /api/items/data-quality/** routes, already-emitted findings, and N17\'s incident console are all unaffected. Use it to withdraw the depth surfaces without redeploying.',
+    ownerItem: 'N7d',
+    surface: 'Data-quality editor → Runner checks + Data diff tabs',
   },
 ];
 

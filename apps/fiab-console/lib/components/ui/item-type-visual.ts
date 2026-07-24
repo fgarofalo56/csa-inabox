@@ -162,6 +162,8 @@ const REGISTRY: Record<string, Entry> = {
   'data-pipeline':      { icon: Flow24Regular,         family: 'data-factory', label: 'Data Pipeline' },
   'dataflow':           { icon: CloudFlow24Regular,    family: 'data-factory', label: 'Dataflow' },
   'copy-job':           { icon: ArrowDownload24Regular, family: 'data-factory', label: 'Copy Job' },
+  // N7c — reverse ETL / activation sync (pushes modeled data OUT).
+  'activation-sync':    { icon: ArrowRepeatAll24Regular, family: 'data-factory', label: 'Activation Sync' },
   'mirrored-database':  { icon: ArrowSwap24Regular,    family: 'data-factory', label: 'Mirrored Database' },
   'mirrored-databricks':{ icon: ArrowSwap24Regular,    family: 'data-factory', label: 'Mirrored Databricks' },
   'mounted-adf':        { icon: Link24Regular,         family: 'data-factory', label: 'Mounted ADF' },
