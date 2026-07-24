@@ -11,6 +11,18 @@ name: build-fiab-images-acr-tasks
 #
 # Each app is built via `az acr build`. The source is uploaded as a
 # tar archive to the Task and Docker builds inside ACR.
+#
+# SC1 (supply-chain enforcement on the REAL deploy path): after each image is
+# built, this workflow now (1) Trivy-scans the pushed image and FAILS the build
+# on CRITICAL CVEs, and (2) cosign-signs the image digest keylessly via GitHub
+# Actions OIDC (Sigstore Fulcio + Rekor — no long-lived signing key to manage).
+# The roll workflows (loom-roll-and-validate / gov-console-roll /
+# full-app-deploy-commercial) cosign-VERIFY the signature before rolling, so an
+# image that skipped this gate is rejected at deploy time. Emergency valve:
+# the `skip_supply_chain` dispatch input or repo variable
+# LOOM_BUILD_SKIP_SUPPLY_CHAIN=true skips scan+sign (loud warning) — the
+# resulting UNSIGNED image will then be refused by the roll gates unless their
+# own valves are also used. See docs/SUPPLY_CHAIN.md §7.
 
 on:
   workflow_dispatch:
@@ -23,6 +35,10 @@ on:
         description: 'Comma-separated app list, or "all"'
         type: string
         default: all
+      skip_supply_chain:
+        description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign signing (e.g. Trivy DB / Sigstore outage). The unsigned image will be REJECTED by the roll gates unless their skip valves are also set.'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -31,6 +47,9 @@ on:
 
 permissions:
   contents: read
+  # SC1: keyless cosign signing exchanges the Actions OIDC token for a
+  # short-lived Fulcio certificate.
+  id-token: write
 
 
 # Serialize all runs of this workflow. Two parallel runs would race on
@@ -145,12 +164,67 @@ jobs:
             --build-arg "LOOM_BUILD_TIMESTAMP=${STAMP}" \
             "${{ matrix.ctx }}"
           echo "::notice::Built ${{ matrix.name }}:${TAG} via ACR Tasks (sha=${{ github.sha }})"
+          # Export coordinates for the SC1 scan/sign steps below.
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "ACR_NAME=$ACR" >> "$GITHUB_ENV"
+          echo "ACR_LOGIN_SERVER=${ACR}.azurecr.io" >> "$GITHUB_ENV"
           if [ -n "$POOL_ARGS" ]; then
             # Scale the pool back to 0 when nothing else is queued (pool
             # allocation is what bills; idle pools cost nothing at count 0).
             q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
             [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
           fi
+
+      # ── SC1: supply-chain gate — Trivy CRITICAL scan + keyless cosign sign ──
+      # The ACR data plane is OPEN at this point (acr_enable ran before the
+      # build matrix and acr_restore only runs after it), so the runner can
+      # pull the just-pushed image to scan it and push the signature artifact.
+      - name: Resolve supply-chain gate + image digest
+        id: sc
+        run: |
+          set -e
+          SKIP="false"
+          if [[ "${{ inputs.skip_supply_chain }}" == "true" || "${{ vars.LOOM_BUILD_SKIP_SUPPLY_CHAIN }}" == "true" ]]; then
+            SKIP="true"
+            echo "::warning::skip_supply_chain/LOOM_BUILD_SKIP_SUPPLY_CHAIN is set — SKIPPING the Trivy CRITICAL gate AND cosign signing for ${{ matrix.name }}. This image is UNSIGNED and will be rejected by the roll verification gates unless their skip valves are also used."
+          fi
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP" == "true" ]]; then exit 0; fi
+          # Authenticate docker (Trivy + cosign both read ~/.docker/config.json).
+          az acr login --name "$ACR_NAME"
+          DIGEST=$(az acr repository show --name "$ACR_NAME" --image "${{ matrix.name }}:${{ github.sha }}" --query digest -o tsv | tr -d '\r')
+          if [[ -z "$DIGEST" ]]; then
+            echo "::error::Could not resolve the manifest digest for ${{ matrix.name }}:${{ github.sha }} — cannot scan/sign. The image build reported success but the manifest is unreadable."
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "::notice::${{ matrix.name }}:${{ github.sha }} → $DIGEST"
+
+      - name: Trivy gate — fail on CRITICAL CVEs (pushed image)
+        if: steps.sc.outputs.skip != 'true'
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ env.ACR_LOGIN_SERVER }}/${{ matrix.name }}:${{ github.sha }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+      - name: Install cosign
+        if: steps.sc.outputs.skip != 'true'
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Cosign sign (keyless OIDC)
+        if: steps.sc.outputs.skip != 'true'
+        run: |
+          set -e
+          REF="${ACR_LOGIN_SERVER}/${{ matrix.name }}@${{ steps.sc.outputs.digest }}"
+          echo "Signing $REF keylessly (GitHub Actions OIDC → Fulcio/Rekor) ..."
+          if ! cosign sign --yes "$REF"; then
+            echo "::error::cosign signing FAILED for $REF. The image is built but UNSIGNED — the roll gates will reject it. Re-run this workflow (transient Sigstore outage), or (emergency only) re-dispatch with skip_supply_chain=true AND use the roll workflow's skip valve."
+            exit 1
+          fi
+          echo "::notice::Signed $REF (signature stored in ACR alongside the image; verified at roll time by loom-roll-and-validate / gov-console-roll / full-app-deploy-commercial)."
 
   # v3.41: toggle ACR publicNetworkAccess so `az acr build` can upload the
   # source tarball from the GHA runner. The ACR is provisioned with
