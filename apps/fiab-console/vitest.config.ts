@@ -99,6 +99,11 @@ export default defineConfig({
         'app/**/layout.tsx',
         'app/**/loading.tsx',
         'app/**/not-found.tsx',
+        // apex A2: route boundary wrappers are 3-line delegations to the shared
+        // (and tested) lib/components/route-error.tsx / route-loading.tsx;
+        // global-error.tsx replaces <html> and is exercised only in a browser.
+        'app/**/error.tsx',
+        'app/global-error.tsx',
       ],
       // FLOOR — measured reality 2026-07-03 (whole-console, all:true):
       //   statements 32.52% · branches 56.85% · functions 30.86% · lines 32.52%
