@@ -6,7 +6,12 @@
 # ============================================================
 # Stage 1 — dependencies
 # ============================================================
-FROM node:20-alpine AS deps
+# B-SC1' (loom-apex): node 20 "Iron" went END-OF-LIFE 2026-04-30 (nodejs/Release
+# schedule.json) and Docker Hub stopped rebuilding every `node:20*` tag on
+# 2026-04-22 — the base OS layer can never receive another security patch. All
+# Loom node images are on node 22 "Jod" (LTS, EOL 2027-04-30), the same major
+# loom-copilot-maf has already been running in production. Bump deliberately.
+FROM node:22-alpine AS deps
 
 WORKDIR /app
 
@@ -19,7 +24,7 @@ RUN npm install -g pnpm@9 && \
 # ============================================================
 # Stage 2 — builder
 # ============================================================
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -63,12 +68,25 @@ RUN npx --yes license-checker@0.6.3 --production --json \
 # ============================================================
 # Stage 3 — runner (production)
 # ============================================================
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# B-SC1' (loom-apex): drop the bundled npm/npx from the RUNTIME image.
+# The console runs `node server.js` (Next standalone) and never shells out to
+# npm or npx — the stdio MCP servers that do use npx run in the SEPARATE
+# loom-mcp-bridge image. npm vendors its own copy of node-tar under
+# /usr/local/lib/node_modules/npm/node_modules/tar, which is what the Trivy
+# CRITICAL gate flagged as CVE-2026-59873 (node-tar gzip-bomb DoS, fixed in
+# tar 7.5.19 — first shipped by npm 11.18.0, which no node base image bundles
+# yet: node 22.23.1 -> npm 10.9.8 -> tar 7.5.11, node 26.5.0 -> npm 11.17.0 ->
+# tar 7.5.16, both verified against registry.npmjs.org). Deleting an unused
+# package manager from a production runtime removes the vulnerable code
+# outright instead of suppressing the finding, and shrinks the attack surface.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Build-time marker — populated by CI from --build-arg LOOM_BUILD_SHA=...
 # Embeds the git SHA into the image itself and stamps /public/build-marker.txt

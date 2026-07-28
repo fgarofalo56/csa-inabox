@@ -49,7 +49,7 @@ the Console contract.**
 | Declarative catalog (no UI JSON/command textarea) | ✅ built | `config/loom-mcp-bridge.json` typed entries; loom-no-freeform-config. |
 | Secret boundary (only allow-listed env to child) | ✅ built | `childEnv()` forwards PATH/HOME + `entry.envAllowlist` only. |
 | Per-cloud boundary filter | ✅ built | `AZURE_CLOUD` drops entries whose `boundaries` omit the active cloud (e.g. `fetch` excluded from Gov). |
-| Non-root container + pinned deps | ✅ built | `USER loom`; `ARG UV_VERSION` pinned; node:20-slim. |
+| Non-root container + pinned deps | ✅ built | `USER loom`; `ARG UV_VERSION` + `ARG NPM_VERSION` pinned; node:22-bookworm-slim (node 20 is EOL) with `apt-get dist-upgrade` and npm upgraded to 11.18.0 (CVE-2026-59873 / node-tar >= 7.5.19). |
 | Console one-click registration | ✅ built | `BridgeMcpCard` (mcp-servers-panel.tsx) ← `GET /api/admin/mcp-servers/bridge`. |
 | Honest gate when unprovisioned | ⚠️ honest-gate | `LOOM_MCP_BRIDGE_URL` unset → Fluent MessageBar naming env var + deploy module. |
 | Honest "unreachable" when set but down | ⚠️ honest-gate | bridge `/servers` fetch fails → warning MessageBar (no fabricated state). |
