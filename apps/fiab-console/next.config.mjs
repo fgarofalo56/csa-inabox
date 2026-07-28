@@ -1,8 +1,31 @@
+import { readFileSync } from 'node:fs';
+
+// A1 (loom-apex) — deploy-skew protection. Wire Next's `deploymentId`
+// (verified against installed next@15.5.18: config key in
+// dist/server/config-shared.d.ts:939; inlined as process.env.NEXT_DEPLOYMENT_ID
+// by dist/build/define-env.js:84 and appended as `?dpl=<id>` to every chunk /
+// asset request by dist/build/deployment-id.js) to the git SHA CI passes via
+// --build-arg LOOM_BUILD_SHA (exported to the Dockerfile *builder* stage so
+// `next build` can see it). With a per-build id, a tab whose bundle predates
+// the current image is detected as skewed instead of 404-looping on old chunk
+// URLs; lib/components/shared/deploy-skew.ts keys its one-shot-reload loop
+// guard on the same id. Dev / local builds (no CI sha) fall back to the
+// package version so the id is stable but still changes per release.
+const loomBuildSha = (process.env.LOOM_BUILD_SHA || '').trim();
+let pkgVersion;
+try {
+  pkgVersion = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))?.version;
+} catch { /* package.json unreadable — deploymentId stays undefined */ }
+const deploymentId = loomBuildSha && loomBuildSha !== 'unknown'
+  ? loomBuildSha.slice(0, 12)
+  : (pkgVersion ? `pkg-${pkgVersion}` : undefined);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
   poweredByHeader: false,
+  deploymentId,
   // The production build now gates on real TypeScript type-checking.
   // `tsconfig.build.json` extends the base tsconfig but excludes test files
   // (**/*.test.*, **/*.spec.*, **/__tests__/**, e2e/**, *.uat.*) and the

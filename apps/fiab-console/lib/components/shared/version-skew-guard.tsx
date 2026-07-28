@@ -23,6 +23,7 @@
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { clientFetch } from '@/lib/client-fetch';
+import { attemptOneShotReload } from '@/lib/components/shared/deploy-skew';
 
 const CHECK_INTERVAL_MS = 5 * 60_000;
 const IDLE_RELOAD_GRACE_MS = 60_000;
@@ -33,9 +34,13 @@ export function VersionSkewGuard() {
   const skewed = useRef(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Hard reload on the next route change once skew is known.
+  // Hard reload on the next route change once skew is known. Routed through
+  // the shared one-shot loop-guard (loom-apex A1, sessionStorage keyed
+  // pathname+client build) so that if a reload does NOT actually refresh the
+  // client bundle (e.g. a CDN still serving the stale shell) we never
+  // reload-loop — same recovery path as the boundary's ChunkLoadError branch.
   useEffect(() => {
-    if (skewed.current) window.location.reload();
+    if (skewed.current) attemptOneShotReload(pathname);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
@@ -60,7 +65,7 @@ export function VersionSkewGuard() {
             idleTimer.current = setTimeout(() => {
               const el = document.activeElement;
               const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable);
-              if (typing) arm(); else window.location.reload();
+              if (typing) arm(); else attemptOneShotReload(window.location.pathname);
             }, IDLE_RELOAD_GRACE_MS);
           };
           arm();
