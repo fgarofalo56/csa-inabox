@@ -123,7 +123,7 @@ export const EDITOR_STEP_IMAGE_COUNTS: Readonly<Record<string, number>> = {
 };
 
 /**
- * The item-type slugs that have a real per-editor Loom doc at
+ * The 117 item-type slugs that have a real per-editor Loom doc at
  * `docs/fiab/tutorials/editor-<slug>.md` (served at
  * `<base>/fiab/tutorials/editor-<slug>/`). Kept in sync with the mkdocs.yml
  * "Editor Tutorials (per-item)" nav block. A slug NOT in this set has no Loom
@@ -167,13 +167,6 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   // registered - their Learn cards showed "Loom guide coming" while the doc
   // was already published. Verified against docs/fiab/tutorials/editor-<slug>.md.
   'ai-enrichment', 'batch-pool', 'databricks-pipeline', 'digital-twin', 'lakebase-postgres', 'loom-app', 'loom-app-runtime',
-  // D2 (loom-apex): the 18 recent-wave item types that shipped with NO editor
-  // guide at all. Authored from the real editor components + their API routes.
-  // Screenshots are operator-gated, so none of these are in EDITOR_THUMB_SLUGS.
-  'sql-lab', 'streaming-sql', 'code-report', 'data-contract', 'transformation-project',
-  'activation-sync', 'feature-table', 'model-serving-endpoint', 'fine-tuning-job',
-  'ai-red-team', 'synthetic-data', 'data-quality', 'ducklake-catalog', 's3-gateway',
-  'agent-flow', 'analysis-board', 'fusion-sheet', 'notepad',
 ]);
 
 /**
