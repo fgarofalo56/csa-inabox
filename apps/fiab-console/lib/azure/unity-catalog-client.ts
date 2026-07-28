@@ -35,7 +35,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { isOssUc, ossUcBase, ossUcAuthToken, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
+import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
 import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
@@ -219,8 +219,13 @@ async function ucFetch<T = any>(
     // The path rewrite maps the one Databricks↔OSS naming split
     // (storage-credentials → credentials) so callers stay backend-agnostic.
     url = `${ossUcBase()}${ossUcRewritePath(path)}`;
-    const token = ossUcAuthToken();
-    if (token) authHeaders.authorization = `Bearer ${token}`;
+    // LU-2 — the BFF is the single choke point: inject the Console's credential
+    // (pre-shared server token, or an Entra bearer minted by the Console UAMI for
+    // the Loom Unity audience). Fails CLOSED when authorization is required but
+    // unmintable; returns {} only in the explicitly-anonymous posture, which the
+    // svc-loom-unity-authz gate + probe-loom-unity-authz probe surface as a
+    // security finding rather than a silent open door.
+    Object.assign(authHeaders, await ossUcAuthHeader());
   } else {
     const token = await dbxToken();
     url = `https://${host}${path}`;

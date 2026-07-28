@@ -10,6 +10,10 @@ vi.mock('@/lib/azure/databricks-client', () => ({ databricksConfigGate: vi.fn() 
 vi.mock('@/lib/azure/cloud-endpoints', () => ({
   isGovCloud: vi.fn(() => false),
   cloudBoundaryLabel: vi.fn(() => 'GCC-High'),
+  // Pulled in transitively once this route moved onto the route-toolkit
+  // (LU-2 boy-scout migration) - the toolkit's session/authz path resolves the
+  // ARM scope. Mocking it keeps this a pure capabilities-shape test.
+  armScope: vi.fn(() => 'https://management.azure.com/.default'),
 }));
 
 import { GET } from '../capabilities/route';

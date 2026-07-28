@@ -27,6 +27,12 @@
  *
  * No Fabric / Power BI is ever reached — OSS Unity Catalog IS the Azure-native
  * backend (`.claude/rules/no-fabric-dependency.md`).
+ *
+ * LU-2 (AuthN/Z hardening) added the authorization half: {@link ossUcAuthHeader}
+ * injects the Console's credential on every Loom Unity call so the BFF is the
+ * single audited choke point, and {@link unityAuthorizationPosture} reports —
+ * honestly — when nothing is configured and the catalog is therefore reachable
+ * anonymously by anything on the VNet.
  */
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 
@@ -96,10 +102,177 @@ export function ossUcBase(): string {
   return url;
 }
 
-/** Optional bearer token for the OSS server (only when OIDC/token auth is enabled). */
+/** Optional pre-shared bearer for the OSS server (a server-minted service token,
+ * delivered as a Key Vault secretref — never a plain env literal in bicep). */
 export function ossUcAuthToken(): string | undefined {
   const t = (process.env.LOOM_UNITY_TOKEN || '').trim();
   return t || undefined;
+}
+
+// ============================================================
+// LU-2 — Loom Unity authorization (the BFF is the ONLY caller)
+// ============================================================
+
+/**
+ * How the Console authenticates to Loom Unity (the self-hosted, Unity-Catalog-
+ * compatible OSS server).
+ *
+ *   'token'     — a pre-shared server-minted bearer (`LOOM_UNITY_TOKEN`, a Key
+ *                 Vault secretref). Highest precedence because it is the only
+ *                 credential the upstream server mints for itself.
+ *   'entra'     — the Console UAMI mints an Entra access token for the Loom Unity
+ *                 audience (`LOOM_UNITY_AUDIENCE`, or `api://<client-id>/.default`
+ *                 derived from `LOOM_UNITY_CLIENT_ID` / `LOOM_MSAL_CLIENT_ID`).
+ *                 The server pins issuer + audience (server.allowed-issuers /
+ *                 server.audiences — verified against upstream v0.5.1).
+ *   'anonymous' — NOTHING is configured. Calls go out unauthenticated, which only
+ *                 works against a server running `server.authorization=disable`:
+ *                 the pre-LU-2 posture where anything on the VNet can read AND
+ *                 mutate the catalog. This state is never silent — see
+ *                 {@link unityAuthorizationPosture}, the `svc-loom-unity-authz`
+ *                 gate, and the `probe-loom-unity-authz` live health probe, which
+ *                 PROVES the open door by getting a 200 on an unauthenticated read.
+ */
+export type UnityAuthMode = 'token' | 'entra' | 'anonymous';
+
+/** The Entra scope the Console requests its Loom Unity bearer for (undefined when
+ * no app registration is wired at all). Mirrors the Iceberg-REST-catalog BFF
+ * pattern: a dedicated `LOOM_UNITY_CLIENT_ID` when the operator registered one,
+ * otherwise the Console's own app registration. */
+export function unityAudience(): string | undefined {
+  const explicit = (process.env.LOOM_UNITY_AUDIENCE || '').trim();
+  if (explicit) return explicit;
+  const clientId = (process.env.LOOM_UNITY_CLIENT_ID || '').trim();
+  if (clientId) return `api://${clientId}/.default`;
+  const msal = (process.env.LOOM_MSAL_CLIENT_ID || '').trim();
+  return msal ? `api://${msal}/.default` : undefined;
+}
+
+/**
+ * True when the operator has DECLARED a Loom Unity audience. Deliberately does
+ * NOT count the `LOOM_MSAL_CLIENT_ID` fallback: inferring "authorization is on"
+ * from a var every deployment sets would make the Console fail closed against
+ * catalogs that never enabled authorization (every pre-LU-2 estate). Hardening is
+ * therefore always the result of an explicit declaration, and the un-declared
+ * state is reported — never guessed at.
+ */
+function unityAudienceDeclared(): boolean {
+  return !!((process.env.LOOM_UNITY_AUDIENCE || '').trim() || (process.env.LOOM_UNITY_CLIENT_ID || '').trim());
+}
+
+/** Resolve the active authentication mode. Explicit `LOOM_UNITY_AUTH_MODE` wins. */
+export function resolveUnityAuthMode(): UnityAuthMode {
+  const explicit = (process.env.LOOM_UNITY_AUTH_MODE || '').trim().toLowerCase();
+  if (explicit === 'token' || explicit === 'entra' || explicit === 'anonymous') return explicit;
+  if (ossUcAuthToken()) return 'token';
+  if (unityAudienceDeclared()) return 'entra';
+  return 'anonymous';
+}
+
+export interface UnityAuthorizationPosture {
+  mode: UnityAuthMode;
+  /** True when the Console presents a credential on every Loom Unity call. */
+  hardened: boolean;
+  /** Entra scope in use (entra mode only). */
+  audience?: string;
+  /** Honest, operator-facing description of the CURRENT posture. */
+  detail: string;
+  /** Exact remediation when `hardened` is false. */
+  remediation?: string;
+}
+
+/**
+ * The Console's Loom Unity authorization posture — surfaced on
+ * `/api/catalog/unity/capabilities` so the UC panes can render an honest bar
+ * instead of pretending an anonymous catalog is secured.
+ */
+export function unityAuthorizationPosture(): UnityAuthorizationPosture {
+  const mode = resolveUnityAuthMode();
+  if (mode === 'token') {
+    return {
+      mode,
+      hardened: true,
+      detail: 'Loom Unity calls carry a pre-shared server-minted bearer token (LOOM_UNITY_TOKEN, Key Vault secretref). The catalog rejects anonymous callers.',
+    };
+  }
+  if (mode === 'entra') {
+    return {
+      mode,
+      hardened: true,
+      audience: unityAudience(),
+      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${unityAudience()}. The server pins the issuer + audience, so a token for any other app or tenant is rejected.`,
+    };
+  }
+  return {
+    mode,
+    hardened: false,
+    detail: 'Loom Unity calls go out UNAUTHENTICATED. That only succeeds against a catalog running with authorization disabled — in which case every workload that can reach the Container Apps environment can read AND modify catalog metadata (and mint ADLS credentials if vending is wired).',
+    remediation:
+      'Redeploy platform/fiab/bicep/modules/compute/loom-unity-app.bicep with authMode=entra (the default) + entraClientId=<loom-unity app registration>, then set LOOM_UNITY_CLIENT_ID (or LOOM_UNITY_AUDIENCE) on the Console app so it mints a bearer. Alternatively set LOOM_UNITY_TOKEN from Key Vault. See docs/fiab/security/loom-unity-threat-model.md.',
+  };
+}
+
+/** Thrown when Loom Unity authorization is REQUIRED but no credential can be
+ * produced — the Console fails closed instead of silently retrying anonymously. */
+export class OssUcAuthNotConfiguredError extends Error {
+  hint: OssUcNotConfiguredHint;
+  constructor(hint: OssUcNotConfiguredHint) {
+    super(`Loom Unity authorization is not configured: ${hint.missingEnvVar}`);
+    this.name = 'OssUcAuthNotConfiguredError';
+    this.hint = hint;
+  }
+}
+
+/**
+ * The Authorization header for one Loom Unity call. The Console BFF is the single
+ * audited choke point: no engine or user talks to `loom-unity` directly (its
+ * ingress is internal + IP-pinned), so this is where the credential is injected.
+ *
+ * Fails CLOSED in `token` / `entra` mode — an unmintable token throws rather than
+ * degrading to an anonymous request that would either 401 opaquely or, worse,
+ * succeed against an unsecured server.
+ */
+export async function ossUcAuthHeader(): Promise<Record<string, string>> {
+  // A pre-shared server-minted token always wins (the Iceberg-REST BFF pattern).
+  const preShared = ossUcAuthToken();
+  if (preShared) return { authorization: `Bearer ${preShared}` };
+
+  const mode = resolveUnityAuthMode();
+  if (mode === 'anonymous') return {};
+
+  const audience = unityAudience();
+  if (!audience) {
+    throw new OssUcAuthNotConfiguredError({
+      missingEnvVar: 'LOOM_UNITY_CLIENT_ID | LOOM_UNITY_AUDIENCE | LOOM_UNITY_TOKEN',
+      bicepModule: 'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
+      bicepStatus:
+        'LOOM_UNITY_AUTH_MODE requires the Console to authenticate to Loom Unity, but no audience or token is configured.',
+      followUp:
+        'Set LOOM_UNITY_CLIENT_ID (the Loom Unity Entra app registration) so the Console mints api://<client-id>/.default, or LOOM_UNITY_TOKEN from Key Vault. See docs/fiab/security/loom-unity-threat-model.md.',
+    });
+  }
+  try {
+    // Lazy import: this module is imported by the pure capability surface, so the
+    // Azure credential chain must never be pulled in eagerly.
+    const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
+    const token = await uamiArmCredential().getToken(audience);
+    if (token?.token) return { authorization: `Bearer ${token.token}` };
+  } catch (e) {
+    throw new OssUcAuthNotConfiguredError({
+      missingEnvVar: 'LOOM_UNITY_AUDIENCE',
+      bicepModule: 'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
+      bicepStatus: `The Console managed identity could not mint an Entra token for ${audience}: ${(e as Error)?.message || String(e)}`,
+      followUp:
+        'Confirm the Loom Unity app registration exposes that scope and the Console UAMI is permitted on it (or set LOOM_UNITY_TOKEN from Key Vault). See docs/fiab/security/loom-unity-threat-model.md.',
+    });
+  }
+  throw new OssUcAuthNotConfiguredError({
+    missingEnvVar: 'LOOM_UNITY_AUDIENCE',
+    bicepModule: 'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
+    bicepStatus: `The Console managed identity returned no Entra token for ${audience}.`,
+    followUp:
+      'Confirm the Loom Unity app registration exposes that scope and the Console UAMI is permitted on it (or set LOOM_UNITY_TOKEN from Key Vault). See docs/fiab/security/loom-unity-threat-model.md.',
+  });
 }
 
 /**

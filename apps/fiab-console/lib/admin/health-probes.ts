@@ -791,8 +791,73 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
   return { ...base, status: 'pass', detail: `Restorable baseline verified via live ARM — ${good.join('; ')}.` };
 }
 
-/** Run every extended probe in parallel (each individually time-bounded). */
-export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
+/**
+ * LU-2 — Loom Unity catalog authorization, PROVEN not assumed.
+ *
+ * The Unity-Catalog-compatible OSS server Loom deploys for the sovereign path
+ * shipped with `server.authorization=disable`: any workload that could reach the
+ * Container Apps environment could read AND mutate catalog metadata anonymously
+ * (and mint ADLS delegation SAS where credential vending was wired). Env presence
+ * alone cannot tell you whether that is still true — only an actual
+ * unauthenticated request can. So this probe sends one, deliberately WITHOUT a
+ * bearer, at a securable-listing endpoint:
+ *
+ *   401 / 403  → authorization is enforced                      → pass
+ *   2xx        → the catalog answered an anonymous caller        → FAIL (evidence)
+ *   anything else / unreachable                                  → warn (unverified)
+ *
+ * No LOOM_UNITY_URL (every Commercial estate on the Databricks Unity Catalog
+ * path) → pass: there is no self-hosted catalog to secure.
+ */
+async function probeLoomUnityAuthz(h: ProbeHelpers): Promise<CheckResult> {
+  const base = {
+    id: 'probe-loom-unity-authz', category: 'security' as const,
+    title: 'Loom Unity — anonymous catalog access rejected', severity: 'critical' as const,
+  };
+  const raw = env('LOOM_UNITY_URL');
+  if (!raw) {
+    return {
+      ...base, status: 'pass',
+      detail: 'Loom Unity (the self-hosted, Unity-Catalog-compatible catalog) is not deployed in this estate — there is no anonymous surface. The Databricks Unity Catalog path authenticates every call with an Entra bearer.',
+    };
+  }
+  const url = `${raw.replace(/\/+$/, '')}/api/2.1/unity-catalog/catalogs`;
+  const remediation =
+    'Redeploy platform/fiab/bicep/modules/compute/loom-unity-app.bicep with authMode=entra (the default) and entraClientId=<the Entra app registration fronting Loom Unity, normally the same as LOOM_MSAL_CLIENT_ID>, plus consoleAllowedCidrs=<the Container Apps infrastructure subnet CIDR> so only the Console can open a connection. Then set LOOM_UNITY_CLIENT_ID on the Console so the BFF mints a matching bearer on every catalog call. Threat model: docs/fiab/security/loom-unity-threat-model.md.';
+  try {
+    // Deliberately unauthenticated — this IS the test.
+    const res = await withTimeout(fetch(url, { method: 'GET', cache: 'no-store' }), 8000);
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ...base, status: 'pass',
+        detail: `Loom Unity rejected an unauthenticated read of ${url} with HTTP ${res.status} — authorization is enforced and the Console BFF is the only credentialed caller.`,
+      };
+    }
+    if (res.ok) {
+      return {
+        ...base, status: 'fail',
+        detail: `SECURITY: Loom Unity answered an UNAUTHENTICATED read of ${url} with HTTP ${res.status}. The catalog is running with authorization disabled — every workload that can reach the Container Apps environment can read AND modify catalog metadata, and mint ADLS credentials if vending is wired.`,
+        remediation,
+        redeploy: true,
+        docs: 'https://docs.unitycatalog.io/server/auth/',
+        ...h.envVarFix(['LOOM_UNITY_CLIENT_ID']),
+      };
+    }
+    return {
+      ...base, status: 'warn',
+      detail: `Loom Unity returned HTTP ${res.status} to an unauthenticated read of ${url} — neither an authorization rejection nor an anonymous success, so the posture is unverified.`,
+      remediation,
+    };
+  } catch (e: any) {
+    return {
+      ...base, status: 'warn',
+      detail: `Loom Unity at ${raw} is unreachable from the Console (${e?.message || String(e)}) — the authorization posture could not be verified. Confirm LOOM_UNITY_URL and that the app is running (the catalog is internal-ingress by design).`,
+      remediation,
+    };
+  }
+}
+
+/** Run every extended probe in parallel (each individually time-bounded). */export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
   return Promise.all([
     probeAdls(h),
     probeSynapse(h),
@@ -833,5 +898,7 @@ export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
     probeCopilotCorpus(h),
     // DR0 — restore posture (Cosmos PITR tier + lake soft-delete/change-feed, live ARM).
     probeDrRestorePosture(h),
+    // LU-2 — Loom Unity anonymous-access proof (an actual unauthenticated request).
+    probeLoomUnityAuthz(h),
   ]);
 }

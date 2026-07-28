@@ -12,17 +12,15 @@
  * (per .claude/rules/no-vaporware.md + no-fabric-dependency.md).
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { resolveUcBackend, UC_CAPABILITIES, ossUcBase, OssUcNotConfiguredError } from '@/lib/azure/uc-backend';
+import { withSession } from '@/lib/api/route-toolkit';
+import { resolveUcBackend, UC_CAPABILITIES, ossUcBase, OssUcNotConfiguredError, unityAuthorizationPosture } from '@/lib/azure/uc-backend';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import { databricksConfigGate } from '@/lib/azure/databricks-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
 
   const backend = resolveUcBackend();
   let configured = true;
@@ -62,10 +60,17 @@ export async function GET() {
     cloud: isGovCloud() ? cloudBoundaryLabel() : 'Commercial',
     configured,
     ...(gate ? { gate } : {}),
+    // LU-2 — the Loom Unity authorization posture, reported honestly. On the OSS
+    // backend an `hardened: false` here means the Console calls the catalog
+    // anonymously, i.e. the server is (or must be) running with authorization
+    // disabled and anything on the VNet can read/mutate catalog metadata. The UC
+    // panes render this as a security bar; the live proof is the
+    // `probe-loom-unity-authz` health probe.
+    ...(backend === 'oss' ? { authorization: unityAuthorizationPosture() } : {}),
     capabilities: UC_CAPABILITIES.map((c) => ({
       ...c,
       supported: (backend === 'oss' ? c.oss : c.databricks) !== 'none',
       support: backend === 'oss' ? c.oss : c.databricks,
     })),
   });
-}
+});

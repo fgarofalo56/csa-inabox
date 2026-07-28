@@ -130,4 +130,36 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'runtime-only (admin-plane apps[] env LOOM_A2A_EGRESS_ALLOW; no bicep resource — an outbound-egress policy knob)',
     role: 'none (an egress allow-list; the outbound fetch uses the Console UAMI / the caller-supplied token)',
   },
+  // ── LU-2 — Loom Unity (Unity-Catalog-compatible OSS server) authorization ──
+  // The deployed catalog shipped with `server.authorization=disable`: anything
+  // that could reach the Container Apps environment could read AND mutate catalog
+  // metadata anonymously (and mint ADLS delegation SAS where vending was wired).
+  // LU-2 makes Entra authorization the bicep default and makes the Console present
+  // a credential on every call. This spec declares the Console half so the state is
+  // (a) visible on /admin/gates with an inline Fix-it, and (b) resolvable through
+  // the one shared env-apply write path.
+  //
+  // SCOPE NOTE (honest): ENV_CHECKS has no "applies only when X" predicate, so on a
+  // Commercial estate that never deploys loom-unity this row reads as an unset
+  // optional gate. The SHARP verdict lives in the live probe
+  // `probe-loom-unity-authz` (health-probes.ts), which passes when LOOM_UNITY_URL
+  // is absent and FAILS with real evidence — an unauthenticated HTTP 200 — when a
+  // deployed catalog answers anonymous callers.
+  {
+    id: 'svc-loom-unity-authz', category: 'security',
+    title: 'Loom Unity — catalog authorization (Entra bearer)', severity: 'recommended',
+    anyOf: [['LOOM_UNITY_CLIENT_ID', 'LOOM_UNITY_AUDIENCE', 'LOOM_UNITY_AUTH_MODE']],
+    warnOnMiss: true,
+    remediation: 'Loom Unity (the Unity-Catalog-compatible OSS catalog Loom deploys for the sovereign path) must not be reachable anonymously. (1) Redeploy platform/fiab/bicep/modules/compute/loom-unity-app.bicep with authMode=entra (the default) and entraClientId=<the Entra app registration fronting Loom Unity — normally the same one as LOOM_MSAL_CLIENT_ID>, plus consoleAllowedCidrs=<the Container Apps infrastructure subnet> to pin ingress to the Console. (2) Set LOOM_UNITY_CLIENT_ID on the Console (or LOOM_UNITY_AUDIENCE for an explicit scope) so the BFF mints an Entra bearer from the Console managed identity on every catalog call — the BFF is the single audited choke point; nothing else talks to the catalog. A pre-shared server-minted token via LOOM_UNITY_TOKEN (Key Vault secretref) is the alternative. Leave unset ONLY where loom-unity is not deployed (Commercial estates on the Databricks Unity Catalog path). Threat model: docs/fiab/security/loom-unity-threat-model.md.',
+    provisionedBy: 'modules/compute/loom-unity-app.bicep (authMode / entraClientId / entraClientSecretUri / consoleAllowedCidrs — standalone out-of-band entrypoint, admin-plane/main.bicep is at the 256-param ceiling) → LOOM_UNITY_CLIENT_ID on the Console app',
+    role: 'Key Vault Secrets User (loom-unity UAMI) on the vault holding the Entra / ADLS-vending client secrets; no role is needed for the Console to mint its own bearer',
+    docs: 'https://docs.unitycatalog.io/server/auth/',
+    // X2: Microsoft Entra + Container Apps IP restrictions are GA in every
+    // boundary; only the authority host differs (login.microsoftonline.us in Gov),
+    // which the bicep derives from environment().authentication.loginEndpoint.
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Fully supported in Azure Government — the issuer is pinned to https://login.microsoftonline.us/<tenant>/v2.0, derived from the cloud, never hard-coded.',
+    },
+  },
 ];
