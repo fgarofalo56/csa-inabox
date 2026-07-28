@@ -43,6 +43,10 @@ on:
         description: 'Optional artifact slug for the receipt (derived from target_route when blank)'
         type: string
         default: ''
+      extra_projects:
+        description: 'Optional comma-separated Playwright projects to ALSO run in-VNet after verify (e.g. "route-smoke" for the full page-by-page sweep, or "route-smoke,visual-wide"). Blank = none.'
+        type: string
+        default: ''
 
   schedule:
     # Weekly on Monday at 06:00 UTC — early morning before the business day
@@ -258,6 +262,37 @@ jobs:
       #      is its own signal; continue-on-error so a per-type selector hiccup
       #      annotates the run but does not mask the core verify gate.
       # -----------------------------------------------------------------------
+      # -----------------------------------------------------------------------
+      # 6a1. Optional extra projects (apex A4): the full page-by-page sweep
+      #      (`route-smoke` asserts a clean mount + zero console errors + zero
+      #      5xx on EVERY app/**/page.tsx route) and any other project, run
+      #      in-VNet with the SAME minted session. continue-on-error so a
+      #      sweep finding annotates the run and uploads its report instead of
+      #      masking the core verify gate; the report artifact is the receipt.
+      # -----------------------------------------------------------------------
+      - name: Run extra Playwright projects
+        if: inputs.extra_projects != ''
+        continue-on-error: true
+        run: |
+          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
+          IFS=',' read -ra PROJS <<< "${{ inputs.extra_projects }}"
+          rc=0
+          for p in "${PROJS[@]}"; do
+            p="$(echo "$p" | tr -d '[:space:]')"
+            [ -z "$p" ] && continue
+            echo "::group::playwright --project=$p"
+            pnpm -C apps/fiab-console exec playwright test --project="$p" || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
+        env:
+          SESSION_SECRET:       ${{ env.SESSION_SECRET }}
+          LOOM_URL:             ${{ env.LOOM_URL }}
+          LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
+          LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
+          CI: 'true'
+
       - name: Run publish-version E2E (--project=publish-version)
         continue-on-error: true
         run: |
