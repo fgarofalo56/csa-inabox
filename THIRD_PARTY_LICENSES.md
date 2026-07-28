@@ -108,6 +108,48 @@ HTTP client — so every embed here is license-reviewed and permissive.
 | Apache XTable / delta-rs (dual-metadata emit path, N1) | Apache-2.0 | Synapse Spark job (N1) | Delta↔Iceberg metadata |
 | RisingWave (streaming-SQL tier, N7a) | Apache-2.0 | `loom-risingwave-aca.bicep` | single-node stateful streaming engine; consumes Event Hubs (Kafka endpoint), sinks Delta/Iceberg; runs in-boundary/air-gap-safe |
 
+## Client SDKs — `sdk/` (B-N19b; NOT baked into any deployed image)
+
+Both first-party SDKs are **developer artifacts built from source**. Neither is baked into a
+Loom container image, a wasm asset, or a deployed sidecar, and this repository publishes
+neither (no PyPI push, no Terraform Registry push). They are recorded here anyway so the
+distribution posture of everything under version control is visible in one place.
+
+### `sdk/python/csa-loom` — the `csa-loom` Python SDK
+
+**Zero runtime dependencies.** The transport is `urllib` from the Python standard library, so
+there is nothing to license-review and nothing to resolve on an air-gapped install.
+
+| Package | Version | License | Role |
+|---|---|---|---|
+| _(none)_ | — | — | runtime dependency list is empty by design |
+
+Dev-only tooling (`pip install -e ".[dev]"`, never distributed): `ruff` (MIT), `mypy` (MIT),
+`pytest` (MIT), `hatchling` (MIT).
+
+### `sdk/terraform-provider-loom` — the Go Terraform provider
+
+Terraform's plugin protocol can only be spoken through HashiCorp's own SDKs; there is no
+MIT/Apache-licensed alternative. All four are **MPL-2.0** — a file-level weak copyleft that is
+outside the forbidden set (no AGPL/GPL/BSL/SSPL) and is the universal license for every
+provider in the ecosystem. The provider binary is not distributed by this repository.
+
+| Module | Version | License | Role |
+|---|---|---|---|
+| `github.com/hashicorp/terraform-plugin-framework` | v1.13.0 | MPL-2.0 | provider/resource/data-source implementation |
+| `github.com/hashicorp/terraform-plugin-go` | v0.25.0 | MPL-2.0 | protocol v6 types (`tfprotov6`) |
+| `github.com/hashicorp/terraform-plugin-log` | v0.9.0 | MPL-2.0 | structured provider logging |
+| `github.com/hashicorp/terraform-plugin-testing` | v1.11.0 | MPL-2.0 | acceptance-test harness (test-only) |
+
+The Loom API client inside the provider is standard-library only (`net/http`,
+`encoding/json`) — the `sdk-contract` CI lane fails the build if any direct dependency
+outside `github.com/hashicorp/terraform-plugin-*` appears in `go.mod`.
+
+**CLI note:** the acceptance harness shells out to a Terraform-compatible CLI at test time.
+The HashiCorp `terraform` binary is **BUSL-1.1** from 1.6 onward, so the documented and
+recommended choice is **OpenTofu (MPL-2.0)** via `TF_ACC_TERRAFORM_PATH=$(command -v tofu)`.
+No Terraform CLI is required to build, vet or unit-test the provider.
+
 ## Deliberately NOT shipped (license posture)
 
 | Component | License | Disposition |
@@ -115,6 +157,7 @@ HTTP client — so every embed here is license-reviewed and permissive.
 | MinIO S3 gateway | AGPL-v3 | **DROPPED** — the N8 S3-compat lab proceeds only via a permissively-licensed path (e.g. `s3proxy` Apache-2.0) or is cut. Not present in any requirements. |
 | Univer spreadsheet | (module review) | **GATED** on a module-level license review before it may ship. Not present in any requirements. |
 | Trino / Starburst (N7e) | Apache-2.0 | opt-in carve-out (heavy AKS tier); permissive, allowed. |
+| HashiCorp `terraform` CLI (≥ 1.6) | BUSL-1.1 | **NOT bundled and NOT required.** Acceptance tests document OpenTofu (MPL-2.0) instead. |
 
 ---
 _Regenerate the inventory tables from source with `node scripts/ci/check-license-inventory.mjs --list`; the guard

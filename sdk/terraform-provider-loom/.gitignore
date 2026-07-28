@@ -1,0 +1,12 @@
+# Compiled provider binary (built on demand; never committed).
+terraform-provider-loom
+terraform-provider-loom.exe
+
+# Terraform working state produced by acceptance runs.
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+!*.tfvars.example
+crash.log
