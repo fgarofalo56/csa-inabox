@@ -1448,6 +1448,7 @@ nav:
           - Console Access Patterns: fiab/access-patterns.md
           - "UX Standards (Fabric-grade floor for every surface)": fiab/ux-standards.md
           - "Model Strategy (best-LLM-per-task, cloud-aware runbook)": fiab/model-strategy.md
+          - "Copilot Quality Triage (retrieval hit-rate diagnosis)": fiab/copilot-quality-triage.md
           - "Compute Tiers & Telemetry (workload-tiered Spark + Log Analytics)": fiab/compute-tiers-and-telemetry.md
           - ADRs:
               - Overview: fiab/adr/README.md
