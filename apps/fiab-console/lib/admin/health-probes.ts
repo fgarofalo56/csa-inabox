@@ -809,6 +809,35 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
  * No LOOM_UNITY_URL (every Commercial estate on the Databricks Unity Catalog
  * path) → pass: there is no self-hosted catalog to secure.
  */
+/**
+ * LU-3 — audit the anonymous authorization probe itself. Lazy-imported so the
+ * Cosmos / SIEM clients never enter this module's static graph (health-probes is
+ * pulled in by admin routes whose specs mock those modules). Never throws: a
+ * failed audit write must not turn a security probe into an error.
+ */
+async function recordUnityAuthzProbe(url: string, status: number): Promise<void> {
+  try {
+    const { recordUnityAccess, unityOutcomeForError } = await import('@/lib/azure/unity-audit');
+    const denied = status === 401 || status === 403;
+    await recordUnityAccess({
+      operation: 'probe.anonymous-read',
+      securableType: 'catalog',
+      securableFqn: '*',
+      backend: 'oss',
+      method: 'GET',
+      path: '/api/2.1/unity-catalog/catalogs',
+      status,
+      durationMs: 0,
+      outcome: denied ? unityOutcomeForError(null, status) : 'success',
+      detail: denied
+        ? `probe-loom-unity-authz: ${url} rejected an unauthenticated read (HTTP ${status}) — authorization enforced.`
+        : `probe-loom-unity-authz: ${url} answered an UNAUTHENTICATED read with HTTP ${status}.`,
+    });
+  } catch {
+    /* audit is additive telemetry — never fail the probe on it */
+  }
+}
+
 async function probeLoomUnityAuthz(h: ProbeHelpers): Promise<CheckResult> {
   const base = {
     id: 'probe-loom-unity-authz', category: 'security' as const,
@@ -827,6 +856,12 @@ async function probeLoomUnityAuthz(h: ProbeHelpers): Promise<CheckResult> {
   try {
     // Deliberately unauthenticated — this IS the test.
     const res = await withTimeout(fetch(url, { method: 'GET', cache: 'no-store' }), 8000);
+    // LU-3 — this probe is the ONE catalog call that intentionally bypasses the
+    // credentialed ucFetch choke point (injecting a bearer would defeat it), so
+    // it records its own audit row. An anonymous read of the catalog is a
+    // security-relevant access event whichever way it lands: a 401/403 is the
+    // desired `denied`, and a 2xx is a `success` that means the catalog is open.
+    void recordUnityAuthzProbe(url, res.status);
     if (res.status === 401 || res.status === 403) {
       return {
         ...base, status: 'pass',

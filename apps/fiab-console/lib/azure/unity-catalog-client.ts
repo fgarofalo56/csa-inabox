@@ -27,6 +27,9 @@
  *
  * No mocks. No `return []` placeholders. Every export hits api.azuredatabricks
  * or throws `UnityCatalogError` with status + body + endpoint.
+ *
+ * LU-3 — AUDIT CHOKE POINT: every catalog call, on EITHER backend, funnels
+ * through the single {@link ucFetch} below (lib/azure/unity-audit.ts).
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
@@ -36,6 +39,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
+import { classifyUnityCall, recordUnityAccess, unityOutcomeForError } from '@/lib/azure/unity-audit';
 import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
@@ -189,6 +193,17 @@ async function dbxToken(): Promise<string> {
   return t.token;
 }
 
+/**
+ * The ONE outbound call to a Unity Catalog / Loom Unity server, and therefore
+ * the LU-3 **audit choke point**: the `finally` records every call — success,
+ * failure, and every authorization DENIAL — to the Cosmos `_auditLog` trail and
+ * the `LoomAudit_CL` SIEM stream (lib/azure/unity-audit.ts). Because this holds
+ * the file's only outbound fetch, a new call site cannot reach the catalog
+ * un-audited; `scripts/ci/check-unity-audit-chokepoint.mjs` fails the build on a
+ * second fetch, a removed `recordUnityAccess(`, or any other file building a
+ * Loom Unity request URL. Recording is fire-and-forget so an audit-store hiccup
+ * never fails a read; await `flushUnityAudit()` when durability matters.
+ */
 async function ucFetch<T = any>(
   host: string,
   path: string,
@@ -199,63 +214,87 @@ async function ucFetch<T = any>(
   // default). Both speak the same /api/2.1/unity-catalog/* REST surface, so the
   // only differences are the base URL + auth.
   const oss = isOssUc();
-  const authHeaders: Record<string, string> = {};
-  let url: string;
-  if (oss) {
-    // Gate Databricks-only families honestly rather than 404-ing the OSS server.
-    const unsupported = ossUcUnsupportedPath(path);
-    if (unsupported) {
-      throw new UnityCatalogError(
-        `${unsupported} is not available on the OSS Unity Catalog backend (LOOM_UC_BACKEND=oss). ` +
-          'These are Databricks Unity Catalog features; use the Databricks backend for them, or the ' +
-          'Loom-native equivalent (see /api/catalog/unity/capabilities). Catalogs, schemas, tables, ' +
-          'volumes, functions, models, grants, external locations, and storage credentials are supported.',
-        501,
-        undefined,
-        path,
-      );
+  const method = init?.method ?? 'GET';
+  const startedMs = Date.now();
+  // Classify BEFORE the OSS path rewrite so the audit vocabulary is identical
+  // on both backends (`storage-credentials` and `credentials` are one family).
+  const call = classifyUnityCall(method, path);
+  let status = 0;
+  let failure: unknown;
+  try {
+    const authHeaders: Record<string, string> = {};
+    let url: string;
+    if (oss) {
+      // Gate Databricks-only families honestly rather than 404-ing the OSS server.
+      const unsupported = ossUcUnsupportedPath(path);
+      if (unsupported) {
+        throw new UnityCatalogError(
+          `${unsupported} is not available on the OSS Unity Catalog backend (LOOM_UC_BACKEND=oss). ` +
+            'These are Databricks Unity Catalog features; use the Databricks backend for them, or the ' +
+            'Loom-native equivalent (see /api/catalog/unity/capabilities). Catalogs, schemas, tables, ' +
+            'volumes, functions, models, grants, external locations, and storage credentials are supported.',
+          501,
+          undefined,
+          path,
+        );
+      }
+      // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
+      // The path rewrite maps the one Databricks↔OSS naming split
+      // (storage-credentials → credentials) so callers stay backend-agnostic.
+      url = `${ossUcBase()}${ossUcRewritePath(path)}`;
+      // LU-2 — the BFF is the single choke point: inject the Console's credential
+      // (pre-shared server token, or an Entra bearer minted by the Console UAMI for
+      // the Loom Unity audience). Fails CLOSED when authorization is required but
+      // unmintable; returns {} only in the explicitly-anonymous posture, which the
+      // svc-loom-unity-authz gate + probe-loom-unity-authz probe surface as a
+      // security finding rather than a silent open door.
+      Object.assign(authHeaders, await ossUcAuthHeader());
+    } else {
+      const token = await dbxToken();
+      url = `https://${host}${path}`;
+      authHeaders.authorization = `Bearer ${token}`;
     }
-    // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
-    // The path rewrite maps the one Databricks↔OSS naming split
-    // (storage-credentials → credentials) so callers stay backend-agnostic.
-    url = `${ossUcBase()}${ossUcRewritePath(path)}`;
-    // LU-2 — the BFF is the single choke point: inject the Console's credential
-    // (pre-shared server token, or an Entra bearer minted by the Console UAMI for
-    // the Loom Unity audience). Fails CLOSED when authorization is required but
-    // unmintable; returns {} only in the explicitly-anonymous posture, which the
-    // svc-loom-unity-authz gate + probe-loom-unity-authz probe surface as a
-    // security finding rather than a silent open door.
-    Object.assign(authHeaders, await ossUcAuthHeader());
-  } else {
-    const token = await dbxToken();
-    url = `https://${host}${path}`;
-    authHeaders.authorization = `Bearer ${token}`;
+    if (init?.query) {
+      const qs = new URLSearchParams(init.query).toString();
+      if (qs) url += (url.includes('?') ? '&' : '?') + qs;
+    }
+    const res = await fetchWithTimeout(url, {
+      method,
+      headers: {
+        ...authHeaders,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      cache: 'no-store',
+    });
+    status = res.status;
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+    if (!res.ok) {
+      const msg =
+        json?.message ||
+        json?.error_code ||
+        (typeof json === 'string' ? json : `${method} ${path} failed ${res.status}`);
+      throw new UnityCatalogError(msg, res.status, json, url);
+    }
+    return (json as T) ?? ({} as T);
+  } catch (e) {
+    failure = e;
+    throw e;
+  } finally {
+    // `finally`, not the success path: a DENIED call is the row an auditor most
+    // wants and the one a happy-path-only emitter silently drops. Loom Unity is
+    // a single server (LOOM_UNITY_URL), so only Databricks rows carry a host.
+    const st = status || Number((failure as { status?: number } | null)?.status) || 0;
+    void recordUnityAccess({
+      ...call, backend: oss ? 'oss' : 'databricks', method, path,
+      workspaceHost: oss ? undefined : host, status: st, durationMs: Date.now() - startedMs,
+      outcome: failure ? unityOutcomeForError(failure, st) : 'success',
+      detail: failure ? String((failure as Error)?.message || failure).slice(0, 400) : undefined,
+    });
   }
-  if (init?.query) {
-    const qs = new URLSearchParams(init.query).toString();
-    if (qs) url += (url.includes('?') ? '&' : '?') + qs;
-  }
-  const res = await fetchWithTimeout(url, {
-    method: init?.method ?? 'GET',
-    headers: {
-      ...authHeaders,
-      'content-type': 'application/json',
-      accept: 'application/json',
-    },
-    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  if (!res.ok) {
-    const msg =
-      json?.message ||
-      json?.error_code ||
-      (typeof json === 'string' ? json : `${init?.method ?? 'GET'} ${path} failed ${res.status}`);
-    throw new UnityCatalogError(msg, res.status, json, url);
-  }
-  return (json as T) ?? ({} as T);
 }
 
 // ============================================================

@@ -1,5 +1,5 @@
 /**
- * Unity Catalog SYSTEM TABLES / AUDIT surface — wave c3.
+ * Unity Catalog SYSTEM TABLES / AUDIT surface — wave c3, extended by loom-apex LU-3.
  *
  *   GET /api/databricks/unity-catalog/system-tables?table=audit|billing|query-history[&days=&limit=&service=&action=&status=&warehouseId=]
  *         → { ok, table, columns[], rows[], executionMs }
@@ -8,22 +8,41 @@
  *   POST /api/databricks/unity-catalog/system-tables
  *         body { action:'enable-schema', schema }          → { ok }
  *
- * Read-only reads of the Databricks system tables over the SQL Statement
- * Execution path (Learn-grounded SQL):
- *   system.access.audit · system.billing.usage · system.query.history
- *   https://learn.microsoft.com/azure/databricks/admin/system-tables/
- * Enablement is confirmed / requested via the systemschemas REST
- *   GET/PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas[/{schema}]
+ * TWO BACKENDS, ONE CONTRACT (`lib/azure/uc-backend.ts`):
  *
- * Honest gate when Databricks is not configured, at the GCC-High / DoD boundary,
- * and (from the client) when a system schema isn't enabled or the Console UAMI
- * lacks USE CATALOG/USE SCHEMA/SELECT on it — the error names the exact grant.
+ *   Databricks Unity Catalog (Commercial default) — read-only reads of the
+ *   Databricks system tables over the SQL Statement Execution path
+ *   (Learn-grounded SQL):
+ *     system.access.audit · system.billing.usage · system.query.history
+ *     https://learn.microsoft.com/azure/databricks/admin/system-tables/
+ *   Enablement is confirmed / requested via the systemschemas REST
+ *     GET/PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas[/{schema}]
+ *
+ *   Loom Unity / OSS Unity Catalog (Azure Government default) — LU-3. This
+ *   route used to answer EVERY Gov request with "system tables are not
+ *   available at this boundary". That gate is GONE: Loom Unity now has a real
+ *   `access.audit` equivalent, because every catalog call funnels through the
+ *   BFF audit choke point (`ucFetch` → `recordUnityAccess`) and lands in the
+ *   Cosmos `_auditLog` trail + the `LoomAudit_CL` SIEM stream. Reads come from
+ *   `readUnitySystemTable()` and carry the SAME { columns, rows, executionMs }
+ *   contract, so the existing UC audit dialog works unchanged in Gov.
+ *
+ * Honest gate when Databricks is not configured, and (from the client) when a
+ * system schema isn't enabled or the Console UAMI lacks USE CATALOG/USE
+ * SCHEMA/SELECT on it — the error names the exact grant. On the Loom Unity
+ * backend, `billing` and `query-history` have no equivalent (there is no
+ * Databricks billing meter and no warehouse query engine); those name the real
+ * Loom surface that answers the question instead of pretending.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { databricksConfigGate, listWarehouses } from '@/lib/azure/databricks-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
+import { isOssUc } from '@/lib/azure/uc-backend';
+import {
+  readUnitySystemTable, UNITY_SYSTEM_TABLES, type UnitySystemTable,
+} from '@/lib/azure/unity-audit';
 import {
   primaryWorkspaceHost, getMetastoreSummary, listSystemSchemas, enableSystemSchema,
   readAccessAudit, readBillingUsage, readQueryHistory,
@@ -35,6 +54,10 @@ export const dynamic = 'force-dynamic';
 interface Gate { gated: true; error: string }
 
 function resolveGate(): Gate | null {
+  // LU-3 — on the Loom Unity (OSS) backend there is nothing to gate on: the
+  // audit trail is Loom's own, written by the BFF choke point, and needs no
+  // Databricks account, no warehouse, and no Fabric workspace.
+  if (isOssUc()) return null;
   const cfg = databricksConfigGate();
   if (cfg) {
     return { gated: true, error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
@@ -43,13 +66,41 @@ function resolveGate(): Gate | null {
     return {
       gated: true,
       error:
-        `Unity Catalog system tables (audit / billing / query history) are not available at the ${cloudBoundaryLabel()} boundary. ` +
-        `They require a Commercial or GCC Databricks account (Microsoft Entra-connected Unity Catalog metastore). ` +
-        `At this boundary use Azure Monitor / Log Analytics on the Databricks diagnostic logs instead.`,
+        `Databricks Unity Catalog system tables (audit / billing / query history) are not available at the ${cloudBoundaryLabel()} boundary — ` +
+        `they require a Commercial or GCC Databricks account. This deployment is on the Databricks backend ` +
+        `(LOOM_UC_BACKEND=databricks); switch to the Loom Unity backend (LOOM_UC_BACKEND=oss + LOOM_UNITY_URL) to get the ` +
+        `Loom-native access audit, which needs no Databricks account.`,
     };
   }
   return null;
 }
+
+/** Map the client's table key onto a Loom Unity system-table view. */
+const OSS_TABLE_ALIASES: Record<string, UnitySystemTable> = {
+  audit: 'audit',
+  access: 'audit',
+  denials: 'denials',
+  denied: 'denials',
+  summary: 'summary',
+};
+
+/**
+ * Databricks-only families on the Loom Unity backend. Honest per
+ * no-vaporware.md: name the REAL Loom surface that answers the same question
+ * rather than rendering an empty grid.
+ */
+const OSS_UNSUPPORTED: Record<string, string> = {
+  billing:
+    'Loom Unity has no billing meter — there are no Databricks DBUs to bill. Cost for the Azure-native backends (ADLS, Synapse, ADX, Container Apps) is real Azure spend: see the FinOps hub at /admin/finops, which reads Azure Cost Management directly.',
+  usage:
+    'Loom Unity has no billing meter — there are no Databricks DBUs to bill. Cost for the Azure-native backends (ADLS, Synapse, ADX, Container Apps) is real Azure spend: see the FinOps hub at /admin/finops, which reads Azure Cost Management directly.',
+  'query-history':
+    'Loom Unity is a metastore, not a query engine, so it has no warehouse query history. Query history for the engines that read the catalog lives with those engines: Synapse serverless / SQL Lab under /sql, and ADX under the KQL surfaces. The catalog-call history itself is the access audit view on this pane.',
+  query:
+    'Loom Unity is a metastore, not a query engine, so it has no warehouse query history. Query history for the engines that read the catalog lives with those engines: Synapse serverless / SQL Lab under /sql, and ADX under the KQL surfaces. The catalog-call history itself is the access audit view on this pane.',
+  history:
+    'Loom Unity is a metastore, not a query engine, so it has no warehouse query history. Query history for the engines that read the catalog lives with those engines: Synapse serverless / SQL Lab under /sql, and ADX under the KQL surfaces. The catalog-call history itself is the access audit view on this pane.',
+};
 
 async function resolveWarehouseId(requested?: string): Promise<string> {
   if (requested) return requested;
@@ -65,16 +116,27 @@ const numOr = (v: string | null, def?: number): number | undefined => {
   return Number.isFinite(n) ? n : def;
 };
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req) => {
   const gate = resolveGate();
   if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
 
   const sp = req.nextUrl.searchParams;
+  const oss = isOssUc();
 
-  // ---- Enablement state (systemschemas REST) ----
+  // ---- Enablement state ----
   if (sp.get('info') === 'schemas') {
+    // LU-3 — Loom Unity's "system schemas" need no enablement: the access trail
+    // is written by the BFF choke point on every call, so it is always on. Report
+    // the real views rather than a Databricks enablement handshake that does not
+    // exist on this backend.
+    if (oss) {
+      return NextResponse.json({
+        ok: true,
+        backend: 'oss',
+        metastore: { name: 'Loom Unity', metastoreId: 'loom-unity' },
+        schemas: UNITY_SYSTEM_TABLES.map((t) => ({ schema: t.id, state: 'ENABLE_COMPLETED', label: t.label, description: t.description })),
+      });
+    }
     try {
       const host = await primaryWorkspaceHost();
       const summary = await getMetastoreSummary(host);
@@ -83,10 +145,10 @@ export async function GET(req: NextRequest) {
         try { schemas = await listSystemSchemas(host, summary.metastoreId); }
         catch (e: any) {
           // Listing requires metastore/account admin — surface honestly, don't 500.
-          return NextResponse.json({ ok: true, metastore: summary, schemas: [], schemasError: e?.message || String(e) });
+          return NextResponse.json({ ok: true, backend: 'databricks', metastore: summary, schemas: [], schemasError: e?.message || String(e) });
         }
       }
-      return NextResponse.json({ ok: true, metastore: summary, schemas });
+      return NextResponse.json({ ok: true, backend: 'databricks', metastore: summary, schemas });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
     }
@@ -94,6 +156,36 @@ export async function GET(req: NextRequest) {
 
   // ---- System table read ----
   const table = (sp.get('table') || 'audit').toLowerCase().trim();
+  const days = numOr(sp.get('days'));
+  const limit = numOr(sp.get('limit'));
+
+  // ---- Loom Unity (OSS) backend — the Loom-native access audit ----
+  if (oss) {
+    const unsupported = OSS_UNSUPPORTED[table];
+    if (unsupported) return NextResponse.json({ ok: false, gated: true, backend: 'oss', error: unsupported }, { status: 200 });
+    const view = OSS_TABLE_ALIASES[table];
+    if (!view) {
+      return NextResponse.json({
+        ok: false,
+        error: `table must be one of: ${Object.keys(OSS_TABLE_ALIASES).join(', ')} on the Loom Unity backend`,
+      }, { status: 400 });
+    }
+    try {
+      const since = days ? new Date(Date.now() - days * 24 * 3600 * 1000).toISOString() : undefined;
+      const result = await readUnitySystemTable(view, {
+        since,
+        limit,
+        operation: sp.get('action')?.trim() || undefined,
+        securable: sp.get('securable')?.trim() || undefined,
+        actor: sp.get('service')?.trim() || undefined,
+      });
+      return NextResponse.json({ ok: true, backend: 'oss', table: view, ...result });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    }
+  }
+
+  // ---- Databricks backend ----
   let warehouseId: string;
   try {
     warehouseId = await resolveWarehouseId(sp.get('warehouseId')?.trim() || undefined);
@@ -101,8 +193,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, gated: true, error: e?.message || String(e) }, { status: 200 });
   }
 
-  const days = numOr(sp.get('days'));
-  const limit = numOr(sp.get('limit'));
   try {
     let result;
     if (table === 'audit') {
@@ -114,18 +204,16 @@ export async function GET(req: NextRequest) {
     } else {
       return NextResponse.json({ ok: false, error: "table must be one of: audit, billing, query-history" }, { status: 400 });
     }
-    return NextResponse.json({ ok: true, table, ...result });
+    return NextResponse.json({ ok: true, backend: 'databricks', table, ...result });
   } catch (e: any) {
     // The client throws a typed gate (schema not enabled / UAMI missing grants)
     // with a 403; surface it as a gated MessageBar rather than a hard error.
     if (e?.status === 403) return NextResponse.json({ ok: false, gated: true, error: e?.message || String(e) }, { status: 200 });
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req, { session }) => {
   const gate = resolveGate();
   if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
 
@@ -135,6 +223,22 @@ export async function POST(req: NextRequest) {
   if (action !== 'enable-schema') return NextResponse.json({ ok: false, error: "unsupported action; expected 'enable-schema'" }, { status: 400 });
   const schema = String(body?.schema || '').toLowerCase().trim();
   if (!schema) return NextResponse.json({ ok: false, error: 'schema is required (e.g. access, billing, query, data_classification)' }, { status: 400 });
+
+  // LU-3 — nothing to enable on Loom Unity: the access trail is always on
+  // because the BFF choke point writes it. Answer truthfully instead of
+  // pretending to run a Databricks enablement handshake.
+  if (isOssUc()) {
+    const known = UNITY_SYSTEM_TABLES.some((t) => t.id === schema);
+    return NextResponse.json({
+      ok: known,
+      backend: 'oss',
+      schema,
+      alreadyEnabled: known,
+      ...(known
+        ? { note: 'Loom Unity system tables need no enablement — every catalog call is recorded by the BFF audit choke point as it happens.' }
+        : { error: `Loom Unity has no '${schema}' system view. Available: ${UNITY_SYSTEM_TABLES.map((t) => t.id).join(', ')}.` }),
+    }, { status: known ? 200 : 400 });
+  }
 
   try {
     const host = await primaryWorkspaceHost();
@@ -152,4 +256,4 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

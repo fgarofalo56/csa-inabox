@@ -132,6 +132,61 @@ unauthenticated read was rejected.** Leaving `entraClientId` empty is an honest,
 loudly-reported gate — the container logs a SECURITY WARNING on every boot and the
 gate + probe both go red with this exact remediation — not a silent open door.
 
+## Audit (LU-3) — the BFF choke point and "Loom Unity system tables"
+
+Databricks Unity Catalog answers "who touched which securable, and were they
+allowed to" from `system.access.audit`. OSS Unity Catalog has no system schemas,
+so before LU-3 that whole question returned an honest-but-dead gate in Gov:
+*"system tables are not available at this boundary."* That gate is **gone**.
+
+**Where the trail comes from.** `loom-unity` has internal ingress and (post-LU-2)
+rejects anonymous callers, so the Console BFF is its only credentialed client.
+Loom leans on that: **every** catalog call — on the Loom Unity backend *and* on
+Databricks — goes through a single function, `ucFetch` in
+`apps/fiab-console/lib/azure/unity-catalog-client.ts`, which holds the file's only
+outbound fetch. Its `finally` block calls `recordUnityAccess()`
+(`lib/azure/unity-audit.ts`) with:
+
+| Field | Source |
+|---|---|
+| **WHO** | `actorOid` / `actorUpn` from the request-scoped session (`system` when there is no request scope — never a borrowed identity) |
+| **WHAT** | `operation` + `securableType` + `securableFqn`, parsed from the REST path (`catalog.list`, `grant.update`, `temporary-credential.vend`, …) |
+| **WHEN** | ISO `at` + `durationMs` |
+| **OUTCOME** | `success` · `failure` · **`denied`** |
+
+`denied` is deliberately narrow — an upstream **401/403**, or the LU-2
+fail-closed refusal when the Console cannot mint a credential. A 501 honest gate
+or a timeout records as `failure`, so the denial signal stays clean. Recording
+happens in `finally` rather than on the success path precisely so a refused call
+— the row an auditor actually hunts for — cannot be dropped.
+
+**Two sinks.** Cosmos `_auditLog` (`itemType: 'loom-unity'`, the authoritative
+trail) and, through `emitAuditEvent`, the `LoomAudit_CL` custom table via the
+Azure Monitor Logs-Ingestion DCR that Microsoft Sentinel reads. An
+un-provisioned DCR is a silent no-op — the Cosmos trail is unaffected, so there
+is no day-one gate here. Writes are fire-and-forget: an audit-store hiccup never
+fails a catalog read.
+
+**The choke point is enforced, not just documented.**
+`scripts/ci/check-unity-audit-chokepoint.mjs` is a merge-blocking guardrail that
+fails the build when (a) any file outside the allowlist combines a Loom Unity
+address with outbound-request code, (b) `unity-catalog-client.ts` grows a second
+outbound fetch, (c) the `recordUnityAccess(` call leaves the `finally`, or (d)
+`unity-audit.ts` stops writing either sink or stops classifying denials. One
+allowlisted bypass exists and is justified in the guard: the LU-2
+`probe-loom-unity-authz` health probe, whose *whole point* is an unauthenticated
+request — it records its own audit row.
+
+**Where you read it.** `/catalog/unity → System tables` serves three real views
+over the trail — `access.audit`, `access.denied`, and `access.summary` (calls +
+denials per operation and per securable) — and prints the equivalent KQL for
+Sentinel. `billing` and `query-history` have no Loom Unity equivalent (there is
+no DBU meter and no query engine); those name `/admin/finops` and the engine
+surfaces instead of rendering an empty grid. The BFF is
+`GET /api/databricks/unity-catalog/system-tables?table=audit|denials|summary`,
+which keeps the `{ columns, rows, executionMs }` contract, so the existing UC
+audit dialog works unchanged in Gov.
+
 ## Honest capability matrix — OSS Unity Catalog vs Databricks Unity Catalog
 
 > **The complete, per-capability matrix now lives at
@@ -148,6 +203,7 @@ gate + probe both go red with this exact remediation — not a silent open door.
 | Temporary credential vending — **Azure ADLS** (delegation SAS) | ✅ | ✅ via `adls.*` server config | ⚠️ Opt-in (`LOOM_UNITY_ADLS_*`). **Default OFF** — data access stays on Loom's existing managed-identity / ACL paths |
 | Delta Sharing (shares / recipients / providers) | ✅ | ❌ Not in the server | **Gated (501)** with the Loom-native fallback named: Loom Marketplace shares |
 | Table / column lineage (system tables + lineage-tracking) | ✅ | ❌ | **Gated (501)** — Loom unified lineage (Purview + ADX + item edges) is the equivalent |
+| **Access audit (“system tables”)** | ✅ `system.access.audit` | ❌ No system schemas in the server | ✅ **Built Loom-native (LU-3)** — every catalog call funnels through the BFF audit choke point (`ucFetch` → `recordUnityAccess`) into Cosmos `_auditLog` + the `LoomAudit_CL` SIEM stream; read at `/catalog/unity → System tables`. Billing / warehouse query history have no equivalent and name the real Loom surface instead. |
 | Connections (Lakehouse Federation) / workspace bindings / system schemas | ✅ | ❌ | **Gated (501)** with Loom-native fallbacks named |
 | Governed tags / policies / metric views (SQL-warehouse features) | ✅ | ❌ | Naturally gated (no SQL warehouse on OSS) |
 | API stability | GA | **Evolving** ("APIs should not be assumed stable" — upstream) | Pin the image tag; bump deliberately |

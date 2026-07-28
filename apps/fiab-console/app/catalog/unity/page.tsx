@@ -13,8 +13,10 @@
  *     naming the Loom-native equivalent, never a dead pane.
  *
  * Panes: Explore (object tree CRUD) · Grants (securable ACLs) · Storage
- * (external locations + credentials) · Sharing (Delta Sharing) · Capabilities
- * (the live support matrix from /api/catalog/unity/capabilities).
+ * (external locations + credentials) · Sharing (Delta Sharing) · System tables
+ * (LU-3 — the Loom Unity access audit: who touched which securable, and were
+ * they allowed to) · Capabilities (the live support matrix from
+ * /api/catalog/unity/capabilities).
  *
  * Every control calls the real BFF → real UC REST per no-vaporware.md. The
  * backend switch is transparent: the same routes serve both backends
@@ -39,7 +41,9 @@ import {
   Add24Regular, ArrowSync24Regular, Delete24Regular, Database24Regular,
   Key24Regular, LockClosed24Regular, Share24Regular, CloudArrowUp24Regular,
   CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular,
+  ShieldTask24Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 // ============================================================
 // Types (BFF payload shapes)
@@ -111,6 +115,25 @@ const useStyles = makeStyles({
   },
   sectionGap: { marginTop: tokens.spacingVerticalL },
   actionsRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' },
+  mono: { fontFamily: tokens.fontFamilyMonospace, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  sysFilters: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'end',
+    marginBottom: tokens.spacingVerticalM,
+  },
+  kql: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalS,
+    overflowX: 'auto',
+    whiteSpace: 'pre',
+  },
   supportIconOk: { color: tokens.colorPaletteGreenForeground1 },
   supportIconWarn: { color: tokens.colorPaletteMarigoldForeground1 },
   supportIconNo: { color: tokens.colorNeutralForeground3 },
@@ -161,7 +184,7 @@ function BackendBadge({ cap }: { cap: CapabilitiesPayload | null }) {
 
 export default function UnityCatalogPage() {
   const s = useStyles();
-  const [tab, setTab] = useState<'explore' | 'grants' | 'storage' | 'sharing' | 'capabilities'>('explore');
+  const [tab, setTab] = useState<'explore' | 'grants' | 'storage' | 'sharing' | 'system-tables' | 'capabilities'>('explore');
   const [cap, setCap] = useState<CapabilitiesPayload | null>(null);
   const [capError, setCapError] = useState<string | null>(null);
 
@@ -250,6 +273,7 @@ export default function UnityCatalogPage() {
         <Tab value="grants" icon={<LockClosed24Regular />}>Grants</Tab>
         <Tab value="storage" icon={<CloudArrowUp24Regular />}>Storage</Tab>
         <Tab value="sharing" icon={<Share24Regular />}>Sharing</Tab>
+        <Tab value="system-tables" icon={<ShieldTask24Regular />}>System tables</Tab>
         <Tab value="capabilities" icon={<Key24Regular />}>Capabilities</Tab>
       </TabList>
 
@@ -257,6 +281,7 @@ export default function UnityCatalogPage() {
       {tab === 'grants' && <GrantsPane oss={oss} />}
       {tab === 'storage' && <StoragePane oss={oss} />}
       {tab === 'sharing' && <SharingPane oss={oss} />}
+      {tab === 'system-tables' && <SystemTablesPane oss={oss} />}
       {tab === 'capabilities' && <CapabilitiesPane cap={cap} />}
     </CatalogShell>
   );
@@ -1064,6 +1089,178 @@ function SharingPane({ oss }: { oss: boolean }) {
               getRowId={(r) => r.name}
               empty="No shares yet — create one in the Marketplace share explorer."
             />
+          )}
+        </>
+      )}
+    </Section>
+  );
+}
+
+// ============================================================
+// System tables — the Loom Unity access audit (LU-3)
+// ============================================================
+
+/** One row of the access-audit view (route: { columns, rows }). */
+type SysRow = Record<string, unknown>;
+interface SysPayload {
+  ok: boolean; backend: 'oss' | 'databricks'; table: string;
+  columns: string[]; rows: SysRow[]; executionMs?: number; recordCount?: number; kql?: string;
+}
+
+/** Views offered per backend — Loom Unity's are Loom-native, Databricks' are system.*. */
+const OSS_VIEWS: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'audit', label: 'access.audit', hint: 'Every catalog call the BFF made — actor, operation, securable, outcome.' },
+  { id: 'denials', label: 'access.denied', hint: 'Authorization refusals only — the highest-signal rows for a reviewer.' },
+  { id: 'summary', label: 'access.summary', hint: 'Call and denial counts per operation and per securable.' },
+];
+const DBX_VIEWS: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'audit', label: 'system.access.audit', hint: 'Databricks account audit events.' },
+  { id: 'query-history', label: 'system.query.history', hint: 'SQL warehouse query history.' },
+  { id: 'billing', label: 'system.billing.usage', hint: 'Billable DBU usage.' },
+];
+
+function outcomeBadge(v: unknown) {
+  const s = String(v ?? '');
+  if (s === 'denied') return <Badge appearance="filled" color="danger">denied</Badge>;
+  if (s === 'failure') return <Badge appearance="tint" color="warning">failure</Badge>;
+  if (s === 'success') return <Badge appearance="tint" color="success">success</Badge>;
+  return <>{s}</>;
+}
+
+function SystemTablesPane({ oss }: { oss: boolean }) {
+  const s = useStyles();
+  const views = oss ? OSS_VIEWS : DBX_VIEWS;
+  const [view, setView] = useState<string>('audit');
+  const [days, setDays] = useState('7');
+  const [limit, setLimit] = useState('200');
+  const [actor, setActor] = useState('');
+  const [operation, setOperation] = useState('');
+  const q = useJson<SysPayload>();
+
+  // `daysOverride` lets the empty-state "Widen to 30 days" button re-read with the
+  // new window immediately instead of racing React's state flush.
+  const load = useCallback((daysOverride?: string) => {
+    const win = (daysOverride ?? days).trim();
+    const p = new URLSearchParams({ table: view });
+    if (win) p.set('days', win);
+    if (limit.trim()) p.set('limit', limit.trim());
+    if (actor.trim()) p.set('service', actor.trim());
+    if (operation.trim()) p.set('action', operation.trim());
+    void q.run(`/api/databricks/unity-catalog/system-tables?${p.toString()}`);
+  }, [view, days, limit, actor, operation, q]);
+
+  // Re-read whenever the view changes; the filter inputs apply on Run, so `load`
+  // is deliberately not a dependency (it changes on every keystroke).
+  useEffect(() => { load(); }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const payload = q.data;
+  // LoomDataTable keys rows by value, and two catalog calls in the same
+  // millisecond are genuinely identical, so stamp a positional key.
+  const rows: SysRow[] = useMemo(
+    () => (payload?.rows || []).map((r, i) => ({ ...r, __k: `${i}` })),
+    [payload?.rows],
+  );
+  const columns: LoomColumn<SysRow>[] = useMemo(() => (payload?.columns || []).map((c) => ({
+    key: c,
+    label: c.replace(/_/g, ' '),
+    filterType: c === 'outcome' ? ('select' as const) : ('text' as const),
+    ...(c === 'outcome' ? { filterOptions: ['success', 'failure', 'denied'] } : {}),
+    getValue: (r: SysRow) => String(r[c] ?? ''),
+    render: (r: SysRow) => (c === 'outcome'
+      ? outcomeBadge(r[c])
+      : <Caption1 className={s.mono}>{String(r[c] ?? '')}</Caption1>),
+  })), [payload?.columns, s.mono]);
+
+  return (
+    <Section
+      title={oss ? 'Loom Unity system tables' : 'Unity Catalog system tables'}
+      actions={
+        <Button icon={<ArrowSync24Regular />} appearance="subtle" onClick={() => load()} disabled={q.loading}>
+          Run
+        </Button>
+      }
+    >
+      <Body1 className={s.mutedBlock}>
+        {oss ? (
+          <>
+            Loom Unity&apos;s answer to <code>system.access.audit</code>. Every catalog call the Console BFF
+            makes funnels through <strong>one audited choke point</strong>, which records the acting principal,
+            the operation, the securable, the latency and the outcome — <strong>including every denial</strong> —
+            to the Cosmos <code>_auditLog</code> trail and the <code>LoomAudit_CL</code> SIEM stream. No Databricks
+            account, no SQL warehouse, and no Fabric workspace are involved.
+          </>
+        ) : (
+          <>
+            Read-only reads of the Databricks <strong>system tables</strong> over the SQL Statement Execution API.
+            The system schema must be enabled on the metastore and the Console UAMI needs
+            <code> USE CATALOG</code>/<code>USE SCHEMA</code>/<code>SELECT</code> on it.
+          </>
+        )}
+      </Body1>
+
+      <div className={s.sysFilters}>
+        <Field label="View">
+          <Dropdown
+            value={views.find((v) => v.id === view)?.label || view}
+            selectedOptions={[view]}
+            onOptionSelect={(_, d) => setView(d.optionValue || 'audit')}
+          >
+            {views.map((v) => <Option key={v.id} value={v.id} text={v.label}>{v.label}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Days"><Input value={days} onChange={(_, d) => setDays(d.value)} type="number" min={1} /></Field>
+        <Field label="Max rows"><Input value={limit} onChange={(_, d) => setLimit(d.value)} type="number" min={1} /></Field>
+        <Field label={oss ? 'Actor contains' : 'Service'}><Input value={actor} onChange={(_, d) => setActor(d.value)} placeholder={oss ? 'user@contoso.com' : 'unityCatalog'} /></Field>
+        <Field label={oss ? 'Operation contains' : 'Action'}><Input value={operation} onChange={(_, d) => setOperation(d.value)} placeholder={oss ? 'grant.update' : 'getTable'} /></Field>
+      </div>
+
+      <Caption1 className={s.mutedBlock}>{views.find((v) => v.id === view)?.hint}</Caption1>
+
+      {q.gated && (
+        <MessageBar intent="warning" className={s.mb}>
+          <MessageBarBody>
+            <MessageBarTitle>This view has no equivalent on the active backend</MessageBarTitle>
+            {q.gated}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {q.error && <MessageBar intent="error" className={s.mb}><MessageBarBody>{q.error}</MessageBarBody></MessageBar>}
+
+      {q.loading ? <Spinner label="Reading…" className={s.spinner} /> : !q.gated && !q.error && payload && (
+        <>
+          <div className={s.actionsRow}>
+            <Badge appearance="tint" color="brand">{rows.length} row(s)</Badge>
+            {typeof payload.executionMs === 'number' && <Caption1 className={s.muted}>{payload.executionMs} ms</Caption1>}
+            {typeof payload.recordCount === 'number' && <Caption1 className={s.muted}>{payload.recordCount} access record(s) in window</Caption1>}
+          </div>
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={<ShieldTask24Regular />}
+              title="No catalog activity in this window"
+              body={oss
+                ? 'Nothing has touched Loom Unity in the selected window. Browse the Explore tab (or widen Days) and re-run — every call lands here, including the ones that are refused.'
+                : 'The system table returned no rows for this window. Widen Days, or confirm the system schema is enabled on the metastore.'}
+              primaryAction={{ label: 'Widen to 30 days', onClick: () => { setDays('30'); load('30'); } }}
+            />
+          ) : (
+            <LoomDataTable<SysRow>
+              ariaLabel={`${view} rows`}
+              columns={columns}
+              rows={rows}
+              getRowId={(r) => String(r.__k)}
+              empty="No rows."
+            />
+          )}
+          {payload.kql && (
+            <div className={s.sectionGap}>
+              <Subtitle2>Same events in your SIEM</Subtitle2>
+              <Caption1 className={s.mutedBlock}>
+                Every row above is mirrored to the <code>LoomAudit_CL</code> custom table via the Azure Monitor
+                Logs Ingestion DCR, where Microsoft Sentinel (or any workspace-connected SIEM) can alert on it
+                continuously. Paste this into Log Analytics:
+              </Caption1>
+              <pre className={s.kql}>{payload.kql}</pre>
+            </div>
           )}
         </>
       )}
