@@ -159,13 +159,6 @@ weave that produces the Fabric experience inside any Azure tenant*.
     One page per Fabric workload — how Loom delivers the parity, the
     honest gaps, the forward-migration path.
 
--   :material-lightbulb-on: [**Feature deep-dives**](features/index.md)
-
-    One page per cross-cutting capability — trusted answers (verified
-    queries, GraphRAG, receipts), open-lakehouse interop, the migration
-    on-ramp, the FinOps hub — each with its real backend, its honest
-    gates, and its kill-switch flag.
-
 -   :material-school: [**Workshops**](workshops/index.md)
 
     5-day Federal CoE and Commercial CoE workshops to stand up your

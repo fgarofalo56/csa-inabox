@@ -1521,38 +1521,6 @@ nav:
           - "Loom Apps (org apps & data apps)": loom/loom-apps.md
 
       # ------------------------------------------------------------
-      # 4b. Feature deep-dives — cross-cutting capabilities
-      #     (what it is / why / how end-to-end / real backend / honest
-      #      gates / kill-switch flag id). Sibling set to the per-item
-      #      Editor Tutorials and the per-surface Parity Specs.
-      # ------------------------------------------------------------
-      - Feature deep-dives:
-          - Index: fiab/features/index.md
-          - Trusted answers:
-              - "Verified queries & the semantic contract": fiab/features/verified-queries.md
-              - "GraphRAG grounding": fiab/features/graphrag-grounding.md
-              - "Self-healing NL2SQL": fiab/features/self-healing-nl2sql.md
-              - "Answer receipts (the IL5 compliance artifact)": fiab/features/answer-receipts.md
-              - "Prompt registry & token budgets": fiab/features/prompt-registry-token-budgets.md
-          - Open lakehouse & query:
-              - "Iceberg REST catalog & Delta/Iceberg interop": fiab/features/iceberg-interop.md
-              - "Arrow Flight SQL & ADBC connect": fiab/features/flight-sql-adbc.md
-              - "Trino federation (opt-in)": fiab/features/trino-federation.md
-              - "Streaming SQL on RisingWave": fiab/features/streaming-sql-risingwave.md
-              - "PRQL modern-query mode (Preview)": fiab/features/prql-modern-query.md
-          - Authoring surfaces:
-              - "Mapping data flow Debug sessions": fiab/features/mapping-dataflow-debug.md
-              - "Real-Time Dashboard pages, text tiles & drill-through": fiab/features/kql-dashboard-depth.md
-              - "Canvas full-screen": fiab/features/canvas-fullscreen.md
-              - "Collaborative presence & comments": fiab/features/collaboration-presence-comments.md
-          - Platform & operations:
-              - "Workspace portability (.loomws)": fiab/features/workspace-portability.md
-              - "Column-level lineage & impact analysis": fiab/features/column-level-lineage.md
-              - "Migration on-ramp (assess, copy in, translate)": fiab/features/migration-on-ramp.md
-              - "FinOps hub": fiab/features/finops-hub.md
-              - "Dependency-chaos harness": fiab/features/dependency-chaos-harness.md
-
-      # ------------------------------------------------------------
       # 5. Editors — Fabric-item parity per editor type
       # ------------------------------------------------------------
       - Editors:
