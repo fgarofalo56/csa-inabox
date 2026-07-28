@@ -60,6 +60,29 @@ def main() -> int:
     # The [dbt] extra — one project, either engine (the N4 backend selector).
     check("sqlmesh.dbt.project", lambda: __import__("sqlmesh.dbt.project", fromlist=["*"]).__name__)
 
+    print("=== security overrides (requirements-security.txt) ===")
+
+    def security_overrides_applied():
+        import re
+        from importlib.metadata import version
+        from pathlib import Path
+
+        req = Path(__file__).with_name("requirements-security.txt")
+        pins = dict(
+            re.findall(r"^\s*([A-Za-z0-9._-]+)==([^\s#]+)", req.read_text(), re.M)
+        )
+        if not pins:
+            raise RuntimeError(f"{req.name} declares no pins — the override is a no-op")
+        wrong = {n: (want, version(n)) for n, want in pins.items() if version(n) != want}
+        if wrong:
+            raise RuntimeError(
+                "override NOT applied (did the second `pip install -r "
+                f"requirements-security.txt` pass run?): {wrong}"
+            )
+        return ", ".join(f"{n}=={v}" for n, v in sorted(pins.items()))
+
+    check("CVE-bearing transitive pins overridden", security_overrides_applied)
+
     print("=== app ===")
     check("app.main", lambda: __import__("app.main", fromlist=["app"]).app.title)
 

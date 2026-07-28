@@ -148,6 +148,14 @@ jobs:
         working-directory: apps/loom-transform-runner
         run: pip install --no-cache-dir -r requirements.txt
 
+      # Second pass, exactly as the Dockerfile does it. These pins override a
+      # transitive range to clear a CRITICAL CVE the SC1 Trivy gate blocks on
+      # (deepdiff / CVE-2025-58367). If this step is skipped here, CI would be
+      # smoke-testing a dependency tree the image does not actually ship.
+      - name: Apply the security overrides (same second pass as the Dockerfile)
+        working-directory: apps/loom-transform-runner
+        run: pip install --no-cache-dir -r requirements-security.txt
+
       - name: Import smoke — both engines, every adapter, the app
         working-directory: apps/loom-transform-runner
         run: python smoke_imports.py
