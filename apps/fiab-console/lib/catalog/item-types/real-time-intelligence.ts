@@ -112,26 +112,30 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
   { slug: 'kql-dashboard', displayName: 'Real-Time dashboard', restType: 'KQLDashboard', category: 'Real-Time Intelligence',
     description: 'Tile grid powered by KQL queries with parameters and auto-refresh.',
     learnContent: {
-      "overview": "A Real-Time dashboard is a tile grid powered by KQL queries with parameters and auto-refresh. In Loom tiles render from the shared ADX cluster. Use it to monitor live telemetry with drilldowns and time-pickers.",
+      "overview": "A Real-Time dashboard is a tile grid powered by KQL queries. Azure-native by default: every tile executes against the deployment's Azure Data Explorer cluster — no Fabric capacity or workspace is involved. Tiles are either query visuals or markdown text; dashboard parameters cross-filter the whole grid, drill-through injects a clicked value into a parameter (optionally jumping to another page), and an auto-refresh interval keeps the grid live.",
       "steps": [
         {
           "title": "Add tiles",
-          "body": "Each tile is backed by a KQL query against a KQL database."
+          "body": "Add tile creates a query tile — bind it to a data source (a KQL database on the ADX cluster), write the KQL, and pick a visual. Add text tile creates a markdown tile that renders content and is never executed. Add tile with Copilot writes the KQL for you from a prompt."
         },
         {
           "title": "Add parameters",
-          "body": "Define parameters (time range, dimension filters) that cascade across tiles."
+          "body": "Parameters opens the parameter editor: freetext, fixed, multi-select, query-backed (values loaded from KQL), data-source, and duration types. They render in the filter bar above the grid and substitute into every tile's KQL, so changing one cross-filters the whole dashboard."
         },
         {
-          "title": "Set auto-refresh",
-          "body": "Configure the refresh interval so tiles stay current with the stream."
+          "title": "Organize into pages",
+          "body": "Add page creates a named tile-container page and the page strip switches between them. A dashboard with no authored pages stays a single canvas; rename is inline, and deleting a page moves its tiles to the first remaining page rather than destroying them."
         },
         {
-          "title": "Enable drilldowns",
-          "body": "Wire drilldowns and time-pickers so viewers can pivot without editing KQL."
+          "title": "Set the time range and auto-refresh",
+          "body": "The Time button cycles the dashboard time range and the Auto-refresh selector sets the interval (off, 5s, 30s, 1m, 5m, 30m, 1h). While auto-refresh is on, a live pill shows the last refresh time; Refresh all re-runs every tile on demand."
+        },
+        {
+          "title": "Wire drill-through and alerts",
+          "body": "In a tile's settings pick a drill-through column, the parameter to set from the clicked value, and an optional target page — clicking a data point applies the value and re-runs the grid. The bell on a tile opens Set alert, which links a backing Activator item and mints a real ADX-evaluated rule (plus an Azure Monitor scheduled-query rule when LOOM_ADX_ALERT_SCOPE is provisioned)."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/real-time-intelligence/dashboard-real-time-create"
+      "docsUrl": "https://learn.microsoft.com/azure/data-explorer/azure-data-explorer-dashboards"
     } },
   { slug: 'eventstream', displayName: 'Eventstream', restType: 'Eventstream', category: 'Real-Time Intelligence',
     description: 'Visual canvas to ingest, transform, and route real-time event streams.',

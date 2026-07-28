@@ -38,11 +38,15 @@ export const dataFactoryItems: FabricItemType[] = [
           "body": "Connect activities with success/failure conditions on the designer canvas to control flow."
         },
         {
+          "title": "Publish, then Debug",
+          "body": "Publish deploys the pipeline to Azure Data Factory so it can run. Debug dispatches a run and streams its receipts back onto the canvas: each activity node paints its live run status, the run strip shows overall progress with Rerun from failed, and the eyeglass on a node opens the run's input / output / error JSON."
+        },
+        {
           "title": "Schedule a trigger",
           "body": "Configure a schedule, tumbling window, or event-based trigger to automate runs and review run history."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/data-factory/data-factory-overview"
+      "docsUrl": "https://learn.microsoft.com/azure/data-factory/introduction"
     } },
   { slug: 'dataflow', displayName: 'Dataflow Gen2', restType: 'Dataflow', category: 'Data Factory',
     description: 'Low-code Power Query data prep with visual + M code authoring.',

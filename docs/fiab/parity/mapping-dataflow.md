@@ -93,12 +93,14 @@ to row-6 single-stream inline preview). UI: `dataflow-debug-panel.tsx`.
 | 11 | Dataset-backed Source/Sink pickers | ✅ built | `GET /api/adf/datasets` |
 | 12 | **Visual expression builder** (Add Dynamic Content) | ❌ MISSING | plain expression textareas (see `adf-mapping-data-flow.md` C9) |
 | 13 | Free edge-drawing / inline "+" between nodes | ⚠️ partial | add chains off the selected node |
-| 14 | Per-node Optimize / Inspect / Data-preview tabs | ✅ built (U7) / ⏳ | Data-preview tab shipped (U7-2); Inspect/Statistics tabs U7 PR-2 (§U7) |
+| 14 | Per-node Data preview / Inspect / Statistics tabs | ✅ built | all three shipped in U7 (PR-1 preview, PR-2 Inspect + Statistics) — see §U7 |
+| 14b | Per-node **Optimize** tab (partitioning scheme) | ❌ MISSING | no partition-option surface in the designer |
 | 15 | Rename / clone / Publish-Git shell | ❌ MISSING | direct PUT only |
 
 **Grade: B+ (post-U7).** The standalone editor gives a real
 create→author→save→**held-session Debug** loop against ADF REST — per-transform
 Data Preview, Inspect (in/out schema + drift), Statistics, and preview-grid
 quick-actions — with an honest Spark-debug gate. Remaining gaps (visual
-expression builder, publish/git) are shared with the mounted-ADF surface and
-tracked in `adf-mapping-data-flow.md` — not stubs, and never Fabric-gated.
+expression builder, per-node Optimize/partitioning, publish/git) are shared
+with the mounted-ADF surface and tracked in `adf-mapping-data-flow.md` — not
+stubs, and never Fabric-gated.

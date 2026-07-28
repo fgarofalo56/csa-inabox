@@ -27,7 +27,7 @@ KQL is the real-time, append-heavy, time-series tool.
 | **Eventhouse** | Container of KQL databases sharing compute. |
 | **KQL database** | The store. Ingests from Eventstream / Event Hubs / direct REST. |
 | **KQL queryset** | Saved set of Kusto queries; pin charts to a dashboard. |
-| **KQL dashboard** | Auto-refresh tiles, parameters, time-pickers, drilldowns. |
+| **KQL dashboard** | Query and markdown tiles across named pages, parameters that cross-filter the grid, drill-through, and auto-refresh. |
 | **Activator** | Watches a KQL query / stream and dispatches Teams/email/Power Automate. |
 
 ### Step-by-step: stream → store → query → alert
@@ -47,7 +47,12 @@ KQL is the real-time, append-heavy, time-series tool.
    ```
 
 3. **KQL queryset.** Save the query to a queryset and **pin** its chart to a
-   **KQL dashboard**. Add a time-picker parameter so consumers scope the window.
+   **KQL dashboard**. On the dashboard, use the **Time** button and the
+   **Auto-refresh** selector for the window and refresh cadence, **Parameters**
+   to add typed filters that cross-filter every tile, **Add page** to split a
+   large dashboard into named pages, and **Add text tile** for markdown notes.
+   Per tile you can wire drill-through (clicked value → parameter, optionally
+   jumping to another page) and **Set alert**.
 4. **Activator.** Create an Activator rule over the KQL query: pick the source
    (KQL queryset / Eventstream / measure), set the trigger (value crosses a
    threshold or a pattern occurs), and pick the action (Teams notification,
