@@ -44,7 +44,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { PagingBudget } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -387,19 +387,21 @@ export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promis
   const out: AutoMlJob[] = [];
   // Row cap alone is not a bound (a chain of pages whose `value` is empty, or
   // whose rows all fail the jobType guard, walks forever) — budget it (#2557).
+  // The fetch goes through `runPage` so a deadline landing INSIDE it truncates
+  // exactly like one at the loop top, instead of throwing.
   const budget = new PagingBudget('aml-automl listAutoMlJobs');
   let next: string | null = null;
   while (budget.claimPage()) {
-    const res: Response = next
-      ? await fetchWithTimeout(
-          next,
-          { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
-          budget.remainingMs(),
-        )
-      : await automlFetch('/jobs', {
-          query: { $filter: "jobType eq 'AutoML'" },
-          timeoutMs: budget.remainingMs(),
-        });
+    const res = await budget.runPage(async (timeoutMs) =>
+      next
+        ? fetchWithTimeout(
+            next,
+            { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
+            timeoutMs,
+          )
+        : automlFetch('/jobs', { query: { $filter: "jobType eq 'AutoML'" }, timeoutMs }),
+    );
+    if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     const j = await readJson<{ value?: any[]; nextLink?: string }>(res, 'listAutoMlJobs');
     if (!j) break;
     if (Array.isArray(j.value)) {

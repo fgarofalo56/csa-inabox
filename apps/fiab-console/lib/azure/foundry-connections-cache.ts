@@ -14,16 +14,25 @@
  *   • bounded — 10 pages / 8 s (`LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS`);
  *   • memoized — 5 min (`LOOM_FOUNDRY_CONNECTIONS_TTL_MS`), invalidated by
  *     Loom's own writes and by `?refresh=1`;
- *   • a TIME-truncated walk is NEVER memoized. That truncation means ARM was
- *     slow right now, so caching the partial answer would keep the surface
- *     wrong for five minutes after ARM recovered — the next caller re-walks.
- *     (A PAGE-cap truncation is deterministic — re-walking would re-pay 10 ARM
- *     pages for the identical partial answer — so that one stays memoized.)
- *   • `requireComplete` turns EITHER truncation into a `PagingDeadlineError`,
- *     so a caller that would otherwise conclude "that connection does not
- *     exist" from an incomplete list reports a DEADLINE instead of a missing
- *     resource. That inversion is the whole point: a slow ARM must never be
- *     surfaced as an un-deployed model.
+ *   • ONLY A COMPLETE WALK IS EVER MEMOIZED. The memo is shared across
+ *     consumers that ask for different things — the Copilot's AOAI discovery,
+ *     `GET /api/foundry/connections`, `resolveContentSafetyEndpoint` — and a
+ *     partial list cached by one of them is served to all the others for the
+ *     full TTL. That is memo poisoning: a caller that would have wanted the
+ *     whole list silently gets someone else's truncated one, with no way to
+ *     tell. Splitting the rule by truncation KIND ("time is transient, pages is
+ *     deterministic, so keep the page-capped one") only made it harder to
+ *     reason about without removing the poisoning, so the rule is now flat:
+ *     truncated ⇒ not memoized, and the next caller re-walks ARM. The cost is
+ *     re-paying a bounded walk on a hub that genuinely overflows 10 pages; the
+ *     benefit is that a memo hit is, by construction, a WHOLE list.
+ *   • `requireComplete` turns a truncation into a `PagingDeadlineError`, so a
+ *     caller that would otherwise conclude "that connection does not exist"
+ *     from an incomplete list reports a DEADLINE instead of a missing resource.
+ *     Note this is the LAST resort, not the first: a caller searching for one
+ *     connection should search first and only care about completeness if the
+ *     search MISSES (see `copilot-orchestrator.resolveAoaiTargetRaw`) — a
+ *     truncated walk that already contains the target is a fine answer.
  *
  * No mocks — this only decides what to do with the result of a real ARM walk.
  */
@@ -74,7 +83,10 @@ export async function cachedConnections<T>(
   const memo = (await connectionsMemo.get(compute, opts?.force)) as ConnectionsWalk<T>;
   const truncatedBy = memo.walk.truncatedBy;
   if (truncatedBy) opts?.onTruncated?.(truncatedBy);
-  if (truncatedBy === 'time') connectionsMemo.invalidate();
+  // Never let a partial list become the 5-minute answer for EVERY consumer of
+  // this memo — whatever cut it short. The caller that triggered the walk still
+  // gets these rows (they are the freshest thing we have); the next one re-walks.
+  if (truncatedBy) connectionsMemo.invalidate();
   if (truncatedBy && opts?.requireComplete) memo.walk.budget.assertComplete(memo.rows.length);
   return memo.rows;
 }

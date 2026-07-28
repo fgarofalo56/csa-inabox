@@ -39,7 +39,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { detectLoomCloud } from './cloud-endpoints';
-import { PagingBudget } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 
 // The Synapse Studio data-plane host + token scope are sovereign-cloud aware.
 // Commercial / GCC run on `dev.azuresynapse.net`; GCC-High / IL5 / DoD run on
@@ -117,13 +117,17 @@ async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
 // Synapse artifact lists are paged with a `nextLink` continuation; walk it so
 // the count is accurate for large workspaces. The hand-rolled `guard < 50`
 // capped PAGES but not TIME (50 pages x the 30s per-request ceiling = 25 min on
-// a request path) — the shared PagingBudget adds the wall clock (#2557).
+// a request path) — the shared PagingBudget adds the wall clock (#2557), and
+// `runPage` absorbs a deadline that lands INSIDE the fetch so the breach
+// truncates (rows kept) instead of throwing.
 async function listAll<T>(collection: string, label: string): Promise<T[]> {
   const out: T[] = [];
   const budget = new PagingBudget(`synapse-artifacts ${label}`);
   let path: string | null = `/${collection}?api-version=${DEV_API}`;
   while (path && budget.claimPage()) {
-    const r = await callDev(path, undefined, budget.remainingMs());
+    const nextPath: string = path;
+    const r = await budget.runPage((timeoutMs) => callDev(nextPath, undefined, timeoutMs));
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     const body = await jsonOrThrow<{ value?: T[]; nextLink?: string }>(r, label);
     if (Array.isArray(body.value)) out.push(...body.value);
     if (body.nextLink) {

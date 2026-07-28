@@ -115,10 +115,32 @@ function stubHangingPager(opts: { fastFirst?: boolean } = {}) {
   return calls;
 }
 
+/**
+ * A pager that ENDS — one page, no `nextLink`, so the walk is COMPLETE. Only a
+ * complete walk is memoized, so every "the memo works" assertion has to be made
+ * over this stub rather than `stubEndlessPager` (which page-cap-truncates and
+ * is therefore deliberately un-memoizable).
+ */
+function stubFinitePager() {
+  const calls: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string | URL | Request) => {
+      calls.push(typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url);
+      return new Response(
+        JSON.stringify({
+          value: [{ id: '/c/1', name: 'conn-1', properties: { category: 'AzureOpenAI', target: 'https://aoai' } }],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }),
+  );
+  return calls;
+}
+
 describe('PagingBudget', () => {
   it('stops at the page cap and reports the reason', async () => {
-    const { PagingBudget } = await import('@/lib/azure/paging-budget');
-    const b = new PagingBudget('t', { maxPages: 3, budgetMs: 60_000 });
+    const { PagingBudget } = await import('@/lib/azure/paging-budget');    const b = new PagingBudget('t', { maxPages: 3, budgetMs: 60_000 });
     expect([b.claimPage(), b.claimPage(), b.claimPage()]).toEqual([true, true, true]);
     expect(b.claimPage()).toBe(false);
     expect(b.truncatedBy).toBe('pages');
@@ -320,11 +342,45 @@ describe('foundry-client pagedList — a deadline INSIDE a fetch truncates, neve
     // that would keep the surface wrong long after ARM recovered.
     expect(calls.length).toBeGreaterThan(after1);
   });
+
+  /**
+   * Cross-consumer memo POISONING (#2557 re-review). The `/connections` memo is
+   * shared by consumers that want different things — Copilot AOAI discovery,
+   * `GET /api/foundry/connections`, `resolveContentSafetyEndpoint`. Keeping a
+   * PAGE-cap-truncated walk for the full 5-minute TTL (on the reasoning that a
+   * page cap is "deterministic") hands one caller's partial list to every other
+   * caller, none of whom asked for a partial list or can tell they got one.
+   * The rule is flat: truncated ⇒ not memoized.
+   */
+  it('never memoizes a PAGE-CAP-truncated list either — no cross-consumer poisoning', async () => {
+    process.env.LOOM_ARM_PAGING_MAX_PAGES = '2'; // page-cap the walk, keep it fast
+    const calls = stubEndlessPager(); // always another nextLink -> 'pages' truncation
+    const { listConnections } = await import('@/lib/azure/foundry-client');
+
+    await listConnections();
+    const after1 = calls.length;
+    // A DIFFERENT consumer, one that never asked about completeness, reads next.
+    const rows = await listConnections();
+
+    expect(calls.length).toBeGreaterThan(after1); // it re-walked; it was not served the memo
+    expect(rows.length).toBeGreaterThan(0); // …and it still got the rows in hand
+  });
+
+  it('a truncated walk still reports its truncation to the caller that paid for it', async () => {
+    process.env.LOOM_ARM_PAGING_MAX_PAGES = '2';
+    stubEndlessPager();
+    const { listConnections } = await import('@/lib/azure/foundry-client');
+
+    const seen: string[] = [];
+    await listConnections({ onTruncated: (t) => seen.push(t) });
+
+    expect(seen).toEqual(['pages']);
+  });
 });
 
 describe('foundry-client listConnections — #2557 memo', () => {
   it('serves repeat callers from the memo (zero extra ARM calls)', async () => {
-    const calls = stubEndlessPager();
+    const calls = stubFinitePager(); // a COMPLETE walk — the only kind that memoizes
     const { listConnections } = await import('@/lib/azure/foundry-client');
 
     await listConnections();
@@ -366,7 +422,7 @@ describe('foundry-client listConnections — #2557 memo', () => {
   });
 
   it('invalidateFoundryConnections() drops the memo so a write is visible next read', async () => {
-    const calls = stubEndlessPager();
+    const calls = stubFinitePager(); // COMPLETE, so the memo would otherwise hold
     const { listConnections, invalidateFoundryConnections } = await import('@/lib/azure/foundry-client');
 
     await listConnections();
@@ -378,7 +434,7 @@ describe('foundry-client listConnections — #2557 memo', () => {
   });
 
   it('force:true bypasses the memo (the ?refresh=1 escape hatch)', async () => {
-    const calls = stubEndlessPager();
+    const calls = stubFinitePager(); // COMPLETE, so only `force` can cause a re-walk
     const { listConnections } = await import('@/lib/azure/foundry-client');
 
     await listConnections();

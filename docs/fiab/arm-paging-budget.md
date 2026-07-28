@@ -56,7 +56,9 @@ A deadline now surfaces **as a deadline**:
 A caller that genuinely needs a complete list opts in — `walkPagedListResult()`
 exposes `truncatedBy`, and `PagingBudget.assertComplete()` /
 `listConnections({ requireComplete: true })` turn truncation into an error
-instead of a silently partial answer.
+instead of a silently partial answer. `listConnections({ onTruncated })` is the
+softer form: the rows are returned AND the caller is told the list is short, so
+it can decide for itself (see *Completeness is the last question* below).
 
 ### Foundry `/connections` cache
 
@@ -70,10 +72,26 @@ path being shortened.
   Loom (the hub editor's **Reload** button sends it).
 - Invalidation bumps a generation counter, so a write landing while a read is
   in flight is not overwritten by the pre-write snapshot.
-- A **time**-truncated walk is never memoized — that truncation means ARM was
-  slow *right now*, and caching it would keep the surface wrong for five minutes
-  after ARM recovered. A **page-cap** truncation is deterministic (re-walking
-  re-pays 10 ARM pages for the identical answer) and stays memoized.
+- **Only a complete walk is memoized** — a truncated one (either ceiling) is
+  handed to the caller that paid for it and then dropped, so the next caller
+  re-walks ARM. The memo is shared across consumers that ask for different
+  things (Copilot AOAI discovery, `GET /api/foundry/connections`,
+  `resolveContentSafetyEndpoint`); caching a partial list would serve it, for
+  five minutes, to callers that never asked for a partial list and cannot tell.
+  A memo hit is therefore a whole list by construction.
+
+### Completeness is the LAST question, not the first
+
+`requireComplete` / `assertComplete` exist for the negative conclusion only.
+A caller looking for one connection must **search first**:
+
+- found in a truncated list → a perfectly good answer, use it;
+- **not** found in a *complete* list → a real answer ("it isn't there");
+- **not** found in a *truncated* list → not an answer at all; raise the deadline.
+
+`resolveAoaiTarget` gets this wrong the moment it inverts the order: requiring a
+complete list up front fails turns whose AOAI connection had already been
+collected, which is the fix defeating itself.
 
 ## Operator knobs
 
@@ -89,7 +107,7 @@ can retune them per sovereign region.
 | `LOOM_ARM_PAGING_MAX_PAGES` | `50` | Pages any one `nextLink` walk may fetch. Matches the `guard < 50` literal the discovery clients already hand-rolled. |
 | `LOOM_ARM_PAGING_BUDGET_MS` | `15000` | Wall clock for a whole walk. Deliberately **half** `LOOM_SERVER_FETCH_TIMEOUT_MS` so a multi-page list can't out-live the single request it is made of by more than 1x, and well inside a BFF route's 60 s `maxDuration`. |
 | `LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS` | `8000` | Tighter wall clock for the Foundry `/connections` walk (Copilot hot path; also 10 pages, not 50). |
-| `LOOM_FOUNDRY_CONNECTIONS_TTL_MS` | `300000` | How long a **complete** `/connections` walk is memoized in-process. |
+| `LOOM_FOUNDRY_CONNECTIONS_TTL_MS` | `300000` | How long a **complete** `/connections` walk is memoized in-process. A truncated walk is never memoized. |
 
 ### Reading the warn line
 
@@ -115,6 +133,12 @@ Bounded through `walkPagedListResult` / a `PagingBudget` loop: `foundry-client`
 the `api/setup/subscriptions`, `api/setup/scan-cosmos`,
 `api/admin/gates/[id]/options` routes.
 
+Every one of those runs its page fetch through `PagingBudget.runPage`, including
+the hand-rolled loops (the ones that keep a row cap or rewrite `nextLink` and so
+can't use `walkPagedList`). That is not optional polish: handing `remainingMs()`
+to `fetchWithTimeout` without absorbing the resulting `FetchTimeoutError` leaves
+the loop **throwing** on a deadline, which is the opposite of the contract above.
+
 **Not yet** — these carry a `guard < N` page cap but no wall clock. They cannot
 spin forever; they can still be slow, and they adopt the budget when next
 touched: `databricks-discovery`, `iothub-client`, `kv-secrets-client`,
@@ -126,8 +150,10 @@ touched: `databricks-discovery`, `iothub-client`, `kv-secrets-client`,
 
 | Spec | What it proves |
 |---|---|
-| `lib/azure/__tests__/paging-budget.test.ts` | Budget arithmetic; an endless pager stops on the page cap; a **hanging** pager (one that only settles on `AbortSignal`) truncates mid-fetch and the caller keeps the rows already collected; `requireComplete` raises a `PagingDeadlineError`; a foreign 30 s timeout still propagates. |
+| `lib/azure/__tests__/paging-budget.test.ts` | Budget arithmetic; an endless pager stops on the page cap; a **hanging** pager (one that only settles on `AbortSignal`) truncates mid-fetch and the caller keeps the rows already collected; `requireComplete` raises a `PagingDeadlineError`; a foreign 30 s timeout still propagates; **neither** truncation kind is memoized, so no consumer is served another consumer's partial list. |
+| `lib/azure/__tests__/paging-budget-handrolled.test.ts` | One case per hand-rolled `PagingBudget` loop (`aml-client.listJobs`, `aml-automl-client.listAutoMlJobs`, `eventhubs-client` `armList`, both `eventgrid-topics-client` walks, `synapse-artifacts-client` `listAll`): a deadline landing inside the page fetch truncates and returns page 1's rows instead of rejecting. |
 | `lib/azure/__tests__/ttl-memo.test.ts` | De-dupe, no error caching, TTL expiry, and the invalidate-during-in-flight race. |
 | `lib/azure/__tests__/aoai-discovery-deadline.test.ts` | A paging deadline surfaces as `AoaiDiscoveryTimeoutError`, never as "deploy a gpt-4o model first"; a genuinely empty hub still gets the honest `NoAoaiDeploymentError` gate. |
+| `lib/azure/__tests__/aoai-discovery-truncated-walk.test.ts` | Over the real client + a stubbed slow ARM: an AOAI connection already collected by a truncated walk RESOLVES; one absent from a truncated walk raises the deadline; one absent from a **complete** walk still raises the honest deploy-a-model gate. |
 | `app/api/setup/__tests__/scan-cosmos-route.test.ts` | One slow subscription degrades the scan instead of 502-ing it; the fan-out shares one wall clock. |
 | `app/api/admin/gates/__tests__/gate-options-route.test.ts` | The 100-row picker cap bounds the page loop only — a DLZ subscription's resources stay pickable behind a crowded admin subscription; a hanging ARM truncates the picker (`truncated: 'time'`) instead of failing the request. |

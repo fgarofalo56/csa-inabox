@@ -42,8 +42,8 @@
  */
 
 import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
-import { PagingDeadlineError } from '@/lib/azure/paging-budget';
-import { NoAoaiDeploymentError, aoaiDiscoveryTimeout } from '@/lib/azure/aoai-errors';
+import { PagingDeadlineError, type PagingTruncation } from '@/lib/azure/paging-budget';
+import { NoAoaiDeploymentError, aoaiDiscoveryTimeout, aoaiDiscoveryIncomplete } from '@/lib/azure/aoai-errors';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -196,8 +196,7 @@ const credential = uamiClientId
 
 // ---------- AOAI discovery ----------
 
-// Re-exported for the many `instanceof` importers; see aoai-errors.ts for why
-// "nothing is deployed" and "ARM was slow" are separate types (#2557).
+// Re-exported for the many `instanceof` importers — see aoai-errors.ts (#2557).
 export { NoAoaiDeploymentError, AoaiDiscoveryTimeoutError } from './aoai-errors';
 
 export interface AoaiTarget {
@@ -321,14 +320,14 @@ async function resolveAoaiTargetRaw(
     return t;
   }
 
-  // 3. Discover via Foundry hub connections. requireComplete: a TRUNCATED list
-  // must NOT read as "no AOAI connection exists", and a deadline must NOT be
-  // rethrown as NoAoaiDeploymentError — that told the operator to deploy a
-  // model that already existed (#2557 review; no-vaporware honest-gate rule).
+  // 3. Discover via Foundry hub connections. SEARCH FIRST, require completeness
+  // LAST — completeness only decides the NEGATIVE case (aoaiDiscoveryIncomplete).
+  const trunc: { by: PagingTruncation | null } = { by: null };
   let conns: Awaited<ReturnType<typeof listConnections>> = [];
   try {
-    conns = await listConnections({ requireComplete: true });
+    conns = await listConnections({ onTruncated: (t) => { trunc.by = t; } });
   } catch (e: any) {
+    // A deadline is NOT NoAoaiDeploymentError (#2557 review).
     if (e instanceof PagingDeadlineError || e instanceof FetchTimeoutError) throw aoaiDiscoveryTimeout(e);
     throw new NoAoaiDeploymentError(
       `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ` +
@@ -341,6 +340,7 @@ async function resolveAoaiTargetRaw(
            (c.category || '').toLowerCase() === 'azureopenai',
   );
   if (!aoai || !aoai.target) {
+    if (trunc.by) throw aoaiDiscoveryIncomplete(trunc.by); // an incomplete list is not a conclusion
     throw new NoAoaiDeploymentError(
       `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ${expectedSuffixHint()}`,
     );

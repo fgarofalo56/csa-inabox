@@ -51,7 +51,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, isGovCloud } from './cloud-endpoints';
-import { PagingBudget, walkPagedList } from './paging-budget';
+import { PagingBudget, walkPagedList, PAGE_DEADLINE } from './paging-budget';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -619,17 +619,24 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
   const cap = opts.maxResults ?? 200;
   const out: AmlJob[] = [];
   // Row cap alone is not a bound: a chain of pages with an empty `value` walks
-  // forever. Budget it like every other pager (#2557).
+  // forever. Budget it like every other pager (#2557). The fetch runs through
+  // `runPage` so a deadline landing INSIDE it truncates exactly like one landing
+  // at the loop top — handing `remainingMs()` to fetch without absorbing the
+  // resulting FetchTimeoutError would still THROW, which is the behaviour this
+  // whole change exists to remove.
   const budget = new PagingBudget('aml listJobs');
   let next: string | null = null;
   while (budget.claimPage()) {
-    const res: Response = next
-      ? await fetchWithTimeout(
-          next,
-          { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
-          budget.remainingMs(),
-        )
-      : await amlFetch('/jobs', { query, timeoutMs: budget.remainingMs() });
+    const res = await budget.runPage(async (timeoutMs) =>
+      next
+        ? fetchWithTimeout(
+            next,
+            { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
+            timeoutMs,
+          )
+        : amlFetch('/jobs', { query, timeoutMs }),
+    );
+    if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     const j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
     if (!j) break;
     if (Array.isArray(j.value)) for (const r of j.value) out.push(shapeJob(r));

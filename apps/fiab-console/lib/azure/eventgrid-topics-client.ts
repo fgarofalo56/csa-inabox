@@ -44,7 +44,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { PagingBudget } from './paging-budget';
+import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 
 /** Control-plane (ARM) api-version covering topics + eventSubscriptions. */
 const EG_ARM_API = '2024-06-01-preview';
@@ -187,10 +187,13 @@ export async function listEventGridTopics(): Promise<EventGridTopic[]> {
   const cfg = readEventGridTopicsConfig();
   const out: EventGridTopic[] = [];
   // Bounded page walk (#2557) — a bare `while (nextLink)` inherits no ceiling.
+  // `runPage` absorbs a deadline that lands inside the fetch, so the breach
+  // truncates (rows kept) instead of throwing, exactly as at the loop top.
   const budget = new PagingBudget('eventgrid listTopics');
   let next = `${rgUrl(cfg)}/providers/Microsoft.EventGrid/topics?api-version=${EG_ARM_API}`;
   while (budget.claimPage()) {
-    const body: any = await arm(next, {}, budget.remainingMs());
+    const body = await budget.runPage((timeoutMs) => arm<any>(next, {}, timeoutMs));
+    if (body === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     if (Array.isArray(body?.value)) out.push(...body.value.map(shapeTopic));
     if (!body?.nextLink) break;
     next = body.nextLink;
@@ -277,10 +280,12 @@ export async function listTopicEventSubscriptions(topic: string): Promise<TopicE
   const url = `${topicUrl(cfg, topic)}/providers/Microsoft.EventGrid/eventSubscriptions?api-version=${EG_ARM_API}`;
   const out: TopicEventSubscription[] = [];
   // Bounded page walk (#2557) — a bare `while (nextLink)` inherits no ceiling.
+  // `runPage` absorbs a deadline that lands inside the fetch (see listTopics).
   const budget = new PagingBudget('eventgrid listTopicEventSubscriptions');
   let next = url;
   while (budget.claimPage()) {
-    const body: any = await arm(next, {}, budget.remainingMs());
+    const body = await budget.runPage((timeoutMs) => arm<any>(next, {}, timeoutMs));
+    if (body === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     for (const s of body?.value || []) {
       const p = s?.properties || {};
       const dest = p?.destination || {};

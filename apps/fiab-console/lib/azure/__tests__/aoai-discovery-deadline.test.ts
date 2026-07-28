@@ -101,7 +101,10 @@ describe('resolveAoaiTarget — a deadline is a deadline, not a missing model', 
     await expect(resolveAoaiTarget(true)).rejects.toBeInstanceOf(AoaiDiscoveryTimeoutError);
   });
 
-  it('asks for a COMPLETE list so a truncated one is never read as "absent"', async () => {
+  it('asks to be TOLD about truncation rather than pre-emptively failing on it', async () => {
+    // `onTruncated`, NOT `requireComplete`: completeness only matters if the
+    // search misses, so discovery must not demand it up front (that made the
+    // fix defeat itself — see aoai-discovery-truncated-walk.test.ts).
     listConnections.mockResolvedValue([
       { id: '/c/1', name: 'aoai', category: 'AzureOpenAI', target: 'https://aoai-x.openai.azure.com' },
     ]);
@@ -109,7 +112,9 @@ describe('resolveAoaiTarget — a deadline is a deadline, not a missing model', 
 
     await resolveAoaiTarget(true);
 
-    expect(listConnections).toHaveBeenCalledWith(expect.objectContaining({ requireComplete: true }));
+    const opts = listConnections.mock.calls[0][0];
+    expect(typeof opts?.onTruncated).toBe('function');
+    expect(opts?.requireComplete).toBeFalsy();
   });
 
   it('still reports the honest missing-deployment gate when the hub really has none', async () => {
