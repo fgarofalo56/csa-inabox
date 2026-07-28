@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1643 |
+| Total routes | 1645 |
 | Public (no session) | 116 |
-| Session-only | 575 |
-| Owner-scoped | 680 |
-| Admin | 272 |
+| Session-only | 571 |
+| Owner-scoped | 684 |
+| Admin | 274 |
 | Gated (backend config) | 528 |
 | Areas | 117 |
 
@@ -42,6 +42,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `access-governance/group-sync/route.ts` | POST | admin | ● | Cosmos |
 | `access-governance/report/route.ts` | GET | admin | ● | Cosmos |
 | `access-governance/reviews/[id]/decision/route.ts` | POST | admin |  | Cosmos |
+| `access-governance/reviews/[id]/evidence/route.ts` | GET | admin |  | Cosmos |
 | `access-governance/reviews/[id]/route.ts` | GET PATCH DELETE | admin |  | Cosmos |
 | `access-governance/reviews/route.ts` | GET POST | admin |  | Cosmos |
 | `access-governance/reviews/sweep/route.ts` | POST | admin |  | Cosmos |
@@ -153,6 +154,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/finops/anomalies/route.ts` | GET PUT DELETE | admin |  | Cosmos |
 | `admin/finops/breakdown/route.ts` | GET | admin |  | — |
 | `admin/finops/budgets/route.ts` | GET POST PUT DELETE | admin |  | — |
+| `admin/finops/focus/route.ts` | GET | admin |  | — |
 | `admin/finops/forecast/route.ts` | GET | admin |  | — |
 | `admin/gates/[id]/options/route.ts` | GET | admin | ● | — |
 | `admin/gates/[id]/resolve/route.ts` | POST | admin | ● | — |
@@ -1156,7 +1158,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/dashboard/[id]/pin/route.ts` | POST | session-only | ● | — |
 | `items/dashboard/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |
 | `items/dashboard/[id]/tile-embed-token/route.ts` | POST | session-only |  | — |
-| `items/dashboard/[id]/tile-query/route.ts` | POST | session-only | ● | AAS, ADX |
+| `items/dashboard/[id]/tile-query/route.ts` | POST | owner-scoped | ● | AAS, ADX |
 | `items/dashboard/route.ts` | GET | session-only |  | — |
 | `items/data-agent/[id]/a2a/route.ts` | GET POST | owner-scoped |  | — |
 | `items/data-agent/[id]/chat/route.ts` | POST | owner-scoped |  | — |
@@ -1243,7 +1245,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-sql-warehouse/[id]/model/route.ts` | GET POST DELETE | owner-scoped |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/query-history/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/query-profile/route.ts` | GET | session-only | ● | Databricks |
-| `items/databricks-sql-warehouse/[id]/query/route.ts` | POST | session-only |  | Databricks |
+| `items/databricks-sql-warehouse/[id]/query/route.ts` | POST | owner-scoped |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/schema/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/script-out/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-sql-warehouse/[id]/start/route.ts` | POST | session-only |  | Databricks |
@@ -1682,7 +1684,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/warehouse/[id]/iqy/route.ts` | POST | session-only |  | — |
 | `items/warehouse/[id]/model/route.ts` | — | public |  | — |
 | `items/warehouse/[id]/query-acceleration/route.ts` | GET POST | session-only | ● | Synapse SQL, Synapse pool |
-| `items/warehouse/[id]/query/route.ts` | POST | session-only |  | Synapse SQL, Synapse pool |
+| `items/warehouse/[id]/query/route.ts` | POST | owner-scoped |  | Synapse SQL, Synapse pool |
 | `items/warehouse/[id]/restore-points/route.ts` | GET POST | session-only | ● | Synapse pool |
 | `items/warehouse/[id]/schema/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
 | `items/warehouse/[id]/script-out/route.ts` | GET | session-only |  | Synapse SQL, Synapse pool |
@@ -2220,7 +2222,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `warehouse/explain/route.ts` | POST | session-only | ● | Synapse SQL, Synapse pool |
 | `warehouse/history/route.ts` | GET | session-only | ● | Synapse SQL, Synapse pool |
-| `warehouse/query/route.ts` | POST | session-only | ● | Synapse SQL, Synapse pool |
+| `warehouse/query/route.ts` | POST | owner-scoped | ● | Synapse SQL, Synapse pool |
 
 ## workloads-catalog
 
