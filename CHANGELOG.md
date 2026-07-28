@@ -25,6 +25,45 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.77.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.76.0...csa-inabox-v0.77.0) (2026-07-28)
+
+
+### Features
+
+* **loom-next-level:** §P2-gaps residual wave — EXP1/A14/CMK1/U8/U9/U13/L5/SC1/CH1 ([#2523](https://github.com/fgarofalo56/csa-inabox/issues/2523)) ([d713354](https://github.com/fgarofalo56/csa-inabox/commit/d713354ed174dbcb1536d816b8c24ccca5e8131f))
+
+
+### Bug Fixes
+
+* **loom-apex:** Phase A platform integrity — chunk-skew recovery, route boundaries, silent-failure fixes, canvas resize, ledger truth-fix ([#2542](https://github.com/fgarofalo56/csa-inabox/issues/2542)) ([4bfa3ed](https://github.com/fgarofalo56/csa-inabox/commit/4bfa3ed5b492cb10ecc0f264e47bfd98fbf5c134))
+* **p2:** nested CanvasFullscreenHost passthrough + mcp-bridge gnutls patch ([#2527](https://github.com/fgarofalo56/csa-inabox/issues/2527)) ([11ea763](https://github.com/fgarofalo56/csa-inabox/commit/11ea763b02203956c3653517991f6af9bf74b6be))
+* **sc1:** scope trivy gate to vuln scanning + reviewed CVE baseline ([#2526](https://github.com/fgarofalo56/csa-inabox/issues/2526)) ([fb3e0aa](https://github.com/fgarofalo56/csa-inabox/commit/fb3e0aacfd40473b1c4793766953d5c33eb806ae))
+
+
+### Documentation
+
+* **apex:** committed KICKOFF.md — machine-wipe-safe resume prompt ([#2539](https://github.com/fgarofalo56/csa-inabox/issues/2539)) ([a45a2e9](https://github.com/fgarofalo56/csa-inabox/commit/a45a2e9e8a472e5c37467ecb638511ad081da1dd))
+* **apex:** live gate-registry + Model Fabric state (minted-session probe) ([#2538](https://github.com/fgarofalo56/csa-inabox/issues/2538)) ([59ba312](https://github.com/fgarofalo56/csa-inabox/commit/59ba312d7d4b0358bb494242330283f3a2bef7c5))
+* **prp:** §P2 both-estates roll receipt (11ea763b live, first roll through the SC1 chain) ([#2529](https://github.com/fgarofalo56/csa-inabox/issues/2529)) ([7d609e9](https://github.com/fgarofalo56/csa-inabox/commit/7d609e978ad807c855f422d4cc33a6d4448ce739))
+* **prp:** loom-apex — the finishing program (drain + zero-gates + page-integrity + help + Loom Unity + adversarial review) ([#2528](https://github.com/fgarofalo56/csa-inabox/issues/2528)) ([3640b36](https://github.com/fgarofalo56/csa-inabox/commit/3640b36a25c104c223340a462c1a1273d9b541ec))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump @testing-library/jest-dom in /portal/react-webapp ([#2531](https://github.com/fgarofalo56/csa-inabox/issues/2531)) ([4235207](https://github.com/fgarofalo56/csa-inabox/commit/423520762417f49596e1afb7881695d7e0a78d8f))
+* **deps-dev:** bump ts-jest in /portal/react-webapp ([#2534](https://github.com/fgarofalo56/csa-inabox/issues/2534)) ([0049f3d](https://github.com/fgarofalo56/csa-inabox/commit/0049f3da91948991dad422578d906282629e979b))
+* **deps-dev:** bump ws from 8.20.0 to 8.21.1 in /portal/react-webapp ([#2492](https://github.com/fgarofalo56/csa-inabox/issues/2492)) ([5201c67](https://github.com/fgarofalo56/csa-inabox/commit/5201c676c96c34a631b01b4513a6ef3af438a3e5))
+* **deps:** bump @radix-ui/react-dialog in /portal/react-webapp ([#2536](https://github.com/fgarofalo56/csa-inabox/issues/2536)) ([ab4eea7](https://github.com/fgarofalo56/csa-inabox/commit/ab4eea7e74ba13db28cb7965017a731af331c8db))
+* **deps:** bump @radix-ui/react-label in /portal/react-webapp ([#2530](https://github.com/fgarofalo56/csa-inabox/issues/2530)) ([b396213](https://github.com/fgarofalo56/csa-inabox/commit/b39621377db76391aabddcaf4147681aa69c1346))
+* **deps:** bump @radix-ui/react-toast in /portal/react-webapp ([#2532](https://github.com/fgarofalo56/csa-inabox/issues/2532)) ([290e316](https://github.com/fgarofalo56/csa-inabox/commit/290e316cdb257978b6c896dbc557c136d89f8775))
+* **deps:** bump esbuild and vitest ([#2436](https://github.com/fgarofalo56/csa-inabox/issues/2436)) ([8906484](https://github.com/fgarofalo56/csa-inabox/commit/8906484387252ffd208e77db5cc2561fe5b9e4e0))
+* **deps:** bump esbuild and vitest ([#2485](https://github.com/fgarofalo56/csa-inabox/issues/2485)) ([db98c96](https://github.com/fgarofalo56/csa-inabox/commit/db98c965aa2d05a2958fd897a7c0dee81133f7e1))
+* **deps:** bump next from 16.2.10 to 16.2.11 in /portal/react-webapp ([#2437](https://github.com/fgarofalo56/csa-inabox/issues/2437)) ([236427a](https://github.com/fgarofalo56/csa-inabox/commit/236427a6355effb73fe8952a1a262022d6fff69a))
+* **deps:** bump pyarrow from 18.1.0 to 23.0.1 in /apps/loom-duckdb ([#2504](https://github.com/fgarofalo56/csa-inabox/issues/2504)) ([04913be](https://github.com/fgarofalo56/csa-inabox/commit/04913be167135927142c9960a0b41a8616f88921))
+* **deps:** bump react-hook-form in /portal/react-webapp ([#2533](https://github.com/fgarofalo56/csa-inabox/issues/2533)) ([a86c7cc](https://github.com/fgarofalo56/csa-inabox/commit/a86c7cc12fc893fa80b10bcbe8d69eb595e790e2))
+* **deps:** bump vite and vitest ([#2435](https://github.com/fgarofalo56/csa-inabox/issues/2435)) ([bf63ad9](https://github.com/fgarofalo56/csa-inabox/commit/bf63ad902748d67c8ce15966f22b6a0e3fb268a0))
+* **deps:** bump vite and vitest in /azure-functions/copilot-evaluator ([#2487](https://github.com/fgarofalo56/csa-inabox/issues/2487)) ([2c8357e](https://github.com/fgarofalo56/csa-inabox/commit/2c8357eacefd83e807a3f700e580cb1e9daa90e8))
+
 ## [0.76.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.75.0...csa-inabox-v0.76.0) (2026-07-24)
 
 
