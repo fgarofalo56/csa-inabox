@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.77.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.77.0...csa-inabox-v0.77.1) (2026-07-28)
+
+
+### Miscellaneous
+
+* **deps:** bump @radix-ui/react-select in /portal/react-webapp ([#2535](https://github.com/fgarofalo56/csa-inabox/issues/2535)) ([e9743eb](https://github.com/fgarofalo56/csa-inabox/commit/e9743eb7e0c7d807efd349a236ac384e68e5c81e))
+
 ## [0.77.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.76.0...csa-inabox-v0.77.0) (2026-07-28)
 
 
