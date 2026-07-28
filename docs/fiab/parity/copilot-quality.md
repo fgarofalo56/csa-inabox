@@ -1,6 +1,8 @@
 # copilot-quality — parity with Azure AI Foundry evaluation / observability
 
-**Loom surface:** `/admin/copilot-quality` (E5, loom-next-level ws-copilot-cost.md)
+**Loom surface:** `/admin/ai-operations?tab=quality` — the Copilot-quality tab of the
+AI-operations hub (E5, loom-next-level ws-copilot-cost.md). `/admin/copilot-quality`
+redirects here (IA-04).
 **Source UI:** Azure AI Foundry portal → *Evaluation* + *Observability* (per-run
 metrics, groundedness/retrieval scores, run history, row-level drill-in) —
 <https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai>.

@@ -7,7 +7,8 @@ canary weight-shifting (Azure Well-Architected safe-deployments). Loom fuses the
 eval + red-team + serving + SLO signals into ONE automatic promote/demote loop
 no single-product competitor ships.
 
-Admin surface: `/admin/model-fabric` → `lib/components/admin/model-fabric-panel.tsx`
+Admin surface: `/admin/ai-operations?tab=fabric` → `lib/components/admin/model-fabric-panel.tsx`
+(`/admin/model-fabric` redirects here, IA-04)
 Backends: `lib/admin/model-fabric.ts` (pure decider) + `lib/admin/model-fabric-loop.ts`
 (signal reader + actuator) over WS-1.1 tier-router, WS-1.2 model-serving, WS-1.4
 eval/red-team/SLO, the shared `env-apply` write path, and the Cosmos audit-log.
