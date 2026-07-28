@@ -482,6 +482,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'CH1',
     surface: '/admin/health?tab=chaos + POST /api/admin/chaos/dependency',
   },
+  // ── B-N19e — FOCUS cost-per-query / per-dashboard attribution ──
+  {
+    id: 'n19e-focus-cost-attribution',
+    label: 'FinOps — FOCUS cost-per-query / per-dashboard attribution',
+    description:
+      'The B-N19e FOCUS 1.1 mart: every query run (SQL Lab/DuckDB, Synapse dedicated + serverless, ADX/KQL, Trino, Databricks SQL, AAS DAX, dashboard tiles) is tagged with user + item + workspace + dashboard in the cost-attribution ledger, then priced by allocating the REAL Cost Management spend of that engine\'s ARM resource type. OFF makes GET /api/admin/finops/focus return a guided "turned off" 503 and the cost panels on /admin/finops + /admin/chargeback render that notice on the next load; query runs keep being recorded to the ledger (so nothing is lost) and every other cost surface is unaffected. No roll needed.',
+    ownerItem: 'B-N19e',
+    surface: '/admin/finops + /admin/chargeback FOCUS panel + GET /api/admin/finops/focus',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

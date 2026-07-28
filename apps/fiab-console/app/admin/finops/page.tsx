@@ -40,6 +40,7 @@ import {
   ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
 import { assembleFinopsTiles, type FinopsTile, type TileIntent } from '@/lib/admin/finops-view';
+import { FocusCostPanel } from '@/lib/components/finops/focus-cost-panel';
 import type { CostAnomaly } from '@/lib/azure/cost-anomaly-core';
 import type { CostBudget } from '@/lib/azure/cost-client';
 import type { CostAnomalyRuleDoc } from '@/lib/azure/cost-anomaly-rules-model';
@@ -346,6 +347,9 @@ export default function FinopsPage() {
                 title={`Spend by ${dimension} (${currency})`} />
             ) : <Body1>No breakdown data.</Body1>}
         </div>
+
+        {/* B-N19e — FOCUS cost-per-query / per-dashboard attribution */}
+        <FocusCostPanel title="Cost per query / per dashboard (FOCUS)" />
 
         {/* Budgets */}
         <div className={styles.section}>

@@ -25,6 +25,7 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
 import { StaleDataBadge } from '@/lib/components/ui/stale-data-badge';
+import { FocusCostPanel } from '@/lib/components/finops/focus-cost-panel';
 
 interface DomainCostRow { domainId: string; name: string; cost: number; pctOfTotal: number }
 interface ChargebackModel {
@@ -582,6 +583,9 @@ export default function ChargebackPage() {
           )}
         </Section>
       )}
+
+      {/* B-N19e — FOCUS cost-per-query / per-dashboard attribution */}
+      {!unauth && <FocusCostPanel />}
     </AdminShell>
   );
 }

@@ -29,8 +29,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
+import { recordQueryRun } from '@/lib/finops/query-run';
 import {
   executeDatasetQueries,
   PowerBiError,
@@ -77,12 +79,10 @@ function shapePbiResult(resp: Awaited<ReturnType<typeof executeDatasetQueries>>)
   return { columns, rows };
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session, params }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
-  await ctx.params; // keep the dynamic segment (parity with sibling routes)
+  const dashboardId = params.id;
 
   const body = await req.json().catch(() => ({}));
   const kind = body?.kind as TileKind | undefined;
@@ -91,6 +91,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
   const nlPrompt = String(body?.nlPrompt || '').trim();
   let query = String(body?.query || '').trim();
+  /** Tile the run belongs to — carried into the FOCUS per-dashboard rollup. */
+  const tileId = String(body?.tileId || '').trim() || undefined;
   const started = Date.now();
 
   // ---- DAX (Q&A or pinned-measure) ----
@@ -129,6 +131,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         const { server, model } = resolveAasTarget();
         const r = await executeDax(server, model, query);
+        // B-N19e — per-DASHBOARD cost attribution (this tile's run).
+        void recordQueryRun({
+          tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+          engine: 'aas-dax', statement: query, durationMs: r.executionMs ?? (Date.now() - started),
+          rowCount: r.rowCount, itemId: dashboardId, itemType: 'dashboard',
+          dashboardId, dashboardTile: tileId, resourceId: `${server}/${model}`,
+        });
         return NextResponse.json({ ok: true, columns: r.columns, rows: r.rows, rowCount: r.rowCount, truncated: r.truncated, executionMs: r.executionMs, generatedQuery });
       } catch (e: any) {
         const status = e instanceof AasError ? e.status : 502;
@@ -180,9 +189,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const database = String(body?.database || '').trim() || defaultDatabase();
   try {
     const r = await executeQuery(database, query);
+    // B-N19e — per-DASHBOARD cost attribution for the Azure-native (ADX) tile
+    // path. The Power BI DAX branch above is the OPT-IN Fabric-family
+    // alternative: its spend is billed to the Power BI capacity, not to the
+    // Loom Azure subscriptions Cost Management meters, so it is deliberately
+    // NOT recorded here rather than attributed against a resource type that
+    // never carried it.
+    void recordQueryRun({
+      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+      engine: 'adx', statement: query, durationMs: r.executionMs ?? (Date.now() - started),
+      rowCount: r.rowCount, itemId: dashboardId, itemType: 'dashboard',
+      dashboardId, dashboardTile: tileId, resourceId: database,
+    });
     return NextResponse.json({ ok: true, columns: r.columns, rows: r.rows, rowCount: r.rowCount, truncated: r.truncated, executionMs: r.executionMs, visualization: r.visualization });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
