@@ -23,10 +23,11 @@
  * types* are the things you create/manage inside it.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner, makeStyles, tokens, Badge, Button, Body1, Text, Tooltip, Caption1,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
 } from '@fluentui/react-components';
 import {
   ArrowRight20Regular, Star20Filled, AppsAddIn20Filled,
@@ -169,14 +170,25 @@ export default function WorkloadHubPage() {
     try { window.localStorage.setItem(LS_VIEW, view); } catch { /* ignore */ }
   }, [view]);
 
-  useEffect(() => {
+  // A3 (silent-failure fix): a rejected /api/workloads-catalog fetch must not
+  // silently render as "no tenant enablements". The registry-derived workloads
+  // below still work (partial data), so keep rendering them and surface an
+  // honest error MessageBar with a Retry for the catalog overlay.
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const loadCatalog = useCallback(() => {
+    setCatalogError(null);
     clientFetch('/api/workloads-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setCatalog([]); return null; }
       return r.json();
     }).then(d => {
       if (d) setCatalog(Array.isArray(d?.workloads) ? d.workloads : []);
-    }).catch(() => setCatalog([]));
+    }).catch((e: unknown) => {
+      setCatalog([]);
+      setCatalogError(e instanceof Error && e.message ? e.message : 'The request failed before the service answered (network or timeout).');
+    });
   }, []);
+
+  useEffect(() => { loadCatalog(); }, [loadCatalog]);
 
   // Registry-derived workloads, enriched with the tenant catalog overlay.
   const workloads = useMemo<HubWorkload[]>(() => {
@@ -346,6 +358,19 @@ export default function WorkloadHubPage() {
       subtitle="Pick a workload, then create or manage the item types inside it."
     >
       {unauth && <SignInRequired subject="workloads" />}
+
+      {!loading && catalogError && (
+        <MessageBar intent="error" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Could not load the tenant workload catalog</MessageBarTitle>
+            {catalogError} The built-in workloads below still work — only the tenant
+            enablement overlay (which accelerators show under “My workloads”) is affected.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={loadCatalog}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
 
       {!loading && (
         <div className={s.hero}>

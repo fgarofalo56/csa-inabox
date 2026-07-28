@@ -24,7 +24,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   makeStyles, tokens, Card, Title3, Subtitle2, Body1, Caption1, Badge, Spinner,
-  Button, Tab, TabList, MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
+  Button, Tab, TabList, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Dropdown, Option, Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent,
   DialogActions, Field, Input, Textarea,
@@ -108,6 +108,26 @@ function fmt(ts?: string): string {
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
 }
 
+/**
+ * Honest transport-failure state (loom-apex A3). A rejected fetch must NEVER
+ * fall through to the healthy/empty EmptyState — that masks an outage as
+ * "all monitored tables are healthy" (the 2026-07-15 G1 0-count class).
+ */
+function FetchErrorBar({ title, error, onRetry }: { title: string; error: unknown; onRetry: () => void }) {
+  return (
+    <MessageBar intent="error" layout="multiline">
+      <MessageBarBody>
+        <MessageBarTitle>{title}</MessageBarTitle>
+        {(error instanceof Error && error.message) || 'The request failed before the service answered (network or timeout).'}{' '}
+        This is a transport failure, not a healthy state — retry, and if it persists check the console replica logs.
+      </MessageBarBody>
+      <MessageBarActions>
+        <Button size="small" icon={<ArrowClockwise20Regular />} onClick={onRetry}>Retry</Button>
+      </MessageBarActions>
+    </MessageBar>
+  );
+}
+
 // ── main pane ────────────────────────────────────────────────────────────────
 export function IncidentConsole() {
   const styles = useStyles();
@@ -177,12 +197,16 @@ export function IncidentConsole() {
       )}
 
       {tab === 'incidents' ? (
-        <IncidentsTab
-          loading={listQ.isLoading}
-          incidents={incidents}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-        />
+        listQ.isError ? (
+          <FetchErrorBar title="Could not load incidents" error={listQ.error} onRetry={() => void listQ.refetch()} />
+        ) : (
+          <IncidentsTab
+            loading={listQ.isLoading}
+            incidents={incidents}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
+        )
       ) : (
         <MonitorsTab />
       )}
@@ -252,6 +276,9 @@ function IncidentDetail({ id }: { id: string }) {
   });
 
   if (detailQ.isLoading) return <Spinner label="Loading incident…" />;
+  if (detailQ.isError) {
+    return <FetchErrorBar title="Could not load this incident" error={detailQ.error} onRetry={() => void detailQ.refetch()} />;
+  }
   if (!incident) return <MessageBar intent="error"><MessageBarBody>Incident not found.</MessageBarBody></MessageBar>;
 
   const m = incident.metric;
@@ -361,6 +388,9 @@ function MonitorsTab() {
   const [observeFor, setObserveFor] = useState<Monitor | null>(null);
 
   if (monQ.isLoading) return <Spinner label="Loading monitors…" />;
+  if (monQ.isError) {
+    return <FetchErrorBar title="Could not load monitors" error={monQ.error} onRetry={() => void monQ.refetch()} />;
+  }
 
   return (
     <div className={styles.root}>

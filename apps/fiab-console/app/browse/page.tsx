@@ -25,15 +25,18 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { PageShell } from '@/lib/components/page-shell';
 import { RecentItems } from '@/lib/components/recent-items';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   makeStyles,
   tokens,
   Spinner,
   Badge,
+  Button,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
+  MessageBarTitle,
   Text,
 } from '@fluentui/react-components';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -142,15 +145,26 @@ export default function BrowsePage() {
     }
   }, [view]);
 
-  useEffect(() => {
+  // A3 (silent-failure fix): a rejected /api/workspaces fetch must NOT render
+  // as "0 workspaces" — that is the 2026-07-15 G1 dead-data-path class. Track
+  // the failure and surface an honest error MessageBar with a Retry.
+  const [wsError, setWsError] = useState<string | null>(null);
+  const loadWorkspaces = useCallback(() => {
+    setWsError(null);
+    setWorkspaces(null);
     clientFetch('/api/workspaces')
       .then((r) => r.json())
       .then((d) => {
         const list = Array.isArray(d) ? d : d?.workspaces || [];
         setWorkspaces(list);
       })
-      .catch(() => setWorkspaces([]));
+      .catch((e: unknown) => {
+        setWorkspaces([]);
+        setWsError(e instanceof Error && e.message ? e.message : 'The request failed before the service answered (network or timeout).');
+      });
   }, []);
+
+  useEffect(() => { loadWorkspaces(); }, [loadWorkspaces]);
 
   const filter = q.trim().toLowerCase();
 
@@ -243,7 +257,7 @@ export default function BrowsePage() {
         onSearch={setQ}
         searchPlaceholder="Filter pinned and workspaces…"
         actions={
-          !pinsLoading && !wsLoading ? (
+          !pinsLoading && !wsLoading && !wsError ? (
             <div className={styles.countBadges}>
               <Badge appearance="outline">{pins?.length ?? 0} pinned</Badge>
               <Badge appearance="outline">{workspaces?.length ?? 0} workspaces</Badge>
@@ -340,7 +354,18 @@ export default function BrowsePage() {
             <Spinner size="tiny" label="Loading workspaces…" />
           </div>
         )}
-        {!wsLoading && (workspaces?.length ?? 0) === 0 && (
+        {!wsLoading && wsError && (
+          <MessageBar intent="error" layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>Could not load workspaces</MessageBarTitle>
+              {wsError} Your workspaces still exist — this is a transport failure, not an empty tenant.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button size="small" onClick={loadWorkspaces}>Retry</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
+        {!wsLoading && !wsError && (workspaces?.length ?? 0) === 0 && (
           <GuidedEmptyState
             title="No workspaces yet"
             intro="Workspaces group the items your team builds. Start one, install a ready-made app, or explore the marketplace."

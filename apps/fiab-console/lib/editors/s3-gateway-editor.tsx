@@ -18,8 +18,8 @@
 
 import { useQuery } from '@tanstack/react-query';
 import {
-  Badge, Body1, Caption1, Subtitle2, Spinner,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  Badge, Body1, Button, Caption1, Subtitle2, Spinner,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { CloudLink20Regular, Link20Regular } from '@fluentui/react-icons';
@@ -132,6 +132,23 @@ export function S3GatewayEditor({ item, id }: { item: FabricItemType; id: string
         </div>
 
         {q.isLoading && <Spinner size="small" label="Reading gateway config…" labelPosition="after" />}
+
+        {/* A3 (silent-failure fix): fetchInfo throws on !res.ok / transport
+            failure — render it honestly instead of a blank body under the
+            toolbar (this was the repo's only useQuery consumer with zero
+            error references). */}
+        {q.isError && (
+          <MessageBar intent="error" layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>Could not read the S3 gateway configuration</MessageBarTitle>
+              {(q.error as Error)?.message || 'The request failed before /api/s3-gateway/info answered (network or timeout).'}{' '}
+              The native abfss:// + Iceberg REST Catalog path is unaffected.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button size="small" onClick={() => void q.refetch()}>Retry</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
 
         {/* The native no-gateway path — always shown; it is the recommended default. */}
         {data?.nativePath && (
