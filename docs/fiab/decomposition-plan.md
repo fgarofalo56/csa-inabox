@@ -138,6 +138,56 @@ per-tab state into each pane and lift only the shared model doc into a
 `useSemanticModel()` reducer/context. **Target:** shell + context ~700 LOC;
 each pane group < 800; no pane > 500.
 
+**Progress — R10 slice 1 (loom-apex B-R10).** The "already-standalone units"
+row above shipped as WS-E1 (9 sibling modules under
+`phase3/semantic-model-editor/`, 4617→3025 LOC). R10 slice 1 then lifted the
+first three *ops* clusters — **aggregations**, **Direct Lake (shim)**, and
+**incremental refresh + enhanced refresh** — out of `SemanticModelEditorInner`
+(3025→2397 LOC; ratchet re-baselined 3050→2400). Each moved as a pair in one
+sibling module: a `use<Cluster>()` hook holding the cluster's `useState` /
+`useCallback` / `useEffect` **verbatim**, plus a presentational `<...Tab>` body
+that receives the hook's api object. The parent calls each hook
+**unconditionally**, at the position the raw block occupied, so hook order,
+effect order, and state lifetime across tab switches are unchanged — which is
+what makes the move purely structural (state does NOT move into the
+conditionally-mounted body; that would reset every draft on tab switch).
+
+**The hook-order constraint is now enforced, not asserted.** The first push of
+this slice collapsed the incremental-refresh cluster into a single hook, which
+silently moved its 17-`useState` run 70 hook positions later — the cluster was
+NOT contiguous in the monolith (state at ~line 411, callbacks at ~line 979,
+after `loadRefreshes`). A non-contiguous cluster must therefore be exported as
+**two hooks** (`use…State()` + `use…Actions()`) called at the two original
+positions. `apps/fiab-console/lib/editors/__tests__/semantic-model-hook-order.test.ts`
+diffs the component's expanded hook sequence against a golden captured from the
+pre-decomposition file (`fixtures/semantic-model-hook-order.txt`, 193 entries at
+commit `20b3fe93`). **Every future slice must keep that golden green**, or
+regenerate it in the same commit so the fixture diff shows exactly what changed.
+
+Remaining slices, same pattern, in descending payoff order. Line refs are
+against the **2,397-line** file this slice produced (`state` = the `useState`
+block; `JSX` = the tab body / dialog):
+
+| Slice | Cluster | Parent lines today | Est. LOC |
+|-------|---------|--------------------|----------|
+| 2 | Tables tab — XMLA column metadata, calc column/table dialogs, per-table storage mode | state 276–295 (+ per-table modes 550–554), callbacks 297–408, JSX 1292–1564 + the calc-column / calc-table dialogs 2318–2397 | ~380 |
+| 3 | "Get data" Power Query ingest dialog + connector gallery | state 560–573, JSX (the `<Dialog open={getDataOpen}>`) 1063–1199 | ~240 |
+| 4 | Measures tab — DAX validator + DAX Copilot + format/folder persistence | state 189–207, JSX 1713–1858 | ~215 |
+| 5 | Calc groups + field parameters | types 155–158, state 159–164, JSX 2049–2160 | ~180 |
+| 6 | Scheduled refresh (config tab) + refresh history | state 261–268, JSX 1865–1891 (history) + 1897–1937 (schedule) | ~150 |
+| 7 | Model builder ("Build model" tab, push-dataset authoring) | types 173–177, state 178–184, JSX 1638–1712 | ~130 |
+| 8 | Direct Lake **query** tab (distinct from the shim in slice 1) | `DlQueryResult` interface 514–532, state 533–536, JSX 2162–2312 | ~150 |
+
+Slices 2 and 6 are adjacent but disjoint: the scheduled-refresh state is
+261–268 and the Tables-tab XMLA state starts at 276. Do not merge them.
+
+Only after those does the `useSemanticModel()` reducer/context step become
+worthwhile — the per-cluster hooks are its natural inputs. R18's shared
+`lib/editors/use-editor-state.ts` is the intended home for the *document*
+state (tables/relationships/measures) once the ops clusters are out of the way;
+adopting it changes save/dirty semantics, so it must be its own PR with a
+browser E2E receipt, never bundled into a structural slice.
+
 ---
 
 ## 4. `notebook-editor.tsx` — 3875 LOC
