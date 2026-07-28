@@ -15,6 +15,20 @@ name: loom-drift-check
 # an ACR "allow unsigned" toggle or a firewall rule — that silently diverged
 # from IaC). The scheduled lane IS the per-cloud mechanism (one job per estate).
 #
+# SIGNAL QUALITY (2026-07-28, issues #2540/#2541). The raw what-if changeType is
+# NOT a usable drift verdict on its own — the first scheduled run filed 11
+# "deltas" that were 100% documented ARM what-if noise (9 identical UAMI
+# `properties.isolationScope` reports plus Grafana/Container-App server defaults;
+# Learn: properties "can be incorrectly reported as deleted when they aren't in
+# the Bicep file, but are automatically set during deployment as default
+# values"). The verdict now runs through scripts/ci/whatif-drift-verdict.mjs,
+# which (a) suppresses ONLY allowlisted read-only/server-defaulted properties
+# (scripts/ci/whatif-noise-allowlist.json — Delete/NoEffect only, all-or-nothing
+# per resource, every suppression printed) and (b) surfaces the
+# NestedDeploymentShortCircuited coverage gap, because what-if cannot expand
+# modules whose params come from module outputs and silently marks their
+# resources `Ignore` — so a bare "zero deltas" would overstate what was checked.
+#
 # deployAppsEnabled=false on both estates: the app plane (Container Apps) rolls
 # continuously via loom-roll-and-validate.yml / gov-console-roll.yml with
 # sha-tagged images that churn BY DESIGN — including them would make every run
@@ -104,6 +118,24 @@ jobs:
           EXTRA_PARAMS: ${{ inputs.extra_parameters }} ${{ vars.LOOM_DRIFT_EXTRA_PARAMS }}
         run: |
           az bicep install
+
+          # Drift detection COMPARES state; it never deploys. The default
+          # --validation-level Provider additionally preflight-checks that the
+          # lane's SP could *deploy* every resource in the template — which is
+          # how the Gov lane died on 2026-07-27 (issue #2541): the gov deploy SP
+          # lacks Microsoft.Authorization/roleAssignments/write, so what-if
+          # errored out before comparing a single resource and the Gov estate
+          # had ZERO drift coverage. ProviderNoRbac keeps full template +
+          # resource validation and drops only the deploy-permission preflight.
+          # Requires az >= 2.76.0; probed so an older runner image degrades to
+          # the old behaviour with a loud warning instead of breaking the lane.
+          VALIDATION_ARGS=""
+          AZ_VER=$(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "0.0.0")
+          if [[ "$(printf '%s\n' "2.76.0" "$AZ_VER" | sort -V | head -1)" == "2.76.0" ]]; then
+            VALIDATION_ARGS="--validation-level ProviderNoRbac"
+          else
+            echo "::warning::[$CLOUD_LABEL] az $AZ_VER < 2.76.0 — --validation-level unavailable; an RBAC preflight failure can abort the what-if before it compares anything. See docs/fiab/runbooks/bicep-drift.md."
+          fi
           set +e
           az deployment sub what-if \
             --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }} \
@@ -115,11 +147,12 @@ jobs:
             --parameters deployAppsEnabled=false \
             --parameters loomVanityDomain="$FIAB_VANITY_DOMAIN" \
             $EXTRA_PARAMS \
+            $VALIDATION_ARGS \
             --no-pretty-print --only-show-errors > whatif.json 2> whatif.err
           EXIT_CODE=$?
           set -e
 
-          if [[ $EXIT_CODE -ne 0 ]] || ! jq -e '.changes' whatif.json >/dev/null 2>&1; then
+          if [[ $EXIT_CODE -ne 0 ]]; then
             echo "status=Error" >> "$GITHUB_OUTPUT"
             echo "::error::[$CLOUD_LABEL] what-if FAILED (exit $EXIT_CODE) — the drift verdict is UNKNOWN. stderr:"
             cat whatif.err || true
@@ -127,35 +160,22 @@ jobs:
             exit 1
           fi
 
-          COUNTS=$(jq -c '[.changes[]?] | group_by(.changeType) | map({(.[0].changeType): length}) | add // {}' whatif.json)
-          DRIFT=$(jq '[.changes[]? | select(.changeType == "Create" or .changeType == "Delete" or .changeType == "Modify")] | length' whatif.json)
-          jq -r '.changes[]? | select(.changeType != "NoChange" and .changeType != "Ignore") | "\(.changeType)\t\(.resourceId)"' whatif.json | head -200 > drift-list.txt
-
-          echo "counts=$COUNTS" >> "$GITHUB_OUTPUT"
-          echo "drift_count=$DRIFT" >> "$GITHUB_OUTPUT"
-          {
-            echo "drift_list<<DRIFT_EOF"
-            cat drift-list.txt
-            echo "DRIFT_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          {
-            echo "### [$CLOUD_LABEL] bicep-drift check — $DRIFT managed-resource delta(s)"
-            echo ""
-            echo "Change counts: \`$COUNTS\`"
-            echo ""
-            echo '```'
-            cat drift-list.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$DRIFT" != "0" ]]; then
-            echo "status=Drift" >> "$GITHUB_OUTPUT"
-            echo "::error::[$CLOUD_LABEL] UNMANAGED DRIFT — $DRIFT Create/Delete/Modify delta(s) between platform/fiab/bicep and the live estate. See the step summary / artifact; runbook docs/fiab/runbooks/bicep-drift.md."
-            exit 1
-          fi
-          echo "status=Clean" >> "$GITHUB_OUTPUT"
-          echo "::notice::[$CLOUD_LABEL] estate matches IaC — zero unmanaged deltas."
+          # Single-source verdict (shared with bicep-whatif.yml's PR lane):
+          #   * filters DOCUMENTED ARM what-if noise — read-only / server-
+          #     defaulted properties the template does not declare, which a
+          #     redeploy re-applies verbatim (Learn: "considered 'noise' in the
+          #     what-if response"). Allowlist + per-entry rationale:
+          #     scripts/ci/whatif-noise-allowlist.json. Only propertyChangeType
+          #     Delete/NoEffect on an allowlisted path is suppressible, a
+          #     resource must have ALL its deltas allowlisted to drop out, and
+          #     every suppression is printed.
+          #   * reports the NestedDeploymentShortCircuited coverage gap so a
+          #     "clean" verdict never silently covers unexpanded modules.
+          # Writes status/counts/drift_count/suppressed_count/
+          # shortcircuit_count/evaluated_count/coverage_note/*_list to
+          # $GITHUB_OUTPUT + the markdown block to $GITHUB_STEP_SUMMARY, and
+          # exits 1 on REAL drift.
+          node scripts/ci/whatif-drift-verdict.mjs whatif.json --out-dir . --label "$CLOUD_LABEL"
 
       - name: Upload full what-if JSON
         if: always()
@@ -166,6 +186,8 @@ jobs:
             whatif.json
             whatif.err
             drift-list.txt
+            suppressed-list.txt
+            summary.md
           if-no-files-found: ignore
 
       - name: Alert — notify the shared action group (loom-default-alerts)
@@ -190,22 +212,35 @@ jobs:
           script: |
             const cloud = 'Commercial';
             const label = 'drift-commercial';
-            const status = `${{ steps.whatif.outputs.status }}` || 'Error';
-            const drift = `${{ steps.whatif.outputs.drift_count }}` || '?';
-            const counts = `${{ steps.whatif.outputs.counts }}` || '{}';
+            const status = process.env.WHATIF_STATUS || 'Error';
+            const drift = process.env.DRIFT_COUNT || '?';
+            const counts = process.env.WHATIF_COUNTS || '{}';
+            const suppressedCount = process.env.SUPPRESSED_COUNT || '0';
+            const shortCircuitCount = process.env.SHORTCIRCUIT_COUNT || '?';
+            const coverage = process.env.COVERAGE_NOTE || '(unknown — what-if failed before a verdict)';
             const list = process.env.DRIFT_LIST || '(what-if failed before a verdict — see the run logs)';
+            const suppressedList = process.env.SUPPRESSED_LIST || '';
+            const shortCircuitList = process.env.SHORTCIRCUIT_LIST || '';
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
-              `Verdict: **${status}** — ${drift} Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
+              `Verdict: **${status}** — ${drift} **real** Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
               `Change counts: \`${counts}\``,
+              `Coverage: ${coverage}`,
+              `Suppressed as documented ARM what-if noise: ${suppressedCount} (read-only / server-defaulted properties — \`scripts/ci/whatif-noise-allowlist.json\`)`,
               ``,
               '```',
-              list.slice(0, 50000),
+              list.slice(0, 40000),
               '```',
               ``,
-              `A delta here means a hand-portal change diverged from IaC (or IaC merged without deploying). Reconcile by opening a PR that encodes the live state into bicep — or redeploy IaC over the estate if the live change was accidental.`,
-              `Triage: docs/fiab/runbooks/bicep-drift.md · full what-if JSON in the run artifact.`,
+              suppressedList
+                ? `<details><summary>Suppressed what-if noise (${suppressedCount}) — NOT drift</summary>\n\n\`\`\`\n${suppressedList.slice(0, 20000)}\n\`\`\`\n</details>\n`
+                : '',
+              shortCircuitList
+                ? `<details><summary>⚠ Coverage gap — ${shortCircuitCount} nested deployment(s) what-if could not expand; their resources were NOT compared</summary>\n\n\`\`\`\n${shortCircuitList.slice(0, 20000)}\n\`\`\`\n</details>\n`
+                : '',
+              `A **real** delta means a hand-portal change diverged from IaC (or IaC merged without deploying). Reconcile by opening a PR that encodes the live state into bicep — or redeploy IaC over the estate if the live change was accidental.`,
+              `Triage: docs/fiab/runbooks/bicep-drift.md · full what-if JSON + drift/suppressed lists in the run artifact.`,
             ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
@@ -226,6 +261,14 @@ jobs:
             }
         env:
           DRIFT_LIST: ${{ steps.whatif.outputs.drift_list }}
+          SUPPRESSED_LIST: ${{ steps.whatif.outputs.suppressed_list }}
+          SHORTCIRCUIT_LIST: ${{ steps.whatif.outputs.shortcircuit_list }}
+          WHATIF_STATUS: ${{ steps.whatif.outputs.status }}
+          WHATIF_COUNTS: ${{ steps.whatif.outputs.counts }}
+          DRIFT_COUNT: ${{ steps.whatif.outputs.drift_count }}
+          SUPPRESSED_COUNT: ${{ steps.whatif.outputs.suppressed_count }}
+          SHORTCIRCUIT_COUNT: ${{ steps.whatif.outputs.shortcircuit_count }}
+          COVERAGE_NOTE: ${{ steps.whatif.outputs.coverage_note }}
 
       - name: Auto-close stale drift issues on a clean run
         if: success() && steps.whatif.outputs.status == 'Clean'
@@ -311,6 +354,24 @@ jobs:
           EXTRA_PARAMS: ${{ inputs.extra_parameters }} ${{ vars.LOOM_DRIFT_EXTRA_PARAMS_GOV }}
         run: |
           az bicep install
+
+          # Drift detection COMPARES state; it never deploys. The default
+          # --validation-level Provider additionally preflight-checks that the
+          # lane's SP could *deploy* every resource in the template — which is
+          # how the Gov lane died on 2026-07-27 (issue #2541): the gov deploy SP
+          # lacks Microsoft.Authorization/roleAssignments/write, so what-if
+          # errored out before comparing a single resource and the Gov estate
+          # had ZERO drift coverage. ProviderNoRbac keeps full template +
+          # resource validation and drops only the deploy-permission preflight.
+          # Requires az >= 2.76.0; probed so an older runner image degrades to
+          # the old behaviour with a loud warning instead of breaking the lane.
+          VALIDATION_ARGS=""
+          AZ_VER=$(az version --query '"azure-cli"' -o tsv 2>/dev/null || echo "0.0.0")
+          if [[ "$(printf '%s\n' "2.76.0" "$AZ_VER" | sort -V | head -1)" == "2.76.0" ]]; then
+            VALIDATION_ARGS="--validation-level ProviderNoRbac"
+          else
+            echo "::warning::[$CLOUD_LABEL] az $AZ_VER < 2.76.0 — --validation-level unavailable; an RBAC preflight failure can abort the what-if before it compares anything. See docs/fiab/runbooks/bicep-drift.md."
+          fi
           set +e
           az deployment sub what-if \
             --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }} \
@@ -321,11 +382,12 @@ jobs:
             --parameters adminEntraGroupId="$ADMIN_GROUP_ID" \
             --parameters deployAppsEnabled=false \
             $EXTRA_PARAMS \
+            $VALIDATION_ARGS \
             --no-pretty-print --only-show-errors > whatif.json 2> whatif.err
           EXIT_CODE=$?
           set -e
 
-          if [[ $EXIT_CODE -ne 0 ]] || ! jq -e '.changes' whatif.json >/dev/null 2>&1; then
+          if [[ $EXIT_CODE -ne 0 ]]; then
             echo "status=Error" >> "$GITHUB_OUTPUT"
             echo "::error::[$CLOUD_LABEL] what-if FAILED (exit $EXIT_CODE) — the drift verdict is UNKNOWN. stderr:"
             cat whatif.err || true
@@ -333,35 +395,9 @@ jobs:
             exit 1
           fi
 
-          COUNTS=$(jq -c '[.changes[]?] | group_by(.changeType) | map({(.[0].changeType): length}) | add // {}' whatif.json)
-          DRIFT=$(jq '[.changes[]? | select(.changeType == "Create" or .changeType == "Delete" or .changeType == "Modify")] | length' whatif.json)
-          jq -r '.changes[]? | select(.changeType != "NoChange" and .changeType != "Ignore") | "\(.changeType)\t\(.resourceId)"' whatif.json | head -200 > drift-list.txt
-
-          echo "counts=$COUNTS" >> "$GITHUB_OUTPUT"
-          echo "drift_count=$DRIFT" >> "$GITHUB_OUTPUT"
-          {
-            echo "drift_list<<DRIFT_EOF"
-            cat drift-list.txt
-            echo "DRIFT_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          {
-            echo "### [$CLOUD_LABEL] bicep-drift check — $DRIFT managed-resource delta(s)"
-            echo ""
-            echo "Change counts: \`$COUNTS\`"
-            echo ""
-            echo '```'
-            cat drift-list.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$DRIFT" != "0" ]]; then
-            echo "status=Drift" >> "$GITHUB_OUTPUT"
-            echo "::error::[$CLOUD_LABEL] UNMANAGED DRIFT — $DRIFT Create/Delete/Modify delta(s) between platform/fiab/bicep and the live estate. See the step summary / artifact; runbook docs/fiab/runbooks/bicep-drift.md."
-            exit 1
-          fi
-          echo "status=Clean" >> "$GITHUB_OUTPUT"
-          echo "::notice::[$CLOUD_LABEL] estate matches IaC — zero unmanaged deltas."
+          # Same single-source verdict as the Commercial job — see the comment
+          # block there and scripts/ci/whatif-noise-allowlist.json.
+          node scripts/ci/whatif-drift-verdict.mjs whatif.json --out-dir . --label "$CLOUD_LABEL"
 
       - name: Upload full what-if JSON
         if: always()
@@ -372,6 +408,8 @@ jobs:
             whatif.json
             whatif.err
             drift-list.txt
+            suppressed-list.txt
+            summary.md
           if-no-files-found: ignore
 
       - name: Alert — notify the shared action group (loom-default-alerts)
@@ -394,22 +432,35 @@ jobs:
           script: |
             const cloud = 'Gov (GCC-High)';
             const label = 'drift-gov';
-            const status = `${{ steps.whatif.outputs.status }}` || 'Error';
-            const drift = `${{ steps.whatif.outputs.drift_count }}` || '?';
-            const counts = `${{ steps.whatif.outputs.counts }}` || '{}';
+            const status = process.env.WHATIF_STATUS || 'Error';
+            const drift = process.env.DRIFT_COUNT || '?';
+            const counts = process.env.WHATIF_COUNTS || '{}';
+            const suppressedCount = process.env.SUPPRESSED_COUNT || '0';
+            const shortCircuitCount = process.env.SHORTCIRCUIT_COUNT || '?';
+            const coverage = process.env.COVERAGE_NOTE || '(unknown — what-if failed before a verdict)';
             const list = process.env.DRIFT_LIST || '(what-if failed before a verdict — see the run logs)';
+            const suppressedList = process.env.SUPPRESSED_LIST || '';
+            const shortCircuitList = process.env.SHORTCIRCUIT_LIST || '';
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
-              `Verdict: **${status}** — ${drift} Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
+              `Verdict: **${status}** — ${drift} **real** Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
               `Change counts: \`${counts}\``,
+              `Coverage: ${coverage}`,
+              `Suppressed as documented ARM what-if noise: ${suppressedCount} (read-only / server-defaulted properties — \`scripts/ci/whatif-noise-allowlist.json\`)`,
               ``,
               '```',
-              list.slice(0, 50000),
+              list.slice(0, 40000),
               '```',
               ``,
-              `A delta here means a hand-portal change diverged from IaC (or IaC merged without deploying). Reconcile by opening a PR that encodes the live state into bicep — or redeploy IaC over the estate if the live change was accidental.`,
-              `Triage: docs/fiab/runbooks/bicep-drift.md · full what-if JSON in the run artifact.`,
+              suppressedList
+                ? `<details><summary>Suppressed what-if noise (${suppressedCount}) — NOT drift</summary>\n\n\`\`\`\n${suppressedList.slice(0, 20000)}\n\`\`\`\n</details>\n`
+                : '',
+              shortCircuitList
+                ? `<details><summary>⚠ Coverage gap — ${shortCircuitCount} nested deployment(s) what-if could not expand; their resources were NOT compared</summary>\n\n\`\`\`\n${shortCircuitList.slice(0, 20000)}\n\`\`\`\n</details>\n`
+                : '',
+              `A **real** delta means a hand-portal change diverged from IaC (or IaC merged without deploying). Reconcile by opening a PR that encodes the live state into bicep — or redeploy IaC over the estate if the live change was accidental.`,
+              `Triage: docs/fiab/runbooks/bicep-drift.md · full what-if JSON + drift/suppressed lists in the run artifact.`,
             ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
@@ -430,6 +481,14 @@ jobs:
             }
         env:
           DRIFT_LIST: ${{ steps.whatif.outputs.drift_list }}
+          SUPPRESSED_LIST: ${{ steps.whatif.outputs.suppressed_list }}
+          SHORTCIRCUIT_LIST: ${{ steps.whatif.outputs.shortcircuit_list }}
+          WHATIF_STATUS: ${{ steps.whatif.outputs.status }}
+          WHATIF_COUNTS: ${{ steps.whatif.outputs.counts }}
+          DRIFT_COUNT: ${{ steps.whatif.outputs.drift_count }}
+          SUPPRESSED_COUNT: ${{ steps.whatif.outputs.suppressed_count }}
+          SHORTCIRCUIT_COUNT: ${{ steps.whatif.outputs.shortcircuit_count }}
+          COVERAGE_NOTE: ${{ steps.whatif.outputs.coverage_note }}
 
       - name: Auto-close stale drift issues on a clean run
         if: success() && steps.whatif.outputs.status == 'Clean'

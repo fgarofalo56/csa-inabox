@@ -1,0 +1,110 @@
+{
+  "$comment": [
+    "ARM what-if NOISE allowlist — consumed by scripts/ci/whatif-drift-verdict.mjs.",
+    "",
+    "WHY THIS FILE EXISTS. Microsoft documents the false-positive class directly:",
+    "  'Some of the properties that are listed as deleted won't actually change.",
+    "   Properties can be incorrectly reported as deleted when they aren't in the",
+    "   Bicep file, but are automatically set during deployment as default values.",
+    "   This result is considered \"noise\" in the what-if response.'",
+    "  — https://learn.microsoft.com/azure/azure-resource-manager/bicep/deploy-what-if",
+    "",
+    "RULES OF THE ALLOWLIST (enforced by the script, not by convention):",
+    "  1. Only propertyChangeType Delete / NoEffect is ever suppressible. A",
+    "     Create or Modify on a property is a genuine template-vs-live conflict",
+    "     and is NEVER suppressed.",
+    "  2. A resource drops out of the drift verdict only when EVERY one of its",
+    "     property deltas is allowlisted. One unmatched delta keeps the whole",
+    "     resource as real drift.",
+    "  3. Every suppressed delta is still printed (step summary + artifact",
+    "     suppressed-list.txt) so suppression is auditable, never silent.",
+    "  4. Adding an entry requires a `reason` grounded in the resource's ARM",
+    "     schema (read-only / server-defaulted / service-managed). Do not add a",
+    "     property you merely find inconvenient — encode it in bicep instead.",
+    "",
+    "Seeded 2026-07-28 from run 30259654971 (issue #2540): 11/11 Modify deltas",
+    "were this class — 9 identical UAMI deltas plus Grafana + the UDF Container",
+    "App. See docs/fiab/runbooks/bicep-drift.md."
+  ],
+  "resourceTypes": {
+    "Microsoft.ManagedIdentity/userAssignedIdentities": [
+      {
+        "path": "properties",
+        "whenBeforeKeysSubsetOf": ["isolationScope", "clientId", "principalId", "tenantId"],
+        "reason": "identity.bicep declares no `properties` block (a UAMI has none to set). The RP populates isolationScope='None' (the default of the None|Regional enum, 2024-11-30 schema) plus the read-only clientId/principalId/tenantId. what-if therefore reports the whole `properties` object as Delete on EVERY UAMI in the estate. The subset guard means a future settable property (e.g. assignmentRestrictions) would NOT be suppressed."
+      },
+      {
+        "path": "properties.isolationScope",
+        "reason": "Same as above when what-if reports the leaf rather than the parent object. 'None' is the server default; a redeploy that omits it is a no-op."
+      }
+    ],
+    "Microsoft.Dashboard/grafana": [
+      {
+        "path": "properties.grafanaMajorVersion",
+        "reason": "Service-managed lifecycle. Azure Managed Grafana upgrades the major version in place; admin-plane/main.bicep deliberately does not pin it (pinning would make a from-scratch deploy fail in any cloud/region where that major is not yet offered — Gov lags Commercial). The template expressing no opinion is the intent, not drift. If Loom ever needs a pinned version, set it in bicep and DELETE this entry."
+      },
+      {
+        "path": "properties.endpoint",
+        "reason": "Read-only — the RP-assigned Grafana URL (surfaced as the grafanaEndpoint output)."
+      },
+      {
+        "path": "properties.outboundIPs",
+        "reason": "Read-only — RP-assigned outbound IP list."
+      },
+      {
+        "path": "properties.grafanaVersion",
+        "reason": "Read-only — the exact running Grafana build, chosen by the service."
+      }
+    ],
+    "Microsoft.App/containerApps": [
+      {
+        "path": "properties.runningStatus",
+        "reason": "Read-only runtime state ('Running'), never settable in a template."
+      },
+      {
+        "path": "properties.workloadProfileName",
+        "reason": "Server-defaulted to 'Consumption' on a Consumption-only managed environment; udf-runtime.bicep omits it deliberately so the same template works on Consumption and workload-profile environments."
+      },
+      {
+        "path": "properties.configuration.maxInactiveRevisions",
+        "reason": "Server-defaulted (100). Omitted by template; a redeploy re-applies the same default."
+      },
+      {
+        "path": "properties.configuration.ingress.traffic",
+        "reason": "Server-defaulted to [{latestRevision:true, weight:100}] under activeRevisionsMode 'Single'. Declaring it would fight the roll workflows that shift traffic."
+      },
+      {
+        "path": "properties.configuration.ingress.exposedPort",
+        "reason": "Server-defaulted to 0 for non-TCP transports."
+      },
+      {
+        "path": "properties.configuration.ingress.fqdn",
+        "reason": "Read-only — RP-assigned ingress FQDN."
+      },
+      {
+        "path": "properties.latestRevisionName",
+        "reason": "Read-only revision bookkeeping."
+      },
+      {
+        "path": "properties.latestReadyRevisionName",
+        "reason": "Read-only revision bookkeeping."
+      },
+      {
+        "path": "properties.latestRevisionFqdn",
+        "reason": "Read-only revision bookkeeping."
+      },
+      {
+        "path": "properties.eventStreamEndpoint",
+        "reason": "Read-only — RP-assigned log-stream endpoint."
+      },
+      {
+        "path": "properties.outboundIpAddresses",
+        "reason": "Read-only — RP-assigned outbound IPs."
+      },
+      {
+        "path": "properties.customDomainVerificationId",
+        "reason": "Read-only — RP-assigned domain-verification token."
+      }
+    ]
+  }
+}
