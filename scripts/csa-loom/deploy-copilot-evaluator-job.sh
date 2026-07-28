@@ -29,6 +29,15 @@
 #      default 5-field cron `0 7 * * *`) using the console UAMI for registry
 #      pull + managed identity.
 #
+# CONTAINER NAME IS LOAD-BEARING: it must be `evaluator`, matching
+#   modules/admin-plane/copilot-evaluator-job.bicep. `az containerapp job create`
+#   defaults the container name to the JOB name, and a job created that way still
+#   RUNS fine — but `az containerapp job logs show --container evaluator` (how
+#   .github/workflows/copilot-quality-evals.yml lifts the `::eval-run::` receipt)
+#   then matches nothing, so the CI gate goes GREEN having measured ZERO surfaces.
+#   Same for the `ContainerName_s == 'evaluator'` Log Analytics query documented
+#   below. Do not let this drift from the bicep.
+#
 # NOTE: bicep (modules/admin-plane/copilot-evaluator-job.bicep, wired via
 #   functionAppsConfig.copilotEvaluatorEnabled) already creates the Job on a
 #   full deploy — including the Contributor-on-the-job grant that lets the
@@ -199,6 +208,7 @@ else
     --parallelism 1 \
     --replica-completion-count 1 \
     --image "$IMAGE" \
+    --container-name evaluator \
     --cpu 1.0 --memory 2.0Gi \
     --mi-user-assigned "$CONSOLE_UAMI_ID" \
     --registry-server "$ACR" \
