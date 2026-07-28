@@ -68,14 +68,39 @@ jobs:
         id: changed
         working-directory: ${{ github.workspace }}
         run: |
+          # FAIL OPEN. `git fetch --depth=1` gives a shallow base whose merge
+          # base with HEAD may not exist locally, in which case `git diff
+          # base...HEAD` errors and the old code read that as "nothing changed"
+          # and reported this REQUIRED check green WITHOUT BUILDING. That is not
+          # hypothetical: on 2026-07-28 PR #2613 shipped a console-wide change
+          # and both this job and `vitest (node 20)` — the roll gate — passed in
+          # 13s having run nothing. When the diff cannot be computed we now build.
+          set +e
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="origin/${{ github.base_ref }}"
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
-            range="$base...HEAD"
+            git fetch --no-tags --depth=50 origin "${{ github.base_ref }}" >/dev/null 2>&1
+            base="$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null)"
+            if [ -z "$base" ]; then
+              # Shallow history: deepen once, then give up and build.
+              git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1
+              base="$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null)"
+            fi
+            if [ -z "$base" ]; then
+              echo "console=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::Could not compute a merge base with ${{ github.base_ref }} — building anyway (fail-open)."
+              exit 0
+            fi
+            range="$base..HEAD"
           else
             range="HEAD~1...HEAD"
           fi
-          if git diff --name-only "$range" 2>/dev/null | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+          changed="$(git diff --name-only "$range" 2>/dev/null)"
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "console=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::git diff failed — building anyway (fail-open)."
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
             echo "console=true" >> "$GITHUB_OUTPUT"
             echo "Console changed — running full next build."
           else
@@ -171,14 +196,39 @@ jobs:
         # workflow-only PRs) but skips the heavy install/test — reporting green —
         # when apps/fiab-console is untouched.
         run: |
+          # FAIL OPEN. `git fetch --depth=1` gives a shallow base whose merge
+          # base with HEAD may not exist locally, in which case `git diff
+          # base...HEAD` errors and the old code read that as "nothing changed"
+          # and reported this REQUIRED check green WITHOUT BUILDING. That is not
+          # hypothetical: on 2026-07-28 PR #2613 shipped a console-wide change
+          # and both this job and `vitest (node 20)` — the roll gate — passed in
+          # 13s having run nothing. When the diff cannot be computed we now build.
+          set +e
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="origin/${{ github.base_ref }}"
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
-            range="$base...HEAD"
+            git fetch --no-tags --depth=50 origin "${{ github.base_ref }}" >/dev/null 2>&1
+            base="$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null)"
+            if [ -z "$base" ]; then
+              # Shallow history: deepen once, then give up and build.
+              git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1
+              base="$(git merge-base "origin/${{ github.base_ref }}" HEAD 2>/dev/null)"
+            fi
+            if [ -z "$base" ]; then
+              echo "console=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::Could not compute a merge base with ${{ github.base_ref }} — building anyway (fail-open)."
+              exit 0
+            fi
+            range="$base..HEAD"
           else
             range="HEAD~1...HEAD"
           fi
-          if git diff --name-only "$range" 2>/dev/null | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+          changed="$(git diff --name-only "$range" 2>/dev/null)"
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "console=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::git diff failed — building anyway (fail-open)."
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
             echo "console=true" >> "$GITHUB_OUTPUT"
             echo "Console changed — running vitest."
           else
