@@ -157,11 +157,16 @@ const REGISTRY: Record<string, Entry> = {
   'data-quality':         { icon: CheckmarkCircle24Regular, family: 'data-eng', label: 'Data-Quality Check' },
   // N2b — SQL Lab (DuckDB): the interactive tier below Spark.
   'sql-lab':              { icon: Flash24Regular,     family: 'data-eng', label: 'SQL Lab (DuckDB)' },
+  // N8 Openness Tier-3 labs (Preview).
+  'ducklake-catalog':     { icon: Database24Regular,  family: 'data-eng', label: 'DuckLake catalog' },
+  's3-gateway':           { icon: Link24Regular,      family: 'data-eng', label: 'S3-compatible ADLS gateway' },
 
   // ── Data Factory ──────────────────────────────────────────────────
   'data-pipeline':      { icon: Flow24Regular,         family: 'data-factory', label: 'Data Pipeline' },
   'dataflow':           { icon: CloudFlow24Regular,    family: 'data-factory', label: 'Dataflow' },
   'copy-job':           { icon: ArrowDownload24Regular, family: 'data-factory', label: 'Copy Job' },
+  // N7c — reverse ETL / activation sync (pushes modeled data OUT).
+  'activation-sync':    { icon: ArrowRepeatAll24Regular, family: 'data-factory', label: 'Activation Sync' },
   'mirrored-database':  { icon: ArrowSwap24Regular,    family: 'data-factory', label: 'Mirrored Database' },
   'mirrored-databricks':{ icon: ArrowSwap24Regular,    family: 'data-factory', label: 'Mirrored Databricks' },
   'mounted-adf':        { icon: Link24Regular,         family: 'data-factory', label: 'Mounted ADF' },
@@ -227,6 +232,7 @@ const REGISTRY: Record<string, Entry> = {
   'dashboard':          { icon: Gauge24Regular,            family: 'powerbi', label: 'Dashboard' },
   'paginated-report':   { icon: DocumentBulletList24Regular, family: 'powerbi', label: 'Paginated Report' },
   'scorecard':          { icon: DataTreemap24Regular,      family: 'powerbi', label: 'Scorecard' },
+  'code-report':        { icon: Code24Regular,             family: 'powerbi', label: 'Code Report' },
 
   // ── APIs / functions ─────────────────────────────────────────────
   'graphql-api':        { icon: Globe24Regular,         family: 'api', label: 'GraphQL API' },
@@ -252,6 +258,7 @@ const REGISTRY: Record<string, Entry> = {
   'adf-dataset':                 { icon: Table24Regular,      family: 'data-factory', label: 'ADF Dataset' },
   'adf-trigger':                 { icon: Pulse24Regular,      family: 'data-factory', label: 'ADF Trigger' },
   'stream-analytics-job':        { icon: Pulse24Regular,      family: 'rti',          label: 'Stream Analytics Job' },
+  'streaming-sql':               { icon: DataLine24Regular,   family: 'rti',          label: 'Streaming SQL' },
 
   // ── AI Foundry ───────────────────────────────────────────────────
   'ai-foundry-hub':       { icon: Cube24Regular,           family: 'foundry', label: 'AI Foundry Hub' },

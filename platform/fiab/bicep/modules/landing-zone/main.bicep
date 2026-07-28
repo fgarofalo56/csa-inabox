@@ -98,6 +98,15 @@ param storageCmkKeyUri string = ''
 @description('Storage CMK UAMI ID (required if storageRequireCmk)')
 param storageCmkIdentityId string = ''
 
+@description('CMK1 — require customer-managed-key (CMK) at-rest encryption on this DLZ\'s Cosmos accounts (the state account in cosmos.bicep + the graph/vector accounts in cosmos-graph-vector.bicep). Default OFF = service-managed keys, unchanged. IL5 mandates true. Rides drConfig.cosmosRequireCmk from the top-level orchestrator (256-param cap — never a new top-level scalar there).')
+param cosmosRequireCmk bool = false
+
+@description('CMK1 — VERSIONLESS Key Vault key URI for the Cosmos CMK (https://<vault>.vault.azure.<suffix>/keys/<key>, no key version, no trailing slash). Required when cosmosRequireCmk.')
+param cosmosCmkKeyUri string = ''
+
+@description('CMK1 — RESOURCE ID of the UAMI holding "Key Vault Crypto Service Encryption User" on the key vault (mirrors storageCmkIdentityId). Required when cosmosRequireCmk.')
+param cosmosCmkIdentityId string = ''
+
 @description('Power BI SKU. Reserved for v3.x — Power BI capacity is provisioned in admin plane; preserved here for orchestrator contract.')
 #disable-next-line no-unused-params
 param powerBiSku string
@@ -598,6 +607,10 @@ module cosmos 'cosmos.bicep' = {
     consolePrincipalId: consolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // CMK1 — Cosmos CMK-at-rest opt-in (default OFF = service-managed keys).
+    requireCmk: cosmosRequireCmk
+    cmkKeyUri: cosmosCmkKeyUri
+    cmkIdentityId: cosmosCmkIdentityId
   }
 }
 
@@ -820,6 +833,11 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
     consolePrincipalId: consolePrincipalId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    // CMK1 — Cosmos CMK-at-rest opt-in (default OFF = service-managed keys);
+    // applies to BOTH the Gremlin graph and NoSQL vector accounts.
+    requireCmk: cosmosRequireCmk
+    cmkKeyUri: cosmosCmkKeyUri
+    cmkIdentityId: cosmosCmkIdentityId
   }
 }
 

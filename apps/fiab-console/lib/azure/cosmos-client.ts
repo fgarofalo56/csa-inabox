@@ -16,6 +16,7 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { withMigrations } from '@/lib/azure/cosmos-migrations';
 import { createTtlEnabledContainer } from '@/lib/azure/cosmos-ttl';
+import { injectCosmosFault } from '@/lib/resilience/fault-injection';
 // E2 — loom-copilot-evals doc shapes + MIG1 migrator registration (module-scope
 // side effect: the chain is live before any read materializes).
 import '@/lib/azure/copilot-evals-model';
@@ -38,11 +39,19 @@ import '@/lib/azure/graphrag-index-model';
 // module: imports only cosmos-migrations, so this side-effect import can never
 // cycle back into cosmos-client).
 import { LAKEHOUSE_INTEROP_CONTAINER } from '@/lib/azure/lakehouse-interop-model';
+// M2 — migration copy-in job store. Importing the constant also runs the
+// model's registerCopyJobMigrators() at module scope (MIG1) before any read.
+import { COPY_JOB_CONTAINER } from '@/lib/migrate/copy-job-model';
 import '@/lib/azure/transform-plan-model';
 // N5 — loom-assets doc shape + MIG1 registration (LEAF: cosmos-migrations only).
 import { ASSET_REGISTRY_CONTAINER } from '@/lib/azure/asset-registry-model';
 // N6 — loom-data-contracts doc shape + MIG1 migrator registration (LEAF).
 import { DATA_CONTRACT_CONTAINER } from '@/lib/azure/data-contract-model';
+// N7d — loom-dq-findings doc shape + MIG1 migrator registration (LEAF). Findings
+// produced by the data-quality checks + data-diff, consumed by N17's incident console.
+import { DQ_FINDING_CONTAINER } from '@/lib/azure/dq-finding-model';
+// N17 — loom-monitors + loom-incidents doc shapes + MIG1 (LEAF: incident-model imports only cosmos-migrations).
+import { MONITOR_CONTAINER, INCIDENT_CONTAINER } from '@/lib/observability/incident-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -90,6 +99,9 @@ let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
 let _dataproductJobs: Container | null = null;
 let _appInstallJobs: Container | null = null;
+// M2 — migration copy-in jobs (PK /tenantId). One doc per copy run; the
+// /admin/migrate "Copy in" monitor polls a single partition.
+let _migrationCopyJobs: Container | null = null;
 let _labelPropagation: Container | null = null;
 let _postureAggregates: Container | null = null;
 let _recommendedActions: Container | null = null;
@@ -505,6 +517,13 @@ let _assets: Container | null = null;
 // the registry list and the enforcement hot-path lookup are single-partition).
 // Shapes/MIG1: data-contract-model.ts; store: data-contract-store.ts.
 let _dataContracts: Container | null = null;
+// N7d — loom-dq-findings: normalized data-quality findings (rule-check failures,
+// anomaly-baseline outliers, data-diff regressions) emitted for N17's incident
+// console. PK /tenantId (N17 lists a tenant's findings single-partition).
+let _dqFindings: Container | null = null;
+// N17 — observability monitors + incident lifecycle console (PK /tenantId; MIG1: incident-model.ts).
+let _monitors: Container | null = null;
+let _incidents: Container | null = null;
 let _ensured = false;
 
 /**
@@ -775,6 +794,11 @@ export async function probeCosmosReachable(budgetMs = 2000): Promise<void> {
 }
 
 async function ensure() {
+  // CH1 dependency-chaos chokepoint — inert unless the harness is armed AND
+  // LOOM_DEPENDENCY_CHAOS_ENABLED is set (provably dead in prod). Placed BEFORE
+  // the memo short-circuit so an armed `cosmos-429` fault injects on EVERY
+  // container accessor, not just the first (which creates the containers).
+  await injectCosmosFault();
   if (_ensured) return;
   const c = client();
   const { database } = await c.databases.createIfNotExists({ id: databaseId() });
@@ -909,6 +933,11 @@ async function ensure() {
   // the install dialog's 5s poll hits a single physical partition. Created lazily
   // (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers.
   _appInstallJobs = await mk('app-install-jobs', '/tenantId');
+  // M2 — migration copy-in jobs. PK /tenantId so the "Copy in" monitor's poll
+  // hits a single physical partition. withMigrations (MIG1) wraps reads. Created
+  // lazily (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's
+  // loomContainers.
+  _migrationCopyJobs = await mk(COPY_JOB_CONTAINER, '/tenantId');
   // Sensitivity-label downstream propagation state (F15). One row per item
   // (id = 'prop:<itemId>'), written by the label-propagation timer Function
   // and read live-overlaid by the lineage view. PK /tenantId so the governance
@@ -1308,6 +1337,14 @@ async function ensure() {
     (await database.containers.createIfNotExists({ id: DATA_CONTRACT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
     DATA_CONTRACT_CONTAINER,
   );
+  // N7d — data-quality findings for N17. PK /tenantId; withMigrations (MIG1).
+  _dqFindings = withMigrations(
+    (await database.containers.createIfNotExists({ id: DQ_FINDING_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container,
+    DQ_FINDING_CONTAINER,
+  );
+  // N17 — observability monitors + incidents. PK /tenantId; withMigrations (MIG1).
+  _monitors = withMigrations((await database.containers.createIfNotExists({ id: MONITOR_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container, MONITOR_CONTAINER);
+  _incidents = withMigrations((await database.containers.createIfNotExists({ id: INCIDENT_CONTAINER, partitionKey: { paths: ['/tenantId'] } })).container, INCIDENT_CONTAINER);
   _ensured = true;
 }
 
@@ -1325,6 +1362,7 @@ export async function landingZonesContainer(): Promise<Container> { await ensure
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 export async function appInstallJobsContainer(): Promise<Container> { await ensure(); return _appInstallJobs!; }
+export async function migrationCopyJobsContainer(): Promise<Container> { await ensure(); return _migrationCopyJobs!; }
 export async function labelPropagationContainer(): Promise<Container> { await ensure(); return _labelPropagation!; }
 export async function postureAggregatesContainer(): Promise<Container> { await ensure(); return _postureAggregates!; }
 export async function recommendedActionsContainer(): Promise<Container> { await ensure(); return _recommendedActions!; }
@@ -1464,6 +1502,11 @@ export async function lakehouseInteropContainer(): Promise<Container> { await en
 export async function assetsContainer(): Promise<Container> { await ensure(); return _assets!; }
 /** N6 — ODCS 3.1 data contracts + enforcement posture + bindings + run trend, PK /tenantId. */
 export async function dataContractsContainer(): Promise<Container> { await ensure(); return _dataContracts!; }
+export async function dqFindingsContainer(): Promise<Container> { await ensure(); return _dqFindings!; }
+/** N17 — observability monitors (freshness/volume/schema-drift), PK /tenantId. */
+export async function monitorsContainer(): Promise<Container> { await ensure(); return _monitors!; }
+/** N17 — incident lifecycle console (open→acknowledged→resolved), PK /tenantId. */
+export async function incidentsContainer(): Promise<Container> { await ensure(); return _incidents!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

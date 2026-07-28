@@ -19,7 +19,9 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
-import { ResizableCanvasRegion } from '../resizable-canvas';
+import {
+  ResizableCanvasRegion, clampMaxToContainer, findClipAncestor, measureContainerCeiling,
+} from '../resizable-canvas';
 
 beforeAll(() => {
   if (typeof window.PointerEvent === 'undefined') {
@@ -110,6 +112,126 @@ describe('ResizableCanvasRegion', () => {
       </ResizableCanvasRegion>,
     );
     expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '320');
+  });
+});
+
+/**
+ * A5 — container-aware max clamp. The 80vh window ceiling alone let a height
+ * persisted on a tall monitor strand the resize grip inside a non-scrolling
+ * `overflow: hidden` ancestor on a shorter window (the operator's "pipeline
+ * canvas cannot be resized at all" report, research/canvas-resize.md §2.3).
+ * The hook now caps its ceiling to the space actually AVAILABLE inside the
+ * nearest clipping ancestor.
+ */
+describe('A5 — container-aware max clamp', () => {
+  describe('clampMaxToContainer (pure)', () => {
+    it('caps the base ceiling to the available container height', () => {
+      // The headline case: a height persisted at 800 on a tall monitor must
+      // clamp to <= 500 when only 500px is available.
+      expect(clampMaxToContainer(900, 500, 240)).toBe(500);
+      expect(Math.min(800, clampMaxToContainer(900, 500, 240))).toBeLessThanOrEqual(500);
+    });
+
+    it('keeps the base ceiling when no container measurement exists', () => {
+      expect(clampMaxToContainer(900, null, 240)).toBe(900);
+      expect(clampMaxToContainer(900, undefined, 240)).toBe(900);
+      expect(clampMaxToContainer(900, Number.NaN, 240)).toBe(900);
+      expect(clampMaxToContainer(900, 0, 240)).toBe(900);
+      expect(clampMaxToContainer(900, -50, 240)).toBe(900);
+    });
+
+    it('never drops the ceiling below minPx (region stays usable)', () => {
+      expect(clampMaxToContainer(900, 100, 240)).toBe(240);
+    });
+
+    it('does not raise a ceiling already below the container availability', () => {
+      expect(clampMaxToContainer(400, 700, 240)).toBe(400);
+    });
+  });
+
+  describe('findClipAncestor (pure, jsdom)', () => {
+    afterEach(() => { document.body.innerHTML = ''; });
+
+    const chain = (styles: string[]): HTMLElement => {
+      // Builds nested divs outermost-first and returns the INNERMOST element.
+      let parent: HTMLElement = document.body;
+      let leaf: HTMLElement = document.body;
+      for (const overflowY of styles) {
+        const el = document.createElement('div');
+        if (overflowY) el.style.overflowY = overflowY;
+        parent.appendChild(el);
+        parent = el;
+        leaf = el;
+      }
+      return leaf;
+    };
+
+    it('finds the nearest overflow-hidden ancestor', () => {
+      const leaf = chain(['hidden', '', '']);
+      const hidden = document.body.firstElementChild as HTMLElement;
+      expect(findClipAncestor(leaf)).toBe(hidden);
+    });
+
+    it('stops (null) at a scrollable ancestor — the grip can be scrolled to', () => {
+      // hidden > auto > leaf: the scrollable rescue wins over the outer clip.
+      const leaf = chain(['hidden', 'auto', '']);
+      expect(findClipAncestor(leaf)).toBeNull();
+    });
+
+    it('returns null when nothing clips', () => {
+      const leaf = chain(['', '', '']);
+      expect(findClipAncestor(leaf)).toBeNull();
+    });
+  });
+
+  describe('measureContainerCeiling (jsdom, mocked geometry)', () => {
+    it('returns null when the clip ancestor is content-sized (nothing clipped)', () => {
+      const clip = document.createElement('div');
+      const region = document.createElement('div');
+      clip.appendChild(region);
+      // jsdom defaults: scrollHeight === clientHeight === 0 → nothing clipped.
+      expect(measureContainerCeiling(clip, region)).toBeNull();
+    });
+
+    it('measures the px from the region top to the clip ancestor visible bottom', () => {
+      const clip = document.createElement('div');
+      const region = document.createElement('div');
+      clip.appendChild(region);
+      Object.defineProperty(clip, 'clientHeight', { value: 500, configurable: true });
+      Object.defineProperty(clip, 'scrollHeight', { value: 810, configurable: true });
+      clip.getBoundingClientRect = () => ({ top: 100 } as DOMRect);
+      region.getBoundingClientRect = () => ({ top: 140 } as DOMRect);
+      // visible bottom 100 + 500 = 600; region top 140 → 460 available.
+      expect(measureContainerCeiling(clip, region)).toBe(460);
+    });
+  });
+
+  it('a persisted 800 clamps to <=500 once a 500-available clipping container is measured (grip never strands)', () => {
+    window.localStorage.setItem('loom.canvasHeight.t-container', '800');
+    const { container } = wrap(
+      <div data-testid="clip" style={{ overflowY: 'hidden' }}>
+        <ResizableCanvasRegion storageKey="t-container" defaultPx={460} minPx={300} maxPx={900}>
+          {CANVAS}
+        </ResizableCanvasRegion>
+      </div>,
+    );
+    const sep = screen.getByRole('separator');
+    // jsdom reports zero geometry at mount → no container clamp yet: the
+    // persisted 800 applies within the explicit 900 ceiling.
+    expect(sep).toHaveAttribute('aria-valuenow', '800');
+
+    // The window shrank (RDP): the clipping ancestor now has 500px visible and
+    // its content overflows. Re-measure fires on window resize.
+    const clip = container.querySelector('[data-testid="clip"]') as HTMLElement;
+    Object.defineProperty(clip, 'clientHeight', { value: 500, configurable: true });
+    Object.defineProperty(clip, 'scrollHeight', { value: 810, configurable: true });
+    fireEvent(window, new Event('resize'));
+
+    expect(Number(sep.getAttribute('aria-valuenow'))).toBeLessThanOrEqual(500);
+    expect(sep).toHaveAttribute('aria-valuemax', '500');
+    // The tall-monitor preference is NOT destroyed — only the live height is
+    // clamped; storage keeps the user's chosen 800 for when space returns.
+    expect(window.localStorage.getItem('loom.canvasHeight.t-container')).toBe('800');
   });
 });
 

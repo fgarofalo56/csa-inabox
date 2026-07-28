@@ -73,8 +73,12 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
   `items/aip-logic/[id]/bind-ontology`, `/deploy`, `/invoke` — binding +
   deployment are wired; the missing pieces stay block-level (apply-action,
   semantic-search, loop, tool-call).
-- **6.3 Row-level security authoring — ❌ confirmed.** No CREATE SECURITY
-  POLICY / row-policy authoring anywhere in lib/app (content bundles only). W8.
+- **6.3 Row-level security authoring — ✅ CLOSED (re-verified 2026-07-24).**
+  Real `CREATE SECURITY POLICY` + inline-predicate TVF authoring: the lakehouse
+  `permissions-dialog.tsx` "Create row-level security policy" UX + POST
+  `lakehouse/permissions` (`createRlsPolicyWithPredicate`/`createRlsPolicy`),
+  `items/[type]/[id]/onelake-security/[role]/rls`, `semantic-model/[id]/roles`,
+  and `lakehouse/permissions/rls-test`. Was ❌ at batch-3; built since. W8 done.
 - **2.2 Object sync — ❌ confirmed.** No objectSync/backfill machinery in
   weave/editors; ontology item API exists (`items/ontology/[id]`) but dataset→
   object-instance sync UX/pipeline is absent. W1 anchor.
@@ -101,7 +105,7 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 - [ ] Dataset versioning: Delta time-travel surfaced anywhere? (1.1).
 - [ ] DQ sentinels: freshness/volume checks bound to datasets? (1.11).
 - [ ] Lineage: column-level? cross-item completeness? (1.12).
-- [ ] Permissions: row-policy authoring UX? (6.3).
+- [x] Permissions: row-policy authoring UX? (6.3) — ✅ CLOSED (lakehouse permissions-dialog + createRlsPolicyWithPredicate).
 - [ ] Media handling: image/PDF preview + tagging in lakehouse Files (1.5).
 - [ ] Evals wiring: can an evaluation gate an aip-logic publish? (5.4).
 - [ ] Agent tools: can agent-flow query ontology objects / invoke actions? (5.2).

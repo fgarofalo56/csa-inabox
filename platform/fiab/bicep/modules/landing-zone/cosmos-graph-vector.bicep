@@ -51,6 +51,31 @@ param complianceTags object
 @description('Vector embedding dimensions (OpenAI default is 1536). DiskANN supports 4096 max.')
 param vectorDimensions int = 1536
 
+// ── CMK1 — customer-managed-key at-rest encryption (opt-in; IL5 mandate) ──
+// Applies to BOTH accounts below (Gremlin graph + NoSQL vector). Mirrors
+// landing-zone/cosmos.bicep — see that module's param block for the full
+// Learn-grounded notes (versionless key URI; continuous-backup accounts must
+// use a managed identity as defaultIdentity; existing-account enablement is a
+// supported two-step hot update).
+@description('Require CMK at-rest on the graph + vector Cosmos accounts (CMK1). Default OFF = service-managed keys, unchanged. Requires cmkKeyUri + cmkIdentityId.')
+param requireCmk bool = false
+
+@description('VERSIONLESS Key Vault key URI (https://<vault>.vault.azure.<suffix>/keys/<key> — no key version, no trailing slash). Required when requireCmk.')
+param cmkKeyUri string = ''
+
+@description('RESOURCE ID of the user-assigned managed identity holding "Key Vault Crypto Service Encryption User" on the key vault. Required when requireCmk.')
+param cmkIdentityId string = ''
+
+// Shared CMK shapes for both accounts (graph + vector).
+var cmkIdentity = requireCmk ? {
+  type: 'SystemAssigned,UserAssigned'
+  userAssignedIdentities: {
+    '${cmkIdentityId}': {}
+  }
+} : { type: 'SystemAssigned' }
+var cmkKeyVaultKeyUri = requireCmk ? cmkKeyUri : null
+var cmkDefaultIdentity = requireCmk ? 'UserAssignedIdentity=${cmkIdentityId}' : null
+
 // =====================================================================
 // 1. Cosmos Gremlin account (kind=GlobalDocumentDB + EnableGremlin)
 // =====================================================================
@@ -64,7 +89,7 @@ resource gremlinAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previe
   location: location
   tags: complianceTags
   kind: 'GlobalDocumentDB'
-  identity: { type: 'SystemAssigned' }
+  identity: cmkIdentity
   properties: {
     databaseAccountOfferType: 'Standard'
     consistencyPolicy: { defaultConsistencyLevel: 'Session' }
@@ -77,6 +102,9 @@ resource gremlinAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-previe
       type: 'Continuous'
       continuousModeProperties: { tier: 'Continuous7Days' }
     }
+    // CMK1 — CMK-at-rest (null = service-managed keys, the default).
+    keyVaultKeyUri: cmkKeyVaultKeyUri
+    defaultIdentity: cmkDefaultIdentity
   }
 }
 
@@ -157,7 +185,7 @@ resource vectorAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview
   location: location
   tags: complianceTags
   kind: 'GlobalDocumentDB'
-  identity: { type: 'SystemAssigned' }
+  identity: cmkIdentity
   properties: {
     databaseAccountOfferType: 'Standard'
     consistencyPolicy: { defaultConsistencyLevel: 'Session' }
@@ -175,6 +203,9 @@ resource vectorAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview
       type: 'Continuous'
       continuousModeProperties: { tier: 'Continuous7Days' }
     }
+    // CMK1 — CMK-at-rest (null = service-managed keys, the default).
+    keyVaultKeyUri: cmkKeyVaultKeyUri
+    defaultIdentity: cmkDefaultIdentity
   }
 }
 

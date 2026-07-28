@@ -243,7 +243,31 @@ describe('admin/env-config registry', () => {
     // LOOM_FLIGHT_ROW_THRESHOLD, LOOM_DUCKDB_MAX_ROWS) are runtime-only code
     // defaults / secretRefs and deliberately NOT part of the specs, so the
     // editable count rises by exactly two: 178 → 180.
-    expect(EDITABLE_ENV.length).toBe(180);
+    // Bumped to 181 by M1 (inbound-migration on-ramp): svc-loom-migrate adds
+    // LOOM_MIGRATE_URL — the loom-migrate estate-assessment reader. Opt-in (NOT
+    // optionalDefault: with the reader absent the assess route is honestly
+    // gated), so it counts as one new editable var: 180 → 181.
+    // Bumped to 182 by N7a (streaming-SQL tier): svc-loom-risingwave adds
+    // LOOM_RISINGWAVE_URL — the RisingWave stateful-streaming Container App.
+    // Opt-in (NOT optionalDefault: with the tier absent /api/streaming-sql/* is
+    // honestly gated), so it counts as one new editable var: 181 → 182. Its
+    // DATABASE/USER/PASSWORD knobs are runtime-only (allowlisted in check-env-sync,
+    // not ENV_CHECKS specs), so they do not enter EDITABLE_ENV.
+    // Bumped to 183 by N7e (Trino Federated SQL — the single opt-in carve-out):
+    // svc-loom-trino adds LOOM_TRINO_URL. Opt-in like M1 (NOT optionalDefault:
+    // the /api/sql/trino route is honestly gated when the cluster is absent, and
+    // the default DuckDB engine keeps SQL Lab functional), so it counts as one
+    // new editable var: 182 → 183. The sibling knobs (LOOM_TRINO_ICEBERG_CATALOG,
+    // LOOM_TRINO_AUDIENCE, LOOM_TRINO_TOKEN) are runtime-only code defaults /
+    // secretRefs and deliberately NOT part of the spec.
+    // Bumped to 185 by the N8 Openness Tier-3 labs: svc-ducklake-catalog adds
+    // LOOM_DUCKLAKE_CATALOG_URL and svc-s3-gateway adds LOOM_S3_GATEWAY_URL —
+    // both opt-in Preview labs (honest-gated when unset), +2: 183 → 185.
+    // Bumped to 186 by CH1: svc-dependency-chaos-drill adds
+    // LOOM_DEPENDENCY_CHAOS_ENABLED (optionalDefault — OFF by default, the
+    // fully-functional prod posture; enabled only for a non-prod resilience
+    // drill), mirroring A13's LOOM_SPARK_CHAOS_ENABLED: 185 → 186.
+    expect(EDITABLE_ENV.length).toBe(186);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -336,6 +360,10 @@ describe('admin/env-config registry', () => {
       // (unset → 30-day horizon, method 'auto' = real Forecast API first with
       // the computed linear/seasonal fallback, honestly labeled).
       'LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD',
+      // CH1 svc-dependency-chaos-drill — OFF by default (the fully-functional
+      // prod posture: no fault injection); enabled only for a non-prod
+      // resilience drill, mirroring A13's LOOM_SPARK_CHAOS_ENABLED.
+      'LOOM_DEPENDENCY_CHAOS_ENABLED',
       'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       // N2b svc-loom-duckdb — unset is fully functional: SQL Lab runs the
       // identical statement on Synapse Serverless and names the engine that

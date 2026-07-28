@@ -33,6 +33,7 @@ import {
   AddCircle24Regular,
   CalendarClock24Regular,
   DatabaseLink24Regular,
+  BoxMultiple24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
@@ -56,6 +57,7 @@ const ICON_BY_HREF: Record<string, FluentIcon | typeof CopilotIcon> = {
   '/browse': Apps24Regular,
   '/onelake': Library24Regular,
   '/catalog': GlobeSearch24Regular,
+  '/data-products': BoxMultiple24Regular,
   '/org-reports': DataPie24Regular,
   '/semantic-model': Table24Regular,
   '/thread': Branch24Regular,

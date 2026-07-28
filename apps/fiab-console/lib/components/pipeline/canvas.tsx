@@ -41,6 +41,11 @@ import { elkLayout, topoFallback, shouldVirtualize, type XY } from './flow-layou
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType } from './drill-path';
 import {
+  useRunOverlay, clearRunOverlay, RunOverlayStrip, ActivityRunDetailDialog,
+  PIPELINE_RUN_OVERLAY_FLAG_ID, type ActivityRunOverlayRow,
+} from './pipeline-debug-overlay';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import {
   getActivityVisual, accentTint, CanvasRightRail,
   GhostNextStepNode, ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
   type GhostNodeData, type AnchorNode,
@@ -53,6 +58,7 @@ import { cloneSelection, type ClonableEdge } from '@/lib/components/canvas/canva
 import { alignPositions, distributePositions, type AlignMode, type DistributeAxis, type AlignNode } from '@/lib/components/canvas/canvas-align';
 import { CanvasPowerToolbar } from '@/lib/components/canvas/canvas-power-toolbar';
 import { CanvasShortcutDialog } from '@/lib/components/canvas/canvas-shortcut-dialog';
+import { CanvasFullscreenHost } from '@/lib/components/canvas/canvas-fullscreen';
 import { EmptyState } from '@/lib/components/empty-state';
 import type { PipelineActivity } from './types';
 
@@ -305,6 +311,22 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   // inline mini-preview of their inner activities. Toggled by N / the toolbar.
   const [showNestedPreviews, setShowNestedPreviews] = useState(false);
 
+  // ── U13: in-canvas Debug/Output run overlay (ADF pipeline-debug parity) ────
+  // Subscribe to run receipts published for THIS pipeline item (by the Debug
+  // panel / Monitor drill / ribbon Debug pollers — one shared run path). The
+  // 'u13-pipeline-run-overlay' runtime flag is the kill-switch: OFF reverts to
+  // the glyph-less pre-U13 canvas on the next render (fail-open default-ON).
+  const runOverlayFlagOn = useRuntimeFlag(PIPELINE_RUN_OVERLAY_FLAG_ID);
+  const publishedOverlay = useRunOverlay(itemId);
+  const runOverlay = runOverlayFlagOn ? publishedOverlay : null;
+  const runRowByName = useMemo(() => {
+    const m = new Map<string, ActivityRunOverlayRow>();
+    for (const r of runOverlay?.rows || []) m.set(r.name, r);
+    return m;
+  }, [runOverlay]);
+  // The activity whose run detail (eyeglass) dialog is open.
+  const [inspectRunActivity, setInspectRunActivity] = useState<string | null>(null);
+
   // W7 — AOAI ghost next-step suggestion. Ground on the current activity graph
   // (names + types + dependsOn edges) and the full activity palette so an
   // accepted suggestion maps straight to onDropPaletteKey. Disabled in readOnly
@@ -364,6 +386,10 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         // Inline nested-activity preview (N toggle) — only meaningful on
         // containers, but harmless on leaf nodes (they render nothing).
         showNestedPreview: showNestedPreviews,
+        // U13 — this activity's run receipt (paints the header StatusChip) and
+        // the eyeglass drill into the run-monitoring detail dialog.
+        run: runRowByName.get(a.name),
+        onInspectRun: runRowByName.size > 0 ? setInspectRunActivity : undefined,
       } as ActivityNodeData,
       selected: selectedName === a.name,
       sourcePosition: Position.Right,
@@ -416,7 +442,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
     }
     setNodes(activityNodes);
   }, [activities, selectedName, setNodes, onDrillInto, onExplainNode, showNestedPreviews, readOnly, onDropPaletteKey,
-    aiSuggest, suggestion, suggestLoading, dismissSuggestion, paletteLabels]);
+    aiSuggest, suggestion, suggestLoading, dismissSuggestion, paletteLabels, runRowByName]);
 
   // Re-sync when the activity set / their deps change.
   useEffect(() => { syncNodes(); }, [syncNodes]);
@@ -815,6 +841,16 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             onToggleCollapse={() => setRailCollapsed((v) => !v)}
           />
         </Panel>
+        {/* U13 — in-canvas Debug/Output run strip (ADF debug-canvas parity):
+            status + progress + rerun-from-failed for the published run. */}
+        {runOverlay && itemId && (
+          <Panel position="top-center">
+            <RunOverlayStrip
+              state={runOverlay}
+              onDismiss={() => clearRunOverlay(itemId)}
+            />
+          </Panel>
+        )}
         <MiniMap
           pannable
           zoomable
@@ -834,6 +870,15 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             without an itemId; no host node-state changes. */}
         <CanvasCollabLayer itemType={itemType} itemId={itemId} canvasKey="pipeline" />
       </ReactFlow>
+
+      {/* U13 — the eyeglass run-monitoring detail (input/output/error JSON). */}
+      <ActivityRunDetailDialog
+        open={!!inspectRunActivity && !!runOverlay}
+        onOpenChange={(o) => { if (!o) setInspectRunActivity(null); }}
+        row={inspectRunActivity ? runRowByName.get(inspectRunActivity) ?? null : null}
+        runId={runOverlay?.runId}
+        onRerunFromActivity={runOverlay?.onRerunFromActivity}
+      />
 
       {activities.length === 0 && !hideEmptyState && (
         <div className={s.empty}>
@@ -858,11 +903,16 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
 /**
  * Public component — wraps the inner canvas in a ReactFlowProvider so
  * useReactFlow() works, and forwards the imperative handle through.
+ * The U9 CanvasFullscreenHost wraps the provider so BOTH pipeline canvas
+ * hosts (data-pipeline editor + pipeline designer) inherit full-screen —
+ * the shared CanvasRightRail inside picks it up via context.
  */
 export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvas(props, ref) {
   return (
-    <ReactFlowProvider>
-      <PipelineCanvasInner {...props} ref={ref} />
-    </ReactFlowProvider>
+    <CanvasFullscreenHost ariaLabel="Pipeline canvas full screen">
+      <ReactFlowProvider>
+        <PipelineCanvasInner {...props} ref={ref} />
+      </ReactFlowProvider>
+    </CanvasFullscreenHost>
   );
 });

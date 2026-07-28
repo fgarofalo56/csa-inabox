@@ -1,0 +1,74 @@
+{
+  "name": "@csa-loom/embed",
+  "version": "0.1.0",
+  "description": "Embedded analytics for CSA Loom — a <loom-report> web component + React wrapper that renders a governed Loom report from a short-lived, RLS-scoped embed token. Fabric-free: no Power BI Embedded, no Fabric F-SKU. Builds on @csa-loom/sdk.",
+  "keywords": [
+    "csa-loom",
+    "loom",
+    "embed",
+    "embedded-analytics",
+    "web-component",
+    "react",
+    "rls",
+    "row-level-security",
+    "azure"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./loom-report": {
+      "types": "./dist/loom-report.d.ts",
+      "import": "./dist/loom-report.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@csa-loom/sdk": "^0.1.0"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "@types/react": "^19.0.0",
+    "jsdom": "^25.0.0",
+    "react": "^19.1.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Limitless-Data-LLC/csa-inabox.git",
+    "directory": "apps/loom-embed"
+  }
+}

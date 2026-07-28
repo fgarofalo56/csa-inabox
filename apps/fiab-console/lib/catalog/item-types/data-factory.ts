@@ -116,6 +116,30 @@ export const dataFactoryItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-factory/what-is-copy-job"
     } },
+  { slug: 'activation-sync', displayName: 'Activation sync', restType: 'ActivationSync', category: 'Data Factory',
+    description: 'Reverse ETL — push a modeled table, model, or audience OUT to Dataverse/Dynamics, a webhook, Event Grid, or Service Bus. Full + incremental (Delta CDF), idempotent upserts, scheduled by data-change triggers.',
+    learnContent: {
+      "overview": "An Activation sync is reverse ETL: it takes a modeled dataset that already lives in your lake (a Delta table, a semantic model's output, or a materialized audience/segment) and pushes it OUT to the operational systems that act on it — Dataverse/Dynamics first (the estate's S2S app is already wired), plus a webhook, an Event Grid custom topic, or a Service Bus queue/topic. It runs FULL (the whole source) or INCREMENTAL via the source Delta table's Change Data Feed, so a run after a small edit moves only the changed rows. Writes are idempotent (Dataverse upserts by an alternate key; the other destinations carry a stable dedup id), and scheduling rides Loom's software-defined-asset triggers — a data-change on the source fires the sync, no separate scheduler. Azure-native, no Microsoft Fabric dependency; IL5/air-gap: webhook / Event Grid / Service Bus destinations run in-boundary, SaaS destinations are honest-gated.",
+      "steps": [
+        {
+          "title": "Pick a source",
+          "body": "Choose the modeled table / model / audience to activate. The source resolves to a lake Delta location; incremental mode needs delta.enableChangeDataFeed on that table."
+        },
+        {
+          "title": "Pick a destination",
+          "body": "Dataverse/Dynamics (choose environment + table + key attribute), or a webhook URL, an Event Grid custom topic endpoint, or a Service Bus namespace + entity. Every option is a real, keyless Entra-authed push."
+        },
+        {
+          "title": "Map fields",
+          "body": "Map source columns to destination fields with dropdowns on both sides (no freeform config), and pick the source column that supplies the destination key value for idempotent upserts."
+        },
+        {
+          "title": "Run + schedule",
+          "body": "Run full or incremental from the ribbon and watch real run history (rows read, upserts, deletes, errors). Bind the sync to a software-defined asset so a data-change on the source triggers it automatically; a failed run raises an alert through the platform's alert convention."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/databricks/delta/delta-change-data-feed"
+    } },
   { slug: 'mirrored-database', displayName: 'Mirrored database', restType: 'MirroredDatabase', category: 'Data Factory',
     description: 'Near-real-time replica of Snowflake / SQL DB / Postgres / Cosmos / MSSQL into ADLS Bronze (Delta) — Azure-native CDC, no Fabric required.',
     learnContent: {

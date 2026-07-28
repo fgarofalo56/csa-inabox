@@ -12,7 +12,8 @@
  * explicitly flips it OFF in /admin/runtime-flags.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useContext, useState } from 'react';
+import { QueryClient, QueryClientContext, useQuery } from '@tanstack/react-query';
 import { clientFetch } from '@/lib/client-fetch';
 
 async function fetchFlags(): Promise<Record<string, boolean> | null> {
@@ -23,13 +24,19 @@ async function fetchFlags(): Promise<Record<string, boolean> | null> {
 }
 
 export function useRuntimeFlag(id: string, defaultValue = true): boolean {
+  // Fail-open all the way down: a mount OUTSIDE the app's QueryClientProvider
+  // (isolated embeds, unit tests) must return the default, never throw —
+  // useQuery would throw without a client, so fall back to a local one.
+  const ctxClient = useContext(QueryClientContext);
+  const [fallbackClient] = useState(() =>
+    ctxClient ? null : new QueryClient({ defaultOptions: { queries: { retry: false } } }));
   const { data } = useQuery({
     queryKey: ['runtime-flags'],
     queryFn: fetchFlags,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     retry: 1,
-  });
+  }, ctxClient ?? fallbackClient!);
   const v = data?.[id];
   return typeof v === 'boolean' ? v : defaultValue;
 }

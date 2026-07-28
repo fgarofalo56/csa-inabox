@@ -28,6 +28,7 @@ import { semanticContractContainer, auditLogContainer } from './cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import {
   SEMANTIC_CONTRACT_SCHEMA_VERSION,
+  SEMANTIC_SPEC_DOC_ID,
   VQR_MATCH_THRESHOLD,
   METRIC_MATCH_MIN,
   bestVerifiedMatch,
@@ -35,12 +36,14 @@ import {
   resolveSynonymIn,
   type MetricDoc,
   type MetricSourceKind,
+  type SemanticSpecDoc,
   type VerifiedQueryDoc,
 } from './semantic-contract-model';
 
 export type {
   MetricDoc,
   MetricSourceKind,
+  SemanticSpecDoc,
   VerifiedQueryDoc,
 } from './semantic-contract-model';
 export { VQR_MATCH_THRESHOLD, METRIC_MATCH_MIN } from './semantic-contract-model';
@@ -163,6 +166,60 @@ export async function matchMetric(
   const metrics = await listMetrics(tenantId);
   const hit = bestMetricMatch(question, metrics);
   return hit && hit.confidence >= METRIC_MATCH_MIN ? hit : null;
+}
+
+// ── N15: MetricFlow semantic spec (the compilable substrate) ─────────────────
+
+/**
+ * Read the tenant's stored MetricFlow-compatible semantic spec (the compilable
+ * substrate N15's compiler folds to SQL). Owner-scoped; returns the parsed
+ * `spec` payload (a MetricFlowSpec from lib/metrics/metricflow-spec.ts) or null
+ * when the owner has imported none. EXTENDS N9's store (same container) — not a
+ * fork. Fail-open at the caller (a metrics route falls through to an honest gate).
+ */
+export async function getSemanticSpec(tenantId: string): Promise<unknown | null> {
+  const c = await semanticContractContainer();
+  try {
+    const { resource } = await c.item(SEMANTIC_SPEC_DOC_ID, tenantId).read<SemanticSpecDoc>();
+    return resource?.spec ?? null;
+  } catch (e: unknown) {
+    if ((e as { code?: number })?.code === 404) return null;
+    throw e;
+  }
+}
+
+/**
+ * Upsert the tenant's MetricFlow semantic spec (owner-scoped). Stamps the MIG1
+ * schema version + created/updated provenance. The `spec` payload shape is owned
+ * by lib/metrics/metricflow-spec.ts; this store keeps it opaque (`unknown`) so
+ * the leaf model stays import-cycle-free.
+ */
+export async function putSemanticSpec(tenantId: string, spec: unknown): Promise<SemanticSpecDoc> {
+  const c = await semanticContractContainer();
+  let createdAt = now();
+  let createdBy = tenantId;
+  try {
+    const { resource } = await c.item(SEMANTIC_SPEC_DOC_ID, tenantId).read<SemanticSpecDoc>();
+    if (resource) {
+      createdAt = resource.createdAt || createdAt;
+      createdBy = resource.createdBy || createdBy;
+    }
+  } catch (e: unknown) {
+    if ((e as { code?: number })?.code !== 404) throw e;
+  }
+  const doc: SemanticSpecDoc = {
+    id: SEMANTIC_SPEC_DOC_ID,
+    tenantId,
+    docType: 'semantic-spec',
+    schemaVersion: SEMANTIC_CONTRACT_SCHEMA_VERSION,
+    spec,
+    createdAt,
+    createdBy,
+    updatedAt: now(),
+    updatedBy: tenantId,
+  };
+  await c.items.upsert(doc);
+  return doc;
 }
 
 // ── Verified Query Repository (VQR) ──────────────────────────────────────────

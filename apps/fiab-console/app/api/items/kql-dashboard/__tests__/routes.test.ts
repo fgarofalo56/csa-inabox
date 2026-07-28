@@ -183,6 +183,31 @@ describe('PUT /api/items/kql-dashboard/[id]', () => {
     expect(patch.tiles[0].drillthrough).toBeUndefined();
   });
 
+  // U8 — pages + markdown text tiles + page-targeted drill-through persist
+  // through the same PUT → sanitizeModel → Cosmos path.
+  it('round-trips pages, tile pageIds, a markdown text tile, and a drillthrough targetPageId (U8)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    (loadKustoItem as any).mockResolvedValue({ id: 'dash-1', workspaceId: 'w', itemType: 'kql-dashboard', displayName: 'D', state: {} });
+    (saveItemState as any).mockImplementation(async (_item: any, patch: any) => ({ state: patch }));
+    const body = {
+      pages: [{ id: 'p1', name: 'Overview' }, { id: 'p2', name: 'Detail' }],
+      tiles: [
+        { title: 'Q', kql: 'print 1', viz: 'table', pageId: 'p1', drillthrough: { column: 'State', paramName: '_state', targetPageId: 'p2' } },
+        { title: 'Note', kql: '', viz: 'markdown', markdown: '## About this board', pageId: 'p2' },
+      ],
+    };
+    const res = await PUT(jsonReq(body), ctx);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    const patch = (saveItemState as any).mock.calls[0][1];
+    expect(patch.pages).toEqual([{ id: 'p1', name: 'Overview' }, { id: 'p2', name: 'Detail' }]);
+    expect(patch.tiles).toHaveLength(2); // the markdown tile survives without KQL
+    expect(patch.tiles[0].drillthrough).toMatchObject({ column: 'State', paramName: '_state', targetPageId: 'p2' });
+    expect(patch.tiles[1]).toMatchObject({ viz: 'markdown', markdown: '## About this board', pageId: 'p2' });
+    // Echoed back so the editor can confirm the persisted pages.
+    expect(j.pages).toHaveLength(2);
+  });
+
   // EventhouseEditor "New dashboard" ribbon (Fabric Eventhouse parity): after the
   // dashboard Cosmos item is created, the editor seeds a data source bound to the
   // eventhouse's current/default KQL database plus a starter tile referencing that
@@ -265,6 +290,27 @@ describe('POST /api/items/kql-dashboard/[id]/run', () => {
     expect(j.ok).toBe(true);
     expect(j.tiles[0].error).toContain('Semantic error');
     expect(j.tiles[0].result).toBeUndefined();
+  });
+
+  // U8 — text (markdown) tiles NEVER execute against ADX: the run route
+  // returns them unchanged while every query tile still runs for real.
+  it('skips executing markdown text tiles but still runs query tiles (U8)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o', upn: 'u' } });
+    const body = {
+      tiles: [
+        { title: 'Note', kql: '', viz: 'markdown', markdown: '## Section' },
+        { title: 'Q', kql: 'print 1', viz: 'table' },
+      ],
+    };
+    const res = await RUN(jsonReq(body), ctxNew);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    // Only the query tile hit the cluster.
+    expect(executeQuery).toHaveBeenCalledTimes(1);
+    expect(j.tiles[0]).toMatchObject({ viz: 'markdown', markdown: '## Section' });
+    expect(j.tiles[0].result).toBeUndefined();
+    expect(j.tiles[0].error).toBeUndefined();
+    expect(j.tiles[1].result).toEqual({ ok: true, ...RESULT });
   });
 
   it('inlines a $baseQuery() reference into the executed tile KQL', async () => {

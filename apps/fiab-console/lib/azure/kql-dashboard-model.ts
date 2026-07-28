@@ -25,11 +25,17 @@ export type TileViz =
   | 'column'      // vertical bars
   | 'pie'
   | 'stat'        // single big-number card (KPI)
-  | 'map';        // point map (lat/long columns)
+  | 'map'         // point map (lat/long columns)
+  | 'markdown';   // text tile — authored markdown, no KQL (Fabric RTD text tile)
 
 export const VALID_VIZ = new Set<TileViz>([
-  'table', 'timechart', 'line', 'bar', 'column', 'pie', 'stat', 'map',
+  'table', 'timechart', 'line', 'bar', 'column', 'pie', 'stat', 'map', 'markdown',
 ]);
+
+/** True when the tile executes a KQL query (markdown/text tiles do not). */
+export function isQueryTile(tile: { viz?: string }): boolean {
+  return tile?.viz !== 'markdown';
+}
 
 export interface DashboardDataSource {
   /** Stable id referenced by tiles (`tile.dataSourceId`) + datasource params. */
@@ -144,23 +150,42 @@ export interface CfMatch {
  * Per-tile drill-through wiring. Fabric Real-Time Dashboards expose
  * "drillthroughs" under a visual's Interactions: selecting a value in a
  * visual maps a result column to a dashboard parameter, which re-filters the
- * (target) page. Loom is single-page, so the parameter injection stays on the
- * current page — clicking a value sets `paramName` to the value in `column`
- * and re-runs every tile (cross-filter), matching the documented behavior.
- * Grounded in Microsoft Learn: dashboard-parameters#use-drillthroughs-as-
- * dashboard-parameters.
+ * target page. Clicking a value sets `paramName` to the value in `column`
+ * and re-runs every tile (cross-filter); when `targetPageId` names one of
+ * the dashboard's pages the editor also navigates to that page — the full
+ * documented Fabric behavior (dashboard-parameters#use-drillthroughs-as-
+ * dashboard-parameters). With no `targetPageId` the injection stays on the
+ * current page.
  */
 export interface DashTileDrillthrough {
   /** Column name from the tile's query result to extract on click. */
   column: string;
   /** The dashboard parameter `variableName` to inject the clicked value into. */
   paramName: string;
+  /** Optional page to navigate to after injecting the parameter (U8 pages). */
+  targetPageId?: string;
+}
+
+/**
+ * A dashboard page — a named tile container (Fabric RTD "Pages"). Tiles carry
+ * a `pageId`; tiles with no/unknown `pageId` belong to the first page. An
+ * empty `pages[]` is the back-compat single-page dashboard.
+ */
+export interface DashboardPage {
+  /** Stable id referenced by `tile.pageId` + drillthrough `targetPageId`. */
+  id: string;
+  /** Page name shown on the page strip. */
+  name: string;
 }
 
 export interface DashboardTile {
   title: string;
   kql: string;
   viz: TileViz;
+  /** Text-tile content (viz:'markdown' only) — rendered, never executed. */
+  markdown?: string;
+  /** Owning page id (U8 pages). Absent/unknown → the first page. */
+  pageId?: string;
   /** Bound data source id (resolves to a database). */
   dataSourceId?: string;
   /** Legacy direct database override (pre-data-source model). */
@@ -316,6 +341,8 @@ export interface DashboardModel {
   parameters: DashboardParam[];
   /** Shared KQL snippets referenced by tiles via `$baseQuery('name')`. */
   baseQueries: BaseQuery[];
+  /** Named tile-container pages (U8). Empty = single-page (back-compat). */
+  pages: DashboardPage[];
   /** Global time range key, e.g. `last-24h`, or a raw `ago(...)` token. */
   timeRange?: string;
   autoRefreshMs?: number;
@@ -532,6 +559,16 @@ export function resolveTileDatabase(
   return fallback || DEFAULT_DB;
 }
 
+/**
+ * Resolve the page a tile belongs to: its `pageId` when it names a real page,
+ * else the FIRST page (so pre-pages tiles land on page 1). Returns '' for a
+ * single-page dashboard (no pages authored).
+ */
+export function resolveTilePageId(tile: { pageId?: string }, pages: DashboardPage[]): string {
+  if (!Array.isArray(pages) || pages.length === 0) return '';
+  return pages.some((p) => p.id === tile?.pageId) ? (tile.pageId as string) : pages[0].id;
+}
+
 /** Coerce arbitrary input into a clean DashboardModel (PUT body / JSON edit). */
 export function sanitizeModel(input: any): DashboardModel {
   const sources: DashboardDataSource[] = Array.isArray(input?.dataSources)
@@ -571,6 +608,8 @@ export function sanitizeModel(input: any): DashboardModel {
           title: String(t?.title || 'Untitled tile').slice(0, 200),
           kql: String(t?.kql || ''),
           viz: VALID_VIZ.has(t?.viz) ? t.viz : 'table',
+          markdown: t?.markdown != null && String(t.markdown).trim() ? String(t.markdown) : undefined,
+          pageId: t?.pageId ? String(t.pageId).slice(0, 80) : undefined,
           dataSourceId: t?.dataSourceId ? String(t.dataSourceId).slice(0, 80) : undefined,
           database: t?.database ? String(t.database).slice(0, 200) : undefined,
           w: clampInt(t?.w, 1, 12),
@@ -582,11 +621,27 @@ export function sanitizeModel(input: any): DashboardModel {
               ? {
                   column: String(t.drillthrough.column).slice(0, 80),
                   paramName: String(t.drillthrough.paramName).slice(0, 80),
+                  targetPageId: t.drillthrough.targetPageId
+                    ? String(t.drillthrough.targetPageId).slice(0, 80)
+                    : undefined,
                 }
               : undefined,
         }))
-        .filter((t: DashboardTile) => t.kql.length > 0 && t.kql.length <= 65_536)
+        // A text (markdown) tile carries content instead of KQL; a query tile
+        // must carry KQL. Both are bounded to the same 64 KiB ceiling.
+        .filter((t: DashboardTile) => (t.viz === 'markdown'
+          ? (t.markdown || '').length > 0 && (t.markdown || '').length <= 65_536
+          : t.kql.length > 0 && t.kql.length <= 65_536))
         .slice(0, 100)
+    : [];
+
+  const pages: DashboardPage[] = Array.isArray(input?.pages)
+    ? input.pages
+        .map((p: any): DashboardPage => ({
+          id: String(p?.id || '').slice(0, 80) || genId(),
+          name: String(p?.name || 'Page').slice(0, 120),
+        }))
+        .slice(0, 20)
     : [];
 
   const baseQueries: BaseQuery[] = Array.isArray(input?.baseQueries)
@@ -605,6 +660,7 @@ export function sanitizeModel(input: any): DashboardModel {
     dataSources: sources,
     parameters,
     baseQueries,
+    pages,
     timeRange: input?.timeRange ? String(input.timeRange).slice(0, 60) : undefined,
     autoRefreshMs: Number.isFinite(Number(input?.autoRefreshMs)) ? Number(input.autoRefreshMs) : undefined,
   };

@@ -29,6 +29,7 @@ import {
 import { getLearn } from '@/lib/learn/content';
 import { SensitivityLabelPane } from './label-flyout';
 import { ClassificationPane } from './classification-flyout';
+import { COLLAB_COMMENTS_EVENT, type CollabCommentsEventDetail } from '@/lib/collab/collab-stream-model';
 
 interface Props { type: string; id: string; }
 
@@ -143,6 +144,20 @@ function CommentsPane({ type, id }: Props) {
     .catch(() => setItems([]));
 
   useEffect(() => { load(); }, [type, id]);
+
+  // A14 push transport: when the item's collab stream reports the review
+  // thread changed (a peer posted/edited/resolved a comment), reload while the
+  // pane is open — session B sees session A's comment live. Additive: with
+  // push off nothing dispatches and the pane behaves exactly as before.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onChanged = (e: Event) => {
+      const detail = (e as CustomEvent<CollabCommentsEventDetail>).detail;
+      if (detail?.itemId === id && detail.scope === 'item') load();
+    };
+    window.addEventListener(COLLAB_COMMENTS_EVENT, onChanged);
+    return () => window.removeEventListener(COLLAB_COMMENTS_EVENT, onChanged);
+  }, [type, id]);
 
   const submit = async () => {
     if (!draft.trim()) return;

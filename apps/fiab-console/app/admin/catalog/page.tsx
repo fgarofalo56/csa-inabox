@@ -168,7 +168,7 @@ export default function AdminCatalogPage() {
 
   return (
     <AdminShell
-      sectionTitle="Catalog federation"
+      sectionTitle="External-engine federation (Iceberg)"
       learn={{
         title: 'Iceberg REST Catalog',
         content:
@@ -213,7 +213,7 @@ export default function AdminCatalogPage() {
         {q.data && !q.data.catalog.configured && (
           <HonestGate
             gateId="svc-iceberg-catalog"
-            surface="Catalog federation"
+            surface="External-engine federation (Iceberg)"
             gate={q.data.catalog.gate}
             onResolved={() => void q.refetch()}
           />

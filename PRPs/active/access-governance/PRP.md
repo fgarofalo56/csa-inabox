@@ -1,6 +1,23 @@
 # PRP — Access Governance: entitlement-management breadth for CSA Loom
 
-**Status:** DRAFT (design, 2026-07-20). Author: access-audit agent.
+**Status:** BUILT / SHIPPED (W1–W4 landed on `main`; header corrected 2026-07-27 from a
+stale "DRAFT" by the loom-apex A7 truth reconcile). Author: access-audit agent.
+**Verification (2026-07-24 all-PRPs audit, `PRPs/active/loom-apex/research/prps-audit.md:148-155`)** —
+every wave's code exists on `main` and was re-confirmed on disk 2026-07-27:
+- **Ledger + report (W1):** `apps/fiab-console/lib/access/{assignment-ledger,access-report}.ts` +
+  `app/api/access-governance/{assignments,backfill,report}/`.
+- **Packages + approval policy (W2):** `lib/access/approval-policy.ts` (+ test), Cosmos containers
+  `access-assignments` / `access-packages` (`lib/azure/cosmos-client.ts:1048-1049,1656-1657`).
+- **Expiry / JIT sweeper (W3):** `lib/access/expiry.ts` + `azure-functions/access-governance-sweeper/`
+  (timer Function: `function_app.py`, `deploy/`) + `app/api/access-governance/sweep/`.
+- **Reviews + group sync + leaver + inline request (W4):** `lib/access/{access-reviews,close-campaign,revoke-assignment,group-sync,leaver}.ts`
+  (+ `lib/access/__tests__/`), `app/admin/access-reviews/page.tsx`,
+  `app/api/access-governance/{reviews,group-sync,revoke-all}/`,
+  `lib/components/access/request-access-inline.tsx`.
+Residuals (NOT blocking this status): the N19c **signed-evidence record** on campaign close
+(scheduled as loom-apex **B-N19c′**, `PRPs/active/loom-apex/PRP.md:93`), the
+`docs/fiab/parity/access-governance.md` zero-❌ confirmation, and the Graph-permission gate verify
+(prps-audit.md:154-155).
 **Origin:** the 2026-06→07 ask audit (`temp/ask-audit-2026-07-20.md`) found "user
 access requests + management" delivered as a real *request→approve→grant* spine but
 **missing the entitlement-management breadth** the operator asked for. This PRP specs
@@ -140,6 +157,13 @@ wizard/table per `loom-no-freeform-config` + `web3-ui` + `ux-baseline`.
 ---
 
 ## (d) Wave plan (day-one-ON; each wave ships with real backend + E2E receipt)
+
+> **2026-07-27 note (A7 truth reconcile):** W1–W4 below SHIPPED on `main` — see the
+> Status verification block at the top for the per-wave code evidence
+> (`PRPs/active/loom-apex/research/prps-audit.md:148-155`). The checkboxes were never
+> ticked when the work landed; they are kept as the original spec. Open residuals are
+> only the three named in the Status block (B-N19c′ signed evidence, parity-doc
+> confirmation, Graph-permission gate verify).
 
 **W1 — Entitlement ledger + unified who-has-access (foundation).**
 - [ ] AG-11 `access-assignments` ledger container + write-through: every existing grant

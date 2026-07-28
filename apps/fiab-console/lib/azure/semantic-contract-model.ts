@@ -116,6 +116,37 @@ export interface VerifiedQueryDoc {
   approvedByOid?: string;
 }
 
+/**
+ * N15 — the tenant's MetricFlow-compatible semantic spec, stored as ONE doc in
+ * this SAME container (docType `semantic-spec`, id `semantic-spec`) so N15
+ * EXTENDS N9's contract store rather than forking it. The compilable substrate
+ * (measures' agg+expr, dimensions' expr+grain, the model's base relation) lives
+ * on `spec`; N9's {@link MetricDoc} registry rows are ALSO written on import so
+ * synonym-matching + refuse-not-guess keep working. Additive at schemaVersion 1
+ * — a new docType on the current schema needs no MIG1 migrator (the first
+ * BREAKING shape change to `spec` would bump SEMANTIC_CONTRACT_SCHEMA_VERSION and
+ * register its migrator here, per the MIG1 convention). The `spec` payload shape
+ * is owned by lib/metrics/metricflow-spec.ts; kept `unknown` here so this leaf
+ * stays import-cycle-free (it must not import the metrics module).
+ */
+export interface SemanticSpecDoc {
+  /** Cosmos id — the fixed `semantic-spec` (one spec doc per owner partition). */
+  id: string;
+  /** PK — owner oid (owner-scoped, mirrors MetricDoc). */
+  tenantId: string;
+  docType: 'semantic-spec';
+  schemaVersion: number;
+  /** The canonical MetricFlowSpec (semantic_models + metrics). */
+  spec: unknown;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+/** Fixed Cosmos id for the single per-owner semantic-spec doc. */
+export const SEMANTIC_SPEC_DOC_ID = 'semantic-spec';
+
 // ── Pure matching layer (no Azure, fully unit-testable) ──────────────────────
 
 /** English stopwords dropped before token overlap so scoring keys on content. */

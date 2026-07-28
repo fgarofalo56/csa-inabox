@@ -55,6 +55,8 @@ The real Fabric pipeline editor exposes:
 | Debug | ✅ built — Home → Debug | `POST /api/items/data-pipeline/[id]/debug` |
 | Schedule / Add trigger (list/create/start/stop) | ✅ built — `TriggerWizard` | `GET/POST/DELETE /api/items/data-pipeline/[id]/triggers` |
 | Output / run history (monitor) | ✅ built — Output pane | `GET /api/items/data-pipeline/[id]/output[?runId]`, `.../jobs` |
+| **In-canvas Debug/Output overlay** — per-activity run-status glyphs on the nodes, floating run strip (status/progress), eyeglass → run detail (input/output/error JSON) | ✅ built — U13 `pipeline-debug-overlay` painted by the shared `PipelineCanvas` (both canvases: this editor AND `PipelineDesigner`); in-canvas Output dock below the graph; kill-switch `u13-pipeline-run-overlay` | same `GET .../output?runId=` (queryActivityRuns) — one run path |
+| **Rerun from failed activities / rerun from activity** (ADF recovery run) | ✅ built — run strip + eyeglass dialog + Debug tab button | `POST /api/items/data-pipeline/[id]/debug` (createRun `isRecovery=true` + `startFromFailure` / `startActivityName`) |
 | Publish | ✅ built | `POST /api/items/data-pipeline/[id]/publish` |
 | Import / Export pipeline JSON | ✅ built | `POST /api/items/data-pipeline/import`, `GET .../[id]/export` |
 | Manage connections / Integration runtimes | ✅ built — `PipelineManageHub` / `ManagePanel` | `GET .../[id]/connections`, `.../integration-runtimes` |

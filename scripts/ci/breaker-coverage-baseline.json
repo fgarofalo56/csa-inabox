@@ -1,0 +1,6 @@
+{
+  "_owner": "loom-next-level CH1 — platform/resilience",
+  "_why": "Every lib/azure client must make network calls through the bounded transport (fetchWithTimeout / withDeadline), never a raw unbounded fetch() that can pin a worker on a hung backend. Baseline = the grandfathered raw fetches; it only shrinks.",
+  "_unblock": "Route the call through fetchWithTimeout()/withDeadline(), then: node scripts/ci/check-breaker-coverage.mjs --update-baseline (run in the blocked PR with a one-line justification).",
+  "entries": {}
+}

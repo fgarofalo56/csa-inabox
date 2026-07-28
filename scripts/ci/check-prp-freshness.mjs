@@ -97,14 +97,14 @@ const FACTS = [
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1575, // 4a boundary re-baseline (Phase-4 trust chain added N9 verified-queries, N13 prompts/[promptId]/budgets routes)
+    stated: 1643, // §P2-gaps wave re-baseline (EXP1 workspace export/import/clone + A14 collab/stream + U8 kql-dashboard depth routes)
     live: countRoutes,
   },
   {
     id: 'route-toolkit-gap',
     where: 'PRP.md ground-truth #4 / ws-ratchets.md §0',
     statement: 'hand-rolled session routes not on the route-toolkit',
-    stated: 1343, // 1→2 boundary re-baseline; R2 pilot + R3 touch-rule migrations shrank 1359→1343
+    stated: 1338, // 4c/4d/openness boundary re-baseline; ratchet continues to shrink (1343→1338)
     live: countHandRolledRoutes,
   },
   {

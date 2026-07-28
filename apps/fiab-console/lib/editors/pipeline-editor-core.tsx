@@ -47,6 +47,7 @@ import { PipelineCopilotPane } from './pipeline-editor';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import { PipelineDesigner, type PipelineDesignerHandle } from '@/lib/components/pipeline/pipeline-designer';
+import { startRunOverlayPolling, type ActivityRunOverlayRow } from '@/lib/components/pipeline/pipeline-debug-overlay';
 import { ParametersPane, VariablesPane, SettingsPane } from '@/lib/components/pipeline/pipeline-config-panes';
 import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
@@ -454,6 +455,36 @@ export function PipelineEditorCore({
 
   const dirty = spec !== origSpec;
 
+  // U13 — stream a Debug run's per-activity receipts onto the designer canvas
+  // via the shared overlay poller (reads the SAME `${apiBase}/runs?runId=`
+  // route — one run path). Rerun callbacks dispatch REAL recovery runs.
+  const streamRunToCanvas = useCallback((initialRunId: string) => {
+    async function rerun(payload: Record<string, unknown>) {
+      const res = await clientFetch(`${apiBase}/debug`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const { ok, data, error: e } = await safePipelineJson(res);
+      if (ok && data?.runId) start(String(data.runId));
+      else setError(e || 'rerun failed');
+    }
+    function start(rid: string) {
+      startRunOverlayPolling({
+        key: id,
+        runId: rid,
+        source: 'debug',
+        fetchActivities: async () => {
+          const res = await clientFetch(`${apiBase}/runs?runId=${encodeURIComponent(rid)}`, { cache: 'no-store' });
+          const { ok, data } = await safePipelineJson(res);
+          return ok && data ? ((data.activities || []) as ActivityRunOverlayRow[]) : null;
+        },
+        onRerunFromFailed: () => rerun({ referencePipelineRunId: rid, startFromFailure: true }),
+        onRerunFromActivity: (name) => rerun({ referencePipelineRunId: rid, startActivityName: name }),
+      });
+    }
+    start(initialRunId);
+  }, [apiBase, id]);
+
   const kick = useCallback(async (action: 'run' | 'debug') => {
     if (!bound) return;
     setBusy(true); setError(null);
@@ -462,13 +493,20 @@ export function PipelineEditorCore({
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ params: {} }),
       });
-      const { ok, error: e } = await safePipelineJson(res);
+      const { ok, data, error: e } = await safePipelineJson(res);
       if (!ok) throw new Error(e || `${action} failed`);
       setTimeout(() => loadRuns(), 1500);
-      setTab('runs');
+      if (action === 'debug' && data?.runId) {
+        // U13 ADF parity — Debug stays ON the canvas: stream the run's
+        // per-activity status onto the nodes instead of leaving for Output.
+        streamRunToCanvas(String(data.runId));
+        setTab('graph');
+      } else {
+        setTab('runs');
+      }
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [apiBase, bound, loadRuns]);
+  }, [apiBase, bound, loadRuns, streamRunToCanvas]);
 
   const validate = useCallback(async () => {
     if (!bound) return;
@@ -1102,6 +1140,10 @@ export function PipelineEditorCore({
                   activities={activities as any}
                   parameters={pipelineParameters}
                   variables={pipelineVariables}
+                  // U13 — the item id keys the in-canvas run overlay (Debug run
+                  // receipts painted on the nodes) + the shared collab layer.
+                  itemId={id}
+                  apiSlug={config.slug}
                   onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
                   // Guided empty-state / gallery apply the FULL template spec
                   // (activities + params + variables), leaving the editor dirty so

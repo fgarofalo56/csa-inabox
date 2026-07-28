@@ -777,9 +777,22 @@ export async function listDatasets(): Promise<SynapseDataset[]> {
 export async function debugPipeline(
   name: string,
   params?: Record<string, unknown>,
+  opts?: { referencePipelineRunId?: string; startActivityName?: string; startFromFailure?: boolean },
 ): Promise<PipelineRunResponse> {
+  // Recovery reruns (U13 "Rerun from failed") use the same createRun query
+  // contract as ADF: isRecovery=true + referencePipelineRunId, optionally
+  // startFromFailure / startActivityName.
+  const qs = new URLSearchParams({ 'api-version': DEV_API, isDebugRun: 'true' });
+  if (opts?.referencePipelineRunId) {
+    qs.set('isRecovery', 'true');
+    qs.set('referencePipelineRunId', opts.referencePipelineRunId);
+    if (opts.startFromFailure) qs.set('startFromFailure', 'true');
+  } else {
+    qs.set('isRecovery', 'false');
+  }
+  if (opts?.startActivityName) qs.set('startActivityName', opts.startActivityName);
   const r = await callDev(
-    `/pipelines/${encodeURIComponent(name)}/createRun?api-version=${DEV_API}&isRecovery=false&isDebugRun=true`,
+    `/pipelines/${encodeURIComponent(name)}/createRun?${qs.toString()}`,
     { method: 'POST', body: JSON.stringify(params || {}) },
   );
   return jsonOrThrow<PipelineRunResponse>(r, `debugPipeline(${name})`);

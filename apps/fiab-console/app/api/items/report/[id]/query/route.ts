@@ -57,7 +57,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { AasError, type DaxVisual } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
 import {
@@ -86,6 +86,9 @@ import {
 } from '@/lib/report/executors/loom-native';
 import { executeConnectionQueryPath } from '@/lib/report/executors/connection';
 import { parseAsOf, isLive, TimeMachineError } from '@/lib/time-machine/time-machine';
+import { runtimeFlag } from '@/lib/admin/runtime-flags';
+import { runGovernedMetricQuery } from '@/lib/metrics/run';
+import { METRIC_ENGINES, type MetricEngine, type MetricFilter } from '@/lib/metrics/metric-compiler';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -112,12 +115,18 @@ interface QueryRequest {
   whatIf?: ScalarParamBinding[];
   /** WS-10.3 Time-Machine — view this visual AS OF a point in time (ISO / v:<n>). */
   asOf?: string;
+  // N15 — a visual bound to a GOVERNED METRIC (headless metrics layer). When
+  // `metric` is set the visual resolves through the SAME native compiler + execute
+  // path as POST /api/metrics/query and the Copilot NL2SQL grounding, so a KPI
+  // card / matrix returns the identical governed number ("one metric everywhere").
+  metric?: string;
+  metricDimensions?: string[];
+  metricFilters?: MetricFilter[];
+  metricGrain?: string;
+  metricEngine?: string;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withSession(async (req: NextRequest, { session, params }) => {
   const body = (await req.json().catch(() => ({}))) as QueryRequest;
   const filters = Array.isArray(body.filters) ? body.filters : undefined;
 
@@ -153,6 +162,55 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       : undefined;
 
   // ------------------------------------------------------------------
+  // N15 — governed metric-backed visual (headless metrics layer, CONSUMER 1).
+  // Resolves through runGovernedMetricQuery — the SAME native compiler + execute
+  // path POST /api/metrics/query uses — so this visual's number matches the API
+  // and the Copilot. FLAG0-gated (default-on); OFF falls through to the normal
+  // field-wells path below (byte-identical pre-N15 behaviour).
+  // ------------------------------------------------------------------
+  const metricRef = typeof body.metric === 'string' ? body.metric.trim() : '';
+  if (metricRef && (await runtimeFlag('n15-metrics-layer', { default: true }))) {
+    const engine: MetricEngine | undefined =
+      typeof body.metricEngine === 'string' && (METRIC_ENGINES as readonly string[]).includes(body.metricEngine)
+        ? (body.metricEngine as MetricEngine)
+        : undefined;
+    const outcome = await runGovernedMetricQuery(
+      {
+        oid: session.claims.oid,
+        who: session.claims.upn || session.claims.oid,
+        tenantId: session.claims.tid || session.claims.oid,
+      },
+      {
+        metric: metricRef,
+        dimensions: Array.isArray(body.metricDimensions) ? body.metricDimensions : undefined,
+        filters: Array.isArray(body.metricFilters) ? body.metricFilters : undefined,
+        grain: typeof body.metricGrain === 'string' ? body.metricGrain : undefined,
+        engine,
+      },
+    );
+    if (!outcome.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: outcome.error,
+          ...(outcome.code ? { code: outcome.code } : {}),
+          ...(outcome.missing ? { missing: outcome.missing } : {}),
+        },
+        { status: outcome.status },
+      );
+    }
+    return NextResponse.json({
+      ok: true,
+      rows: outcome.result.rows,
+      columns: outcome.result.columns,
+      sql: outcome.result.sql,
+      metric: outcome.result.metric,
+      engine: outcome.result.engine,
+      cached: outcome.result.cached,
+    });
+  }
+
+  // ------------------------------------------------------------------
   // Path 1 — Power BI executeQueries (opt-in Visual Designer path)
   // ------------------------------------------------------------------
   const workspaceId = body.workspaceId?.trim();
@@ -165,7 +223,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // ------------------------------------------------------------------
   // Load the report item (loom: content id OR plain Cosmos id), owner-checked.
   // ------------------------------------------------------------------
-  const id = (await ctx.params).id;
+  const id = params.id;
   const rawQuery: string = (body?.query || '').toString().trim();
 
   let item: WorkspaceItem | null;
@@ -247,4 +305,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Path 2 — Azure Analysis Services (advanced / back-compat)
   // ------------------------------------------------------------------
   return executeAasQueryPath(resolved, rawQuery, body.visual, filters, userExec);
-}
+});

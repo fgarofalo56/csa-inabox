@@ -1074,6 +1074,13 @@ export interface CosmosAccountManagement {
   consistencyPolicy: CosmosConsistencyPolicy;
   // Backup & restore
   backupPolicy: CosmosBackupPolicy;
+  // Encryption at rest (CMK1) — properties.keyVaultKeyUri is set iff the
+  // account is encrypted with a customer-managed key; undefined = the
+  // service-managed default. defaultIdentity names the identity Cosmos uses
+  // for Key Vault access ('FirstPartyIdentity' | 'SystemAssignedIdentity' |
+  // 'UserAssignedIdentity=<uami-resource-id>').
+  keyVaultKeyUri?: string;
+  defaultIdentity?: string;
   // Networking
   publicNetworkAccess: string;
   isVirtualNetworkFilterEnabled: boolean;
@@ -1166,6 +1173,8 @@ export async function getAccountManagement(): Promise<CosmosAccountManagement | 
     enableAutomaticFailover: props.enableAutomaticFailover === true,
     consistencyPolicy: shapeConsistency(props.consistencyPolicy),
     backupPolicy: shapeBackup(props.backupPolicy),
+    keyVaultKeyUri: typeof props.keyVaultKeyUri === 'string' && props.keyVaultKeyUri ? props.keyVaultKeyUri : undefined,
+    defaultIdentity: typeof props.defaultIdentity === 'string' && props.defaultIdentity ? props.defaultIdentity : undefined,
     publicNetworkAccess: props.publicNetworkAccess || 'Enabled',
     isVirtualNetworkFilterEnabled: props.isVirtualNetworkFilterEnabled === true,
     ipRules: (props.ipRules || []).map((r: any) => r?.ipAddressOrRange).filter(Boolean),

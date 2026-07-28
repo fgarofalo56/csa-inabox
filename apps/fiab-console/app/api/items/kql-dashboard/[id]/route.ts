@@ -3,9 +3,10 @@
  * PUT /api/items/kql-dashboard/[id]  — save the dashboard model.
  *
  * Persisted shape (state):
- *   tiles:        [{ title, kql, viz, dataSourceId?, database?, w?, h? }]
+ *   tiles:        [{ title, kql, viz, markdown?, pageId?, dataSourceId?, database?, w?, h?, drillthrough? }]
  *   dataSources:  [{ id, name, database, clusterUri? }]
  *   parameters:   [{ variableName, label?, type, dataType?, values?, query?, dataSourceId?, value? }]
+ *   pages:        [{ id, name }]                  (U8 — empty = single-page)
  *   timeRange:    'last-24h' | … | raw ago(...) token
  *   autoRefreshMs: number
  *
@@ -19,14 +20,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { recordItemOpen } from '@/lib/items/record-open';
 import {
   loadKustoItem, saveItemState, resolveDatabase, resolveDashboardDatabase, defaultDatabase,
   executeQuery, KustoError,
 } from '@/lib/azure/kusto-client';
 import {
-  sanitizeModel, buildTileKql, resolveTileDatabase,
+  sanitizeModel, buildTileKql, resolveTileDatabase, isQueryTile,
   type DashboardParam, type DashboardTile, type DashboardDataSource, type BaseQuery,
 } from '@/lib/azure/kql-dashboard-model';
 
@@ -66,6 +67,7 @@ function readModel(state: Record<string, any> | undefined) {
       dataSources: state?.dataSources,
       parameters: state?.parameters,
       baseQueries: state?.baseQueries ?? content?.baseQueries,
+      pages: state?.pages,
       timeRange: state?.timeRange,
       autoRefreshMs: state?.autoRefreshMs,
     });
@@ -75,16 +77,15 @@ function readModel(state: Record<string, any> | undefined) {
     dataSources: state?.dataSources,
     parameters: state?.parameters,
     baseQueries: state?.baseQueries,
+    pages: state?.pages,
     timeRange: state?.timeRange,
     autoRefreshMs: state?.autoRefreshMs,
   });
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session, params: routeParams }) => {
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'kql-dashboard', session.claims.oid);
+    const item = await loadKustoItem(routeParams.id, 'kql-dashboard', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     // Feed "Recent": type-specific base routes bypass the generic GET's write.
     await recordItemOpen({ oid: session.claims.oid, upn: session.claims.upn }, { id: item.id, itemType: 'kql-dashboard', workspaceId: item.workspaceId });
@@ -126,6 +127,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       dataSources: model.dataSources,
       parameters: params,
       baseQueries: model.baseQueries,
+      pages: model.pages,
       timeRange: timeKey,
       autoRefreshMs: model.autoRefreshMs ?? 0,
     });
@@ -137,21 +139,20 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession(async (req: NextRequest, { session, params }) => {
   const body = await req.json().catch(() => ({}));
   const model = sanitizeModel(body);
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'kql-dashboard', session.claims.oid);
+    const item = await loadKustoItem(params.id, 'kql-dashboard', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const patch: Record<string, any> = {
       tiles: model.tiles,
       dataSources: model.dataSources,
       parameters: model.parameters,
       baseQueries: model.baseQueries,
+      pages: model.pages,
     };
     if (model.timeRange) patch.timeRange = model.timeRange;
     if (model.autoRefreshMs !== undefined) patch.autoRefreshMs = model.autoRefreshMs;
@@ -165,12 +166,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       dataSources: saved.state?.dataSources || [],
       parameters: saved.state?.parameters || [],
       baseQueries: saved.state?.baseQueries || [],
+      pages: saved.state?.pages || [],
     });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
 /**
  * Cacheable window (seconds) for a dashboard's tile queries. A tile is refreshed
@@ -195,6 +197,8 @@ export async function runTiles(
   opts?: { cacheMaxAgeSec?: number },
 ) {
   return Promise.all(tiles.map(async (t) => {
+    // Text (markdown) tiles render their authored content — nothing to execute.
+    if (!isQueryTile(t)) return { ...t };
     try {
       const db = resolveTileDatabase(t, dataSources, fallbackDb);
       const kql = buildTileKql(t.kql, params, timeKey, baseQueries);

@@ -32,7 +32,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import {
   useCallback, useEffect, useMemo, useRef, useState,
-  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
@@ -44,7 +44,9 @@ import {
   makeStyles, mergeClasses, tokens,
   Toast, ToastTitle, useToastController, Toaster, useId,
 } from '@fluentui/react-components';
-import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// A5/G3: shared draggable divider — sizes the palette column and the
+// canvas↔config-dock split with persisted sizingKeys (ux-baseline G3).
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
@@ -64,6 +66,8 @@ import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
 import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
+import { PipelineOutputDock } from '@/lib/components/pipeline/pipeline-output-dock';
+import { streamDataPipelineRun } from '@/lib/components/pipeline/pipeline-debug-overlay';
 import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
 import { PIPELINE_TEMPLATES, type PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
 import {
@@ -114,54 +118,40 @@ const useLocalStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
     overflow: 'hidden',
     display: 'flex',
+    // A5/G3: the SplitPane pane owns the column width — let the ActivityPalette
+    // fill whatever width the user drags instead of its content max-width
+    // (mirrors pipeline-designer.tsx paletteCol).
+    '> :last-child': { maxWidth: '100%' },
   },
   centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   tabBody: { padding: tokens.spacingHorizontalM, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 
-  // ── ADF-Studio designer layout: palette | (canvas over a resizable config dock) ──
-  // The canvas FILLS the space above the dock; the dock has an explicit,
-  // user-dragged height with its own internal scroll, so expanding/collapsing
-  // sections inside the activity config NEVER resizes the canvas.
+  // ── ADF-Studio designer layout (A5): palette | (canvas over config dock) ──
+  // ONE vertical SplitPane (`adf-data-pipeline.config-dock`) reallocates space
+  // between the canvas (which FILLS everything above the divider, exactly like
+  // ADF Studio) and the bottom activity-config dock, which keeps its own
+  // internal scroll. Dragging the single visible divider therefore resizes the
+  // CANVAS too — the previous fixed-height canvas region + independent dock
+  // divider contradicted the ADF muscle-memory it emulates
+  // (research/canvas-resize.md §2.4).
   designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: tokens.spacingHorizontalS, minWidth: 0 },
   designerMain: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
-  canvasWrap: { flex: 1, minHeight: '180px', display: 'flex', overflow: 'hidden' },
-  splitter: {
-    flexShrink: 0,
-    height: '10px',  // inherent: drag-grip bar thickness — no spacing token is this thin
-    cursor: 'row-resize',
+  // The canvas↔dock SplitPane fills the main column; the U13 output dock (when
+  // pinned) stacks below it, so the split flexes instead of claiming 100%.
+  dockSplit: { flex: 1, minHeight: 0, height: 'auto' },
+  canvasWrap: {
+    position: 'relative',
+    flex: 1,
+    minHeight: 0,
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    touchAction: 'none',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
-    // Keyboard-focus affordance — the handle is focusable (tabIndex=0) and
-    // Arrow/Page/Home/End resizable, matching the canvas handle above it.
-    ':focus-visible': {
-      outline: `2px solid ${tokens.colorStrokeFocus2}`,
-      outlineOffset: '-2px',
-    },
-  },
-  splitterActive: { backgroundColor: tokens.colorBrandBackground2 },
-  splitterGrip: {
-    width: '44px',   // inherent: grip-pill width (decorative drag affordance — no token expresses it)
-    height: '4px',   // inherent: grip-pill thickness
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorNeutralStroke1,
-    pointerEvents: 'none',  // pointer events belong to the separator, not the grip
+    overflow: 'hidden',
+    borderRadius: tokens.borderRadiusMedium,
   },
   configDock: {
-    flexShrink: 0,
     overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusSmall,
-    minHeight: '240px',  // inherent: matches DOCK_MIN_PX floor
-    // Smooth keyboard-driven height changes; during a pointer drag the
-    // transition is suppressed inline (onPointerDown) so dragging stays direct.
-    transitionProperty: 'height',
-    transitionDuration: tokens.durationFast,
-    transitionTimingFunction: tokens.curveEasyEase,
-    '@media (prefers-reduced-motion: reduce)': { transitionProperty: 'none' },
   },
 
   // ── Web-5.0 polish: elevated, interactive start-cards (blank / practice /
@@ -224,24 +214,17 @@ function fromB64(b: string): string {
   } catch { return ''; }
 }
 
-// ── Activity-config dock divider — inherent layout dimensions ───────────────
-// Raw px below are layout bounds / drag-steps that no Fluent token expresses
-// (mirrors resizable-canvas.tsx). They are the documented carve-out from the
-// web3-ui token-discipline rule (resize min/max bounds + step sizes). The
-// ceiling is NOT a fixed px: it tracks 80vh of the viewport (recomputed on
-// resize, exactly like the shared primitive); the const below is only the
-// SSR-safe placeholder used until the first client measurement.
+// ── Activity-config dock (A5: shared vertical SplitPane) ────────────────────
+// The dock is the sized ("primary") pane of ONE vertical SplitPane; the canvas
+// flex-fills everything above the divider (the ADF Studio model — dragging the
+// divider reallocates canvas↔dock space). Raw px below are resize bounds that
+// no Fluent token expresses (documented carve-out from web3-ui).
 const DOCK_MIN_PX = 240;          // floor — below this the config form is unusable
-const DOCK_MAX_FALLBACK = 680;    // SSR-safe ceiling placeholder; corrected to 80vh on mount
 const DOCK_DEFAULT_PX = 300;      // initial dock height
-const DOCK_STEP = 24;             // Arrow-key resize step (px)
-const DOCK_STEP_LARGE = 96;       // Shift+Arrow / PageUp-Down resize step (px)
-// Per-surface persistence (matches the canvas region's storageKey).
-const DOCK_STORAGE_KEY = 'loom.dockHeight.adf-data-pipeline';
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(Math.round(value), min), Math.max(min, max));
-}
+// SplitPane persistence (G3 sizingKey) + the pre-A5 custom-divider key it
+// migrates from, so a previously dragged dock height carries over.
+const DOCK_SIZING_KEY = 'adf-data-pipeline.config-dock';
+const LEGACY_DOCK_STORAGE_KEY = 'loom.dockHeight.adf-data-pipeline';
 
 const STARTER: PipelineSpec = {
   properties: {
@@ -327,6 +310,10 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
 
   // Editor chrome state
   const [topTab, setTopTab] = useState<TopTabId>('pipeline');
+  // U13 — the in-canvas Output dock (ADF's output strip below the canvas).
+  // Opens automatically when a ribbon Debug run starts; user-resizable
+  // (persisted under its own key) and dismissible.
+  const [outputDockOpen, setOutputDockOpen] = useState(false);
   const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
   // "Explain this step" (W19) — the activity name whose node-scoped Explain
   // drawer is open (null = closed). Set by the canvas node Explain action.
@@ -335,130 +322,25 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const [showGrid, setShowGrid] = useState(true);
   const [outputPinned, setOutputPinned] = useState(false);
 
-  // Activity-config dock height (ADF Studio docks config at the bottom of the
-  // canvas with a draggable divider). Explicit height + internal scroll means
-  // expanding/collapsing sections never resizes the canvas above it.
-  //
-  // The divider matches the canvas handle's accessible Pointer-Events standard
-  // (see ResizableCanvasRegion): pointer-capture drag that works for mouse /
-  // touch / pen and survives the pointer leaving the handle; rAF-coalesced,
-  // DOM-direct height writes during drag (no per-frame React re-render →
-  // smooth, no layout thrash); keyboard resize (Arrow ±24 / Shift+Arrow /
-  // PageUp-Down ±96 / Home=min / End=max); full ARIA; and a height persisted
-  // per-surface in localStorage. Dragging UP grows the dock.
-  const configDockRef = useRef<HTMLDivElement | null>(null);
-  const [configHeight, setConfigHeight] = useState(DOCK_DEFAULT_PX);
-  const [resizing, setResizing] = useState(false);
-  // Ceiling tracks 80vh of the viewport (recomputed on resize); the fallback
-  // keeps SSR and the first client render identical (no hydration mismatch).
-  const [dockMax, setDockMax] = useState(DOCK_MAX_FALLBACK);
-  const configHeightRef = useRef(configHeight);
-  configHeightRef.current = configHeight;
-  // Render-synced mirror so pointer/keyboard handlers read the live ceiling
-  // without being torn down and rebuilt on every resize.
-  const dockMaxRef = useRef(dockMax);
-  dockMaxRef.current = dockMax;
-  const dockDragRef = useRef(false);
-  const dockStartYRef = useRef(0);
-  const dockStartHRef = useRef(0);
-  const dockPendingYRef = useRef(0);
-  const dockRafRef = useRef<number | null>(null);
-
-  // Commit a dock height: clamp into bounds → state → localStorage.
-  const commitDockHeight = useCallback((next: number) => {
-    const clamped = clamp(next, DOCK_MIN_PX, dockMaxRef.current);
-    setConfigHeight(clamped);
-    try { window.localStorage.setItem(DOCK_STORAGE_KEY, String(clamped)); }
-    catch { /* storage unavailable (private mode / quota) — height still applies */ }
-  }, []);
-
-  // Track the 80vh ceiling — recomputed on viewport resize (mirrors the shared
-  // canvas primitive). SSR keeps the fallback; the client corrects on mount.
-  useEffect(() => {
-    const recompute = () => setDockMax(Math.round(window.innerHeight * 0.8));
-    recompute();
-    window.addEventListener('resize', recompute);
-    return () => window.removeEventListener('resize', recompute);
-  }, []);
-
-  // Apply the persisted dock height once, after mount. Init stays at the
-  // default so SSR and first client render match (avoids a hydration mismatch).
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(DOCK_STORAGE_KEY);
-      if (raw != null) {
-        const parsed = parseInt(raw, 10);
-        if (Number.isFinite(parsed)) setConfigHeight(clamp(parsed, DOCK_MIN_PX, dockMaxRef.current));
-      }
-    } catch { /* ignore */ }
-  }, []);
-
-  // Re-clamp the current height whenever the ceiling changes (e.g. viewport shrank).
-  useEffect(() => { setConfigHeight((h) => clamp(h, DOCK_MIN_PX, dockMax)); }, [dockMax]);
-
-  const startResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer capture best-effort */ }
-    dockStartYRef.current = e.clientY;
-    dockStartHRef.current = configDockRef.current?.offsetHeight ?? configHeightRef.current;
-    dockDragRef.current = true;
-    setResizing(true);
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-    // Suppress the keyboard transition so direct DOM writes never lag the drag.
-    if (configDockRef.current) configDockRef.current.style.transition = 'none';
-  }, []);
-
-  const onDockPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dockDragRef.current) return;
-    dockPendingYRef.current = e.clientY;
-    if (dockRafRef.current != null) return;
-    dockRafRef.current = requestAnimationFrame(() => {
-      dockRafRef.current = null;
-      // Dragging UP (clientY decreases) grows the bottom dock.
-      const dy = dockPendingYRef.current - dockStartYRef.current;
-      const next = clamp(dockStartHRef.current - dy, DOCK_MIN_PX, dockMaxRef.current);
-      // Write height DIRECTLY — no setState during drag → smooth, no thrash.
-      if (configDockRef.current) configDockRef.current.style.height = `${next}px`;
-    });
-  }, []);
-
-  const endDockResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dockDragRef.current) return;
-    dockDragRef.current = false;
-    if (dockRafRef.current != null) { cancelAnimationFrame(dockRafRef.current); dockRafRef.current = null; }
-    setResizing(false);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-    // Read back what the drag painted, restore the transition (revert the inline
-    // override to the stylesheet), then commit to state + storage.
-    const committed = configDockRef.current?.offsetHeight ?? configHeightRef.current;
-    if (configDockRef.current) configDockRef.current.style.transition = '';
-    commitDockHeight(committed);
-  }, [commitDockHeight]);
-
-  const onDockKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
-    let next: number | null = null;
-    switch (e.key) {
-      // Dragging the divider UP grows the dock, so ArrowUp/PageUp grow it.
-      case 'ArrowUp':   next = configHeightRef.current + (e.shiftKey ? DOCK_STEP_LARGE : DOCK_STEP); break;
-      case 'ArrowDown': next = configHeightRef.current - (e.shiftKey ? DOCK_STEP_LARGE : DOCK_STEP); break;
-      case 'PageUp':    next = configHeightRef.current + DOCK_STEP_LARGE; break;
-      case 'PageDown':  next = configHeightRef.current - DOCK_STEP_LARGE; break;
-      case 'Home':      next = DOCK_MIN_PX; break;
-      case 'End':       next = dockMaxRef.current; break;
-      default: return;
+  // A5 — one-time key migration: carry a config-dock height dragged with the
+  // pre-A5 custom divider (loom.dockHeight.*) into the SplitPane sizingKey so
+  // the user's chosen dock height survives the divider-model change. A lazy
+  // initializer runs during the FIRST render — before the SplitPane child's
+  // layout effect reads its storage key.
+  useState<null>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const splitKey = `loom.splitpane.${DOCK_SIZING_KEY}`;
+        if (window.localStorage.getItem(splitKey) == null) {
+          const legacy = window.localStorage.getItem(LEGACY_DOCK_STORAGE_KEY);
+          if (legacy != null && Number.isFinite(parseInt(legacy, 10))) {
+            window.localStorage.setItem(splitKey, String(parseInt(legacy, 10)));
+          }
+        }
+      } catch { /* storage unavailable (private mode / quota) — defaults apply */ }
     }
-    e.preventDefault();
-    commitDockHeight(next);
-  }, [commitDockHeight]);
-
-  // Cancel any in-flight rAF on unmount; restore body styles defensively.
-  useEffect(() => () => {
-    if (dockRafRef.current != null) cancelAnimationFrame(dockRafRef.current);
-    if (dockDragRef.current) { document.body.style.cursor = ''; document.body.style.userSelect = ''; }
-  }, []);
+    return null;
+  });
 
   // Lifecycle state
   const [saving, setSaving] = useState(false);
@@ -836,6 +718,18 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     } finally { setRunning(false); }
   }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
+  // U13 — stream a ribbon-dispatched debug run's per-activity receipts onto
+  // the canvas via the shared overlay poller (SAME /output route the Output
+  // pane reads — one run path; rerun callbacks dispatch REAL recovery runs).
+  const streamRunToCanvas = useCallback((initialRunId: string) => {
+    if (!workspaceId || !pipelineId) return;
+    streamDataPipelineRun({
+      workspaceId, pipelineId, runId: initialRunId,
+      notify: (message, intent) =>
+        dispatchToast(<Toast><ToastTitle>{message}</ToastTitle></Toast>, { intent }),
+    });
+  }, [workspaceId, pipelineId, dispatchToast]);
+
   const debug = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setDebugging(true);
@@ -853,10 +747,15 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
       if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Debug run started · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
-        setTopTab('output');
+        // U13 ADF parity — stay ON the canvas: paint per-activity status on
+        // the nodes and open the Output dock below (instead of leaving for
+        // the Output tab, which hid the graph while the run streamed).
+        if (j.runId) streamRunToCanvas(j.runId);
+        setTopTab('pipeline');
+        setOutputDockOpen(true);
       }
     } finally { setDebugging(false); }
-  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf, streamRunToCanvas]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -1131,6 +1030,8 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
         { label: 'Output', actions: [
           { label: outputPinned ? 'Unpin' : 'Pin output', onClick: () => setOutputPinned((v) => !v) },
           { label: 'Open Output tab', onClick: pipelineId ? () => setTopTab('output') : undefined, disabled: !pipelineId },
+          // U13 — toggle the in-canvas Output dock (run receipts + canvas together).
+          { label: outputDockOpen ? 'Hide output dock' : 'Show output dock', onClick: pipelineId ? () => { setOutputDockOpen((v) => !v); setTopTab('pipeline'); } : undefined, disabled: !pipelineId },
         ]},
       ],
     },
@@ -1138,7 +1039,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     canCreate, saving, canSave, save, workspaceId, loadList, canDiscard, dirty, discard,
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
-    pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
+    pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned, outputDockOpen,
     exportPipeline, openManageHub,
   ]);
 
@@ -1430,81 +1331,91 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
               }}>
               {topTab === 'pipeline' && (
                 <div className={s.designerRow}>
-                  <div className={s.paletteCol}>
-                    <ActivityPalette onInsert={(d) => insertActivity(d)} />
-                  </div>
-                  <div className={s.designerMain}>
-                    {/* Canvas region — user-resizable height (drag the grip below
-                        the canvas, or focus it and use Arrow keys). Height is
-                        persisted per-surface; the canvas FILLS this region and is
-                        never resized by config expand/collapse. The dock divider
-                        below is complementary and resizes only the config dock. */}
-                    <ResizableCanvasRegion
-                      storageKey="adf-data-pipeline"
-                      defaultPx={460}
-                      minPx={300}
-                      ariaLabel="Resize pipeline canvas height"
-                    >
-                      <div className={s.canvasWrap} style={{ flex: 1, height: '100%', minHeight: 0 }}>
-                        <PipelineCanvas
-                          ref={canvasRef}
-                          activities={activities}
-                          selectedName={selectedActivity || undefined}
-                          onSelect={setSelectedActivity}
-                          snapToGrid={snapToGrid}
-                          showGrid={showGrid}
-                          onDropPaletteKey={(key) => {
-                            const def = findByKey(key);
-                            if (def) insertActivity(def);
-                          }}
-                          onConnect={connect}
-                          onDeleteActivity={deleteActivity}
-                          onExplainNode={setExplainActivity}
-                          aiSuggest
-                          itemType="data-pipeline"
-                          itemId={pipelineId || undefined}
+                  {/* A5/G3: the palette | designer split is user-draggable
+                      (keyboard-accessible) and persisted under
+                      loom.splitpane.adf-data-pipeline.palette — mirroring the
+                      pipeline designer's palette split. */}
+                  <SplitPane
+                    direction="horizontal"
+                    primary="first"
+                    storageKey="adf-data-pipeline.palette"
+                    defaultSize={280}
+                    minSize={260}
+                    maxSize={440}
+                    dividerLabel="Resize activities palette"
+                  >
+                    <div className={s.paletteCol}>
+                      <ActivityPalette onInsert={(d) => insertActivity(d)} />
+                    </div>
+                    <div className={s.designerMain}>
+                      {/* A5: ONE vertical SplitPane reallocates canvas↔dock space
+                          exactly like ADF Studio — the canvas FILLS everything
+                          above the divider, the config dock below is the sized
+                          pane with its own internal scroll (so expanding config
+                          sections never resizes the canvas). Persisted under
+                          loom.splitpane.adf-data-pipeline.config-dock. */}
+                      <SplitPane
+                        direction="vertical"
+                        primary="second"
+                        storageKey={DOCK_SIZING_KEY}
+                        defaultSize={DOCK_DEFAULT_PX}
+                        minSize={DOCK_MIN_PX}
+                        className={s.dockSplit}
+                        dividerLabel="Resize activity configuration panel"
+                      >
+                        <div className={s.canvasWrap}>
+                          <PipelineCanvas
+                            ref={canvasRef}
+                            activities={activities}
+                            selectedName={selectedActivity || undefined}
+                            onSelect={setSelectedActivity}
+                            snapToGrid={snapToGrid}
+                            showGrid={showGrid}
+                            onDropPaletteKey={(key) => {
+                              const def = findByKey(key);
+                              if (def) insertActivity(def);
+                            }}
+                            onConnect={connect}
+                            onDeleteActivity={deleteActivity}
+                            onExplainNode={setExplainActivity}
+                            aiSuggest
+                            itemType="data-pipeline"
+                            itemId={pipelineId || undefined}
+                          />
+                        </div>
+                        {/* Bottom-docked activity configuration — own scroll. */}
+                        <div className={s.configDock}>
+                          <PropertiesPanel
+                            activity={selected}
+                            allActivities={activities}
+                            parameters={parameters}
+                            variables={variables}
+                            layout="dock"
+                            itemId={pipelineId}
+                            pipelineId={pipelineId}
+                            workspaceId={workspaceId}
+                            apiSlug="data-pipeline"
+                            onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
+                            onDelete={() => { if (selected) deleteActivity(selected.name); }}
+                          />
+                        </div>
+                      </SplitPane>
+                      {/* U13 — the in-canvas Output dock (ADF's output strip
+                          below the canvas): run receipts + graph together. */}
+                      {outputDockOpen && pipelineId && (
+                        <PipelineOutputDock
+                          workspaceId={workspaceId}
+                          pipelineId={pipelineId}
+                          pipelineParams={parameters}
+                          paramNames={parameters.map((p) => p.name)}
+                          variableNames={variables.map((v) => v.name)}
+                          activityNames={activities.map((a) => a.name)}
+                          onOpenFullTab={() => setTopTab('output')}
+                          onClose={() => setOutputDockOpen(false)}
                         />
-                      </div>
-                    </ResizableCanvasRegion>
-                    {/* Draggable divider — same accessible Pointer-Events standard
-                        as the canvas handle above: pointer-capture drag (mouse /
-                        touch / pen), Arrow/Page/Home/End keyboard resize, full
-                        ARIA. Drag UP (or ArrowUp) grows the dock below. */}
-                    <div
-                      className={mergeClasses(s.splitter, resizing && s.splitterActive)}
-                      role="separator"
-                      aria-orientation="horizontal"
-                      aria-label="Resize activity configuration panel. Use Arrow Up and Arrow Down keys."
-                      aria-valuemin={DOCK_MIN_PX}
-                      aria-valuemax={dockMax}
-                      aria-valuenow={configHeight}
-                      tabIndex={0}
-                      title="Drag, or focus and use Arrow keys, to resize the configuration panel"
-                      onPointerDown={startResize}
-                      onPointerMove={onDockPointerMove}
-                      onPointerUp={endDockResize}
-                      onLostPointerCapture={endDockResize}
-                      onKeyDown={onDockKeyDown}
-                    >
-                      <div className={s.splitterGrip} />
+                      )}
                     </div>
-                    {/* Bottom-docked activity configuration — explicit height + own scroll. */}
-                    <div ref={configDockRef} className={s.configDock} style={{ height: configHeight }}>
-                      <PropertiesPanel
-                        activity={selected}
-                        allActivities={activities}
-                        parameters={parameters}
-                        variables={variables}
-                        layout="dock"
-                        itemId={pipelineId}
-                        pipelineId={pipelineId}
-                        workspaceId={workspaceId}
-                        apiSlug="data-pipeline"
-                        onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
-                        onDelete={() => { if (selected) deleteActivity(selected.name); }}
-                      />
-                    </div>
-                  </div>
+                  </SplitPane>
                 </div>
               )}
 

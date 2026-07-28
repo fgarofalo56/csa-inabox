@@ -90,6 +90,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Query↔results panes of the 11 Monaco-based query editors',
   },
   {
+    id: 'u8-kql-dashboard-depth',
+    label: 'KQL dashboard — pages, text tiles & page drill-through',
+    description:
+      'The U8 Real-Time Dashboard depth surface: multi-page tile containers with the page strip, markdown text tiles, and drill-through that navigates to a target page after injecting the clicked value. OFF reverts the editor to the pre-U8 single-page canvas on the next load — saved pages and text tiles are preserved (every tile renders on one canvas; text tiles keep rendering their content) and drill-through falls back to same-page cross-filtering. Nothing is deleted.',
+    ownerItem: 'U8',
+    surface: 'Real-Time Dashboard editor (/items/kql-dashboard/[id])',
+  },
+  {
     id: 'v1-journeys-tab',
     label: 'Health hub — Journeys tab',
     description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',
@@ -173,6 +181,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The U7 ADF-Studio-parity Debug experience on the mapping-dataflow designer: the held debug-session lifecycle, the per-transform Data Preview / Inspect (schema + drift) / Statistics tabs, and the preview-grid quick-actions. OFF reverts the mapping-dataflow editor to the pre-U7 single-stream inline preview on the next load — the real ADF data-flow debug session, factory, and authoring path are unaffected; only the richer bottom Debug panel is hidden. Data preview / debug still require a data-flow-capable Azure Integration Runtime either way (honest gate).',
     ownerItem: 'U7',
     surface: 'Mapping data flow editor (/items/mapping-dataflow/[id]) — bottom Debug panel',
+  },
+  {
+    id: 'u13-pipeline-run-overlay',
+    label: 'Pipeline canvas — in-canvas Debug/Output run overlay',
+    description:
+      'The U13 ADF-pipeline-debug-parity overlay on BOTH pipeline canvases (the data-pipeline editor and the shared PipelineDesigner): per-activity run-status glyphs painted on the nodes, the floating run strip (status / progress / rerun-from-failed), and the eyeglass run-detail dialog (input / output / error JSON from the real queryActivityRuns APIs). OFF reverts the canvases to the pre-U13 glyph-less rendering on the next render — the Output pane, the Debug dispatch, recovery reruns, and every /output & /runs route keep working; only the on-canvas paint is gated.',
+    ownerItem: 'U13',
+    surface: 'Pipeline canvases (/items/data-pipeline/[id] + PipelineDesigner hosts) — run overlay',
   },
   {
     id: 'a9-matrix-conditional-format',
@@ -279,6 +295,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/governance/data-contracts (registry page + /api/governance/data-contracts)',
   },
   {
+    id: 'n7b-cdc-control-plane',
+    label: 'CDC connectors — Debezium control plane',
+    description:
+      'The N7b CDC control plane on /cdc: the dropdown-only source-connector wizard (SQL Server / PostgreSQL / MySQL / MongoDB / Oracle → the Azure-native mirror engine\'s config, secrets as Key Vault references) and the live connector monitor (initial-snapshot % → streaming lag, source-DDL schema-change feed, and the N6 dead-letter list read from the Bronze `_rejected` tree). OFF renders /cdc as a guided "turned off" notice and makes the list/monitor APIs return an empty payload on the next load — the seconds-fast revert for a rendering regression on the new surface. It does NOT stop replication: connectors already Started keep snapshotting/streaming into ADLS Bronze via the mirror engine, and N6 enforcement keeps quarantining violating rows. No Microsoft Fabric.',
+    ownerItem: 'N7b',
+    surface: 'CDC connectors control plane (/cdc) + /api/cdc/connectors/**',
+  },
+  {
     id: 'n2a-duckdb-wasm-preview',
     label: 'Local analysis — in-browser SQL over a fetched Arrow result',
     description:
@@ -301,6 +325,162 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The N3 Connect tab on the lakehouse, warehouse and SQL Lab editors: the Flight SQL endpoint with its honest exposure, the Generate-ticket button (short-lived, Entra-scoped, audited), and the copy-paste client snippets. OFF hides the tab on the next render — already-minted tickets keep working until they expire (minutes), the serving tier is untouched, and every other tab is unaffected. Use it to withdraw the self-service ticket path without redeploying.',
     ownerItem: 'N3',
     surface: 'Lakehouse / warehouse / SQL Lab editors → Connect tab',
+  },
+  {
+    id: 'n7a-streaming-sql',
+    label: 'Streaming SQL (RisingWave) editor',
+    description:
+      'The N7a streaming-sql surface: the SQL editor for streaming MATERIALIZED VIEWS over Azure Event Hubs (with the honest gate when LOOM_RISINGWAVE_URL is unset), the live MV status panel (throughput / backfill / row counts read from RisingWave\'s catalog), the source/sink pickers, and the Materialize action. OFF replaces the editor body with a guided notice on the next render — the loom-risingwave Container App, the /api/streaming-sql/** routes, and every already-created item are unaffected. Azure Stream Analytics (stream-analytics-job) is a separate item and is not touched by this flag.',
+    ownerItem: 'N7a',
+    surface: 'Streaming SQL editor (/items/streaming-sql/[id])',
+  },
+  {
+    id: 'n7e-trino-federation',
+    label: 'Federated SQL (Trino) engine option',
+    description:
+      'The N7e "Federated SQL (Trino)" engine choice in the SQL Lab engine picker — the ONE opt-in carve-out of the program. This flag DEFAULTS OFF (default:false, the documented exception to loom_default_on_opt_out) because Trino is a heavy-infra additive engine that requires a private AKS cluster; SQL Lab is fully functional without it on the DEFAULT DuckDB tier. Turn it ON to expose the Trino option in the engine dropdown (it still honest-gates until LOOM_TRINO_URL is wired). OFF hides the option entirely — DuckDB / Synapse Serverless are unaffected and remain the default.',
+    ownerItem: 'N7e',
+    surface: 'SQL Lab editor (/items/sql-lab/[id]) → engine picker',
+  },
+  {
+    id: 'n7c-activation-sync',
+    label: 'Activation sync (reverse ETL)',
+    description:
+      'The N7c activation-sync item: the source/destination/field-mapping editor plus the Run (full + Delta-CDF incremental) surface that pushes a modeled dataset out to Dataverse / webhook / Event Grid / Service Bus. OFF replaces the editor body with a guided notice on the next render — already-created items, the /api/items/activation-sync/** routes and the N5 asset-trigger binding keep working; turn it back on in Admin → Runtime flags to restore the surface.',
+    ownerItem: 'N7c',
+    surface: 'Activation sync editor (/items/activation-sync/[id])',
+  },
+  {
+    id: 'n15-metrics-layer',
+    label: 'Headless metrics layer (governed metric query endpoint)',
+    description:
+      'The N15 headless metrics layer: POST /api/metrics/query compiles ONE governed MetricFlow-compatible metric definition natively to SQL/KQL (Synapse serverless / ADX / lakehouse) and serves it to the report designer, the Copilot NL2SQL path, and the SDK/API — the "one metric, one number everywhere" contract. OFF makes the query endpoint return a guided "turned off" gate and the report/NL metric-resolution fall back to their pre-N15 direct compile on the very next call (no roll) — the imported MetricFlow spec, the N9 metric registry, and every other surface are unaffected. There is NO runtime MetricFlow engine either way; Loom\'s own compiler emits the SQL.',
+    ownerItem: 'N15',
+    surface: 'POST /api/metrics/query + report metric wells + Copilot metric grounding',
+  },
+  {
+    id: 'n18-embedded-analytics',
+    label: 'Embedded analytics SDK (embed tokens + RLS)',
+    description:
+      'The N18 Fabric-free embedded-analytics story: POST /api/embed/token mints short-lived HMAC-signed embed tokens carrying an effective identity + row-level-security claims, and POST /api/embed/query serves a governed metric to the <loom-report> web component / @csa-loom/embed React wrapper with RLS enforced at QUERY TIME via the N15 metric compiler (a bound WHERE predicate keyed on the token identity — engine-level, never client-side row hiding). OFF makes BOTH endpoints return a guided "turned off" gate on the very next call (no roll) — already-issued tokens stop resolving; the N15 metrics layer, the report designer, and Copilot grounding are unaffected. No Power BI Embedded, no Fabric F-SKU either way — identical on every cloud (this IS the Gov embed story).',
+    ownerItem: 'N18',
+    surface: 'POST /api/embed/token + POST /api/embed/query + <loom-report> / @csa-loom/embed',
+  },
+  {
+    id: 'n7d-data-quality-diff',
+    label: 'Data-quality depth — runner checks + data-diff',
+    description:
+      'The N7d surfaces on the data-quality editor: the "Runner checks" tab (rule-builder checks executed on the N4 transform runner with anomaly baselines) and the "Data diff" tab (Delta-version / cross-env row+column diff computed through the N2 DuckDB engine). OFF hides both tabs on the next render — the existing ADX/Databricks/Synapse rule-run tabs, the /api/items/data-quality/** routes, already-emitted findings, and N17\'s incident console are all unaffected. Use it to withdraw the depth surfaces without redeploying.',
+    ownerItem: 'N7d',
+    surface: 'Data-quality editor → Runner checks + Data diff tabs',
+  },
+  {
+    id: 'n16-code-report',
+    label: 'Code report (BI-as-code item type)',
+    description:
+      'The N16 `code-report` item type: a dashboard authored as ONE versionable Markdown + SQL document (fenced `sql` / `sql loom` query blocks + `{visual}` directives), rendered on real Synapse-serverless / ADX backends with governed-metric blocks resolving through the N15 metrics layer. OFF makes the render + validate endpoints (POST /api/items/code-report/[id]/render, POST /api/items/code-report/validate) return a guided "turned off" gate on the next call — the editor still opens and saves source, and every already-created report and other surface is unaffected. No roll needed.',
+    ownerItem: 'N16',
+    surface: 'Code report editor (preview) + POST /api/items/code-report/[id]/render + …/validate',
+  },
+  {
+    id: 'n17-incident-console',
+    label: 'Observability incident console (monitors + incidents)',
+    description:
+      'The N17 OpenLineage-backed observability console at /admin/incident-console: per-table freshness/volume/schema-drift monitors, the incident timeline (open→acknowledged→resolved), and the downstream-impact panel — plus the monitor observation feed + the N7d finding→incident consumer. OFF returns a guided "turned off" gate from the /api/observability/** routes and hides the surface on the next load; already-open incidents, emitted lineage, the OpenLineage export, and every other surface are unaffected. No roll needed.',
+    ownerItem: 'N17',
+    surface: '/admin/incident-console + /api/observability/monitors + /api/observability/incidents',
+  },
+  {
+    id: 'n-m1-estate-assess',
+    label: 'Migration — estate assessment on-ramp',
+    description:
+      'The M1 inbound-migration on-ramp at /admin/migrate: point Loom at a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI estate, enumerate it through the loom-migrate reader, and render the migration-readiness report (per-object → Loom item type + 1:1/needs-review effort). OFF makes /api/migrate/assess return a guided "turned off" 503 and hides the surface\'s function on the next load; nothing else is affected (no roll needed). A Fabric / Power BI estate is only ever a migration SOURCE — Loom itself needs no Fabric.',
+    ownerItem: 'M1',
+    surface: '/admin/migrate + /api/migrate/assess',
+  },
+  {
+    id: 'n-m2-copy-in',
+    label: 'Migration — schema + data copy-in',
+    description:
+      'The M2 copy-in step on /admin/migrate ("Copy in" tab): build a copy plan from the M1 readiness report and land each assessed table into ADLS Bronze via a REAL Azure Data Factory Copy pipeline (the mirror substrate in reverse), then optionally materialize managed Delta in the target Loom lakehouse. OFF makes /api/migrate/copy return a guided "turned off" 503 and hides the tab\'s function on the next load; assessment, in-flight pipelines, and every other surface are unaffected (no roll needed). ADF runs in-boundary; a Fabric / Power BI estate is only ever a migration SOURCE — Loom itself needs no Fabric.',
+    ownerItem: 'M2',
+    surface: '/admin/migrate (Copy in) + /api/migrate/copy',
+  },
+  {
+    id: 'n-m3-translate',
+    label: 'Migration — code translation (SQL / DAX / report)',
+    description:
+      'The M3 code-translation surface on /admin/migrate (Translate tab): transpile Snowflake / T-SQL views to Loom SQL, DAX measures to N9 semantic-contract measures (reusing the A1/A2/A3 parser + fold), and Power BI / Fabric reports to N16 code-reports (reusing the N16 parser). Every unsupported construct is flagged needs-review with the exact reason (never a fabricated translation); generated artifacts land as draft Loom items. OFF makes POST /api/migrate/translate return a guided "turned off" 503 and hides the Translate tab on the next load; nothing else is affected (no roll needed).',
+    ownerItem: 'M3',
+    surface: '/admin/migrate (Translate tab) + POST /api/migrate/translate',
+  },
+  {
+    id: 'a14-collab-push',
+    label: 'Collaboration — push transport (SSE presence + live comments)',
+    description:
+      'The A14 real-time collab push transport: one SSE stream per open editor/canvas (/api/items/[type]/[id]/collab/stream) that pushes presence changes in ~1s and live comment-changed refreshes (canvas stickies + the item review thread), replacing the ~15s poll as the READ path. OFF reverts every surface to the pre-A14 polling heartbeat within seconds — the stream route answers 503, open streams wind down, and presence/comments keep working end-to-end over the poll (degraded latency only, no roll). The Cosmos beacon/comment stores and the heartbeat WRITE path are unaffected either way.',
+    ownerItem: 'A14',
+    surface: 'Canvas presence layers + notebook / report-designer / semantic-model / unified-SQL editor presence + comment panes',
+  },
+  // ── N8 — Openness Tier-3 labs (Preview-badged) ──
+  {
+    id: 'n8-modern-query-prql',
+    label: 'SQL Lab — PRQL modern-query mode (Preview)',
+    description:
+      'The N8 "modern query" language toggle in SQL Lab: write PRQL (Pipelined Relational Query Language, Apache-2.0) and Loom transpiles the supported subset to SQL and runs it on the SAME N2 DuckDB engine (with the honest Synapse Serverless fallback). OFF hides the language toggle and reverts SQL Lab to SQL-only on the next render — the DuckDB tier, the /api/duckdb/** routes, and every other tab are unaffected. Unsupported PRQL constructs surface an honest error; Loom never fabricates SQL.',
+    ownerItem: 'N8',
+    surface: 'SQL Lab editor (/items/sql-lab/[id]) — modern-query language toggle',
+  },
+  {
+    id: 'n8-ducklake-catalog',
+    label: 'DuckLake catalog option (Preview)',
+    description:
+      'The N8 DuckLake catalog item + editor: a Postgres-backed lakehouse-metadata catalog option ALONGSIDE the N1 Iceberg REST Catalog (a forward bet on the DuckDB ecosystem). OFF replaces the editor body with a guided notice on the next render — the /api/ducklake/** routes and every other surface are unaffected. Honest-gated on LOOM_DUCKLAKE_CATALOG_URL (the DuckLake Postgres metadata store) — never fabricated catalog contents.',
+    ownerItem: 'N8',
+    surface: 'DuckLake catalog editor (/items/ducklake-catalog/[id])',
+  },
+  {
+    id: 'n8-s3-gateway',
+    label: 'S3-compatible ADLS gateway (Preview)',
+    description:
+      'The N8 S3-compatible gateway config surface: expose an S3-compatible endpoint over ADLS so s3://-native OSS clients connect. OFF replaces the editor body with a guided notice on the next render. Honest-gated on LOOM_S3_GATEWAY_URL (an operator-deployed Apache-2.0 s3proxy in front of ADLS); the surface documents that the N1 IRC + ADLS SDK path already covers most external-engine access without a gateway. No AGPL MinIO dependency.',
+    ownerItem: 'N8',
+    surface: 'S3 gateway editor (/items/s3-gateway/[id])',
+  },
+  // ── EXP1 — workspace portability (§P2 completeness gap 8) ──
+  {
+    id: 'exp1-workspace-portability',
+    label: 'Workspace export / import / clone (.loomws)',
+    description:
+      'The EXP1 whole-workspace portability surface: the workspace Settings → Portability tab (.loomws bundle export download, import wizard with collision strategy, one-click clone) and its /api/workspaces/[id]/export|import|clone routes. OFF makes the three routes refuse with `flag_disabled` (naming this flag) and the tab surface a guided notice on the next request — no roll required. Existing workspaces, items, and the app-scoped .loomapp export/import are unaffected.',
+    ownerItem: 'EXP1',
+    surface: 'Workspace settings → Portability tab + /api/workspaces/[id]/{export,import,clone}',
+  },
+  {
+    id: 'u9-canvas-fullscreen',
+    label: 'Canvas full-screen mode (shared kit)',
+    description:
+      'The U9 maximize control on the shared CanvasRightRail: expands the canvas host to a fixed viewport overlay (chrome covered, canvas state / undo-redo / palette preserved; Esc, F11 or the rail button exits; focus-trapped and screen-reader announced). OFF hides the maximize button on every canvas rail on the next render — a canvas ALREADY maximized keeps its exit button + Esc/F11 so nobody is stranded. Session-scoped by design: nothing persists either way.',
+    ownerItem: 'U9',
+    surface: 'Every xyflow canvas carrying the shared CanvasRightRail (pipeline, eventstream, estate, dataflow, lineage, assets, …)',
+  },
+  // ── L5 — Column-level lineage UI ──
+  {
+    id: 'l5-column-lineage-ui',
+    label: 'Lineage canvas — column fan-out + impact analysis',
+    description:
+      'The L5 column-grain layer on the shared lineage canvas: the table→column expand/fan-out affordance, column→column edges, the column-focus highlight, and the column impact-analysis panel/mode. OFF reverts every lineage canvas to the pre-L5 table-grain rendering on the next load (column nodes/edges are simply filtered out client-side) — the L1 column model, the ?columns=true API facet, and all lineage capture keep running either way. No roll required.',
+    ownerItem: 'L5',
+    surface: 'Lineage canvases (Unified Catalog → Lineage, /catalog/lineage, /catalog/[source]/[id])',
+  },
+  // ── CH1 — Dependency-fault chaos harness (deliberately OPT-IN, default OFF) ──
+  {
+    id: 'ch1-dependency-chaos',
+    label: 'Health hub — Dependency chaos tab (fault injection)',
+    description:
+      'The CH1 dependency-fault chaos harness tab on /admin/health: arm a Cosmos-429, Azure OpenAI 429/timeout, ADX cold-start, or Key Vault throttle fault against THIS replica to PROVE the surface degrades to serve-stale / an honest gate — never a crash. This is the ONE deliberately OPT-IN switch of the health hub (default OFF, read with default:false) because chaos is operator-INITIATED. Turning it ON only reveals the tab; a fault still requires the triple-gated route (tenant admin + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN) to arm, and every armed fault auto-expires (≤5 min) so a forgotten drill self-heals. OFF hides the tab and the arming route rejects — the seconds-fast kill switch for the whole harness.',
+    ownerItem: 'CH1',
+    surface: '/admin/health?tab=chaos + POST /api/admin/chaos/dependency',
   },
 ];
 

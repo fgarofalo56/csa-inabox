@@ -27,6 +27,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
+# A1 (loom-apex): re-declare the CI-passed build SHA in the BUILDER stage so it
+# is visible to `next build` — next.config.mjs wires it into `deploymentId`
+# (deploy-skew / ChunkLoadError protection). Previously the ARG existed only in
+# the runner stage, i.e. AFTER the build had already run without it.
+ARG LOOM_BUILD_SHA=unknown
+ENV LOOM_BUILD_SHA=${LOOM_BUILD_SHA}
 # The Next build OOMed in the ACR Tasks container (JS heap out of memory) as the
 # app grew — give Node a larger old-space heap. 4096 became the ceiling again on
 # 2026-07-02 (run cj9h: Mark-Compact 3.6GB → SIGABRT), so 6144; the default ACR
@@ -37,7 +43,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # forces earlier GC so the TOTAL stays under the agent limit; paired with
 # experimental.webpackMemoryOptimizations (next.config.mjs) to keep the JS
 # heap itself inside the lower cap.
-ENV NODE_OPTIONS=--max-old-space-size=5120
+# 6656 MiB: the codebase grew enough (Phase-3/4) that the `pnpm build` tsc/next
+# step consistently V8-heap-aborts (SIGABRT ~4.5-5GB) at 5120 — two ACR builds
+# failed in a row (7eb2ee94, 2eaf8656). Safe headroom on the 16 GB loombuild S3
+# pool; this is a V8 heap ceiling, not a cgroup SIGKILL. (memory: csa_loom_acr_build_oom_incident)
+ENV NODE_OPTIONS=--max-old-space-size=6656
 RUN npm install -g pnpm@9 && \
     pnpm build
 

@@ -33,4 +33,32 @@ export const streamingAnalyticsItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/stream-analytics/stream-analytics-introduction"
     } },
+  // N7a — Streaming SQL (RisingWave): STATEFUL streaming materialized views over
+  // Event Hubs (Kafka endpoint), sinking to Delta/Iceberg or the Postgres wire.
+  // The tier ABOVE Stream Analytics (which stays the light default for simple
+  // jobs). Azure-native/OSS — RisingWave runs in-boundary; no Fabric.
+  { slug: 'streaming-sql',               displayName: 'Streaming SQL',               restType: 'StreamingSqlJob',          category: 'Streaming analytics',
+    description: 'Stateful streaming materialized views authored in SQL over Azure Event Hubs, continuously maintained and sunk to Delta/Iceberg or served on the Postgres wire (RisingWave — the stateful tier above Stream Analytics).',
+    learnContent: {
+      "overview": "A Streaming SQL job authors continuously-maintained MATERIALIZED VIEWS in SQL over real-time Azure Event Hubs streams, backed by a single-node RisingWave (Apache-2.0) container running in-boundary. It is the STATEFUL tier above Azure Stream Analytics — use it for multi-stream windowed joins, incremental aggregations and temporal joins that ASA cannot express. Results are maintained incrementally and can be sunk to Delta/Iceberg on your own ADLS Gen2 (the lakehouse) or served straight off the Postgres wire. No Microsoft Fabric.",
+      "steps": [
+        {
+          "title": "Add an Event Hubs source",
+          "body": "Point the source picker at an Event Hub; the editor builds a CREATE SOURCE over the namespace's Kafka endpoint (<namespace>.servicebus.windows.net:9093). Auth is SASL over a Key-Vault-resolved connection string, or in-VNet trust."
+        },
+        {
+          "title": "Author a materialized view",
+          "body": "Write the SELECT (including multi-stream JOINs and windowed aggregations); Materialize runs CREATE MATERIALIZED VIEW, which RisingWave maintains incrementally as new events arrive."
+        },
+        {
+          "title": "Watch it live",
+          "body": "The MV status panel reads RisingWave's own catalog — every view's definition, backfill progress and current materialized row count — so you can see throughput as the view fills."
+        },
+        {
+          "title": "Sink to the lake",
+          "body": "Add a Delta or Iceberg sink to land the maintained results into your own ADLS Gen2 (the N1 lake), or query the view directly over the Postgres wire."
+        }
+      ],
+      "docsUrl": "https://docs.risingwave.com/docs/current/intro/"
+    } },
 ];

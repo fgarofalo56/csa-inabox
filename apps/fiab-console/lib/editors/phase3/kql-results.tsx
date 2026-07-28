@@ -193,7 +193,7 @@ export function computeColStats(columns: string[], rows: unknown[][]): Record<st
 
 // Dashboard tile visual types — superset that matches the ADX `render`
 // operator visualizations exposed by Fabric Real-Time Dashboards.
-export type TileViz = 'table' | 'timechart' | 'line' | 'bar' | 'column' | 'pie' | 'stat' | 'map';
+export type TileViz = 'table' | 'timechart' | 'line' | 'bar' | 'column' | 'pie' | 'stat' | 'map' | 'markdown';
 
 export const PIE_COLORS = [
   tokens.colorBrandBackground,

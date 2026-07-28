@@ -12,8 +12,11 @@ FROM node:20-slim
 # uv/uvx (Python stdio MCP servers) + the toolchain npx/uvx need to fetch and
 # run packages at runtime. git is required by mcp-server-git and by npx for
 # git-hosted specs. Pinned base + apt for a reproducible, security-reviewable
-# image — bump deliberately.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# image — bump deliberately. The leading dist-upgrade pulls the distro's
+# security patches ahead of the pinned base tag (SC1 trivy CRITICAL gate —
+# e.g. libgnutls30 CVE-2026-42010 fixed in deb12u7 before node:20-slim rebuilt).
+RUN apt-get update && apt-get dist-upgrade -y \
+    && apt-get install -y --no-install-recommends \
       python3 python3-venv ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 

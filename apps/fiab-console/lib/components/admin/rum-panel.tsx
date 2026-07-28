@@ -17,10 +17,12 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Badge,
+  Button,
   Caption1,
   Dropdown,
   Link as FluentLink,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
   Option,
@@ -135,7 +137,16 @@ interface FetchState {
 }
 
 async function fetchRum(window: string): Promise<FetchState> {
-  const res = await clientFetch(`/api/admin/rum?window=${encodeURIComponent(window)}`);
+  // A3 (silent-failure fix): clientFetch REJECTS on transport failures (20 s
+  // timeout, network). Catch those into the same structured FetchState.error
+  // shape the HTTP branches use, so the panel renders an honest error
+  // MessageBar instead of a silently blank body under the toolbar.
+  let res: Response;
+  try {
+    res = await clientFetch(`/api/admin/rum?window=${encodeURIComponent(window)}`);
+  } catch (e) {
+    return { error: e instanceof Error && e.message ? e.message : 'The request failed before the service answered (network or timeout).' };
+  }
   let body: { ok?: boolean; rum?: RumRollup; error?: string } | null = null;
   try {
     body = await res.json();
@@ -150,7 +161,7 @@ async function fetchRum(window: string): Promise<FetchState> {
 export function RumPanel() {
   const styles = useStyles();
   const [window, setWindow] = useState<string>('P1D');
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['admin-rum', window],
     queryFn: () => fetchRum(window),
     staleTime: 60_000,
@@ -203,6 +214,20 @@ export function RumPanel() {
         </Skeleton>
       )}
 
+      {/* A3: belt-and-braces — if the queryFn itself ever throws, render the
+          failure honestly instead of a silently blank body. */}
+      {isError && (
+        <MessageBar intent="error" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Could not load RUM telemetry</MessageBarTitle>
+            {(error as Error)?.message || 'The request failed before the service answered (network or timeout).'}
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => void refetch()}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+
       {data?.gate && (
         <MessageBar intent="warning" layout="multiline">
           <MessageBarBody>
@@ -217,6 +242,9 @@ export function RumPanel() {
             <MessageBarTitle>Could not load RUM telemetry</MessageBarTitle>
             {data.error}
           </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={() => void refetch()}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 

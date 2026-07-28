@@ -38,6 +38,7 @@ import {
   labelAssignmentsContainer,
   costAnomalyRulesContainer,
   lakehouseInteropContainer,
+  incidentsContainer,
 } from '@/lib/azure/cosmos-client';
 import type { SqlParameter } from '@azure/cosmos';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
@@ -68,7 +69,7 @@ export type OverviewTileKey =
   | 'attributeGroups' | 'labeledItems' | 'tenantSettings'
   | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels'
   | 'runtimeFlags' | 'rumClientErrors' | 'diagnostics' | 'finops'
-  | 'icebergTables';
+  | 'icebergTables' | 'openIncidents';
 
 export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 
@@ -263,7 +264,7 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables,
+    runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables, openIncidents,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
@@ -292,13 +293,30 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
     tile(() => finopsRulesCount(), COSMOS_HINT),
     // N1 — tables exposed to external engines as Iceberg (Delta ✓ + Iceberg ✓).
     tile(() => icebergExposedTableCount(tenantId), COSMOS_HINT),
+    // N17 — open data-observability incidents (monitor trips + N7d findings).
+    tile(() => openIncidentCount(tenantId), COSMOS_HINT),
   ]);
 
   return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables,
+    runtimeFlags, rumClientErrors, diagnostics, finops, icebergTables, openIncidents,
   };
+}
+
+/** N17 — count OPEN incidents (single-partition scan on /tenantId). */
+async function openIncidentCount(tenantId: string): Promise<number> {
+  const c = await incidentsContainer();
+  const { resources } = await c.items
+    .query<number>(
+      {
+        query: "SELECT VALUE COUNT(1) FROM c WHERE c.tenantId = @t AND c.docType = 'incident' AND c.status = 'open'",
+        parameters: [{ name: '@t', value: tenantId }],
+      },
+      { partitionKey: tenantId },
+    )
+    .fetchAll();
+  return Number(resources?.[0] ?? 0);
 }
 
 /** C4 — count enabled cost-anomaly watch rules (single-partition scan). */

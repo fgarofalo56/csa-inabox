@@ -20,10 +20,13 @@ import {
 } from '@fluentui/react-components';
 import {
   ShieldCheckmarkRegular, PlayRegular, HistoryRegular, DatabaseRegular,
+  BeakerRegular, ArrowSyncRegular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { DqRunnerChecksPanel } from './components/dq-runner-checks-panel';
+import { DqDataDiffPanel } from './components/dq-data-diff-panel';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useItemState } from './palantir/shared';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -68,7 +71,8 @@ export function DataQualityEditor({ item, id }: { item: FabricItemType; id: stri
   const { state, setState, loading, saving, error, save, dirty } =
     useItemState<DqState>('data-quality', id, { backend: 'kusto', tableNames: [] });
 
-  const [tab, setTab] = useState<'run' | 'history'>('run');
+  const [tab, setTab] = useState<'run' | 'history' | 'checks' | 'diff'>('run');
+  const [n7dEnabled, setN7dEnabled] = useState(false);
   const [gate, setGate] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<DqItemRunLite | null>(null);
@@ -90,6 +94,20 @@ export function DataQualityEditor({ item, id }: { item: FabricItemType; id: stri
       } catch { /* honest: gate shown after run attempt */ }
     })();
   }, [id, backend]);
+
+  // N7d FLAG0 probe — the "Runner checks" + "Data diff" tabs are gated by the
+  // n7d-data-quality-diff runtime flag (default-ON). We read it from the checks
+  // endpoint's `enabled` field so a kill-switch flip hides both tabs.
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    (async () => {
+      try {
+        const r = await clientFetch(`/api/items/data-quality/${encodeURIComponent(id)}/checks`);
+        const j = await r.json();
+        setN7dEnabled(!!(j.ok && j.enabled));
+      } catch { setN7dEnabled(false); }
+    })();
+  }, [id]);
 
   const doRun = useCallback(async () => {
     setErr(null); setRunning(true);
@@ -128,9 +146,11 @@ export function DataQualityEditor({ item, id }: { item: FabricItemType; id: stri
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div>
         <div className={s.tabBar}>
-          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'run' | 'history')}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'run' | 'history' | 'checks' | 'diff')}>
             <Tab value="run" icon={<ShieldCheckmarkRegular />}>Run</Tab>
             <Tab value="history" icon={<HistoryRegular />}>History{runs.length ? ` (${runs.length})` : ''}</Tab>
+            {n7dEnabled && <Tab value="checks" icon={<BeakerRegular />}>Runner checks</Tab>}
+            {n7dEnabled && <Tab value="diff" icon={<ArrowSyncRegular />}>Data diff</Tab>}
           </TabList>
         </div>
 
@@ -274,6 +294,9 @@ export function DataQualityEditor({ item, id }: { item: FabricItemType; id: stri
               <Caption1 className={s.hint}>Runs are persisted with the item. Newest first; up to 50 retained.</Caption1>
             </div>
           )}
+
+          {n7dEnabled && tab === 'checks' && <DqRunnerChecksPanel id={id} />}
+          {n7dEnabled && tab === 'diff' && <DqDataDiffPanel id={id} />}
         </div>
       </div>
     } />

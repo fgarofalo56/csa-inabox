@@ -37,6 +37,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { CanvasFullscreenHost, useCanvasFullscreen } from './canvas-fullscreen';
 
 // ── Inherent layout dimensions (no Fluent token expresses these) ───────────
 /** Floor for any canvas region — below this a graph canvas is unusable. */
@@ -56,6 +57,68 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(Math.round(value), min), Math.max(min, max));
 }
 
+// ── A5 container-aware ceiling ──────────────────────────────────────────────
+// The 80vh window ceiling alone cannot prevent the grip from stranding: a
+// height persisted on a tall monitor can exceed the ACTUAL panel space on a
+// shorter window (classic over RDP), and when the region sits inside a
+// non-scrolling `overflow: hidden` ancestor the bottom grip is clipped out of
+// view with no scrollbar to reach it — "the canvas cannot be resized at all"
+// (PRPs/active/loom-apex/research/canvas-resize.md §2.3). The helpers below
+// clamp the live/persisted height to the space genuinely AVAILABLE inside the
+// nearest clipping ancestor, measured with a ResizeObserver.
+
+/**
+ * Nearest ancestor that CLIPS overflowing content without a scrollbar
+ * (`overflow-y: hidden | clip`). The walk stops — returning null — at the
+ * first scrollable ancestor (`auto` / `scroll`): once something scrolls, the
+ * grip can always be scrolled to, and clamping there would break surfaces
+ * that deliberately let the outer chrome panel scroll (see `region` styles).
+ */
+export function findClipAncestor(el: HTMLElement): HTMLElement | null {
+  let node = el.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    const overflowY = window.getComputedStyle(node).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') return null;
+    if (overflowY === 'hidden' || overflowY === 'clip') return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Vertical px available to `region` inside its clipping ancestor `clip`
+ * (from the region's top edge down to the ancestor's visible bottom), or
+ * null when nothing is actually clipped. The `scrollHeight` check is what
+ * distinguishes a height-BOUNDED clip ancestor (content overflows → clamp)
+ * from a content-SIZED one that merely clips for border-radius (grows with
+ * the region → clamping would freeze growth entirely).
+ */
+export function measureContainerCeiling(clip: HTMLElement, region: HTMLElement): number | null {
+  // +1: sub-pixel rounding tolerance so a pixel of rounding never engages the clamp.
+  if (clip.scrollHeight <= clip.clientHeight + 1) return null;
+  const clipRect = clip.getBoundingClientRect();
+  const regionRect = region.getBoundingClientRect();
+  const visibleBottom = clipRect.top + clip.clientTop + clip.clientHeight;
+  const avail = Math.floor(visibleBottom - regionRect.top);
+  return Number.isFinite(avail) && avail > 0 ? avail : null;
+}
+
+/**
+ * Effective ceiling = the window/base ceiling capped by the measured container
+ * availability (never below `minPx` so the region stays usable). Pure — unit
+ * tested: a persisted 800 on a 500-available container yields max 500.
+ */
+export function clampMaxToContainer(
+  baseMax: number,
+  containerAvail: number | null | undefined,
+  minPx: number,
+): number {
+  if (containerAvail == null || !Number.isFinite(containerAvail) || containerAvail <= 0) {
+    return baseMax;
+  }
+  return Math.max(minPx, Math.min(baseMax, Math.floor(containerAvail)));
+}
+
 /** Props spread onto the drag handle by {@link ResizableCanvasRegion}. */
 export interface ResizableSeparatorProps {
   tabIndex: number;
@@ -71,7 +134,8 @@ export interface UseResizableHeightResult {
   height: number;
   /** Effective floor — feed to `aria-valuemin` / `style.minHeight`. */
   minHeight: number;
-  /** Effective ceiling (80vh or the explicit `maxPx`) — feed to `aria-valuemax`. */
+  /** Effective ceiling (80vh / explicit `maxPx`, capped to the available
+   *  container space) — feed to `aria-valuemax`. */
   maxHeight: number;
   /** Attach to the resizable region element. */
   regionRef: React.RefObject<HTMLDivElement | null>;
@@ -108,9 +172,15 @@ export function useResizableHeight(
   // Height init = defaultPx so server and first client render match; the
   // persisted value is read in an effect below (avoids a hydration mismatch).
   const [height, setHeight] = useState<number>(defaultPx);
-  const [maxHeight, setMaxHeight] = useState<number>(
+  // Base ceiling: the explicit maxPx, or 80vh of the window (recomputed on
+  // window resize). The EFFECTIVE ceiling additionally caps this to the space
+  // available inside the nearest clipping ancestor (containerMax below) so a
+  // persisted height can never strand the grip off-screen.
+  const [baseMax, setBaseMax] = useState<number>(
     () => maxPx ?? Math.max(MAX_PX_FALLBACK, defaultPx),
   );
+  const [containerMax, setContainerMax] = useState<number | null>(null);
+  const maxHeight = clampMaxToContainer(baseMax, containerMax, minPx);
   const [isDragging, setIsDragging] = useState(false);
   // True once THIS key has a user-chosen height (persisted earlier, or resized
   // now). While false and `autoPx` is provided, the content-driven value wins.
@@ -154,17 +224,44 @@ export function useResizableHeight(
     return clamped;
   }, [key, minPx]);
 
-  // Recompute the 80vh ceiling (only when maxPx is not explicitly pinned).
+  // Recompute the 80vh base ceiling (only when maxPx is not explicitly pinned).
   useEffect(() => {
     if (maxPx !== undefined) {
-      setMaxHeight(maxPx);
+      setBaseMax(maxPx);
       return;
     }
-    const recompute = () => setMaxHeight(Math.round(window.innerHeight * 0.8));
+    const recompute = () => setBaseMax(Math.round(window.innerHeight * 0.8));
     recompute();
     window.addEventListener('resize', recompute);
     return () => window.removeEventListener('resize', recompute);
   }, [maxPx]);
+
+  // A5 — container-aware ceiling: watch the nearest clipping ancestor with a
+  // ResizeObserver (plus the region itself, so a drag/keyboard commit that
+  // overshoots re-measures) and clamp to the space actually available. When
+  // an ancestor scrolls instead of clipping — or nothing is clipped — this
+  // stays null and the base ceiling alone applies.
+  useEffect(() => {
+    const region = regionRef.current;
+    if (region == null || typeof window === 'undefined') return;
+    const measure = () => {
+      const clip = findClipAncestor(region);
+      setContainerMax(clip ? measureContainerCeiling(clip, region) : null);
+    };
+    measure();
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(measure);
+      const clip = findClipAncestor(region);
+      if (clip) observer.observe(clip);
+      observer.observe(region);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
 
   // Apply the persisted height once, after mount. A persisted value also means
   // the user HAS sized this key before — auto-until-first-resize stays off.
@@ -326,6 +423,14 @@ const useStyles = makeStyles({
     transitionTimingFunction: tokens.curveEasyEase,
     '@media (prefers-reduced-motion: reduce)': { transitionProperty: 'none' },
   },
+  // U9 full-screen: while the enclosing CanvasFullscreenHost is maximized the
+  // region abandons its user-set height and simply fills the fixed overlay
+  // (the resize grip is hidden — height is the viewport's while maximized).
+  regionFullscreen: {
+    flexGrow: 1,
+    minHeight: 0,
+    height: 'auto',
+  },
   // The canvas itself fills all space above the handle (children are expected
   // to use flex:1 / height:100%, exactly as they did at their old fixed height).
   canvasFill: {
@@ -396,8 +501,23 @@ export interface ResizableCanvasRegionProps {
  * Wraps a canvas in a flex column whose height the user can drag (or keyboard-
  * resize) via a bottom grip, persisted per surface. Drop-in: replace a fixed
  * `height` container with this and render the canvas as its child.
+ *
+ * U9: the region embeds a `CanvasFullscreenHost`, so EVERY region adopter
+ * inherits canvas full-screen mode with zero wiring — any `CanvasRightRail`
+ * rendered inside the children picks the host up via context and shows the
+ * maximize/restore button. While maximized the region fills the fixed overlay
+ * (the height grip is hidden; the persisted height is untouched — full-screen
+ * is session-scoped by design).
  */
-export function ResizableCanvasRegion({
+export function ResizableCanvasRegion(props: ResizableCanvasRegionProps) {
+  return (
+    <CanvasFullscreenHost>
+      <ResizableCanvasRegionBody {...props} />
+    </CanvasFullscreenHost>
+  );
+}
+
+function ResizableCanvasRegionBody({
   storageKey,
   defaultPx,
   minPx = MIN_PX_DEFAULT,
@@ -410,28 +530,34 @@ export function ResizableCanvasRegion({
   const styles = useStyles();
   const { height, minHeight, maxHeight, regionRef, separatorProps, isDragging } =
     useResizableHeight(storageKey, defaultPx, minPx, maxPx, autoPx);
+  const isFullscreen = useCanvasFullscreen()?.isFullscreen ?? false;
 
   return (
     <div
       ref={regionRef}
-      className={mergeClasses(styles.region, className)}
-      style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
+      className={mergeClasses(styles.region, isFullscreen && styles.regionFullscreen, className)}
+      // The committed height only applies windowed — maximized, the region
+      // fills the fixed overlay (regionFullscreen) so the canvas gets the
+      // viewport while the persisted preference stays exactly as it was.
+      style={isFullscreen ? undefined : { height: `${height}px`, minHeight: `${minHeight}px` }}
     >
       <div className={styles.canvasFill}>{children}</div>
-      <div
-        {...separatorProps}
-        role="separator"
-        aria-orientation="horizontal"
-        aria-valuemin={minHeight}
-        aria-valuemax={maxHeight}
-        aria-valuenow={height}
-        aria-label={ariaLabel ?? 'Resize canvas height. Use Arrow Up and Arrow Down keys.'}
-        className={mergeClasses(styles.handle, isDragging && styles.handleActive)}
-      >
-        <span className={styles.gripBar} />
-        <span className={styles.gripBar} />
-        <span className={styles.gripBar} />
-      </div>
+      {!isFullscreen && (
+        <div
+          {...separatorProps}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-valuemin={minHeight}
+          aria-valuemax={maxHeight}
+          aria-valuenow={height}
+          aria-label={ariaLabel ?? 'Resize canvas height. Use Arrow Up and Arrow Down keys.'}
+          className={mergeClasses(styles.handle, isDragging && styles.handleActive)}
+        >
+          <span className={styles.gripBar} />
+          <span className={styles.gripBar} />
+          <span className={styles.gripBar} />
+        </div>
+      )}
     </div>
   );
 }

@@ -8,6 +8,14 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+
+// U8 FLAG0 client hook (u8-kql-dashboard-depth) → controllable without a
+// react-query provider (same pattern as editor-results-split.test.tsx).
+const flagState = { value: true };
+vi.mock('@/lib/components/ui/use-runtime-flag', () => ({
+  useRuntimeFlag: () => flagState.value,
+}));
+
 import { KqlDashboardEditor } from '../phase3-editors';
 import { BaseQueriesPanel } from '../phase3/kql-dashboard-editor';
 import { makeItem, installFetchMock } from './test-helpers';
@@ -208,5 +216,58 @@ describe('KqlDashboardEditor', () => {
       // No params yet → the section prompts to add a parameter first.
       expect(screen.getByText(/Add at least one dashboard/i)).toBeInTheDocument();
     });
+  });
+
+  // ── U8 — pages, text tiles, flag-off fallback ────────────────────────────
+
+  it('renders the page strip and Add page materializes Page 1 + Page 2 (U8)', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // Single-page mode: an implicit "Page 1" tab + the Add page action.
+    const strip = screen.getByRole('navigation', { name: /Dashboard pages/i });
+    expect(strip).toBeInTheDocument();
+    expect(screen.getByText(/Single-page dashboard/i)).toBeInTheDocument();
+    const addPageBtns = screen.getAllByRole('button', { name: /Add page/i });
+    fireEvent.click(addPageBtns[0]);
+    // First add materializes Page 1 (existing tiles) + Page 2 (new, active).
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Page Page 1/i })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /Page Page 2/i })).toBeInTheDocument();
+    });
+    // Page 2 is active and empty → the existing tiles are hidden.
+    await waitFor(() => {
+      expect(screen.queryByText('Errors')).not.toBeInTheDocument();
+    });
+    // Switching back to Page 1 shows them again (pre-pages tiles land on page 1).
+    fireEvent.click(screen.getByRole('tab', { name: /Page Page 1/i }));
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+  });
+
+  it('Add text tile renders authored markdown with no Run action (U8)', async () => {
+    render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+    await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // Both the ribbon action and the toolbar button carry the label — click one.
+    fireEvent.click(screen.getAllByRole('button', { name: /Add text tile/i })[0]);
+    // The default markdown content renders as real elements (## → h2) — in
+    // the tile body AND the auto-opened flyout's live preview.
+    await waitFor(() => {
+      expect(screen.getAllByText('Section heading').length).toBeGreaterThan(0);
+    });
+    // The text tile's header shows TEXT (not a viz · database caption) and the
+    // per-tile query actions (Run / alert / export) are absent for it: two
+    // query tiles → exactly two "Run tile" card actions, not three.
+    expect(screen.getByText('TEXT')).toBeInTheDocument();
+  });
+
+  it('flag OFF hides the page strip and text-tile authoring (U8 kill-switch)', async () => {
+    flagState.value = false;
+    try {
+      render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
+      await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+      expect(screen.queryByRole('navigation', { name: /Dashboard pages/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Add text tile/i })).not.toBeInTheDocument();
+    } finally {
+      flagState.value = true;
+    }
   });
 });

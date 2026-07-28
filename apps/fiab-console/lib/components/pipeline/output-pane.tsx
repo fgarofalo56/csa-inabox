@@ -38,6 +38,10 @@ import {
   History20Regular, Bug20Regular,
 } from '@fluentui/react-icons';
 import { DebugRunPanel, statusBadge, fmtDuration } from './debug-monitor-panel';
+import {
+  publishRunOverlay, deriveOverallStatus, startRunOverlayPolling,
+  type ActivityRunOverlayRow,
+} from './pipeline-debug-overlay';
 import type { PipelineParameter } from './types';
 
 interface RunRow {
@@ -50,19 +54,7 @@ interface RunRow {
   message?: string | null;
 }
 
-interface ActivityRow {
-  id: string;
-  name: string;
-  type: string;
-  status?: string;
-  start?: string;
-  end?: string;
-  durationMs?: number;
-  input?: unknown;
-  output?: unknown;
-  error?: string | null;
-  errorCode?: string | null;
-}
+type ActivityRow = ActivityRunOverlayRow;
 
 type OutputTab = 'monitor' | 'debug';
 
@@ -177,10 +169,54 @@ function MonitorView({
 
   useEffect(() => { void loadRuns(); }, [loadRuns]);
 
+  // U13 — "Rerun from failed activities" on a monitored run: dispatch the REAL
+  // ADF recovery run (isRecovery=true + startFromFailure) and stream the new
+  // run's per-activity receipts onto the canvas via the shared overlay poller.
+  const rerunFromFailed = useCallback(async (refRunId: string) => {
+    setErr(null);
+    try {
+      const r = await clientFetch(
+        `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ referencePipelineRunId: refRunId, startFromFailure: true }),
+        },
+      );
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok || !j.runId) { setErr(j.gate?.remediation || j.error || `HTTP ${r.status}`); return; }
+      startRunOverlayPolling({
+        key: pipelineId,
+        runId: j.runId,
+        source: 'debug',
+        fetchActivities: async () => {
+          const rr = await clientFetch(
+            `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output` +
+            `?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(j.runId)}`,
+            { cache: 'no-store' },
+          );
+          const jj = await rr.json().catch(() => null);
+          return jj?.ok ? ((jj.activities || []) as ActivityRow[]) : null;
+        },
+      });
+      setTimeout(() => { void loadRuns(); }, 1500);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    }
+  }, [pipelineId, workspaceId, loadRuns]);
+
   const toggleRun = useCallback(async (runId: string) => {
     if (expanded === runId) { setExpanded(null); return; }
     setExpanded(runId);
-    if (activities[runId]) return;
+    if (activities[runId]) {
+      // U13 — re-publish the cached receipts so the canvas repaints this run.
+      publishRunOverlay(pipelineId, {
+        runId, source: 'monitor', rows: activities[runId],
+        overall: deriveOverallStatus(activities[runId]),
+        polling: false, updatedAt: Date.now(),
+        onRerunFromFailed: () => rerunFromFailed(runId),
+      });
+      return;
+    }
     setActivitiesLoading((m) => ({ ...m, [runId]: true }));
     try {
       const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`, { cache: 'no-store' });
@@ -188,14 +224,23 @@ function MonitorView({
       if (!j.ok) {
         setActivitiesErr((m) => ({ ...m, [runId]: j.error || 'failed' }));
       } else {
-        setActivities((m) => ({ ...m, [runId]: j.activities || [] }));
+        const rows = (j.activities || []) as ActivityRow[];
+        setActivities((m) => ({ ...m, [runId]: rows }));
+        // U13 — drilling into a run paints its receipts on the canvas (ADF
+        // monitoring-view parity: the eyeglass lights the pipeline graph).
+        publishRunOverlay(pipelineId, {
+          runId, source: 'monitor', rows,
+          overall: deriveOverallStatus(rows),
+          polling: false, updatedAt: Date.now(),
+          onRerunFromFailed: () => rerunFromFailed(runId),
+        });
       }
     } catch (e: any) {
       setActivitiesErr((m) => ({ ...m, [runId]: e?.message || String(e) }));
     } finally {
       setActivitiesLoading((m) => ({ ...m, [runId]: false }));
     }
-  }, [expanded, activities, pipelineId, workspaceId]);
+  }, [expanded, activities, pipelineId, workspaceId, rerunFromFailed]);
 
   return (
     <div className={s.monitor}>

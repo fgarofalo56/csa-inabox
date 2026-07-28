@@ -37,25 +37,21 @@ import {
 } from '@fluentui/react-components';
 import {
   Bug20Regular, ArrowSync16Regular, ChevronRight16Regular, ChevronDown16Regular,
-  Dismiss16Regular,
+  Dismiss16Regular, ArrowCounterclockwise16Regular,
 } from '@fluentui/react-icons';
 import { ExpressionField } from './expression-field';
+import {
+  publishRunOverlay, statusBadge, fmtDuration, type ActivityRunOverlayRow,
+} from './pipeline-debug-overlay';
 import type { PipelineParameter } from './types';
 
+// Back-compat: these two lived here first; output-pane (and others) import
+// them from this module. The single implementation now lives in the shared
+// pipeline-debug-overlay so the canvas strip/dialog reuse the same language.
+export { statusBadge, fmtDuration };
+
 /** A single activity's live status row (shape returned by the output route). */
-export interface DebugActivityRow {
-  id: string;
-  name: string;
-  type: string;
-  status?: string;
-  start?: string;
-  end?: string;
-  durationMs?: number;
-  input?: unknown;
-  output?: unknown;
-  error?: string | null;
-  errorCode?: string | null;
-}
+export type DebugActivityRow = ActivityRunOverlayRow;
 
 const TERMINAL = new Set(['Succeeded', 'Failed', 'Cancelled', 'Skipped']);
 const POLL_MS = 3500;
@@ -108,29 +104,6 @@ const useStyles = makeStyles({
   peekCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
 });
 
-export function statusBadge(s?: string) {
-  switch (s) {
-    case 'Succeeded': return <Badge appearance="filled" color="success" size="small">Succeeded</Badge>;
-    case 'Failed':    return <Badge appearance="filled" color="danger" size="small">Failed</Badge>;
-    case 'InProgress':return <Badge appearance="filled" color="brand" size="small">In progress</Badge>;
-    case 'Queued':    return <Badge appearance="outline" size="small">Queued</Badge>;
-    case 'Cancelled': return <Badge appearance="filled" color="warning" size="small">Cancelled</Badge>;
-    case 'Cancelling':return <Badge appearance="filled" color="warning" size="small">Cancelling</Badge>;
-    case 'Skipped':   return <Badge appearance="filled" color="subtle" size="small">Skipped</Badge>;
-    default:          return <Badge appearance="outline" size="small">{s || '—'}</Badge>;
-  }
-}
-
-export function fmtDuration(ms?: number): string {
-  if (!ms || ms <= 0) return '—';
-  if (ms < 1000) return `${ms} ms`;
-  const sec = ms / 1000;
-  if (sec < 60) return `${Math.round(sec * 10) / 10}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}m ${s}s`;
-}
-
 /** A short, safe peek at an activity input/output payload for the grid cell. */
 function peek(v: unknown, max = 140): string | null {
   if (v === null || v === undefined) return null;
@@ -151,6 +124,15 @@ export interface DebugRunPanelProps {
   activityNames?: string[];
 }
 
+/** ADF recovery-run options (createRun isRecovery=true) for a re-dispatch. */
+interface DebugRecoveryOpts {
+  referencePipelineRunId: string;
+  /** Rerun only the failed activities of the referenced run. */
+  startFromFailure?: boolean;
+  /** Rerun starting at this activity of the referenced run. */
+  startActivityName?: string;
+}
+
 export function DebugRunPanel({
   workspaceId, pipelineId, pipelineParams, paramNames, variableNames, activityNames,
 }: DebugRunPanelProps) {
@@ -168,6 +150,9 @@ export function DebugRunPanel({
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const polls = useRef(0);
+  // Stable handle to the dispatcher so the overlay's rerun callbacks (published
+  // from pollOnce, defined earlier) always invoke the CURRENT startDebug.
+  const startDebugRef = useRef<(recovery?: DebugRecoveryOpts) => Promise<void>>(async () => {});
 
   // Pre-fill param value fields from declared defaults when the param set changes.
   useEffect(() => {
@@ -241,6 +226,19 @@ export function DebugRunPanel({
       setOverall(next);
       // Stop polling once every (≥1) activity is terminal, or the ceiling hits.
       const done = rows.length > 0 && states.every((x) => TERMINAL.has(x));
+      // U13 — fan this poll's rows out to the canvas overlay so both pipeline
+      // canvases paint per-activity status glyphs (ADF debug-canvas parity).
+      // Rerun callbacks dispatch REAL ADF recovery runs via startDebug.
+      publishRunOverlay(pipelineId, {
+        runId: rid,
+        source: 'debug',
+        rows,
+        overall: next,
+        polling: !done,
+        updatedAt: Date.now(),
+        onRerunFromFailed: () => startDebugRef.current({ referencePipelineRunId: rid, startFromFailure: true }),
+        onRerunFromActivity: (name) => startDebugRef.current({ referencePipelineRunId: rid, startActivityName: name }),
+      });
       return done;
     } catch (e: any) {
       setErr(e?.message || String(e));
@@ -261,7 +259,7 @@ export function DebugRunPanel({
     }, POLL_MS);
   }, [clearTimer, pollOnce]);
 
-  const startDebug = useCallback(async () => {
+  const startDebug = useCallback(async (recovery?: DebugRecoveryOpts) => {
     if (!workspaceId || !pipelineId) return;
     clearTimer();
     polls.current = 0;
@@ -272,7 +270,16 @@ export function DebugRunPanel({
         `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`,
         {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ parameters: buildParams() }),
+          body: JSON.stringify({
+            parameters: buildParams(),
+            // ADF recovery runs — "Rerun from failed activities" / "Rerun from
+            // this activity" re-dispatch the referenced run (isRecovery=true).
+            ...(recovery ? {
+              referencePipelineRunId: recovery.referencePipelineRunId,
+              startFromFailure: recovery.startFromFailure,
+              startActivityName: recovery.startActivityName,
+            } : {}),
+          }),
         },
       );
       const j = await r.json().catch(() => ({}));
@@ -284,6 +291,12 @@ export function DebugRunPanel({
       setRunId(j.runId);
       setOverall(j.status || 'Queued');
       setPolling(true);
+      // Seed the canvas overlay immediately so the strip appears while ADF
+      // spins up the first activity (rows stream in from the polls).
+      publishRunOverlay(pipelineId, {
+        runId: j.runId, source: 'debug', rows: [], overall: j.status || 'Queued',
+        polling: true, updatedAt: Date.now(),
+      });
       // Kick off the first poll quickly, then settle to the steady cadence.
       timer.current = setTimeout(async () => {
         polls.current += 1;
@@ -297,6 +310,9 @@ export function DebugRunPanel({
       setDebugging(false);
     }
   }, [workspaceId, pipelineId, buildParams, clearTimer, pollOnce, scheduleNext]);
+
+  // Keep the ref current so overlay rerun callbacks always hit this closure.
+  useEffect(() => { startDebugRef.current = startDebug; }, [startDebug]);
 
   const stopPolling = useCallback(() => { clearTimer(); setPolling(false); }, [clearTimer]);
 
@@ -329,9 +345,21 @@ export function DebugRunPanel({
             </Button>
           </Tooltip>
         )}
+        {runId && overall === 'Failed' && !polling && (
+          <Tooltip content="Dispatch an ADF recovery run that reruns only the failed activities" relationship="label">
+            <Button
+              size="small"
+              icon={<ArrowCounterclockwise16Regular />}
+              disabled={debugging}
+              onClick={() => startDebug({ referencePipelineRunId: runId, startFromFailure: true })}
+            >
+              Rerun from failed
+            </Button>
+          </Tooltip>
+        )}
         <Button
           appearance="primary" icon={<Bug20Regular />}
-          disabled={debugging || !pipelineId} onClick={startDebug}
+          disabled={debugging || !pipelineId} onClick={() => startDebug()}
         >
           {debugging ? 'Starting…' : 'Debug'}
         </Button>

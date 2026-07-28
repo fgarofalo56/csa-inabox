@@ -107,6 +107,8 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_SPARK_TENANT_SESSION_MAX: '50  (max concurrent active Spark sessions; 0 = unlimited)',
   // A13 — Spark chaos-drill harness (default OFF; svc-spark-chaos-drill).
   LOOM_SPARK_CHAOS_ENABLED: 'false  (default; true = enable fault injection in a NON-PROD drill only)',
+  // CH1 — dependency-fault chaos harness (default OFF; svc-dependency-chaos-drill).
+  LOOM_DEPENDENCY_CHAOS_ENABLED: 'false  (default; true = enable Cosmos/AOAI/ADX/KV fault injection in a NON-PROD drill only)',
   LOOM_DLZ_RG: '<dlz-resource-group>',
   LOOM_ADMIN_RG: '<admin-resource-group>',
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',
@@ -118,6 +120,12 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
   // N1 — Iceberg REST Catalog (internal-ingress Unity Catalog OSS container).
   LOOM_ICEBERG_CATALOG_URL: 'https://iceberg-catalog.internal.<cae-default-domain>  (unset = dual metadata still emitted to your lake; no catalog discovery)',
+  // M1 — estate assessment reader (inbound-migration on-ramp, internal ingress).
+  LOOM_MIGRATE_URL: 'https://loom-migrate.internal.<cae-default-domain>  (unset = /admin/migrate renders but assess honest-gates)',
+  // N8 lab 1 — DuckLake catalog (Postgres-backed lakehouse metadata store).
+  LOOM_DUCKLAKE_CATALOG_URL: 'postgresql://loom@<pg-host>:5432/ducklake  (unset = the DuckLake catalog editor honest-gates; N1 Iceberg REST Catalog is unaffected)',
+  // N8 lab 3 — S3-compatible ADLS gateway (operator-deployed Apache-2.0 s3proxy).
+  LOOM_S3_GATEWAY_URL: 'https://s3-gateway.internal.<cae-default-domain>  (unset = the surface documents the IRC/ADLS path; no gateway required)',
   LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',

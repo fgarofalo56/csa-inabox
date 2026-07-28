@@ -1281,7 +1281,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
 
   return (
     <>
-    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} collabPresence
       leftPanel={
         <PowerBiTree
           workspaceId={workspaceId}

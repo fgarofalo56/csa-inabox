@@ -16,6 +16,7 @@ import { useUi } from '@/lib/stores/ui';
 import { openCopilot } from '@/lib/components/copilot-pane';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
+import { EditorCollabBar } from '@/lib/components/collab/editor-collab-bar';
 import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '@/lib/components/collapsible-side-panel';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
@@ -176,9 +177,19 @@ interface Props {
    * Omitting it preserves today's exact grid layout for every other editor.
    */
   splitKeyPrefix?: string;
+  /**
+   * A14 — real-time presence on this editor. When set (the high-value
+   * co-authoring editors: notebook, report designer, semantic model, unified
+   * SQL), the header action row renders the EditorCollabBar avatar stack —
+   * live Cosmos-backed presence over the push (SSE) transport with the poll
+   * fallback, canvasKey 'editor'. Opt-in per editor so item types without a
+   * co-authoring story don't pay the heartbeat. Additive: omitting it changes
+   * nothing.
+   */
+  collabPresence?: boolean;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain, commandSearch, splitKeyPrefix }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain, commandSearch, splitKeyPrefix, collabPresence }: Props) {
   const styles = useStyles();
   // Shared unsaved-changes guard — one wiring covers every editor that threads
   // a `dirty` signal. Returns the confirm dialog (or null) to render below.
@@ -350,6 +361,9 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
       breadcrumbs={breadcrumbs}
       actions={
         <div className={styles.meta}>
+          {/* A14 — live co-authoring presence (opt-in per editor). Real Cosmos
+              beacons over the SSE push transport w/ poll fallback. */}
+          {!isNew && collabPresence && <EditorCollabBar itemType={item.slug} itemId={id} />}
           <Badge appearance="outline">{item.category}</Badge>
           {item.preview && <Badge appearance="outline" color="warning">Preview</Badge>}
           {/* Discoverable per-editor Copilot — opens the context-aware Loom

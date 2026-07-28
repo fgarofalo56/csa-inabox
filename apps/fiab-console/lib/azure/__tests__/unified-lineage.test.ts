@@ -192,6 +192,15 @@ describe('synthesizeColumnGraph (L1)', () => {
     const weaveTo = weave.nodes.find((n) => n.node.id.endsWith('::customer_id'))!;
     expect(ucTo.identities).toEqual(weaveTo.identities);
   });
+
+  it('carries the declared transform expression onto the column edge (L5)', () => {
+    const { edges } = synthesizeColumnGraph([member({ transform: 'UPPER(id)' })]);
+    expect(edges).toHaveLength(1);
+    expect(edges[0].transform).toBe('UPPER(id)');
+    // absent transform → no key at all, keeping the no-transform payload
+    // byte-identical to the pre-L5 shape (route snapshot contract).
+    expect('transform' in synthesizeColumnGraph([member()]).edges[0]).toBe(false);
+  });
 });
 
 describe('mergeGraphs', () => {

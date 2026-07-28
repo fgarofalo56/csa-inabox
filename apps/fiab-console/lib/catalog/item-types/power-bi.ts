@@ -134,4 +134,36 @@ export const powerBiItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/power-bi/consumer/metrics/metrics-get-started"
     } },
+  // N16 — BI-as-code. A Loom-NATIVE item with NO Fabric/Power BI analog: a
+  // dashboard authored as ONE versionable text document (Markdown + fenced
+  // `sql` / `sql loom` query blocks + `{visual}` directives), PR-reviewable,
+  // CI-testable, and diff-able (the Evidence.dev / Rill / Observable category).
+  // Metric references resolve through the N15 governed-metrics layer, so a
+  // code report agrees to the number with every report, dashboard, and Copilot
+  // answer. Fully Azure-native (Synapse serverless / ADX); no Fabric or Power
+  // BI workspace required (no-fabric-dependency).
+  { slug: 'code-report', displayName: 'Code report', restType: 'CodeReport', category: 'Power BI', noRestApi: true,
+    description: 'BI-as-code: a versionable Markdown + SQL report — PR-reviewed, CI-tested, diff-able. Loom-native (Evidence.dev-class).',
+    learnContent: {
+      "overview": "A Code report is a dashboard authored as code: ONE Markdown document with fenced query blocks and inline visual directives, versioned in git, reviewed in a PR, and validated in CI — the Evidence.dev / Rill / Observable model, built Loom-native. A `sql loom` block references a governed metric and resolves through the headless metrics layer (one metric, one number everywhere); a raw `sql` block runs read-only on the report's bound engine (Synapse serverless or Azure Data Explorer). No Fabric or Power BI workspace is required.",
+      "steps": [
+        {
+          "title": "Write the report",
+          "body": "Author Markdown prose, then add fenced ```sql name``` (raw query) or ```sql loom name``` (governed metric) blocks and place {visual ...} directives that render each query as a table, chart, or KPI."
+        },
+        {
+          "title": "Bind an engine",
+          "body": "Pick the engine raw sql blocks run on — Synapse serverless (T-SQL, default), lakehouse, or Azure Data Explorer (KQL). Metric blocks resolve through the governed metrics layer regardless."
+        },
+        {
+          "title": "Run with live data",
+          "body": "Preview executes every block against the real backend and renders prose, grids, and charts in-console — no mock data."
+        },
+        {
+          "title": "Review + CI-gate it",
+          "body": "Commit the source to git and run `loom report validate <file>` in CI: it parses and dry-compiles the report (metric references, read-only guards) and exits non-zero on any error, so a broken dashboard never merges."
+        }
+      ],
+      "docsUrl": "https://docs.evidence.dev/core-concepts/queries/"
+    } },
 ];

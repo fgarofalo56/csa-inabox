@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1603 |
+| Total routes | 1643 |
 | Public (no session) | 116 |
-| Session-only | 573 |
-| Owner-scoped | 654 |
-| Admin | 260 |
-| Gated (backend config) | 521 |
-| Areas | 108 |
+| Session-only | 575 |
+| Owner-scoped | 680 |
+| Admin | 272 |
+| Gated (backend config) | 528 |
+| Areas | 117 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -112,6 +112,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/capacity/guardrails/route.ts` | GET PUT | admin |  | — |
 | `admin/capacity/utilization/route.ts` | POST | admin |  | Azure Monitor |
 | `admin/capacity/viz-config/route.ts` | GET | admin |  | — |
+| `admin/chaos/dependency/route.ts` | GET POST | admin |  | — |
 | `admin/chargeback/attribution/route.ts` | GET | admin |  | — |
 | `admin/chargeback/route.ts` | GET | admin |  | Azure Monitor, Cosmos |
 | `admin/chargeback/workspaces/route.ts` | GET | admin |  | Azure Monitor |
@@ -489,6 +490,16 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Purview |
 | `catalog/unity/capabilities/route.ts` | GET | session-only | ● | Databricks |
 
+## cdc
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `cdc/connectors/[id]/monitor/route.ts` | GET | owner-scoped |  | — |
+| `cdc/connectors/[id]/route.ts` | GET DELETE | owner-scoped |  | — |
+| `cdc/connectors/[id]/state/route.ts` | POST | owner-scoped |  | Cosmos |
+| `cdc/connectors/route.ts` | GET POST | owner-scoped |  | — |
+| `cdc/connectors/source-tables/route.ts` | POST | session-only |  | — |
+
 ## cloud
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -737,6 +748,19 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `duckdb/capabilities/route.ts` | GET | owner-scoped |  | — |
 | `duckdb/query/route.ts` | POST | owner-scoped |  | — |
 
+## ducklake
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `ducklake/catalog/route.ts` | GET | owner-scoped |  | — |
+
+## embed
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `embed/query/route.ts` | POST | owner-scoped |  | — |
+| `embed/token/route.ts` | POST | owner-scoped |  | Cosmos |
+
 ## estate
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -862,6 +886,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `governance/dlp/schemas/route.ts` | GET | session-only | ● | — |
 | `governance/dlp/violations/route.ts` | GET | owner-scoped |  | — |
 | `governance/domains/route.ts` | GET POST | owner-scoped |  | Cosmos |
+| `governance/dq-findings/route.ts` | GET | owner-scoped |  | — |
 | `governance/govern/actions/route.ts` | GET | admin |  | Cosmos |
 | `governance/govern/copilot/route.ts` | POST | admin |  | — |
 | `governance/govern/embed/route.ts` | GET | admin | ● | — |
@@ -942,6 +967,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/canvas-presence/route.ts` | GET POST DELETE | owner-scoped |  | — |
 | `items/[type]/[id]/canvas-suggest/route.ts` | POST | owner-scoped | ● | — |
 | `items/[type]/[id]/classifications/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
+| `items/[type]/[id]/collab/stream/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/comments/route.ts` | GET POST PATCH DELETE | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/endorsement/route.ts` | GET PATCH | admin |  | — |
 | `items/[type]/[id]/explain/route.ts` | POST | session-only | ● | — |
@@ -972,6 +998,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/versions/[versionId]/route.ts` | GET | owner-scoped | ● | — |
 | `items/[type]/[id]/versions/route.ts` | GET | owner-scoped | ● | — |
 | `items/[type]/[id]/visual-query/route.ts` | POST | owner-scoped |  | Databricks, Synapse SQL, Synapse pool |
+| `items/activation-sync/[id]/bind-trigger/route.ts` | POST | owner-scoped |  | ADLS |
+| `items/activation-sync/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
+| `items/activation-sync/[id]/run/route.ts` | POST | owner-scoped | ● | — |
+| `items/activation-sync/[id]/runs/route.ts` | GET | owner-scoped |  | — |
+| `items/activation-sync/[id]/schema/route.ts` | GET | owner-scoped | ● | ADLS |
+| `items/activation-sync/route.ts` | GET POST | owner-scoped |  | — |
 | `items/activator/[id]/adx-source/route.ts` | GET | owner-scoped | ● | ADX |
 | `items/activator/[id]/history/route.ts` | GET | owner-scoped | ● | Azure Monitor |
 | `items/activator/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
@@ -1082,6 +1114,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/batch-pool/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/batch-pool/tasks/route.ts` | GET POST DELETE | owner-scoped | ● | Batch |
 | `items/by-type/route.ts` | GET | admin |  | Cosmos |
+| `items/code-report/[id]/content/route.ts` | GET PUT | owner-scoped |  | — |
+| `items/code-report/[id]/render/route.ts` | POST | owner-scoped |  | Cosmos |
+| `items/code-report/validate/route.ts` | POST | owner-scoped |  | — |
 | `items/compute/[id]/route.ts` | GET DELETE | session-only |  | — |
 | `items/compute/[id]/start/route.ts` | POST | session-only |  | — |
 | `items/compute/[id]/stop/route.ts` | POST | session-only |  | — |
@@ -1165,6 +1200,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/data-product-template/route.ts` | GET POST | owner-scoped |  | — |
 | `items/data-product/[id]/publish-api/route.ts` | POST | owner-scoped | ● | APIM |
 | `items/data-product/[id]/register-purview/route.ts` | POST | owner-scoped | ● | Purview |
+| `items/data-quality/[id]/checks/route.ts` | GET POST | owner-scoped | ● | — |
+| `items/data-quality/[id]/diff/route.ts` | POST | owner-scoped |  | — |
 | `items/data-quality/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/data-quality/[id]/run/route.ts` | GET POST | owner-scoped | ● | — |
 | `items/data-science/home/route.ts` | GET | owner-scoped |  | Cosmos |
@@ -1711,6 +1748,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `lineage/openlineage/export/route.ts` | GET | owner-scoped |  | — |
 | `lineage/openlineage/route.ts` | POST | public |  | Cosmos |
 
 ## loom
@@ -1790,6 +1828,20 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `messaging/metrics/route.ts` | GET | session-only | ● | Azure Monitor, Event Hubs, Service Bus |
 
+## metrics
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `metrics/query/route.ts` | POST | owner-scoped |  | — |
+
+## migrate
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `migrate/assess/route.ts` | POST | admin | ● | Cosmos |
+| `migrate/copy/route.ts` | GET POST | admin |  | Cosmos |
+| `migrate/translate/route.ts` | POST | admin |  | Cosmos |
+
 ## monitor
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -1838,6 +1890,16 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `notifications/route.ts` | GET POST PATCH | owner-scoped |  | Cosmos |
+
+## observability
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `observability/incidents/[id]/route.ts` | GET | admin |  | — |
+| `observability/incidents/[id]/transition/route.ts` | POST | admin |  | — |
+| `observability/incidents/route.ts` | GET POST | admin |  | — |
+| `observability/monitors/[id]/observe/route.ts` | POST | admin |  | — |
+| `observability/monitors/route.ts` | GET POST | admin |  | — |
 
 ## onelake
 
@@ -1940,6 +2002,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `runtime-flags/route.ts` | GET | session-only |  | — |
 
+## s3-gateway
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `s3-gateway/info/route.ts` | GET | session-only |  | — |
+
 ## scheduler
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -2013,6 +2081,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `spark-environment/[id]/publish/route.ts` | POST | owner-scoped |  | Synapse |
 | `spark-environment/[id]/validate/route.ts` | GET POST | owner-scoped |  | Synapse |
 
+## sql
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `sql/trino/route.ts` | POST | owner-scoped | ● | — |
+
 ## sqldb
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -2035,6 +2109,14 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `storage/accounts/route.ts` | GET | session-only |  | — |
+
+## streaming-sql
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `streaming-sql/mv/route.ts` | POST | owner-scoped | ● | — |
+| `streaming-sql/query/route.ts` | POST | owner-scoped | ● | — |
+| `streaming-sql/status/route.ts` | GET | owner-scoped |  | — |
 
 ## synapse
 
@@ -2151,8 +2233,11 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `workspaces/[id]/agent-config/route.ts` | GET PUT | owner-scoped |  | — |
+| `workspaces/[id]/clone/route.ts` | POST | admin |  | Cosmos |
+| `workspaces/[id]/export/route.ts` | GET | admin |  | — |
 | `workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | Cosmos |
 | `workspaces/[id]/image/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
+| `workspaces/[id]/import/route.ts` | POST | admin |  | Cosmos |
 | `workspaces/[id]/items/[itemId]/route.ts` | PATCH DELETE | owner-scoped |  | Cosmos |
 | `workspaces/[id]/items/route.ts` | GET POST | admin |  | Cosmos |
 | `workspaces/[id]/permissions/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |

@@ -7,6 +7,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSync20Regular } from '@fluentui/react-icons';
 import { LineageCanvas, type LineageCanvasHandle, type CanvasLineageNode, type CanvasLineageEdge } from './lineage-canvas';
+import { isColumnNode } from './lineage-column-model';
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%' },
@@ -57,10 +58,13 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
   // the merge toggle is only meaningful for the Azure-native Purview / UC paths.
   const mergeable = source === 'purview' || source === 'unity-catalog';
   const [merge, setMerge] = useState(mergeable);
-  // Column-level lineage (system.access.column_lineage) is a Unity Catalog
-  // capability — matches Databricks Catalog Explorer's "See column-level
-  // lineage" toggle. Off by default so the table-grain graph stays primary.
-  const columnsAvailable = source === 'unity-catalog';
+  // Column-level lineage (L1/L5): the unified resolver overlays EVERY column
+  // source on the same `col:` identity — UC `system.access.column_lineage`,
+  // Weave ThreadEdge.columnMappings, and the Purview columnMapping facet (L4)
+  // — matching Databricks Catalog Explorer's "See column-level lineage"
+  // toggle. It rides the unified (merge) path, so it's offered whenever the
+  // merged graph is on. Off by default so the table-grain graph stays primary.
+  const columnsAvailable = mergeable && merge;
   const [columns, setColumns] = useState(false);
 
   const loadLineage = (isRefresh?: boolean) => {
@@ -136,6 +140,18 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
           </MessageBarBody>
         </MessageBar>
       ))}
+      {/* Honest empty affordance (L5): the column facet was requested but no
+          source has captured column-grain lineage for this asset yet — never a
+          red error (ux-baseline clean first open). */}
+      {!loading && !error && columns && columnsAvailable && nodes.length > 0 && !nodes.some((n) => isColumnNode(n)) && (
+        <MessageBar intent="info" data-testid="columns-empty-hint">
+          <MessageBarBody>
+            No column-level lineage captured yet for this asset. Column lineage flows in from
+            Databricks jobs (Unity Catalog system tables), Spark runs (OpenLineage), and Weave
+            transforms with column mappings — the table-grain graph below is unaffected.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {!loading && !error && nodes.length === 0 && <MessageBar><MessageBarBody>No lineage edges found for this asset.</MessageBarBody></MessageBar>}
       {!loading && !error && nodes.length > 0 && <LineageCanvas ref={canvasRef} nodes={nodes} edges={edges} focusId={id} />}
     </div>
