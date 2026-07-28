@@ -269,6 +269,14 @@ jobs:
       #      in-VNet with the SAME minted session. continue-on-error so a
       #      sweep finding annotates the run and uploads its report instead of
       #      masking the core verify gate; the report artifact is the receipt.
+      #
+      #      PER-PROJECT OUTPUT DIR (fix 2026-07-28): playwright CLEANS its
+      #      outputDir at the START of every run. With every project sharing the
+      #      config default (test-results/uat/artifacts), the LAST project to run
+      #      deleted the traces, screenshots and error-context.md of every
+      #      project before it — run 30330893902 uploaded only publish-version's
+      #      report.json, so the two route-smoke failures had no artifacts at all.
+      #      Each project now writes to test-results/<project>/ and survives.
       # -----------------------------------------------------------------------
       - name: Run extra Playwright projects
         if: inputs.extra_projects != ''
@@ -281,7 +289,9 @@ jobs:
             p="$(echo "$p" | tr -d '[:space:]')"
             [ -z "$p" ] && continue
             echo "::group::playwright --project=$p"
-            pnpm -C apps/fiab-console exec playwright test --project="$p" || rc=1
+            PLAYWRIGHT_JSON_OUTPUT_NAME="test-results/$p/report.json" \
+              pnpm -C apps/fiab-console exec playwright test --project="$p" \
+                --output="test-results/$p/artifacts" || rc=1
             echo "::endgroup::"
           done
           exit $rc
@@ -297,7 +307,9 @@ jobs:
         continue-on-error: true
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
-          pnpm -C apps/fiab-console exec playwright test --project=publish-version
+          PLAYWRIGHT_JSON_OUTPUT_NAME="test-results/publish-version/report.json" \
+            pnpm -C apps/fiab-console exec playwright test --project=publish-version \
+              --output="test-results/publish-version/artifacts"
         env:
           SESSION_SECRET:       ${{ env.SESSION_SECRET }}
           LOOM_URL:             ${{ env.LOOM_URL }}
@@ -333,6 +345,10 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 7. Upload Playwright HTML report + any receipts as artifact (always).
+      #    The whole test-results/ tree, not just test-results/uat/ — every
+      #    project now has its own subdirectory (see 6a1), and the traces /
+      #    screenshots / error-context.md of a FAILING extra project are the
+      #    only receipt that explains it.
       # -----------------------------------------------------------------------
       - name: Upload Playwright report
         if: always()
@@ -341,6 +357,5 @@ jobs:
           name: loom-ui-verify-report-${{ github.run_id }}
           path: |
             apps/fiab-console/playwright-report/
-            apps/fiab-console/test-results/uat/
-            apps/fiab-console/test-results/receipts/
+            apps/fiab-console/test-results/
           retention-days: 14

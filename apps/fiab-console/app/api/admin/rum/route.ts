@@ -16,8 +16,19 @@
  *
  * Honest gate: MonitorNotConfiguredError (LOOM_LOG_ANALYTICS_WORKSPACE_ID
  * unset) → 503 naming the exact env var; the /admin/rum panel renders the
- * MessageBar. Empty tables are a REAL zero (data appears minutes after the
- * first browser session), not a gate.
+ * MessageBar. A UAMI that cannot read the workspace (401/403) → 503 naming the
+ * role to grant.
+ *
+ * NOT a gate and NOT a 500: a workspace that is configured and readable but has
+ * never ingested browser telemetry. The App Insights per-signal tables are
+ * materialized on FIRST INGEST, so until a real browser session lands,
+ * `AppBrowserTimings | where …` fails with HTTP 400 BadArgumentError /
+ * SemanticError SEM0100 "Failed to resolve table or column expression named
+ * 'AppBrowserTimings'". That is an EMPTY state — every such query degrades to
+ * zero rows, the degraded table names ride along on the payload, and the panel
+ * renders its "No real-user telemetry yet" launcher card. (Live symptom before
+ * this fix: /admin/rum answered 500 on the in-VNet route-smoke sweep, Actions
+ * run 30330893902.) A genuine unexpected failure still returns 500.
  *
  * Cached 5 min (getOrComputeCached, serve-stale) — the admin view is a
  * rollup, and LA queries are the expensive hop.
@@ -25,7 +36,7 @@
 import type { NextRequest } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { apiHonestError, apiOk, apiServerError } from '@/lib/api/respond';
-import { MonitorNotConfiguredError, queryLogs } from '@/lib/azure/monitor-client';
+import { classifyMonitorError, isMissingTableError, queryLogs, type LogQueryResult } from '@/lib/azure/monitor-client';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { RUM_CLOUD_ROLE, RUM_FLAG_ID } from '@/lib/telemetry/rum-shared';
 import { isRumEnvEnabled, rumSampleRate } from '@/lib/telemetry/rum-ingest';
@@ -78,6 +89,13 @@ export interface RumRollup {
   routeChanges: number;
   vitals: RumVitals;
   capture: { envEnabled: boolean; flagEnabled: boolean; sampleRate: number };
+  /**
+   * App Insights tables that do not exist in the workspace yet (never ingested)
+   * — the queries over them returned ZERO rows instead of failing. Empty on a
+   * workspace that has seen browser telemetry. Surfaced so the empty state is
+   * HONEST about why it is empty rather than silently showing zeros.
+   */
+  missingTables: string[];
 }
 
 const num = (v: unknown): number | null => {
@@ -85,35 +103,71 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : null;
 };
 
+/** A fresh zero-row result — never a shared instance the callers could alias. */
+const emptyResult = (): LogQueryResult => ({ columns: [], rows: [], rowCount: 0 });
+
+/**
+ * Run one RUM query. A table that has never been written to is EMPTY, not a
+ * failure — record its name in `missing` and return zero rows. Every other
+ * error (auth, throttling, a genuine service fault) propagates to the route's
+ * classifier.
+ */
+async function queryOrEmpty(
+  table: string,
+  kql: string,
+  window: string,
+  missing: string[],
+): Promise<LogQueryResult> {
+  try {
+    return await queryLogs(kql, window);
+  } catch (e) {
+    if (isMissingTableError(e)) {
+      if (!missing.includes(table)) missing.push(table);
+      return emptyResult();
+    }
+    throw e;
+  }
+}
+
 async function computeRollup(window: string): Promise<Omit<RumRollup, 'capture'>> {
   const role = RUM_CLOUD_ROLE;
   const surfaceExpr = `tostring(Properties['csa-loom.surface'])`;
+  const missingTables: string[] = [];
 
   const [loadsQ, trendQ, surfacesQ, errorsQ, vitalsQ, pageViewsQ] = await Promise.all([
-    queryLogs(
+    queryOrEmpty(
+      'AppBrowserTimings',
       `AppBrowserTimings | where AppRoleName == '${role}'
        | summarize views = count(), p50 = percentile(TotalDurationMs, 50), p95 = percentile(TotalDurationMs, 95)`,
       window,
+      missingTables,
     ),
-    queryLogs(
+    queryOrEmpty(
+      'AppBrowserTimings',
       `AppBrowserTimings | where AppRoleName == '${role}'
        | summarize p50 = percentile(TotalDurationMs, 50), p95 = percentile(TotalDurationMs, 95), views = count() by bin(TimeGenerated, 1h)
        | order by TimeGenerated asc`,
       window,
+      missingTables,
     ),
-    queryLogs(
+    queryOrEmpty(
+      'AppBrowserTimings',
       `AppBrowserTimings | where AppRoleName == '${role}'
        | summarize views = count(), p50 = percentile(TotalDurationMs, 50), p95 = percentile(TotalDurationMs, 95) by surface = ${surfaceExpr}
        | order by views desc | take 25`,
       window,
+      missingTables,
     ),
-    queryLogs(
+    queryOrEmpty(
+      'AppExceptions',
       `AppExceptions | where AppRoleName == '${role}'
        | summarize count_ = count(), lastSeen = max(TimeGenerated) by type = tostring(ExceptionType), message = tostring(OuterMessage), surface = ${surfaceExpr}
        | order by count_ desc | take 25`,
       window,
+      missingTables,
     ),
-    queryLogs(
+    queryOrEmpty(
+      'AppEvents',
       `AppEvents | where AppRoleName == '${role}' and Name == 'loom-rum-vitals'
        | summarize samples = count(),
            lcp = percentile(todouble(Measurements['lcpMs']), 75),
@@ -122,10 +176,13 @@ async function computeRollup(window: string): Promise<Omit<RumRollup, 'capture'>
            cls = percentile(todouble(Measurements['cls']), 75),
            inp = percentile(todouble(Measurements['inpMs']), 75)`,
       window,
+      missingTables,
     ),
-    queryLogs(
+    queryOrEmpty(
+      'AppPageViews',
       `AppPageViews | where AppRoleName == '${role}' | summarize views = count()`,
       window,
+      missingTables,
     ),
   ]);
 
@@ -182,6 +239,7 @@ async function computeRollup(window: string): Promise<Omit<RumRollup, 'capture'>
     errorCount: errors.reduce((n, e) => n + e.count, 0),
     routeChanges,
     vitals,
+    missingTables,
   };
 }
 
@@ -203,16 +261,29 @@ export const GET = withTenantAdmin(async (req: NextRequest) => {
     };
     return apiOk({ rum: rollup });
   } catch (e) {
-    if (e instanceof MonitorNotConfiguredError) {
-      return apiHonestError(
-        e,
-        503,
-        'RUM analytics need the Log Analytics workspace: set LOOM_LOG_ANALYTICS_WORKSPACE_ID ' +
-          '(auto-derived from the monitoring module on a push-button deploy) and grant the Console UAMI ' +
-          '"Log Analytics Reader" on the workspace. Browser beacons are still being captured and shipped ' +
-          'to App Insights — only this admin view is gated.',
-      );
+    // (a) not configured → honest gate. (b) no-data is handled per-query inside
+    // computeRollup and never reaches here. (c) anything else → a real 500.
+    switch (classifyMonitorError(e)) {
+      case 'not-configured':
+        return apiHonestError(
+          e,
+          503,
+          'RUM analytics need the Log Analytics workspace: set LOOM_LOG_ANALYTICS_WORKSPACE_ID ' +
+            '(auto-derived from the monitoring module on a push-button deploy) and grant the Console UAMI ' +
+            '"Log Analytics Reader" on the workspace. Browser beacons are still being captured and shipped ' +
+            'to App Insights — only this admin view is gated.',
+        );
+      case 'forbidden':
+        return apiHonestError(
+          e,
+          503,
+          'The Console managed identity cannot read the Log Analytics workspace. Grant it ' +
+            '"Log Analytics Reader" on the workspace named by LOOM_LOG_ANALYTICS_WORKSPACE_ID. Bicep: ' +
+            'platform/fiab/bicep/modules/admin-plane/monitoring-reader-rbac.bicep. Browser beacons are ' +
+            'still being captured — only this admin view is gated.',
+        );
+      default:
+        return apiServerError(e);
     }
-    return apiServerError(e);
   }
 });

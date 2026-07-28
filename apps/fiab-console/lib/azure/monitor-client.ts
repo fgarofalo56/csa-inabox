@@ -103,6 +103,72 @@ export class MonitorNotConfiguredError extends Error {
   }
 }
 
+/**
+ * The three-way split every telemetry-backed route MUST make (no-vaporware.md):
+ *
+ *   'not-configured' — the env var / resource is missing        → honest GATE
+ *   'no-data'        — configured, but the queried table has never been created
+ *                      → designed EMPTY state (never a 500, never a fake zero)
+ *   'forbidden'      — the Console UAMI lacks the reader role   → honest GATE
+ *   'error'          — a genuine unexpected failure             → still a 500
+ *
+ * WHY 'no-data' is its own case: in a workspace-based Application Insights
+ * setup the per-signal tables (`AppBrowserTimings`, `AppPageViews`,
+ * `AppExceptions`, `AppTraces`, `ADFPipelineRun`, …) are materialized on FIRST
+ * INGEST. Until a row lands, the table does not exist and Log Analytics answers
+ * the query with HTTP 400:
+ *
+ *   { "error": { "code": "BadArgumentError",
+ *                "message": "The request had some invalid properties",
+ *                "innererror": { "code": "SemanticError",
+ *                  "innererror": { "code": "SEM0100",
+ *                    "message": "'where' operator: Failed to resolve table or
+ *                                column expression named 'AppBrowserTimings'" }}}}
+ *
+ * That is "no telemetry yet", NOT a server fault — a route that lets it reach
+ * its 500 handler reports a healthy-but-empty deployment as broken (live
+ * symptom: /admin/rum answering 500 on the route-smoke sweep, run
+ * 30330893902). Two earlier surfaces hit the identical wall and fixed it
+ * inline (queryLoomAppEvents #1464, queryPipelineRuns); this is that check,
+ * named and shared.
+ */
+export type MonitorFailureKind = 'not-configured' | 'no-data' | 'forbidden' | 'error';
+
+/**
+ * Log Analytics' vocabulary for "the source you named does not resolve".
+ * Only ever consulted together with HTTP 400 — a 400 from any other cause
+ * (malformed timespan, over-length query) stays an 'error'.
+ */
+const UNRESOLVED_SOURCE_RE =
+  /invalid propert|SyntaxError|SemanticError|Failed to resolve|could not be found|BadArgumentError|SEM0100/i;
+
+/** Stringify an error body for pattern-matching without ever throwing. */
+function errorBodyText(body: unknown): string {
+  if (body == null) return '';
+  if (typeof body === 'string') return body;
+  try { return JSON.stringify(body); } catch { return String(body); }
+}
+
+/** Classify a thrown Monitor error into the four handling cases above. */
+export function classifyMonitorError(e: unknown): MonitorFailureKind {
+  if (e instanceof MonitorNotConfiguredError) return 'not-configured';
+  if (e instanceof MonitorError) {
+    if (e.status === 401 || e.status === 403) return 'forbidden';
+    if (e.status === 400 && UNRESOLVED_SOURCE_RE.test(`${e.message} ${errorBodyText(e.body)}`)) {
+      return 'no-data';
+    }
+  }
+  return 'error';
+}
+
+/**
+ * True when the failure is "this table has never been written to" — the caller
+ * should degrade to an EMPTY result and say so, not fail.
+ */
+export function isMissingTableError(e: unknown): boolean {
+  return classifyMonitorError(e) === 'no-data';
+}
+
 // ----------------------------------------------------------------------------
 // config
 // ----------------------------------------------------------------------------
@@ -725,16 +791,8 @@ ${itemClause}
     // properties") on a workspace with no Application-Insights traces — degrade
     // to ZERO Loom-app rows rather than failing the audit grid. Auth (401/403)
     // and not-configured errors still propagate so the route renders their
-    // specific honest gate.
-    if (
-      e instanceof MonitorError &&
-      e.status === 400 &&
-      /invalid propert|SyntaxError|SemanticError|Failed to resolve|could not be found/i.test(
-        `${e.message} ${JSON.stringify(e.body ?? '')}`,
-      )
-    ) {
-      return [];
-    }
+    // specific honest gate. (Shared classifier — see classifyMonitorError.)
+    if (isMissingTableError(e)) return [];
     throw e;
   }
 
@@ -865,15 +923,7 @@ ${synapseUnion}
     // rejects the query because no source table can be resolved, degrade to
     // ZERO runs rather than failing the Activities feed. Auth (401/403) and
     // not-configured errors still propagate so the route renders their gate.
-    if (
-      e instanceof MonitorError &&
-      e.status === 400 &&
-      /invalid propert|SyntaxError|SemanticError|Failed to resolve|could not be found/i.test(
-        `${e.message} ${JSON.stringify(e.body ?? '')}`,
-      )
-    ) {
-      return [];
-    }
+    if (isMissingTableError(e)) return [];
     throw e;
   }
   const at = (name: string) => result.columns.indexOf(name);

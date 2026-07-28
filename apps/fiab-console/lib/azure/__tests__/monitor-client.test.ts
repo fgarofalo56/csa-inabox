@@ -733,3 +733,105 @@ describe('sendActionGroupTestNotification', () => {
     await expect(sendActionGroupTestNotification('not-an-arm-id')).rejects.toThrow(/action group/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// classifyMonitorError — the three-way split every telemetry route depends on.
+//
+// The shapes below are the REAL Azure Monitor / Log Analytics payloads (per
+// learn.microsoft.com/azure/azure-monitor/logs/api/errors), not invented ones:
+// pinning them keeps "configured but never ingested" from ever regressing back
+// into a 500 (live symptom: /admin/rum 500 on route-smoke run 30330893902).
+// ---------------------------------------------------------------------------
+describe('classifyMonitorError', () => {
+  /** Exactly what Log Analytics answers for a table that was never created. */
+  const missingTableBody = {
+    error: {
+      message: 'The request had some invalid properties',
+      code: 'BadArgumentError',
+      correlationId: '2f0b0f4e-0e5f-4a4a-9d0a-1f1d2c3b4a5e',
+      innererror: {
+        code: 'SemanticError',
+        message: 'Semantic error: query could not be parsed',
+        innererror: {
+          code: 'SEM0100',
+          message:
+            "'where' operator: Failed to resolve table or column expression named 'AppBrowserTimings'",
+        },
+      },
+    },
+  };
+
+  it('classifies a never-ingested App Insights table as no-data (empty state, not a 500)', async () => {
+    const { classifyMonitorError, isMissingTableError, MonitorError } = await import('../monitor-client');
+    const e = new MonitorError('The request had some invalid properties', 400, missingTableBody);
+    expect(classifyMonitorError(e)).toBe('no-data');
+    expect(isMissingTableError(e)).toBe(true);
+  });
+
+  it('classifies a missing-column semantic error as no-data too', async () => {
+    const { classifyMonitorError, MonitorError } = await import('../monitor-client');
+    const e = new MonitorError('The request had some invalid properties', 400, {
+      error: {
+        code: 'BadArgumentError',
+        message: 'The request had some invalid properties',
+        innererror: { code: 'SEM0001', message: "Failed to resolve column 'TotalDurationMs'" },
+      },
+    });
+    expect(classifyMonitorError(e)).toBe('no-data');
+  });
+
+  it('classifies a missing env var as not-configured (honest gate)', async () => {
+    const { classifyMonitorError, isMissingTableError, MonitorNotConfiguredError } = await import('../monitor-client');
+    const e = new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
+    expect(classifyMonitorError(e)).toBe('not-configured');
+    expect(isMissingTableError(e)).toBe(false);
+  });
+
+  it('classifies 403 / 401 as forbidden (role gate), never as no-data', async () => {
+    const { classifyMonitorError, isMissingTableError, MonitorError } = await import('../monitor-client');
+    const forbidden = new MonitorError('The provided credentials have insufficient access', 403, {
+      error: { code: 'InsufficientAccessError', message: 'The provided credentials have insufficient access to perform the requested operation' },
+    });
+    const unauthorized = new MonitorError('Failed to acquire token', 401);
+    expect(classifyMonitorError(forbidden)).toBe('forbidden');
+    expect(classifyMonitorError(unauthorized)).toBe('forbidden');
+    expect(isMissingTableError(forbidden)).toBe(false);
+  });
+
+  it('classifies a real service fault (500 / 429 / plain Error) as error — still a 500', async () => {
+    const { classifyMonitorError, isMissingTableError, MonitorError } = await import('../monitor-client');
+    const serverFault = new MonitorError('Internal server error', 500, {
+      error: { code: 'InternalServerError', message: 'Internal server error' },
+    });
+    const throttled = new MonitorError('Rate limit exceeded', 429, {
+      error: { code: 'ThrottledError', message: 'Rate limit exceeded' },
+    });
+    expect(classifyMonitorError(serverFault)).toBe('error');
+    expect(classifyMonitorError(throttled)).toBe('error');
+    expect(classifyMonitorError(new Error('socket hang up'))).toBe('error');
+    expect(classifyMonitorError(undefined)).toBe('error');
+    expect(isMissingTableError(serverFault)).toBe(false);
+  });
+
+  it('does NOT swallow a 400 that is not an unresolved-source error', async () => {
+    const { classifyMonitorError, MonitorError } = await import('../monitor-client');
+    const badTimespan = new MonitorError('The value of the timespan parameter is not valid', 400, {
+      error: { code: 'BadArgumentError', message: 'The value of the timespan parameter is not valid' },
+    });
+    // BadArgumentError alone is ambiguous; a NON-BadArgument 400 must stay an error.
+    const pathError = new MonitorError('Workspace not found', 400, {
+      error: { code: 'PathNotFoundError', message: 'The requested path does not exist' },
+    });
+    expect(classifyMonitorError(pathError)).toBe('error');
+    // Documented tradeoff: a BadArgumentError body is treated as no-data, which
+    // is the same call the two pre-existing call sites already make.
+    expect(classifyMonitorError(badTimespan)).toBe('no-data');
+  });
+
+  it('tolerates an unstringifiable error body without throwing', async () => {
+    const { classifyMonitorError, MonitorError } = await import('../monitor-client');
+    const circular: any = {};
+    circular.self = circular;
+    expect(classifyMonitorError(new MonitorError('boom', 400, circular))).toBe('error');
+  });
+});

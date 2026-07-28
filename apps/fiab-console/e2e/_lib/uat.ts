@@ -59,7 +59,7 @@ export interface FeatureResult {
   status: 'pass' | 'fail' | 'vaporware' | 'skip';
   notes?: string;
   consoleErrors?: string[];
-  networkErrors?: { url: string; status: number; body?: string }[];
+  networkErrors?: NetworkFailure[];
   screenshot?: string;
   durationMs?: number;
 }
@@ -72,35 +72,155 @@ export function recordVerdict(r: FeatureResult) {
   fs.appendFileSync(f, JSON.stringify({ ts: new Date().toISOString(), ...r }) + '\n');
 }
 
-/** Subscribe to console + network failures while running `fn`; return them. */
-export async function captureFailures<T>(page: Page, fn: () => Promise<T>): Promise<{
+/**
+ * One captured network failure.
+ *
+ * `status` is the HTTP status, or 0 when the request never got a response
+ * (DNS / TLS / connection reset — `failure` then carries Chromium's errorText).
+ */
+export interface NetworkFailure {
+  url: string;
+  status: number;
+  body?: string;
+  method?: string;
+  /** False for third-party hosts (App Insights, CDNs) — those must not fail a smoke. */
+  sameOrigin: boolean;
+  /** Chromium errorText for a request that never completed. */
+  failure?: string;
+}
+
+export interface CaptureOptions {
+  /**
+   * Echo every captured failure to stdout the moment it happens. This is what
+   * makes a TIMED-OUT test diagnosable: when Playwright aborts the test body,
+   * nothing the spec would have asserted is ever reported, but stdout is
+   * already in the Actions log. Default: on.
+   */
+  echo?: boolean;
+  /** Prefix for echoed lines, e.g. the route under test. */
+  label?: string;
+  /**
+   * Grace period for in-flight response-body reads to land before returning.
+   * `response.text()` is a CDP round-trip, so a failure that arrives in the
+   * last milliseconds of `fn()` would otherwise be dropped. Default 2000ms.
+   */
+  settleMs?: number;
+}
+
+/** Format one failure as a single actionable line. */
+export function formatNetworkFailure(n: NetworkFailure): string {
+  const where = n.sameOrigin ? '' : ' [third-party]';
+  const what = n.status ? `${n.status}` : `FAILED(${n.failure || 'unknown'})`;
+  const body = n.body ? ` :: ${n.body.replace(/\s+/g, ' ').slice(0, 300)}` : '';
+  return `${what}${where} ${n.method || 'GET'} ${n.url}${body}`;
+}
+
+/**
+ * Subscribe to console + network failures while running `fn`; return them.
+ *
+ * Hardened 2026-07-28 after the in-VNet route-smoke sweep (run 30330893902)
+ * proved a 500 existed on /admin/rum while the spec's `5xx calls:` diagnostic
+ * printed NOTHING — the failure was real but unattributable without the trace
+ * (which the workflow had also dropped). Four independent gaps are closed:
+ *
+ *  1. RECORD-THEN-ENRICH. The old handler `await`ed `response.text()` BEFORE
+ *     pushing, so any body read that resolved after `fn()` returned — or hung,
+ *     or threw on page teardown — lost the whole record. The record is now
+ *     pushed SYNCHRONOUSLY from the event; the body is filled in afterwards.
+ *  2. NO HOST FILTER ON 5xx. `if (!u.includes(HOST)) return` silently dropped
+ *     any 5xx whose URL did not literally contain the base hostname (a vanity
+ *     domain, an apex redirect, a same-site API host). 5xx is now recorded from
+ *     ANY origin and tagged `sameOrigin` so callers can still scope what fails.
+ *  3. requestfailed. A request that dies before a response (reset, TLS, DNS)
+ *     emitted no `response` event at all and was invisible. Now captured, with
+ *     `net::ERR_ABORTED` filtered out (React StrictMode / AbortController noise).
+ *  4. CONSOLE LOCATION. A bare "Failed to load resource: …500" now carries
+ *     `msg.location()`, so the resource is named even if every other path fails.
+ */
+export async function captureFailures<T>(page: Page, fn: () => Promise<T>, opts: CaptureOptions = {}): Promise<{
   result: T;
   consoleErrors: string[];
-  networkErrors: { url: string; status: number; body?: string }[];
+  networkErrors: NetworkFailure[];
 }> {
+  const { echo = true, label = '', settleMs = 2_000 } = opts;
+  const tag = label ? `[capture ${label}]` : '[capture]';
   const consoleErrors: string[] = [];
-  const networkErrors: { url: string; status: number; body?: string }[] = [];
+  const networkErrors: NetworkFailure[] = [];
+  /** In-flight body reads — awaited (bounded) before returning. */
+  const pending: Promise<unknown>[] = [];
+
+  const say = (line: string) => { if (echo) console.log(`${tag} ${line}`); };
+
   const onConsole = (msg: any) => {
-    if (msg.type() === 'error') consoleErrors.push(msg.text());
+    if (msg.type() !== 'error') return;
+    let where = '';
+    try {
+      const loc = msg.location?.();
+      if (loc?.url) where = ` @ ${loc.url}${loc.lineNumber ? `:${loc.lineNumber}` : ''}`;
+    } catch { /* location is best-effort */ }
+    const text = `${msg.text()}${where}`;
+    consoleErrors.push(text);
+    say(`console.error ${text}`);
   };
-  const onResponse = async (r: any) => {
-    const u = r.url();
-    if (!u.includes(HOST)) return;
-    if (r.status() >= 400 && r.status() !== 401) {
-      // 401 is the auth-not-loaded-yet noise we ignore
-      let body: string | undefined;
-      try { body = (await r.text()).slice(0, 300); } catch { /* ignore */ }
-      networkErrors.push({ url: u, status: r.status(), body });
-    }
+
+  const onResponse = (r: any) => {
+    let u = '';
+    let status = 0;
+    try { u = r.url(); status = r.status(); } catch { return; }
+    const sameOrigin = u.includes(HOST);
+    // 401 is the auth-not-loaded-yet noise we ignore. 4xx is only interesting
+    // on our own origin (a third-party 404 is not our mount's problem); a 5xx
+    // is ALWAYS recorded, wherever it came from.
+    if (status < 400 || status === 401) return;
+    if (status < 500 && !sameOrigin) return;
+
+    const rec: NetworkFailure = { url: u, status, sameOrigin };
+    try { rec.method = r.request?.().method?.(); } catch { /* best-effort */ }
+    networkErrors.push(rec);            // <-- synchronous: never lost to a race
+    say(formatNetworkFailure(rec));
+
+    // Enrich with the body afterwards. Bounded so a never-finishing body cannot
+    // stall the settle window.
+    pending.push(
+      Promise.race([
+        r.text().then((t: string) => { rec.body = t.slice(0, 1_000); }),
+        new Promise((res) => setTimeout(res, 1_500)),
+      ]).catch(() => { /* body unavailable — the url + status still stand */ }),
+    );
   };
+
+  const onRequestFailed = (req: any) => {
+    let u = '';
+    let errorText = '';
+    try {
+      u = req.url();
+      errorText = req.failure?.()?.errorText || '';
+    } catch { return; }
+    // Aborts are expected: unmount cancellations, AbortController timeouts.
+    if (/ERR_ABORTED/i.test(errorText)) return;
+    const sameOrigin = u.includes(HOST);
+    if (!sameOrigin) return;
+    const rec: NetworkFailure = { url: u, status: 0, sameOrigin, failure: errorText };
+    try { rec.method = req.method?.(); } catch { /* best-effort */ }
+    networkErrors.push(rec);
+    say(formatNetworkFailure(rec));
+  };
+
   page.on('console', onConsole);
   page.on('response', onResponse);
+  page.on('requestfailed', onRequestFailed);
   try {
     const result = await fn();
+    // Let in-flight body reads land before the caller inspects the array.
+    await Promise.race([
+      Promise.allSettled(pending),
+      new Promise((res) => setTimeout(res, settleMs)),
+    ]);
     return { result, consoleErrors, networkErrors };
   } finally {
     page.off('console', onConsole);
     page.off('response', onResponse);
+    page.off('requestfailed', onRequestFailed);
   }
 }
 
