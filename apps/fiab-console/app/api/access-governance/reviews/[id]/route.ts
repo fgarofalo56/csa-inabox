@@ -7,21 +7,23 @@
  *                                                 { action: 'close' | 'delegate' | 'reopen',
  *                                                   delegatedTo?: ApproverBinding[] }
  *                                                 'close' auto-revokes undecided
- *                                                 items when autoRevokeOnExpiry.
+ *                                                 items when autoRevokeOnExpiry,
+ *                                                 then seals the signed evidence
+ *                                                 record (B-N19c').
  *   DELETE /api/access-governance/reviews/[id]  → delete the campaign (admin).
  *
  * Backed by `access-reviews` (PK /tenantId). Closing a campaign runs the same real
  * revoke path as the reviewer inbox for any still-pending items (auto-revoke).
+ * Auth via the shared route-toolkit (withSession / withTenantAdmin).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin, isTenantAdmin } from '@/lib/auth/feature-gate';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
 import { accessReviewsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import type { AccessReview } from '@/lib/types/access-review';
 import type { ApproverBinding } from '@/lib/types/approval-policy';
 import { canReview, computeStats } from '@/lib/access/access-reviews';
 import { closeCampaign } from '@/lib/access/close-campaign';
-import { apiServerError } from '@/lib/api/respond';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -35,83 +37,69 @@ async function readById(id: string): Promise<AccessReview | null> {
   return resources[0] || null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
-  try {
-    const review = await readById(id);
-    if (!review) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    if (!canReview(review, s.claims.oid, s.claims.groups || [], isTenantAdmin(s))) {
-      return NextResponse.json({ ok: false, error: 'You are not a reviewer for this campaign.' }, { status: 403 });
-    }
-    return NextResponse.json({ ok: true, review: { ...review, stats: computeStats(review.items || []) } });
-  } catch (e: any) {
-    return apiServerError(e);
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const review = await readById(params.id);
+  if (!review) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+  if (!canReview(review, session.claims.oid, session.claims.groups || [], isTenantAdmin(session))) {
+    return NextResponse.json({ ok: false, error: 'You are not a reviewer for this campaign.' }, { status: 403 });
   }
-}
+  return NextResponse.json({ ok: true, review: { ...review, stats: computeStats(review.items || []) } });
+});
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-  const { id } = await ctx.params;
-  try {
-    const review = await readById(id);
-    if (!review) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    const body = await req.json().catch(() => ({} as any));
-    const action = body?.action;
-    const c = await accessReviewsContainer();
-    const by = s!.claims.upn || s!.claims.oid;
+export const PATCH = withTenantAdmin<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const review = await readById(params.id);
+  if (!review) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+  const body = await req.json().catch(() => ({} as any));
+  const action = body?.action;
+  const c = await accessReviewsContainer();
+  const by = session.claims.upn || session.claims.oid;
 
-    if (action === 'close') {
-      if (review.status !== 'active') return NextResponse.json({ ok: false, error: `campaign is already ${review.status}` }, { status: 409 });
-      const { review: closed, revoked, warnings } = await closeCampaign(review, by);
-      await c.item(closed.id, closed.tenantId).replace(closed);
-      const al = await auditLogContainer();
-      await al.items.create({ id: crypto.randomUUID(), itemId: closed.id, itemType: 'access-review', action: 'review-closed', summary: `${by} closed review "${closed.name}" — ${revoked} undecided grant${revoked === 1 ? '' : 's'} auto-revoked.`, upn: by, at: closed.updatedAt });
-      return NextResponse.json({ ok: true, review: { ...closed, stats: computeStats(closed.items) }, autoRevoked: revoked, ...(warnings.length ? { revokeWarnings: warnings.slice(0, 20) } : {}) });
-    }
-
-    if (action === 'reopen') {
-      review.status = 'active';
-      review.closedAt = undefined;
-      review.closedBy = undefined;
-      review.updatedAt = new Date().toISOString();
-      await c.item(review.id, review.tenantId).replace(review);
-      return NextResponse.json({ ok: true, review: { ...review, stats: computeStats(review.items) } });
-    }
-
-    if (action === 'delegate') {
-      const delegatedTo: ApproverBinding[] = (Array.isArray(body?.delegatedTo) ? body.delegatedTo : [])
-        .map((r: any) => ({ type: r?.type === 'group' ? 'group' : 'user', id: String(r?.id || '').trim(), name: r?.name ? String(r.name).trim().slice(0, 200) : undefined }))
-        .filter((r: ApproverBinding) => r.id);
-      review.delegatedTo = delegatedTo;
-      review.updatedAt = new Date().toISOString();
-      await c.item(review.id, review.tenantId).replace(review);
-      const al = await auditLogContainer();
-      await al.items.create({ id: crypto.randomUUID(), itemId: review.id, itemType: 'access-review', action: 'review-delegated', summary: `${by} delegated review "${review.name}" to ${delegatedTo.length} reviewer${delegatedTo.length === 1 ? '' : 's'}.`, upn: by, at: review.updatedAt });
-      return NextResponse.json({ ok: true, review: { ...review, stats: computeStats(review.items) } });
-    }
-
-    return NextResponse.json({ ok: false, error: 'action must be "close", "reopen", or "delegate"' }, { status: 400 });
-  } catch (e: any) {
-    return apiServerError(e);
+  if (action === 'close') {
+    if (review.status !== 'active') return NextResponse.json({ ok: false, error: `campaign is already ${review.status}` }, { status: 409 });
+    // closeCampaign persists the closed campaign AND seals the hash-chained
+    // evidence record (B-N19c') — no separate replace here.
+    const { review: closed, revoked, warnings, evidence } = await closeCampaign(review, by, {
+      oid: session.claims.oid, upn: session.claims.upn, tid: session.claims.tid,
+    });
+    const al = await auditLogContainer();
+    await al.items.create({ id: crypto.randomUUID(), itemId: closed.id, itemType: 'access-review', action: 'review-closed', summary: `${by} closed review "${closed.name}" — ${revoked} undecided grant${revoked === 1 ? '' : 's'} auto-revoked.`, upn: by, at: closed.updatedAt });
+    return NextResponse.json({
+      ok: true,
+      review: { ...closed, stats: computeStats(closed.items) },
+      autoRevoked: revoked,
+      ...(evidence ? { evidence: { id: evidence.id, sequence: evidence.sequence, contentHash: evidence.contentHash, prevHash: evidence.prevHash } } : {}),
+      ...(warnings.length ? { revokeWarnings: warnings.slice(0, 20) } : {}),
+    });
   }
-}
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-  const { id } = await ctx.params;
-  try {
-    const review = await readById(id);
-    if (!review) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    const c = await accessReviewsContainer();
-    await c.item(review.id, review.tenantId).delete();
-    return NextResponse.json({ ok: true, deleted: id });
-  } catch (e: any) {
-    return apiServerError(e);
+  if (action === 'reopen') {
+    review.status = 'active';
+    review.closedAt = undefined;
+    review.closedBy = undefined;
+    review.updatedAt = new Date().toISOString();
+    await c.item(review.id, review.tenantId).replace(review);
+    return NextResponse.json({ ok: true, review: { ...review, stats: computeStats(review.items) } });
   }
-}
+
+  if (action === 'delegate') {
+    const delegatedTo: ApproverBinding[] = (Array.isArray(body?.delegatedTo) ? body.delegatedTo : [])
+      .map((r: any) => ({ type: r?.type === 'group' ? 'group' : 'user', id: String(r?.id || '').trim(), name: r?.name ? String(r.name).trim().slice(0, 200) : undefined }))
+      .filter((r: ApproverBinding) => r.id);
+    review.delegatedTo = delegatedTo;
+    review.updatedAt = new Date().toISOString();
+    await c.item(review.id, review.tenantId).replace(review);
+    const al = await auditLogContainer();
+    await al.items.create({ id: crypto.randomUUID(), itemId: review.id, itemType: 'access-review', action: 'review-delegated', summary: `${by} delegated review "${review.name}" to ${delegatedTo.length} reviewer${delegatedTo.length === 1 ? '' : 's'}.`, upn: by, at: review.updatedAt });
+    return NextResponse.json({ ok: true, review: { ...review, stats: computeStats(review.items) } });
+  }
+
+  return NextResponse.json({ ok: false, error: 'action must be "close", "reopen", or "delegate"' }, { status: 400 });
+});
+
+export const DELETE = withTenantAdmin<{ id: string }>(async (_req: NextRequest, { params }) => {
+  const review = await readById(params.id);
+  if (!review) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+  const c = await accessReviewsContainer();
+  await c.item(review.id, review.tenantId).delete();
+  return NextResponse.json({ ok: true, deleted: params.id });
+});

@@ -28,11 +28,12 @@ import {
 import {
   ClipboardTaskListLtr24Regular, Add20Regular, ArrowSync20Regular, Timer20Regular,
   PeopleTeam20Regular, PersonDelete20Regular, CheckmarkCircle20Regular, DismissCircle20Regular,
-  Person20Regular, Group20Regular, ShieldTask24Regular,
+  Person20Regular, Group20Regular, ShieldTask24Regular, ShieldCheckmark20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { IdentityPicker } from '@/lib/components/ui/identity-picker';
+import { AccessReviewEvidenceDialog } from '@/lib/components/admin/access-review-evidence-dialog';
 
 interface Binding { type: 'user' | 'group'; id: string; name?: string }
 interface ReviewItem {
@@ -317,6 +318,7 @@ function CampaignInbox({ review, onClose, onChanged }: { review: Review; onClose
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [delegateOpen, setDelegateOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -350,7 +352,7 @@ function CampaignInbox({ review, onClose, onChanged }: { review: Review; onClose
       const r = await clientFetch(`/api/access-governance/reviews/${encodeURIComponent(review.id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'close' }) });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
-      setNote(`Campaign closed — ${j.autoRevoked ?? 0} undecided grant(s) auto-revoked.`);
+      setNote(`Campaign closed — ${j.autoRevoked ?? 0} undecided grant(s) auto-revoked.${j.evidence ? ` Evidence record #${j.evidence.sequence} sealed (${String(j.evidence.contentHash).slice(0, 16)}…).` : ''}`);
       setStatus('closed'); await refresh(); onChanged();
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
@@ -392,6 +394,9 @@ function CampaignInbox({ review, onClose, onChanged }: { review: Review; onClose
                 <Button appearance="subtle" size="small" disabled={!active || busy || pending === 0} onClick={() => void decide('revoke', { all: true })}>Revoke all remaining</Button>
                 <Button appearance="subtle" size="small" icon={<PeopleTeam20Regular />} disabled={busy} onClick={() => setDelegateOpen(true)}>Delegate</Button>
                 <Button appearance="subtle" size="small" icon={<Timer20Regular />} disabled={!active || busy} onClick={() => void close()}>Close campaign</Button>
+                <Tooltip content="Signed, hash-chained evidence record for this campaign — download as JSON or a readable summary" relationship="label">
+                  <Button appearance="subtle" size="small" icon={<ShieldCheckmark20Regular />} onClick={() => setEvidenceOpen(true)}>Evidence pack</Button>
+                </Tooltip>
               </div>
 
               {note && <MessageBar intent="success"><MessageBarBody>{note}</MessageBarBody></MessageBar>}
@@ -444,6 +449,10 @@ function CampaignInbox({ review, onClose, onChanged }: { review: Review; onClose
         </DialogBody>
       </DialogSurface>
     </Dialog>
+
+      {evidenceOpen && (
+        <AccessReviewEvidenceDialog campaignId={review.id} campaignName={review.name} onClose={() => setEvidenceOpen(false)} />
+      )}
 
       {delegateOpen && (
         <Dialog open onOpenChange={(_, d) => { if (!d.open) setDelegateOpen(false); }}>
