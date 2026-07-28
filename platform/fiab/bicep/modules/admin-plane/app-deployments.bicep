@@ -168,6 +168,15 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               // target-resolution hot path (a cold walk measured 22.9s).
               { name: 'LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS', value: '8000' }
               { name: 'LOOM_FOUNDRY_CONNECTIONS_TTL_MS', value: '300000' }
+              // Wider budgets for the "Add existing Azure resource" browser
+              // (app/api/azure/connectables): a cross-subscription control-plane
+              // sweep legitimately takes 20-35s on a large tenant, so it gets its
+              // own ceilings rather than the shared 15s (#2582). A breach here
+              // answers `code:'paging_timeout'` — never the grant-Reader
+              // `no_access` gate, which is what a premature abort used to
+              // produce. Both match the in-code defaults.
+              { name: 'LOOM_CONNECTABLES_ARG_BUDGET_MS', value: '20000' }
+              { name: 'LOOM_CONNECTABLES_ARM_BUDGET_MS', value: '40000' }
               // Deployment planner cost estimator → public Azure Retail Prices
               // API. Empty = default prices.azure.com (no auth, Commercial cloud).
               // Read only by the Console app; ignored elsewhere.

@@ -39,6 +39,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import crypto from 'node:crypto';
 import { armBase, armScope, graphBase, graphScope } from './cloud-endpoints';
 import { workspaceRolesContainer } from './cosmos-client';
+import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 import {
   ROLE_TO_RBAC,
   pickHighestRole,
@@ -508,22 +509,41 @@ async function graphUserInGroup(token: string, groupId: string, userId: string):
   }
   // Fallback: enumerate transitive members (covers tenants where the direct
   // membership-by-id check is not permitted on the resource type).
-  let next: string | null =
+  //
+  // BOUNDED by a PagingBudget (#2557/#2582): the old `guard < 50` capped pages
+  // only, and 50 Graph pages x the 30s per-request ceiling is 25 minutes of
+  // unbounded await on the authorization path. `runPage` hands each page the
+  // walk's remaining wall clock and absorbs the resulting abort.
+  //
+  // TRUNCATION IS DELIBERATELY FAIL-CLOSED HERE, and that is the one place the
+  // "truncate, keep the rows" reflex must not become "assume the answer". This
+  // is an AUTHORIZATION check: returning true on a partial list would grant a
+  // role from a membership we never actually saw. So a truncated walk answers
+  // `false` — identical to this function's existing posture for a Graph error
+  // or a non-404 status — and `warnIfTruncated` logs the honest cause so the
+  // deadline is diagnosable as a deadline, not silently read as "not a member".
+  const budget = new PagingBudget(`graph transitiveMembers ${groupId}`);
+  let next: string =
     `${graphBase()}/groups/${groupId}/transitiveMembers?$select=id&$top=999&$count=true`;
-  let guard = 0;
-  while (next && guard < 50) {
-    guard += 1;
-    const res: Response = await fetchWithTimeout(next, {
+  let scanned = 0;
+  while (budget.claimPage()) {
+    const res = await budget.runPage((timeoutMs) => fetchWithTimeout(next, {
       headers: { authorization: `Bearer ${token}`, accept: 'application/json', ConsistencyLevel: 'eventual' },
       cache: 'no-store',
-    });
+    }, timeoutMs));
+    if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch
     if (!res.ok) return false;
     const json: any = await res.json();
     for (const m of json?.value || []) {
+      scanned += 1;
       if (m?.id === userId) return true;
     }
-    next = json?.['@odata.nextLink'] || null;
+    if (!json?.['@odata.nextLink']) break; // finished cleanly — NOT a truncation
+    next = json['@odata.nextLink'];
   }
+  // Only reachable without a match. A truncation here means "we never finished
+  // looking", so say so loudly; the returned `false` stays fail-closed.
+  budget.warnIfTruncated(scanned);
   return false;
 }
 

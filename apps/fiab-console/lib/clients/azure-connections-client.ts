@@ -50,6 +50,8 @@ import { loomSubscriptionScope } from '@/lib/azure/loom-subscriptions';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/storage-discovery';
 import { azureConnectionsContainer } from '@/lib/azure/cosmos-client';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { walkPagedList, type PagedEnvelope } from '@/lib/azure/paging-budget';
 
 // ---------------------------------------------------------------------------
 // Built-in role GUIDs (global across every Azure cloud).
@@ -178,13 +180,15 @@ async function armToken(): Promise<string> {
   return t.token;
 }
 
-async function armGet<T = any>(pathOrUrl: string): Promise<T> {
+async function armGet<T = any>(pathOrUrl: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${armBase()}${pathOrUrl}`;
-  const res = await fetch(url, {
+  // fetchWithTimeout, not bare fetch: this runs on a BFF request path, and an
+  // ARM round-trip with NO deadline is the unbounded await #2557 exists to kill.
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = text; }
@@ -195,17 +199,18 @@ async function armGet<T = any>(pathOrUrl: string): Promise<T> {
   return (json as T) ?? ({} as T);
 }
 
+/**
+ * Walk an ARM `nextLink` list BOUNDED by the shared paging budget (page cap +
+ * wall clock, #2557/#2582). The old `guard < 50` bounded pages only. A deadline
+ * inside a page fetch truncates (rows kept) instead of throwing, so the "Add
+ * existing Azure" picker degrades to a shorter list rather than surfacing a
+ * slow ARM as "no resources found".
+ */
 async function armList<T = any>(firstPath: string): Promise<T[]> {
-  const out: T[] = [];
-  let next: string | null = firstPath;
-  let guard = 0;
-  while (next && guard < 50) {
-    guard += 1;
-    const page: { value?: T[]; nextLink?: string } = await armGet(stripArmBase(next));
-    if (Array.isArray(page.value)) out.push(...page.value);
-    next = page.nextLink || null;
-  }
-  return out;
+  return walkPagedList<T>(
+    `azure-connections ${firstPath.split('?')[0]}`,
+    (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), timeoutMs),
+  );
 }
 
 function subscriptionIds(): string[] {

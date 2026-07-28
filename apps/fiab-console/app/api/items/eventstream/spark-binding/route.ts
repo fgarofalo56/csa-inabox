@@ -22,7 +22,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { apiServerError } from '@/lib/api/respond';
-import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   resolveSparkStreamingBinding,
@@ -30,35 +29,43 @@ import {
   type SparkStreamingBinding,
 } from '@/lib/admin/platform-settings';
 import { armGet } from '@/lib/azure/arm-client';
+import { walkPagedList } from '@/lib/azure/paging-budget';
 import { listDatabricksWorkspaces } from '@/lib/azure/databricks-discovery';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const SYNAPSE_API = '2021-06-01';
 
-/** Real ARM list of Synapse workspaces in the deployment subscription. */
+/**
+ * Real ARM list of Synapse workspaces in the deployment subscription.
+ *
+ * BOUNDED by the shared paging budget (#2557/#2582): the old `guard < 20`
+ * capped pages only, and 20 pages x the 30s per-request ceiling is 10 minutes
+ * inside a route whose own `maxDuration` is far smaller. A deadline inside a
+ * page fetch truncates (workspaces already collected are kept) instead of
+ * throwing, so a slow ARM never renders as "no Synapse workspaces exist" — the
+ * binding picker would then push the operator to provision a duplicate.
+ */
 async function listSynapseWorkspaces(): Promise<Array<{ name: string; id: string }>> {
   const sub = (process.env.LOOM_SUBSCRIPTION_ID || '').trim();
   if (!sub) return [];
-  const out: Array<{ name: string; id: string }> = [];
-  let path: string | null = `/subscriptions/${sub}/providers/Microsoft.Synapse/workspaces?api-version=${SYNAPSE_API}`;
-  let guard = 0;
-  while (path && guard < 20) {
-    guard += 1;
-    const page: { value?: Array<{ name?: string; id?: string }>; nextLink?: string } = await armGet(path);
-    for (const w of page.value || []) {
-      if (w?.name && w?.id) out.push({ name: w.name, id: w.id });
-    }
-    path = page.nextLink ? page.nextLink.replace(/^https?:\/\/[^/]+/i, '') : null;
-  }
+  const first = `/subscriptions/${sub}/providers/Microsoft.Synapse/workspaces?api-version=${SYNAPSE_API}`;
+  const rows = await walkPagedList<{ name?: string; id?: string }>(
+    'spark-binding synapse workspaces',
+    // nextLink is absolute; strip the host so armGet re-prefixes the ARM base.
+    (next, timeoutMs) => armGet(next ? next.replace(/^https?:\/\/[^/]+/i, '') : first, timeoutMs),
+    { maxPages: 20 },
+  );
+  const out = rows
+    .filter((w): w is { name: string; id: string } => !!(w?.name && w?.id))
+    .map((w) => ({ name: w.name, id: w.id }));
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const admin = isTenantAdmin(session);
   try {
     const binding = await resolveSparkStreamingBinding();
@@ -92,11 +99,9 @@ export async function GET(req: NextRequest) {
   } catch (e: unknown) {
     return apiServerError(e, 'failed to resolve the Spark streaming binding', 'spark_binding_resolve_failed');
   }
-}
+});
 
-export async function PUT(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession(async (req: NextRequest, { session }) => {
   if (!isTenantAdmin(session)) {
     return NextResponse.json(
       { ok: false, error: 'forbidden — binding the Spark streaming workspace is admin-only' },
@@ -122,4 +127,4 @@ export async function PUT(req: NextRequest) {
   } catch (e: unknown) {
     return apiServerError(e, 'failed to save the Spark streaming binding', 'spark_binding_save_failed');
   }
-}
+});

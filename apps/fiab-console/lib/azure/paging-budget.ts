@@ -357,9 +357,12 @@ export async function walkPagedListResult<T = any>(
  *
  * Most ARM pagers in the console route through here or a hand-rolled
  * {@link PagingBudget} loop, so the bound is defined once rather than
- * re-derived per client — see #2557. It is NOT yet universal: the residual
- * page-capped-but-not-time-capped pagers are listed in that issue and adopt
- * this helper as they are next touched.
+ * re-derived per client — see #2557, and #2582 for the residual page-capped
+ * batch (the discovery clients, `monitor-client`, `cmk-client`,
+ * `kv-secrets-client`, `iothub-client`, the Graph membership walks, and the
+ * `api/azure/connectables` / `spark-binding` routes). The remaining
+ * un-clocked walks are the ARG `$skipToken` loops named in
+ * `docs/fiab/arm-paging-budget.md` — they adopt this when next touched.
  */
 export async function walkPagedList<T = any>(
   label: string,

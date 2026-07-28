@@ -32,6 +32,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, getLogAnalyticsHost, logAnalyticsTokenScope } from './cloud-endpoints';
+import { PagingBudget, PAGE_DEADLINE, walkPagedList } from './paging-budget';
 import {
   loomResourceGroupScopes,
   loomSubscriptionScope,
@@ -221,13 +222,13 @@ async function token(scope: string): Promise<string> {
   return t.token;
 }
 
-async function armGet(path: string): Promise<any> {
+async function armGet(path: string, timeoutMs?: number): Promise<any> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
   const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
     cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
@@ -236,6 +237,21 @@ async function armGet(path: string): Promise<any> {
     throw new MonitorError(msg, res.status, json || text);
   }
   return json;
+}
+
+/**
+ * Walk an ARM `nextLink` list BOUNDED by the shared paging budget (page cap +
+ * wall clock, #2557/#2582). Every hand-rolled `guard < N` in this module capped
+ * PAGES only — N pages x the 30s per-request ceiling is minutes of unbounded
+ * await on a request path. A deadline inside a page fetch truncates (rows kept)
+ * instead of throwing a `MonitorError` a caller would show as "no data".
+ */
+async function armPagedList<T = any>(
+  label: string,
+  firstPath: string,
+  maxPages: number,
+): Promise<T[]> {
+  return walkPagedList<T>(label, (next, timeoutMs) => armGet(next ?? firstPath, timeoutMs), { maxPages });
 }
 
 async function armPut(path: string, body: unknown): Promise<any> {
@@ -257,7 +273,7 @@ async function armPut(path: string, body: unknown): Promise<any> {
   return json;
 }
 
-async function armPost(path: string, body: unknown): Promise<{ status: number; json: any; operationLocation?: string }> {
+async function armPost(path: string, body: unknown, timeoutMs?: number): Promise<{ status: number; json: any; operationLocation?: string }> {
   const tk = await token(ARM_SCOPE);
   const url = path.startsWith('http') ? path : `${ARM}${path}`;
   const res = await fetchWithTimeout(url, {
@@ -265,7 +281,7 @@ async function armPost(path: string, body: unknown): Promise<{ status: number; j
     headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body),
     cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
@@ -480,16 +496,21 @@ async function resourceHealthViaResourceGraph(
     '    OccurredTime = tostring(properties.occurredTime)',
   ].join('\n');
 
+  // `$skipToken` paging, bounded by pages AND wall clock (#2582). `runPage`
+  // absorbs our own deadline so a slow ARG truncates to the rows already read
+  // (the caller then falls back to the crawl) rather than throwing.
+  const budget = new PagingBudget(`resource-health ARG ${subscriptionId}`, { maxPages: 20 });
   let skipToken: string | undefined;
-  let guard = 0;
-  do {
-    guard++;
+  while (budget.claimPage()) {
     const options: Record<string, unknown> = { resultFormat: 'objectArray' };
     if (skipToken) options.$skipToken = skipToken;
-    const { json } = await armPost(
+    const page = await budget.runPage((timeoutMs) => armPost(
       `/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
       { subscriptions: [subscriptionId], query, options },
-    );
+      timeoutMs,
+    ));
+    if (page === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
+    const json = page.json;
     const data: any[] = Array.isArray(json?.data) ? json.data : [];
     for (const row of data) {
       const resourceId = String(row?.ResourceId || '').toLowerCase();
@@ -503,7 +524,9 @@ async function resourceHealthViaResourceGraph(
       };
     }
     skipToken = (json?.$skipToken as string) || undefined;
-  } while (skipToken && guard < 20);
+    if (!skipToken) break; // finished cleanly — NOT a truncation
+  }
+  budget.warnIfTruncated(Object.keys(out).length);
   return out;
 }
 
@@ -517,28 +540,25 @@ async function resourceHealthViaCrawl(
   subscriptionId: string,
 ): Promise<Record<string, ResourceHealthStatus>> {
   const out: Record<string, ResourceHealthStatus> = {};
-  let next: string | null =
-    `/subscriptions/${subscriptionId}/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=${RESOURCE_HEALTH_API}`;
-  let guard = 0;
-  while (next && guard < 20) {
-    guard++;
-    const j: any = await armGet(next);
-    for (const s of j?.value || []) {
-      const props = s?.properties || {};
-      // availabilityStatuses id looks like {resourceId}/providers/Microsoft.ResourceHealth/availabilityStatuses/current
-      const resourceId = (s?.id || '').replace(
-        /\/providers\/Microsoft\.ResourceHealth\/availabilityStatuses\/.*/i,
-        '',
-      );
-      out[resourceId.toLowerCase()] = {
-        resourceId,
-        availabilityState: props.availabilityState || 'Unknown',
-        summary: props.summary,
-        reasonType: props.reasonType,
-        occurredTime: props.occurredTime,
-      };
-    }
-    next = j?.nextLink || null;
+  const rows = await armPagedList<any>(
+    `resource-health crawl ${subscriptionId}`,
+    `/subscriptions/${subscriptionId}/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=${RESOURCE_HEALTH_API}`,
+    20,
+  );
+  for (const s of rows) {
+    const props = s?.properties || {};
+    // availabilityStatuses id looks like {resourceId}/providers/Microsoft.ResourceHealth/availabilityStatuses/current
+    const resourceId = (s?.id || '').replace(
+      /\/providers\/Microsoft\.ResourceHealth\/availabilityStatuses\/.*/i,
+      '',
+    );
+    out[resourceId.toLowerCase()] = {
+      resourceId,
+      availabilityState: props.availabilityState || 'Unknown',
+      summary: props.summary,
+      reasonType: props.reasonType,
+      occurredTime: props.occurredTime,
+    };
   }
   return out;
 }
@@ -1051,13 +1071,15 @@ async function _listActivityLog(
         `eventTimestamp ge '${startTime}' and eventTimestamp le '${endTime}' and resourceGroupName eq '${rg}'`;
       const qs = new URLSearchParams({ 'api-version': ACTIVITY_LOG_API });
       // $filter / $select OData params: encode values, leave the operators readable.
-      let next: string | null =
+      // Bounded by pages, ROWS, and wall clock (#2582). The row cap is why this
+      // is a hand-rolled budget loop rather than `armPagedList`.
+      const budget = new PagingBudget(`activity-log ${rg}`, { maxPages: 10 });
+      let next: string =
         `/subscriptions/${sub}/providers/Microsoft.Insights/eventtypes/management/values?${qs.toString()}&$filter=${encodeURIComponent(filter)}&$select=${select}`;
-      let guard = 0;
       let taken = 0;
-      while (next && guard < 10 && taken < maxPerRg) {
-        guard++;
-        const j: any = await armGet(next);
+      while (taken < maxPerRg && budget.claimPage()) {
+        const j = await budget.runPage((timeoutMs) => armGet(next, timeoutMs));
+        if (j === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
         for (const e of j?.value || []) {
           if (taken >= maxPerRg) break;
           taken++;
@@ -1074,8 +1096,10 @@ async function _listActivityLog(
             correlationId: e.correlationId,
           });
         }
-        next = j?.nextLink || null;
+        if (!j?.nextLink) break; // finished cleanly — NOT a truncation
+        next = j.nextLink;
       }
+      budget.warnIfTruncated(taken);
     }),
   );
   events.sort((a, b) => new Date(b.eventTimestamp).getTime() - new Date(a.eventTimestamp).getTime());
@@ -1230,33 +1254,30 @@ export async function listAlertHistory(opts?: {
   });
   // alertRule filters by the rule name (essentials.alertRule is the name).
   if (opts?.alertRule) qs.set('alertRule', opts.alertRule);
-  let next: string | null =
-    `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.AlertsManagement/alerts?${qs.toString()}`;
+  const rows = await armPagedList<any>(
+    'alert history',
+    `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.AlertsManagement/alerts?${qs.toString()}`,
+    5,
+  );
   const out: AlertHistoryEvent[] = [];
-  let guard = 0;
-  while (next && guard < 5) {
-    guard++;
-    const j: any = await armGet(next);
-    for (const a of j?.value || []) {
-      const ess = a?.properties?.essentials || {};
-      // Belt-and-suspenders: if a rule filter was requested, keep only matching
-      // instances (in case the service ignores an unknown filter format).
-      if (opts?.alertRule && ess.alertRule && ess.alertRule !== opts.alertRule) continue;
-      out.push({
-        id: a.name || a.id,
-        alertRule: ess.alertRule || '',
-        monitorCondition: ess.monitorCondition || '',
-        alertState: ess.alertState || '',
-        severity: ess.severity,
-        startDateTime: ess.startDateTime || '',
-        lastModifiedDateTime: ess.lastModifiedDateTime,
-        monitorConditionResolvedDateTime: ess.monitorConditionResolvedDateTime,
-        targetResourceName: ess.targetResourceName,
-        targetResourceGroup: ess.targetResourceGroup,
-        payload: extractAlertPayload(a?.properties),
-      });
-    }
-    next = j?.nextLink || null;
+  for (const a of rows) {
+    const ess = a?.properties?.essentials || {};
+    // Belt-and-suspenders: if a rule filter was requested, keep only matching
+    // instances (in case the service ignores an unknown filter format).
+    if (opts?.alertRule && ess.alertRule && ess.alertRule !== opts.alertRule) continue;
+    out.push({
+      id: a.name || a.id,
+      alertRule: ess.alertRule || '',
+      monitorCondition: ess.monitorCondition || '',
+      alertState: ess.alertState || '',
+      severity: ess.severity,
+      startDateTime: ess.startDateTime || '',
+      lastModifiedDateTime: ess.lastModifiedDateTime,
+      monitorConditionResolvedDateTime: ess.monitorConditionResolvedDateTime,
+      targetResourceName: ess.targetResourceName,
+      targetResourceGroup: ess.targetResourceGroup,
+      payload: extractAlertPayload(a?.properties),
+    });
   }
   return out;
 }

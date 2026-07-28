@@ -20,6 +20,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { kvScope, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
+import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -220,14 +221,20 @@ export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef
   const base = certVaultUrl();
   if (!base) throw new KeyVaultError('Eventstream cert Key Vault not configured (LOOM_EVENTSTREAM_CERT_VAULT)', 503);
   const out: KeyVaultCertificateRef[] = [];
-  let next: string | null = `${base}/certificates?api-version=${KV_API}`;
-  // Follow KV paging (`nextLink`) so vaults with many certs return all of them.
-  let guard = 0;
-  while (next && guard++ < 50) {
-    const res: Response = await fetchWithTimeout(next, {
+  // Follow KV paging (`nextLink`) so vaults with many certs return all of them —
+  // BOUNDED by a PagingBudget (#2557/#2582). The old `guard < 50` capped pages
+  // only; the wall clock is handed to each page's fetch through `runPage`, and a
+  // breach INSIDE a fetch truncates (certs already read are kept, so the picker
+  // still populates) rather than throwing a KeyVaultError the dialog would show
+  // as "no certificates in this vault".
+  const budget = new PagingBudget('key-vault certificates');
+  let next: string = `${base}/certificates?api-version=${KV_API}`;
+  while (budget.claimPage()) {
+    const res = await budget.runPage(async (timeoutMs) => fetchWithTimeout(next, {
       headers: { authorization: `Bearer ${await token()}` },
       cache: 'no-store',
-    });
+    }, timeoutMs));
+    if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       throw new KeyVaultError(`Key Vault list-certificates failed (${res.status}): ${body.slice(0, 300)}`, res.status);
@@ -244,8 +251,10 @@ export async function listKeyVaultCertificates(): Promise<KeyVaultCertificateRef
         expires: c?.attributes?.exp ? new Date(c.attributes.exp * 1000).toISOString() : undefined,
       });
     }
-    next = typeof j?.nextLink === 'string' ? j.nextLink : null;
+    if (typeof j?.nextLink !== 'string' || !j.nextLink) break; // finished cleanly
+    next = j.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 

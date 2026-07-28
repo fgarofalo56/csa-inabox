@@ -41,12 +41,13 @@ function armUrl(path: string): string {
   return `${armBase()}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
-async function armFetch(path: string, init?: RequestInit): Promise<Response> {
+async function armFetch(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token');
   // Per-request timeout so a hung ARM call can't make the BFF route (and the
   // page) spin forever. 202 LROs are polled by the caller; each poll round-trip
-  // inherits this same per-request ceiling.
+  // inherits this same per-request ceiling. `timeoutMs` lets a PagingBudget hand
+  // a nextLink walk's REMAINING wall clock down to one page (#2557/#2582).
   return fetchWithTimeout(armUrl(path), {
     ...init,
     headers: {
@@ -54,7 +55,7 @@ async function armFetch(path: string, init?: RequestInit): Promise<Response> {
       authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
 }
 
 async function jsonOrThrow<T = any>(res: Response, label: string): Promise<T> {
@@ -67,8 +68,8 @@ async function jsonOrThrow<T = any>(res: Response, label: string): Promise<T> {
 }
 
 /** GET an ARM resource by bare path (api-version included by the caller). */
-export async function armGet<T = any>(path: string): Promise<T> {
-  return jsonOrThrow<T>(await armFetch(path), `GET ${path}`);
+export async function armGet<T = any>(path: string, timeoutMs?: number): Promise<T> {
+  return jsonOrThrow<T>(await armFetch(path, undefined, timeoutMs), `GET ${path}`);
 }
 
 /** PATCH an ARM resource by bare path. */

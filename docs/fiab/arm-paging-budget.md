@@ -95,7 +95,7 @@ collected, which is the fix defeating itself.
 
 ## Operator knobs
 
-All four are optional tuning knobs with code defaults — nothing gates on them
+All six are optional tuning knobs with code defaults — nothing gates on them
 (`default-ON / opt-out`). They are read **per walk**, not once at module load,
 so raising one takes effect on the next request without a container restart.
 They are set to their defaults in
@@ -108,6 +108,8 @@ can retune them per sovereign region.
 | `LOOM_ARM_PAGING_BUDGET_MS` | `15000` | Wall clock for a whole walk. Deliberately **half** `LOOM_SERVER_FETCH_TIMEOUT_MS` so a multi-page list can't out-live the single request it is made of by more than 1x, and well inside a BFF route's 60 s `maxDuration`. |
 | `LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS` | `8000` | Tighter wall clock for the Foundry `/connections` walk (Copilot hot path; also 10 pages, not 50). |
 | `LOOM_FOUNDRY_CONNECTIONS_TTL_MS` | `300000` | How long a **complete** `/connections` walk is memoized in-process. A truncated walk is never memoized. |
+| `LOOM_CONNECTABLES_ARG_BUDGET_MS` | `20000` | Wall clock for the `/api/azure/connectables` Resource-Graph fast path (`$skipToken`). Before #2582 this walk had **no** ceiling at all — a bare `fetch`. |
+| `LOOM_CONNECTABLES_ARM_BUDGET_MS` | `40000` | Wall clock for the same route's cross-subscription ARM control-plane sweep. Wider than the shared 15 s on purpose: that sweep legitimately takes 20-35 s on a large tenant and must stay `>=` the client's own 40 s `CONNECTABLES_TIMEOUT_MS`. |
 
 ### Reading the warn line
 
@@ -139,12 +141,54 @@ can't use `walkPagedList`). That is not optional polish: handing `remainingMs()`
 to `fetchWithTimeout` without absorbing the resulting `FetchTimeoutError` leaves
 the loop **throwing** on a deadline, which is the opposite of the contract above.
 
-**Not yet** — these carry a `guard < N` page cap but no wall clock. They cannot
-spin forever; they can still be slow, and they adopt the budget when next
-touched: `databricks-discovery`, `iothub-client`, `kv-secrets-client`,
-`monitor-client` (x3), `network-discovery`, `storage-discovery`,
-`workspace-roles-client`, `azure-connections-client`, `cmk-client` (x2),
-`api/azure/connectables` (x2), `api/items/eventstream/spark-binding`.
+### The residual pagers — closed by [#2582](https://github.com/fgarofalo56/csa-inabox/issues/2582)
+
+#2568 left fourteen pagers carrying only a hand-rolled `guard < N`. They could
+not spin forever, but N pages x the 30 s per-request ceiling is minutes, and a
+breach in them was shaped as "stop at N pages", never as a deadline. All now
+walk under the budget:
+
+| Site | Walk | Note |
+|---|---|---|
+| `databricks-discovery` | `armList` | → `walkPagedList` |
+| `network-discovery` | `armList` + **2 ARG `$skipToken` walks** | the ARG walks were unlisted |
+| `storage-discovery` | `armList` | → `walkPagedList` |
+| `azure-connections-client` | `armList` | also swapped a bare `fetch` for `fetchWithTimeout` |
+| `iothub-client` | consumer groups | hand-rolled budget loop |
+| `kv-secrets-client` | certificates | hand-rolled budget loop |
+| `cmk-client` | keys, key versions | also swapped a bare `fetch` for `fetchWithTimeout` |
+| `monitor-client` | resource-health ARG, resource-health crawl, activity log, alert history | four, not three |
+| `workspace-roles-client` | Graph `transitiveMembers` | **fail-closed** — see below |
+| `graph-identity-client` | `getGroupTransitiveMembers` | unlisted |
+| `api/azure/connectables` | subscriptions list, per-type list, **ARG `$skipToken`** | the ARG walk had NO ceiling at all |
+| `api/items/eventstream/spark-binding` | Synapse workspaces | the route `.catch(() => [])`s this, so a throw silently blanked the picker |
+
+Two call sites needed more than a budget:
+
+- **`workspace-roles-client.graphUserInGroup` is deliberately fail-closed.**
+  It is an authorization check, so "truncate and keep the rows" must not become
+  "assume the answer": returning `true` off a list we never finished reading
+  would grant a role from a membership we never saw. A truncated walk therefore
+  answers `false` — the same posture the function already had for a Graph error
+  — and `warnIfTruncated` logs the honest cause so the deadline is diagnosable
+  rather than silently mis-denying.
+- **`api/azure/connectables` used to report a deadline as a missing role.** Its
+  only empty-handed answer was `code:'no_access'`, whose message tells the
+  operator to admin-consent the app registration and grant the UAMI Reader at
+  the tenant root. A slow ARM that aborted mid-enumeration produced exactly that
+  — the route's own comment records the incident, band-aided by raising the
+  timeout from 25 s to 40 s rather than by telling the two states apart. The
+  truncation is now carried out of `runArg` / `runArmList` and an
+  empty-but-truncated result answers `code:'paging_timeout'`, naming the
+  deadline and the knob. A truncated walk that DID collect rows returns them
+  with `truncated: 'time' | 'pages'` — found-in-a-truncated-list is a good
+  answer (see *Completeness is the last question* above).
+
+**Still unbounded on the wall clock** — the same ARG `$skipToken` shape, in
+files this change did not otherwise touch. They keep a `guard < N` page cap and
+adopt the budget when next touched: `network-topology-graph`,
+`topology-inventory`, `api/admin/security/purview/discover`,
+`api/landing-zones/discover`, `api/setup/existing-dlzs`.
 
 ## Tests
 
@@ -152,6 +196,8 @@ touched: `databricks-discovery`, `iothub-client`, `kv-secrets-client`,
 |---|---|
 | `lib/azure/__tests__/paging-budget.test.ts` | Budget arithmetic; an endless pager stops on the page cap; a **hanging** pager (one that only settles on `AbortSignal`) truncates mid-fetch and the caller keeps the rows already collected; `requireComplete` raises a `PagingDeadlineError`; a foreign 30 s timeout still propagates; **neither** truncation kind is memoized, so no consumer is served another consumer's partial list. |
 | `lib/azure/__tests__/paging-budget-handrolled.test.ts` | One case per hand-rolled `PagingBudget` loop (`aml-client.listJobs`, `aml-automl-client.listAutoMlJobs`, `eventhubs-client` `armList`, both `eventgrid-topics-client` walks, `synapse-artifacts-client` `listAll`): a deadline landing inside the page fetch truncates and returns page 1's rows instead of rejecting. |
+| `lib/azure/__tests__/paging-budget-residual.test.ts` | The #2582 batch — one case per residual pager, each against a stub whose page 2 settles ONLY on `AbortSignal`, plus a shared `afterEach` assertion that a second fetch was actually issued (proof the MID-FETCH branch ran, not the loop top — a stub that ignores the signal makes that branch unreachable and the test vacuous). Includes the fail-closed `workspace-roles` case: a truncated authz walk answers `false` AND logs the `[paging-budget]` line. |
+| `app/api/azure/__tests__/connectables-route.test.ts` | A hanging ARM answers `code:'paging_timeout'` (never `no_access`, never "grant Reader"); a truncated walk that DID collect rows returns them flagged `truncated`; a genuinely empty estate still gets the honest `no_access` gate. |
 | `lib/azure/__tests__/ttl-memo.test.ts` | De-dupe, no error caching, TTL expiry, and the invalidate-during-in-flight race. |
 | `lib/azure/__tests__/aoai-discovery-deadline.test.ts` | A paging deadline surfaces as `AoaiDiscoveryTimeoutError`, never as "deploy a gpt-4o model first"; a genuinely empty hub still gets the honest `NoAoaiDeploymentError` gate. |
 | `lib/azure/__tests__/aoai-discovery-truncated-walk.test.ts` | Over the real client + a stubbed slow ARM: an AOAI connection already collected by a truncated walk RESOLVES; one absent from a truncated walk raises the deadline; one absent from a **complete** walk still raises the honest deploy-a-model gate. |

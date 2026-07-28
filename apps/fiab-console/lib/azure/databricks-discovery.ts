@@ -38,6 +38,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
+import { walkPagedList, type PagedEnvelope } from './paging-budget';
 
 const ARM_SCOPE = armScope();
 const SUBSCRIPTIONS_API = '2022-12-01';
@@ -88,7 +89,7 @@ async function armToken(): Promise<string> {
   return t.token;
 }
 
-async function armGet<T = any>(path: string): Promise<T> {
+async function armGet<T = any>(path: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
   const url = `${armBase()}${path}`;
   const res = await fetchWithTimeout(url, {
@@ -97,7 +98,7 @@ async function armGet<T = any>(path: string): Promise<T> {
       accept: 'application/json',
     },
     cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = text; }
@@ -109,21 +110,21 @@ async function armGet<T = any>(path: string): Promise<T> {
   return (json as T) ?? ({} as T);
 }
 
-/** Page through an ARM list endpoint that uses `nextLink` continuation. */
+/**
+ * Page through an ARM list endpoint that uses `nextLink` continuation —
+ * BOUNDED by the shared {@link walkPagedList} budget (page cap + wall clock,
+ * #2557/#2582). The old `guard < 50` literal capped PAGES only; 50 pages x the
+ * 30s per-request ceiling is still 25 minutes of unbounded await on a request
+ * path. The remaining wall clock is handed down as each page's `timeoutMs`, so
+ * a deadline landing inside the FIRST page fetch truncates (rows kept) instead
+ * of throwing — a caller must never read a slow ARM as "no workspaces exist".
+ */
 async function armList<T = any>(firstPath: string): Promise<T[]> {
-  const out: T[] = [];
-  let next: string | null = firstPath;
-  let guard = 0;
-  while (next && guard < 50) {
-    guard += 1;
+  return walkPagedList<T>(
+    `databricks-discovery ${firstPath.split('?')[0]}`,
     // nextLink is an absolute URL; strip the host so armGet can re-prefix it.
-    const path: string = stripArmBase(next);
-    const page: { value?: T[]; nextLink?: string } =
-      await armGet<{ value?: T[]; nextLink?: string }>(path);
-    if (Array.isArray(page.value)) out.push(...page.value);
-    next = page.nextLink || null;
-  }
-  return out;
+    (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), timeoutMs),
+  );
 }
 
 /** Subscriptions to scan for Databricks workspaces.
