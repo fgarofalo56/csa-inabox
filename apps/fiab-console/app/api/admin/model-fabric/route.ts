@@ -19,6 +19,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin, enforceCapability } from '@/lib/auth/feature-gate';
 import { apiOk, apiError, apiServerError, apiUnauthorized } from '@/lib/api/respond';
 import { runModelFabricLoop, loadFabricState, setFabricMode, type FabricMode } from '@/lib/admin/model-fabric-loop';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,6 +43,13 @@ export async function GET() {
       actorOid: session.claims.oid,
       mode: 'propose',
       persist: false,
+      // The reasoning tier is configured per-TENANT (modelTiers.strong in the
+      // copilot config), so the loop MUST be given that config. Without it
+      // `tierCfg` was undefined, `reasoningTierConfigured(null)` returned false,
+      // and the panel reported "reasoning tier not set" + refused to promote
+      // even on a tenant that HAD set modelTiers.strong. Verified live: config
+      // held {strong:'gpt-5.6-sol'} while the loop reported currentStrong=null.
+      tierCfg: await loadTenantCopilotConfig(tenantId),
     });
     // Surface the PERSISTED approval mode (not the dry-run's 'propose').
     return apiOk({ ...loop, mode: state.mode }) as NextResponse;
