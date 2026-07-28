@@ -52,6 +52,10 @@ export interface EntraBearerClaims {
   upn?: string;
   /** Raw audience. */
   audience: string;
+  /** Delegated scopes (`scp`), split. Empty for an app-only token. */
+  scopes: string[];
+  /** App roles (`roles`). Empty for a delegated token. */
+  roles: string[];
   /** Expiry (epoch seconds). */
   expiresAt: number;
 }
@@ -134,6 +138,27 @@ export interface VerifyEntraBearerOptions {
   audiences: string[];
   /** Override the estate tenant (tests / multi-tenant callers). */
   tenantId?: string;
+  /**
+   * Accept ID tokens as well as access tokens. DEFAULT false, and callers that
+   * authorize data access must leave it false.
+   *
+   * An ID token is minted for the CLIENT (aud = the app registration's client id
+   * or App ID URI) as proof of who signed in — it is not an authorization to call
+   * an API. Because a Console-audience ID token and a Console-audience access
+   * token have the same `iss`/`aud`/`exp` shape, signature+audience verification
+   * alone cannot tell them apart, so an ordinary interactive sign-in to the
+   * Console would otherwise mint a credential accepted at the data-export
+   * endpoint. The discriminator used here is the one Entra actually guarantees:
+   * an access token carries `scp` (delegated) or `roles` (app-only); an ID token
+   * carries neither, and carries `nonce` when it came from an interactive flow.
+   */
+  allowIdTokens?: boolean;
+  /**
+   * When set, the token must carry at least one of these values in `scp` or
+   * `roles`. Unset = any access token for the pinned audience is accepted (the
+   * audience is then the only authorization surface).
+   */
+  requiredScopes?: string[];
 }
 
 /**
@@ -202,6 +227,31 @@ export async function verifyEntraBearer(
   const aud = String(payload.aud || '');
   if (!audiences.includes(aud)) return { ok: false, status: 401, error: 'token audience mismatch' };
 
+  // ── Token TYPE ──────────────────────────────────────────────────────────
+  // See VerifyEntraBearerOptions.allowIdTokens: iss/aud/exp/signature are
+  // identical between an ID token and an access token for the same app, so the
+  // audience pin alone does NOT keep an interactive sign-in credential out of an
+  // API that authorizes data access.
+  const scopes = typeof payload.scp === 'string'
+    ? payload.scp.split(' ').map((s) => s.trim()).filter(Boolean)
+    : Array.isArray(payload.scp) ? payload.scp.map(String) : [];
+  const roles = Array.isArray(payload.roles) ? payload.roles.map(String) : [];
+  if (!opts.allowIdTokens) {
+    if (payload.nonce !== undefined) {
+      return { ok: false, status: 401, error: 'an ID token is not accepted here — present an access token issued for this API' };
+    }
+    if (!scopes.length && !roles.length) {
+      return { ok: false, status: 401, error: 'an ID token is not accepted here — present an access token issued for this API (it carries scp or roles)' };
+    }
+  }
+  const required = (opts.requiredScopes || []).map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (required.length) {
+    const held = new Set([...scopes, ...roles].map((s) => s.toLowerCase()));
+    if (!required.some((r) => held.has(r))) {
+      return { ok: false, status: 401, error: 'the token does not carry a scope or app role that authorizes this API' };
+    }
+  }
+
   return {
     ok: true,
     claims: {
@@ -210,6 +260,8 @@ export async function verifyEntraBearer(
       tenantId: payload.tid ? String(payload.tid) : undefined,
       upn: payload.upn ? String(payload.upn) : (payload.preferred_username ? String(payload.preferred_username) : undefined),
       audience: aud,
+      scopes,
+      roles,
       expiresAt: exp,
     },
   };

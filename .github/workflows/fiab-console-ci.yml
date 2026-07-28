@@ -275,3 +275,25 @@ jobs:
         # Non-blocking until reviewed captures land — add `--strict` here to enable
         # the blocking gate in the same change that commits the published captures.
         run: node scripts/csa-loom/check-tutorial-coverage.mjs --apps-catalog scripts/csa-loom/fixtures/apps-catalog.json
+
+  # -- LU-9: the out-of-band sharing app's own fail-closed suite -------------
+  #
+  # apps/loom-sharing ships an entrypoint that renders the Delta Sharing
+  # reference server's config and REFUSES TO BOOT without a bearer, with a
+  # corrupt manifest, or with a half-wired storage principal. Those assertions
+  # are the difference between "internal-ingress only" and "an unauthenticated
+  # server holding every published share", so they need a CI lane rather than a
+  # local `node --test` nobody runs. Pure node:test -- no install, no network.
+  loom-sharing:
+    name: loom-sharing entrypoint (node 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Run the entrypoint fail-closed suite
+        working-directory: apps/loom-sharing
+        run: node --test tests/

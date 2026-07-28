@@ -78,8 +78,8 @@ param sharingEndpoint string = '/delta-sharing'
 @description('REQUIRED. Key Vault secret URI (https://<vault>.vault.azure.net/secrets/<name>) holding the Console→server bearer. Wired as a Container Apps SECRET REFERENCE resolved by sharingUamiId — never an inline literal. The container REFUSES TO BOOT without it, because the upstream server treats a missing bearer as "no authentication required", which would expose every published share to anything that can reach the Container Apps environment.')
 param sharingBearerSecretUri string
 
-@description('CIDR ranges allowed to reach this app on top of internal-ingress isolation — normally ONLY the Container Apps environment infrastructure subnet the Console runs in. Empty => no IP rules (internal ingress remains the sole network control). ACA supports Allow-only or Deny-only rule sets; these are emitted as Allow rules, so anything outside them is denied.')
-param consoleAllowedCidrs array = []
+@description('REQUIRED — no default, so the network posture is a decision and not an omission. CIDR ranges allowed to reach this app on top of internal-ingress isolation: normally ONLY the Container Apps environment infrastructure subnet the Console runs in (az containerapp env show --query properties.vnetConfiguration.infrastructureSubnetId, then the subnet's addressPrefix). ACA supports Allow-only or Deny-only rule sets; these are emitted as Allow rules, so anything outside them is denied. Pass [] to deliberately opt out — that leaves internal ingress as the SOLE control, so anything with a route into the Container Apps environment plus the Console's bearer can read every published share (threat-model row E2).')
+param consoleAllowedCidrs array
 
 // ── Shared data (ADLS Gen2 Delta — the SAME lake the lakehouse item writes) ─
 
