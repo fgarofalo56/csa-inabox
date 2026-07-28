@@ -2,16 +2,50 @@ fastapi==0.115.5
 uvicorn[standard]==0.32.1
 pydantic==2.10.3
 # --- dbt (the ecosystem side of the N4 dual-engine runner) --------------------
+#
+# PROTOBUF FENCE — read before touching any pin below.
+#
+# dbt-core 1.8.9 requires `protobuf<6.0,>=5.0`. dbt-databricks was pinned at
+# 1.8.7, which requires `protobuf<5.0.0`. Those are disjoint, so this file was
+# UNRESOLVABLE and the image had never built (ResolutionImpossible at
+# `pip install -r requirements.txt`) — which is why the `svc-transform-runner`
+# gate was never clearable and LOOM_TRANSFORM_RUNNER_URL was never set.
+#
+# dbt-databricks DROPPED its protobuf pin entirely at 1.9.0, so the fix is to
+# move the older side forward. 1.9.0-1.9.7 are NOT usable here: 1.9.0 requires
+# `pydantic<2` (this app is pydantic v2) and the series only relaxes to
+# `pydantic<2.13.0,>=1.10.0` at 1.9.8. 1.9.8 also keeps `dbt-core<1.10.14,
+# >=1.8.7`, so dbt-core stays at 1.8.9 and no other adapter has to move.
+#
+# The `protobuf<6` bound from dbt-core also fences the transitive dbt-adapters /
+# dbt-common: dbt-adapters 1.17.0+ and dbt-common 1.28.0+ moved to
+# `protobuf<7,>=6`, so the resolver deterministically lands on the last
+# protobuf-5 line (dbt-adapters 1.16.3 / dbt-common 1.27.1). That is a real
+# constraint, not luck — which is why those two are left unpinned.
+#
+# dbt-core CANNOT move past 1.8.x here without also moving dbt-synapse, whose
+# newest release is 1.8.5. Synapse is the Azure-native DEFAULT backend
+# (no-fabric-dependency.md), so it is not droppable. Any future dbt-core bump is
+# a coordinated four-adapter change, not a one-line edit.
+#
+# All four adapters below are installed and importable — `/capabilities`
+# reports them from the live import table, so this list and that endpoint
+# cannot drift apart.
 dbt-core==1.8.9
 dbt-synapse==1.8.2
-dbt-databricks==1.8.7
+dbt-databricks==1.9.8
 dbt-duckdb==1.8.4
 dbt-fabric==1.8.7
 # --- SQLMesh (virtual data environments + plan/apply + column-level diff) -----
 # `sqlmesh[web]` is deliberately NOT used: the Loom console IS the UI, and the
 # bundled web app would add a second (unauthenticated) surface inside the VNet.
-sqlmesh==0.132.1
+# It would also drag in `fastapi==0.110.2`, breaking the repo-wide fastapi
+# 0.115.x / starlette <0.42 band (see .github/workflows/test.yml, #2615).
+#
 # SQLMesh reads dbt projects through its dbt adapter shim, so a single project
-# can be planned by either engine (the N4 backend selector).
+# can be planned by either engine (the N4 backend selector). This was previously
+# two lines (`sqlmesh==` plus `sqlmesh[dbt]==`); pip unions extras for the same
+# requirement, so the bare line was a no-op. Collapsed to the one line that
+# actually carries the extra.
 sqlmesh[dbt]==0.132.1
 azure-identity==1.19.0

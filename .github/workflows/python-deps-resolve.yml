@@ -1,0 +1,153 @@
+# Python dependency resolution gate
+#
+# WHY THIS EXISTS
+# ---------------
+# `apps/loom-transform-runner/requirements.txt` was UNRESOLVABLE from the day it
+# landed — dbt-core 1.8.9 requires `protobuf<6.0,>=5.0` while the pinned
+# dbt-databricks 1.8.7 required `protobuf<5.0.0`. `pip install` failed with
+# ResolutionImpossible, so the image never built, so it was never in ACR, so the
+# `svc-transform-runner` gate was never clearable and LOOM_TRANSFORM_RUNNER_URL
+# was never set in the live estate.
+#
+# Nothing caught it for months. The only consumer of these files is a container
+# image build that runs on dispatch, against an ACR, long after the PR merged.
+# A broken pin set is a PR-time defect and belongs in a PR-time check.
+#
+# WHAT THIS CHECKS
+#   1. resolve — every containerized app's requirements.txt actually resolves,
+#      on LINUX / py3.11 (matching every app Dockerfile's `python:3.11-slim`).
+#      Resolving on a developer's Windows or macOS box can succeed where the
+#      image fails, because the wheel set differs.
+#   2. transform-runner-imports — a dry-run only proves pip CAN resolve. The
+#      transform runner pins dbt-core 1.8.9, whose `dbt-adapters<2.0` floor lets
+#      the resolver pick an adapters release built for a much newer dbt-core:
+#      resolves clean, explodes at import. So this job does a REAL install and
+#      imports both engines, all four dbt adapters, and the app.
+#
+# The weekly schedule matters as much as the PR trigger: these pin sets are not
+# fully frozen (transitive deps float within their bounds), so an upstream
+# release can break the build with no commit of ours. Weekly turns that into a
+# ticket instead of a surprise on the next deploy.
+#
+# ADDING AN APP: add its requirements.txt to the `resolve` matrix below.
+
+name: Python Deps Resolve
+
+on:
+  pull_request:
+    paths:
+      - '**/requirements.txt'
+      - 'apps/loom-transform-runner/**'
+      - '.github/workflows/python-deps-resolve.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/requirements.txt'
+      - 'apps/loom-transform-runner/**'
+      - '.github/workflows/python-deps-resolve.yml'
+  schedule:
+    # Weekly — catches upstream releases that break a pin set with no commit.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: resolve ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: fiab-dbt-runner
+            req: apps/fiab-dbt-runner/requirements.txt
+          - app: fiab-prpt-renderer
+            req: apps/fiab-prpt-renderer/requirements.txt
+          - app: fiab-wrangler-host
+            req: apps/fiab-wrangler-host/requirements.txt
+          - app: loom-duckdb
+            req: apps/loom-duckdb/requirements.txt
+          - app: loom-migrate
+            req: apps/loom-migrate/requirements.txt
+          - app: loom-transform-runner
+            req: apps/loom-transform-runner/requirements.txt
+          - app: script-runner
+            req: platform/runners/script-runner/requirements.txt
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Resolve ${{ matrix.req }}
+        run: |
+          set -o pipefail
+          echo "::group::pip install --dry-run -r ${{ matrix.req }}"
+          if pip install --dry-run --report /tmp/report.json -r "${{ matrix.req }}" 2>&1 | tee /tmp/pip.log; then
+            echo "::endgroup::"
+            echo "### \`${{ matrix.req }}\` resolves" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::endgroup::"
+            echo "::error file=${{ matrix.req }}::pin set does not resolve on linux/py3.11 — the container image for '${{ matrix.app }}' CANNOT build. See the log for the conflicting requirement lines."
+            {
+              echo "### \`${{ matrix.req }}\` DOES NOT RESOLVE"
+              echo '```'
+              grep -E '^(ERROR|The conflict|  )' /tmp/pip.log | tail -30 || tail -30 /tmp/pip.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Record resolved versions
+        if: success()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          with open("/tmp/report.json") as fh:
+              report = json.load(fh)
+          pkgs = sorted(
+              (i["metadata"]["name"], i["metadata"]["version"])
+              for i in report.get("install", [])
+          )
+          print(f"<details><summary>{len(pkgs)} packages resolved</summary>\n")
+          print("```")
+          for name, ver in pkgs:
+              print(f"{name}=={ver}")
+          print("```")
+          print("\n</details>")
+          PY
+
+  transform-runner-imports:
+    name: transform-runner import smoke (real install)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.11'
+
+      # dbt-synapse / dbt-fabric import pyodbc, which needs libodbc at import
+      # time. The image installs unixodbc-dev + msodbcsql18; the smoke test only
+      # imports (it never opens a connection), so plain unixodbc is enough.
+      - name: Install unixodbc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq unixodbc
+
+      - name: Install the pinned dependency set
+        working-directory: apps/loom-transform-runner
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Import smoke — both engines, every adapter, the app
+        working-directory: apps/loom-transform-runner
+        run: python smoke_imports.py
