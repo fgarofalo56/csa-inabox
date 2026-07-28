@@ -267,7 +267,14 @@ describe('admin/env-config registry', () => {
     // LOOM_DEPENDENCY_CHAOS_ENABLED (optionalDefault — OFF by default, the
     // fully-functional prod posture; enabled only for a non-prod resilience
     // drill), mirroring A13's LOOM_SPARK_CHAOS_ENABLED: 185 → 186.
-    expect(EDITABLE_ENV.length).toBe(186);
+    // Bumped to 189 by LU-2 (Loom Unity AuthN/Z hardening): svc-loom-unity-authz
+    // adds the anyOf group LOOM_UNITY_CLIENT_ID | LOOM_UNITY_AUDIENCE |
+    // LOOM_UNITY_AUTH_MODE — the Console half of the catalog authorization
+    // (setting ANY one makes the BFF present a credential on every Loom Unity
+    // call), +3: 186 → 189. LOOM_UNITY_TOKEN is deliberately NOT in the spec: a
+    // bearer is a Key Vault secretref, not an env-config field (same treatment as
+    // LOOM_ICEBERG_CATALOG_TOKEN).
+    expect(EDITABLE_ENV.length).toBe(189);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

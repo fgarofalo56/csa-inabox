@@ -89,4 +89,24 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
     autoResolveNote: 'Unset → mode off (the intended day-one default): every call runs as the shared Console UAMI, unchanged. Phased shadow → enforce is the sole Phase-0 exception to default-ON, per the operator decision recorded in the loom-next-level PRP.',
     legacyCodes: ['workspace_identity_not_configured'],
   },
+  // LU-2 — Loom Unity catalog authorization. Fix-it is a WIZARD, not a bare env
+  // write: the value only takes effect once the loom-unity Container App is
+  // redeployed with authMode=entra + a matching entraClientId (and, ideally,
+  // consoleAllowedCidrs pinning ingress to the Console subnet). The wizard states
+  // both halves so an operator cannot set the Console var and believe the catalog
+  // is secured when the server still answers anonymous callers — the live
+  // probe-loom-unity-authz check is the proof either way.
+  'svc-loom-unity-authz': {
+    surfaces: [
+      { path: '/catalog/unity', label: 'Loom Unity — Explore / Grants / Storage' },
+      { path: '/api/catalog/unity/capabilities', label: 'Loom Unity capability + authorization posture' },
+      { path: '/api/databricks/unity-catalog/*', label: 'Unity Catalog BFF (the single audited choke point)' },
+      { path: '/admin/health', label: 'Health — probe-loom-unity-authz' },
+    ],
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'Two halves, both required. (1) SERVER: redeploy modules/compute/loom-unity-app.bicep with authMode=entra (default) + entraClientId=<Entra app registration fronting Loom Unity, normally the same as LOOM_MSAL_CLIENT_ID>, optionally consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR> to pin ingress, and entraClientSecretUri/adlsClientSecretUri as Key Vault secret URIs (never inline). The loom-unity UAMI needs "Key Vault Secrets User" on that vault. (2) CONSOLE: set LOOM_UNITY_CLIENT_ID (or LOOM_UNITY_AUDIENCE) here so the BFF mints an Entra bearer on every catalog call. Verify with the live probe-loom-unity-authz health check: it must report that an unauthenticated read is rejected.',
+    },
+    legacyCodes: ['unity_authz_not_configured'],
+  },
 };

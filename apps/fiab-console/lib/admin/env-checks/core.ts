@@ -120,6 +120,10 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
   // N1 — Iceberg REST Catalog (internal-ingress Unity Catalog OSS container).
   LOOM_ICEBERG_CATALOG_URL: 'https://iceberg-catalog.internal.<cae-default-domain>  (unset = dual metadata still emitted to your lake; no catalog discovery)',
+  // LU-2 — Loom Unity catalog authorization (the Console half of the hardening).
+  LOOM_UNITY_CLIENT_ID: '<entra-app-client-id fronting Loom Unity — normally the same as LOOM_MSAL_CLIENT_ID>  (the Console mints api://<id>/.default for every catalog call)',
+  LOOM_UNITY_AUDIENCE: 'api://<loom-unity-app-client-id>/.default  (explicit scope override; unset = derived from LOOM_UNITY_CLIENT_ID)',
+  LOOM_UNITY_AUTH_MODE: 'entra (default once an audience is declared) | token | anonymous  (anonymous = the catalog is reachable unauthenticated — a security finding, not a setting)',
   // M1 — estate assessment reader (inbound-migration on-ramp, internal ingress).
   LOOM_MIGRATE_URL: 'https://loom-migrate.internal.<cae-default-domain>  (unset = /admin/migrate renders but assess honest-gates)',
   // N8 lab 1 — DuckLake catalog (Postgres-backed lakehouse metadata store).

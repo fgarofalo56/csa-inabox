@@ -11,7 +11,7 @@
 # then execs the upstream start script:
 #
 #   etc/conf/hibernate.properties   persistence (H2 file DB default, Postgres opt-in)
-#   etc/conf/server.properties      auth mode + optional ADLS credential vending
+#   etc/conf/server.properties      Entra authorization (LU-2) + optional ADLS vending
 #
 # Persistence is the DEFAULT H2 file DB placed on a mounted Azure Files volume so
 # the catalog survives container restarts (the bicep module mounts the share at
@@ -116,20 +116,99 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# server.properties — auth mode + optional ADLS credential vending
+# server.properties — authorization (Entra/OIDC) + optional ADLS vending
+#
+# LU-2 (AuthN/Z hardening). Before LU-2 this rendered `server.authorization=disable`
+# unconditionally and the VNet was the ONLY boundary: anything that could reach the
+# Container Apps environment could read AND mutate catalog metadata anonymously,
+# and (with vending wired) mint ADLS delegation SAS. That is a FedRAMP AC-3/IA-2
+# finding, not a design choice. LU-2 makes Entra-backed authorization the DEFAULT
+# and refuses to start half-configured.
+#
+# Config keys are the upstream ones, verified verbatim against
+# unitycatalog/unitycatalog `etc/conf/server.properties` at BOTH v0.5.0 (the tag
+# apps/loom-unity/Dockerfile pins) and v0.5.1:
+#   server.authorization      enable | disable
+#   server.authorization-url  IdP authorize endpoint
+#   server.token-url          IdP token endpoint
+#   server.client-id          IdP client id
+#   server.client-secret      IdP client secret
+#   server.redirect-port      OAuth redirect port (blank = upstream default)
+#   server.allowed-issuers    REQUIRED when authorization is enabled — comma list,
+#                             EXACT match. Upstream documents the Entra ID form as
+#                             https://login.microsoftonline.com/{tenant-id}/v2.0
+#   server.audiences          REQUIRED when authorization is enabled — comma list
+#                             of accepted JWT audiences (typically the app id URI
+#                             and/or the client id)
+# `server.access-token-timeout` exists on upstream main but NOT in v0.5.0/v0.5.1, so
+# it is deliberately not rendered here (we pin the image tag; see the Dockerfile).
 # ---------------------------------------------------------------------------
+
+die() {
+  echo "[loom-unity] FATAL: $*" >&2
+  exit 1
+}
+
+# Entra authority host — Commercial by default; Azure Government deployments pass
+# login.microsoftonline.us. Sovereign hosts are NEVER hard-coded on a code path;
+# the bicep module derives this from environment().authentication.loginEndpoint.
+unity_authority_host() {
+  printf '%s' "${LOOM_UNITY_AUTHORITY_HOST:-login.microsoftonline.com}"
+}
+
 render_server() {
-  # Auth defaults to DISABLE: the service runs on internal-ingress only (reachable
-  # from the Console over the Container Apps VNet, never public), so the network
-  # boundary is the security perimeter — identical to the sibling loom-onelake
-  # internal service. Set LOOM_UNITY_AUTH=enable to turn on the upstream OAuth/OIDC
-  # authorization server (opt-in; then wire the authorization/token URLs below).
-  auth="${LOOM_UNITY_AUTH:-disable}"
+  tenant="${LOOM_UNITY_ENTRA_TENANT_ID:-}"
+  client_id="${LOOM_UNITY_ENTRA_CLIENT_ID:-}"
+  authority="$(unity_authority_host)"
+
+  # DEFAULT-ON: with an Entra tenant wired, authorization is ENABLED unless the
+  # operator explicitly sets LOOM_UNITY_AUTH=disable (an audited opt-out, not a
+  # silent default). With no tenant wired at all we cannot fabricate a validator,
+  # so the server stays open — and says so, loudly, on every boot.
+  auth="${LOOM_UNITY_AUTH:-}"
+  if [ -z "${auth}" ]; then
+    if [ -n "${tenant}" ]; then auth=enable; else auth=disable; fi
+  fi
+
+  authz_url="${LOOM_UNITY_AUTHORIZATION_URL:-}"
+  token_url="${LOOM_UNITY_TOKEN_URL:-}"
+  issuers="${LOOM_UNITY_ALLOWED_ISSUERS:-}"
+  audiences="${LOOM_UNITY_AUDIENCES:-}"
+  # NOTE: plain `if` blocks, not `[ … ] && x=y` one-liners — `set -e` is on and a
+  # false AND-list at statement level would abort the boot.
+  if [ -n "${tenant}" ]; then
+    if [ -z "${authz_url}" ]; then authz_url="https://${authority}/${tenant}/oauth2/v2.0/authorize"; fi
+    if [ -z "${token_url}" ]; then token_url="https://${authority}/${tenant}/oauth2/v2.0/token"; fi
+    if [ -z "${issuers}" ]; then issuers="https://${authority}/${tenant}/v2.0"; fi
+  fi
+  if [ -z "${audiences}" ] && [ -n "${client_id}" ]; then
+    audiences="api://${client_id},${client_id}"
+  fi
+
+  if [ "${auth}" = "enable" ]; then
+    # FAIL CLOSED. An "enabled" authorization server with no pinned issuer or no
+    # pinned audience accepts tokens it must not accept — worse than an honest
+    # open door because it LOOKS secured. Refuse to boot and name the exact vars.
+    if [ -z "${issuers}" ]; then
+      die "LOOM_UNITY_AUTH=enable but no token issuer is pinned. Set LOOM_UNITY_ENTRA_TENANT_ID (issuer is derived as https://<authority>/<tenant>/v2.0) or LOOM_UNITY_ALLOWED_ISSUERS explicitly. See docs/fiab/unity-gov.md."
+    fi
+    if [ -z "${audiences}" ]; then
+      die "LOOM_UNITY_AUTH=enable but no token audience is pinned. Set LOOM_UNITY_ENTRA_CLIENT_ID (audiences are derived as api://<client-id>,<client-id>) or LOOM_UNITY_AUDIENCES explicitly. See docs/fiab/unity-gov.md."
+    fi
+  else
+    echo "[loom-unity] SECURITY WARNING: authorization is DISABLED — every workload that can reach this Container App over the VNet can read AND modify Loom Unity catalog metadata anonymously (and mint ADLS credentials if vending is wired). This is an honest, audited opt-out, not the default. Set LOOM_UNITY_ENTRA_TENANT_ID + LOOM_UNITY_ENTRA_CLIENT_ID (bicep authMode=entra) to enforce Entra bearer authorization. See docs/fiab/security/loom-unity-threat-model.md." >&2
+  fi
+
   cat <<EOF
 server.env=prod
 server.authorization=${auth}
-server.authorization-url=${LOOM_UNITY_AUTHORIZATION_URL:-}
-server.token-url=${LOOM_UNITY_TOKEN_URL:-}
+server.authorization-url=${authz_url}
+server.token-url=${token_url}
+server.client-id=${client_id}
+server.client-secret=${LOOM_UNITY_ENTRA_CLIENT_SECRET:-}
+server.redirect-port=${LOOM_UNITY_REDIRECT_PORT:-}
+server.allowed-issuers=${issuers}
+server.audiences=${audiences}
 EOF
 
   # ADLS credential vending (opt-in). When the operator wires a service-principal
@@ -137,6 +216,10 @@ EOF
   # external tables/volumes. When UNSET, loom-unity is a metadata catalog + table
   # registry and data access stays on Loom's existing managed-identity/ACL paths
   # (honest scope — see docs/fiab/unity-gov.md capability matrix).
+  #
+  # LU-2: the client secret arrives as a Container Apps SECRET REFERENCE backed by
+  # Key Vault (loom-unity-app.bicep `adlsClientSecretUri`), never an inline literal
+  # in bicep, a param file, or an `az containerapp update --set-env-vars` line.
   if [ -n "${LOOM_UNITY_ADLS_ACCOUNT:-}" ]; then
     cat <<EOF
 adls.storageAccountName.0=${LOOM_UNITY_ADLS_ACCOUNT}
@@ -179,7 +262,7 @@ fi
 # Resolve a writable DB dir BEFORE rendering hibernate.properties (which bakes
 # the path into the JDBC URL) — this is what makes the H2/SMB fallback take.
 resolve_db_dir
-echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-disable} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
+echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-${LOOM_UNITY_ENTRA_TENANT_ID:+enable}${LOOM_UNITY_ENTRA_TENANT_ID:-disable}} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
 seed_db_if_empty
 write_config
 

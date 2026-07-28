@@ -25,14 +25,25 @@ new client.
 ## Architecture
 
 ```
-Console (fiab-console)                         loom-unity Container App (internal ingress)
-  lib/azure/unity-catalog-client.ts  ──HTTP──▶   OSS Unity Catalog server (:8080)
-    ucFetch() ──▶ uc-backend.ts                    /api/2.1/unity-catalog/{catalogs,
-      resolveUcBackend():                            schemas,tables,volumes,functions}
-        'databricks' | 'oss'                       persistence:
-      isOssUc() → LOOM_UNITY_URL                     H2 file DB on Azure Files (default)
-                                                     Postgres via LOOM_UNITY_DB_URL (opt-in)
+Console (fiab-console)                         loom-unity Container App (internal ingress
+  lib/azure/unity-catalog-client.ts  ──HTTPS─▶   + optional Console-subnet IP pin)
+    ucFetch() ──▶ uc-backend.ts        Bearer     "Loom Unity" — Unity-Catalog-compatible
+      resolveUcBackend():                          OSS server (:8080)
+        'databricks' | 'oss'                     /api/2.1/unity-catalog/{catalogs,
+      isOssUc() → LOOM_UNITY_URL                   schemas,tables,volumes,functions}
+      ossUcAuthHeader():                         authorization (LU-2, default ON):
+        LOOM_UNITY_TOKEN (KV secretref)            server.authorization=enable
+        | UAMI ⇒ api://<client-id>/.default        server.allowed-issuers  (pinned)
+        | anonymous (reported, never silent)       server.audiences        (pinned)
+                                                 persistence:
+                                                   H2 file DB on Azure Files (default)
+                                                   Postgres via LOOM_UNITY_DB_URL (opt-in)
 ```
+
+**The BFF is the only caller.** No engine, notebook, or user talks to Loom Unity
+directly — its ingress is internal and can be pinned to the Console subnet, and the
+credential is injected in `ucFetch`. That single choke point is what makes every
+catalog access attributable (and is what LU-3 hangs the audit rows on).
 
 - **Backend switch** (`uc-backend.ts`): `LOOM_UC_BACKEND` = `databricks` (Commercial
   default) | `oss`. When unset, Loom **auto-selects `oss` in Azure Government**
@@ -40,19 +51,67 @@ Console (fiab-console)                         loom-unity Container App (interna
   and `LOOM_UNITY_URL` is set. Commercial is unchanged.
 - **Same REST surface**: `ucFetch()` routes catalogs / schemas / tables / volumes /
   functions to `LOOM_UNITY_URL` — the OSS server returns the same JSON shapes, so
-  the existing catalog browse, CRUD, and search work unchanged.
+  the existing catalog browse, CRUD, and search work unchanged. `ossUcAuthHeader()`
+  attaches the Console's credential to every one of those calls (LU-2).
 - **Persistence**: default **H2 file DB** on a mounted **Azure Files** share (the
   bicep module creates the share + storage link; the entrypoint seeds the schema
   on first boot and it survives restarts). **Postgres** is opt-in via
   `LOOM_UNITY_DB_URL`.
-- **Auth**: `server.authorization=disable` by default — the app is **internal
-  ingress only** (reachable from the Console over the Container Apps VNet, never
-  public), so the VNet is the security boundary, identical to the sibling
-  `loom-onelake` service. Upstream OAuth/OIDC is opt-in (`LOOM_UNITY_AUTH=enable`);
-  when the client is given `LOOM_UNITY_TOKEN` it sends it as a bearer token.
+- **Auth (LU-2 — hardened)**: the server enforces **Microsoft Entra bearer
+  authorization by default** (`authMode='entra'`), with the token **issuer and
+  audience both pinned**; the Console BFF injects the credential on every call and
+  is the only caller. Ingress stays internal-only and can be narrowed further to
+  the Console's subnet. See [Authorization](#authorization-lu-2) below and the
+  threat model at `docs/fiab/security/loom-unity-threat-model.md`.
 - **Honest gate**: `LOOM_UC_BACKEND=oss` with `LOOM_UNITY_URL` unset throws a
   structured `OssUcNotConfiguredError` naming the env var + this bicep module — the
   BFF surfaces it as a MessageBar rather than failing opaquely.
+
+## Authorization (LU-2)
+
+> **Naming.** The platform is **Loom Unity** — Loom's Unity-Catalog-**compatible**
+> catalog. It is not a Databricks product and is never presented as one.
+
+**The finding.** Before LU-2 the server ran `server.authorization=disable` and the
+Container Apps VNet was the *only* control: any workload that could reach the
+environment could read **and modify** catalog metadata anonymously — and mint ADLS
+delegation SAS wherever credential vending was wired. The vending service-principal
+secret was also documented as an inline `--set-env-vars` value, which lands a live
+secret in ARM deployment history.
+
+**What LU-2 changed.**
+
+| Layer | Control |
+|---|---|
+| Server | `server.authorization=enable` with `server.allowed-issuers` pinned to `https://<authority>/<tenant>/v2.0` and `server.audiences` pinned to `api://<client-id>,<client-id>`. Config keys verified verbatim against upstream `etc/conf/server.properties` at **v0.5.0** (the pinned image tag) **and v0.5.1**. |
+| Server boot | **Fails closed.** `LOOM_UNITY_AUTH=enable` without a pinned issuer *or* a pinned audience exits 1 with a FATAL naming the exact variable — a half-secured server never runs. |
+| Network | Internal ingress **plus** an optional `ipSecurityRestrictions` Allow-list (`consoleAllowedCidrs`) pinning ingress to the Console's subnet. |
+| Console | The BFF is the single credentialed choke point: `ossUcAuthHeader()` presents a pre-shared server token (Key Vault secretref) or an Entra bearer minted by the Console UAMI for the Loom Unity audience — and **fails closed** rather than silently retrying anonymously. |
+| Secrets | The Entra client secret and the ADLS vending secret are **Key Vault secretrefs** resolved by the app UAMI (`Key Vault Secrets User` on the vault). No inline literals anywhere. |
+| Reporting | `svc-loom-unity-authz` gate (registry + two-half Fix-it wizard), the `authorization` block on `GET /api/catalog/unity/capabilities`, and the live `probe-loom-unity-authz` health probe, which sends a **deliberately unauthenticated** request: `401/403` → pass, `2xx` → **fail with the status as evidence**. Config drift cannot fake it. |
+
+**Sovereign-safe by construction.** The authority host is derived from
+`environment().authentication.loginEndpoint`, so Azure Government pins the issuer to
+`https://login.microsoftonline.us/<tenant>/v2.0`. Nothing is hard-coded on a code path.
+
+**Wiring it (both halves are required).**
+
+```bash
+# 1. SERVER — redeploy with the audience pinned (normally the Console app registration)
+az deployment group create -g <admin-rg> \
+  -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
+  -p ... authMode=entra entraClientId=<LOOM_MSAL_CLIENT_ID> \
+     consoleAllowedCidrs='["<cae-infrastructure-subnet-cidr>"]'
+
+# 2. CONSOLE — mint a matching bearer on every catalog call
+az containerapp update -n <console-app> -g <admin-rg> \
+  --set-env-vars LOOM_UNITY_CLIENT_ID=<same-app-registration-client-id>
+```
+
+Then confirm on `/admin/health`: **`probe-loom-unity-authz` must report that an
+unauthenticated read was rejected.** Leaving `entraClientId` empty is an honest,
+loudly-reported gate — the container logs a SECURITY WARNING on every boot and the
+gate + probe both go red with this exact remediation — not a silent open door.
 
 ## Honest capability matrix — OSS Unity Catalog vs Databricks Unity Catalog
 
@@ -95,7 +154,8 @@ Azure-native equivalent instead.
    az acr build -r <acr-name> -t loom-unity:<tag> apps/loom-unity
    ```
 
-2. **Deploy the Container App** (creates the persistent Azure Files share + mount):
+2. **Deploy the Container App** (creates the persistent Azure Files share + mount,
+   and enforces Entra authorization — see [Authorization](#authorization-lu-2)):
 
    ```bash
    az deployment group create -g <admin-resource-group> \
@@ -104,20 +164,30 @@ Azure-native equivalent instead.
         environmentId=<container-apps-env-resource-id> \
         acrLoginServer=<acr-name>.azurecr.io \
         image=<acr-name>.azurecr.io/loom-unity:<tag> \
-        unityUamiId=<uami-resource-id-with-AcrPull> \
+        unityUamiId=<uami-resource-id-with-AcrPull-and-KeyVaultSecretsUser> \
         workspaceId=<log-analytics-workspace-resource-id> \
+        authMode=entra \
+        entraClientId=<entra-app-registration-client-id> \
+        consoleAllowedCidrs='["<cae-infrastructure-subnet-cidr>"]' \
         complianceTags='{ "env": "gov" }'
    ```
+
+   Useful outputs: `authorizationEnforced` (must be `true`), `ingressIpRestricted`,
+   and `acceptedAudiences` (set `LOOM_UNITY_CLIENT_ID` on the Console to match).
 
 3. **Point the Console at it** (default-ON, no approval gate):
 
    ```bash
    az containerapp update -n <console-app> -g <admin-resource-group> \
-     --set-env-vars LOOM_UC_BACKEND=oss LOOM_UNITY_URL=https://<loom-unity-fqdn>
+     --set-env-vars LOOM_UC_BACKEND=oss LOOM_UNITY_URL=https://<loom-unity-fqdn> \
+                    LOOM_UNITY_CLIENT_ID=<entra-app-registration-client-id>
    ```
 
    (In Azure Government with no Databricks workspace bound, `LOOM_UC_BACKEND` may be
-   left unset — Loom auto-selects `oss` once `LOOM_UNITY_URL` is set.)
+   left unset — Loom auto-selects `oss` once `LOOM_UNITY_URL` is set.
+   `LOOM_UNITY_CLIENT_ID` is what makes the BFF present a bearer on every call; without
+   it the `svc-loom-unity-authz` gate and the `probe-loom-unity-authz` probe both report
+   the unauthenticated posture.)
 
 ### Optional: Postgres persistence
 
@@ -129,9 +199,13 @@ default needs none of this** and is the recommended day-one path.
 
 ### Optional: ADLS credential vending
 
-Set `LOOM_UNITY_ADLS_ACCOUNT` / `_TENANT` / `_CLIENT_ID` / `_CLIENT_SECRET` on the
-app to let UC vend delegation-SAS credentials for external tables/volumes. Unset,
-data access stays on Loom's managed-identity / ACL paths.
+Pass `adlsAccount` (+ `adlsTenantId` / `adlsClientId`) to the bicep module to let
+Loom Unity vend delegation-SAS credentials for external tables/volumes. **The
+service-principal secret goes in as `adlsClientSecretUri` — a Key Vault secret URI
+resolved at revision start by the app UAMI (`Key Vault Secrets User` on the vault).
+Never pass it inline on an `az containerapp update --set-env-vars` line: that lands
+a live secret in ARM deployment history and shell history (LU-2, finding F-4).**
+Unset, data access stays on Loom's managed-identity / ACL paths.
 
 ## Government endpoint notes
 
@@ -141,21 +215,30 @@ data access stays on Loom's managed-identity / ACL paths.
 - The service reaches **no** `api.fabric.microsoft.com` / `api.powerbi.com` /
   `*.azuredatabricks.net` host — it IS the Azure-native Unity Catalog backend.
 - Sovereign host suffixes (Storage, ARM, Log Analytics) are resolved by the Console
-  through `lib/azure/cloud-endpoints.ts`; `loom-unity` itself is cloud-agnostic (it
-  only talks to its own H2/Postgres store and, if enabled, the ADLS SP you wire).
+  through `lib/azure/cloud-endpoints.ts`. `loom-unity` itself only talks to its own
+  H2/Postgres store, the sovereign Entra endpoint for token validation (issuer host
+  derived from `environment().authentication.loginEndpoint`), and — if enabled — the
+  ADLS SP you wire.
 
-## Verification (this PR)
+## Verification
 
 - `resolveUcBackend()` / `ucFetch()` routing, the Gov auto-select, the honest gate,
   and the grants-gated-on-OSS behaviour are covered by
-  `apps/fiab-console/lib/azure/__tests__/uc-backend-switch.test.ts` (12 tests, real
-  fetch capture — no client stubs).
-- The entrypoint config rendering (H2 default / Postgres / auth / ADLS vending) is
-  covered by `apps/loom-unity/tests/entrypoint.test.mjs` (dry-run, 4 tests).
-- `check-bicep-sync`, `check-env-sync`, and `tsc --noEmit` (zero new errors) pass.
+  `apps/fiab-console/lib/azure/__tests__/uc-backend-switch.test.ts` (real fetch
+  capture — no client stubs).
+- **LU-2 authorization**: `apps/fiab-console/lib/azure/__tests__/uc-authz.test.ts`
+  (17 tests — bearer injection reaches the real REST call, fail-closed on an
+  unmintable token, no hardening inferred from `LOOM_MSAL_CLIENT_ID`).
+- The entrypoint config rendering (H2 default / Postgres / **Entra authorization,
+  including both fail-closed boot paths** / ADLS vending) is covered by
+  `apps/loom-unity/tests/entrypoint.test.mjs` (dry-run, 10 tests).
+- Live posture: `probe-loom-unity-authz` on `/admin/health` — the G1 receipt.
+- `check-bicep-sync`, `check-bicep-param-cap`, `check-env-sync`,
+  `check-duplicate-env`, `check-health-coverage`, and `tsc --noEmit` pass.
 
 ## Cross-references
 
 - `apps/loom-unity/README.md` — the packaged server + env-var reference.
+- `docs/fiab/security/loom-unity-threat-model.md` — the LU-2 STRIDE threat model.
 - `.claude/rules/no-fabric-dependency.md` — why every item works Azure-native.
 - `docs/fiab/hyperscale.md` — the sibling out-of-band ACA-app deploy pattern.
