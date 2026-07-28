@@ -107,9 +107,17 @@ test('ADLS OAuth renders per-account hadoop properties for the SOVEREIGN endpoin
     /<value>https:\/\/login\.microsoftonline\.us\/tenant-guid\/oauth2\/token<\/value>/,
   );
   // A Commercial authority leaking into a Gov deployment is a sovereignty bug.
-  assert.doesNotMatch(r.stdout, /login\.microsoftonline\.com/);
+  // Plain substring, not a regex: this asserts ABSENCE, so an unanchored host
+  // pattern is both what we want and what CodeQL flags (js/regex/missing-regexp-anchor).
+  assert.ok(
+    !r.stdout.includes('login.microsoftonline.com'),
+    'a Commercial Entra authority leaked into a Gov core-site.xml render',
+  );
   // Account keys are never an option — only OAuth.
-  assert.doesNotMatch(r.stdout, /fs\.azure\.account\.key/);
+  assert.ok(
+    !r.stdout.includes('fs.azure.account.key'),
+    'shared-key storage auth was rendered; the sharing server must be OAuth-only',
+  );
 });
 
 test('no ADLS account => no core-site.xml at all (and an honest notice)', { skip: !shAvailable }, () => {
