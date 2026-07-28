@@ -4,13 +4,13 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
-  Body1, Caption1, Badge, Spinner, Dropdown, Option, Text, Tooltip, Button,
+  Body1, Caption1, Badge, Spinner, Dropdown, Option, Text, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Open16Regular, Dismiss24Regular, ArrowClockwise16Regular,
+  Open16Regular, Dismiss24Regular, ArrowClockwise16Regular, ArrowDownload16Regular,
   Server20Regular, CloudCube20Regular, Money20Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
@@ -25,6 +25,10 @@ import { SurgeProtectionPanel } from '@/lib/components/admin/surge-protection-pa
 import { SparkTelemetryAuditPanel } from '@/lib/components/admin/spark-telemetry-audit-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { OpsCopilotPane } from '@/lib/components/admin/ops-copilot-pane';
+import {
+  CostCell, UtilizationSparkCell, detailCache, fmtCurrency,
+  type AzureRes, type MetricSeries,
+} from '@/lib/components/admin/capacity-cells';
 
 function portalUrl(id: string): string {
   // Azure portal deep-link to the resource Overview blade.
@@ -43,18 +47,14 @@ function portalUrl(id: string): string {
  * honest gate ("⚠ No access" / "—"). Gov cloud, where Cost Management offers or
  * Fabric capacity metrics may be unavailable, falls through to honest gates and
  * the inline Monitor charts — never a blank cell (per no-vaporware.md).
+ *
+ * MOUNT COST: the inventory table paints from the ONE ARM call. The per-row
+ * cost + utilization reads are deferred until the row is actually on screen
+ * (`lib/components/admin/capacity-cells`), and rows above the shared
+ * virtualization cutoff are windowed by `LoomDataTable`. Before this, painting
+ * an N-row inventory issued 2N Azure calls at mount behind small QPU limiters —
+ * ~44s to mount on the live estate, and the page never reached `networkidle`.
  */
-
-interface AzureRes {
-  id: string;
-  name: string;
-  type: string;
-  location: string;
-  resourceGroup: string;
-  sku?: string;
-  kind?: string;
-  provisioningState?: string;
-}
 
 interface Response {
   ok: boolean;
@@ -66,56 +66,6 @@ interface Response {
   errors?: string[];
   error?: string;
   hint?: string;
-}
-
-// --- cost + utilization shared state (module-level cache + concurrency limit) -
-
-type CostResult =
-  | { status: 'loading' }
-  | { status: 'ok'; cost: number; currency: string }
-  | { status: 'gate'; message: string }
-  | { status: 'error'; message: string };
-
-interface MetricSeries { metricName: string; label: string; unit: string; aggregation: string; points: { timeStamp: string; value: number | null }[] }
-type UtilResult =
-  | { status: 'loading' }
-  | { status: 'metric'; metric: MetricSeries }
-  | { status: 'none' }            // no catalog metrics, or no data in window
-  | { status: 'gate'; message: string }
-  | { status: 'error'; message: string };
-
-// Cache by resourceId so re-mounts (filter changes) don't refetch.
-const costCache = new Map<string, CostResult>();
-const utilCache = new Map<string, UtilResult>();
-const detailCache = new Map<string, MetricSeries[]>();
-
-/** Tiny concurrency limiter — Cost Management QPU quota is small (12/10s). */
-function makeLimiter(max: number) {
-  let active = 0;
-  const queue: (() => void)[] = [];
-  const pump = () => {
-    if (active >= max || queue.length === 0) return;
-    active += 1;
-    const job = queue.shift()!;
-    job();
-  };
-  return <T,>(fn: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-      queue.push(() => {
-        fn().then(resolve, reject).finally(() => { active -= 1; pump(); });
-      });
-      pump();
-    });
-}
-const costLimit = makeLimiter(3);
-const utilLimit = makeLimiter(5);
-
-function fmtCurrency(n: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 2 }).format(n);
-  } catch {
-    return `${currency || '$'} ${n.toFixed(2)}`;
-  }
 }
 
 const useStyles = makeStyles({
@@ -163,11 +113,6 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   },
   portalLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
-  costCell: { fontVariantNumeric: 'tabular-nums', fontWeight: 600 },
-  spark: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
-  sparkSvg: { flexShrink: 0 },
-  sparkVal: { fontSize: tokens.fontSizeBase200, fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
-  dim: { color: tokens.colorNeutralForeground3 },
   totalBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
     marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalL,
@@ -208,130 +153,6 @@ function resourceTypeToSlug(type: string): string {
   if (t.includes('apimanagement')) return 'apim-api';
   if (t.includes('streamanalytics')) return 'stream-analytics-job';
   return 'environment';
-}
-
-// --- compact inline sparkline (cell-sized; the detail pane uses MetricChart) --
-const SPARK_W = 110;
-const SPARK_H = 26;
-function MiniSpark({ points }: { points: { value: number | null }[] }) {
-  const styles = useStyles();
-  const vals = points.map((p) => (typeof p.value === 'number' ? p.value : null));
-  const present = vals.filter((v): v is number => v != null);
-  if (present.length === 0) return null;
-  const lo = Math.min(...present);
-  const hi = Math.max(...present);
-  const span = hi - lo || 1;
-  const n = vals.length;
-  const x = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * SPARK_W);
-  const y = (v: number) => SPARK_H - 2 - ((v - lo) / span) * (SPARK_H - 4);
-  let d = '';
-  vals.forEach((v, i) => { if (v == null) return; const px = x(i); const py = y(v); d += d === '' ? `M ${px} ${py}` : ` L ${px} ${py}`; });
-  return (
-    <svg viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} width={SPARK_W} height={SPARK_H} preserveAspectRatio="none" role="img" aria-label="utilization sparkline" className={styles.sparkSvg}>
-      {d ? <path d={d} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth={1.5} /> : null}
-    </svg>
-  );
-}
-
-function fmtNum(n: number): string {
-  if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  if (Number.isInteger(n)) return String(n);
-  return n.toFixed(1);
-}
-
-function CostCell({ resourceId, onCost }: { resourceId: string; onCost: (id: string, cost: number, currency: string) => void }) {
-  const styles = useStyles();
-  const [state, setState] = useState<CostResult>(() => costCache.get(resourceId) || { status: 'loading' });
-
-  useEffect(() => {
-    let cancelled = false;
-    const cached = costCache.get(resourceId);
-    if (cached) {
-      setState(cached);
-      if (cached.status === 'ok') onCost(resourceId, cached.cost, cached.currency);
-      return;
-    }
-    costLimit(() => clientFetch(`/api/admin/capacity/cost?resourceId=${encodeURIComponent(resourceId)}`, { cache: 'no-store' }).then((r) => r.json()))
-      .then((j: any) => {
-        let result: CostResult;
-        if (j?.ok) result = { status: 'ok', cost: Number(j.cost) || 0, currency: j.currency || 'USD' };
-        else if (j?.gate) result = { status: 'gate', message: j.gate.message || 'No access' };
-        else result = { status: 'error', message: j?.error || 'error' };
-        costCache.set(resourceId, result);
-        if (cancelled) return;
-        setState(result);
-        if (result.status === 'ok') onCost(resourceId, result.cost, result.currency);
-      })
-      .catch((e) => { if (!cancelled) setState({ status: 'error', message: String(e) }); });
-    return () => { cancelled = true; };
-  }, [resourceId, onCost]);
-
-  if (state.status === 'loading') return <Spinner size="extra-tiny" aria-label="Loading cost" />;
-  if (state.status === 'ok') return <span className={styles.costCell}>{fmtCurrency(state.cost, state.currency)}</span>;
-  if (state.status === 'gate') return (
-    <Tooltip content={state.message} relationship="description">
-      <Badge appearance="outline" color="warning" size="small">No access</Badge>
-    </Tooltip>
-  );
-  return (
-    <Tooltip content={state.message} relationship="description">
-      <Caption1 className={styles.dim}>—</Caption1>
-    </Tooltip>
-  );
-}
-
-function UtilizationSparkCell({ res }: { res: AzureRes }) {
-  const styles = useStyles();
-  const [state, setState] = useState<UtilResult>(() => utilCache.get(res.id) || { status: 'loading' });
-
-  useEffect(() => {
-    let cancelled = false;
-    const cached = utilCache.get(res.id);
-    if (cached) { setState(cached); return; }
-    utilLimit(() => clientFetch('/api/admin/capacity/utilization', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ resourceId: res.id, resourceType: res.type, timespan: 'P1D', interval: 'PT15M' }),
-      cache: 'no-store',
-    }).then((r) => r.json()))
-      .then((j: any) => {
-        let result: UtilResult;
-        if (j?.ok && j.data?.gate === 'no_metrics_for_type') result = { status: 'none' };
-        else if (j?.ok && j.data?.metric) {
-          const m: MetricSeries = j.data.metric;
-          const hasData = (m.points || []).some((p) => typeof p.value === 'number');
-          result = hasData ? { status: 'metric', metric: m } : { status: 'none' };
-        } else if (j?.gate) result = { status: 'gate', message: j.gate.message || 'No access' };
-        else if (j?.ok) result = { status: 'none' };
-        else result = { status: 'error', message: j?.error || 'error' };
-        utilCache.set(res.id, result);
-        if (!cancelled) setState(result);
-      })
-      .catch((e) => { if (!cancelled) setState({ status: 'error', message: String(e) }); });
-    return () => { cancelled = true; };
-  }, [res.id, res.type]);
-
-  if (state.status === 'loading') return <Spinner size="extra-tiny" aria-label="Loading utilization" />;
-  if (state.status === 'gate') return (
-    <Tooltip content={state.message} relationship="description">
-      <Badge appearance="outline" color="warning" size="small">No access</Badge>
-    </Tooltip>
-  );
-  if (state.status === 'none' || state.status === 'error') return <Caption1 className={styles.dim}>—</Caption1>;
-  // metric
-  const pts = state.metric.points || [];
-  const last = [...pts].reverse().find((p) => typeof p.value === 'number')?.value ?? null;
-  const isPct = /%|percent/i.test(`${state.metric.label} ${state.metric.unit}`);
-  return (
-    <Tooltip content={`${state.metric.label}${state.metric.unit ? ` (${state.metric.unit})` : ''} · ${state.metric.aggregation}`} relationship="description">
-      <span className={styles.spark}>
-        <MiniSpark points={pts} />
-        {last != null ? <span className={styles.sparkVal}>{fmtNum(last)}{isPct ? '%' : ''}</span> : null}
-      </span>
-    </Tooltip>
-  );
 }
 
 interface VizConfig {
@@ -466,6 +287,12 @@ export default function CapacityPage() {
   // inaccessible — surfaced as a MessageBar instead of silent "—" cells (T14).
   const [dlzGate, setDlzGate] = useState<string | null>(null);
 
+  // Per-row cost + utilization are deferred to the rows that are actually on
+  // screen. "Load all costs" is the explicit opt-in for the estate-wide total —
+  // a user-initiated burst (still bounded by the QPU limiter), never something
+  // the page does to itself at mount.
+  const [eagerCost, setEagerCost] = useState(false);
+
   // Running cost total across loaded rows (for the footer sum).
   const [costTotals, setCostTotals] = useState<Record<string, number>>({});
   const currencyRef = useRef<string>('USD');
@@ -550,7 +377,7 @@ export default function CapacityPage() {
     {
       key: 'cost', label: '$/mo', width: 120, filterable: false,
       getValue: (r) => costTotals[r.id] ?? -1,
-      render: (r) => <CostCell resourceId={r.id} onCost={onCost} />,
+      render: (r) => <CostCell resourceId={r.id} onCost={onCost} eager={eagerCost} />,
     },
     {
       key: 'utilization', label: 'Utilization (24h)', width: 170, sortable: false, filterable: false,
@@ -572,7 +399,7 @@ export default function CapacityPage() {
         </a>
       ),
     },
-  ], [styles, a, costTotals, onCost]);
+  ], [styles, a, mode, costTotals, onCost, eagerCost]);
 
   return (
     <AdminShell
@@ -767,15 +594,31 @@ export default function CapacityPage() {
               onSearch={setQ}
               searchPlaceholder="Filter by name, type, RG, SKU…"
               actions={
-                <Dropdown
-                  value={provider || 'All providers'}
-                  selectedOptions={[provider]}
-                  onOptionSelect={(_, d) => setProvider(d.optionValue ?? '')}
-                  className={a.filterControl}
-                >
-                  <Option value="">All providers</Option>
-                  {Object.keys(data.byProvider || {}).map((p) => <Option key={p} value={p}>{p}</Option>)}
-                </Dropdown>
+                <>
+                  <Dropdown
+                    value={provider || 'All providers'}
+                    selectedOptions={[provider]}
+                    onOptionSelect={(_, d) => setProvider(d.optionValue ?? '')}
+                    className={a.filterControl}
+                  >
+                    <Option value="">All providers</Option>
+                    {Object.keys(data.byProvider || {}).map((p) => <Option key={p} value={p}>{p}</Option>)}
+                  </Dropdown>
+                  <Button
+                    size="small"
+                    icon={<ArrowDownload16Regular />}
+                    disabled={eagerCost}
+                    onClick={() => setEagerCost(true)}
+                  >
+                    {eagerCost ? 'All costs requested' : 'Load all costs'}
+                  </Button>
+                  <LearnPopover
+                    title="Why costs load as you scroll"
+                    content="Cost Management and Azure Monitor are queried per resource, and Cost Management's quota is small (12 queries per 10 seconds). Querying every row at once made this page take ~44 seconds to open, so each row's $/mo and utilization are fetched when the row scrolls into view and cached afterwards. Use Load all costs when you want the estate-wide total in the footer."
+                    tips={['Rows fetch when they scroll into view', 'Results are cached — scrolling back is free', 'Load all costs queues every row behind the same quota limiter']}
+                    learnMoreHref="https://learn.microsoft.com/rest/api/cost-management/query/usage"
+                  />
+                </>
               }
             />
             <LoomDataTable
@@ -785,13 +628,18 @@ export default function CapacityPage() {
               onRowClick={(r) => setSelected(r)}
               empty="No resources match the current filters."
               ariaLabel="Azure resources"
+              // U10 row windowing: above the shared cutoff only the rows near the
+              // viewport mount at all, so a very large estate neither renders nor
+              // fetches thousands of off-screen cells.
+              virtualizeRows
             />
             <div className={styles.totalBar}>
               <span className={styles.totalIcon} aria-hidden><Money20Regular /></span>
               <Text className={styles.statLabel}>Estimated month-to-date cost (loaded rows)</Text>
               <span className={styles.totalVal}>{fmtCurrency(costSum, currencyRef.current)}</span>
               <Caption1 className={a.muted}>
-                across {costCount} resource{costCount === 1 ? '' : 's'} with Cost Management data
+                across {costCount} of {visibleResources.length} resource{visibleResources.length === 1 ? '' : 's'} — rows query
+                Cost Management as they scroll into view; use “Load all costs” for the full estate total
                 {viz?.isGov ? ' · Azure Government — Power BI Embedded unavailable; Managed Grafana used for embeds' : ''}
               </Caption1>
             </div>
