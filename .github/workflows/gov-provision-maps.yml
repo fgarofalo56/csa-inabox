@@ -72,15 +72,25 @@ jobs:
           set -euo pipefail
           SHA=$(git rev-parse --short=8 HEAD)
           echo "SHA=$SHA" >> "$GITHUB_ENV"
-          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          # #2603: lease the ACR firewall instead of a bare toggle, so this
+          # step's re-lock cannot deny another run's in-flight push. The
+          # basemap bake can run the better part of an hour, so take a long
+          # lease. `release` also restores publicNetworkAccess=Disabled — the
+          # old `--default-action Deny` alone left the public endpoint ENABLED.
+          LOOM_ACR_LEASE_TTL_MINUTES=120 \
+            bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # The basemap bake (Natural Earth + tippecanoe) + tileserver base is a
           # large build — allow a generous timeout.
           az acr build --registry "$ACR" --timeout 3600 \
             --image "loom-maps-tileserver:$SHA" --image "loom-maps-tileserver:v1" \
             apps/loom-maps-tileserver
-          az acr update -n "$ACR" --default-action Deny -o none || true
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
           echo "::notice::loom-maps-tileserver:$SHA built + pushed."
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
 
       - name: What-if the loom-maps-tiles deployment
         if: ${{ inputs.apply != 'build-only' }}

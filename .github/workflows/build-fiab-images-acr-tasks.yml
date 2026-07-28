@@ -58,11 +58,26 @@ permissions:
 # late finishers with "client with IP ... not allowed access". With
 # cancel-in-progress=false we queue subsequent runs instead of dropping
 # them, so every commit still gets its image build.
+#
+# #2603: this guard is necessary but NOT sufficient. It only covers two
+# *running* instances of THIS workflow. It does not cover (a) a CANCELLED run,
+# whose `acr_restore` job still executes under `if: always()` after GitHub has
+# already released the concurrency slot to the next run, nor (b) the ~19 other
+# call sites — other workflows, the Gov estate, and the deploy-*-job.sh scripts
+# a human runs from a laptop — that toggle the same registry. Ownership of the
+# firewall now lives in scripts/csa-loom/acr-firewall-lease.sh: acr_enable
+# ACQUIRES a lease recorded as ARM tags on the registry, and acr_restore only
+# re-locks if this run is still the recorded holder. See
+# docs/fiab/acr-firewall-lease.md.
 concurrency:
   group: build-fiab-images-acr-tasks
   cancel-in-progress: false
 env:
   AZURE_LOCATION: eastus2
+  # This workflow is the longest-lived holder (console compile + matrix builds +
+  # Trivy scan + cosign sign). Size the lease so a legitimate run never expires
+  # mid-push and gets its registry swept out from under it.
+  LOOM_ACR_LEASE_TTL_MINUTES: '120'
 
 jobs:
   resolve:
@@ -72,6 +87,10 @@ jobs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       app_matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
+      # The matrix resolver probes ./apps/<name> to decide each build context, so this
+      # job needs the tree. It had no checkout before — the probe silently evaluated
+      # false for every app and everything fell through to the ./apps/fiab-* convention.
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: azure/login@v2.3.0
         with:
@@ -271,11 +290,18 @@ jobs:
   # source tarball from the GHA runner. The ACR is provisioned with
   # publicNetworkAccess=Disabled by default (private endpoint), which was
   # blocking every build with "client with IP ... is not allowed access".
+  #
+  # #2603: the open is now a LEASE ACQUISITION, not a bare toggle. The lease is
+  # recorded as ARM tags on the registry and names this run; only this run may
+  # re-lock. If another run legitimately holds it (a Gov roll, a human's
+  # deploy-*-job.sh), this job waits — bounded, 25 min by default — and then
+  # fails loudly naming the holder rather than stomping on it.
   acr_enable:
-    name: Enable ACR public access (temp)
+    name: Acquire ACR firewall lease + open (temp)
     needs: resolve
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: azure/login@v2.3.0
         with:
@@ -286,21 +312,18 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - run: |
-          ACR="${{ needs.resolve.outputs.acr_name }}"
-          # Two distinct rules block GHA: publicNetworkAccess (the endpoint
-          # itself) AND networkRuleSet.defaultAction (the IP-allowlist
-          # default). Flip BOTH.
-          az acr update --name "$ACR" --public-network-enabled true -o tsv --query "publicNetworkAccess" || true
-          az acr update --name "$ACR" --default-action Allow -o tsv --query "networkRuleSet.defaultAction" || true
-          sleep 30
+      - name: Acquire the ACR firewall lease (opens the registry)
+        run: |
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire \
+            --acr "${{ needs.resolve.outputs.acr_name }}"
 
   acr_restore:
-    name: Restore ACR public access disabled
+    name: Release ACR firewall lease (re-lock if still the holder)
     needs: [resolve, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: azure/login@v2.3.0
         with:
@@ -311,7 +334,15 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - run: |
-          ACR="${{ needs.resolve.outputs.acr_name }}"
-          az acr update --name "$ACR" --default-action Deny -o tsv --query "networkRuleSet.defaultAction" || true
-          az acr update --name "$ACR" --public-network-enabled false -o tsv --query "publicNetworkAccess" || true
+      # #2603: THE fix. This job also runs when the workflow is CANCELLED, and
+      # by then GitHub may already have started the next run — which is why the
+      # old unconditional `az acr update --default-action Deny` killed a healthy
+      # 14-minute build at its push step. `release` re-reads the lease owner and
+      # re-locks ONLY if this run still holds it. If another run holds it, the
+      # registry is left open for them (they release it; the scheduled
+      # acr-firewall-sweeper re-locks if they die). If NOBODY holds it, this
+      # re-locks anyway — never leave a registry publicly reachable.
+      - name: Release the ACR firewall lease
+        run: |
+          bash scripts/csa-loom/acr-firewall-lease.sh release \
+            --acr "${{ needs.resolve.outputs.acr_name }}"

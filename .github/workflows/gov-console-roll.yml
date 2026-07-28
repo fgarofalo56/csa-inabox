@@ -75,7 +75,13 @@ jobs:
           SHA=$(git rev-parse --short=8 HEAD)
           echo "SHA=$SHA" >> "$GITHUB_ENV"
           echo "::notice::Building loom-console:$SHA on $ACR"
-          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          # #2603: take the ACR firewall lease instead of a bare toggle. The
+          # "Re-lock ACR (always)" step below then re-locks ONLY if this run is
+          # still the recorded holder — an `if: always()` cleanup that fires on
+          # cancellation can no longer deny another run's in-flight push. See
+          # docs/fiab/acr-firewall-lease.md.
+          LOOM_ACR_LEASE_TTL_MINUTES=120 \
+            bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # 2026-07-16: console builds run on a dedicated 16 GB S3 agent pool —
           # the default 8 GB agent cgroup-OOM-SIGKILLs the compile. Agent pools
@@ -162,8 +168,11 @@ jobs:
       - name: Re-lock ACR (always)
         if: always()
         run: |
-          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none || true
-          echo "::notice::Gov ACR $ACR re-locked (private endpoint only)."
+          # #2603: re-locks only if this run still holds the firewall lease; if
+          # another run holds it, this leaves the registry open for them (they
+          # release it, and acr-firewall-sweeper re-locks if they die). If
+          # nobody holds it, this re-locks anyway — fail closed.
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
 
       - name: Roll loom-console + health-gate
         run: |

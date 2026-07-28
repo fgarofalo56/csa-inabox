@@ -1,0 +1,177 @@
+name: acr-firewall-sweeper
+
+# =============================================================================
+# Fail-closed janitor for the ACR firewall lease (#2603).
+# =============================================================================
+#
+# Every Loom ACR rests at publicNetworkAccess=Disabled + defaultAction=Deny.
+# Anything that needs to push an image from outside the VNet opens it under a
+# LEASE (scripts/csa-loom/acr-firewall-lease.sh) and closes it on release.
+#
+# The lease fixes the "wrong process re-locks the registry" half of #2603 — a
+# non-holder no longer closes the door on a holder's in-flight push. This
+# workflow fixes the other half, which is the one that matters for security: if
+# a holder CRASHES, is force-killed, or its cleanup job never runs, nobody is
+# left to re-lock and the registry stays publicly reachable. Skipping the
+# restore without this sweeper would be a security regression, strictly worse
+# than the bug it fixes.
+#
+# The sweeper re-locks any registry it finds OPEN with no LIVE lease holder:
+#   * no lease recorded at all  -> re-lock (an unwired/manual toggle)
+#   * lease expired             -> re-lock (holder died without releasing)
+#   * lease live but the holder GitHub run is finished -> re-lock immediately,
+#     without waiting out the remaining TTL
+#   * lease live and the holder run is still going     -> LEAVE IT OPEN
+#
+# Worst-case exposure is therefore one sweeper interval (15 min) for a crashed
+# holder whose run status is readable, and TTL + one interval otherwise.
+#
+# Emergency valve: set the repository variable LOOM_ACR_SWEEPER_DISABLED=true to
+# park the sweeper (e.g. during a long manual maintenance window). Prefer taking
+# a lease instead:
+#   scripts/csa-loom/acr-firewall-lease.sh acquire --acr <acr> --owner manual:<you>
+#
+# Manual one-shot from a laptop:
+#   scripts/csa-loom/acr-firewall-lease.sh sweep --acr <acr> [--force]
+#
+# See docs/fiab/acr-firewall-lease.md.
+
+on:
+  schedule:
+    # Every 15 minutes. Bounds how long a crashed holder can leave a registry
+    # publicly reachable.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-lock even if a LIVE lease is recorded (use only when you know the holder is dead)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # The sweeper probes whether a lease holder's GitHub run is still running, so
+  # a crashed holder is swept without waiting out its TTL.
+  actions: read
+
+# Never let two sweeps of the same cloud fight each other.
+concurrency:
+  group: acr-firewall-sweeper
+  cancel-in-progress: false
+
+jobs:
+  commercial:
+    name: Sweep Commercial ACR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if disabled
+        id: guard
+        env:
+          DISABLED: ${{ vars.LOOM_ACR_SWEEPER_DISABLED }}
+          CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          if [[ "${DISABLED}" == "true" ]]; then
+            echo "::warning::LOOM_ACR_SWEEPER_DISABLED=true — the ACR firewall sweeper is PARKED. A registry left open by a crashed build will NOT be re-locked until this is cleared."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [[ -z "${CLIENT_ID}" ]]; then
+            echo "::notice::No Commercial deploy credentials configured in this repo — nothing to sweep."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login
+        if: steps.guard.outputs.skip != 'true'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Sweep
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # Resolve the admin RG by PREFIX — it may or may not carry a region
+          # suffix (mirrors build-fiab-images-acr-tasks / console-bluegreen-roll).
+          RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
+          if [[ -z "$RG" ]]; then
+            echo "::notice::No rg-csa-loom-admin* resource group in this subscription — nothing to sweep."
+            exit 0
+          fi
+          RC=0
+          for ACR in $(az acr list --resource-group "$RG" --query "[?starts_with(name,'acrloom')].name" -o tsv | tr -d '\r'); do
+            bash scripts/csa-loom/acr-firewall-lease.sh sweep --acr "$ACR" \
+              ${{ inputs.force && '--force' || '' }} || RC=1
+          done
+          exit $RC
+
+  gov:
+    name: Sweep Gov ACR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if disabled or Gov not configured
+        id: guard
+        env:
+          DISABLED: ${{ vars.LOOM_ACR_SWEEPER_DISABLED }}
+          CLIENT_ID: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+        run: |
+          if [[ "${DISABLED}" == "true" ]]; then
+            echo "::warning::LOOM_ACR_SWEEPER_DISABLED=true — the ACR firewall sweeper is PARKED for the Gov estate too."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [[ -z "${CLIENT_ID}" ]]; then
+            echo "::notice::No Gov deploy credentials configured in this repo — skipping the Gov sweep."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login (Gov sub)
+        if: steps.guard.outputs.skip != 'true'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: steps.guard.outputs.skip != 'true'
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Sweep
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
+          if [[ -z "$RG" ]]; then
+            echo "::notice::No rg-csa-loom-admin* resource group in the Gov subscription — nothing to sweep."
+            exit 0
+          fi
+          RC=0
+          for ACR in $(az acr list --resource-group "$RG" --query "[?starts_with(name,'acrloom')].name" -o tsv | tr -d '\r'); do
+            bash scripts/csa-loom/acr-firewall-lease.sh sweep --acr "$ACR" \
+              ${{ inputs.force && '--force' || '' }} || RC=1
+          done
+          exit $RC

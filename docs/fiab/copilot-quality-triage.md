@@ -1,9 +1,7 @@
 # Copilot quality triage — why 9 of 10 surfaces are below floor
 
 **Issue:** [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585) ·
-**Status:** diagnosis complete; **P0/P1/P1b/P3 remediated — see
-[copilot-retrieval-remediation.md](copilot-retrieval-remediation.md)**; P2 + P4
-still open ·
+**Status:** diagnosis complete, remediation NOT started ·
 **Author:** triage pass, 2026-07-28 ·
 **Subject run:** [30373810035](https://github.com/fgarofalo56/csa-inabox/actions/runs/30373810035)
 (10 sets / 146 rows, judge `gpt-5.6-sol`, corpus manifest `f3484db9`)

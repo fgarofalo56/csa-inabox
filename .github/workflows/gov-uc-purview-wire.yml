@@ -88,13 +88,19 @@ jobs:
           set -euo pipefail
           SHA=$(git rev-parse --short=8 HEAD)
           echo "SHA=$SHA" >> "$GITHUB_ENV"
-          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          # #2603: lease the ACR firewall instead of a bare toggle, so this
+          # step's re-lock cannot deny another run's in-flight push.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           az acr build --registry "$ACR" --no-logs \
             --image "loom-unity:$SHA" --image "loom-unity:latest" \
             --file apps/loom-unity/Dockerfile \
             apps/loom-unity
-          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
 
       - name: Deploy the OSS Unity Catalog Container App (loom-unity-app.bicep)
         if: ${{ inputs.skip_unity != 'true' }}
