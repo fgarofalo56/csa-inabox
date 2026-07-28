@@ -94,6 +94,11 @@ import { LoomNativeModelView } from './semantic-model-editor/loom-native-model-v
 // + approved question→query pairs; the data agent retrieves verified queries
 // first and refuses out-of-contract questions).
 import { VerifiedQueriesPane } from './semantic-model-editor/verified-queries-pane';
+// R10 decomposition slice 1 — three self-contained tab clusters (state hook +
+// presentational body) moved to sibling modules. Purely structural.
+import { useSemanticModelAggregations, SemanticModelAggregationsTab } from './semantic-model-editor/aggregations-tab';
+import { useSemanticModelDirectLake, SemanticModelDirectLakeTab } from './semantic-model-editor/direct-lake-tab';
+import { useSemanticModelIncrementalRefresh, SemanticModelIncrementalRefreshTab } from './semantic-model-editor/incremental-refresh-tab';
 
 // Re-export so `import { SemanticModelPrepForAiPane } from '.../semantic-model-editor'`
 // keeps resolving unchanged (the prep-for-ai smoke test imports it from here).
@@ -401,33 +406,6 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     finally { setCalcBusy(false); }
   }, [datasetId, workspaceId, calcTableName, calcTableExpr, loadModel]);
 
-  // --- Incremental refresh policy + hybrid table (current-period DirectQuery) ---
-  // Mirrors the Power BI Desktop "Incremental refresh and real-time data" dialog:
-  // archive (keep) range, incremental refresh range, real-time DirectQuery toggle,
-  // detect-changes column. Writes via PUT /refresh-policy → aas-incremental-refresh
-  // (TMSL Alter + Refresh applyRefreshPolicy). Opt-in AAS backend; default stays
-  // loom-native.
-  const GRAINS = ['day', 'month', 'quarter', 'year'] as const;
-  type Grain = typeof GRAINS[number];
-  const [irTableName, setIrTableName] = useState('');
-  const [irRollingWindowPeriods, setIrRollingWindowPeriods] = useState(3);
-  const [irRollingWindowGranularity, setIrRollingWindowGranularity] = useState<Grain>('year');
-  const [irIncrementalPeriods, setIrIncrementalPeriods] = useState(10);
-  const [irIncrementalGranularity, setIrIncrementalGranularity] = useState<Grain>('day');
-  const [irEnableHybrid, setIrEnableHybrid] = useState(false);
-  const [irPollingExpression, setIrPollingExpression] = useState('');
-  const [irEffectiveDate, setIrEffectiveDate] = useState('');
-  const [irBusy, setIrBusy] = useState(false);
-  const [irMsg, setIrMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [irPartitions, setIrPartitions] = useState<Array<{ name: string; storageMode: string; queryDefinition?: string }>>([]);
-  const [irGate, setIrGate] = useState<string | null>(null);
-  // Enhanced refresh (apply-policy + targeted) controls.
-  const [enhBusy, setEnhBusy] = useState(false);
-  const [enhMsg, setEnhMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [enhApplyPolicy, setEnhApplyPolicy] = useState(true);
-  const [enhEffectiveDate, setEnhEffectiveDate] = useState('');
-  const [enhCommitMode, setEnhCommitMode] = useState<'transactional' | 'partialBatch'>('transactional');
-
 
   // --- Security tab (RLS row filters + OLS object permissions) -------------
   // Authors model roles through the Analysis-Services XMLA endpoint (Azure
@@ -517,93 +495,9 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     setSecRoles((prev) => (prev || []).map((r) => (r.name === roleName ? mut(r) : r)));
   }, []);
 
-  // matching queries to the small agg table and falls through to the DirectQuery
-  // detail table otherwise. Writes via POST /api/items/semantic-model/{id}/model
-  // → XMLA (Azure Analysis Services by default; Premium/Fabric XMLA opt-in by URL).
-  const AGG_SUMMARIZATIONS = ['GroupBy', 'Sum', 'Count', 'Min', 'Max'] as const;
-  const AGG_DATATYPES = ['int64', 'double', 'decimal', 'dateTime', 'string', 'boolean'] as const;
-  type AggSummarization = typeof AGG_SUMMARIZATIONS[number];
-  type AltMap = { aggColumn: string; dataType: typeof AGG_DATATYPES[number]; summarization: AggSummarization; detailTable: string; detailColumn: string };
-  const [aggTableName, setAggTableName] = useState('');
-  const [aggPartitionExpr, setAggPartitionExpr] = useState('');
-  const [aggAltMaps, setAggAltMaps] = useState<AltMap[]>([]);
-  const [aggProbeQuery, setAggProbeQuery] = useState('');
-  const [aggBusy, setAggBusy] = useState(false);
-  const [aggMsg, setAggMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [aggProbeResult, setAggProbeResult] = useState<Array<Record<string, unknown>> | null>(null);
-
-  const addAltMap = useCallback(() => {
-    setAggAltMaps((prev) => [...prev, { aggColumn: '', dataType: 'double', summarization: 'Sum', detailTable: detail?.tables?.[0]?.name || '', detailColumn: '' }]);
-  }, [detail?.tables]);
-  const updateAltMap = useCallback((i: number, patch: Partial<AltMap>) => {
-    setAggAltMaps((prev) => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m));
-  }, []);
-  const removeAltMap = useCallback((i: number) => {
-    setAggAltMaps((prev) => prev.filter((_, idx) => idx !== i));
-  }, []);
-
-  // Seed a starter set of mappings from the first table's columns: numeric
-  // columns → Sum, the first column → GroupBy grain. A UI convenience only —
-  // every value stays editable; nothing is applied until Create is clicked.
-  const seedAltMapsFromTable = useCallback(() => {
-    const t = detail?.tables?.[0];
-    if (!t) return;
-    const cols = t.columns || [];
-    const numeric = (dt?: string) => /int|double|decimal|number|currency/i.test(dt || '');
-    const seeded: AltMap[] = [];
-    cols.forEach((c, idx) => {
-      const isNum = numeric(c.dataType);
-      seeded.push({
-        aggColumn: c.name,
-        dataType: isNum ? 'double' : 'string',
-        summarization: (idx === 0 || !isNum) ? 'GroupBy' : 'Sum',
-        detailTable: t.name,
-        detailColumn: c.name,
-      });
-    });
-    setAggAltMaps(seeded);
-    if (!aggTableName) setAggTableName(`${t.name}_Agg`);
-  }, [detail?.tables, aggTableName]);
-
-  const createAggregation = useCallback(async () => {
-    if (!workspaceId || !datasetId || !aggTableName.trim() || aggAltMaps.length === 0) return;
-    setAggBusy(true); setAggMsg(null); setAggProbeResult(null);
-    try {
-      const r = await clientFetch(
-        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`,
-        {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            action: 'aggregation',
-            aggTableName: aggTableName.trim(),
-            partitionExpression: aggPartitionExpr.trim(),
-            altMaps: aggAltMaps.map((m) => ({
-              aggColumn: m.aggColumn.trim(), dataType: m.dataType, summarization: m.summarization,
-              detailTable: m.detailTable.trim(), detailColumn: m.detailColumn.trim() || undefined,
-            })),
-            probeQuery: aggProbeQuery.trim() || undefined,
-          }),
-        },
-      );
-      const j = await r.json();
-      if (j.xmlaUnavailable) {
-        setAggMsg({ ok: false, text: `XMLA endpoint not configured. ${j.detail || 'Set LOOM_POWERBI_XMLA_ENDPOINT to enable aggregation authoring.'}` });
-        return;
-      }
-      if (!j.ok) { setAggMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
-      const probeNote = j.probeError ? ` Probe query failed: ${j.probeError}` : (j.probeResult ? ' Probe query returned data — the engine answers the agg-grain query.' : '');
-      setAggMsg({ ok: true, text: `Aggregation table "${aggTableName.trim()}" registered on model "${j.catalog}".${probeNote}` });
-      if (j.probeResult?.rows) setAggProbeResult(j.probeResult.rows);
-    } catch (e: any) { setAggMsg({ ok: false, text: e?.message || String(e) }); }
-    finally { setAggBusy(false); }
-  }, [workspaceId, datasetId, aggTableName, aggPartitionExpr, aggAltMaps, aggProbeQuery]);
-
-  // --- Automatic aggregations builder (XMLA TMSL alternateOf) --------------
-  // Defines a hidden, Import-mode aggregation table whose columns each carry an
-  // alternateOf (BaseTable/BaseColumn + Summarization) so the AS engine routes
-  // matching queries to the small agg table and falls through to the DirectQuery
-  // detail table otherwise. Writes via POST /api/items/semantic-model/{id}/model
-  // → XMLA (Azure Analysis Services by default; Premium/Fabric XMLA opt-in by URL).
+  // Automatic aggregations builder (XMLA TMSL alternateOf) — extracted to
+  // ./semantic-model-editor/aggregations-tab (R10).
+  const agg = useSemanticModelAggregations({ workspaceId, datasetId, tables: detail?.tables });
   // Direct Lake query with transparent Serverless fallback (direct-lake-query tab).
   // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
   // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
@@ -633,112 +527,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   const [dlqLoading, setDlqLoading] = useState(false);
   const [dlResult, setDlResult] = useState<DlQueryResult | null>(null);
 
-  // --- Direct Lake (shim) tab -------------------------------------------------
-  // Azure-native parity for Fabric Direct Lake: the shim keeps a warm AAS
-  // (Power BI Premium XMLA) cache fresh from an ADLS Gen2 Delta source, driven
-  // by _delta_log Event Grid notifications. Config persists to the shim's
-  // Cosmos store via PUT /api/items/semantic-model/{id}/direct-lake.
-  type DlPolicy = 'Partition' | 'Full' | 'DirectQueryFallback' | 'Composite';
-  type DlTableRow = { tableName: string; policy: DlPolicy; partitionColumn: string };
-  interface DlShimRun { requestId: string; refreshType?: string; status?: string; startTime?: string; endTime?: string; durationMs?: number; error?: string }
-  interface DlEventGrid { systemTopic: string; topicState: string; subscriptionName: string; subscriptionState: string; destinationQueueId?: string }
-  const DL_SLA_OPTIONS = [
-    { value: 300, label: '5 minutes' },
-    { value: 900, label: '15 minutes' },
-    { value: 3600, label: '1 hour' },
-    { value: -1, label: 'On change (Event Grid trigger)' },
-  ];
-  const DL_POLICIES: Array<{ value: DlPolicy; label: string }> = [
-    { value: 'Partition', label: 'Partition (incremental — Direct Lake sweet spot)' },
-    { value: 'Full', label: 'Full table refresh' },
-    { value: 'DirectQueryFallback', label: 'DirectQuery (always live)' },
-    { value: 'Composite', label: 'Composite (Import + DirectQuery)' },
-  ];
-  const [dlEnabled, setDlEnabled] = useState<boolean | null>(null); // null = unknown until first load
-  const [dlHint, setDlHint] = useState<string>('');
-  const [dlDeltaPath, setDlDeltaPath] = useState('');
-  const [dlSla, setDlSla] = useState<number>(300);
-  const [dlTables, setDlTables] = useState<DlTableRow[]>([]);
-  const [dlRuns, setDlRuns] = useState<DlShimRun[]>([]);
-  const [dlEventGrid, setDlEventGrid] = useState<DlEventGrid | null>(null);
-  const [dlBusy, setDlBusy] = useState(false);
-  const [dlLoading, setDlLoading] = useState(false);
-  const [dlMsg, setDlMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const DEFAULT_DL_PATH_HINT = 'abfss://gold@<account>.dfs.core.windows.net/<delta-table-path>';
-
-  const loadDirectLake = useCallback(async (dsId: string, wsId: string) => {
-    if (!dsId) return;
-    setDlLoading(true); setDlMsg(null);
-    try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
-      const j = await r.json();
-      if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); setDlEnabled(true); return; }
-      setDlEnabled(!!j.shimEnabled);
-      setDlHint(j.hint || '');
-      setDlRuns(Array.isArray(j.runs) ? j.runs : []);
-      setDlEventGrid(j.eventGrid || null);
-      if (j.config) {
-        setDlDeltaPath(j.config.deltaSourcePath || '');
-        setDlSla(typeof j.config.freshnessSlaSeconds === 'number' ? j.config.freshnessSlaSeconds : 300);
-        const rows: DlTableRow[] = Object.values(j.config.tables || {}).map((t: any) => ({
-          tableName: t.tableName || '', policy: (t.policy as DlPolicy) || 'Partition', partitionColumn: t.partitionColumn || '',
-        }));
-        if (rows.length) setDlTables(rows);
-      }
-    } catch (e: any) { setDlMsg({ ok: false, text: e?.message || String(e) }); setDlEnabled(true); }
-    finally { setDlLoading(false); }
-  }, []);
-
-  // Seed the per-table policy grid from the model's tables when none is loaded
-  // yet, so the operator sees one row per table to configure.
-  useEffect(() => {
-    if (tab !== 'direct-lake') return;
-    setDlTables((prev) => {
-      if (prev.length) return prev;
-      const fromModel = (detail?.tables || []).map((t) => ({ tableName: t.name, policy: 'Partition' as DlPolicy, partitionColumn: '' }));
-      return fromModel;
-    });
-  }, [tab, detail?.tables]);
-
-  useEffect(() => {
-    if (tab === 'direct-lake' && datasetId) loadDirectLake(datasetId, workspaceId);
-  }, [tab, datasetId, workspaceId, loadDirectLake]);
-
-  const setDlTablePolicy = useCallback((idx: number, policy: DlPolicy) => {
-    setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, policy } : row)));
-  }, []);
-  const setDlTablePartCol = useCallback((idx: number, partitionColumn: string) => {
-    setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, partitionColumn } : row)));
-  }, []);
-
-  const saveDirectLake = useCallback(async () => {
-    if (!datasetId || !workspaceId || !dlDeltaPath.trim()) {
-      setDlMsg({ ok: false, text: 'Select a workspace + dataset and enter the ADLS Gen2 Delta source path first.' });
-      return;
-    }
-    setDlBusy(true); setDlMsg(null);
-    try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/direct-lake`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          deltaSourcePath: dlDeltaPath.trim(),
-          freshnessSlaSeconds: dlSla,
-          workspaceId,
-          datasetId,
-          tables: dlTables.filter((t) => t.tableName.trim()).map((t) => ({
-            tableName: t.tableName.trim(), policy: t.policy,
-            ...(t.partitionColumn.trim() ? { partitionColumn: t.partitionColumn.trim() } : {}),
-          })),
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
-      setDlEventGrid(j.eventGrid || null);
-      setDlMsg({ ok: true, text: j.eventGridNote ? `Saved. Event Grid wiring deferred: ${j.eventGridNote}` : 'Direct Lake (shim) configured. The shim picks up the new policy within ~60 s.' });
-      if (j.config?.deltaSourcePath) setDlDeltaPath(j.config.deltaSourcePath);
-    } catch (e: any) { setDlMsg({ ok: false, text: e?.message || String(e) }); }
-    finally { setDlBusy(false); }
-  }, [datasetId, workspaceId, dlDeltaPath, dlSla, dlTables]);
+  // Direct Lake (shim) — extracted to ./semantic-model-editor/direct-lake-tab
+  // (R10). Called at the exact position the raw state block occupied so the
+  // hook + effect order of this component is unchanged.
+  const dl = useSemanticModelDirectLake({ tab, datasetId, workspaceId, tables: detail?.tables });
 
   // Composite + Dual per-table storage mode (Tables tab). Each table gets an
   // Import / DirectQuery / Dual picker so a single model can MIX modes; the
@@ -974,73 +766,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     finally { setTakeoverBusy(false); }
   }, [workspaceId, datasetId, loadDetail]);
 
-  // Load the live partition schema (TMSCHEMA_PARTITIONS via AAS XMLA). Surfaces
-  // the honest AAS config gate when LOOM_SEMANTIC_BACKEND!=analysis-services.
-  const loadIrPolicy = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
-    setIrGate(null); setIrPartitions([]);
-    try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}&tableName=${encodeURIComponent(irTableName)}`);
-      const j = await r.json();
-      if (!j.ok) { setIrGate(j.error); return; }
-      setIrPartitions(j.partitions || []);
-    } catch (e: any) { setIrGate(e?.message || String(e)); }
-  }, [workspaceId, datasetId, irTableName]);
-
-  // Apply an incremental refresh policy: TMSL Alter (set policy) + TMSL Refresh
-  // (applyRefreshPolicy:true → historical Import partitions + live DQ partition
-  // when Hybrid). The receipt is the resulting partition list.
-  const saveIrPolicy = useCallback(async () => {
-    if (!workspaceId || !datasetId || !irTableName) return;
-    setIrBusy(true); setIrMsg(null);
-    try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          tableName: irTableName,
-          policy: {
-            rollingWindowGranularity: irRollingWindowGranularity,
-            rollingWindowPeriods: irRollingWindowPeriods,
-            incrementalGranularity: irIncrementalGranularity,
-            incrementalPeriods: irIncrementalPeriods,
-            mode: irEnableHybrid ? 'Hybrid' : 'Import',
-            ...(irPollingExpression.trim() ? { pollingExpression: irPollingExpression.trim() } : {}),
-          },
-          ...(irEffectiveDate.trim() ? { effectiveDate: irEffectiveDate.trim() } : {}),
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setIrMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
-      setIrPartitions(j.partitions || []);
-      const dq = (j.partitions || []).filter((p: any) => p.storageMode === 'DirectQuery').length;
-      setIrMsg({ ok: true, text: `Policy applied. ${j.partitions?.length ?? 0} partition(s)${dq ? `, including ${dq} live DirectQuery partition` : ''}.` });
-    } catch (e: any) { setIrMsg({ ok: false, text: e?.message || String(e) }); }
-    finally { setIrBusy(false); }
-  }, [workspaceId, datasetId, irTableName, irRollingWindowGranularity, irRollingWindowPeriods, irIncrementalGranularity, irIncrementalPeriods, irEnableHybrid, irPollingExpression, irEffectiveDate]);
-
-  // Enhanced (async) refresh — POST /refreshes with commitMode + applyRefreshPolicy
-  // + effectiveDate. Refreshes the rolling Import partitions per the policy while
-  // leaving historical + DQ partitions intact.
-  const triggerEnhancedRefresh = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
-    setEnhBusy(true); setEnhMsg(null);
-    try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'full',
-          commitMode: enhCommitMode,
-          applyRefreshPolicy: enhApplyPolicy,
-          ...(enhEffectiveDate.trim() ? { effectiveDate: enhEffectiveDate.trim() } : {}),
-        }),
-      });
-      const j = await r.json();
-      if (!j.ok) { setEnhMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
-      setEnhMsg({ ok: true, text: `Enhanced refresh queued (requestId: ${String(j.requestId || '').slice(0, 8)}…).` });
-      setTimeout(() => loadRefreshes(workspaceId, datasetId), 2000);
-    } catch (e: any) { setEnhMsg({ ok: false, text: e?.message || String(e) }); }
-    finally { setEnhBusy(false); }
-  }, [workspaceId, datasetId, enhCommitMode, enhApplyPolicy, enhEffectiveDate, loadRefreshes]);
+  // Incremental-refresh policy + hybrid table + enhanced refresh — extracted
+  // to ./semantic-model-editor/incremental-refresh-tab (R10). Called
+  // unconditionally so the tab keeps its draft across tab switches.
+  const ir = useSemanticModelIncrementalRefresh({ workspaceId, datasetId, loadRefreshes });
 
   // Apply the per-table storage modes: builds a composite model.bim TMSL with a
   // per-partition `mode` (import/directQuery/dual) and applies it via the
@@ -1534,7 +1263,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   <Tab value="ask" icon={<Sparkle20Regular />}>Ask</Tab>                  <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
                   <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
                   <Tab value="build">Build model</Tab>
-                  <Tab value="aggregations">Aggregations ({aggAltMaps.length})</Tab>
+                  <Tab value="aggregations">Aggregations ({agg.aggAltMaps.length})</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   {isDqMode && <Tab value="datasource">DirectQuery source</Tab>}
                   <Tab value="incremental">Incremental refresh</Tab>
@@ -2116,121 +1845,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   </>
                 )}
                 {tab === 'aggregations' && (
-                  <>
-                    <MessageBar intent="info">
-                      <MessageBarBody>
-                        <MessageBarTitle>Automatic aggregations</MessageBarTitle>
-                        Define a hidden, Import-mode <strong>aggregation table</strong> whose columns each map (via
-                        <code> alternateOf</code>) to a column in a DirectQuery <strong>detail table</strong> with a
-                        summarization (GroupBy for grain keys; Sum / Count / Min / Max for measures). The Analysis Services
-                        engine then automatically rewrites queries that match the agg grain to this small table and falls
-                        through to the detail table otherwise. Requires the model at compatibility level 1460+ and an XMLA
-                        endpoint (<code>LOOM_POWERBI_XMLA_ENDPOINT</code> — Azure Analysis Services by default; a Power BI
-                        Premium / Fabric capacity XMLA endpoint is opt-in by URL). Verify a query-plan hit with SQL Profiler /
-                        SSMS XEvents → the <strong>Aggregate Table Rewrite Query</strong> event reports
-                        <code> matchingResult=matchFound</code>.
-                      </MessageBarBody>
-                    </MessageBar>
-                    {detail?.dataset?.targetStorageMode === 'Push' && (
-                      <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}>
-                        <MessageBarBody>
-                          <MessageBarTitle>Push datasets do not support XMLA aggregations</MessageBarTitle>
-                          This model is a push dataset; aggregation tables are written over the XMLA endpoint, which push
-                          datasets don&rsquo;t expose. Build the model in Import / DirectQuery mode to author aggregations.
-                        </MessageBarBody>
-                      </MessageBar>
-                    )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 920 }}>
-                      <Field label="Aggregation table name" required style={{ maxWidth: 420 }}>
-                        <Input value={aggTableName} onChange={(_, d) => setAggTableName(d.value)} placeholder="Sales_Agg" />
-                      </Field>
-                      <Field label="Partition source (Power Query / M expression)" hint='The query that produces the pre-aggregated rows, e.g. Value.NativeQuery over a "SELECT CustomerKey, SUM(SalesAmount) AS SalesAmount FROM FactSales GROUP BY CustomerKey". Import-mode partition.'>
-                        <MonacoTextarea value={aggPartitionExpr} onChange={setAggPartitionExpr} language="plaintext" height={120} ariaLabel="Aggregation partition M expression" />
-                      </Field>
-
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Subtitle2>Column mappings ({aggAltMaps.length})</Subtitle2>
-                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
-                          <Button size="small" appearance="outline" onClick={seedAltMapsFromTable} disabled={!detail?.tables?.length} title="seed starter mappings from the first table's columns (editable)">Seed from first table</Button>
-                          <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addAltMap}>Add mapping</Button>
-                        </div>
-                      </div>
-                      {aggAltMaps.length === 0 ? (
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No mappings yet. Add a GroupBy mapping for each grain key and a Sum/Count/Min/Max mapping for each measure.</Caption1>
-                      ) : (
-                        <div className={s.tableWrap}>
-                          <Table aria-label="Aggregation column mappings" size="small">
-                            <TableHeader><TableRow>
-                              <TableHeaderCell><InfoLabel info="The column created on the hidden, Import-mode aggregation table. It stores a pre-aggregated value the engine can substitute for queries against the detail table.">Agg column</InfoLabel></TableHeaderCell>
-                              <TableHeaderCell>Data type</TableHeaderCell>
-                              <TableHeaderCell><InfoLabel info="How this column rolls up the detail data: GroupBy for grain/key columns, or Sum / Count / Min / Max for measures. The engine only rewrites a query to the agg table when its grain and summarizations match.">Summarization</InfoLabel></TableHeaderCell>
-                              <TableHeaderCell><InfoLabel info="The DirectQuery detail table this aggregation column maps to (via alternateOf). Queries answerable at the agg grain hit the small agg table; everything else falls through to this detail table.">Detail table</InfoLabel></TableHeaderCell>
-                              <TableHeaderCell>Detail column</TableHeaderCell>
-                              <TableHeaderCell />
-                            </TableRow></TableHeader>
-                            <TableBody>
-                              {aggAltMaps.map((m, i) => (
-                                <TableRow key={i}>
-                                  <TableCell><Input size="small" value={m.aggColumn} onChange={(_, d) => updateAltMap(i, { aggColumn: d.value })} placeholder="SalesAmount" /></TableCell>
-                                  <TableCell>
-                                    <Select size="small" value={m.dataType} onChange={(_, d) => updateAltMap(i, { dataType: d.value as AltMap['dataType'] })}>
-                                      {AGG_DATATYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                                    </Select>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Select size="small" value={m.summarization} onChange={(_, d) => updateAltMap(i, { summarization: d.value as AggSummarization })}>
-                                      {AGG_SUMMARIZATIONS.map((su) => <option key={su} value={su}>{su}</option>)}
-                                    </Select>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Select size="small" value={m.detailTable} onChange={(_, d) => updateAltMap(i, { detailTable: d.value })}>
-                                      <option value="">— select —</option>
-                                      {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-                                    </Select>
-                                  </TableCell>
-                                  <TableCell>
-                                    <Input size="small" value={m.detailColumn} onChange={(_, d) => updateAltMap(i, { detailColumn: d.value })} placeholder={m.summarization === 'Count' ? '(rows — optional)' : 'SalesAmount'} />
-                                  </TableCell>
-                                  <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeAltMap(i)} title="remove mapping" aria-label="Remove column mapping" /></TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      )}
-
-                      <Field label="Probe DAX (optional)" hint={'Runs after the agg table is applied to prove the engine answers a query at the agg grain, e.g. EVALUATE SUMMARIZECOLUMNS(\'FactSales\'[CustomerKey], "Total", SUM(\'FactSales\'[SalesAmount])). Confirm the actual query-plan hit in SQL Profiler’s Aggregate Table Rewrite Query event.'}>
-                        <MonacoTextarea value={aggProbeQuery} onChange={setAggProbeQuery} language="sql" height={90} ariaLabel="Probe DAX query" />
-                      </Field>
-
-                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
-                        <Button appearance="primary" icon={<Save20Regular />}
-                          onClick={createAggregation}
-                          disabled={aggBusy || !datasetId || !aggTableName.trim() || !aggPartitionExpr.trim() || aggAltMaps.length === 0 || detail?.dataset?.targetStorageMode === 'Push'}>
-                          {aggBusy ? 'Applying…' : 'Create aggregation table'}
-                        </Button>
-                        {!datasetId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Select a model first.</Caption1>}
-                      </div>
-                      {aggMsg && <MessageBar intent={aggMsg.ok ? 'success' : (aggMsg.text.includes('XMLA endpoint not configured') ? 'warning' : 'error')}><MessageBarBody>{aggMsg.text}</MessageBarBody></MessageBar>}
-                      {aggProbeResult && aggProbeResult.length > 0 && (
-                        <div className={s.tableWrap}>
-                          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalXS}}>Probe result ({aggProbeResult.length} row{aggProbeResult.length === 1 ? '' : 's'})</Subtitle2>
-                          <Table aria-label="Probe result" size="small">
-                            <TableHeader><TableRow>
-                              {Object.keys(aggProbeResult[0]).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
-                            </TableRow></TableHeader>
-                            <TableBody>
-                              {aggProbeResult.slice(0, 20).map((row, ri) => (
-                                <TableRow key={ri}>
-                                  {Object.keys(aggProbeResult[0]).map((k) => <TableCell key={k} className={s.cell}>{String(row[k] ?? '')}</TableCell>)}
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      )}
-                    </div>
-                  </>
+                  <SemanticModelAggregationsTab
+                    s={s} agg={agg} tables={detail?.tables}
+                    targetStorageMode={detail?.dataset?.targetStorageMode} datasetId={datasetId}
+                  />
                 )}
                 {tab === 'refresh' && (
                   <div className={s.tableWrap}>
@@ -2260,132 +1878,9 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   </div>
                 )}
                 {tab === 'incremental' && (
-                  <>
-                    <MessageBar intent="info">
-                      <MessageBarBody>
-                        <MessageBarTitle>Incremental refresh + hybrid table (current-period DirectQuery)</MessageBarTitle>
-                        Sets a <code>refreshPolicy</code> on a table (TMSL Alter over the Azure Analysis Services XMLA
-                        endpoint), then applies it (TMSL Refresh, <code>applyRefreshPolicy:true</code>) to create historical
-                        Import partitions and — when <em>real-time DirectQuery partition</em> is enabled — a live
-                        DirectQuery partition for the current period. Requires <code>LOOM_SEMANTIC_BACKEND=analysis-services</code>{' '}
-                        and <code>LOOM_AAS_XMLA_ENDPOINT</code> (compatibility level 1565+ for Hybrid mode). AAS is an
-                        Azure-native PaaS — no Microsoft Fabric or Power BI workspace required.{' '}
-                        <a href="https://learn.microsoft.com/power-bi/connect-data/incremental-refresh-xmla" target="_blank" rel="noreferrer">Docs</a>
-                      </MessageBarBody>
-                    </MessageBar>
-                    {irGate && (
-                      <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS}}>
-                        <MessageBarBody><MessageBarTitle>Azure Analysis Services not configured</MessageBarTitle>{irGate}</MessageBarBody>
-                      </MessageBar>
-                    )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM, maxWidth: 580 }}>
-                      <Field label="Table" required>
-                        <Select value={irTableName} onChange={(_, d) => setIrTableName(d.value)}>
-                          <option value="">(select a table)</option>
-                          {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-                        </Select>
-                      </Field>
-                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
-                        <Field label="Archive data starting (keep)" style={{ flex: 1 }}>
-                          <SpinButton min={1} value={irRollingWindowPeriods} onChange={(_, d) => setIrRollingWindowPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irRollingWindowPeriods)))} />
-                        </Field>
-                        <Field label="Unit" style={{ minWidth: 120 }}>
-                          <Select value={irRollingWindowGranularity} onChange={(_, d) => setIrRollingWindowGranularity(d.value as Grain)}>
-                            {GRAINS.map((g) => <option key={g} value={g}>{g}(s)</option>)}
-                          </Select>
-                        </Field>
-                      </div>
-                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
-                        <Field label="Incrementally refresh data in the last" style={{ flex: 1 }}>
-                          <SpinButton min={1} value={irIncrementalPeriods} onChange={(_, d) => setIrIncrementalPeriods(Math.max(1, Number(d.value ?? d.displayValue ?? irIncrementalPeriods)))} />
-                        </Field>
-                        <Field label="Unit" style={{ minWidth: 120 }}>
-                          <Select value={irIncrementalGranularity} onChange={(_, d) => setIrIncrementalGranularity(d.value as Grain)}>
-                            {GRAINS.map((g) => <option key={g} value={g}>{g}(s)</option>)}
-                          </Select>
-                        </Field>
-                      </div>
-                      <Switch
-                        label="Get the latest data in real time with DirectQuery (hybrid table — adds a live current-period partition)"
-                        checked={irEnableHybrid}
-                        onChange={(_, d) => setIrEnableHybrid(d.checked)}
-                      />
-                      <Field label="Detect data changes — column expression (optional M, e.g. Table.Max(FactSales, &quot;LastModified&quot;)[LastModified])">
-                        <Input value={irPollingExpression} onChange={(_, d) => setIrPollingExpression(d.value)} placeholder='Table.Max(FactSales, "LastModified")[LastModified]' />
-                      </Field>
-                      <Field label="Effective date override (ISO, optional — overrides &quot;today&quot; for the rolling window)">
-                        <Input value={irEffectiveDate} onChange={(_, d) => setIrEffectiveDate(d.value)} placeholder="2025-06-08" />
-                      </Field>
-                      <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
-                        <Button appearance="primary" icon={<Save20Regular />} disabled={irBusy || !workspaceId || !datasetId || !irTableName} onClick={saveIrPolicy}>
-                          {irBusy ? 'Applying…' : 'Apply refresh policy'}
-                        </Button>
-                        <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={!workspaceId || !datasetId} onClick={loadIrPolicy}>
-                          Load partitions
-                        </Button>
-                      </div>
-                      {irMsg && <MessageBar intent={irMsg.ok ? 'success' : 'error'}><MessageBarBody>{irMsg.text}</MessageBarBody></MessageBar>}
-                    </div>
-
-                    {irPartitions.length > 0 && (
-                      <>
-                        <Subtitle2 style={{ marginTop: tokens.spacingVerticalXL }}>Partition receipt ({irPartitions.length})</Subtitle2>
-                        <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
-                          <Table aria-label="Partitions" size="small">
-                            <TableHeader><TableRow>
-                              <TableHeaderCell>Partition</TableHeaderCell>
-                              <TableHeaderCell>Storage mode</TableHeaderCell>
-                              <TableHeaderCell>Query / source</TableHeaderCell>
-                            </TableRow></TableHeader>
-                            <TableBody>
-                              {irPartitions.map((p) => (
-                                <TableRow key={p.name} style={p.storageMode === 'DirectQuery' ? { background: tokens.colorBrandBackground2 } : undefined}>
-                                  <TableCell>{p.name}</TableCell>
-                                  <TableCell>
-                                    <Badge appearance={p.storageMode === 'DirectQuery' ? 'filled' : 'outline'} color={p.storageMode === 'DirectQuery' ? 'brand' : 'informative'}>{p.storageMode}</Badge>
-                                  </TableCell>
-                                  <TableCell className={s.cell}><code style={{ fontSize: tokens.fontSizeBase100}}>{p.queryDefinition?.slice(0, 140) || '—'}</code></TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      </>
-                    )}
-
-                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalXXL }}>Enhanced refresh (apply policy)</Subtitle2>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      POST /refreshes with <code>commitMode</code>, <code>applyRefreshPolicy</code> and <code>effectiveDate</code>.
-                      Refreshes the rolling Import partitions per the policy; the historical and live DirectQuery partitions stay intact.
-                    </Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS, maxWidth: 580 }}>
-                      <Switch label="Apply refresh policy (creates / reshuffles partitions)" checked={enhApplyPolicy} onChange={(_, d) => setEnhApplyPolicy(d.checked)} />
-                      <Field label="Commit mode">
-                        <Select value={enhCommitMode} onChange={(_, d) => setEnhCommitMode(d.value as 'transactional' | 'partialBatch')}>
-                          <option value="transactional">transactional (all-or-nothing)</option>
-                          <option value="partialBatch" disabled={enhApplyPolicy}>partialBatch (per-partition commit — not valid with applyRefreshPolicy)</option>
-                        </Select>
-                      </Field>
-                      <Field label="Effective date override (ISO, optional)">
-                        <Input value={enhEffectiveDate} onChange={(_, d) => setEnhEffectiveDate(d.value)} placeholder="2025-06-08" />
-                      </Field>
-                      <Button appearance="primary" icon={<Play20Regular />} disabled={enhBusy || !workspaceId || !datasetId} onClick={triggerEnhancedRefresh}>
-                        {enhBusy ? 'Queuing…' : 'Run enhanced refresh'}
-                      </Button>
-                      {enhMsg && <MessageBar intent={enhMsg.ok ? 'success' : 'error'}><MessageBarBody>{enhMsg.text}</MessageBarBody></MessageBar>}
-                    </div>
-
-                    <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalXL }}>
-                      <MessageBarBody>
-                        <MessageBarTitle>Scheduled refresh trigger</MessageBarTitle>
-                        To run this enhanced refresh on a timer, author a Synapse / ADF ScheduleTrigger with a Web Activity
-                        that POSTs to this dataset&apos;s refresh endpoint (the <strong>Data pipeline</strong> editor wires the
-                        pipeline; <code>synapse-dev-client.upsertTrigger()</code> creates the trigger when
-                        <code>LOOM_SYNAPSE_WORKSPACE</code> is configured). The daily run refreshes only the rolling Import
-                        partitions — current-period rows already arrive live through the DirectQuery partition, no full refresh needed.
-                      </MessageBarBody>
-                    </MessageBar>
-                  </>
+                  <SemanticModelIncrementalRefreshTab
+                    s={s} ir={ir} tables={detail?.tables} workspaceId={workspaceId} datasetId={datasetId}
+                  />
                 )}
                 {tab === 'config' && (
                   <>
@@ -2494,142 +1989,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   />
                 )}
                 {tab === 'direct-lake' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: 820 }}>
-                    <div>
-                      <Subtitle2>Direct Lake (shim)</Subtitle2>
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS }}>
-                        Azure-native parity for Fabric Direct Lake. The shim keeps a warm AAS (Power BI Premium XMLA)
-                        cache fresh from an ADLS Gen2 Delta source — triggered by <code>_delta_log</code> Event Grid
-                        notifications — so the model reflects new Delta rows within the freshness SLA.
-                      </Caption1>
-                    </div>
-
-                    {/* Honest, always-on disclosure — cloud-invariant. */}
-                    <MessageBar intent="warning">
-                      <MessageBarBody>
-                        <MessageBarTitle>This is an AAS incremental-refresh shim, not a Fabric F-SKU</MessageBarTitle>
-                        True Direct Lake sub-second freshness requires a Fabric F-SKU (unavailable in Gov). This shim
-                        achieves 5–30 s via AAS incremental refresh via Power BI Premium XMLA. Set
-                        {' '}<code>LOOM_DIRECT_LAKE_SHIM_ENABLED=true</code> to activate.
-                      </MessageBarBody>
-                    </MessageBar>
-
-                    {dlEnabled === false ? (
-                      <MessageBar intent="info">
-                        <MessageBarBody>
-                          <MessageBarTitle>Direct Lake (shim) is not enabled in this deployment</MessageBarTitle>
-                          {dlHint || 'Set LOOM_DIRECT_LAKE_SHIM_ENABLED=true to activate the shim.'} Deploy the shim
-                          container app, its Service Bus queue, and the Event Grid system topic via
-                          {' '}<code>platform/fiab/bicep/modules/admin-plane/aas.bicep</code>.
-                        </MessageBarBody>
-                      </MessageBar>
-                    ) : (
-                      <>
-                        {dlEventGrid && (
-                          <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <Badge appearance="filled" color={dlEventGrid.subscriptionState === 'Succeeded' ? 'success' : 'warning'}>
-                              Event Grid: {dlEventGrid.subscriptionState}
-                            </Badge>
-                            <Caption1>Topic: <strong>{dlEventGrid.systemTopic}</strong> ({dlEventGrid.topicState})</Caption1>
-                          </div>
-                        )}
-
-                        <Field label="ADLS Gen2 Delta source path" hint="abfss://container@account.dfs… or https://account.dfs…/container/… — populated from the lakehouse the model is built on.">
-                          <Input value={dlDeltaPath} onChange={(_, d) => setDlDeltaPath(d.value)} placeholder={DEFAULT_DL_PATH_HINT} disabled={dlBusy} />
-                        </Field>
-
-                        <Field label="Freshness SLA">
-                          <Select value={String(dlSla)} onChange={(_, d) => setDlSla(parseInt(d.value, 10))} disabled={dlBusy}>
-                            {DL_SLA_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                          </Select>
-                        </Field>
-
-                        <div>
-                          <Caption1 style={{ fontWeight: 600 }}>Per-table refresh policy</Caption1>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS, marginBottom: tokens.spacingVerticalS}}>
-                            One row per table in the model. Partition is the incremental Direct-Lake sweet spot — set the
-                            partition column the Delta directory layout encodes (e.g. <code>event_date</code>).
-                          </Caption1>
-                          <div className={s.tableWrap}>
-                            <Table aria-label="Per-table refresh policy" size="small">
-                              <TableHeader><TableRow>
-                                <TableHeaderCell>Table</TableHeaderCell>
-                                <TableHeaderCell>Refresh policy</TableHeaderCell>
-                                <TableHeaderCell>Partition column</TableHeaderCell>
-                              </TableRow></TableHeader>
-                              <TableBody>
-                                {dlTables.length === 0 && (
-                                  <TableRow><TableCell colSpan={3}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No tables loaded yet — open the Tables tab to load the model schema.</Caption1></TableCell></TableRow>
-                                )}
-                                {dlTables.map((row, idx) => (
-                                  <TableRow key={row.tableName || idx}>
-                                    <TableCell>{row.tableName}</TableCell>
-                                    <TableCell>
-                                      <Select value={row.policy} onChange={(_, d) => setDlTablePolicy(idx, d.value as DlPolicy)} disabled={dlBusy}>
-                                        {DL_POLICIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                                      </Select>
-                                    </TableCell>
-                                    <TableCell>
-                                      <Input
-                                        value={row.partitionColumn}
-                                        onChange={(_, d) => setDlTablePartCol(idx, d.value)}
-                                        placeholder={row.policy === 'Partition' ? 'event_date' : '—'}
-                                        disabled={dlBusy || row.policy !== 'Partition'}
-                                        size="small"
-                                      />
-                                    </TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center' }}>
-                          <Button appearance="primary" icon={<Save20Regular />} disabled={dlBusy || dlLoading} onClick={saveDirectLake}>
-                            {dlBusy ? 'Saving…' : 'Configure shim'}
-                          </Button>
-                          <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={dlLoading || !datasetId} onClick={() => loadDirectLake(datasetId, workspaceId)}>
-                            {dlLoading ? 'Loading…' : 'Refresh status'}
-                          </Button>
-                        </div>
-                        {dlMsg && <MessageBar intent={dlMsg.ok ? 'success' : 'error'}><MessageBarBody>{dlMsg.text}</MessageBarBody></MessageBar>}
-
-                        <div>
-                          <Caption1 style={{ fontWeight: 600 }}>Shim run log (last {dlRuns.length})</Caption1>
-                          <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
-                            <Table aria-label="Shim refresh runs" size="small">
-                              <TableHeader><TableRow>
-                                <TableHeaderCell>Request</TableHeaderCell>
-                                <TableHeaderCell>Type</TableHeaderCell>
-                                <TableHeaderCell>Status</TableHeaderCell>
-                                <TableHeaderCell>Start</TableHeaderCell>
-                                <TableHeaderCell>Duration</TableHeaderCell>
-                              </TableRow></TableHeader>
-                              <TableBody>
-                                {dlRuns.length === 0 && (
-                                  <TableRow><TableCell colSpan={5}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No refresh runs yet. Write new Delta rows to the source to trigger the shim.</Caption1></TableCell></TableRow>
-                                )}
-                                {dlRuns.map((run, i) => (
-                                  <TableRow key={run.requestId || i}>
-                                    <TableCell><span style={{ fontFamily: 'monospace' }}>{(run.requestId || '—').slice(0, 8)}</span></TableCell>
-                                    <TableCell>{run.refreshType || '—'}</TableCell>
-                                    <TableCell>
-                                      <Badge appearance="outline" color={run.status === 'Completed' ? 'success' : run.status === 'Failed' ? 'danger' : 'informative'}>
-                                        {run.status || 'Unknown'}
-                                      </Badge>
-                                    </TableCell>
-                                    <TableCell>{run.startTime ? new Date(run.startTime).toLocaleString() : '—'}</TableCell>
-                                    <TableCell>{typeof run.durationMs === 'number' ? `${(run.durationMs / 1000).toFixed(1)} s` : '—'}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={datasetId} workspaceId={workspaceId} />
                 )}
                 {tab === 'datasource' && isDqMode && datasetId && (
                   <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={workspaceId} />

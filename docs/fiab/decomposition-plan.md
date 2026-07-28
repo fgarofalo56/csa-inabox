@@ -138,6 +138,41 @@ per-tab state into each pane and lift only the shared model doc into a
 `useSemanticModel()` reducer/context. **Target:** shell + context ~700 LOC;
 each pane group < 800; no pane > 500.
 
+**Progress — R10 slice 1 (loom-apex B-R10).** The "already-standalone units"
+row above shipped as WS-E1 (9 sibling modules under
+`phase3/semantic-model-editor/`, 4617→3025 LOC). R10 slice 1 then lifted the
+first three *ops* clusters — **aggregations**, **Direct Lake (shim)**, and
+**incremental refresh + enhanced refresh** — out of `SemanticModelEditorInner`
+(3025→2386 LOC; ratchet re-baselined 3050→2400). Each moved as a pair in one
+sibling module: a `use<Cluster>()` hook holding the cluster's `useState` /
+`useCallback` / `useEffect` **verbatim**, plus a presentational `<...Tab>` body
+that receives the hook's api object. The parent calls each hook
+**unconditionally**, at the position the raw state block occupied, so hook
+order, effect order, and state lifetime across tab switches are unchanged —
+which is what makes the move purely structural (state does NOT move into the
+conditionally-mounted body; that would reset every draft on tab switch).
+
+Remaining slices, same pattern, in descending payoff order (parent line refs
+are as of the 2,386-LOC file this slice produced):
+
+| Slice | Cluster | Parent lines today | Est. LOC |
+|-------|---------|--------------------|----------|
+| 2 | Tables tab — XMLA column metadata, calc column/table dialogs, per-table storage mode | state 264–294 + 337–408, JSX 1280–1552 | ~380 |
+| 3 | "Get data" Power Query ingest dialog + connector gallery | state 548–598, JSX 1051–1240 | ~240 |
+| 4 | Measures tab — DAX validator + DAX Copilot + format/folder persistence | state 180–201 + 203–250, JSX 1701–1846 | ~215 |
+| 5 | Calc groups + field parameters | state 146–158 + loaders, JSX 2037–2149 | ~180 |
+| 6 | Scheduled refresh (config tab) + refresh history | state 252–262, JSX 1853–1925 | ~150 |
+| 7 | Model builder ("Build model" tab, push-dataset authoring) | state 164–178, JSX 1626–1700 | ~130 |
+| 8 | Direct Lake **query** tab (distinct from the shim in slice 1) | state 521–527, JSX 2150–end | ~150 |
+
+
+Only after those does the `useSemanticModel()` reducer/context step become
+worthwhile — the per-cluster hooks are its natural inputs. R18's shared
+`lib/editors/use-editor-state.ts` is the intended home for the *document*
+state (tables/relationships/measures) once the ops clusters are out of the way;
+adopting it changes save/dirty semantics, so it must be its own PR with a
+browser E2E receipt, never bundled into a structural slice.
+
 ---
 
 ## 4. `notebook-editor.tsx` — 3875 LOC
