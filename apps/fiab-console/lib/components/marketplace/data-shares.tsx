@@ -26,7 +26,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Divider, Card, CardHeader,
-  Input, Textarea, Field, Select, Tag, Tooltip, Tab, TabList,
+  Input, Textarea, Field, Select, Tag, Tooltip, Tab, TabList, Switch, Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -73,7 +73,7 @@ const useStyles = makeStyles({
 interface Gate { error: string; hint?: string; missing?: string }
 interface ShareObj { name: string; data_object_type?: string; shared_as?: string }
 interface Share { name: string; comment?: string; owner?: string; objects?: ShareObj[] }
-interface Recipient { name: string; authentication_type?: string; comment?: string; tokens?: Array<{ activation_url?: string }> }
+interface Recipient { name: string; authentication_type?: string; comment?: string; tokens?: Array<{ activation_url?: string }>; disabled?: boolean }
 interface Provider { name: string; comment?: string; data_provider_global_metastore_id?: string; shares?: Share[] }
 interface MountedCatalog { name: string; provider_name?: string; share_name?: string; comment?: string; catalog_type?: string }
 
@@ -752,6 +752,7 @@ function OutboundPanel({
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Auth</TableHeaderCell>
               <TableHeaderCell>Activation</TableHeaderCell>
+              {backend === 'loom' && <TableHeaderCell>Access</TableHeaderCell>}
               <TableHeaderCell>Actions</TableHeaderCell>
             </TableRow>
           </TableHeader>
@@ -768,6 +769,35 @@ function OutboundPanel({
                       </Tooltip>
                     : <Caption1 className={styles.hint}>—</Caption1>}
                 </TableCell>
+                {backend === 'loom' && (
+                  <TableCell>
+                    {/* Suspend keeps the record, the grants, and the audit history
+                        while stopping every protocol call on the next request —
+                        DELETE loses the grant list an investigation needs. */}
+                    <Tooltip
+                      relationship="description"
+                      content={r.disabled
+                        ? 'Suspended: this recipient is refused at authentication. Its grants are preserved.'
+                        : 'Active. Turn off to suspend all access immediately without deleting the recipient.'}
+                    >
+                      <Switch
+                        checked={!r.disabled}
+                        disabled={busy}
+                        label={r.disabled ? 'Suspended' : 'Active'}
+                        aria-label={`Access for ${r.name}`}
+                        onChange={async (_, d) => {
+                          setBusy(true);
+                          await clientFetch(`/api/marketplace/sharing/recipients/${encodeURIComponent(r.name)}`, {
+                            method: 'PATCH',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ disabled: !d.checked }),
+                          });
+                          setBusy(false); onChange();
+                        }}
+                      />
+                    </Tooltip>
+                  </TableCell>
+                )}
                 <TableCell>
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete recipient"
                     onClick={async () => {
@@ -849,6 +879,9 @@ function AddObjectDialog({
   const [loomSchema, setLoomSchema] = useState('');
   const [loomTable, setLoomTable] = useState('');
   const [loomLocation, setLoomLocation] = useState('');
+  // Change Data Feed. The protocol's `changes` endpoint only works for a table
+  // the server was told to share history for, so this has to reach the manifest.
+  const [loomHistory, setLoomHistory] = useState(false);
   const [catalogs, setCatalogs] = useState<string[]>([]);
   const [schemas, setSchemas] = useState<string[]>([]);
   const [tables, setTables] = useState<Array<{ full: string; name: string }>>([]);
@@ -862,9 +895,14 @@ function AddObjectDialog({
     return j.ok ? (j.nodes || []) : [];
   }, [host]);
 
-  useEffect(() => { if (open && host) void browse([]).then((n) => setCatalogs(n.map((x: any) => x.id))); }, [open, host, browse]);
-  useEffect(() => { setSch(''); setTbl(''); setSchemas([]); setTables([]); if (cat) void browse([cat]).then((n) => setSchemas(n.map((x: any) => x.id))); }, [cat, browse]);
-  useEffect(() => { setTbl(''); setTables([]); if (cat && sch) void browse([cat, sch]).then((n) => setTables(n.filter((x: any) => x.kind === 'table').map((x: any) => ({ full: x.meta?.full_name || `${cat}.${sch}.${x.id}`, name: x.id })))); }, [cat, sch, browse]);
+  // The cascade below browses a Unity Catalog metastore. On the Loom backend
+  // `host` is the sharing SERVER's FQDN and no metastore exists, so firing these
+  // would issue /api/catalog/browse?source=unity-catalog&path=<sharing-fqdn> on
+  // every dialog open — a call to the wrong backend that can only fail.
+  const ucBrowse = backend !== 'loom';
+  useEffect(() => { if (ucBrowse && open && host) void browse([]).then((n) => setCatalogs(n.map((x: any) => x.id))); }, [ucBrowse, open, host, browse]);
+  useEffect(() => { setSch(''); setTbl(''); setSchemas([]); setTables([]); if (ucBrowse && cat) void browse([cat]).then((n) => setSchemas(n.map((x: any) => x.id))); }, [ucBrowse, cat, browse]);
+  useEffect(() => { setTbl(''); setTables([]); if (ucBrowse && cat && sch) void browse([cat, sch]).then((n) => setTables(n.filter((x: any) => x.kind === 'table').map((x: any) => ({ full: x.meta?.full_name || `${cat}.${sch}.${x.id}`, name: x.id })))); }, [ucBrowse, cat, sch, browse]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
@@ -886,6 +924,16 @@ function AddObjectDialog({
                 >
                   <Input value={loomLocation} onChange={(_, d) => setLoomLocation(d.value)}
                     placeholder="abfss://lake@stloom.dfs.core.usgovcloudapi.net/gold/revenue" />
+                </Field>
+                <Field
+                  label="Share history (CDF)" className={s.field}
+                  hint="Publishes the Delta change data feed as well as the current snapshot, so the recipient's client can call /changes. Without it, a CDF read fails at the server."
+                >
+                  <Checkbox
+                    checked={loomHistory}
+                    onChange={(_, d) => setLoomHistory(!!d.checked)}
+                    label="Recipients may read table history"
+                  />
                 </Field>
               </div>
             ) : (
@@ -927,7 +975,10 @@ function AddObjectDialog({
               onClick={async () => {
                 setBusy(true); setErr(null);
                 const addObjects = backend === 'loom'
-                  ? [{ schema: loomSchema.trim(), name: loomTable.trim(), location: loomLocation.trim() }]
+                  ? [{
+                    schema: loomSchema.trim(), name: loomTable.trim(),
+                    location: loomLocation.trim(), historyShared: loomHistory,
+                  }]
                   : [{ name: tbl, data_object_type: 'TABLE', ...(sharedAs ? { shared_as: sharedAs } : {}) }];
                 const r = await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(shareName)}`, {
                   method: 'PATCH', headers: { 'content-type': 'application/json' },
@@ -936,7 +987,7 @@ function AddObjectDialog({
                 const j = await r.json(); setBusy(false);
                 if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
                 setOpen(false); setCat(''); setSch(''); setTbl(''); setSharedAs('');
-                setLoomSchema(''); setLoomTable(''); setLoomLocation(''); onDone();
+                setLoomSchema(''); setLoomTable(''); setLoomLocation(''); setLoomHistory(false); onDone();
               }}
             >{busy ? 'Adding…' : 'Add table'}</Button>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>

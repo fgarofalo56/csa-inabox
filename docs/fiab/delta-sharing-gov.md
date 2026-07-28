@@ -66,8 +66,20 @@ A Loom recipient is a set of **Entra principal ids** — the `oid` of a guest/B2
 }
 ```
 
+The bearer must be an **access token** for the sharing audience — an ID token minted for the
+Console during an ordinary interactive sign-in is refused (`lib/azure/entra-bearer-verify.ts`
+checks `scp`/`roles` and rejects the bare-client-id audience). Set `LOOM_SHARING_AUDIENCE` to a
+dedicated app registration so a Console token is not a sharing token at all; optionally set
+`LOOM_SHARING_SCOPE` to require a specific scope or app role.
+
 Tokens expire on their own, are revocable in Entra, and every call is audit-logged with the
-presenting principal (allow **and** deny).
+presenting principal — allow **and** deny, including the 401 for a bad credential and the 403
+for a valid token that is not a registered recipient. Allow rows record what was actually
+served, resolved from the share record, not the path the caller typed.
+
+A recipient can be **suspended** without being deleted (Data shares → Recipients → the Access
+toggle, `PATCH {disabled:true}`): authentication starts failing on the next call while the
+grant list and audit history survive for the investigation.
 
 ---
 
