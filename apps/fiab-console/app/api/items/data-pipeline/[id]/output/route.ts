@@ -22,11 +22,20 @@ import { itemsContainer } from '@/lib/azure/cosmos-client';
 import {
   listActivityRuns, listPipelineRuns,
   listActivityRunsFromLA, listPipelineRunsFromLA, adfLogAnalyticsWorkspace,
+  defaultFactoryName,
 } from '@/lib/azure/adf-client';
+import { harvestPipelineRunLineage } from '@/lib/lineage/synapse-lineage-harvest';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** Factory name for the OpenLineage job namespace. `defaultFactoryName()`
+ *  throws when the ADF env is unset; the run we are reading came FROM a
+ *  factory, so fall back to a stable label rather than failing the response. */
+function safeFactoryName(): string {
+  try { return defaultFactoryName(); } catch { return 'adf'; }
+}
 
 
 
@@ -63,6 +72,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         ok: true,
         runId,
         source,
+        // LU-8: harvest this run's Copy activities into OpenLineage and write
+        // the edges into unified-lineage. The activity runs are already in
+        // hand, so the harvest costs only the pipeline/dataset/linked-service
+        // reads it needs to name datasets canonically. Best-effort + deduped
+        // per run per replica; never throws into the Output pane.
+        lineage: await harvestPipelineRunLineage(s, {
+          workspaceId,
+          adfPipelineName: adfName,
+          factoryName: safeFactoryName(),
+          runId,
+          runEnd: activities[activities.length - 1]?.activityRunEnd,
+          activityRuns: activities,
+        }),
         activities: activities.map((a) => ({
           id: a.activityRunId,
           name: a.activityName,

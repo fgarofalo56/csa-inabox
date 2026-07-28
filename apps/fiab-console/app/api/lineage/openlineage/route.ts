@@ -49,11 +49,14 @@ import {
   type MappedOpenLineageEdge,
 } from '@/lib/azure/openlineage-ingest';
 import { enforceRateLimitForKey } from '@/lib/azure/rate-limiter';
-import { itemsContainer, workspacesContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+import { workspacesContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+// LU-8: the dataset URI -> Loom item resolver is SHARED with the Synapse
+// pipeline / Spark emitters so every OpenLineage producer resolves paths the
+// same way (and canonicalizes abfss/wasbs/https spellings before matching).
+import { resolveOwner, loadWorkspacePathItems, findForeignOwner } from '@/lib/lineage/dataset-item-resolver';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { SessionPayload } from '@/lib/auth/session';
-import { stripTrailingSlashes } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,87 +66,6 @@ export const dynamic = 'force-dynamic';
  *  a runaway or hostile producer. The durable Cosmos window (default class:
  *  120/min cross-replica) backstops replica spreading. */
 const OL_RATE_LIMITS = { ratePerSec: 5, burst: 20 };
-
-/** A Loom item that carries at least one physical storage path in its state. */
-interface PathItem {
-  id: string;
-  workspaceId: string;
-  itemType: string;
-  displayName?: string;
-  paths: string[]; // normalized (lowercase, no trailing slash)
-}
-
-function normPath(p: string): string {
-  return stripTrailingSlashes(p.trim()).toLowerCase();
-}
-
-/** Collect the physical storage-path strings on an item's state (top level —
- *  e.g. lakehouse `state.adlsRoot`, mirror bronze roots). */
-function statePaths(state: Record<string, unknown> | undefined): string[] {
-  if (!state || typeof state !== 'object') return [];
-  const out: string[] = [];
-  for (const v of Object.values(state)) {
-    if (typeof v === 'string' && /^(abfss?|wasbs?|https):\/\//i.test(v.trim())) out.push(normPath(v));
-  }
-  return out;
-}
-
-/** True when `uri` is the item path itself or a child of it (`/` boundary). */
-function pathOwns(itemPath: string, uri: string): boolean {
-  if (!itemPath) return false;
-  if (uri === itemPath) return true;
-  return uri.startsWith(`${itemPath}/`);
-}
-
-/** Longest-prefix owner of `uri` among the candidates, or null. */
-function resolveOwner(uri: string, candidates: PathItem[]): PathItem | null {
-  let best: PathItem | null = null;
-  let bestLen = -1;
-  for (const c of candidates) {
-    for (const p of c.paths) {
-      if (pathOwns(p, uri) && p.length > bestLen) {
-        best = c;
-        bestLen = p.length;
-      }
-    }
-  }
-  return best;
-}
-
-/** Path-bearing items of ONE workspace (the authorized scope). */
-async function loadWorkspacePathItems(workspaceId: string): Promise<PathItem[]> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<{ id: string; workspaceId: string; itemType: string; displayName?: string; state?: Record<string, unknown> }>({
-      query: 'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
-      parameters: [{ name: '@w', value: workspaceId }],
-    })
-    .fetchAll();
-  return (resources || [])
-    .map((r) => ({ id: r.id, workspaceId: r.workspaceId, itemType: r.itemType, displayName: r.displayName, paths: statePaths(r.state) }))
-    .filter((r) => r.paths.length > 0);
-}
-
-/**
- * Cross-workspace forgery probe (redesign #2): find an item in a DIFFERENT
- * workspace that owns `uri`. Queries only the path-bearing item classes
- * (bounded), then prefix-matches in process.
- */
-async function findForeignOwner(uri: string, workspaceId: string): Promise<PathItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<{ id: string; workspaceId: string; itemType: string; displayName?: string; state?: Record<string, unknown> }>({
-      query:
-        'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.state FROM c ' +
-        'WHERE c.workspaceId != @w AND (IS_DEFINED(c.state.adlsRoot) OR IS_DEFINED(c.state.abfssUri) OR IS_DEFINED(c.state.storageLocation))',
-      parameters: [{ name: '@w', value: workspaceId }],
-    })
-    .fetchAll();
-  const candidates = (resources || [])
-    .map((r) => ({ id: r.id, workspaceId: r.workspaceId, itemType: r.itemType, displayName: r.displayName, paths: statePaths(r.state) }))
-    .filter((r) => r.paths.length > 0);
-  return resolveOwner(uri, candidates);
-}
 
 /** Cross-partition workspace load (machine path — no user session). */
 async function loadWorkspaceDoc(workspaceId: string): Promise<{ id: string; tenantId: string; name?: string } | null> {

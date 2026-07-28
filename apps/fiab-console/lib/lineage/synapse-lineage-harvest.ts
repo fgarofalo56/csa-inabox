@@ -1,0 +1,373 @@
+/**
+ * LU-8 — the IMPURE half of the Synapse OpenLineage emitters: read what really
+ * ran from Azure, build the RunEvents (pure, `synapse-emitters.ts`), and write
+ * the resulting edges through the SAME L2 path the openlineage-spark listener
+ * ingest uses (`mapRunEventToEdges` → `recordThreadEdge`).
+ *
+ * There is deliberately NO second lineage store and NO second mapper. The only
+ * difference from the listener path is where the event comes from: an in-process
+ * harvest of Azure Data Factory / Synapse REST instead of an HTTP POST from a
+ * Spark executor.
+ *
+ * Backends called (all REAL, all Azure-native — no Fabric):
+ *   - ADF/Synapse pipeline definition   `getPipeline`      (ARM REST)
+ *   - ADF/Synapse datasets              `getDataset`       (ARM REST)
+ *   - ADF/Synapse linked services       `getLinkedService` (ARM REST)
+ *   - ADF/Synapse activity runs         `listActivityRuns` (ARM REST)
+ *   - Synapse Spark batch (Livy)        `getSparkBatchJob` (Synapse dev REST)
+ *   - Cosmos `items` (dataset → item)   + Cosmos `thread-edges` (the sink)
+ *
+ * Every entry point is BEST-EFFORT and non-throwing: lineage is an
+ * observability layer over a run that already happened, so a harvest failure
+ * must never turn a healthy run poll into an error. Each returns a receipt the
+ * caller can surface.
+ */
+
+import {
+  getPipeline,
+  getDataset,
+  getLinkedService,
+  listActivityRuns,
+  type AdfActivityRun,
+} from '@/lib/azure/adf-client';
+import {
+  mapRunEventToEdges,
+  type OpenLineageRunEvent,
+  type MappedOpenLineageEdge,
+} from '@/lib/azure/openlineage-ingest';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { canonicalStorageUri, parseStorageAccountUrl } from '@/lib/lineage/dataset-naming';
+import { loadWorkspacePathItems, resolveOwner, type PathItem } from '@/lib/lineage/dataset-item-resolver';
+import {
+  pipelineRunEvents,
+  sparkBatchRunEvent,
+  translatorColumnMappings,
+  type CopyActivityLineage,
+  type ResolvedAdfDataset,
+} from '@/lib/lineage/synapse-emitters';
+import type { OpenLineageFullRunEvent } from '@/lib/lineage/openlineage';
+import type { SessionPayload } from '@/lib/auth/session';
+
+/** ThreadEdge action for pipeline-derived lineage (distinct from the
+ *  listener's `openlineage-spark`, so the canvas can tell them apart). */
+export const PIPELINE_LINEAGE_ACTION = 'openlineage-pipeline';
+/** ThreadEdge action for Loom-side Spark-batch-derived lineage. */
+export const SPARK_LINEAGE_ACTION = 'openlineage-spark';
+
+/** Max activities harvested from one pipeline run (write-amplification bound). */
+const MAX_ACTIVITIES = 40;
+/** Bounded in-process dedupe so a polled route harvests a run once per replica. */
+const HARVESTED_MAX = 500;
+const harvested = new Set<string>();
+
+function alreadyHarvested(key: string): boolean {
+  if (harvested.has(key)) return true;
+  if (harvested.size >= HARVESTED_MAX) harvested.clear(); // cheap bounded LRU
+  harvested.add(key);
+  return false;
+}
+
+/** Test hook — clears the dedupe set between cases. */
+export function __resetHarvestDedupe(): void {
+  harvested.clear();
+}
+
+export interface HarvestReceipt {
+  ok: boolean;
+  /** RunEvents built from the real run. */
+  events: number;
+  /** Item/dataset edges written to the lineage store. */
+  written: number;
+  skipped: number;
+  /** Set when nothing was harvested and why (honest, never a silent no-op). */
+  reason?: string;
+  error?: string;
+}
+
+const EMPTY: HarvestReceipt = { ok: true, events: 0, written: 0, skipped: 0 };
+
+// ---------------------------------------------------------------------------
+// Shared write path
+// ---------------------------------------------------------------------------
+
+/**
+ * Write one built RunEvent's edges through the L2 mapper + sink.
+ *
+ * Endpoint identity, in order:
+ *   1. the Loom item that OWNS the physical path (longest-prefix, shared
+ *      resolver) — a deep-linkable node on the canvas;
+ *   2. otherwise the canonical dataset id itself, recorded as an EXTERNAL
+ *      endpoint. The asset is real (the run just read/wrote it) and its
+ *      canonical id normalizes to the same `path:` / `uc:` key the Purview and
+ *      Unity Catalog overlays use, so it merges with their node instead of
+ *      dangling. It is NOT deep-linked, because there is no Loom item to open.
+ */
+async function writeEventEdges(
+  session: SessionPayload,
+  event: OpenLineageFullRunEvent,
+  candidates: PathItem[],
+  action: string,
+): Promise<{ written: number; skipped: number }> {
+  const mapped = mapRunEventToEdges(event as unknown as OpenLineageRunEvent);
+  if (!mapped.ok) return { written: 0, skipped: 0 };
+  let written = 0;
+  let skipped = 0;
+  for (const edge of mapped.edges as MappedOpenLineageEdge[]) {
+    const from = endpoint(edge.fromUri, candidates);
+    const to = endpoint(edge.toUri, candidates);
+    if (from.id === to.id) { skipped += 1; continue; }
+    await recordThreadEdge(session, {
+      fromItemId: from.id,
+      fromType: from.type,
+      fromName: from.name,
+      toItemId: to.id,
+      toType: to.type,
+      toName: to.name,
+      ...(to.external ? { toExternal: true } : {}),
+      action,
+      ...(edge.columnMappings.length ? { columnMappings: edge.columnMappings } : {}),
+    });
+    written += 1;
+  }
+  return { written, skipped };
+}
+
+interface Endpoint { id: string; type: string; name: string; external?: boolean }
+
+/** Resolve one dataset URI to its lineage-graph endpoint (see writeEventEdges). */
+function endpoint(uri: string, candidates: PathItem[]): Endpoint {
+  const owner = resolveOwner(uri, candidates);
+  if (owner) {
+    return { id: owner.id, type: owner.itemType, name: owner.displayName || owner.id };
+  }
+  const canonical = canonicalStorageUri(uri);
+  return { id: canonical, type: 'dataset', name: shortDatasetLabel(canonical), external: true };
+}
+
+/** Human label for an external dataset node: the last two path segments. */
+function shortDatasetLabel(uri: string): string {
+  const tail = uri.split('/').filter(Boolean).slice(-2).join('/');
+  return tail || uri;
+}
+
+// ---------------------------------------------------------------------------
+// Synapse / ADF pipeline runs
+// ---------------------------------------------------------------------------
+
+/** Resolve an ADF dataset reference (by name) into the emitter's input shape. */
+async function resolveDataset(
+  name: string,
+  cache: Map<string, ResolvedAdfDataset | null>,
+): Promise<ResolvedAdfDataset | null> {
+  if (cache.has(name)) return cache.get(name) || null;
+  let out: ResolvedAdfDataset | null = null;
+  try {
+    const ds = await getDataset(name);
+    const props = (ds.properties || {}) as Record<string, any>;
+    const tp = (props.typeProperties || {}) as Record<string, any>;
+    const rawCols = (Array.isArray(props.schema) && props.schema.length ? props.schema : props.structure) as
+      | Array<Record<string, unknown>>
+      | undefined;
+    const columns = (rawCols || []).map((c) => String(c?.name ?? '')).filter(Boolean);
+
+    const lsName = props.linkedServiceName?.referenceName as string | undefined;
+    let linkedServiceUrl: string | undefined;
+    let sqlServer: string | undefined;
+    let sqlDatabase: string | undefined;
+    if (lsName) {
+      const ls = await getLinkedService(lsName).catch(() => null);
+      const lsProps = (ls?.properties || {}) as Record<string, any>;
+      const lsTp = (lsProps.typeProperties || {}) as Record<string, any>;
+      const url = typeof lsTp.url === 'string' ? lsTp.url : typeof lsTp.serviceEndpoint === 'string' ? lsTp.serviceEndpoint : '';
+      if (url && parseStorageAccountUrl(url)) linkedServiceUrl = url;
+      const conn = typeof lsTp.connectionString === 'string' ? lsTp.connectionString : '';
+      if (conn) {
+        // A literal ADO.NET connection string (KV-referenced secrets arrive as
+        // an object, not a string — those simply yield no host, and the SQL
+        // dataset still joins on its `database.schema.table` name).
+        sqlServer = /(?:^|;)\s*(?:server|data source)\s*=\s*(?:tcp:)?([^,;]+)/i.exec(conn)?.[1]?.trim();
+        sqlDatabase = /(?:^|;)\s*(?:initial catalog|database)\s*=\s*([^;]+)/i.exec(conn)?.[1]?.trim();
+      }
+      if (!sqlDatabase && typeof lsTp.database === 'string') sqlDatabase = lsTp.database;
+    }
+
+    const isTable = typeof tp.table === 'string' || typeof tp.tableName === 'string';
+    out = {
+      name,
+      type: props.type,
+      ...(tp.location ? { location: tp.location } : {}),
+      ...(linkedServiceUrl ? { linkedServiceUrl } : {}),
+      ...(isTable
+        ? {
+            sqlServer,
+            sqlDatabase,
+            sqlSchema: typeof tp.schema === 'string' ? tp.schema : undefined,
+            sqlTable: String(tp.table ?? tp.tableName ?? ''),
+          }
+        : {}),
+      ...(columns.length ? { columns } : {}),
+    };
+  } catch {
+    out = null; // dataset unreadable — that activity contributes no lineage
+  }
+  cache.set(name, out);
+  return out;
+}
+
+export interface HarvestPipelineInput {
+  /** Loom workspace owning the pipeline item (scopes item resolution). */
+  workspaceId: string;
+  /** ADF/Synapse pipeline name (`state.adfPipelineName`). */
+  adfPipelineName: string;
+  /** Factory / workspace name for the OL job namespace. */
+  factoryName: string;
+  /** The pipeline run to harvest. */
+  runId: string;
+  runStatus?: string;
+  runEnd?: string;
+  /** Pre-fetched activity runs (the Output pane already has them). */
+  activityRuns?: AdfActivityRun[];
+}
+
+/**
+ * Harvest ONE Synapse/ADF pipeline run into OpenLineage events and write the
+ * resulting lineage. Only activities that actually ran are considered, and each
+ * emits with its own status, so a failed Copy never stamps an edge.
+ *
+ * Non-throwing; deduped per (workspace, run) per replica so a polled route can
+ * call it on every poll without re-reading ADF.
+ */
+export async function harvestPipelineRunLineage(
+  session: SessionPayload,
+  input: HarvestPipelineInput,
+): Promise<HarvestReceipt> {
+  if (!input.runId || !input.adfPipelineName) return { ...EMPTY, reason: 'no pipeline run to harvest' };
+  const status = (input.runStatus || '').toLowerCase();
+  if (status && status !== 'succeeded') {
+    return { ...EMPTY, reason: `run status ${input.runStatus} — lineage is only stamped for a succeeded run` };
+  }
+  if (alreadyHarvested(`adf:${input.workspaceId}:${input.runId}`)) {
+    return { ...EMPTY, reason: 'already harvested in this replica' };
+  }
+  try {
+    const pipeline = await getPipeline(input.adfPipelineName);
+    const defs = ((pipeline.properties?.activities || []) as Array<Record<string, any>>).slice(0, MAX_ACTIVITIES);
+    if (!defs.length) return { ...EMPTY, reason: 'pipeline has no activities' };
+
+    const runs = input.activityRuns ?? (await listActivityRuns(input.runId).catch(() => [] as AdfActivityRun[]));
+    const statusByActivity = new Map<string, string>();
+    for (const r of runs) if (r.activityName) statusByActivity.set(r.activityName, r.status || '');
+
+    const cache = new Map<string, ResolvedAdfDataset | null>();
+    const activities: CopyActivityLineage[] = [];
+    for (const a of defs) {
+      const type = String(a?.type || '');
+      if (type.toLowerCase() !== 'copy') continue; // only Copy declares a dataset pair
+      const name = String(a?.name || '');
+      // When we have activity-run rows, honour them: an activity that did not
+      // run in THIS run contributes nothing.
+      const actStatus = statusByActivity.size ? statusByActivity.get(name) : input.runStatus;
+      if (statusByActivity.size && !actStatus) continue;
+      const srcRef = (a?.inputs || [])[0]?.referenceName;
+      const snkRef = (a?.outputs || [])[0]?.referenceName;
+      if (!srcRef || !snkRef) continue;
+      const [source, sink] = await Promise.all([
+        resolveDataset(String(srcRef), cache),
+        resolveDataset(String(snkRef), cache),
+      ]);
+      if (!source || !sink) continue;
+      activities.push({
+        activityName: name,
+        activityType: type,
+        source,
+        sink,
+        columnMappings: translatorColumnMappings(a?.typeProperties?.translator),
+        status: actStatus || input.runStatus,
+      });
+    }
+    if (!activities.length) return { ...EMPTY, reason: 'no Copy activity with a resolvable source and sink' };
+
+    const events = pipelineRunEvents({
+      factoryName: input.factoryName,
+      pipelineName: input.adfPipelineName,
+      runId: input.runId,
+      runStatus: input.runStatus,
+      runEnd: input.runEnd,
+      activities,
+    });
+    const candidates = await loadWorkspacePathItems(input.workspaceId);
+    let written = 0;
+    let skipped = 0;
+    for (const ev of events) {
+      const r = await writeEventEdges(session, ev, candidates, PIPELINE_LINEAGE_ACTION);
+      written += r.written;
+      skipped += r.skipped;
+    }
+    return { ok: true, events: events.length, written, skipped };
+  } catch (e) {
+    return { ...EMPTY, ok: false, error: (e as Error)?.message || String(e) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Synapse Spark batch runs
+// ---------------------------------------------------------------------------
+
+export interface HarvestSparkInput {
+  workspaceId: string;
+  /** Synapse workspace name for the OL job namespace. */
+  synapseWorkspaceName: string;
+  poolName: string;
+  batchId: number | string;
+  jobName: string;
+  /** Livy batch state (`success` / `dead` / `killed` / `running`). */
+  state?: string;
+  args?: string[];
+  conf?: Record<string, string>;
+  eventTime?: string;
+}
+
+/**
+ * Harvest ONE Synapse Spark batch (Livy) run. Emits only when the submitted
+ * batch declared both an input and an output dataset (conf declaration or
+ * argv flags — see `parseSparkDatasets`); otherwise returns an honest reason
+ * naming the higher-fidelity option (the openlineage-spark listener), never a
+ * guessed edge.
+ */
+export async function harvestSparkBatchLineage(
+  session: SessionPayload,
+  input: HarvestSparkInput,
+): Promise<HarvestReceipt> {
+  const state = (input.state || '').toLowerCase();
+  if (state !== 'success') {
+    return { ...EMPTY, reason: `batch state ${input.state || 'unknown'} — lineage is only stamped on success` };
+  }
+  if (alreadyHarvested(`spark:${input.workspaceId}:${input.poolName}:${input.batchId}`)) {
+    return { ...EMPTY, reason: 'already harvested in this replica' };
+  }
+  try {
+    const event = sparkBatchRunEvent({
+      workspaceName: input.synapseWorkspaceName,
+      poolName: input.poolName,
+      batchId: input.batchId,
+      jobName: input.jobName,
+      state: input.state,
+      args: input.args,
+      conf: input.conf,
+      eventTime: input.eventTime,
+    });
+    if (!event) {
+      return {
+        ...EMPTY,
+        reason:
+          'the batch declared no storage input+output (set spark.loom.lineage.inputs/outputs, ' +
+          'pass --input/--output paths, or wire the openlineage-spark listener for full column lineage)',
+      };
+    }
+    const candidates = await loadWorkspacePathItems(input.workspaceId);
+    const r = await writeEventEdges(session, event, candidates, SPARK_LINEAGE_ACTION);
+    return { ok: true, events: 1, written: r.written, skipped: r.skipped };
+  } catch (e) {
+    return { ...EMPTY, ok: false, error: (e as Error)?.message || String(e) };
+  }
+}

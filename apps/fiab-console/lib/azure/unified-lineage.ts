@@ -58,6 +58,7 @@ import {
   UnityCatalogError,
 } from './unity-catalog-client';
 import { resolveAssetIdentities, storagePathIdentity } from './asset-identity';
+import { parseStorageUri, storagePartsToUri } from '@/lib/lineage/dataset-naming';
 import { listThreadEdges, type ThreadEdge } from '@/lib/thread/thread-edges';
 import type { SessionPayload } from '@/lib/auth/session';
 import type {
@@ -82,7 +83,13 @@ export function normalizeIdentity(raw: string | undefined | null): string {
   //   https://{host}/api/2.1/unity-catalog/tables/{fullName}
   const ucUrl = v.match(/\/unity-catalog\/tables\/(.+)$/i);
   if (ucUrl) return `uc:${decodeURIComponent(ucUrl[1]).toLowerCase()}`;
-  // Storage paths (UC storage_location ⇄ Atlas ADLS qualifiedName, OneLake).
+  // Azure storage (LU-8): abfss / abfs / wasbs / wasb AND the https dfs/blob
+  // endpoint spelling Purview qualifiedNames and ADF linked services use — all
+  // reduced to ONE canonical `abfss://…` URI so the same folder surfaced by
+  // Spark, a pipeline, Purview, and Unity Catalog collapses to one node.
+  const azure = parseStorageUri(v);
+  if (azure) return `path:${storagePartsToUri(azure).toLowerCase()}`;
+  // Non-Azure object stores (S3/GCS/ADL gen1) + OneLake keep the raw spelling.
   if (/^(abfss?|wasbs?|adl|s3a?|gs):\/\//i.test(v)) return `path:${v.toLowerCase()}`;
   if (/^https:\/\/[^/]*onelake\.dfs\./i.test(v)) return `path:${v.toLowerCase()}`;
   if (/^mssql:\/\//i.test(v) || /^postgresql:\/\//i.test(v)) return `path:${v.toLowerCase()}`;
@@ -440,9 +447,16 @@ async function purviewGraph(
   const nodes: IdentifiedNode[] = Object.values(graph.guidEntityMap).map((n) => {
     const isFocus = n.guid === guid;
     const identities = [`guid:${n.guid.toLowerCase()}`];
-    if (n.displayText) {
-      const norm = normalizeIdentity(n.displayText);
-      if (norm && norm !== n.guid.toLowerCase()) identities.push(norm);
+    // LU-8: the Atlas **qualifiedName** is the asset's real FQN (for an ADLS
+    // path it is the `https://acct.dfs…/container/path` URL); `displayText` is
+    // usually just the leaf name. Normalizing BOTH is what lets a Purview ADLS
+    // asset collapse onto the `path:` node the OpenLineage emitters and Unity
+    // Catalog's storage_location contribute — normalizing only displayText left
+    // the Purview node dangling beside an identical-looking storage node.
+    for (const candidate of [n.qualifiedName, n.displayText]) {
+      if (!candidate) continue;
+      const norm = normalizeIdentity(candidate);
+      if (norm && norm !== n.guid.toLowerCase() && !identities.includes(norm)) identities.push(norm);
     }
     return {
       node: {
@@ -679,7 +693,9 @@ function weaveGraph(
         focus: isFocus,
         ...(external ? (link ? { openHref: link } : {}) : { openHref: `/items/${type}/${encodeURIComponent(id)}` }),
       },
-      identities: isFocus ? [`item:${id.toLowerCase()}`, ...focusIds] : [`item:${id.toLowerCase()}`],
+      identities: isFocus
+        ? [`item:${id.toLowerCase()}`, ...weaveEndpointIdentities(id), ...focusIds]
+        : [`item:${id.toLowerCase()}`, ...weaveEndpointIdentities(id)],
     });
   };
 
@@ -744,6 +760,29 @@ function weaveGraph(
     }
   }
   return { source: 'weave', nodes: [...nodes.values()], edges: out };
+}
+
+/**
+ * The CROSS-SOURCE identities a Weave endpoint id carries in addition to its
+ * `item:` key (LU-8).
+ *
+ * A thread edge's endpoint is not always a Loom item id. The OpenLineage
+ * emitters (Synapse pipeline / Spark) and the dbt manifest parser record the
+ * PHYSICAL asset — a canonical `abfss://…` path or a `catalog.schema.table`
+ * relation — when no Loom item owns it. With only an `item:<id>` identity those
+ * nodes could never collapse onto the Purview / Unity-Catalog node for the same
+ * asset: the graph rendered two disconnected nodes that each looked correct.
+ *
+ * Routing the endpoint id through {@link normalizeIdentity} yields the SAME
+ * `path:` / `uc:` key the Purview and UC overlays contribute, so they merge.
+ * Only those two recognised cross-source key kinds are added — a plain Loom
+ * item id (a guid, a slug) normalizes to itself and must NOT be re-added as a
+ * second identity, or two unrelated items with look-alike ids could collapse.
+ */
+function weaveEndpointIdentities(id: string): string[] {
+  const ident = normalizeIdentity(id);
+  if (!ident || ident === `item:${id.toLowerCase()}`) return [];
+  return ident.startsWith('path:') || ident.startsWith('uc:') ? [ident] : [];
 }
 
 /** Add `column` to the node's `columns` badge list (de-duped), when present. */

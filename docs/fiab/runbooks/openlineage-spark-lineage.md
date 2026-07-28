@@ -111,6 +111,64 @@ Never one global static secret. `LOOM_OPENLINEAGE_AUTH_MODE` selects:
   (listener runs inside existing Spark sessions; ingest is the existing
   console).
 
+## LU-8 — Loom-side emitters (Synapse pipeline + Spark batch), no operator setup
+
+The listener above is the HIGHEST-fidelity source (it sees the physical plan, so
+it emits true column lineage). It is not the only one. LU-8 adds two emitters
+that run **inside the console** and need no pool config at all, so a merged
+lineage graph exists on day one:
+
+| Emitter | Trigger (real backend read) | Event | ThreadEdge `action` |
+|---------|-----------------------------|-------|---------------------|
+| **Synapse / ADF pipeline** | `GET /api/items/data-pipeline/[id]/jobs` (newest Succeeded run) and `…/output?runId=` — reads the pipeline definition, its datasets + linked services, and `queryActivityRuns` | one `RunEvent` per lineage-bearing **activity** (`job.name = <pipeline>.<activity>`), Copy `translator.mappings` → `columnLineage` facet | `openlineage-pipeline` |
+| **Synapse Spark batch** | `GET /api/items/spark-job-definition/[id]/runs/[runId]` — reads the Livy batch's own `livyInfo.jobCreationRequest` (the args + conf Loom submitted) | one `RunEvent` per batch; datasets from `spark.loom.lineage.inputs/outputs` conf or `--input`/`--output` argv | `openlineage-spark` |
+
+Both build spec-valid OpenLineage 1.x `RunEvent`s (`lib/lineage/synapse-emitters.ts`,
+pure) and write them through the **same L2 path** — `mapRunEventToEdges` →
+`recordThreadEdge` (`lib/lineage/synapse-lineage-harvest.ts`). No second store,
+no second mapper. `run.runId` is a deterministic UUIDv5 of the run's natural key,
+so re-harvesting is idempotent for downstream OL consumers too. Only a
+**succeeded** run/activity emits `COMPLETE`; anything else maps to `FAIL`/`ABORT`,
+which the mapper drops — a failed copy never stamps lineage.
+
+Honest limits (no fabrication): a Spark batch whose IO is not in its conf/argv
+emits nothing and returns a reason naming the listener; an ADF dataset that
+cannot be anchored to a physical location is skipped rather than rendered as an
+un-joinable node.
+
+### Canonical dataset naming (`lib/lineage/dataset-naming.ts`)
+
+This is the part that makes the graph actually merge. The same ADLS folder is
+spelled at least four ways across producers (`abfss://c@a.dfs…`, `wasbs://`, the
+ADF `fileSystem` + `folderPath` on an `https://a.dfs…` linked service, and a
+Spark write that names `…/_delta_log`). All of them reduce to ONE canonical
+identity, per the [OpenLineage naming spec](https://openlineage.io/docs/spec/naming)
+(docs release 1.52.0; RunEvent schema pinned to `1-0-5`):
+
+- **ADLS Gen2 / Blob** → namespace `abfss://{container}@{account}.dfs.{suffix}`,
+  name `/{path}`. `wasbs`/`abfs`/`https` dfs+blob spellings all fold in (one
+  storage account + container + path is one dataset), `_delta_log` /
+  `_spark_metadata` / part-file leaves fold onto the table folder, and the
+  identity is case-folded. Sovereign suffixes are carried through, never assumed.
+- **Synapse / SQL** → namespace `sqlserver://{host}:{port}`, name
+  `{database}.{schema}.{table}` (3-part, deliberately: it is what
+  `normalizeIdentity` maps to the `uc:` key the Unity Catalog overlay and the
+  dbt manifest parser already use).
+
+Three joins were repaired by adopting it:
+
+1. `POST /api/lineage/openlineage` matched dataset URIs against item state paths
+   **verbatim** — an item whose `state.adlsRoot` held the `https://…` spelling
+   could never be matched by a Spark event, so those events were silently
+   skipped. Both sides are now canonicalized (`lib/lineage/dataset-item-resolver.ts`,
+   shared by all three producers).
+2. Weave/thread-edge endpoints only carried an `item:<id>` identity, so an edge
+   recorded against a physical path or a `catalog.schema.table` relation (the
+   emitters, and the dbt L6 parser) could never collapse onto the Purview /
+   Unity Catalog node for the same asset.
+3. The Purview overlay derived its join key from `displayText` (usually just the
+   leaf name) and ignored the Atlas **qualifiedName** — the actual FQN.
+
 ## MIG1 note (Cosmos doc shapes)
 
 No migration required: `ThreadEdge.columnMappings` is **additive** and shipped
@@ -120,6 +178,14 @@ upgrade. L2 only writes NEW edges in the L1 shape.
 
 ## Verification
 
+- Unit (LU-8): `lib/lineage/__tests__/dataset-naming.test.ts` (spelling
+  equivalences + the non-equivalences), `…/synapse-emitters.test.ts` (RunEvent
+  conformance, status→eventType, translator → columnLineage) and
+  `…/lineage-join.test.ts` — **the join proof**: it emits from BOTH sides over
+  the same folders (Spark by `…/_delta_log` argv, the pipeline by
+  fileSystem+folderPath on an https linked service) and asserts the real merge
+  engine renders ONE connected `bronze → silver → gold` chain that also collapses
+  with the Purview node for the same path.
 - Unit: `lib/azure/__tests__/openlineage-ingest.test.ts` (golden RunEvent →
   declared column mappings; fan-out caps) and
   `lib/azure/__tests__/openlineage-auth.test.ts` (real-RS256 accept path;
