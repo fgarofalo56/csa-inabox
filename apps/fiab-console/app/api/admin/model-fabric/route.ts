@@ -16,20 +16,20 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { requireTenantAdmin, enforceCapability } from '@/lib/auth/feature-gate';
 import { apiOk, apiError, apiServerError, apiUnauthorized } from '@/lib/api/respond';
 import { runModelFabricLoop, loadFabricState, setFabricMode, type FabricMode } from '@/lib/admin/model-fabric-loop';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 45;
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const denied = requireTenantAdmin(session);
-  if (denied) return denied;
-
+// R3 boy-scout: withTenantAdmin runs the SAME getSession + requireTenantAdmin
+// pair this handler rolled by hand, returning the identical envelopes, so the
+// wire contract is unchanged.
+export const GET = withTenantAdmin(async (_req, { session }) => {
   const tenantId = session.claims.oid;
   const who = session.claims.upn || session.claims.email || tenantId;
   try {
@@ -42,13 +42,20 @@ export async function GET() {
       actorOid: session.claims.oid,
       mode: 'propose',
       persist: false,
+      // The reasoning tier is configured per-TENANT (modelTiers.strong in the
+      // copilot config), so the loop MUST be given that config. Without it
+      // `tierCfg` was undefined, `reasoningTierConfigured(null)` returned false,
+      // and the panel reported "reasoning tier not set" + refused to promote
+      // even on a tenant that HAD set modelTiers.strong. Verified live: config
+      // held {strong:'gpt-5.6-sol'} while the loop reported currentStrong=null.
+      tierCfg: await loadTenantCopilotConfig(tenantId),
     });
     // Surface the PERSISTED approval mode (not the dry-run's 'propose').
     return apiOk({ ...loop, mode: state.mode }) as NextResponse;
   } catch (e) {
     return apiServerError(e, 'Failed to read the model-fabric loop state');
   }
-}
+});
 
 export async function PUT(req: NextRequest) {
   const session = getSession();

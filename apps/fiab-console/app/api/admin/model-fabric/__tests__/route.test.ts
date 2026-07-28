@@ -26,6 +26,13 @@ const runModelFabricLoop = vi.fn(async (opts: any) => ({
 }));
 const setFabricMode = vi.fn(async (opts: any) => ({ mode: opts.mode }));
 const loadFabricState = vi.fn(async () => ({ id: 't', tenantId: 't', mode: 'propose', lastActuatedAt: {}, history: [], updatedAt: '', updatedBy: '' }));
+// The route loads the tenant copilot config to supply `tierCfg`. Without this
+// the reasoning tier reads as unconfigured (see the regression test below).
+const loadTenantCopilotConfig = vi.fn(async () => ({ modelTiers: { strong: 'gpt-5.6-sol' } }));
+vi.mock('@/lib/azure/copilot-config-store', () => ({
+  loadTenantCopilotConfig: (...a: any[]) => loadTenantCopilotConfig(...a),
+}));
+
 vi.mock('@/lib/admin/model-fabric-loop', () => ({
   runModelFabricLoop: (...a: any[]) => runModelFabricLoop(...a),
   setFabricMode: (...a: any[]) => setFabricMode(...a),
@@ -56,6 +63,14 @@ describe('/api/admin/model-fabric', () => {
     const opts = runModelFabricLoop.mock.calls[0][0];
     expect(opts.mode).toBe('propose');
     expect(opts.persist).toBe(false);
+    // REGRESSION: the loop reads the reasoning tier from the tenant copilot
+    // config. Neither route passed `tierCfg`, so `reasoningTierConfigured(null)`
+    // was always false and the panel reported "reasoning tier not set" (and
+    // refused to promote) on a tenant that HAD set modelTiers.strong. Verified
+    // live before the fix: config held {strong:'gpt-5.6-sol'} while the API
+    // returned reasoningConfigured=false, currentStrong=null.
+    expect(loadTenantCopilotConfig).toHaveBeenCalledWith('admin-1');
+    expect(opts.tierCfg).toEqual({ modelTiers: { strong: 'gpt-5.6-sol' } });
   });
 
   it('PUT rejects an invalid mode', async () => {
