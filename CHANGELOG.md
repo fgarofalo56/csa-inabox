@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.78.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.77.1...csa-inabox-v0.78.0) (2026-07-28)
+
+
+### Features
+
+* **d1:** ship the 7 authored-but-unreachable Learn guides + 37 unshown captures, guard the registry ([#2549](https://github.com/fgarofalo56/csa-inabox/issues/2549)) ([479d312](https://github.com/fgarofalo56/csa-inabox/commit/479d31266b7e9bee55e68607e654667522eb0cb5))
+* **loom-apex:** Phase B wave 1 — admin hub folds, U12, SC1 CVE burn-down, X3 Gov lane, N19c evidence, N14a embeddings, N19b SDK, N19e FOCUS costs ([#2551](https://github.com/fgarofalo56/csa-inabox/issues/2551)) ([449b97a](https://github.com/fgarofalo56/csa-inabox/commit/449b97a83d088796964dfafd3193fb787b871ebf))
+
+
+### Bug Fixes
+
+* **ci:** main CI concurrency per-COMMIT so roll gates stay valid ([#2550](https://github.com/fgarofalo56/csa-inabox/issues/2550)) ([553ef86](https://github.com/fgarofalo56/csa-inabox/commit/553ef869a40548112c4ad196541df81a07c6c2f7))
+* **ci:** make bicep-drift a trustworthy signal — filter what-if noise, surface coverage ([#2547](https://github.com/fgarofalo56/csa-inabox/issues/2547)) ([a217e09](https://github.com/fgarofalo56/csa-inabox/commit/a217e095bcf47f67fb1a37e2d161286f0a8a9f89))
+
 ## [0.77.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.77.0...csa-inabox-v0.77.1) (2026-07-28)
 
 
