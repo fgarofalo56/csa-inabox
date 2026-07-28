@@ -44,6 +44,17 @@ describe('deterministicRunId', () => {
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  it('matches its FROZEN wire value — the namespace UUID is part of the contract', () => {
+    // Asserting the function against itself (`f(x) === f(x)`) is true by
+    // construction for any pure function and cannot catch a changed namespace
+    // UUID or a changed digest. These goldens can: they are the ids already
+    // emitted to downstream OpenLineage consumers, so changing either input to
+    // the hash is a breaking change and must fail here first.
+    expect(deterministicRunId('adf:f1:run-1:Copy')).toBe('ffe6c217-7ab9-5962-8f44-a61c66945f03');
+    expect(deterministicRunId('synapse-spark:syn-loom:loompool:42:2026-07-28T02:00:00.000Z'))
+      .toBe('c553babf-72f6-5c62-8a64-a0000e85cfcd');
+  });
+
   it('separates different runs and different activities of one run', () => {
     expect(deterministicRunId('adf:f1:run-1:Copy')).not.toBe(deterministicRunId('adf:f1:run-2:Copy'));
     expect(deterministicRunId('adf:f1:run-1:Copy')).not.toBe(deterministicRunId('adf:f1:run-1:Copy2'));

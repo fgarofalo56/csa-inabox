@@ -39,7 +39,6 @@
  */
 
 import { NextRequest } from 'next/server';
-import crypto from 'node:crypto';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { verifyOpenLineageAuth } from '@/lib/azure/openlineage-auth';
 import {
@@ -49,13 +48,15 @@ import {
   type MappedOpenLineageEdge,
 } from '@/lib/azure/openlineage-ingest';
 import { enforceRateLimitForKey } from '@/lib/azure/rate-limiter';
-import { workspacesContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+import { workspacesContainer } from '@/lib/azure/cosmos-client';
 // LU-8: the dataset URI -> Loom item resolver is SHARED with the Synapse
 // pipeline / Spark emitters so every OpenLineage producer resolves paths the
 // same way (and canonicalizes abfss/wasbs/https spellings before matching).
 import { resolveOwner, loadWorkspacePathItems, findForeignOwner } from '@/lib/lineage/dataset-item-resolver';
+// LU-8: the cross-workspace denial audit is SHARED with the Synapse harvests —
+// two producers writing one lineage store must audit denials identically.
+import { auditCrossWorkspaceDenial } from '@/lib/lineage/lineage-audit';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
-import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { SessionPayload } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
@@ -87,50 +88,6 @@ function machineSession(ownerOid: string): SessionPayload {
     claims: { oid: ownerOid, name: 'OpenLineage ingest', upn: 'openlineage-ingest@loom.internal' },
     exp: Math.floor(Date.now() / 1000) + 60,
   };
-}
-
-/** 403 + authoritative audit row + SIEM emit for a cross-workspace write
- *  attempt (redesign #2 — every rejection is attributable + discoverable). */
-async function auditCrossWorkspaceDenial(opts: {
-  principal: string;
-  authorizedWorkspaceId: string;
-  targetWorkspaceId: string;
-  uri: string;
-  itemId: string;
-}): Promise<void> {
-  const now = new Date().toISOString();
-  try {
-    const audit = await auditLogContainer();
-    await audit.items
-      .create({
-        id: `audit-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-        itemId: `openlineage:${opts.itemId}`,
-        tenantId: opts.authorizedWorkspaceId,
-        who: opts.principal,
-        actorOid: opts.principal,
-        at: now,
-        kind: 'lineage.openlineage.cross-workspace-denied',
-        target: opts.uri,
-        detail: {
-          authorizedWorkspaceId: opts.authorizedWorkspaceId,
-          targetWorkspaceId: opts.targetWorkspaceId,
-          resolvedItemId: opts.itemId,
-        },
-      })
-      .catch(() => undefined);
-  } catch {
-    /* audit is best-effort; the 403 itself is the enforcement */
-  }
-  emitAuditEvent({
-    actorOid: opts.principal,
-    actorUpn: opts.principal,
-    action: 'lineage.openlineage.cross-workspace-denied',
-    targetType: 'thread-edge',
-    targetId: opts.itemId,
-    outcome: 'denied',
-    tenantId: opts.authorizedWorkspaceId,
-    detail: { uri: opts.uri, authorizedWorkspaceId: opts.authorizedWorkspaceId, targetWorkspaceId: opts.targetWorkspaceId },
-  });
 }
 
 export async function POST(req: NextRequest) {
@@ -199,6 +156,7 @@ export async function POST(req: NextRequest) {
         if (foreign) {
           await auditCrossWorkspaceDenial({
             principal: auth.principal,
+            producer: 'openlineage-ingest',
             authorizedWorkspaceId: auth.workspaceId,
             targetWorkspaceId: foreign.workspaceId,
             uri: edge.toUri,

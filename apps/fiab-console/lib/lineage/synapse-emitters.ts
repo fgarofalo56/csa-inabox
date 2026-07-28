@@ -456,7 +456,13 @@ export function sparkBatchRunEvent(input: SparkBatchLineageInput): OpenLineageFu
   return buildEvent({
     eventType,
     eventTime: input.eventTime || new Date().toISOString(),
-    runId: deterministicRunId(`synapse-spark:${input.workspaceName}:${input.poolName}:${input.batchId}`),
+    // The submit time is part of the natural key: Livy batch ids restart from 0
+    // when a Synapse pool is recreated (loompool → loompool2 already happened in
+    // this estate), so `workspace:pool:batchId` alone conflates two genuinely
+    // different runs under ONE OpenLineage run id in every downstream catalog.
+    runId: deterministicRunId(
+      `synapse-spark:${input.workspaceName}:${input.poolName}:${input.batchId}:${input.eventTime || ''}`,
+    ),
     // Mirrors the openlineage-spark listener's namespace convention so a
     // listener-emitted run and a Loom-emitted run for the same pool sort
     // together in a downstream catalog.

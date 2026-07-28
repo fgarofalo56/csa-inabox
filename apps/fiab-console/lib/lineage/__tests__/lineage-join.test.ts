@@ -175,6 +175,7 @@ async function emitBothSides() {
       '--input', 'abfss://data@stloom.dfs.core.windows.net/bronze/sales',
       '--output', 'abfss://data@stloom.dfs.core.windows.net/silver/sales/_delta_log',
     ],
+    attributed: true,
   });
   // The pipeline reads silver — named by container + folder on an https linked
   // service — and writes gold.
@@ -339,6 +340,7 @@ describe('LU-8 harvest guards', () => {
     const r = await harvestSparkBatchLineage(session, {
       workspaceId: 'ws1', synapseWorkspaceName: 'syn-loom', poolName: 'loompool',
       batchId: 99, jobName: 'opaque', state: 'success', args: ['--mode', 'overwrite'],
+      attributed: true,
     });
     expect(r.written).toBe(0);
     expect(r.reason).toContain('openlineage-spark listener');

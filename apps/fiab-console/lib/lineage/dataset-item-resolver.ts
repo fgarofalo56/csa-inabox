@@ -32,13 +32,23 @@ export interface PathItem {
 /**
  * Collect the physical storage-path strings on an item's state (top level —
  * e.g. lakehouse `state.adlsRoot`, mirror bronze roots), canonicalized.
+ *
+ * **`{ fold: false }` is a security choice, not a style one.** These strings are
+ * OWNERSHIP CLAIMS: `resolveOwner` grants an item every dataset under its
+ * longest-matching path. `foldToTableFolder` rewrites `…/warehouses/part-a` to
+ * `…/warehouses`, so folding a claim silently widens it to the whole parent
+ * folder — the item would then own every unrelated sibling dataset, AND (in the
+ * ingest route) a resolved local owner suppresses the `findForeignOwner`
+ * forgery probe, converting a would-be 403 into an allow. Observed dataset URIs
+ * are still folded (in `resolveOwner`), which is the direction that makes the
+ * `_delta_log` join work; claims are taken literally.
  */
 export function statePaths(state: Record<string, unknown> | undefined): string[] {
   if (!state || typeof state !== 'object') return [];
   const out: string[] = [];
   for (const v of Object.values(state)) {
     if (typeof v === 'string' && /^(abfss?|wasbs?|https):\/\//i.test(v.trim())) {
-      const c = canonicalStorageUri(v);
+      const c = canonicalStorageUri(v, { fold: false });
       if (c) out.push(c);
     }
   }
@@ -92,11 +102,10 @@ export async function loadWorkspacePathItems(workspaceId: string): Promise<PathI
 }
 
 /**
- * Cross-workspace forgery probe: find an item in a DIFFERENT workspace that
- * owns `uri`. Queries only the path-bearing item classes (bounded), then
- * prefix-matches in process.
+ * Path-bearing items OUTSIDE one workspace. Bounded to the item classes that
+ * actually carry a storage root, then prefix-matched in process.
  */
-export async function findForeignOwner(uri: string, workspaceId: string): Promise<PathItem | null> {
+export async function loadForeignPathItems(workspaceId: string): Promise<PathItem[]> {
   const items = await itemsContainer();
   const { resources } = await items.items
     .query<{ id: string; workspaceId: string; itemType: string; displayName?: string; state?: Record<string, unknown> }>({
@@ -106,7 +115,7 @@ export async function findForeignOwner(uri: string, workspaceId: string): Promis
       parameters: [{ name: '@w', value: workspaceId }],
     })
     .fetchAll();
-  const candidates = (resources || [])
+  return (resources || [])
     .map((r) => ({
       id: r.id,
       workspaceId: r.workspaceId,
@@ -115,5 +124,26 @@ export async function findForeignOwner(uri: string, workspaceId: string): Promis
       paths: statePaths(r.state),
     }))
     .filter((r) => r.paths.length > 0);
-  return resolveOwner(uri, candidates);
+}
+
+/**
+ * Cross-workspace forgery probe: find an item in a DIFFERENT workspace that
+ * owns `uri`.
+ */
+export async function findForeignOwner(uri: string, workspaceId: string): Promise<PathItem | null> {
+  return resolveOwner(uri, await loadForeignPathItems(workspaceId));
+}
+
+/**
+ * A findForeignOwner that loads the foreign candidate set at most ONCE, for
+ * callers probing many URIs in a single request (the Synapse harvest walks
+ * every endpoint of every emitted event). Same decision, one cross-partition
+ * query instead of N.
+ */
+export function foreignOwnerProbe(workspaceId: string): (uri: string) => Promise<PathItem | null> {
+  let pending: Promise<PathItem[]> | null = null;
+  return async (uri: string) => {
+    if (!pending) pending = loadForeignPathItems(workspaceId);
+    return resolveOwner(uri, await pending);
+  };
 }

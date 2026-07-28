@@ -37,11 +37,17 @@
  *     that splits them is wrong about physical reality. One storage account +
  *     container + path ⇒ one dataset.
  *  2. **Synapse/SQL names are `{database}.{schema}.{table}`**, not the spec's
- *     bare `{schema}.{table}`. The 3-part form is what `normalizeIdentity()`
- *     maps to the `uc:` join key, so a pipeline's SQL sink collapses onto the
- *     same node the Unity Catalog overlay and the dbt manifest parser (L6,
- *     which also emits `catalog.schema.table`) contribute. A 2-part name would
- *     be ambiguous across databases on the same server anyway.
+ *     bare `{schema}.{table}`. `canonicalDatasetIdentity()` persists that bare
+ *     3-part form as the thread-edge endpoint, and it is the ONLY spelling
+ *     `normalizeIdentity()` turns into a `uc:` join key — so a pipeline's SQL
+ *     sink collapses onto the same node the Unity Catalog overlay and the dbt
+ *     manifest parser (L6 `physicalRelation()`, which emits the identical
+ *     3-part relation) contribute. A 2-part name would be ambiguous across
+ *     databases on the same server anyway.
+ *
+ * SECURITY: every identity produced here is PERSISTED (Cosmos thread edge,
+ * graph node id) and RENDERED (canvas node label). `stripUriCredentials()`
+ * removes SAS query strings and URI userinfo at the door — see its doc.
  *
  * The canonical URI (`canonicalStorageUri`) is exactly what
  * `unified-lineage.normalizeIdentity()` turns into a `path:` key, which is the
@@ -70,6 +76,76 @@ export interface StorageUriParts {
   /** Path within the container, no leading/trailing slash. May be ''. */
   path: string;
 }
+
+// ---------------------------------------------------------------------------
+// Credential stripping — a lineage identity is PERSISTED and RENDERED
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip anything credential-bearing off a storage location BEFORE it is parsed,
+ * canonicalized, persisted as a thread-edge endpoint, or rendered as a node
+ * label.
+ *
+ * This is a SECURITY boundary, not a tidiness pass. A dataset identity produced
+ * here becomes: the thread-edge `fromItemId`/`toItemId`, part of the Cosmos
+ * document id, the merged-graph node id, and the label on the lineage canvas —
+ * all long-lived and readable by every member of the workspace. A SAS-bearing
+ * URL reaches this module through Spark `--input`/`--output` argv, the
+ * `spark.loom.lineage.inputs/outputs` conf, an ADF linked-service url, and item
+ * state strings, so the signature MUST be removed at the door.
+ *
+ * Removed:
+ *   - the query string (`?sv=…&sig=…` — SAS) and the fragment;
+ *   - URI userinfo (`https://user:password@acct.dfs…`).
+ *
+ * `container@account` is NOT userinfo and is preserved — the abfss/wasbs
+ * authority legitimately uses `@`. Only a segment carrying a `:` (i.e. a
+ * `user:password` pair) is dropped there.
+ */
+export function stripUriCredentials(raw: string | null | undefined): string {
+  let v = String(raw ?? '').trim();
+  if (!v) return '';
+  // 1. query + fragment (SAS tokens, signed URLs, `?code=` function keys…)
+  const cut = v.search(/[?#]/);
+  if (cut >= 0) v = v.slice(0, cut);
+  // 2. userinfo in the authority (`scheme://user:pass@host/…`)
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/]*)(\/.*)?$/i.exec(v);
+  if (m) {
+    const [, scheme, authority, rest] = m;
+    const at = authority.lastIndexOf('@');
+    if (at >= 0) {
+      const userinfo = authority.slice(0, at);
+      // `container@account` (abfss/wasbs) has no colon; `user:pass@host` does.
+      // https/http storage URLs never carry a container in the authority, so
+      // ANY userinfo there is a credential.
+      if (userinfo.includes(':') || /^https?:$/i.test(scheme.replace(/\/\/$/, ''))) {
+        v = `${scheme}${authority.slice(at + 1)}${rest || ''}`;
+      }
+    }
+  }
+  return v;
+}
+
+/**
+ * Storage account / container charsets (Azure: lowercase alphanumerics, plus
+ * inner dashes for containers). Enforced so nothing that is not genuinely an
+ * account/container name can occupy those slots — in particular a `user:pass@`
+ * userinfo pair, which `[^./]+` would otherwise happily capture as the account
+ * and carry a credential into the persisted identity. Length is deliberately
+ * NOT enforced (Azure's 3-char minimum is not a security property, and test /
+ * fixture names are shorter).
+ */
+const ACCOUNT_RE = /^[a-z0-9]{1,24}$/;
+const CONTAINER_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * OneLake is Fabric's endpoint and is spelled `…/{workspace}/{lakehouse}/…`,
+ * NOT `{container}@{account}`. Folding it into the ADLS shape fabricates a
+ * container from the workspace GUID and silently re-keys every pre-existing
+ * OneLake/mirroring identity. It keeps its raw spelling (see
+ * `normalizeIdentity`'s dedicated OneLake branch).
+ */
+const ONELAKE_HOST_RE = /(^|\/\/|@)[^/]*onelake\.(dfs|blob)\./i;
 
 /**
  * Delta/Parquet writers name the LOG and the PART FILES, not the table folder.
@@ -101,9 +177,26 @@ export function foldToTableFolder(rawPath: string): string {
 }
 
 /**
+ * Options shared by the canonicalizers.
+ *
+ * `fold` (default true) applies {@link foldToTableFolder}. Callers that are
+ * canonicalizing an **ownership claim** (an item's stored state path) pass
+ * `fold: false` — see {@link canonicalStorageUri} for why folding an ownership
+ * claim is an authorization defect, not a convenience.
+ */
+export interface CanonicalizeOpts {
+  fold?: boolean;
+}
+
+/**
  * Parse ANY spelling of an Azure storage location into its parts, or null when
  * the string is not an Azure storage location (a REST url, a Cosmos container,
- * an S3 bucket — callers then leave it alone rather than mangling it).
+ * an S3 bucket, a OneLake path — callers then leave it alone rather than
+ * mangling it).
+ *
+ * Credentials (SAS query string, userinfo) are stripped FIRST, and the account
+ * and container are validated against Azure's naming rules, so nothing that is
+ * not genuinely an account/container name can be smuggled into those slots.
  *
  * Accepted spellings:
  *   abfss://c@acct.dfs.core.windows.net/p     (Spark / UC storage_location)
@@ -113,42 +206,57 @@ export function foldToTableFolder(rawPath: string): string {
  *   https://acct.dfs.core.windows.net/c/p     (ADF AzureBlobFS linked service)
  *   https://acct.blob.core.windows.net/c/p    (ADF AzureBlobStorage linked service)
  */
-export function parseStorageUri(raw: string | null | undefined): StorageUriParts | null {
-  const v = String(raw || '').trim();
+export function parseStorageUri(
+  raw: string | null | undefined,
+  opts: CanonicalizeOpts = {},
+): StorageUriParts | null {
+  const v = stripUriCredentials(raw);
   if (!v) return null;
+  if (ONELAKE_HOST_RE.test(v)) return null; // Fabric OneLake keeps its own spelling
+  const fold = opts.fold !== false;
+  const path = (p: string | undefined) => (fold ? foldToTableFolder(p || '') : trimSlashes(p || ''));
 
   // scheme://container@account.<dfs|blob>.<suffix>/path
   const at = /^(abfss?|wasbs?):\/\/([^@/]+)@([^./]+)\.(?:dfs|blob)\.([^/]+?)(?:\/(.*))?$/i.exec(v);
   if (at) {
-    const [, , container, account, suffix, path] = at;
+    const container = at[2].toLowerCase();
+    const account = at[3].toLowerCase();
+    if (!ACCOUNT_RE.test(account) || !CONTAINER_RE.test(container)) return null;
     return {
-      account: account.toLowerCase(),
-      container: container.toLowerCase(),
-      suffix: suffix.toLowerCase().replace(/\/+$/, ''),
-      path: foldToTableFolder(path || ''),
+      account,
+      container,
+      suffix: at[4].toLowerCase().replace(/\/+$/, ''),
+      path: path(at[5]),
     };
   }
 
   // https://account.<dfs|blob>.<suffix>/container/path
   const https = /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/]+?)(?::\d+)?\/([^/]+)(?:\/(.*))?$/i.exec(v);
   if (https) {
-    const [, account, suffix, container, path] = https;
+    const account = https[1].toLowerCase();
+    const container = https[3].toLowerCase();
+    if (!ACCOUNT_RE.test(account) || !CONTAINER_RE.test(container)) return null;
     return {
-      account: account.toLowerCase(),
-      container: container.toLowerCase(),
-      suffix: suffix.toLowerCase().replace(/\/+$/, ''),
-      path: foldToTableFolder(path || ''),
+      account,
+      container,
+      suffix: https[2].toLowerCase().replace(/\/+$/, ''),
+      path: path(https[4]),
     };
   }
 
   return null;
 }
 
+function trimSlashes(p: string): string {
+  return String(p || '').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
 /**
  * The ONE canonical string identity of an Azure storage dataset:
- * `abfss://{container}@{account}.dfs.{suffix}/{path}`, **fully lowercased** and
- * without a trailing slash. Non-Azure-storage inputs are returned
- * lowercased+trimmed unchanged so callers can pass anything through safely.
+ * `abfss://{container}@{account}.dfs.{suffix}/{path}`, **fully lowercased**,
+ * credential-free and without a trailing slash. Non-Azure-storage inputs are
+ * returned stripped+lowercased+trimmed so callers can pass anything through
+ * safely — including the credential strip, because this value is persisted.
  *
  * Case: blob names are technically case-sensitive, but every Loom lineage
  * identity has always been case-folded (`normalizeIdentity`, the ingest route's
@@ -157,11 +265,20 @@ export function parseStorageUri(raw: string | null | undefined): StorageUriParts
  * The case-faithful form is still available via {@link storagePartsToUri} and
  * is what the emitted OpenLineage dataset `name` carries.
  *
+ * **`fold`** — {@link foldToTableFolder} rewrites `…/sales/_delta_log` and
+ * `…/sales/part-0001` to `…/sales`. That is correct for an OBSERVED dataset URI
+ * (what a run read/wrote) and wrong for an OWNERSHIP CLAIM (an item's stored
+ * state path): folding an item whose `state.adlsRoot` ends in `part-…` widens
+ * its claim to the whole parent folder, so `resolveOwner` hands it every
+ * unrelated sibling dataset — and, worse, a resolved local owner suppresses the
+ * cross-workspace forgery probe, turning a would-be 403 into an allow. Ownership
+ * canonicalization therefore passes `{ fold: false }` (see `statePaths`).
+ *
  * This is the string `normalizeIdentity()` turns into the `path:` join key.
  */
-export function canonicalStorageUri(raw: string | null | undefined): string {
-  const parts = parseStorageUri(raw);
-  if (!parts) return String(raw || '').trim().replace(/\/+$/, '').toLowerCase();
+export function canonicalStorageUri(raw: string | null | undefined, opts: CanonicalizeOpts = {}): string {
+  const parts = parseStorageUri(raw, opts);
+  if (!parts) return stripUriCredentials(raw).replace(/\/+$/, '').toLowerCase();
   return storagePartsToUri(parts).toLowerCase();
 }
 
@@ -182,8 +299,9 @@ export function storageDataset(raw: string): OpenLineageDatasetRef {
   const parts = parseStorageUri(raw);
   if (!parts) {
     // Not Azure storage — emit it whole in `name` (the OL convention for
-    // producers that don't split), lowercased for a stable join.
-    return { namespace: '', name: String(raw || '').trim().replace(/\/+$/, '').toLowerCase() };
+    // producers that don't split), credential-stripped and lowercased for a
+    // stable, secret-free join key.
+    return { namespace: '', name: stripUriCredentials(raw).replace(/\/+$/, '').toLowerCase() };
   }
   return {
     namespace: `abfss://${parts.container}@${parts.account}.dfs.${parts.suffix}`,
@@ -238,13 +356,20 @@ export function adfLocationToStorageUri(
   });
 }
 
-/** `https://acct.dfs.core.windows.net` (or blob) → { account, suffix }. */
+/** `https://acct.dfs.core.windows.net` (or blob) → { account, suffix }.
+ *  Credential-stripped first: an ADF linked-service url frequently carries a
+ *  SAS (`?sv=…&sig=…`), which would otherwise be captured INTO the suffix and
+ *  ride into the persisted dataset identity. */
 export function parseStorageAccountUrl(
   url: string | null | undefined,
 ): { account: string; suffix: string } | null {
-  const m = /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/:]+)/i.exec(String(url || '').trim());
+  const clean = stripUriCredentials(url);
+  if (ONELAKE_HOST_RE.test(clean)) return null;
+  const m = /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/:]+)/i.exec(clean);
   if (!m) return null;
-  return { account: m[1].toLowerCase(), suffix: m[2].toLowerCase() };
+  const account = m[1].toLowerCase();
+  if (!ACCOUNT_RE.test(account)) return null;
+  return { account, suffix: m[2].toLowerCase() };
 }
 
 // ---------------------------------------------------------------------------
@@ -293,15 +418,45 @@ export function sqlDataset(parts: SqlDatasetParts): OpenLineageDatasetRef {
  *
  *  - storage dataset → the canonical `abfss://…` URI          → `path:…`
  *  - SQL dataset     → the bare `database.schema.table` name   → `uc:…`
- *                      (the SAME convention the dbt manifest parser emits)
+ *                      (the SAME convention `dbt-manifest-lineage.
+ *                      physicalRelation()` emits, which is what lets a
+ *                      pipeline's SQL sink collapse onto the dbt / Unity
+ *                      Catalog node for the same relation)
  *
  * Keeping this in ONE function is what guarantees the Spark emitter, the
- * pipeline emitter, and the dbt parser agree on the node id.
+ * pipeline emitter, and the dbt parser agree on the node id — so it is what the
+ * harvest's endpoint resolver calls (see {@link canonicalDatasetIdentity}).
  */
 export function datasetEdgeId(ds: OpenLineageDatasetRef): string {
-  const ns = String(ds.namespace || '').trim().replace(/\/+$/, '');
-  const name = String(ds.name || '').trim();
+  const ns = stripUriCredentials(ds.namespace).replace(/\/+$/, '');
+  const name = stripUriCredentials(ds.name);
   if (/^sqlserver:\/\//i.test(ns)) return name.toLowerCase();
-  if (!ns) return name.replace(/\/+$/, '').toLowerCase();
-  return `${ns}/${name.replace(/^\/+/, '')}`.replace(/\/+$/, '').toLowerCase();
+  if (!ns) return canonicalDatasetIdentity(name);
+  return canonicalDatasetIdentity(`${ns}/${name.replace(/^\/+/, '')}`);
+}
+
+/** `sqlserver://{host}:{port}/` prefix on an already-joined dataset URI. */
+const SQLSERVER_URI_RE = /^sqlserver:\/\/[^/]+\/(.+)$/i;
+
+/**
+ * Canonicalize an ALREADY-JOINED dataset URI (what `mapRunEventToEdges` hands
+ * the harvest as `edge.fromUri` / `edge.toUri`) into the identity Loom persists
+ * as a thread-edge endpoint.
+ *
+ * Storage URIs reduce to the canonical `abfss://…` form. A SQL relation URI
+ * (`sqlserver://host:1433/db.schema.table`) reduces to the BARE 3-part
+ * `db.schema.table` — that is the only spelling `normalizeIdentity()` turns
+ * into a `uc:` key, and therefore the only spelling that actually collapses
+ * onto the Unity Catalog overlay's and the dbt parser's node for the same
+ * relation. Emitting the full `sqlserver://…` URI would persist a node that
+ * normalizes to itself and joins to nothing.
+ *
+ * Credential-stripping is inherited from `canonicalStorageUri` — this value is
+ * persisted and rendered.
+ */
+export function canonicalDatasetIdentity(uri: string | null | undefined): string {
+  const v = stripUriCredentials(uri);
+  const sql = SQLSERVER_URI_RE.exec(v);
+  if (sql) return sql[1].replace(/\/+$/, '').toLowerCase();
+  return canonicalStorageUri(v);
 }

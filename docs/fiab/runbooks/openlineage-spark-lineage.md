@@ -121,15 +121,21 @@ lineage graph exists on day one:
 | Emitter | Trigger (real backend read) | Event | ThreadEdge `action` |
 |---------|-----------------------------|-------|---------------------|
 | **Synapse / ADF pipeline** | `GET /api/items/data-pipeline/[id]/jobs` (newest Succeeded run) and `…/output?runId=` — reads the pipeline definition, its datasets + linked services, and `queryActivityRuns` | one `RunEvent` per lineage-bearing **activity** (`job.name = <pipeline>.<activity>`), Copy `translator.mappings` → `columnLineage` facet | `openlineage-pipeline` |
-| **Synapse Spark batch** | `GET /api/items/spark-job-definition/[id]/runs/[runId]` — reads the Livy batch's own `livyInfo.jobCreationRequest` (the args + conf Loom submitted) | one `RunEvent` per batch; datasets from `spark.loom.lineage.inputs/outputs` conf or `--input`/`--output` argv | `openlineage-spark` |
+| **Synapse Spark batch** | `GET /api/items/spark-job-definition/[id]/runs/[runId]` — reads the Livy batch's own `livyInfo.jobCreationRequest` (the args + conf Loom submitted). No fallback to the item's stored draft: a draft edited after the run would attribute a fabricated edge to a real run. Only a batch whose Livy `name` carries this item's `loom-<name>-` submit prefix is harvested (Livy ids are pool-scoped). | one `RunEvent` per batch; datasets from `spark.loom.lineage.inputs/outputs` conf or `--input`/`--output` argv | `openlineage-spark` |
 
 Both build spec-valid OpenLineage 1.x `RunEvent`s (`lib/lineage/synapse-emitters.ts`,
-pure) and write them through the **same L2 path** — `mapRunEventToEdges` →
+pure) and write them through the **same L2 sink** — `mapRunEventToEdges` →
 `recordThreadEdge` (`lib/lineage/synapse-lineage-harvest.ts`). No second store,
-no second mapper. `run.runId` is a deterministic UUIDv5 of the run's natural key,
-so re-harvesting is idempotent for downstream OL consumers too. Only a
-**succeeded** run/activity emits `COMPLETE`; anything else maps to `FAIL`/`ABORT`,
-which the mapper drops — a failed copy never stamps lineage.
+no second mapper. Note the partition difference: the listener ingest is a
+machine path and writes with `machineSession(ws.tenantId)` (the workspace
+OWNER's partition); the harvests run inside an authenticated request and write
+with the caller's session. `run.runId` is a deterministic UUIDv5 of the run's
+natural key — which includes the submit time for a Spark batch, because Livy
+batch ids restart from 0 when a pool is recreated — so re-harvesting is
+idempotent for downstream OL consumers too. Only a **succeeded** run/activity
+emits `COMPLETE`; anything else maps to `FAIL`/`ABORT`, which the mapper drops —
+a failed copy never stamps lineage, and an UNKNOWN run status is treated as
+not-succeeded rather than skipping the gate.
 
 Honest limits (no fabrication): a Spark batch whose IO is not in its conf/argv
 emits nothing and returns a reason naming the listener; an ADF dataset that
@@ -150,10 +156,37 @@ identity, per the [OpenLineage naming spec](https://openlineage.io/docs/spec/nam
   storage account + container + path is one dataset), `_delta_log` /
   `_spark_metadata` / part-file leaves fold onto the table folder, and the
   identity is case-folded. Sovereign suffixes are carried through, never assumed.
-- **Synapse / SQL** → namespace `sqlserver://{host}:{port}`, name
-  `{database}.{schema}.{table}` (3-part, deliberately: it is what
-  `normalizeIdentity` maps to the `uc:` key the Unity Catalog overlay and the
-  dbt manifest parser already use).
+- **Synapse / SQL** → the OpenLineage dataset is namespace
+  `sqlserver://{host}:{port}` + name `{database}.{schema}.{table}`, and the
+  identity **persisted on the thread edge** is the bare 3-part
+  `{database}.{schema}.{table}` (`canonicalDatasetIdentity()`). That is the only
+  spelling `normalizeIdentity` turns into a `uc:` key, so the SQL sink collapses
+  onto the node the Unity Catalog overlay and the dbt L6 parser
+  (`physicalRelation()`, identical 3-part form) contribute. Persisting the full
+  `sqlserver://…` URI instead — as the first cut of LU-8 did — yields a node
+  that normalizes to itself and joins to nothing.
+
+### Security properties of a dataset identity
+
+A dataset identity is **persisted** (thread edge, Cosmos document id, graph node
+id) and **rendered** (canvas node label), so it is treated as untrusted input:
+
+- `stripUriCredentials()` removes the query string (SAS `?sv=…&sig=…`) and URI
+  userinfo before parsing, and the account/container slots are charset-validated
+  so a `user:pass@host` pair cannot be captured as an account name. Nothing
+  reaches the store with a signature in it — asserted end-to-end in
+  `lib/lineage/__tests__/lineage-security.test.ts`.
+- An item's stored state path is canonicalized **without** the table-folder fold
+  (`{ fold: false }`): folding an ownership CLAIM widens it to the parent folder,
+  and a resolved local owner suppresses the cross-workspace forgery probe.
+- Both producers run the same `findForeignOwner` probe. A dataset owned by an
+  item in another workspace is refused (never written, never labelled) and the
+  denial is audited (`lineage.cross-workspace-denied`); harvest writes are
+  audited too (`lineage.harvested`).
+- Caller-supplied run identifiers are validated before they drive a write: an
+  ADF `?runId=` must belong to the item's own `adfPipelineName`
+  (`getPipelineRun`), and a Livy `batchId` — which is POOL-scoped, not
+  item-scoped — must carry this item's submit-name prefix.
 
 Three joins were repaired by adopting it:
 
@@ -185,7 +218,12 @@ upgrade. L2 only writes NEW edges in the L1 shape.
   the same folders (Spark by `…/_delta_log` argv, the pipeline by
   fileSystem+folderPath on an https linked service) and asserts the real merge
   engine renders ONE connected `bronze → silver → gold` chain that also collapses
-  with the Purview node for the same path.
+  with the Purview node for the same path. Negative/attack coverage lives in
+  `…/lineage-security.test.ts` (SAS + userinfo stripping end-to-end,
+  cross-workspace denial for BOTH producers, ownership-claim widening,
+  unattributed Livy batch, unknown-run-status gate, dedupe-after-failure) and
+  `lib/thread/__tests__/thread-edge-doc-id.test.ts` (id collision + 255-byte
+  limit).
 - Unit: `lib/azure/__tests__/openlineage-ingest.test.ts` (golden RunEvent →
   declared column mappings; fan-out caps) and
   `lib/azure/__tests__/openlineage-auth.test.ts` (real-RS256 accept path;
