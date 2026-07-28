@@ -87,6 +87,10 @@ jobs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       app_matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
+      # The matrix resolver probes ./apps/<name> to decide each build context, so this
+      # job needs the tree. It had no checkout before — the probe silently evaluated
+      # false for every app and everything fell through to the ./apps/fiab-* convention.
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: azure/login@v2.3.0
         with:
