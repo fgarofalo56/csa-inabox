@@ -24,7 +24,7 @@
 import { NextResponse } from 'next/server';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { PagingBudget } from '@/lib/azure/paging-budget';
+import { PagingBudget, PAGE_DEADLINE, type PagingTruncation } from '@/lib/azure/paging-budget';
 import { getArmTokenPreferUser } from '@/lib/auth/obo';
 import { swrAwait } from '@/lib/azure/cross-sub-cache';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -48,18 +48,28 @@ interface ArmSubscription {
  *
  * Bounded by a {@link PagingBudget} (#2557): this ran on a bare `fetch` with no
  * per-request timeout INSIDE a bare `while (url)` — two missing ceilings on a
- * request path. Each page now inherits the walk's remaining wall clock.
+ * request path. Each page now inherits the walk's remaining wall clock, and a
+ * breach of THAT deadline truncates (via `runPage`) rather than throwing — same
+ * contract as every other pager, so the picker degrades to the subscriptions
+ * already listed instead of 502-ing the wizard. An ARM *error* still throws:
+ * that is a real failure, not a deadline. Truncation is reported to the caller
+ * so the wizard can say the list is short because ARM was slow.
  */
-async function listSubscriptions(token: string): Promise<ArmSubscription[]> {
+async function listSubscriptions(
+  token: string,
+): Promise<{ subscriptions: ArmSubscription[]; truncatedBy: PagingTruncation | null }> {
   const subscriptions: ArmSubscription[] = [];
   const budget = new PagingBudget('setup listSubscriptions');
   let url = `${arm()}/subscriptions?api-version=2022-12-01`;
   while (budget.claimPage()) {
-    const r: Response = await fetchWithTimeout(
-      url,
-      { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
-      budget.remainingMs(),
+    const r = await budget.runPage((timeoutMs) =>
+      fetchWithTimeout(
+        url,
+        { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
+        timeoutMs,
+      ),
     );
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep the rows
     const ct = r.headers.get('content-type') || '';
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -83,7 +93,7 @@ async function listSubscriptions(token: string): Promise<ArmSubscription[]> {
   }
   budget.warnIfTruncated(subscriptions.length);
   subscriptions.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
-  return subscriptions;
+  return { subscriptions, truncatedBy: budget.truncatedBy };
 }
 
 export const GET = withSession(async (_req, { session }) => {
@@ -114,13 +124,20 @@ export const GET = withSession(async (_req, { session }) => {
   // the real ARM walk once). Keyed by identity so a UAMI list never masks the
   // user's own visibility.
   try {
-    const { value: subscriptions } = await swrAwait(
+    const { value } = await swrAwait(
       session.claims.oid,
       `subscriptions:${identity}`,
       { ttlMs: 60_000 },
       () => listSubscriptions(token),
     );
-    return NextResponse.json({ ok: true, subscriptions, identity });
+    return NextResponse.json({
+      ok: true,
+      subscriptions: value.subscriptions,
+      identity,
+      // Honest: a short list because ARM was slow is not the same as a tenant
+      // with fewer subscriptions (#2557).
+      truncated: value.truncatedBy ?? undefined,
+    });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: `ARM request failed: ${e?.message ?? String(e)}` },

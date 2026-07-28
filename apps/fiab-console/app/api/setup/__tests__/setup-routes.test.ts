@@ -71,6 +71,7 @@ afterEach(() => {
   delete process.env.LOOM_SETUP_ORCHESTRATOR_URL;
   delete process.env.LOOM_ORCH_SUBMIT_TIMEOUT_MS;
   delete process.env.LOOM_DEPLOY_SUBMIT_BUDGET_MS;
+  delete process.env.LOOM_ARM_PAGING_BUDGET_MS;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.resetModules();
@@ -169,6 +170,51 @@ describe('GET /api/setup/subscriptions', () => {
     const j = await r.json();
     expect(r.status).toBe(502);
     expect(j.error).toMatch(/ARM 403/);
+  });
+
+  it('truncates (200 + truncated) instead of 502-ing when ARM hangs mid-page', async () => {
+    // #2557 review: the wall clock is handed to fetchWithTimeout as the page's
+    // timeoutMs, so the breach lands INSIDE the fetch. If that throws, the
+    // wizard 502s on a slow tenant instead of showing the subscriptions it
+    // already has. This stub only settles on AbortSignal — a stub that ignores
+    // the signal cannot reach the branch at all, which is how this slipped
+    // through the first time.
+    process.env.LOOM_ARM_PAGING_BUDGET_MS = '80';
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      call += 1;
+      if (call === 1) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              value: [{ subscriptionId: 'p1', displayName: 'Page1 Sub', state: 'Enabled' }],
+              nextLink: 'https://management.azure.com/subscriptions?api-version=2022-12-01&skiptoken=PAGE2',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }
+      return new Promise<Response>((_res, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        const onAbort = () => {
+          const err: any = new Error('The operation was aborted.');
+          err.name = 'AbortError';
+          reject(err);
+        };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      });
+    }));
+
+    const { GET } = await import('@/app/api/setup/subscriptions/route');
+    const r = await GET();
+    const j = await r.json();
+
+    expect(r.status).toBe(200);
+    expect(j.ok).toBe(true);
+    expect(j.subscriptions.map((s: any) => s.subscriptionId)).toEqual(['p1']);
+    expect(j.truncated).toBe('time'); // honest: short because ARM was slow
   });
 });
 
