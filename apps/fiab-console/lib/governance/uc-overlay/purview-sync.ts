@@ -31,11 +31,14 @@
  */
 import {
   addAssetClassification, ensureClassificationDefs, isPurviewConfigured,
-  setBusinessMetadata,
+  removeAssetClassification, setBusinessMetadata,
 } from '@/lib/azure/purview-client';
 import { resolveAssetIdentities } from '@/lib/azure/asset-identity';
 import { resolveWorkspaceHostnames } from '@/lib/azure/unity-catalog-client';
-import { projectOverlayToPurview, type UcGovernanceOverlay, type UcPurviewProvenance } from './model';
+import {
+  projectOverlayToPurview, UcOverlayError,
+  type UcGovernanceOverlay, type UcPurviewProvenance,
+} from './model';
 
 export interface UcPurviewSyncResult {
   synced: boolean;
@@ -43,6 +46,8 @@ export interface UcPurviewSyncResult {
   reason?: string;
   guid?: string;
   classifications: string[];
+  /** Stale classifications this sync REMOVED from the asset (supersede). */
+  removedClassifications: string[];
   businessMetadataKeys: string[];
 }
 
@@ -57,7 +62,22 @@ async function firstUcHost(): Promise<string | undefined> {
 }
 
 /**
- * Push one overlay into the classic Purview Data Map.
+ * Push one overlay into the classic Purview Data Map — as a SUPERSEDE, not an
+ * append.
+ *
+ * WHY SUPERSEDE (this is a security property, not tidiness): an add-only sync
+ * lets an asset accumulate contradictory, unrevocable signals — carrying both
+ * `…_pii_yes` and `…_pii_no`, or keeping `loom_certification: certified` after
+ * Loom de-certified it. Purview classifications and business metadata feed
+ * downstream labelling / DLP / access decisions, so a stale "certified" or
+ * "not PII" claim is actively dangerous. Every sync therefore:
+ *   1. computes the DESIRED classification set from the current overlay,
+ *   2. removes every classification a previous Loom sync recorded in
+ *      `overlay.purview.classifications` that is no longer desired,
+ *   3. writes the full business-metadata map with `isOverwrite=true`, blanking
+ *      any key a previous sync wrote that the overlay no longer carries, and
+ *      always emitting `loom_certification` (`none` when de-certified).
+ * An overlay stripped back to nothing therefore still syncs — it CLEARS.
  *
  * Column overlays are NOT synced: their Atlas counterpart is a column entity
  * that has to be materialised first (`ensureColumnEntities`), which is the
@@ -71,8 +91,17 @@ export async function syncOverlayToPurview(
   overlay: UcGovernanceOverlay,
   opts: { ucHost?: string } = {},
 ): Promise<UcPurviewSyncResult> {
-  const projection = projectOverlayToPurview(overlay);
-  const empty = { classifications: [], businessMetadataKeys: [] };
+  const empty = { classifications: [], removedClassifications: [], businessMetadataKeys: [] };
+  const priorClassifications = overlay.purview?.classifications || [];
+  const priorBmKeys = overlay.purview?.businessMetadataKeys || [];
+
+  let projection;
+  try {
+    projection = projectOverlayToPurview(overlay);
+  } catch (e) {
+    if (e instanceof UcOverlayError) return { synced: false, reason: e.message, ...empty };
+    throw e;
+  }
 
   if (overlay.securableType === 'column') {
     return {
@@ -88,13 +117,26 @@ export async function syncOverlayToPurview(
       ...empty,
     };
   }
-  if (!projection.classifications.length && !Object.keys(projection.businessMetadata).length) {
-    return { synced: false, reason: 'Nothing to sync: this securable has no tags and no certification.', ...empty };
+
+  const stale = priorClassifications.filter((n) => !projection.classifications.includes(n));
+  // Keys a PREVIOUS sync wrote that this overlay no longer carries must be
+  // blanked, or a removed free tag survives in Purview forever.
+  const clearedBmKeys = priorBmKeys.filter((k) => !(k in projection.businessMetadata));
+  for (const k of clearedBmKeys) projection.businessMetadata[k] = '';
+
+  const nothingDesired = !projection.classifications.length
+    && !Object.values(projection.businessMetadata).some((v) => v !== '' && v !== 'none');
+  const nothingToClear = !stale.length && !clearedBmKeys.length && !priorClassifications.length && !priorBmKeys.length;
+  if (nothingDesired && nothingToClear) {
+    return { synced: false, reason: 'Nothing to sync: this securable has no tags and no certification, and Loom has never pushed anything for it.', ...empty };
   }
 
   const ucHost = opts.ucHost || (await firstUcHost());
   const ids = await resolveAssetIdentities({ ucFullName: overlay.fullName, ucHost });
-  const guid = overlay.purview?.guid || ids.purviewGuid;
+  // A LIVE resolve wins over the cached provenance guid: if the Atlas entity was
+  // re-registered it has a NEW guid, and pushing to the recorded-but-dead one
+  // would report `synced: true` while changing nothing.
+  const guid = ids.purviewGuid || overlay.purview?.guid;
   if (!guid) {
     return {
       synced: false,
@@ -103,6 +145,9 @@ export async function syncOverlayToPurview(
     };
   }
 
+  if (stale.length) {
+    await removeAssetClassification(guid, stale);
+  }
   if (projection.classifications.length) {
     await ensureClassificationDefs(projection.classifications);
     await addAssetClassification(guid, projection.classifications);
@@ -116,7 +161,10 @@ export async function syncOverlayToPurview(
     synced: true,
     guid,
     classifications: projection.classifications,
-    businessMetadataKeys: bmKeys,
+    removedClassifications: stale,
+    // Record only the keys that still carry a value — the blanked ones are gone
+    // and must not be re-blanked (nor counted as "pushed") on the next sync.
+    businessMetadataKeys: bmKeys.filter((k) => projection.businessMetadata[k] !== ''),
   };
 }
 

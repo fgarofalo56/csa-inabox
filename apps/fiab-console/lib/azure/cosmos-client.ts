@@ -1455,7 +1455,8 @@ export async function envConfigContainer(): Promise<Container> { await ensure();
 /** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
 export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
 /** LU-5 — Loom Unity governance overlay rows (PK /tenantId, id = `uc:<fqn>`). */
-export async function ucGovernanceContainer(): Promise<Container> { await ensure(); return _ucGovernance!; }/** Tenant topology (audit-t157) — hub coordinates doc (id='tenant-topology', PK /tenantId). */
+export async function ucGovernanceContainer(): Promise<Container> { await ensure(); return _ucGovernance!; }
+/** Tenant topology (audit-t157) — hub coordinates doc (id='tenant-topology', PK /tenantId). */
 export async function tenantTopologyContainer(): Promise<Container> { await ensure(); return _tenantTopology!; }
 /** Durable rate-limiter store (rel-T16) — fixed-window counters + dedupe markers, PK /key, TTL-enabled. */
 export async function rateLimitsContainer(): Promise<Container> { await ensure(); return _rateLimits!; }

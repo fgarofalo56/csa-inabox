@@ -1169,10 +1169,41 @@ export async function addAssetClassification(guid: string, classificationNames: 
   throw new PurviewError(res.status, t, `addAssetClassification failed: ${t || res.statusText}`);
 }
 
+/**
+ * REMOVE one or more classifications from a catalog asset (Atlas entity).
+ *   DELETE /datamap/api/atlas/v2/entity/guid/{guid}/classification/{name}
+ *
+ * The counterpart {@link addAssetClassification} deliberately lacked. Without
+ * it, a Loom-applied classification is UNREVOCABLE: an asset re-tagged
+ * `pii=no` would keep carrying the earlier `..._pii_yes` classification, and a
+ * de-certified asset would keep its `certified` signal forever. Atlas
+ * classifications feed downstream Purview labelling/DLP decisions, so a stale
+ * "not PII" / "certified" claim is actively dangerous, not merely untidy.
+ *
+ * 204 (deleted) and 404 (not attached / typedef unknown) are both success —
+ * the caller's intent is "this asset must not carry X", and both outcomes
+ * satisfy it. Any other non-2xx surfaces verbatim as a PurviewError.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/purview/datamapdataplane/entity/remove-classification
+ */
+export async function removeAssetClassification(guid: string, classificationNames: string[]): Promise<void> {
+  purviewAccount();
+  if (!guid) throw new PurviewError(400, null, 'guid is required');
+  const names = [...new Set((classificationNames || []).map((n) => (n || '').trim()).filter(Boolean))];
+  for (const n of names) {
+    const res = await purviewFetch(
+      `/datamap/api/atlas/v2/entity/guid/${encodeURIComponent(guid)}/classification/${encodeURIComponent(n)}`,
+      { method: 'DELETE' },
+    );
+    if (res.ok || res.status === 204 || res.status === 404) continue;
+    const t = await res.text();
+    throw new PurviewError(res.status, t, `removeAssetClassification(${n}) failed: ${t || res.statusText}`);
+  }
+}
+
 // ------------------------------------------------------------
 // MIP sensitivity labels — Data Map (Atlas) classification typedefs
 // ------------------------------------------------------------
-
 export interface DataMapSensitivityLabel {
   /** Full Atlas classification typedef name, e.g. 'MICROSOFT.GOVERNANCE.LABELS.<labelGuid>'. */
   typedefName: string;

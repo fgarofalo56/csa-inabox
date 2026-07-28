@@ -130,8 +130,16 @@ export async function readOverlay(
 }
 
 /**
- * Every overlay in the tenant whose identity starts with `uc:<prefix>` — i.e.
- * every annotated securable under a catalog (`main`) or schema (`main.sales`).
+ * Every overlay in the tenant whose identity is `uc:<prefix>` or sits UNDER it —
+ * i.e. every annotated securable in a catalog (`main`) or schema (`main.sales`).
+ *
+ * The prefix is matched on a DOT BOUNDARY, not as a bare string prefix: a plain
+ * `STARTSWITH(identity, 'uc:main.sales')` also matches `uc:main.salesops.orders`
+ * and `uc:main.salesforce_stg.x`, so a schema-scoped listing would leak overlays
+ * from unrelated sibling schemas (and a catalog-scoped one from unrelated
+ * catalogs). The query therefore asks for the exact identity OR the identity
+ * plus a trailing `.`.
+ *
  * Column overlays carry a `col:uc:` identity and are returned by
  * {@link listColumnOverlays} instead, so a table listing is not polluted.
  */
@@ -140,11 +148,24 @@ export async function listOverlays(
   prefix?: string,
 ): Promise<UcGovernanceOverlay[]> {
   const c = await ucGovernanceContainer();
-  const idPrefix = prefix ? ucSecurableIdentity(prefix) : 'uc:';
+  if (!prefix) {
+    const { resources } = await c.items
+      .query<UcGovernanceOverlay>({
+        query: 'SELECT * FROM c WHERE c.tenantId = @t AND STARTSWITH(c.identity, @p) ORDER BY c.identity',
+        parameters: [{ name: '@t', value: tenantId }, { name: '@p', value: 'uc:' }],
+      })
+      .fetchAll();
+    return resources || [];
+  }
+  const exact = ucSecurableIdentity(prefix);
   const { resources } = await c.items
     .query<UcGovernanceOverlay>({
-      query: 'SELECT * FROM c WHERE c.tenantId = @t AND STARTSWITH(c.identity, @p) ORDER BY c.identity',
-      parameters: [{ name: '@t', value: tenantId }, { name: '@p', value: idPrefix }],
+      query: 'SELECT * FROM c WHERE c.tenantId = @t AND (c.identity = @exact OR STARTSWITH(c.identity, @under)) ORDER BY c.identity',
+      parameters: [
+        { name: '@t', value: tenantId },
+        { name: '@exact', value: exact },
+        { name: '@under', value: `${exact}.` },
+      ],
     })
     .fetchAll();
   return resources || [];
@@ -183,11 +204,4 @@ export async function deleteOverlay(tenantId: string, identity: string): Promise
   } catch (e) {
     if (!isNotFound(e)) throw e;
   }
-}
-
-/** True when an overlay carries no governance facts at all (safe to delete). */
-export function isEmptyOverlay(o: UcGovernanceOverlay): boolean {
-  return (o.tags || []).length === 0
-    && (o.certification?.rung || 'none') === 'none'
-    && Object.keys(o.attributes || {}).length === 0;
 }

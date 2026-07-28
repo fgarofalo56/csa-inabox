@@ -96,8 +96,11 @@ Legend: built ✅ · honest-gate ⚠️ · MISSING ❌
 
 | # | Source capability | Loom | Where / backend |
 |---|---|---|---|
-| E1 | Governed tags → controlled classifications | ✅ built | `ensureClassificationDefs` + `addAssetClassification` (Atlas v2), name `Loom_<key>_<value>` |
-| E2 | Free tags + certification → business metadata | ✅ built | `setBusinessMetadata` into the `LoomCustomTags` namespace |
+| E1 | Governed tags → controlled classifications | ✅ built | `ensureClassificationDefs` + `addAssetClassification` (Atlas v2), name `Loom_<tenant8>_<key>_<value>` — tenant-namespaced because Atlas typedefs are ACCOUNT-GLOBAL while a Loom tenant is a Cosmos partition |
+| E2 | Free tags + certification → business metadata | ✅ built | `setBusinessMetadata` into the `LoomCustomTags` namespace (`isOverwrite=true`) |
+| E2a | **REVOKE** a classification Loom applied | ✅ built | `removeAssetClassification` (new DELETE counterpart). The sync is a SUPERSEDE: classifications recorded in `overlay.purview.classifications` that are no longer desired are removed, so an asset can never carry `…_pii_yes` **and** `…_pii_no` |
+| E2b | **CLEAR** a stale certification / removed free tag | ✅ built | `loom_certification` is ALWAYS emitted (`none` when de-certified) and previously-pushed business-metadata keys are blanked, so a de-certified asset does not keep a `certified` label |
+| E2c | Push to a re-registered asset | ✅ built | a LIVE `resolveAssetIdentities` wins over the cached `purview.guid`; the cached guid is only the fallback |
 | E3 | Honest state when Purview is absent | ⚠️ honest-gate | result carries `reason` naming `LOOM_PURVIEW_ACCOUNT` + the Data Curator grant; the overlay itself still saves |
 | E4 | Honest state when the asset is not registered | ⚠️ honest-gate | `reason` points at `/api/catalog/register` |
 | E5 | Unified-catalog (`/datagovernance`) business domains | ❌ N/A | the ARM-provisioned account is a CLASSIC Data Map account; that host does not exist here (see `lib/azure/purview-client.ts` header) |
@@ -113,7 +116,9 @@ Legend: built ✅ · honest-gate ⚠️ · MISSING ❌
 | Certification ladder | `lib/dataproducts/certification.EndorsementRung` | a certified table and a certified data product land in the same `endorsement` catalog facet |
 | Attribute schema | `lib/types/attribute-groups` (`attribute-groups:<tenantId>`) | one tenant attribute schema for products and securables |
 | Vocabulary storage | `tenant-settings` one-doc-per-tenant, like `policies:` / `attribute-groups:` | the tenant's governance vocabularies live and back up together |
-| Purview write | `purview-client.{ensureClassificationDefs,addAssetClassification,setBusinessMetadata}` | no second Purview client |
+| Purview write | `purview-client.{ensureClassificationDefs,addAssetClassification,removeAssetClassification,setBusinessMetadata}` | no second Purview client |
+| Authorization | `feature-gate.enforceCapability('admin.security', …)` | write tiers are delegable at /admin/permissions; tenant admins bypass |
+| Audit | `auditLogContainer` — same shape as `governance/domain-audit.ts` | overlay/vocabulary/Purview events **and denials** land in Admin → Audit Logs |
 
 The one NEW concept is the governed-tag definition. A tag is a key=value on a
 *securable*; an `AttributeDef` is a typed field of a *governance-domain business
@@ -133,4 +138,29 @@ same rows.
 - **Bulk apply.** Tagging many securables at once (Catalog Explorer multi-select)
   is not built; the prefix listing endpoint is the foundation for it.
 - **Browser E2E (`ux-baseline` G1).** Not yet run against a live estate — the
-  evidence here is tsc + 57 vitest assertions + the guard suite.
+  evidence here is tsc + 119 vitest assertions (incl. the attack suite) + the
+  guard suite. Tracked as the last item before this surface can be graded A.
+- **Manual FQN entry.** The securable picker drives off the live
+  `catalogs`/`schemas`/`tables` routes; with neither Databricks nor
+  `LOOM_UNITY_URL` configured the picker is empty and the tab has nothing to
+  select, even though the overlay API itself is backend-independent. The
+  “no gate” property holds for the API, not yet for the surface.
+
+## Authorization + audit (added after adversarial review)
+
+`POST /api/catalog/unity/governance` is **not** session-only. Writes are tiered
+on the delegable `admin.security` capability:
+
+| Mutation | Required role | Why |
+|---|---|---|
+| free-form tags, attribute values | `Contributor` | tenant-visible annotation |
+| certification | `Admin` | a trust attestation stamped with the caller's UPN — forging it is the whole attack |
+| governed-tag assign/remove | `Admin` | LU-6's ABAC compiler turns these into real tag DDL / secure views |
+| `syncPurview` | `Admin` | writes the SHARED tenant Purview account via the Console UAMI and creates account-global Atlas typedefs |
+
+`POST /api/catalog/unity/governed-tags` (the vocabulary) stays tenant-admin.
+Every applied mutation, Purview push, vocabulary edit **and denial** (403 authz,
+400 validation) is written to the Cosmos audit-log container
+(`lib/governance/uc-overlay/audit.ts`) and surfaces in Admin → Audit Logs — the
+overlay's own `updatedBy` / `certification.by` are last-writer-wins fields, not
+a trail.

@@ -18,8 +18,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyOverlayMutation, assertValidFullName, atlasSafeName, defaultSecurableType,
-  emptyOverlay, findGovernedTag, normalizeGovernedTagDefs, overlayIdentity,
-  projectOverlayToPurview, ucColumnIdentity, ucSecurableIdentity, UcOverlayError,
+  emptyOverlay, findGovernedTag, hasPurviewResidue, isEmptyOverlay, normalizeGovernedTagDefs,
+  normalizeUcIdentity, overlayIdentity, projectOverlayToPurview, tenantTypedefPrefix,
+  ucColumnIdentity, ucSecurableIdentity, UcOverlayError, validateAttributeValues,
   validateGovernedTagDefs, validateTagAssignment,
   type UcGovernedTagDef,
 } from '../model';
@@ -54,10 +55,31 @@ describe('identity — pinned to unified-lineage (drift guard)', () => {
   });
 
   it('ucColumnIdentity produces the SAME string as unified-lineage.columnIdentity', () => {
-    expect(ucColumnIdentity('main.sales.orders', 'Email'))
-      .toBe(columnIdentity('main.sales.orders', 'Email'));
-    expect(ucColumnIdentity('Main.Sales.Orders', 'EMAIL'))
-      .toBe(columnIdentity('Main.Sales.Orders', 'EMAIL'));
+    // The real join key routes the table through `normalizeIdentity`, which only
+    // prefixes `uc:` for EXACTLY three dot-parts. An unconditional `uc:` prefix
+    // diverges for every other shape, so the pin has to span the arities — the
+    // 3-part-only version of this test could not see the divergence at all.
+    const names = [
+      'main.sales.orders', 'Main.Sales.Orders', 'MAIN.BRONZE.customers_v2',
+      'main', 'Main.Sales', 'main.sales.orders.v2', 'main.sales.orders ',
+    ];
+    for (const n of names) {
+      for (const col of ['Email', 'EMAIL', 'order_id']) {
+        expect(ucColumnIdentity(n, col)).toBe(columnIdentity(n.trim(), col));
+      }
+    }
+    // `normalizeIdentity` also maps storage/JDBC URLs to `path:…`, which the
+    // overlay can never produce — `assertValidFullName` rejects anything with
+    // `/ \ ? #` before an identity is built. That boundary is asserted, so the
+    // narrower pure restatement is complete for every input that can reach it.
+    expect(() => assertValidFullName('abfss://c@a.dfs.core.windows.net/x')).toThrow(UcOverlayError);
+    expect(() => assertValidFullName('mssql://host/db')).toThrow(UcOverlayError);
+  });
+
+  it('normalizeUcIdentity restates unified-lineage.normalizeIdentity for bare UC names', () => {
+    expect(normalizeUcIdentity('Main.Sales.Orders')).toBe('uc:main.sales.orders');
+    expect(normalizeUcIdentity('main.sales')).toBe('main.sales');   // NOT uc:-prefixed
+    expect(normalizeUcIdentity('main')).toBe('main');
   });
 
   it('overlayIdentity routes to the column form only when a column is given', () => {
@@ -167,6 +189,25 @@ describe('applyOverlayMutation', () => {
     expect(cleared.certification.at).toBeUndefined();
   });
 
+  it('ATTACK on provenance: editing only the NOTE does not transfer the attestation', () => {
+    // The "Save note" button re-posts the CURRENT rung. Re-stamping by/at on
+    // every non-none write silently makes the last note-editor the certifier.
+    const certified = applyOverlayMutation(base(), { certification: { rung: 'certified' } }, ctx);
+    const laterCtx = { ...ctx, actorUpn: 'mallory@contoso.com', now: '2027-01-01T00:00:00.000Z' };
+    const noteEdited = applyOverlayMutation(certified, { certification: { rung: 'certified', note: 'lgtm' } }, laterCtx);
+    expect(noteEdited.certification.by).toBe('ana@contoso.com');
+    expect(noteEdited.certification.at).toBe(ctx.now);
+    expect(noteEdited.certification.note).toBe('lgtm');
+  });
+
+  it('but MOVING the rung does re-stamp the signer', () => {
+    const certified = applyOverlayMutation(base(), { certification: { rung: 'certified' } }, ctx);
+    const laterCtx = { ...ctx, actorUpn: 'bob@contoso.com', now: '2027-01-01T00:00:00.000Z' };
+    const promoted = applyOverlayMutation(certified, { certification: { rung: 'promoted' } }, laterCtx);
+    expect(promoted.certification.by).toBe('bob@contoso.com');
+    expect(promoted.certification.at).toBe(laterCtx.now);
+  });
+
   it('rejects a bogus certification rung', () => {
     expect(() => applyOverlayMutation(base(), { certification: { rung: 'gold' as never } }, ctx))
       .toThrow(/certification rung must be one of/);
@@ -192,14 +233,15 @@ describe('applyOverlayMutation', () => {
 
 describe('projectOverlayToPurview', () => {
   const ctx = { vocabulary: VOCAB, attributeGroups: GROUPS, actorUpn: 'ana@contoso.com', now: '2026-07-28T12:00:00.000Z' };
+  const T1 = tenantTypedefPrefix('t1');
 
   it('governed tags become Atlas CLASSIFICATIONS, free tags become business metadata', () => {
     const o = applyOverlayMutation(base(), {
       setTags: [{ key: 'data-sensitivity', value: 'Restricted' }, { key: 'cost center', value: 'CC-42' }],
     }, ctx);
     const p = projectOverlayToPurview(o);
-    expect(p.classifications).toEqual(['Loom_data_sensitivity_Restricted']);
-    expect(p.businessMetadata).toEqual({ cost_center: 'CC-42' });
+    expect(p.classifications).toEqual([`Loom_${T1}_data_sensitivity_Restricted`]);
+    expect(p.businessMetadata.cost_center).toBe('CC-42');
   });
 
   it('certification rides along as business metadata with the signer', () => {
@@ -215,12 +257,104 @@ describe('projectOverlayToPurview', () => {
     const o = applyOverlayMutation(base(), { setTags: [{ key: 'pii', value: 'yes' }] }, ctx);
     for (const c of projectOverlayToPurview(o).classifications) {
       expect(c).toMatch(/^[A-Za-z0-9_]+$/);
+      expect(c.length).toBeLessThanOrEqual(96);
     }
   });
 
-  it('an untouched overlay projects to nothing (so the sync short-circuits honestly)', () => {
+  it('an untouched overlay projects no classifications and a de-certified TOMBSTONE', () => {
+    // `loom_certification: none` is emitted deliberately — omitting it is what
+    // left a stale `certified` label on the Atlas entity forever.
     const p = projectOverlayToPurview(base());
     expect(p.classifications).toEqual([]);
-    expect(p.businessMetadata).toEqual({});
+    expect(p.businessMetadata.loom_certification).toBe('none');
+    expect(p.businessMetadata.loom_certified_by).toBe('');
+  });
+
+  it('ATTACK: one tenant cannot squat another tenant’s account-global typedef name', () => {
+    const o = applyOverlayMutation(base(), { setTags: [{ key: 'pii', value: 'yes' }] }, ctx);
+    const other = projectOverlayToPurview({ ...o, tenantId: 'tenant-two' });
+    expect(projectOverlayToPurview(o).classifications[0])
+      .not.toBe(other.classifications[0]);
+    expect(tenantTypedefPrefix('t1')).toMatch(/^[0-9a-f]{8}$/);
+    expect(tenantTypedefPrefix('t1')).toBe(tenantTypedefPrefix('t1')); // stable
+  });
+
+  it('ATTACK: colliding free-tag keys are REFUSED, not silently last-writer-wins', () => {
+    const o = {
+      ...base(),
+      tags: [
+        { key: 'cost center', value: 'A', governed: false },
+        { key: 'cost-center', value: 'B', governed: false },
+      ],
+    };
+    expect(() => projectOverlayToPurview(o)).toThrow(/both normalize to the Purview attribute "cost_center"/);
+  });
+
+  it('ATTACK: a key that normalizes to nothing is refused, not written under the literal name "tag"', () => {
+    const o = { ...base(), tags: [{ key: '???', value: 'x', governed: false }] };
+    expect(() => projectOverlayToPurview(o)).toThrow(/normalizes to an empty name/);
+  });
+});
+
+describe('validateAttributeValues — typed + bounded (the attribute half of the vocabulary thesis)', () => {
+  it('ATTACK: a value outside a Single choice is refused, exactly like a governed tag', () => {
+    expect(() => validateAttributeValues({ tier: 'platinum' }, GROUPS))
+      .toThrow(/not an allowed value for attribute "Tier"/);
+  });
+
+  it('canonicalises choice casing', () => {
+    expect(validateAttributeValues({ tier: 'GOLD' }, GROUPS)).toEqual({ tier: 'gold' });
+  });
+
+  it('ATTACK: unbounded strings and arrays are refused before they reach Cosmos', () => {
+    expect(() => validateAttributeValues({ 'cost-center': 'x'.repeat(100_000) }, GROUPS))
+      .toThrow(/too long/);
+    const many: Record<string, string> = {};
+    for (let i = 0; i < 500; i++) many[`k${i}`] = 'v';
+    expect(() => validateAttributeValues(many, GROUPS)).toThrow(/too many attributes/);
+  });
+
+  it('ATTACK: a non-object body is refused rather than cast', () => {
+    expect(() => validateAttributeValues('nope', GROUPS)).toThrow(/must be an object/);
+    expect(() => validateAttributeValues(['a'], GROUPS)).toThrow(/must be an object/);
+  });
+
+  it('ATTACK: the wrong JS type for a field is refused', () => {
+    const typed: AttributeGroup[] = [{
+      id: 'g', name: 'G', attributes: [
+        { id: 'flag', name: 'Flag', fieldType: 'Boolean' },
+        { id: 'count', name: 'Count', fieldType: 'Integer' },
+        { id: 'when', name: 'When', fieldType: 'Date' },
+        { id: 'many', name: 'Many', fieldType: 'Multiple choice', choices: ['a', 'b'] },
+      ],
+    }];
+    expect(() => validateAttributeValues({ flag: { deep: { deeper: 1 } } }, typed)).toThrow(/Boolean/);
+    expect(() => validateAttributeValues({ count: 1.5 }, typed)).toThrow(/Integer/);
+    expect(() => validateAttributeValues({ when: 'not-a-date' }, typed)).toThrow(/Date/);
+    expect(() => validateAttributeValues({ many: 'a' }, typed)).toThrow(/Multiple choice/);
+    expect(() => validateAttributeValues({ many: ['c'] }, typed)).toThrow(/not an allowed value/);
+    expect(validateAttributeValues({ many: ['A', 'b'] }, typed)).toEqual({ many: ['a', 'b'] });
+  });
+
+  it('empty / null clear the value', () => {
+    expect(validateAttributeValues({ tier: null, 'cost-center': '' }, GROUPS))
+      .toEqual({ tier: null, 'cost-center': null });
+  });
+});
+
+describe('isEmptyOverlay / hasPurviewResidue (the delete rule)', () => {
+  it('an untouched overlay is empty; any single fact makes it non-empty', () => {
+    expect(isEmptyOverlay(base())).toBe(true);
+    expect(isEmptyOverlay({ ...base(), tags: [{ key: 'a', value: 'b' }] })).toBe(false);
+    expect(isEmptyOverlay({ ...base(), certification: { rung: 'promoted' } })).toBe(false);
+    expect(isEmptyOverlay({ ...base(), attributes: { tier: 'gold' } })).toBe(false);
+  });
+
+  it('residue is a CLASSIFICATION or a real business-metadata key — not the mere presence of a stamp', () => {
+    expect(hasPurviewResidue(base())).toBe(false);
+    expect(hasPurviewResidue({ ...base(), purview: { guid: 'g', syncedAt: 'x' } })).toBe(false);
+    expect(hasPurviewResidue({ ...base(), purview: { businessMetadataKeys: ['loom_certification'] } })).toBe(false);
+    expect(hasPurviewResidue({ ...base(), purview: { classifications: ['Loom_x_pii_yes'] } })).toBe(true);
+    expect(hasPurviewResidue({ ...base(), purview: { businessMetadataKeys: ['cost_center'] } })).toBe(true);
   });
 });

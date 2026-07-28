@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import { Section } from '@/lib/components/ui/section';
 import { EmptyState } from '@/lib/components/empty-state';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
 import {
   Badge, Body1, Button, Caption1, Checkbox, Dropdown, Field, Input, MessageBar,
   MessageBarBody, MessageBarTitle, Option, Spinner, Subtitle2, Textarea,
@@ -40,6 +41,21 @@ const RUNGS: { value: EndorsementRung; label: string; hint: string }[] = [
   { value: 'promoted', label: 'Promoted', hint: 'A lightweight "this is ready to share" signal from the owner.' },
   { value: 'certified', label: 'Certified', hint: 'Authoritative — the certifier identity is recorded on the securable.' },
 ];
+
+/**
+ * True when a failed sync is an INFRA gate (Purview not deployed / not wired)
+ * rather than an ordinary "nothing to do here" outcome.
+ *
+ * G2 requires an infra gate to render through the shared {@link HonestGate} —
+ * registry-driven, with an inline **Fix it** wizard that writes
+ * `LOOM_PURVIEW_ACCOUNT` through the same env-apply path as /admin/env-config.
+ * The other reasons the sync can return (no Atlas entity registered yet, a
+ * column overlay, nothing to sync) are NOT configuration problems and carry
+ * their own next step, so they stay an informational MessageBar.
+ */
+function isPurviewInfraGate(reason?: string): boolean {
+  return !!reason && reason.includes('LOOM_PURVIEW_ACCOUNT');
+}
 
 const useStyles = makeStyles({
   pickerRow: {
@@ -184,7 +200,13 @@ function TagChips({ overlay, onRemove, busy }: {
   const s = useStyles();
   const tags = overlay?.tags || [];
   if (!tags.length) {
-    return <Caption1 className={s.muted}>No tags on this securable yet.</Caption1>;
+    return (
+      <EmptyState
+        icon={<Tag16Regular />}
+        title="No tags on this securable yet"
+        body="Add a governed tag (its value comes from the tenant vocabulary) or a free-form key=value below. Tags apply on BOTH Unity Catalog backends and are the input LU-6 compiles into access policy."
+      />
+    );
   }
   return (
     <div className={s.chips}>
@@ -493,6 +515,8 @@ export function UcGovernancePane({ oss }: { oss: boolean }) {
           icon={<ShieldCheckmark24Regular />}
           title="Pick a securable to govern"
           body="Choose a catalog (and optionally a schema and table) above. Tags, governed tags, certification, and custom attributes all attach to whichever level you select."
+          primaryAction={{ label: 'Browse the catalog', href: '/catalog' }}
+          secondaryAction={{ label: 'Define custom attributes', href: '/admin/attribute-groups' }}
         />
       )}
 
@@ -588,10 +612,12 @@ export function UcGovernancePane({ oss }: { oss: boolean }) {
 
           <Section title="Custom attributes" className={s.sectionGap}>
             {attributeGroups.length === 0 ? (
-              <Caption1 className={s.muted}>
-                No attribute groups are defined for this tenant. Define them once under Governance →
-                Custom attributes; the same schema then applies to data products and to catalog securables.
-              </Caption1>
+              <EmptyState
+                icon={<ShieldCheckmark24Regular />}
+                title="No attribute groups defined for this tenant"
+                body="Define them once under Admin → Catalog & domains → Custom attributes; the same schema then applies to data products and to catalog securables."
+                primaryAction={{ label: 'Define custom attributes', href: '/admin/attribute-groups' }}
+              />
             ) : (
               <div className={s.stack}>
                 {attributeGroups.map((g) => (
@@ -644,7 +670,21 @@ export function UcGovernancePane({ oss }: { oss: boolean }) {
                   {payload.overlay.purview.guid ? ` · asset ${payload.overlay.purview.guid}` : ''}
                 </Caption1>
               )}
-              {purview && !purview.synced && (
+              {/* G2 — an infra gate gets the SHARED HonestGate (inline "Fix it"
+                  wizard, registry-driven), never a bespoke warning bar. Reasons
+                  that are NOT infra gates (no Atlas entity yet, column overlay,
+                  nothing to sync) stay an informational bar with their own
+                  actionable next step. */}
+              {purview && !purview.synced && isPurviewInfraGate(purview.reason) && (
+                <HonestGate
+                  gateId="purview"
+                  surface="Unity governance → Purview sync"
+                  missing={['LOOM_PURVIEW_ACCOUNT']}
+                  detail={purview.reason}
+                  onResolved={() => void reload()}
+                />
+              )}
+              {purview && !purview.synced && !isPurviewInfraGate(purview.reason) && (
                 <MessageBar intent="warning" layout="multiline">
                   <MessageBarBody>
                     <MessageBarTitle>Not synced</MessageBarTitle>

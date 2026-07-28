@@ -18,11 +18,13 @@
  * `validateGovernedTagDefs` so the UI and the route can never disagree.
  */
 import { NextRequest } from 'next/server';
-import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { withSession } from '@/lib/api/route-toolkit';
 import { apiBadRequest, apiOk } from '@/lib/api/respond';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { tenantScopeId } from '@/lib/auth/session';
 import { validateGovernedTagDefs, type UcGovernedTagDef } from '@/lib/governance/uc-overlay/model';
 import { readGovernedTags, writeGovernedTags } from '@/lib/governance/uc-overlay/store';
+import { writeUcGovernanceDenial, writeVocabularyAudit } from '@/lib/governance/uc-overlay/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,14 +34,42 @@ export const GET = withSession(async (_req: NextRequest, { session }) => {
   return apiOk({ tags });
 });
 
-export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
+/**
+ * Whole-document vocabulary save (tenant admin only).
+ *
+ * Deliberately NOT wrapped in `withTenantAdmin`: the 403 has to be AUDITED, and
+ * every rejection recorded, so the gate is called explicitly here. The response
+ * body is byte-identical either way — `withTenantAdmin` returns the very same
+ * `requireTenantAdmin(session)` envelope.
+ */
+export const POST = withSession(async (req: NextRequest, { session }) => {
+  const tenantId = tenantScopeId(session);
+  const who = session.claims.upn || session.claims.oid;
+
   let body: { tags?: unknown };
   try {
     body = (await req.json()) as { tags?: unknown };
   } catch {
     return apiBadRequest('invalid JSON body');
   }
-  if (!Array.isArray(body.tags)) return apiBadRequest('tags[] is required');
+
+  const gate = requireTenantAdmin(session);
+  if (gate) {
+    await writeUcGovernanceDenial({
+      tenantId, who, surface: 'catalog/unity/governed-tags', status: 403,
+      reason: 'the governed-tag vocabulary is tenant-wide state; tenant admin required',
+      attempted: { tagCount: Array.isArray(body.tags) ? body.tags.length : 0 },
+    });
+    return gate;
+  }
+
+  if (!Array.isArray(body.tags)) {
+    await writeUcGovernanceDenial({
+      tenantId, who, surface: 'catalog/unity/governed-tags', status: 400,
+      reason: 'tags[] is required',
+    });
+    return apiBadRequest('tags[] is required');
+  }
 
   const defs: UcGovernedTagDef[] = (body.tags as Array<Record<string, unknown>>).map((t) => ({
     key: String(t?.key ?? ''),
@@ -50,12 +80,19 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
   }));
 
   const problem = validateGovernedTagDefs(defs);
-  if (problem) return apiBadRequest(problem);
+  if (problem) {
+    await writeUcGovernanceDenial({
+      tenantId, who, surface: 'catalog/unity/governed-tags', status: 400, reason: problem,
+      attempted: { keys: defs.map((d) => d.key) },
+    });
+    return apiBadRequest(problem);
+  }
 
-  const doc = await writeGovernedTags(
-    tenantScopeId(session),
-    defs,
-    session.claims.upn || session.claims.oid,
-  );
+  // A whole-document overwrite can silently delete every governed tag the
+  // tenant has, and `updatedBy` is last-writer-wins — so the BEFORE state is
+  // captured and audited, which is the only way to reconstruct it.
+  const before = await readGovernedTags(tenantId);
+  const doc = await writeGovernedTags(tenantId, defs, who);
+  await writeVocabularyAudit({ tenantId, who, before, after: doc.tags });
   return apiOk({ tags: doc.tags, updatedAt: doc.updatedAt });
 });

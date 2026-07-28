@@ -11,35 +11,71 @@
  *                 certification?, attributes?, syncPurview?, ucHost? }
  *          → { ok, overlay, purview? }
  *
- * DEFAULT-ON, both backends, no gate: the overlay is Cosmos-backed Loom-native
- * governance, so it works against the OSS Unity Catalog server in Azure
- * Government exactly as it does against Databricks UC — closing the
+ * AUTHORIZATION — the mutation path is NOT session-only
+ * ----------------------------------------------------
+ * Reads are tenant-partition scoped (`tenantScopeId(session)`), so a signed-in
+ * session is the right bar for GET. WRITES are not: this overlay is a TENANT-
+ * WIDE trust surface, and `lib/auth/feature-gate.requireTenantAdmin`'s own
+ * docblock names exactly this shape of risk — per-user Cosmos self-scoping
+ * gives ZERO protection when the state being mutated is shared. Concretely:
+ *
+ *   - CERTIFICATION is an attestation other people rely on, stamped with the
+ *     caller's UPN. A session-only gate means any authenticated user can FORGE
+ *     "certified by <themselves>" on any table in any catalog.
+ *   - GOVERNED TAGS are the input to LU-6's ABAC compiler, which emits real
+ *     Databricks tag DDL / Synapse secure views — flipping one is an
+ *     access-control change, not a label change.
+ *   - `syncPurview` writes into the SHARED tenant Purview account with the
+ *     Console UAMI's Data Curator role, and creates ACCOUNT-GLOBAL Atlas
+ *     classification typedefs.
+ *
+ * So the write path is tiered on the existing, delegable `admin.security`
+ * ("Security & Governance") capability — tenant admins bypass, and any admin
+ * can delegate either tier at /admin/permissions:
+ *
+ *   Contributor  free-form tags, attribute values
+ *   Admin        certification, governed-tag assignment, Purview sync
+ *
+ * EVERY outcome is audited (`lib/governance/uc-overlay/audit.ts`) — applied
+ * mutations with before/after facts, Purview pushes, AND denials (403 authz,
+ * 400 validation). A failed forgery attempt must leave a trace.
+ *
+ * DEFAULT-ON, both backends, no INFRA gate: the overlay is Cosmos-backed
+ * Loom-native governance, so it works against the OSS Unity Catalog server in
+ * Azure Government exactly as it does against Databricks UC — closing the
  * `UC_CAPABILITIES.tags → oss:'none'` hole without a Databricks SQL warehouse
- * (`.claude/rules/no-fabric-dependency.md`, `loom_default_on_opt_out`).
+ * (`.claude/rules/no-fabric-dependency.md`, `loom_default_on_opt_out`). The
+ * tiers above are an AUTHORIZATION gate, not an infra/spend gate.
  * `POST … syncPurview:true` additionally mirrors the facts into the CLASSIC
  * Purview Data Map; when Purview is unconfigured the write still succeeds and
  * `purview.reason` names the exact missing env var (never a silent no-op).
- *
- * Every write is validated against the tenant's governed-tag vocabulary: a
- * value outside a governed tag's ALLOWED VALUES is rejected 400.
  */
 import { NextRequest } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiBadRequest, apiError, apiHonestError, apiOk } from '@/lib/api/respond';
+import { enforceCapability } from '@/lib/auth/feature-gate';
 import { tenantScopeId } from '@/lib/auth/session';
 import type { EndorsementRung } from '@/lib/dataproducts/certification';
 import {
-  applyOverlayMutation, assertValidFullName, defaultSecurableType, UcOverlayError,
-  UC_SECURABLE_TYPES, type UcOverlayMutation, type UcSecurableType,
+  applyOverlayMutation, assertValidFullName, defaultSecurableType, findGovernedTag,
+  hasPurviewResidue, isEmptyOverlay, UcOverlayError, UC_SECURABLE_TYPES,
+  type UcGovernanceOverlay, type UcOverlayMutation, type UcSecurableType,
 } from '@/lib/governance/uc-overlay/model';
 import {
-  isEmptyOverlay, deleteOverlay, listColumnOverlays, listOverlays, readAttributeGroups,
+  deleteOverlay, listColumnOverlays, listOverlays, readAttributeGroups,
   readGovernedTags, readOverlay, writeOverlay,
 } from '@/lib/governance/uc-overlay/store';
+import {
+  overlayFacts, writeOverlayAudit, writePurviewSyncAudit, writeUcGovernanceDenial,
+} from '@/lib/governance/uc-overlay/audit';
 import { provenanceFromSync, syncOverlayToPurview } from '@/lib/governance/uc-overlay/purview-sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** The capability the governance WRITE path is gated on. Delegable at
+ *  /admin/permissions; tenant admins bypass it (feature-gate.isTenantAdmin). */
+export const GOVERNANCE_CAPABILITY = 'admin.security';
 
 export const GET = withSession(async (req: NextRequest, { session }) => {
   const tenantId = tenantScopeId(session);
@@ -75,6 +111,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
 
 export const POST = withSession(async (req: NextRequest, { session }) => {
   const tenantId = tenantScopeId(session);
+  const who = session.claims.upn || session.claims.oid;
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -108,7 +145,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
             : undefined,
         }
       : undefined,
-    attributes: (body.attributes as UcOverlayMutation['attributes']) || undefined,
+    // NOT trusted as-is despite the cast: `applyOverlayMutation` runs
+    // `model.validateAttributeValues` over it, which enforces the tenant's own
+    // AttributeDef fieldType/choices and hard size bounds before anything
+    // reaches Cosmos (unbounded JSON here was a storage-amplification vector).
+    attributes: (body.attributes ?? undefined) as UcOverlayMutation['attributes'],
   };
 
   const nothingToDo = !mutation.setTags?.length && !mutation.removeTagKeys?.length
@@ -123,32 +164,111 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       readGovernedTags(tenantId),
       readAttributeGroups(tenantId),
     ]);
+
+    // ---- AUTHORIZATION (tiered; see the module docblock) -------------------
+    // Elevated when the request touches a trust signal (certification), an
+    // access-control input (a GOVERNED tag — resolved against the vocabulary so
+    // casing cannot slip one through), or the shared tenant Purview account.
+    const touchesGoverned = (mutation.setTags || []).some((t) => !!findGovernedTag(vocabulary, t.key))
+      || (mutation.removeTagKeys || []).some((k) => !!findGovernedTag(vocabulary, k));
+    const elevated = !!mutation.certification || touchesGoverned || !!body.syncPurview;
+    const requiredRole = elevated ? 'Admin' : 'Contributor';
+    const denied = await enforceCapability(session, GOVERNANCE_CAPABILITY, requiredRole);
+    if (denied) {
+      await writeUcGovernanceDenial({
+        tenantId,
+        who,
+        surface: 'catalog/unity/governance',
+        status: 403,
+        reason: `requires ${requiredRole} on ${GOVERNANCE_CAPABILITY}`
+          + (elevated ? ' (certification / governed tag / Purview sync)' : ''),
+        target: fullName,
+        attempted: {
+          fullName,
+          column,
+          setTags: mutation.setTags,
+          removeTagKeys: mutation.removeTagKeys,
+          certificationRung: mutation.certification?.rung,
+          attributeIds: Object.keys((mutation.attributes || {}) as Record<string, unknown>),
+          syncPurview: !!body.syncPurview,
+        },
+      });
+      return denied;
+    }
+    // ------------------------------------------------------------------------
+
     const current = await readOverlay(tenantId, { fullName, column, securableType });
-    let next = applyOverlayMutation(current, mutation, {
-      vocabulary,
-      attributeGroups,
-      actorUpn: session.claims.upn || session.claims.oid,
+    const before = overlayFacts(current);
+    let next: UcGovernanceOverlay;
+    try {
+      next = applyOverlayMutation(current, mutation, {
+        vocabulary,
+        attributeGroups,
+        actorUpn: who,
+      });
+    } catch (e) {
+      if (e instanceof UcOverlayError) {
+        // A validation refusal is exactly the event a reviewer needs to see.
+        await writeUcGovernanceDenial({
+          tenantId, who, surface: 'catalog/unity/governance', status: e.status,
+          reason: e.message, target: fullName,
+          attempted: {
+            setTags: mutation.setTags,
+            removeTagKeys: mutation.removeTagKeys,
+            certificationRung: mutation.certification?.rung,
+            attributeIds: Object.keys((mutation.attributes || {}) as Record<string, unknown>),
+          },
+        });
+      }
+      throw e;
+    }
+
+    // PERSIST FIRST, then push to Purview. The reverse order leaves Purview
+    // holding classifications Loom has no record of whenever the Cosmos upsert
+    // fails, with no compensating action.
+    //
+    // The delete rule keys on RESIDUE, not on the mere presence of a `purview`
+    // stamp: an ever-synced securable carries that stamp forever, so `!purview`
+    // would persist exactly the hollow row the rule exists to prevent.
+    const emptied = isEmptyOverlay(next) && !hasPurviewResidue(next);
+    if (emptied) await deleteOverlay(tenantId, next.identity);
+    else next = await writeOverlay(next);
+
+    await writeOverlayAudit({
+      tenantId, who, action: emptied ? 'overlay.delete' : 'overlay.update',
+      identity: next.identity, fullName: next.fullName, securableType: next.securableType,
+      before, after: overlayFacts(emptied ? null : next),
     });
 
-    // Purview fold-in BEFORE the persist so the provenance stamp lands in the
-    // same document version the caller gets back.
     let purview;
+    let deleted = emptied;
     if (body.syncPurview) {
       purview = await syncOverlayToPurview(next, {
         ucHost: body.ucHost ? String(body.ucHost) : undefined,
       });
+      await writePurviewSyncAudit({
+        tenantId, who, identity: next.identity, fullName: next.fullName,
+        synced: purview.synced, reason: purview.reason, guid: purview.guid,
+        classificationsAdded: purview.classifications,
+        classificationsRemoved: purview.removedClassifications,
+        businessMetadataKeys: purview.businessMetadataKeys,
+      });
       const prov = provenanceFromSync(purview);
-      if (prov) next = { ...next, purview: prov };
+      if (prov) {
+        // Second write: record what Purview now holds so the NEXT sync knows
+        // exactly which classifications to supersede.
+        next = { ...next, purview: prov };
+        if (isEmptyOverlay(next) && !hasPurviewResidue(next)) {
+          if (!emptied) await deleteOverlay(tenantId, next.identity);
+          deleted = true;
+        } else {
+          next = await writeOverlay(next);
+          deleted = false;
+        }
+      }
     }
 
-    if (isEmptyOverlay(next) && !next.purview) {
-      // The last annotation was removed — drop the row instead of persisting an
-      // empty document so a listing shows only genuinely-governed securables.
-      await deleteOverlay(tenantId, next.identity);
-      return apiOk({ overlay: next, deleted: true, ...(purview ? { purview } : {}) });
-    }
-    const saved = await writeOverlay(next);
-    return apiOk({ overlay: saved, ...(purview ? { purview } : {}) });
+    return apiOk({ overlay: next, ...(deleted ? { deleted: true } : {}), ...(purview ? { purview } : {}) });
   } catch (e) {
     if (e instanceof UcOverlayError) return apiError(e.message, e.status);
     const status = (e as { status?: number })?.status;

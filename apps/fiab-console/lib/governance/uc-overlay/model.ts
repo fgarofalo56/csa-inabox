@@ -33,10 +33,15 @@
  *    index (`governance-catalog-shapes.ts`), and Power BI endorsement. No new
  *    enum, so a UC table and a data product sort into the same facet bucket.
  * 3. ATTRIBUTE GROUPS reuse the tenant's existing schema wholesale —
- *    `AttributeGroup` / `AttributeDef` / `missingRequiredAttributes` from
- *    `lib/types/attribute-groups` (Loom's Purview "custom metadata" equivalent,
- *    stored at `attribute-groups:<tenantId>`). The overlay stores VALUES only,
- *    keyed by `AttributeDef.id`; it never defines a second attribute schema.
+ *    `AttributeGroup` / `AttributeDef` from `lib/types/attribute-groups`
+ *    (Loom's Purview "custom metadata" equivalent, stored at
+ *    `attribute-groups:<tenantId>`). The overlay stores VALUES only, keyed by
+ *    `AttributeDef.id`; it never defines a second attribute schema, and
+ *    {@link validateAttributeValues} enforces each value against its OWN
+ *    `fieldType` / `choices`. NOTE: `AttributeDef.required` is deliberately NOT
+ *    enforced on an overlay write — required-ness is a wizard-completion rule
+ *    (`missingRequiredAttributes`) for a NEW object, whereas an overlay is
+ *    incrementally annotated and must accept a partial write.
  * 4. GOVERNED TAGS are the one genuinely new vocabulary, and deliberately so: a
  *    tag is a key=value stamped on a *securable*, while an `AttributeDef` is a
  *    typed field of a *governance-domain business concept*. Modelling a tag as
@@ -58,7 +63,9 @@
  *   - Purview custom metadata (attributes): https://learn.microsoft.com/purview/unified-catalog-attributes-business-concept
  */
 import type { EndorsementRung } from '@/lib/dataproducts/certification';
-import { kebab, type AttributeGroup } from '@/lib/types/attribute-groups';
+import {
+  CHOICE_FIELD_TYPES, kebab, type AttributeDef, type AttributeGroup,
+} from '@/lib/types/attribute-groups';
 
 export type { EndorsementRung };
 
@@ -161,14 +168,33 @@ export class UcOverlayError extends Error {
 // Pinned by __tests__/model.test.ts (it imports both and asserts equality).
 // ---------------------------------------------------------------------------
 
-/** `catalog.schema.table` → `uc:<lowercased>`, the canonical securable identity. */
+/** `catalog.schema.table` → `uc:<lowercased>`, the canonical securable identity.
+ *  Mirrors `unified-lineage.ucIdentity` (which does not trim; `assertValidFullName`
+ *  has already trimmed everything that reaches here). */
 export function ucSecurableIdentity(fullName: string): string {
   return `uc:${String(fullName || '').trim().toLowerCase()}`;
 }
 
-/** A column of a UC securable → `col:uc:<fqn>::<column>`. */
+/**
+ * Pure restatement of the UC branch of `unified-lineage.normalizeIdentity`.
+ *
+ * That function only prefixes `uc:` for a name with EXACTLY three dot parts
+ * (`^[\w$]+\.[\w$]+\.[\w$]+$`); anything else is returned lowercased as-is. The
+ * column join key has to agree with it EXACTLY or column overlays silently stop
+ * joining the lineage graph — an unconditional `uc:` prefix diverges for every
+ * non-three-part name. Pinned against the original by `__tests__/model.test.ts`
+ * across 1-, 2-, 3- and 4-part names.
+ */
+export function normalizeUcIdentity(raw: string): string {
+  const v = String(raw || '').trim().replace(/\/+$/, '');
+  if (/^[\w$]+\.[\w$]+\.[\w$]+$/.test(v)) return `uc:${v.toLowerCase()}`;
+  return v.toLowerCase();
+}
+
+/** A column of a UC securable → `col:<normalized table>::<column>`, byte-identical
+ *  to `unified-lineage.columnIdentity` for every trimmed input. */
 export function ucColumnIdentity(fullName: string, column: string): string {
-  return `col:${ucSecurableIdentity(fullName)}::${String(column || '').trim().toLowerCase()}`;
+  return `col:${normalizeUcIdentity(fullName)}::${String(column || '').trim().toLowerCase()}`;
 }
 
 /** The identity for a (fullName, column?) pair — the single entry point routes use. */
@@ -294,8 +320,212 @@ export function validateTagAssignment(
 }
 
 // ---------------------------------------------------------------------------
+// Attribute VALUE validation (typed + bounded)
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard caps on what an authenticated caller may push into one overlay document.
+ * Without these, `attributes` is unvalidated JSON straight from the request
+ * body into a Cosmos document on a SHARED container — an authenticated
+ * storage-amplification vector (and Cosmos rejects >2 MB documents with a
+ * confusing 413 rather than an actionable 400).
+ */
+export const OVERLAY_LIMITS = {
+  /** Max attribute ids touched in one mutation. */
+  maxAttributes: 200,
+  /** Max characters in a Text / Rich text / Date / choice value. */
+  maxStringLength: 4096,
+  /** Max entries in a Multiple choice value. */
+  maxArrayItems: 100,
+  /** Max tags on one securable. */
+  maxTags: 200,
+  /** Max Atlas classifications pushed in one Purview sync. */
+  maxClassifications: 100,
+} as const;
+
+/** Flatten every tenant AttributeDef by id (later groups do not shadow earlier). */
+export function attributeDefIndex(groups: AttributeGroup[]): Map<string, AttributeDef> {
+  const idx = new Map<string, AttributeDef>();
+  for (const g of groups || []) for (const a of g.attributes || []) if (!idx.has(a.id)) idx.set(a.id, a);
+  return idx;
+}
+
+/**
+ * THE ATTRIBUTE-VALUE GATE — the typed counterpart of
+ * {@link validateTagAssignment}, and the reason `attributes` is no longer a raw
+ * cast at the route boundary.
+ *
+ * Enforces, per the tenant's OWN `AttributeDef.fieldType` (the same 8 Purview
+ * types the admin authoring UI writes):
+ *   - the id is defined by some attribute group (unchanged behaviour),
+ *   - the JS type matches the field type (a `Boolean` attribute cannot be
+ *     handed an object/array; an `Integer` cannot be handed `"platinum"`),
+ *   - `Single choice` / `Multiple choice` values are members of `choices`
+ *     (case-insensitive, canonical casing restored) — the same rule governed
+ *     tags get, so the PR's own thesis is not asymmetric,
+ *   - size bounds from {@link OVERLAY_LIMITS}.
+ * `null` / `undefined` / `''` still mean DELETE the value.
+ *
+ * Returns the normalized value map; throws {@link UcOverlayError} (400) on the
+ * first violation, so nothing partial is ever persisted.
+ */
+export function validateAttributeValues(
+  raw: unknown,
+  groups: AttributeGroup[],
+): Record<string, string | number | boolean | string[] | null> {
+  if (raw === null || raw === undefined) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new UcOverlayError('attributes must be an object keyed by attribute id');
+  }
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > OVERLAY_LIMITS.maxAttributes) {
+    throw new UcOverlayError(`too many attributes (max ${OVERLAY_LIMITS.maxAttributes})`);
+  }
+  const defs = attributeDefIndex(groups);
+  const out: Record<string, string | number | boolean | string[] | null> = {};
+
+  for (const [id, value] of entries) {
+    const def = defs.get(id);
+    if (!def) {
+      throw new UcOverlayError(
+        `unknown attribute "${id}" — define it in an attribute group first (Admin → Catalog & domains → Custom attributes, /admin/attribute-groups)`,
+      );
+    }
+    if (value === null || value === undefined || value === '') { out[id] = null; continue; }
+
+    const label = def.name || def.id;
+    switch (def.fieldType) {
+      case 'Boolean': {
+        if (typeof value !== 'boolean') {
+          throw new UcOverlayError(`attribute "${label}" is a Boolean — expected true or false`);
+        }
+        out[id] = value;
+        break;
+      }
+      case 'Integer': {
+        if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+          throw new UcOverlayError(`attribute "${label}" is an Integer — expected a whole number`);
+        }
+        out[id] = value;
+        break;
+      }
+      case 'Double': {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new UcOverlayError(`attribute "${label}" is a Double — expected a finite number`);
+        }
+        out[id] = value;
+        break;
+      }
+      case 'Multiple choice': {
+        if (!Array.isArray(value)) {
+          throw new UcOverlayError(`attribute "${label}" is a Multiple choice — expected an array of values`);
+        }
+        if (value.length > OVERLAY_LIMITS.maxArrayItems) {
+          throw new UcOverlayError(`attribute "${label}" has too many values (max ${OVERLAY_LIMITS.maxArrayItems})`);
+        }
+        const choices = (def.choices || []).filter(Boolean);
+        const picked: string[] = [];
+        for (const v of value) {
+          if (typeof v !== 'string') {
+            throw new UcOverlayError(`attribute "${label}" accepts only string values`);
+          }
+          const t = v.trim();
+          if (!t) continue;
+          if (t.length > OVERLAY_LIMITS.maxStringLength) {
+            throw new UcOverlayError(`attribute "${label}" value is too long (max ${OVERLAY_LIMITS.maxStringLength})`);
+          }
+          const canonical = choices.find((c) => c.toLowerCase() === t.toLowerCase());
+          if (!canonical) {
+            throw new UcOverlayError(
+              `"${t}" is not an allowed value for attribute "${label}" (allowed: ${choices.join(', ')})`,
+            );
+          }
+          if (!picked.includes(canonical)) picked.push(canonical);
+        }
+        out[id] = picked.length ? picked : null;
+        break;
+      }
+      case 'Single choice': {
+        if (typeof value !== 'string') {
+          throw new UcOverlayError(`attribute "${label}" is a Single choice — expected one of its values as a string`);
+        }
+        const choices = (def.choices || []).filter(Boolean);
+        const canonical = choices.find((c) => c.toLowerCase() === value.trim().toLowerCase());
+        if (!canonical) {
+          throw new UcOverlayError(
+            `"${value}" is not an allowed value for attribute "${label}" (allowed: ${choices.join(', ')})`,
+          );
+        }
+        out[id] = canonical;
+        break;
+      }
+      case 'Date': {
+        if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+          throw new UcOverlayError(`attribute "${label}" is a Date — expected an ISO-8601 date string`);
+        }
+        out[id] = value.trim();
+        break;
+      }
+      default: {
+        // Text / Rich text — any string, bounded.
+        if (typeof value !== 'string') {
+          throw new UcOverlayError(`attribute "${label}" is ${def.fieldType} — expected a string`);
+        }
+        if (value.length > OVERLAY_LIMITS.maxStringLength) {
+          throw new UcOverlayError(`attribute "${label}" value is too long (max ${OVERLAY_LIMITS.maxStringLength})`);
+        }
+        out[id] = value;
+        break;
+      }
+    }
+    // Defence in depth for a choice def authored with no choices at all.
+    if (CHOICE_FIELD_TYPES.includes(def.fieldType) && !(def.choices || []).filter(Boolean).length) {
+      throw new UcOverlayError(
+        `attribute "${label}" is a ${def.fieldType} with no allowed values defined — fix it at /admin/attribute-groups`,
+      );
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Overlay reducer
 // ---------------------------------------------------------------------------
+
+/**
+ * True when an overlay carries no governance facts at all.
+ *
+ * PURE and defined HERE (not in the Cosmos store) on purpose: the BFF route's
+ * delete-vs-persist decision turns on it, and a test that `vi.mock`s the store
+ * would otherwise be able to substitute its own copy of the predicate — making
+ * the assertion unfalsifiable. Living in the pure model means the route always
+ * exercises the real implementation.
+ */
+export function isEmptyOverlay(o: UcGovernanceOverlay): boolean {
+  return (o.tags || []).length === 0
+    && (o.certification?.rung || 'none') === 'none'
+    && Object.keys(o.attributes || {}).length === 0;
+}
+
+/**
+ * True when a PREVIOUS Purview sync left something on the Atlas entity that
+ * Loom would still need to revoke (a classification, or a business-metadata key
+ * carrying a real value).
+ *
+ * The delete-the-row rule is `isEmptyOverlay(next) && !hasPurviewResidue(next)`
+ * — NOT `!next.purview`. A securable that was ever synced carries a `purview`
+ * provenance stamp forever, so keying on the stamp's mere presence would
+ * persist exactly the hollow row the rule exists to prevent. Keying on residue
+ * keeps the row only while it is still the record of something revocable.
+ */
+export function hasPurviewResidue(o: UcGovernanceOverlay): boolean {
+  const p = o.purview;
+  if (!p) return false;
+  if ((p.classifications || []).length > 0) return true;
+  // `loom_certification: none` is a tombstone we deliberately keep pushing; it
+  // is not residue that needs revoking.
+  return (p.businessMetadataKeys || []).some((k) => k !== 'loom_certification');
+}
 
 /** A fresh, empty overlay for a securable — the shape a first read returns. */
 export function emptyOverlay(p: {
@@ -373,6 +603,9 @@ export function applyOverlayMutation(
       if (i >= 0) tags[i] = t; else tags.push(t);
     }
   }
+  if (tags.length > OVERLAY_LIMITS.maxTags) {
+    throw new UcOverlayError(`too many tags on one securable (max ${OVERLAY_LIMITS.maxTags})`);
+  }
 
   let certification = overlay.certification || { rung: 'none' as EndorsementRung };
   if (mutation.certification) {
@@ -380,27 +613,30 @@ export function applyOverlayMutation(
     if (!RUNGS.includes(rung)) {
       throw new UcOverlayError(`certification rung must be one of ${RUNGS.join(', ')}`);
     }
-    certification = rung === 'none'
-      ? { rung, ...(mutation.certification.note ? { note: mutation.certification.note } : {}) }
-      : {
-          rung,
-          by: ctx.actorUpn,
-          at: now,
-          ...(mutation.certification.note ? { note: mutation.certification.note } : {}),
-        };
+    const note = mutation.certification.note !== undefined
+      ? String(mutation.certification.note).slice(0, OVERLAY_LIMITS.maxStringLength)
+      : certification.note;
+    if (rung === 'none') {
+      // De-certifying clears the signer: `by`/`at` describe the CURRENT rung.
+      certification = { rung, ...(note ? { note } : {}) };
+    } else if (rung === certification.rung && certification.by && certification.at) {
+      // PROVENANCE IS NOT RE-STAMPED WHEN THE RUNG DOES NOT MOVE. Editing the
+      // note (or re-saving) must not silently transfer the attestation to
+      // whoever last touched the row — the recorded certifier has to remain the
+      // person who actually moved it to this rung.
+      certification = { rung, by: certification.by, at: certification.at, ...(note ? { note } : {}) };
+    } else {
+      certification = { rung, by: ctx.actorUpn, at: now, ...(note ? { note } : {}) };
+    }
   }
 
   const attributes: UcAttributeValues = { ...(overlay.attributes || {}) };
   if (mutation.attributes) {
-    const known = new Set<string>();
-    for (const g of ctx.attributeGroups || []) for (const a of g.attributes || []) known.add(a.id);
-    for (const [id, value] of Object.entries(mutation.attributes)) {
-      if (!known.has(id)) {
-        throw new UcOverlayError(
-          `unknown attribute "${id}" — define it in an attribute group first (Governance → Custom attributes)`,
-        );
-      }
-      if (value === null || value === undefined || value === '') delete attributes[id];
+    // Typed + bounded against the tenant's OWN AttributeDef schema — not just
+    // an id-membership check (see validateAttributeValues).
+    const validated = validateAttributeValues(mutation.attributes, ctx.attributeGroups || []);
+    for (const [id, value] of Object.entries(validated)) {
+      if (value === null) delete attributes[id];
       else attributes[id] = value;
     }
   }
@@ -418,9 +654,36 @@ export function atlasSafeName(s: string): string {
   return (s || '').trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
+/**
+ * SHARED-TENANT TYPEDEF NAMESPACE DISCRIMINATOR.
+ *
+ * Atlas classification typedefs are ACCOUNT-GLOBAL in the classic Purview Data
+ * Map, while a Loom "tenant" is a Cosmos partition (`tid || oid`). Without a
+ * discriminator, tenant A's vocabulary word `pii=yes` and tenant B's would
+ * create/attach the SAME global `Loom_pii_yes` typedef — one tenant's
+ * vocabulary polluting (and semantically colliding with) another's inside a
+ * shared Purview account.
+ *
+ * So every Loom classification is namespaced `Loom_<t8>_<key>_<value>`, where
+ * `t8` is a stable 8-hex-char FNV-1a digest of the tenant scope id. This is a
+ * NAMESPACE discriminator, not a secret and not a security primitive — it only
+ * has to make accidental cross-tenant collision improbable, so a pure hash is
+ * used deliberately (this module must stay importable by the client tier: no
+ * `node:crypto`).
+ */
+export function tenantTypedefPrefix(tenantId: string): string {
+  let h = 0x811c9dc5;
+  const s = String(tenantId || '');
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
 export interface UcPurviewProjection {
   /** Atlas CLASSIFICATION names for the governed tags (controlled vocabulary →
-   *  controlled classification set). `Loom_<key>_<value>`. */
+   *  controlled classification set). `Loom_<tenant8>_<key>_<value>`. */
   classifications: string[];
   /** `LoomCustomTags` business-metadata attributes: free tags + certification. */
   businessMetadata: Record<string, string>;
@@ -439,23 +702,60 @@ export interface UcPurviewProjection {
  * The account Loom provisions via ARM is a CLASSIC Data Map account (Atlas v2)
  * — it does NOT expose the unified-catalog `/datagovernance` surface (see the
  * header of `lib/azure/purview-client.ts`), so nothing here targets that host.
+ *
+ * COLLISIONS ARE REFUSED, NOT SILENTLY MERGED. `atlasSafeName` is lossy
+ * (`cost center` and `cost-center` both normalize to `cost_center`), so two
+ * distinct free tags could otherwise overwrite each other with the last writer
+ * winning and no warning — a governance surface must not quietly drop a fact.
+ * Both that case and a key that normalizes to nothing throw
+ * {@link UcOverlayError}, which the sync turns into an honest `reason`.
+ *
+ * ALWAYS emits `loom_certification` (as `none` when de-certified) so a
+ * superseding sync can overwrite a stale `certified` label rather than leaving
+ * it behind — see `purview-sync.syncOverlayToPurview`.
  */
 export function projectOverlayToPurview(overlay: UcGovernanceOverlay): UcPurviewProjection {
+  const prefix = tenantTypedefPrefix(overlay.tenantId);
   const classifications: string[] = [];
   const businessMetadata: Record<string, string> = {};
+  const normalizedFrom = new Map<string, string>();
+
   for (const t of overlay.tags || []) {
     if (t.governed) {
-      const name = `Loom_${atlasSafeName(t.key)}_${atlasSafeName(t.value)}`;
+      const k = atlasSafeName(t.key);
+      const v = atlasSafeName(t.value);
+      if (!k || !v) {
+        throw new UcOverlayError(
+          `governed tag "${t.key}=${t.value}" cannot be expressed as an Atlas classification (Atlas typedef names allow letters, digits and underscore only). Rename it in the tenant vocabulary.`,
+        );
+      }
+      const name = `Loom_${prefix}_${k}_${v}`.slice(0, 96);
       if (!classifications.includes(name)) classifications.push(name);
     } else {
-      businessMetadata[atlasSafeName(t.key) || 'tag'] = t.value;
+      const norm = atlasSafeName(t.key);
+      if (!norm) {
+        throw new UcOverlayError(
+          `tag key "${t.key}" cannot be expressed as Purview business metadata (it normalizes to an empty name). Rename the tag.`,
+        );
+      }
+      const prior = normalizedFrom.get(norm);
+      if (prior !== undefined && prior !== t.key) {
+        throw new UcOverlayError(
+          `tags "${prior}" and "${t.key}" both normalize to the Purview attribute "${norm}" — one would silently overwrite the other. Rename one of them before syncing.`,
+        );
+      }
+      normalizedFrom.set(norm, t.key);
+      businessMetadata[norm] = t.value;
     }
   }
-  const rung = overlay.certification?.rung || 'none';
-  if (rung !== 'none') {
-    businessMetadata.loom_certification = rung;
-    if (overlay.certification?.by) businessMetadata.loom_certified_by = overlay.certification.by;
-    if (overlay.certification?.at) businessMetadata.loom_certified_at = overlay.certification.at;
+  if (classifications.length > OVERLAY_LIMITS.maxClassifications) {
+    throw new UcOverlayError(
+      `too many governed tags to project into Purview (max ${OVERLAY_LIMITS.maxClassifications} classifications)`,
+    );
   }
+  const rung = overlay.certification?.rung || 'none';
+  businessMetadata.loom_certification = rung;
+  businessMetadata.loom_certified_by = rung === 'none' ? '' : (overlay.certification?.by || '');
+  businessMetadata.loom_certified_at = rung === 'none' ? '' : (overlay.certification?.at || '');
   return { classifications, businessMetadata };
 }
