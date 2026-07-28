@@ -2,18 +2,18 @@
 
 Loom's data-integration surface is one-for-one with Azure Data Factory / Fabric
 Data Factory: a **pipeline** is a visual DAG of activities (Copy data,
-Notebook, Dataflow, control flow) on a drag-and-drop canvas, and the two
-transformation item types — **Dataflow Gen2** (Power Query / M) and **Mapping
-data flow** (a Spark-executed transform graph) — are authored separately and
-invoked from a pipeline activity. This guide walks the real Loom pipeline
-editor.
+Notebook, Mapping data flow, Dataflow Gen2, control flow) on a drag-and-drop
+canvas, and the two transformation item types — **Dataflow Gen2** (Power Query
+/ M) and **Mapping data flow** (a Spark-executed transform graph) — are
+authored separately and invoked from a pipeline activity. This guide walks the
+real Loom pipeline editor.
 
 ## When to use which
 
 | Tool | Use when |
 |---|---|
 | **Copy job** | Pure source → sink bulk movement, no transforms. The simplest, fault-tolerant loader. |
-| **Data pipeline** | Orchestration: chain Copy, Notebook, Dataflow, and control-flow activities with dependencies, parameters, and triggers. |
+| **Data pipeline** | Orchestration: chain Copy data, Notebook, Mapping data flow / Dataflow Gen2, and control-flow activities with dependencies, parameters, and triggers. |
 | **Dataflow Gen2** | Visual, code-free transformation authored in the Power Query Editor (M expressions). |
 | **Mapping data flow** | Scaled-out transformation (joins, derived columns, aggregates, pivots, windows) drawn as a Source → transform → Sink graph and executed on Spark. |
 
@@ -41,8 +41,10 @@ in-canvas output dock.
 2. **Add a Notebook activity** for a PySpark transform. Drag *Notebook*, then
    bind it to an existing notebook item. Wire the **green success edge** from
    Copy data → Notebook so the transform runs only after ingest succeeds.
-3. **Add a Dataflow activity** (optional) to do a code-free Mapping Data Flow
-   transform instead of, or alongside, the notebook.
+3. **Add a transform activity** (optional) to do a code-free transform instead
+   of, or alongside, the notebook. The palette's **Move & transform** group has
+   *Mapping data flow* (runs a published mapping data flow on an integration
+   runtime) and *Dataflow Gen2* (runs a Power Query / M wrangling dataflow).
 4. **Validate.** Click **Validate** — the editor checks every activity's
    bindings and surfaces errors inline before you run.
 5. **Debug.** Click **Home → Run → Debug** to dispatch a debug run. Loom
@@ -53,7 +55,10 @@ in-canvas output dock.
    resizable **Output dock** opens under the graph.
 6. **Run.** Click **Run** to queue a real trigger run; the editor switches to the
    **Output** tab, whose Monitor and Debug tables read the live
-   `queryPipelineRuns` / `queryActivityRuns` history (status, duration, rows).
+   `queryPipelineRuns` / `queryActivityRuns` history. The Monitor table columns
+   are Run ID, Status, Invoked by, Start, End, Duration, Message; expanding a
+   run shows its activities (Activity, Type, Status, Duration, Output / error
+   peek).
 7. **Schedule.** Use **Schedule → Schedule** (or **Add trigger**) to attach a
    schedule, tumbling-window, or event-based trigger so the pipeline runs
    automatically.
@@ -70,10 +75,12 @@ These are two **different item types**, not two names for one thing:
   and run on an integration runtime with data-flow compute. It is a real
   `Microsoft.DataFactory/factories/dataflows` resource.
 
-Both are authored as their own item and invoked from a pipeline activity
-(**Dataflow** / **Execute data flow**) so they can be scheduled. Use either for
-the conform/clean step from Bronze → Silver where you want the transform visual
-and reusable rather than buried in notebook code.
+Both are authored as their own item and invoked from a pipeline activity — the
+palette's **Move & transform** group carries **Dataflow Gen2** (activity type
+`ExecuteWranglingDataflow`) and **Mapping data flow** (activity type
+`ExecuteDataFlow`) — so they can be scheduled. Use either for the conform/clean
+step from Bronze → Silver where you want the transform visual and reusable
+rather than buried in notebook code.
 
 The mapping-data-flow editor has a **Debug** panel under the canvas. Flip
 **Data flow debug** on to hold one real ADF debug session for the whole
@@ -92,8 +99,8 @@ or runtime to provision — the canvas and palette still render in full.
 
 ## Learn more
 
-- **MS Learn — [What is Data Factory in Microsoft Fabric?](https://learn.microsoft.com/fabric/data-factory/data-factory-overview)**
-- MS Learn — [Pipelines and activities (ADF)](https://learn.microsoft.com/azure/data-factory/concepts-pipelines-activities)
-- MS Learn — [Dataflow Gen2 overview](https://learn.microsoft.com/fabric/data-factory/dataflows-gen2-overview)
-- MS Learn — [Mapping data flows](https://learn.microsoft.com/azure/data-factory/concepts-data-flow-overview)
+- **MS Learn — [Pipelines and activities (Azure Data Factory)](https://learn.microsoft.com/azure/data-factory/concepts-pipelines-activities)** — ADF/Synapse is the default backend Loom pipelines run on.
+- MS Learn — [Mapping data flows (ADF)](https://learn.microsoft.com/azure/data-factory/concepts-data-flow-overview)
+- MS Learn — [Power Query M / wrangling data flows (ADF)](https://learn.microsoft.com/azure/data-factory/wrangling-overview)
+- Parity reference only — [What is Data Factory in Microsoft Fabric?](https://learn.microsoft.com/fabric/data-factory/data-factory-overview) and [Dataflow Gen2 overview](https://learn.microsoft.com/fabric/data-factory/dataflows-gen2-overview). Loom needs no Fabric capacity or workspace; these describe the surface Loom is one-for-one with.
 - Loom editor guides — [Data pipeline](../tutorials/editor-data-pipeline.md) · [Dataflow](../tutorials/editor-dataflow.md) · [Copy job](../tutorials/editor-copy-job.md)

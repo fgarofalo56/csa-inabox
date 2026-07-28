@@ -93,14 +93,16 @@ to row-6 single-stream inline preview). UI: `dataflow-debug-panel.tsx`.
 | 11 | Dataset-backed Source/Sink pickers | ✅ built | `GET /api/adf/datasets` |
 | 12 | **Visual expression builder** (Add Dynamic Content) | ❌ MISSING | plain expression textareas (see `adf-mapping-data-flow.md` C9) |
 | 13 | Free edge-drawing / inline "+" between nodes | ⚠️ partial | add chains off the selected node |
-| 14 | Per-node Data preview / Inspect / Statistics tabs | ✅ built | all three shipped in U7 (PR-1 preview, PR-2 Inspect + Statistics) — see §U7 |
+| 14 | Per-node Data preview / Inspect / Statistics tabs | ✅ built (U7) / ⏳ | Data-preview tab shipped (U7-2); Inspect/Statistics tabs U7 PR-2 (§U7). Code inspection shows all three `Tab` values present in `dataflow-debug-panel.tsx`, but per `.claude/rules/ui-parity.md` a ⏳→✅ promotion needs a click-walk against a live console — not yet performed, so the row stays pending. Tracked in #2573. |
 | 14b | Per-node **Optimize** tab (partitioning scheme) | ❌ MISSING | no partition-option surface in the designer |
 | 15 | Rename / clone / Publish-Git shell | ❌ MISSING | direct PUT only |
 
 **Grade: B+ (post-U7).** The standalone editor gives a real
 create→author→save→**held-session Debug** loop against ADF REST — per-transform
 Data Preview, Inspect (in/out schema + drift), Statistics, and preview-grid
-quick-actions — with an honest Spark-debug gate. Remaining gaps (visual
-expression builder, per-node Optimize/partitioning, publish/git) are shared
-with the mounted-ADF surface and tracked in `adf-mapping-data-flow.md` — not
-stubs, and never Fabric-gated.
+quick-actions — with an honest Spark-debug gate. Row 14 stays ⏳ until a live
+click-walk confirms the Inspect/Statistics tabs; the code is in place but the
+parity standard does not accept source inspection as verification. Remaining
+gaps (visual expression builder, per-node Optimize/partitioning, publish/git)
+are shared with the mounted-ADF surface and tracked in
+`adf-mapping-data-flow.md` — not stubs, and never Fabric-gated.

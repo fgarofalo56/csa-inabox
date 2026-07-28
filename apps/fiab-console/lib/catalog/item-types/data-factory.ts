@@ -75,7 +75,7 @@ export const dataFactoryItems: FabricItemType[] = [
   { slug: 'mapping-dataflow', displayName: 'Mapping data flow', restType: 'MappingDataFlow', category: 'Data Factory',
     description: 'Visually design a Spark-executed data flow — Source, schema/row transformations, and Sink — that runs on an integration runtime.',
     learnContent: {
-      "overview": "A Mapping data flow is a visually-designed, Spark-executed data transformation. You draw a graph of Source → transformation → Sink nodes on a canvas and Azure Data Factory / Synapse compiles it to a Data Flow Script that runs on a scaled-out Spark cluster (an integration runtime with data-flow compute) — no hand-written Spark code. In CSA Loom it is Azure-native: the flow is a real Microsoft.DataFactory/factories/dataflows resource (type: MappingDataFlow) on the deployment-default Data Factory, and pipelines invoke it with an Execute data flow activity. It is DISTINCT from Dataflow Gen2 (Power Query / M) — same goal, different engine and authoring model.",
+      "overview": "A Mapping data flow is a visually-designed, Spark-executed data transformation. You draw a graph of Source → transformation → Sink nodes on a canvas and Azure Data Factory / Synapse compiles it to a Data Flow Script that runs on a scaled-out Spark cluster (an integration runtime with data-flow compute) — no hand-written Spark code. In CSA Loom it is Azure-native: the flow is a real Microsoft.DataFactory/factories/dataflows resource (type: MappingDataFlow) on the deployment-default Data Factory, and pipelines invoke it with the palette's Mapping data flow activity (Move & transform group; ADF activity type ExecuteDataFlow). It is DISTINCT from Dataflow Gen2 (Power Query / M) — same goal, different engine and authoring model.",
       "steps": [
         {
           "title": "Add a source",
@@ -91,7 +91,7 @@ export const dataFactoryItems: FabricItemType[] = [
         },
         {
           "title": "Debug + run",
-          "body": "Turn on Data flow debug to preview rows at each transformation — this needs a live Spark data-flow debug cluster (an Azure IR with data-flow compute); without one the preview is an honest gate, never faked. Run the flow in production from a pipeline's Execute data flow activity."
+          "body": "Turn on Data flow debug in the Debug panel under the canvas to hold one real ADF debug session, then per transform: Data preview (typed sample rows), Inspect (in/out schema with drift badges), and Statistics (nulls, distinct, min/max/mean/std-dev). This needs a live Spark data-flow debug cluster (an Azure IR with data-flow compute); without one the panel is an honest gate, never faked. Run the flow in production from a pipeline's Mapping data flow activity (Move & transform group; ADF activity type ExecuteDataFlow)."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-factory/concepts-data-flow-overview"

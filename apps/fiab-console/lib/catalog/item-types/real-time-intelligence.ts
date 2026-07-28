@@ -124,7 +124,7 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
         },
         {
           "title": "Organize into pages",
-          "body": "Add page creates a named tile-container page and the page strip switches between them. A dashboard with no authored pages stays a single canvas; rename is inline, and deleting a page moves its tiles to the first remaining page rather than destroying them."
+          "body": "Add page creates a named tile-container page and the page strip switches between them. A dashboard with no authored pages stays a single canvas; the FIRST Add page materializes two pages — Page 1 holding the existing tiles plus the new Page 2 — and each later click appends one. Rename is inline, and deleting a page moves its tiles to the first remaining page rather than destroying them."
         },
         {
           "title": "Set the time range and auto-refresh",

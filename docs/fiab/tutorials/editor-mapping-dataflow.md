@@ -19,7 +19,7 @@ same goal, different engine and authoring model.
 - You need scaled-out transformations (joins, aggregates, pivots, windows)
   without writing Spark.
 - Your pipeline should invoke the transformation as a governed activity
-  (**Execute data flow**) with monitoring.
+  (the pipeline palette's **Mapping data flow** activity, ADF type `ExecuteDataFlow`) with monitoring.
 
 ## Step-by-step in Loom
 
@@ -38,7 +38,8 @@ same goal, different engine and authoring model.
 5. **Debug + run.** Flip the **Data flow debug** switch in the **Debug** panel
    under the canvas to hold a debug session, then preview / inspect / profile
    any transform (see below). Run the flow in production from a pipeline's
-   **Execute data flow** activity.
+   **Mapping data flow** activity (Move & transform group; ADF activity type
+   `ExecuteDataFlow`).
 
 ## Debug mode — the panel under the canvas
 
@@ -103,7 +104,7 @@ factory, and the authoring path are unaffected either way.
   Script the production run executes. One compiler, two entry points.
 - **Routes:** `POST /api/items/mapping-dataflow/<id>/debug/session`
   (acquire/release), `.../debug/preview`, `.../debug/schema`, `.../debug/stats`.
-- **Orchestration:** pipeline **Execute data flow** activity.
+- **Orchestration:** pipeline **Mapping data flow** activity (ADF activity type `ExecuteDataFlow`).
 
 ## No Fabric required
 

@@ -20,7 +20,7 @@ A Real-Time dashboard is a tile grid powered by KQL queries. Azure-native by def
 
 1. **Add tiles** — Add tile creates a query tile — bind it to a data source (a KQL database on the ADX cluster), write the KQL, and pick a visual. Add text tile creates a markdown tile that renders content and is never executed. Add tile with Copilot writes the KQL for you from a prompt.
 2. **Add parameters** — Parameters opens the parameter editor: freetext, fixed, multi-select, query-backed (values loaded from KQL), data-source, and duration types. They render in the filter bar above the grid and substitute into every tile's KQL, so changing one cross-filters the whole dashboard.
-3. **Organize into pages** — Add page creates a named tile-container page and the page strip switches between them. A dashboard with no authored pages stays a single canvas; rename is inline, and deleting a page moves its tiles to the first remaining page rather than destroying them.
+3. **Organize into pages** — Add page creates a named tile-container page and the page strip switches between them. A dashboard with no authored pages stays a single canvas; the FIRST Add page materializes two pages — Page 1 holding the existing tiles plus the new Page 2 — and each later click appends one. Rename is inline, and deleting a page moves its tiles to the first remaining page rather than destroying them.
 4. **Set the time range and auto-refresh** — The Time button cycles the dashboard time range and the Auto-refresh selector sets the interval (off, 5s, 30s, 1m, 5m, 30m, 1h). While auto-refresh is on, a live pill shows the last refresh time; Refresh all re-runs every tile on demand.
 5. **Wire drill-through and alerts** — In a tile's settings pick a drill-through column, the parameter to set from the clicked value, and an optional target page — clicking a data point applies the value and re-runs the grid. The bell on a tile opens Set alert, which links a backing Activator item and mints a real ADX-evaluated rule (plus an Azure Monitor scheduled-query rule when LOOM_ADX_ALERT_SCOPE is provisioned).
 
@@ -43,7 +43,10 @@ The editor's toolbar and **Home** ribbon carry the depth controls:
 **Pages.** **Add page** materializes a named tile-container page; the page strip
 above the grid switches between pages and shows each page's tile count. A
 dashboard that has never had a second page keeps rendering as one canvas — the
-strip shows a single implicit **Page 1** tab. Rename is inline (click the
+strip shows a single implicit **Page 1** tab. The first **Add page** click on
+such a dashboard creates TWO page records — **Page 1** (which adopts the
+existing tiles) and the new **Page 2**, which becomes active; every later click
+appends one page. Rename is inline (click the
 rename glyph, type, press Enter). **Delete** moves that page's tiles to the
 first remaining page; no tile is destroyed. Pages persist in the dashboard's
 Cosmos model, and a tile whose `pageId` is missing or unknown resolves to the
