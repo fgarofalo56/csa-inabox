@@ -64,6 +64,18 @@ TIMEOUT = 60
 
 class UnityClient:
     def __init__(self, base_url: str, token: str | None, label: str) -> None:
+        # Scheme allow-list (bandit B310). Both base URLs come from CLI args, so
+        # without this a `file:///etc/passwd` (or a custom scheme) would be
+        # happily opened by urlopen and read as if it were a catalog response.
+        # Validate ONCE here rather than at every call site.
+        parsed = urllib.parse.urlparse(base_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"{label}: refusing base URL with scheme "
+                f"{parsed.scheme!r} -- only http/https are permitted (got {base_url!r})"
+            )
+        if not parsed.netloc:
+            raise ValueError(f"{label}: base URL has no host (got {base_url!r})")
         self.base = base_url.rstrip("/")
         self.token = token
         self.label = label
@@ -77,7 +89,16 @@ class UnityClient:
             req.add_header("Content-Type", "application/json")
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        # Re-assert at the call site: `path` is composed internally, but this
+        # keeps the scheme guarantee local to the urlopen bandit flags rather
+        # than relying on a reader tracing back to __init__.
+        if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+            raise ValueError(f"refusing non-http(s) request URL: {url!r}")
+        # nosec B310 - the URL scheme is allow-listed to http/https on the two
+        # lines above AND in __init__; B310's concern (file:/ + custom schemes)
+        # cannot be reached. Suppressed HERE rather than added to the global
+        # pyproject skips, so any FUTURE urlopen elsewhere is still flagged.
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310
             raw = resp.read().decode("utf-8")
         return json.loads(raw) if raw.strip() else {}
 
