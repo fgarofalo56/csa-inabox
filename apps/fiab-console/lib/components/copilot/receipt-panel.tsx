@@ -312,6 +312,42 @@ export function ReceiptPanel({ receipt, defaultExpanded = false }: ReceiptPanelP
             </div>
           )}
 
+          {/* N14c — data contracts the turn's PROPOSALS were graded against. */}
+          {!!receipt.contractChecks?.length && (
+            <div className={s.section} data-testid="receipt-contract-checks">
+              <span className={s.sectionTitle}>
+                <ShieldCheckmark16Regular aria-hidden />
+                Data contracts ({receipt.contractChecks.length} proposal
+                {receipt.contractChecks.length === 1 ? '' : 's'} checked)
+              </span>
+              {receipt.contractChecks.map((c, i) => (
+                <div key={i} className={s.section}>
+                  <div className={s.chipRow}>
+                    <Badge
+                      size="small"
+                      appearance="tint"
+                      color={c.blocked ? 'danger' : c.ok ? 'success' : 'warning'}
+                    >
+                      {c.kind}
+                      {c.blocked ? ' — blocked' : c.ok ? ' — conforms' : ' — violations'}
+                    </Badge>
+                    {c.contracts.map((k) => (
+                      <Badge key={k.id} size="extra-small" appearance="outline" color="informative">
+                        {k.name}{k.version ? ` v${k.version}` : ''}{k.mode ? ` · ${k.mode}` : ''}
+                      </Badge>
+                    ))}
+                  </div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{c.note}</Caption1>
+                  {c.violations.slice(0, 8).map((v, j) => (
+                    <Caption1 key={j} style={{ color: tokens.colorNeutralForeground3 }}>
+                      · [{v.severity}] {v.dataset}{v.column ? `.${v.column}` : ''} — {v.detail}
+                    </Caption1>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Graph paths + metrics */}
           {(receipt.graphPaths > 0 || receipt.metrics.length > 0) && (
             <div className={s.section}>

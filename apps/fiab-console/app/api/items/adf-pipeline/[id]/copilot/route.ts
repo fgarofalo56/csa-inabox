@@ -22,7 +22,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   resolveAoaiTarget,
   orchestrate,
@@ -44,11 +44,8 @@ const ITEM_TYPE = 'adf-pipeline';
 const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 const BACKEND = 'adf' as const;
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { id } = await ctx.params;
+export const POST = withSession(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
 
   // The copilot needs the real Azure pipeline name — bind required.
   let pipelineName: string;
@@ -77,7 +74,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 
-  const registry = buildPipelineRegistry(BACKEND, pipelineName, aoaiTarget);
+  const registry = buildPipelineRegistry(BACKEND, pipelineName, aoaiTarget, session.claims.oid);
   const userOid = session.claims.oid;
 
   const encoder = new TextEncoder();
@@ -126,4 +123,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       'x-accel-buffering': 'no',
     },
   });
-}
+});

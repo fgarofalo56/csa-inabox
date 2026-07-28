@@ -34,6 +34,7 @@ import {
   FACTORY_OBJECT_KIND_LABELS,
   type FactoryObjectKind,
 } from '../azure/adf-resource-ops';
+import { checkProposalContracts, contractCheckSummary, type ContractCheck } from './contract-guard';
 
 export type PipelineBackend = 'adf' | 'synapse';
 
@@ -155,9 +156,17 @@ export async function handlePipelineGenerate(
     name: string;
     backend: PipelineBackend;
     connections?: Array<{ name: string; type: string }>;
+    /**
+     * B-N14c — the contract-registry partition (the caller's Entra oid). When
+     * supplied, the generated spec is graded against the N6 ODCS contracts that
+     * govern its sinks BEFORE it is returned, and the verdict rides back on
+     * `contractCheck` + the summary. Omitted (e.g. a unit test) skips the check
+     * entirely — the pre-N14c behaviour, byte-for-byte.
+     */
+    tenantId?: string;
   },
   aoaiTarget: AoaiTarget,
-): Promise<{ spec: PipelineSpec; summary: string }> {
+): Promise<{ spec: PipelineSpec; summary: string; contractCheck?: ContractCheck }> {
   const description = String(args.description || '').trim();
   const name = String(args.name || '').trim() || 'generated_pipeline';
   if (!description) throw new Error('A pipeline description is required.');
@@ -223,10 +232,17 @@ export async function handlePipelineGenerate(
   if (!spec.name) spec.name = name;
 
   const acts = spec.properties.activities;
-  const summary =
+  const baseSummary =
     `Generated "${spec.name}" with ${acts.length} activit${acts.length === 1 ? 'y' : 'ies'}: ` +
     acts.map((a: any) => `${a.name} (${a.type})`).join(', ');
-  return { spec, summary };
+
+  // B-N14c — grade the PROPOSAL against the governing N6 data contracts BEFORE
+  // it is returned, so a contract breach is visible with the suggestion instead
+  // of at run time in the dead-letter tree. Fail-open: the guard never throws.
+  if (!args.tenantId) return { spec, summary: baseSummary };
+  const contractCheck = await checkProposalContracts(args.tenantId, { kind: 'pipeline', spec });
+  const note = contractCheckSummary(contractCheck);
+  return { spec, summary: note ? `${baseSummary}\n${note}` : baseSummary, contractCheck };
 }
 
 // ============================================================

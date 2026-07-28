@@ -27,7 +27,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import {
@@ -41,6 +40,8 @@ import {
   buildLetBody,
   DataflowCopilotError,
 } from '@/lib/azure/dataflow-engine-client';
+import { checkProposalContracts } from '@/lib/copilot/contract-guard';
+import { withSession } from '@/lib/api/route-toolkit';
 
 // Fixed, server-validated intent allowlist (no free-form intent injection).
 const INTENTS = ['generate_query', 'reference_query', 'explain', 'add_step', 'undo'] as const;
@@ -60,9 +61,7 @@ function bodyOf(mScript: string, queryName: string): string {
   return q?.body || '';
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: CopilotBody = {};
   try {
@@ -139,6 +138,9 @@ export async function POST(req: NextRequest) {
           queryName: g.queryName,
           mBody: g.mBody,
           validatedStepCount: v.queries[0]?.stepCount ?? 0,
+          // B-N14c — grade the PROPOSED M against the governing N6 data
+          // contracts before the editor renders the diff.
+          contractCheck: await checkProposalContracts(session.claims.oid, { kind: 'dataflow', text: g.mBody }),
         });
       }
       case 'reference_query': {
@@ -155,6 +157,7 @@ export async function POST(req: NextRequest) {
           queryName: g.queryName,
           mBody: g.mBody,
           validatedStepCount: v.queries[0]?.stepCount ?? 0,
+          contractCheck: await checkProposalContracts(session.claims.oid, { kind: 'dataflow', text: g.mBody }),
         });
       }
       case 'explain': {
@@ -172,6 +175,12 @@ export async function POST(req: NextRequest) {
           queryName: activeQuery,
           stepName: step.stepName,
           stepExpr: step.stepExpr,
+          // The step is checked IN CONTEXT (the query body it will join), so a
+          // column removal that breaks a contract is caught, not just the step.
+          contractCheck: await checkProposalContracts(session.claims.oid, {
+            kind: 'dataflow',
+            text: `${activeBody}\n${step.stepExpr}`,
+          }),
         });
       }
       default:
@@ -181,4 +190,4 @@ export async function POST(req: NextRequest) {
     const status = e instanceof DataflowCopilotError ? 400 : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

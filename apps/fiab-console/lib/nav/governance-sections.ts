@@ -41,6 +41,7 @@ export const GOVERNANCE_SECTIONS: GovernanceSectionGroup[] = [
     items: [
       { href: '/governance', label: 'Overview', desc: 'Governance posture, coverage scores, recent activity.' },
       { href: '/governance/govern', label: 'Govern', desc: 'My-items posture for data owners — label coverage, curation, recommended actions.' },
+      { href: '/governance/ask', label: 'Governance Q&A', desc: 'Ask "who can read PII in EU?" — answered from this deployment\'s real grants, policies, contracts, and classifications, with the policy edges cited.' },
     ],
   },
   {

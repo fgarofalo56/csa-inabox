@@ -518,6 +518,23 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N19a',
     surface: 'Notebook editor (/items/notebook/[id]) — Reactive pane + Deploy as app + POST /api/items/notebook/[id]/deploy-app',
   },
+  // ── B-N14b / B-N14c — governance + contract-validating copilots (default ON) ──
+  {
+    id: 'n14b-nl-governance-copilot',
+    label: 'Governance Q&A — NL copilot over the policy graph',
+    description:
+      'The B-N14b natural-language governance copilot on /governance/ask ("who can read PII in EU?"): it assembles a POLICY GRAPH from this deployment\'s own stores (the entitlement ledger, live workspace ACLs, the tenant governance policy document, the ODCS data-contract registry\'s authored column classifications, and the Purview built-in classification catalog), retrieves over it with the N11 GraphRAG primitives, and answers ONLY from the retrieved policy paths — citing each one and REFUSING when the graph cannot establish the claim. OFF makes /governance/ask render an honest "turned off" state on the next load and the ask API return a refusal; every other governance surface, the PDP, and all enforcement are unaffected (this copilot only READS).',
+    ownerItem: 'B-N14b',
+    surface: '/governance/ask + POST /api/governance/copilot/ask',
+  },
+  {
+    id: 'n14c-contract-validating-copilots',
+    label: 'Copilots — validate proposals against N6 data contracts',
+    description:
+      'The B-N14c pre-proposal check: before a pipeline / dataflow / SQL suggestion is shown, it is graded against the N6 ODCS contracts that govern the datasets it touches (the SAME schema-conformance grader the run-time pipeline-sink pre-flight uses), and any violation is surfaced with the proposal and in the Answer Receipt. OFF stops the check on the very next turn (seconds, no roll) and every copilot answers exactly as it did before. It does NOT touch ingestion-time enforcement: bound contracts keep quarantining violating rows to the Bronze `_rejected` dead-letter path either way.',
+    ownerItem: 'B-N14c',
+    surface: 'Pipeline / Dataflow Gen2 / SQL copilots + POST /api/governance/contract-check + Answer Receipt',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
