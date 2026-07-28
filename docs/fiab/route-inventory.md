@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1645 |
+| Total routes | 1657 |
 | Public (no session) | 116 |
 | Session-only | 571 |
-| Owner-scoped | 684 |
+| Owner-scoped | 696 |
 | Admin | 274 |
-| Gated (backend config) | 529 |
-| Areas | 117 |
+| Gated (backend config) | 530 |
+| Areas | 119 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -30,6 +30,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `a2a/agent-cards/[kind]/[id]/route.ts` | GET | owner-scoped |  | — |
+| `a2a/agent-cards/route.ts` | GET | owner-scoped |  | — |
 | `a2a/delegate/route.ts` | POST | owner-scoped |  | — |
 | `a2a/route.ts` | GET POST | owner-scoped |  | — |
 
@@ -306,6 +308,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `adx/rls/route.ts` | GET POST | owner-scoped |  | ADX |
 | `adx/tables/route.ts` | GET POST PATCH DELETE | owner-scoped |  | ADX |
 
+## agents
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `agents/[id]/memory/route.ts` | GET POST DELETE | owner-scoped |  | — |
+
 ## ai-functions
 
 | Route | Methods | Auth scope | Gated | Backends |
@@ -482,6 +490,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `catalog/iceberg/overview/route.ts` | GET | admin | ● | Cosmos |
 | `catalog/iceberg/table/route.ts` | GET | public |  | — |
 | `catalog/iceberg/tables/route.ts` | GET POST DELETE | public |  | — |
+| `catalog/interop/export/route.ts` | GET | owner-scoped |  | — |
+| `catalog/interop/ingest/route.ts` | POST | owner-scoped |  | — |
 | `catalog/lineage/item/route.ts` | GET | session-only |  | Purview |
 | `catalog/lineage/route.ts` | GET | session-only |  | Purview |
 | `catalog/metastores/route.ts` | GET POST | owner-scoped | ● | Cosmos, Purview |
@@ -880,6 +890,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `governance/classification-types/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
 | `governance/classifications/route.ts` | GET | owner-scoped |  | Cosmos |
 | `governance/classifications/system/route.ts` | GET | session-only |  | Purview |
+| `governance/contract-check/route.ts` | POST | owner-scoped |  | — |
+| `governance/copilot/ask/route.ts` | POST | owner-scoped |  | — |
 | `governance/data-contracts/route.ts` | GET | owner-scoped |  | — |
 | `governance/dlp/library/route.ts` | GET POST | admin | ● | — |
 | `governance/dlp/meta/route.ts` | GET | owner-scoped |  | — |
@@ -931,6 +943,15 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `help-copilot/chat/route.ts` | POST | owner-scoped |  | — |
 | `help-copilot/reindex/route.ts` | GET POST | session-only | ● | — |
 | `help-copilot/sessions/route.ts` | GET | owner-scoped |  | — |
+
+## insights
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `insights/digests/[id]/preview/route.ts` | POST | owner-scoped | ● | Azure Monitor |
+| `insights/digests/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
+| `insights/digests/[id]/run/route.ts` | POST | owner-scoped |  | — |
+| `insights/digests/route.ts` | GET POST | owner-scoped |  | — |
 
 ## internal
 
@@ -1453,6 +1474,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/mounted-adf/[id]/route.ts` | GET DELETE | owner-scoped |  | ADF, Cosmos |
 | `items/mounted-adf/[id]/run/route.ts` | POST | owner-scoped |  | ADF, Cosmos |
 | `items/mounted-adf/route.ts` | GET POST | owner-scoped |  | Cosmos |
+| `items/notebook/[id]/deploy-app/route.ts` | GET POST | owner-scoped |  | — |
 | `items/notebook/[id]/execute-spark/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `items/notebook/[id]/jobs/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/notebook/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |

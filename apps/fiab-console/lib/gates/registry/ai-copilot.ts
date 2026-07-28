@@ -73,15 +73,15 @@ export const AI_COPILOT_GATE_META: Record<string, GateMeta> = {
   'svc-copilot-evaluator': {
     surfaces: [
       { path: '/admin/ai-operations?tab=quality', label: 'AI operations — Copilot quality tab (eval runs + "Run now")' },
-      { path: '/api/internal/copilot/eval-probe', label: 'Eval probe (internal, evaluator Function)' },
+      { path: '/api/internal/copilot/eval-probe', label: 'Eval probe (internal, evaluator job)' },
     ],
-    // Fix-it: deploy-the-Function wizard — the one-time action is a bicep
-    // deploy (functionAppsConfig.copilotEvaluatorEnabled, default-ON) plus the
-    // role grants the module declares; not a plain env write.
+    // Fix-it: deploy-the-job wizard — the one-time action is a bicep deploy
+    // (functionAppsConfig.copilotEvaluatorEnabled, default-ON) plus the image
+    // build; not a plain env write.
     fixit: {
       kind: 'wizard',
       grantNote:
-        'Deploy modules/admin-plane/copilot-evaluator-function.bicep (default-ON via the functionAppsConfig bag). The module grants the Function MI: Search Index Data Reader on the AI Search service, Cognitive Services OpenAI User on the AOAI/Foundry account, Cosmos DB Built-in Data Contributor on the Loom Cosmos, and Storage Blob Data Owner on its host storage (skipRoleGrants-aware). LOOM_COPILOT_EVALUATOR_URL is then wired onto the Console automatically.',
+        'Deploy modules/admin-plane/copilot-evaluator-job.bicep (default-ON via the functionAppsConfig bag) and build the loom-copilot-evaluator image with scripts/csa-loom/deploy-copilot-evaluator-job.sh. The job runs as the Console UAMI, which already holds Search Index Data Reader (AI Search), Cognitive Services OpenAI User (AOAI/Foundry) and Cosmos DB Built-in Data Contributor; the module adds ONE grant — Contributor scoped to the job resource, which ARM requires to start an execution (skipRoleGrants-aware). LOOM_COPILOT_EVALUATOR_JOB_ID is then wired onto the Console automatically. B-FN (2026-07-27) replaced the Y1 Function: Y1 is structurally broken on this estate.',
     },
     legacyCodes: [],
   },

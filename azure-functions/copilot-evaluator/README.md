@@ -1,13 +1,22 @@
-# copilot-evaluator — Copilot quality eval Function (loom-next-level E2)
+# copilot-evaluator — Copilot quality eval job (loom-next-level E2)
 
-Timer + HTTP Azure Function (Node v4 model, Linux Y1 Consumption) that executes
-the **E1 golden Q/A eval sets** (`content/evals/<surface>.jsonl`) against the
+> **B-FN migration (2026-07-27): this is an in-VNet scheduled Container App
+> Job — `loom-copilot-evaluator` — NOT an Azure Function.** Y1 Linux
+> Consumption Functions are structurally broken on this estate (Azure Policy
+> seals the storage data-plane: `publicNetworkAccess=Disabled`, AAD-only, no
+> private endpoint, and the multitenant Y1 runtime is not a trusted service, so
+> host keys / timer leases fail). The folder keeps its historical
+> `azure-functions/` path; the runtime is a one-shot Node entrypoint
+> (`src/main.ts`) in a container. Full rationale + fleet status:
+> [`docs/fiab/functions-to-aca-jobs.md`](../../docs/fiab/functions-to-aca-jobs.md).
+
+A scheduled + on-demand job that executes the **E1 golden Q/A eval sets** (`content/evals/<surface>.jsonl`) against the
 **REAL** Copilot path and writes scored results to Cosmos
 **`loom-copilot-evals`** (PK `/surface`).
 
 ## How a run works
 
-1. **Probe** — for each question the Function POSTs the console's internal
+1. **Probe** — for each question the job POSTs the console's internal
    `POST /api/internal/copilot/eval-probe` route (auth: the shared VNet-internal
    trust token `LOOM_INTERNAL_TOKEN`, fail-closed). The console runs the exact
    `searchDocs()` hybrid retrieval (AI Search → Cosmos fallback, telemetry
@@ -38,12 +47,23 @@ the **E1 golden Q/A eval sets** (`content/evals/<surface>.jsonl`) against the
 
 ## Triggers
 
-- **Timer** — `COPILOT_EVALUATOR_CRON`, default `0 0 7 * * *` (nightly 07:00
-  UTC, off-peak — see the capacity note).
-- **HTTP** — `POST /api/copilotEvaluatorHttp` body
-  `{ "surfaces": ["help"], "trigger": "manual" }` (`authLevel: function` — the
-  caller presents the function key). Fired by the corpus-staging workflow (E4)
-  and the admin "Run now" button (E5).
+- **Schedule** — `COPILOT_EVALUATOR_CRON`, default `0 7 * * *` (standard
+  5-field cron; nightly 07:00 UTC, off-peak — see the capacity note). Runs
+  every mode (`COPILOT_EVAL_MODE=all`).
+- **On demand** — an ARM job start with an execution-template override. The
+  corpus-staging workflow (E4) and the admin "Run now" button (E5) both take
+  this path; the four run knobs the entrypoint reads are
+  `COPILOT_EVAL_MODE` (`all|copilot|search|tier`), `COPILOT_EVAL_TRIGGER`
+  (`nightly|manual|corpus`), `COPILOT_EVAL_SURFACES` and `COPILOT_EVAL_DOMAINS`
+  (comma-separated; empty = all). The Console starts it through
+  `lib/azure/copilot-evaluator-client.ts`, which reads the job's current
+  template and merges the knobs on top — an override REPLACES the template, so
+  a hand-built container spec would silently drop the image and secrets.
+  **There is no HTTP trigger and no function key any more.**
+
+A copilot-mode execution ends with a machine-readable
+`::eval-run::{ok,trigger,surfaces:[...]}` line — the same body the retired HTTP
+trigger returned — which the CI gate lifts out of the execution logs.
 
 ## Env contract
 
@@ -57,17 +77,18 @@ the **E1 golden Q/A eval sets** (`content/evals/<surface>.jsonl`) against the
 | `LOOM_AOAI_STRONG/MINI/_DEPLOYMENT` | Judge fallback chain (bicep-wired per cloud). |
 | `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` | Default 500 judged Q/day. |
 | `LOOM_COPILOT_EVAL_ENABLED` | Default **true** (opt-out per `loom_default_on_opt_out`). |
-| `COPILOT_EVALUATOR_CRON` | Nightly schedule (NCRONTAB, 6-field). |
+| `COPILOT_EVALUATOR_CRON` | Nightly schedule (standard 5-field cron, UTC). |
+| `COPILOT_EVAL_MODE` / `COPILOT_EVAL_TRIGGER` / `COPILOT_EVAL_SURFACES` / `COPILOT_EVAL_DOMAINS` | Per-execution run knobs (see Triggers). |
 
 Missing config → an honest early-exit log naming the exact vars (no-vaporware).
 
 ## Eval-set staging
 
-`resolveEvalRoot()` looks for sets at `./evals` (the deployed package —
-`scripts/stage-evals.mjs` copies `content/evals/*.jsonl` there; wired as
-`prestart` and run before `func azure functionapp publish`), then
-`./copilot-corpus/evals` (console-image layout), then `<repo>/content/evals`
-(checkout). IL5/air-gapped: the sets ship in the package — no external fetch.
+`resolveEvalRoot()` looks for sets at `./evals` (the image —
+`scripts/stage-evals.mjs` copies `content/evals/*.jsonl` there during the
+Docker build), then `./copilot-corpus/evals` (console-image layout), then
+`<repo>/content/evals` (checkout). IL5/air-gapped: the sets ship in the image —
+no external fetch.
 
 ## Build / test / deploy
 
@@ -76,15 +97,23 @@ cd azure-functions/copilot-evaluator
 npm ci
 npm run build          # tsc — rootDir is the repo root (shared pure imports from the console)
 npm test               # vitest — pure core (28 tests)
-node scripts/stage-evals.mjs
-func azure functionapp publish <func-cpeval-...>
 ```
 
-Infra: `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-function.bicep`
+Build the image + create/refresh the job (build context is the REPO ROOT):
+
+```bash
+ADMIN_RG=rg-csa-loom-admin-centralus SUB=<sub> CAE=cae-csa-loom-centralus \
+CONSOLE_UAMI_ID=<uami-resource-id> CONSOLE_UAMI_CLIENT_ID=<uami-client-id> \
+ACR=<acr>.azurecr.io ./scripts/csa-loom/deploy-copilot-evaluator-job.sh
+```
+
+Infra: `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep`
 (wired in `admin-plane/main.bicep` via the R0 `functionAppsConfig` bag —
-`copilotEvaluatorEnabled`, default **true**). Identity-based
-`AzureWebJobsStorage` (no storage key) + all four role grants in-module
-(`skipRoleGrants`-aware).
+`copilotEvaluatorEnabled`, default **true**). The job runs as the **console
+UAMI**, which already holds Cognitive Services OpenAI User, Search Index Data
+Reader and Cosmos Built-in Data Contributor — so the module declares exactly
+one grant: Contributor scoped to the job itself, which ARM requires to start an
+execution (`skipRoleGrants`-aware). No host storage account, no keys.
 
 ## Capacity note (one page — SRE F10 / round-3 F1)
 
@@ -116,29 +145,30 @@ docs + ≤ 146 ledger upserts → trivially inside the serverless account's burs
 capacity (shared with the I3 shadow / C3 rules / V1 summaries writers; the
 container is per-doc-TTL so storage is self-bounding at 180 d).
 
-**Function scale.** Y1 Consumption, single timer instance (timer triggers do
-not fan out); the HTTP trigger is admin/CI-rate (≤ a few runs/day). ~$0 idle.
+**Job scale.** A scale-to-zero Container Apps job: `parallelism: 1`,
+`replicaCompletionCount: 1`, so a scheduled execution never fans out, and
+on-demand starts are admin/CI-rate (a few runs/day at most). ~$0 idle. The
+45-minute `replicaTimeout` replaces Y1's hard 10-minute ceiling, which is why
+ONE execution can now cover every surface instead of one HTTP POST per
+surface.
 
 Cost note: **`Cost: +token spend (judge — capped/day, per-roll + nightly)`**
 (counted in COST0's program budget).
 
 ## Rollback
 
-1. **Code** — keep the last-known-good package: every publish from the
-   bootstrap workflow logs the release; roll back with
+1. **Code** — point the job at the previous image tag:
    ```bash
-   cd azure-functions/copilot-evaluator
-   git checkout <last-good-sha> -- .
-   npm ci && npm run build && node scripts/stage-evals.mjs
-   func azure functionapp publish <func-cpeval-...>
+   az containerapp job update -n loom-copilot-evaluator -g <admin-rg> \
+     --image <acr>.azurecr.io/loom-copilot-evaluator:<last-good>
    ```
-   (equivalently `az functionapp deployment source config-zip -g <rg> -n <app>
-   --src <last-good>.zip` when a zip artifact is retained).
-2. **Disable fast** — `az functionapp config appsettings set -g <rg> -n <app>
-   --settings LOOM_COPILOT_EVAL_ENABLED=false` (honest no-op ticks; zero
-   spend) — the seconds-level kill switch.
+   (or re-run `scripts/csa-loom/deploy-copilot-evaluator-job.sh` from the
+   last-good commit).
+2. **Disable fast** — `az containerapp job update -n loom-copilot-evaluator
+   -g <admin-rg> --set-env-vars LOOM_COPILOT_EVAL_ENABLED=false` (honest no-op
+   executions; zero spend) — the seconds-level kill switch.
 3. **Infra** — re-deploy `admin-plane/main.bicep` with
-   `functionAppsConfig: { copilotEvaluatorEnabled: false }` to remove the app
+   `functionAppsConfig: { copilotEvaluatorEnabled: false }` to remove the job
    from the topology, or follow the existing `bicep-rollback` DR scenario
    (docs/fiab/runbooks) to restore the prior template state. Cosmos data is
    additive-only (eval docs), so rollback never needs a data restore.

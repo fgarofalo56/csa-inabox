@@ -149,7 +149,11 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
 // artifacts (report.json / verdicts.ndjson / screenshots / traces) here under
 // uat-runs/** — created day-one so LOOM_UAT_RESULTS_ACCOUNT/CONTAINER work on
 // a fresh push-button deploy (the runner's createIfNotExists also covers it).
-var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals', 'uat-results']
+// ops-state: small JSON state docs written by the in-VNet scheduled ACA jobs
+// under the SAME console UAMI (B-FN, 2026-07-27) — today the secret-expiry
+// monitor's escalation-dedup blob (secret-expiry-state.json), which used to
+// live on the retired Y1 Function's own host storage account.
+var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals', 'uat-results', 'ops-state']
 
 resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [for c in containers: {
   parent: bs

@@ -35,7 +35,7 @@
  * No-vaporware: every read/write here is a REAL Cosmos call against
  * `loom-prompt-registry`; the eval hook is a REAL POST to the evaluator Function
  * and degrades to an HONEST recorded gate (never a fabricated "run started")
- * when LOOM_COPILOT_EVALUATOR_URL is unwired.
+ * when LOOM_COPILOT_EVALUATOR_JOB_ID is unwired.
  *
  * Per-cloud: identical Commercial / GCC-High. IL5 / SOVEREIGN MOAT: the
  * registry, the eval scores it carries, and the approval records never leave the

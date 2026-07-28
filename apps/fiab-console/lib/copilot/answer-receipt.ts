@@ -105,6 +105,40 @@ export interface ReceiptPlausibility {
   unsupportedFigures?: string[];
 }
 
+/**
+ * N14c — ONE data-contract check the loop ran against a PROPOSED pipeline /
+ * dataflow / SQL BEFORE presenting it. Additive and OPTIONAL: a turn that
+ * proposed nothing assembles exactly as before.
+ *
+ * `blocked` means a `hard-reject` contract found an error, so applying the
+ * proposal as-is would fail the run before any data moved — the receipt is where
+ * an auditor sees that the copilot knew.
+ */
+export interface ReceiptContractCheck {
+  /** What was proposed ('sql' | 'pipeline' | 'dataflow'). */
+  kind: string;
+  /** True when no error-severity violation was found. */
+  ok: boolean;
+  /** True when a hard-reject contract found an error. */
+  blocked: boolean;
+  /** Contracts that actually governed a target of the proposal. */
+  contracts: Array<{ id: string; name: string; version?: string; status?: string; mode?: string }>;
+  violations: Array<{
+    dataset: string;
+    column?: string;
+    rule: string;
+    severity: 'error' | 'warning' | 'info';
+    detail: string;
+    contractName?: string;
+  }>;
+  /** Datasets no contract governs (informational). */
+  ungovernedDatasets?: string[];
+  /** One-line operator summary. */
+  note: string;
+  /** Set when the check did not run (flag off / registry unreadable). */
+  skipped?: string;
+}
+
 /** One tool invocation rolled into the receipt (name · server · timing · status). */
 export interface ReceiptTool {
   name: string;
@@ -182,6 +216,11 @@ export interface AnswerReceipt {
   repairAttempts?: ReceiptRepairAttempt[];
   /** N12 — did the answer follow from the real returned rows? ABSENT when unchecked. */
   plausibility?: ReceiptPlausibility;
+  /**
+   * N14c — data-contract checks run against the proposals this turn made,
+   * BEFORE they were presented. ABSENT when the turn proposed nothing.
+   */
+  contractChecks?: ReceiptContractCheck[];
   /** ISO timestamp the receipt was assembled. */
   createdAt: string;
 }
@@ -217,6 +256,8 @@ export interface ReceiptTraceLike {
   repairAttempts?: Array<Record<string, unknown>>;
   /** N12 — the plausibility verdict stamped onto the trace. */
   plausibility?: Record<string, unknown>;
+  /** N14c — data-contract checks stamped onto the trace by the proposing surface. */
+  contractChecks?: Array<Record<string, unknown>>;
 }
 
 export interface AssembleReceiptOptions {
@@ -233,6 +274,8 @@ export interface AssembleReceiptOptions {
   repairAttempts?: ReceiptRepairAttempt[];
   /** N12 — explicit plausibility verdict (`ReasoningAnswer.plausibility`). */
   plausibility?: ReceiptPlausibility;
+  /** N14c — explicit data-contract checks for the proposals this turn made. */
+  contractChecks?: ReceiptContractCheck[];
   /** Deterministic timestamp (tests); defaults to now. */
   createdAt?: string;
 }
@@ -426,6 +469,59 @@ function normalizePlausibility(raw: unknown): ReceiptPlausibility | undefined {
   };
 }
 
+/**
+ * N14c — coerce loosely-shaped contract checks (from a persisted trace or the
+ * proposing surface) into the typed receipt shape. Defensive: a malformed row is
+ * dropped, never thrown.
+ */
+function normalizeContractChecks(raw: unknown): ReceiptContractCheck[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ReceiptContractCheck[] = [];
+  for (const r of raw) {
+    if (!isRecord(r)) continue;
+    const kind = str(r.kind);
+    if (!kind) continue;
+    const contracts = Array.isArray(r.contracts)
+      ? r.contracts
+          .filter(isRecord)
+          .map((c) => ({
+            id: str(c.id),
+            name: str(c.name) || str(c.id),
+            version: c.version ? str(c.version) : undefined,
+            status: c.status ? str(c.status) : undefined,
+            mode: c.mode ? str(c.mode) : undefined,
+          }))
+          .filter((c) => c.id)
+      : [];
+    const violations = Array.isArray(r.violations)
+      ? r.violations.filter(isRecord).map((v) => ({
+          dataset: str(v.dataset),
+          column: v.column ? str(v.column) : undefined,
+          rule: str(v.rule) || 'violation',
+          severity:
+            v.severity === 'error' || v.severity === 'info'
+              ? (v.severity as 'error' | 'info')
+              : ('warning' as const),
+          detail: str(v.detail),
+          contractName: v.contractName ? str(v.contractName) : undefined,
+        }))
+      : [];
+    out.push({
+      kind,
+      ok: r.ok !== false,
+      blocked: r.blocked === true,
+      contracts,
+      violations,
+      ungovernedDatasets: Array.isArray(r.ungovernedDatasets)
+        ? r.ungovernedDatasets.map(str).filter(Boolean)
+        : undefined,
+      note: str(r.note),
+      skipped: r.skipped ? str(r.skipped) : undefined,
+    });
+  }
+  return out;
+}
+
 /** Map a trace citation (Citation shape) to a ReceiptSource. */
 function sourceFromCitation(c: Record<string, unknown>): ReceiptSource | null {
   const id = str(c.id) || str(c.path);
@@ -540,6 +636,11 @@ export function assembleAnswerReceipt(
   const plausibility = opts.plausibility
     ? normalizePlausibility(opts.plausibility as unknown as Record<string, unknown>)
     : normalizePlausibility(t.plausibility);
+  // N14c — contract checks the proposing surface ran BEFORE presenting a
+  // pipeline / dataflow / SQL proposal. Explicit opts win; else read off the trace.
+  const contractChecks = opts.contractChecks?.length
+    ? normalizeContractChecks(opts.contractChecks as unknown[])
+    : normalizeContractChecks(t.contractChecks);
   // A graph-path citation IS a graph path — keep the existing count honest.
   graphPaths += graphPathCitations.length;
 
@@ -575,6 +676,7 @@ export function assembleAnswerReceipt(
     ...(graphPathCitations.length ? { graphPathCitations } : {}),
     ...(repairAttempts.length ? { repairAttempts } : {}),
     ...(plausibility ? { plausibility } : {}),
+    ...(contractChecks.length ? { contractChecks } : {}),
     createdAt: opts.createdAt ?? new Date().toISOString(),
   };
 }

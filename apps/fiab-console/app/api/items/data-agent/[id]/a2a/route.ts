@@ -47,6 +47,17 @@ function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
   };
 }
 
+/**
+ * The SHARED platform A2A endpoint, registered on the generated card as an
+ * additional §4.4.6 interface (with this agent's `tenant` routing id) so a
+ * client that only knows `/api/a2a` can still address this agent.
+ */
+function platformEndpointFor(req: NextRequest): string {
+  let origin = '';
+  try { origin = new URL(req.url).origin; } catch { origin = process.env.LOOM_PUBLIC_BASE_URL || ''; }
+  return `${origin.replace(/\/+$/, '')}/api/a2a`;
+}
+
 async function loadPublished(req: NextRequest, id: string) {
   const session = await getApiSession(req);
   if (!session) return { ok: false as const, status: 401, code: A2A_ERROR.INVALID_REQUEST, message: 'unauthenticated — present a Console session cookie or an Authorization: Bearer loom_pat_… token' };
@@ -65,8 +76,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const loaded = await loadPublished(req, id);
   if (!loaded.ok) return NextResponse.json({ ok: false, error: loaded.message }, { status: loaded.status });
   return NextResponse.json(buildItemAgentCard({
-    name: loaded.item.displayName || 'Data agent', description: loaded.item.description,
+    id, name: loaded.item.displayName || 'Data agent', description: loaded.item.description,
     endpoint: endpointFor(req, id), kind: 'data agent',
+    platformEndpoint: platformEndpointFor(req), state: loaded.item.state as Record<string, unknown> | null,
   }));
 }
 
@@ -96,7 +108,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
   };
 
-  const card = buildItemAgentCard({ name: agentName, description: item.description, endpoint: endpointFor(req, id), kind: 'data agent' });
+  const card = buildItemAgentCard({
+    id, name: agentName, description: item.description, endpoint: endpointFor(req, id),
+    kind: 'data agent', platformEndpoint: platformEndpointFor(req), state,
+  });
   const a2aCtx = buildItemA2aContext({
     card, ask, tenantId: tenantScopeId(session), actorOid: oid,
     actorUpn: session.claims.upn || session.claims.email || oid,

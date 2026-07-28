@@ -182,11 +182,11 @@ describe('prompt-registry — register + publish', () => {
   it('records an HONEST gate (never a fake run) when the evaluator Function is unwired', async () => {
     await seedPrompt();
     vi.mocked(evaluatorRunGate).mockReturnValue({
-      gated: true, gateId: 'svc-copilot-evaluator', missing: ['LOOM_COPILOT_EVALUATOR_URL'], remediation: 'Deploy it.',
+      gated: true, gateId: 'svc-copilot-evaluator', missing: ['LOOM_COPILOT_EVALUATOR_JOB_ID'], remediation: 'Deploy it.',
     } as any);
     const res = await publishVersion('help-system', { template: 'v2' }, ACTOR);
     expect(res.evalRequested).toBe(false);
-    expect(res.evalGate?.missing).toContain('LOOM_COPILOT_EVALUATOR_URL');
+    expect(res.evalGate?.missing).toContain('LOOM_COPILOT_EVALUATOR_JOB_ID');
     expect(vi.mocked(triggerEvaluatorRun)).not.toHaveBeenCalled();
   });
 

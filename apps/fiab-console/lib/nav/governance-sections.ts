@@ -41,6 +41,7 @@ export const GOVERNANCE_SECTIONS: GovernanceSectionGroup[] = [
     items: [
       { href: '/governance', label: 'Overview', desc: 'Governance posture, coverage scores, recent activity.' },
       { href: '/governance/govern', label: 'Govern', desc: 'My-items posture for data owners — label coverage, curation, recommended actions.' },
+      { href: '/governance/ask', label: 'Governance Q&A', desc: 'Ask "who can read PII in EU?" — answered from this deployment\'s real grants, policies, contracts, and classifications, with the policy edges cited.' },
     ],
   },
   {
@@ -49,6 +50,7 @@ export const GOVERNANCE_SECTIONS: GovernanceSectionGroup[] = [
       { href: '/governance/catalog', label: 'Governed data catalog', desc: 'Governed data-asset inventory with endorsement, sensitivity, and access requests across OneLake, Synapse, Databricks, ADLS, on-prem.' },
       { href: '/admin/domains', label: 'Governance domains', desc: 'Business domains and subdomains, workspace assignment, delegated settings (Admin portal).', adminOnly: true },
       { href: '/governance/glossary', label: 'Business glossary', desc: 'Standardized business terms on the Purview Atlas glossary — create terms and attach them to data assets.' },
+      { href: '/governance/interop', label: 'Catalog interop', desc: 'Export the governed catalog as DataHub MCE / OpenMetadata / OpenLineage, and backfill curation the other way.' },
     ],
   },
   {

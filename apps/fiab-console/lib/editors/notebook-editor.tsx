@@ -95,7 +95,7 @@ import {
   STARTER_PY, TTL_LABEL, AML_CI_VM_SIZES,
 } from './notebook-editor/constants';
 import {
-  cellRoutesToSpark, starterCells, splitKeep, downloadJson, decodePy,
+  cellRoutesToSpark, starterCells, decodePy, exportPercentPy, exportIpynbFile,
   isComputeRunning, isCiStopped, looksStreaming,
 } from './notebook-editor/helpers';
 import { useWorkspaces, useComputes, useAmlConfigured, useMyCi } from './notebook-editor/hooks';
@@ -106,6 +106,10 @@ import {
 import {
   ConfigureComputeDialog, NewComputeInstanceDialog,
 } from './notebook-editor/dialogs/compute-dialogs';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import { useReactiveNotebook, REACTIVE_NOTEBOOK_FLAG } from './notebook-editor/reactive';
+import { ReactivePane } from '@/lib/components/notebook/reactive-pane';
+import { DeployAppDialog } from '@/lib/components/notebook/deploy-app-dialog';
 
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
@@ -1515,19 +1519,8 @@ export function NotebookEditor({ item, id }: Props) {
 
   // ── R4-NB-8 Export .ipynb ───────────────────────────────────────────────────
   const exportIpynb = useCallback(() => {
-    const nb = {
-      nbformat: 4, nbformat_minor: 5,
-      metadata: {
-        kernelspec: { name: defaultLang === 'sparkr' ? 'ir' : 'python3', display_name: defaultLang === 'sparkr' ? 'R' : 'Python 3', language: defaultLang === 'sparkr' ? 'R' : 'python' },
-        language_info: { name: defaultLang === 'sparkr' ? 'R' : 'python' },
-      },
-      cells: cells.map((c) => c.type === 'markdown'
-        ? { cell_type: 'markdown', metadata: {}, source: splitKeep(c.source) }
-        : { cell_type: 'code', execution_count: c.executionCount ?? null, metadata: c.parameters ? { tags: ['parameters'] } : {}, outputs: [], source: splitKeep(c.source) }),
-    };
     const name = (notebooks || []).find((n) => n.id === notebookId)?.displayName || 'notebook';
-    downloadJson(`${name}.ipynb`, nb);
-    setRunMsg(`Exported ${name}.ipynb (${cells.length} cell${cells.length === 1 ? '' : 's'}).`);
+    setRunMsg(exportIpynbFile(cells, defaultLang, name));
   }, [cells, defaultLang, notebooks, notebookId]);
 
   // ── R4-NB-8 Inline rename ───────────────────────────────────────────────────
@@ -2125,6 +2118,22 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress, cellDurationMs]);
 
+  // ── N19a — reactive mode (dep-DAG staleness + downstream-only re-run) ──────
+  // Auto-run stays a per-notebook USER toggle (default off); this FLAG0 flag is
+  // the admin kill switch for the whole capability (default-ON / fail-open).
+  const reactiveAvailable = useRuntimeFlag(REACTIVE_NOTEBOOK_FLAG);
+  const reactive = useReactiveNotebook({ cells, notebookId, runCell, setRunMsg, available: reactiveAvailable });
+  const [reactiveOpen, setReactiveOpen] = useState(false);
+  const [deployAppOpen, setDeployAppOpen] = useState(false);
+  const nbDisplayName = useMemo(
+    () => (notebooks || []).find((n) => n.id === notebookId)?.displayName || 'notebook',
+    [notebooks, notebookId],
+  );
+  // N19a — percent-format `.py` export (the inverse of Import notebook's .py parser).
+  const exportPy = useCallback(() => {
+    setRunMsg(exportPercentPy(cells, defaultLang, nbDisplayName));
+  }, [cells, defaultLang, nbDisplayName]);
+
   /**
    * Variable explorer — submit a Python introspection snippet to the ACTIVE
    * Livy session and return parsed VarRow[]. Reuses the same warm session as
@@ -2287,6 +2296,10 @@ export function NotebookEditor({ item, id }: Props) {
           { label: importing ? 'Importing…' : 'Import notebook', onClick: workspaceId && !importing ? () => fileInputRef.current?.click() : undefined, disabled: !workspaceId || importing },
           // R4-NB-8 — export the open notebook to a portable .ipynb, and inline rename.
           { label: 'Export .ipynb', onClick: notebookId ? exportIpynb : undefined, disabled: !notebookId },
+          // N19a — percent-format .py export (round-trips through Import notebook)
+          // and publish-as-app through the shared org-app publish path.
+          { label: 'Export .py', onClick: notebookId ? exportPy : undefined, disabled: !notebookId },
+          { label: 'Deploy as app', onClick: notebookId && reactiveAvailable ? () => setDeployAppOpen(true) : undefined, disabled: !notebookId || !reactiveAvailable },
           { label: 'Rename', onClick: notebookId ? openRename : undefined, disabled: !notebookId },
           { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
           { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
@@ -2321,6 +2334,8 @@ export function NotebookEditor({ item, id }: Props) {
           { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen(v => !v) },
           { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
           { label: 'Data Wrangler', onClick: () => setWranglerOpen(true) },
+          // N19a — the dependency-graph / staleness pane.
+          { label: 'Dependencies', onClick: () => setReactiveOpen(true) },
         ]},
       ]},
       { id: 'edit', label: 'Edit', groups: [
@@ -2351,6 +2366,12 @@ export function NotebookEditor({ item, id }: Props) {
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
           // R4-NB-2 — parameterized run (papermill). Enabled once a cell is tagged.
           { label: 'Run with parameters', onClick: canRun && parametersCell ? () => setParamsDialogOpen(true) : undefined, disabled: !canRun || !parametersCell },
+          // N19a — run only the cells invalidated by an edit, in dependency order.
+          { label: `Run stale (${reactive.stalePlan.length})`, onClick: canRun && reactive.stalePlan.length > 0 ? () => void reactive.runStale() : undefined, disabled: !canRun || reactive.stalePlan.length === 0 },
+        ]},
+        { label: 'Reactive', actions: [
+          { label: reactive.enabled ? 'Reactive re-run: on' : 'Reactive re-run: off', onClick: reactiveAvailable ? () => reactive.setEnabled(!reactive.enabled) : undefined, disabled: !reactiveAvailable },
+          { label: 'Dependencies', onClick: () => setReactiveOpen(true) },
         ]},
         { label: 'Session', actions: [
           { label: 'Configure session', onClick: () => openConfigDialog() },
@@ -2375,6 +2396,7 @@ export function NotebookEditor({ item, id }: Props) {
     run, save, del, loadList, insertCell, openAttach, openConfigDialog,
     splitCell, mergeCellDown, convertCell,
     exportIpynb, openRename, markParametersCell,
+    exportPy, reactive, reactiveAvailable,
   ]);
 
   // SC-9 — publish notebook ribbon actions (Run all, Save, Insert cell, Data
@@ -3171,13 +3193,22 @@ export function NotebookEditor({ item, id }: Props) {
                         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Overridable on Run with parameters</Caption1>
                       </div>
                     )}
+                    {/* N19a — stale chip: this output no longer follows from the source. */}
+                    {c.type === 'code' && reactive.stale.has(c.id) && (
+                      <div className={s.paramBadgeRow}>
+                        <Badge appearance="tint" color="warning" size="small">Stale</Badge>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          {reactive.enabled ? 'Re-runs automatically when its upstream cell runs' : 'Result is out of date — Run this cell, or Run stale'}
+                        </Caption1>
+                      </div>
+                    )}
                     {c.type === 'code' ? (
                       <CodeCell
                         cell={c}
                         active={activeCellId === c.id}
                         onFocus={() => setActiveCellId(c.id)}
-                        onChange={(next) => updateCell(c.id, next)}
-                        onRun={runCell}
+                        onChange={(next) => { updateCell(c.id, next); if (next.source !== c.source) reactive.onCellEdited(c.id); }}
+                        onRun={reactive.runReactive}
                         onStop={() => stopCell(c.id)}
                         onDelete={() => deleteCell(c.id)}
                         onMoveUp={() => moveCell(c.id, -1)}
@@ -3376,6 +3407,21 @@ export function NotebookEditor({ item, id }: Props) {
             cells={cells}
             onJump={jumpToCell}
           />
+
+          {/* N19a — reactive dependency graph + deploy-as-app. */}
+          <ReactivePane
+            open={reactiveOpen} onOpenChange={setReactiveOpen}
+            cells={cells} dag={reactive.dag} stale={reactive.stale} cycleCells={reactive.cycleCells}
+            enabled={reactive.enabled} onEnabledChange={reactive.setEnabled}
+            running={reactive.running} onRunStale={() => void reactive.runStale()}
+            onClearStale={reactive.clearStale} onJump={jumpToCell} available={reactiveAvailable}
+          />
+          {notebookId && (
+            <DeployAppDialog
+              open={deployAppOpen} onOpenChange={setDeployAppOpen}
+              notebookId={notebookId} notebookName={nbDisplayName} onStatus={setRunMsg}
+            />
+          )}
 
           {/* R4-NB-8 — Inline rename. */}
           <NbRenameDialog

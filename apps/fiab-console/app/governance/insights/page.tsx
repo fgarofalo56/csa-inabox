@@ -16,6 +16,7 @@ import {
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { InsightDigestsPanel } from '@/lib/components/governance/insight-digests-panel';
 import { clientFetch } from '@/lib/client-fetch';
 
 interface CoverageRow { type: string; total: number; labeled: number; classified: number; owned: number; endorsed: number }
@@ -338,6 +339,11 @@ export default function InsightsPage() {
           </Section>
         </>
       )}
+
+      {/* B-N19d — scheduled, Copilot-narrated digests delivered by the C5
+          report-subscriptions timer Function. Independent of the KPI load
+          above, so a KPI error never hides the digest manager. */}
+      <InsightDigestsPanel />
     </GovernanceShell>
   );
 }

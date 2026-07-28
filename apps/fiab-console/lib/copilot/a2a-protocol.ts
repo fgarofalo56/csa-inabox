@@ -105,6 +105,18 @@ export interface A2aAgentCard {
 // Task / Message / Part types
 // ---------------------------------------------------------------------------
 
+/**
+ * The structural minimum a server context needs from an agent card. Both the
+ * legacy {@link A2aAgentCard} (0.3 shape) and the current-spec card generated
+ * by `a2a-agent-card.ts` (B-N14d) satisfy it, so the dispatcher stays agnostic
+ * of which card shape a route serves.
+ */
+export interface A2aCardLike {
+  name: string;
+  description: string;
+  skills: A2aAgentSkill[];
+}
+
 export type A2aTaskState =
   | 'submitted'
   | 'working'
@@ -300,8 +312,13 @@ export interface A2aAuditEvent {
 
 /** Injected side-effect surface — real in the route, stubbed in tests. */
 export interface A2aServerContext {
-  /** The agent card (for the `security`/`skills` the endpoint advertises). */
-  agentCard: A2aAgentCard;
+  /**
+   * The agent card this endpoint advertises. Typed as the STRUCTURAL minimum
+   * the dispatcher needs, so both the legacy {@link A2aAgentCard} and the
+   * current-spec card produced by `a2a-agent-card.generateAgentCard` (B-N14d)
+   * satisfy it without this pure module depending on the generator.
+   */
+  agentCard: A2aCardLike;
   /**
    * Run the delegated task against the REAL backend. `skillId` is the requested
    * A2A skill (or undefined → the agent's default). Throwing rejects the task

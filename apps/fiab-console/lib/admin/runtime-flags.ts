@@ -491,6 +491,50 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'B-N19e',
     surface: '/admin/finops + /admin/chargeback FOCUS panel + GET /api/admin/finops/focus',
   },
+  // ── B-N19d — scheduled insights / anomaly-narration digests ──
+  {
+    id: 'n19d-insight-digests',
+    label: 'Governance Insights — scheduled digests',
+    description:
+      'The B-N19d scheduled-insight digest surface on /governance/insights: metric + Monitor-alert deltas narrated by Copilot and delivered by the EXISTING C5 report-subscriptions timer Function. OFF stops the console preview run (the pane still lists definitions and run history, and the Insights KPI page is untouched) and the Function skips digest processing on its tick, leaving report-subscription delivery unaffected. Default ON, fail-open.',
+    ownerItem: 'B-N19d',
+    surface: '/governance/insights (Scheduled digests) + POST /api/insights/digests/[id]/preview',
+  },
+  // ── B-N14d — formalized agent-memory service (default-ON kill switch) ──
+  {
+    id: 'n14d-agent-memory',
+    label: 'Agent memory — durable per-agent + per-workspace recall',
+    description:
+      'The N14d agent-memory service: durable memories scoped to an agent + workspace (and, privately, to one user), written through the shared redaction/injection guard with an audit row per attempt, retained under an explicit TTL + count cap, and recalled into the agent turn. OFF makes every read return empty and every write a no-op honest rejection — agents keep running with no recalled memory, and nothing already stored is deleted (retention still expires rows normally). Turning it back ON restores recall from the untouched store. Seconds-fast; no revision roll.',
+    ownerItem: 'N14d',
+    surface: 'Agent runs + /api/agents/[id]/memory (read/write/purge)',
+  },
+  // ── N19a — Reactive notebook mode (dep-DAG re-run + deploy-as-app) ──
+  {
+    id: 'n19a-reactive-notebook',
+    label: 'Notebook — reactive mode + deploy-as-app',
+    description:
+      'The N19a reactive layer on the Loom notebook editor: the cell dependency DAG derived from the variables each Python/PySpark cell defines and reads, the Reactive pane, staleness marks, reactive re-run (running or editing a cell re-executes ONLY its invalidated downstream cells, on the same Spark/Livy session a manual run uses), and "Deploy as app" (POST /api/items/notebook/[id]/deploy-app, which publishes through the SHARED loom-app publish path). OFF hides the Reactive pane + its toggle on the next render and makes the deploy-app route return a guided 503 — cells, manual per-cell Run, Run all, .py/.ipynb export/import, and every already-deployed app keep working unchanged (no roll needed). Reactive AUTO-RUN is additionally a per-notebook user toggle that defaults to OFF, so this flag governs availability, not behaviour changes behind the user\'s back.',
+    ownerItem: 'N19a',
+    surface: 'Notebook editor (/items/notebook/[id]) — Reactive pane + Deploy as app + POST /api/items/notebook/[id]/deploy-app',
+  },
+  // ── B-N14b / B-N14c — governance + contract-validating copilots (default ON) ──
+  {
+    id: 'n14b-nl-governance-copilot',
+    label: 'Governance Q&A — NL copilot over the policy graph',
+    description:
+      'The B-N14b natural-language governance copilot on /governance/ask ("who can read PII in EU?"): it assembles a POLICY GRAPH from this deployment\'s own stores (the entitlement ledger, live workspace ACLs, the tenant governance policy document, the ODCS data-contract registry\'s authored column classifications, and the Purview built-in classification catalog), retrieves over it with the N11 GraphRAG primitives, and answers ONLY from the retrieved policy paths — citing each one and REFUSING when the graph cannot establish the claim. OFF makes /governance/ask render an honest "turned off" state on the next load and the ask API return a refusal; every other governance surface, the PDP, and all enforcement are unaffected (this copilot only READS).',
+    ownerItem: 'B-N14b',
+    surface: '/governance/ask + POST /api/governance/copilot/ask',
+  },
+  {
+    id: 'n14c-contract-validating-copilots',
+    label: 'Copilots — validate proposals against N6 data contracts',
+    description:
+      'The B-N14c pre-proposal check: before a pipeline / dataflow / SQL suggestion is shown, it is graded against the N6 ODCS contracts that govern the datasets it touches (the SAME schema-conformance grader the run-time pipeline-sink pre-flight uses), and any violation is surfaced with the proposal and in the Answer Receipt. OFF stops the check on the very next turn (seconds, no roll) and every copilot answers exactly as it did before. It does NOT touch ingestion-time enforcement: bound contracts keep quarantining violating rows to the Bronze `_rejected` dead-letter path either way.',
+    ownerItem: 'B-N14c',
+    surface: 'Pipeline / Dataflow Gen2 / SQL copilots + POST /api/governance/contract-check + Answer Receipt',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

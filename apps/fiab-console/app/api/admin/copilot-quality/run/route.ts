@@ -1,13 +1,15 @@
 /**
  * E5 — POST /api/admin/copilot-quality/run
  *
- * "Run now": fire the copilot-evaluator Function's E2 HTTP trigger for the
- * requested surfaces (or all). Tenant-admin only. Every trigger writes an
- * `_auditLog` row (privileged admin action → ATO evidence, per the loom-next
- * audit standard). Honest-gate (no-vaporware): when LOOM_COPILOT_EVALUATOR_URL
- * is unset the route returns the svc-copilot-evaluator gate with Fix-it, never a
- * fake "started". Per the 2026-07-23 estate note the Function fleet decision is
- * pending, so an unreachable Function degrades to an honest error, not a 500.
+ * "Run now": start an execution of the in-VNet `loom-copilot-evaluator`
+ * Container App Job for the requested surfaces (or all). Tenant-admin only.
+ * Every trigger writes an `_auditLog` row (privileged admin action → ATO
+ * evidence, per the loom-next audit standard). Honest-gate (no-vaporware): when
+ * LOOM_COPILOT_EVALUATOR_JOB_ID is unset the route returns the
+ * svc-copilot-evaluator gate with Fix-it, never a fake "started"; an ARM
+ * failure (job not deployed, missing Contributor grant) degrades to an honest
+ * error, not a 500. B-FN (2026-07-27) replaced the Y1 Function + host key with
+ * this ARM job-start — Y1 is structurally broken on this estate.
  *
  * Body: { surfaces?: string[] }
  */
@@ -59,11 +61,11 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
 
     const auditSurfaces = mode === 'search' ? domains : mode === 'tier' ? ['tier:router'] : surfaces;
 
-    // Honest gate — Function URL not wired. Surface the registry gate + Fix-it.
+    // Honest gate — job id not wired. Surface the registry gate + Fix-it.
     const gate = evaluatorRunGate();
     if (gate) {
       await writeAudit({ tenantId, who, oid, surfaces: auditSurfaces, outcome: 'gated', detail: { mode, missing: gate.missing } });
-      return apiError('Copilot evaluator Function is not configured in this deployment.', 503, {
+      return apiError('Copilot evaluator job is not configured in this deployment.', 503, {
         gated: true,
         gate: { id: gate.gateId, title: 'Copilot quality evaluator', remediation: gate.remediation, missing: gate.missing },
       });
@@ -84,9 +86,9 @@ export const POST = withTenantAdmin(async (req: NextRequest, { session }) => {
 
     if (!result.ok) {
       return apiError(
-        result.error || `The evaluator Function did not accept the run (HTTP ${result.status}).`,
+        result.error || `The evaluator job did not accept the run (HTTP ${result.status}).`,
         502,
-        { functionStatus: result.status, functionBody: result.body },
+        { jobStatus: result.status, jobBody: result.body },
       );
     }
     return apiOk({

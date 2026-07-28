@@ -194,7 +194,9 @@ describe('admin/env-config registry', () => {
     // already counted) (157) → I1 svc-workspace-identity adds
     // LOOM_WORKSPACE_IDENTITY_MODE (off | shadow | enforce) +
     // LOOM_WS_IDENTITY_RG (falls back to LOOM_DLZ_RG) (159) → E2
-    // svc-copilot-evaluator adds LOOM_COPILOT_EVALUATOR_URL (160) → O1
+    // svc-copilot-evaluator adds LOOM_COPILOT_EVALUATOR_JOB_ID (160; B-FN
+    // renamed it from LOOM_COPILOT_EVALUATOR_URL when the evaluator moved from
+    // a Y1 Function to an ACA job — a rename, so the count is unchanged) → O1
     // svc-alerting adds LOOM_ALERT_WEBHOOK_URL (the optional on-call webhook
     // bridge for the unified dispatchAlert path; secret-typed, KV secretRef)
     // (161) → C2 svc-cost-forecast adds LOOM_COST_FORECAST_HORIZON_DAYS +

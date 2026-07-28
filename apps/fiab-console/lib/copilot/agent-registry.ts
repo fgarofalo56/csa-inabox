@@ -27,6 +27,11 @@
 import type { AgentToolKind } from './agent-tool-catalog';
 import type { SubAgentItemType } from './connected-agents';
 import { MCP_CATALOG, airGapSafeServers, type McpCatalogEntry } from '@/lib/azure/mcp-catalog';
+import {
+  generateAgentCard,
+  registeredAgentFromMeshAgent,
+  type A2aSpecAgentCard,
+} from './a2a-agent-card';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -496,47 +501,34 @@ export interface A2ASkill {
 }
 
 /**
- * An A2A agent card (the well-known `agent.json` an external ADK / Foundry agent
- * fetches to discover a Loom mesh agent and delegate a task to it). Shaped to the
- * A2A agent-card schema (name / description / url / provider / capabilities /
- * skills). Loom publishes these OUT so external agents can delegate IN — every
- * inbound call is still policy-checked + audited by the mesh runner.
+ * An A2A agent card for a Loom mesh agent (fetched by an external ADK / Foundry
+ * agent to discover it and delegate a task to it). As of B-N14d this is the
+ * CURRENT-spec {@link A2aSpecAgentCard} — `supportedInterfaces` /
+ * `securityRequirements` / `capabilities` per §4.4.1 — produced by the ONE
+ * generator in `a2a-agent-card.ts`, plus the 0.3-line aliases for clients
+ * already in the field. The Loom egress profile is retained BOTH as the legacy
+ * top-level `loomEgressProfile` key AND as a declared §4.4.4 `AgentExtension`,
+ * so a strict client no longer drops the sovereignty signal.
  */
-export interface A2AAgentCard {
-  name: string;
-  description: string;
-  url: string;
-  version: string;
-  provider: { organization: string; url?: string };
-  capabilities: { streaming: boolean; pushNotifications: boolean };
-  defaultInputModes: string[];
-  defaultOutputModes: string[];
-  skills: A2ASkill[];
+export interface A2AAgentCard extends A2aSpecAgentCard {
   /** Loom extension: the egress profile this agent runs under (sovereignty signal). */
   loomEgressProfile: MeshEgressProfile;
 }
 
 /** Build the A2A agent card for a mesh agent (published at /api/mesh/a2a/[id]/card). */
 export function buildA2AAgentCard(agent: MeshAgentDef, baseUrl: string): A2AAgentCard {
-  const url = `${baseUrl.replace(/\/$/, '')}/api/mesh/a2a/${encodeURIComponent(agent.id)}`;
-  const skill: A2ASkill = {
-    id: `delegate-${agent.kind}`,
-    name: `${agent.name} task`,
-    description:
-      agent.description ||
-      `Delegate a natural-language task to the "${agent.name}" ${agent.kind} agent. It answers grounded on its in-VNet tools; the result is policy-governed.`,
-    tags: [agent.kind, 'loom', 'governed', agent.egressProfile],
-  };
-  return {
-    name: agent.name,
-    description: skill.description,
-    url,
-    version: '1.0.0',
-    provider: { organization: 'CSA Loom — Sovereign Agent Mesh' },
-    capabilities: { streaming: false, pushNotifications: false },
-    defaultInputModes: ['text/plain'],
-    defaultOutputModes: ['text/plain'],
-    skills: [skill],
-    loomEgressProfile: agent.egressProfile,
-  };
+  const endpoint = `${baseUrl.replace(/\/$/, '')}/api/mesh/a2a/${encodeURIComponent(agent.id)}`;
+  const card = generateAgentCard(
+    registeredAgentFromMeshAgent({
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+        kind: agent.kind,
+        egressProfile: agent.egressProfile,
+      },
+      endpoint,
+    }),
+  );
+  return { ...card, loomEgressProfile: agent.egressProfile };
 }

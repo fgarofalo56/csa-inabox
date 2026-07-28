@@ -196,6 +196,7 @@ let _timeBranches: Container | null = null;
 let _scorecardConfig: Container | null = null;
 let _reportSubscriptions: Container | null = null;
 let _reportDeliveryLog: Container | null = null;
+let _insightDigests: Container | null = null;  let _insightDigestLog: Container | null = null;  // B-N19d — insight digests (PK /tenantId) + append-only runs (PK /digestId), delivered by the SAME C5 timer Function as report subscriptions (no second scheduler).
 // BR-WEBHOOK — outbound webhook / event-subscription registry. One row per
 // registered endpoint (PK /tenantId → the tenant's hook list is a single
 // physical partition). The delivery log is append-only, PK /webhookId, capped
@@ -1102,6 +1103,7 @@ async function ensure() {
   // Logic App. No Microsoft Fabric dependency.
   _reportSubscriptions = await mk('report-subscriptions', '/reportId');
   _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
+  _insightDigests = await mk('insight-digests', '/tenantId');  _insightDigestLog = await mk('insight-digest-log', '/digestId');  // B-N19d
   // BR-WEBHOOK — webhook registrations (PK /tenantId) + append-only delivery
   // log (PK /webhookId, capped at 100/hook). Azure-native default: direct HTTPS
   // POST with an HMAC-SHA256 signature; Event Grid is an opt-in alternative when
@@ -1422,6 +1424,8 @@ export async function scorecardConfigContainer(): Promise<Container> { await ens
 export async function reportSubscriptionsContainer(): Promise<Container> { await ensure(); return _reportSubscriptions!; }
 /** Report delivery log (append-only delivery history) — PK /subscriptionId. */
 export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
+export async function insightDigestsContainer(): Promise<Container> { await ensure(); return _insightDigests!; }      // B-N19d — digest definitions, PK /tenantId
+export async function insightDigestLogContainer(): Promise<Container> { await ensure(); return _insightDigestLog!; }   // B-N19d — append-only run log, PK /digestId
 /** BR-WEBHOOK — webhook registrations, PK /tenantId. */
 export async function webhookSubscriptionsContainer(): Promise<Container> { await ensure(); return _webhookSubscriptions!; }
 /** BR-WEBHOOK — append-only webhook delivery log (last 100/hook), PK /webhookId. */
@@ -1678,7 +1682,7 @@ const KNOWN_CONTAINER_IDS = [
   'item-versions',
   'loom-agent-memory',
   'a2a-tasks',
-  'report-subscriptions', 'report-delivery-log',
+  'report-subscriptions', 'report-delivery-log', 'insight-digests', 'insight-digest-log',
   'webhook-subscriptions', 'webhook-deliveries',
   'data-product-analytics',
   'loom-pat-tokens',

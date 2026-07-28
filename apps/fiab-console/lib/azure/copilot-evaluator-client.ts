@@ -1,30 +1,44 @@
 /**
- * E5 — "Run now" proxy to the copilot-evaluator Function (E2 HTTP trigger).
+ * E5 — "Run now" for the copilot-evaluator, via an ARM Container-App-Job start.
  *
- * The admin /admin/copilot-quality page's "Run now" button POSTs here; this
- * module fires the REAL E2 HTTP trigger
- * (`POST {LOOM_COPILOT_EVALUATOR_URL}/api/copilotEvaluatorHttp`) with the
- * requested surfaces. The Function is authLevel 'function', so the host key is
- * supplied either as a `?code=` already baked into LOOM_COPILOT_EVALUATOR_URL
- * or via the optional secret LOOM_COPILOT_EVALUATOR_KEY (x-functions-key).
+ * The admin /admin/copilot-quality page's "Run now" button POSTs the BFF route,
+ * which calls this module; this module starts a REAL execution of the in-VNet
+ * `loom-copilot-evaluator` Container App Job
+ * (modules/admin-plane/copilot-evaluator-job.bicep) with an execution-template
+ * override carrying the requested mode / surfaces / domains.
  *
- * Honest-gate (no-vaporware.md): when the URL is unset OR the Function is
- * unreachable / rejects the key, this returns a structured gate/error the route
- * surfaces verbatim — NEVER a fabricated "run started". Per the 2026-07-23
- * estate note the evaluator Function fleet decision is pending, so an unreachable
- * Function is the expected default and must degrade to an honest gate, not a
- * crash. Azure-native, no Fabric dependency.
+ * B-FN migration (2026-07-27): the evaluator used to be a Y1 Consumption
+ * Function with an authLevel='function' HTTP trigger, and this module POSTed
+ * `{LOOM_COPILOT_EVALUATOR_URL}/api/copilotEvaluatorHttp` with a host key. Y1 is
+ * structurally broken on this estate (Azure Policy seals the storage
+ * data-plane — publicNetworkAccess Disabled, AAD-only, no private endpoint —
+ * and the multitenant Y1 runtime is not a trusted service, so host keys and
+ * timer leases fail), so the evaluator is now an ACA job. Consequences:
+ *   • no host key and no public *.azurewebsites.net surface to protect;
+ *   • auth is the Console UAMI's Azure RBAC (Contributor scoped to that ONE job
+ *     resource, granted in the job module — the role Learn documents as
+ *     required for the start operation);
+ *   • the run parameters ride an execution-template override instead of a JSON
+ *     body. Per Learn the override REPLACES the whole template, so we read the
+ *     job's current template first and merge our env on top of it — never a
+ *     hand-built container spec (that would silently drop the image, the
+ *     Cosmos/AOAI env, and the internal-token secretRef).
+ *
+ * Honest-gate (no-vaporware.md): when the job id is unset OR ARM rejects the
+ * call, this returns a structured gate/error the route surfaces verbatim —
+ * NEVER a fabricated "run started". Azure-native, no Fabric dependency.
  */
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { armGet, armPost } from '@/lib/azure/arm-client';
 
-/** The Function base URL (may already carry a `?code=` host key). */
-export function evaluatorUrl(): string {
-  return (process.env.LOOM_COPILOT_EVALUATOR_URL || '').trim();
-}
+/** Container Apps API version for the job read + start operations (GA). */
+const ACA_JOBS_API = '2024-03-01';
 
-/** Optional host key (x-functions-key) — a KV secretRef, never in EDITABLE_ENV. */
-function evaluatorKey(): string {
-  return (process.env.LOOM_COPILOT_EVALUATOR_KEY || '').trim();
+/** Fixed job name — set by copilot-evaluator-job.bicep. */
+export const EVALUATOR_JOB_NAME = 'loom-copilot-evaluator';
+
+/** The evaluator job's ARM resource id (bicep-wired from the job module). */
+export function evaluatorJobId(): string {
+  return (process.env.LOOM_COPILOT_EVALUATOR_JOB_ID || '').trim().replace(/\/+$/, '');
 }
 
 export interface EvaluatorGate {
@@ -34,15 +48,15 @@ export interface EvaluatorGate {
   remediation: string;
 }
 
-/** Honest config gate — null when the Function URL is present, else the gate. */
+/** Honest config gate — null when the job id is present, else the gate. */
 export function evaluatorRunGate(): EvaluatorGate | null {
-  if (evaluatorUrl()) return null;
+  if (evaluatorJobId()) return null;
   return {
     gated: true,
     gateId: 'svc-copilot-evaluator',
-    missing: ['LOOM_COPILOT_EVALUATOR_URL'],
+    missing: ['LOOM_COPILOT_EVALUATOR_JOB_ID'],
     remediation:
-      'Deploy the copilot-evaluator Function (modules/admin-plane/copilot-evaluator-function.bicep, default-ON) and set LOOM_COPILOT_EVALUATOR_URL. "Run now" then fires the E2 HTTP trigger. Nightly + per-roll runs happen automatically regardless of this button.',
+      'Deploy the copilot-evaluator Container App Job (modules/admin-plane/copilot-evaluator-job.bicep, default-ON via functionAppsConfig.copilotEvaluatorEnabled) and build its image with scripts/csa-loom/deploy-copilot-evaluator-job.sh. LOOM_COPILOT_EVALUATOR_JOB_ID is then wired onto the Console automatically and "Run now" starts an execution. Nightly runs happen on the job schedule regardless of this button.',
   };
 }
 
@@ -59,56 +73,96 @@ export interface TriggerRunInput {
 export interface TriggerRunResult {
   ok: boolean;
   status: number;
-  /** The E2 HTTP response body (`{ok, reason, trigger, surfaces:[...]}`) when JSON. */
+  /** The ARM start response (`{id, name, ...}` for the new execution) when JSON. */
   body: unknown;
   error?: string;
 }
 
+/** One container env entry as ARM returns / accepts it. */
+export interface JobEnvVar {
+  name: string;
+  value?: string;
+  secretRef?: string;
+}
+
+/** One container of a job execution template. */
+export interface JobContainer {
+  name?: string;
+  image?: string;
+  command?: string[];
+  args?: string[];
+  resources?: unknown;
+  env?: JobEnvVar[];
+}
+
 /**
- * Fire the E2 on-demand run. Returns the parsed HTTP response; never throws —
- * a network failure / timeout / non-2xx becomes `{ ok:false, status, error }`
- * so the route surfaces an honest message. `surfaces` empty ⇒ the Function runs
- * every eval set.
+ * Merge the run parameters onto the job's CURRENT container template.
+ *
+ * Pure + exported so the override contract is unit-tested: the returned
+ * containers keep the image, resources, command and every pre-existing env
+ * entry (including `secretRef` ones such as the internal token) and only
+ * replace/append the four COPILOT_EVAL_* run knobs the entrypoint reads.
+ */
+export function mergeRunEnv(containers: JobContainer[], input: TriggerRunInput): JobContainer[] {
+  const trigger = input.trigger === 'corpus' ? 'corpus' : 'manual';
+  const mode = input.mode === 'search' ? 'search' : input.mode === 'tier' ? 'tier' : 'copilot';
+  const overrides: JobEnvVar[] = [
+    { name: 'COPILOT_EVAL_MODE', value: mode },
+    { name: 'COPILOT_EVAL_TRIGGER', value: trigger },
+    {
+      name: 'COPILOT_EVAL_SURFACES',
+      value: mode === 'copilot' && Array.isArray(input.surfaces) ? input.surfaces.filter(Boolean).join(',') : '',
+    },
+    {
+      name: 'COPILOT_EVAL_DOMAINS',
+      value: mode === 'search' && Array.isArray(input.domains) ? input.domains.filter(Boolean).join(',') : '',
+    },
+  ];
+
+  return containers.map((c) => {
+    const kept = (c.env || []).filter((e) => !overrides.some((o) => o.name === e.name));
+    return { ...c, env: [...kept, ...overrides] };
+  });
+}
+
+/**
+ * Start an on-demand evaluator execution. Returns the ARM start response; never
+ * throws — a missing job, a 403 (the Console UAMI lacks Contributor on the job)
+ * or any other ARM failure becomes `{ ok:false, status, error }` so the route
+ * surfaces an honest message. `surfaces` empty ⇒ the execution runs every eval
+ * set for the requested mode.
  */
 export async function triggerEvaluatorRun(input: TriggerRunInput): Promise<TriggerRunResult> {
-  const base = evaluatorUrl();
-  if (!base) return { ok: false, status: 503, body: null, error: 'LOOM_COPILOT_EVALUATOR_URL not set' };
+  const jobId = evaluatorJobId();
+  if (!jobId) return { ok: false, status: 503, body: null, error: 'LOOM_COPILOT_EVALUATOR_JOB_ID not set' };
 
-  // Preserve an existing ?code= in the URL; otherwise append the header key.
-  const hasInlineCode = /[?&]code=/.test(base);
-  const url = `${base.replace(/\/+$/, '').replace(/\?.*$/, '')}/api/copilotEvaluatorHttp${
-    hasInlineCode ? base.slice(base.indexOf('?')) : ''
-  }`;
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  const key = evaluatorKey();
-  if (!hasInlineCode && key) headers['x-functions-key'] = key;
-
-  const triggerKind = input.trigger === 'corpus' ? 'corpus' : 'manual';
-  const payload = input.mode === 'search'
-    ? {
-        mode: 'search' as const,
-        domains: Array.isArray(input.domains) && input.domains.length ? input.domains : undefined,
-        trigger: triggerKind,
-      }
-    : input.mode === 'tier'
-      ? { mode: 'tier' as const, trigger: triggerKind }
-      : {
-          surfaces: Array.isArray(input.surfaces) && input.surfaces.length ? input.surfaces : undefined,
-          trigger: triggerKind,
-        };
-
+  // 1. Read the job's current execution template. A start-with-override
+  //    REPLACES the template wholesale (Learn), so we must start from the real
+  //    one rather than inventing a container spec.
+  let containers: JobContainer[];
   try {
-    // The evaluator run is long — a per-surface judge pass can take minutes.
-    // Bound at 60s: we only need to confirm the trigger was ACCEPTED (the
-    // Function keeps running server-side; the page re-reads Cosmos on refresh).
-    const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(payload) }, 60_000);
-    const text = (await res.text()).slice(0, 4096);
-    let body: unknown = text;
-    try { body = JSON.parse(text); } catch { /* non-JSON — keep raw text */ }
-    if (!res.ok) {
-      return { ok: false, status: res.status, body, error: `evaluator returned ${res.status}` };
+    const job = await armGet<{ properties?: { template?: { containers?: JobContainer[] } } }>(
+      `${jobId}?api-version=${ACA_JOBS_API}`,
+    );
+    containers = job?.properties?.template?.containers || [];
+    if (!containers.length) {
+      return {
+        ok: false,
+        status: 502,
+        body: null,
+        error: `Container App Job ${EVALUATOR_JOB_NAME} has no container template — its image has not been built/deployed yet.`,
+      };
     }
-    return { ok: true, status: res.status, body };
+  } catch (e) {
+    return { ok: false, status: 502, body: null, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  // 2. Start an execution with the run knobs merged onto that template.
+  try {
+    const body = await armPost<{ id?: string; name?: string }>(`${jobId}/start?api-version=${ACA_JOBS_API}`, {
+      containers: mergeRunEnv(containers, input),
+    });
+    return { ok: true, status: 202, body };
   } catch (e) {
     return { ok: false, status: 502, body: null, error: e instanceof Error ? e.message : String(e) };
   }

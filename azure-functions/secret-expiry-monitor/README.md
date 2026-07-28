@@ -1,7 +1,17 @@
 # secret-expiry-monitor (S1)
 
-Timer-triggered Azure Function that turns "when does each standing Loom
-credential die" into monitored data — prevention for the 2026-07-19
+> **B-FN migration (2026-07-27): this is an in-VNet scheduled Container App
+> Job — `loom-secret-expiry-monitor` — NOT an Azure Function.** Y1 Linux
+> Consumption Functions are structurally broken on this estate (Azure Policy
+> seals the storage data-plane: `publicNetworkAccess=Disabled`, AAD-only, no
+> private endpoint, and the multitenant Y1 runtime is not a trusted service, so
+> host keys / timer leases fail). The folder keeps its historical
+> `azure-functions/` path; the runtime is a one-shot Node entrypoint
+> (`src/main.ts`) in a container. Full rationale + fleet status:
+> [`docs/fiab/functions-to-aca-jobs.md`](../../docs/fiab/functions-to-aca-jobs.md).
+
+A scheduled job that turns "when does each standing Loom credential die" into
+monitored data — prevention for the 2026-07-19
 expired/drifted-MSAL-secret sign-in outage class, which recurs on a 2-year
 clock (`entra-app-registration.bicep` mints the Console client secret with
 `az ad app credential reset --years 2`).
@@ -22,22 +32,25 @@ clock (`entra-app-registration.bicep` mints the Console client secret with
    action group (`LOOM_ALERT_ACTION_GROUP_ID`, the O1 alert convention) via
    the Action Groups `createNotifications` API, and opens/updates a **dedup
    GitHub issue** per credential (optional, `LOOM_SECRET_EXPIRY_GITHUB_TOKEN`).
-   Last-alerted band persists in a blob (`secret-expiry-state` container on the
-   Function's own storage account) so a daily cron alerts once per escalation,
-   not once per day.
+   Last-alerted band persists in a blob (`secret-expiry-state.json` in the
+   `ops-state` container on the Loom lake storage account —
+   `LOOM_OPS_STATE_ACCOUNT` / `LOOM_OPS_STATE_CONTAINER`) so a daily cron alerts
+   once per escalation, not once per day. Unset account ⇒ an honest warning and
+   a dedup-less pass, never a crash.
 
 Pure core (threshold math, merge, drift, transitions): `src/expiry-core.ts`,
 unit-tested in `src/expiry-core.test.ts`. Thin wrappers: `src/azure-clients.ts`
-(real Graph/KV/ARM/Blob/GitHub calls) + `src/functions/secretExpiryMonitor.ts`.
-Shape mirrors `azure-functions/ops-agent-evaluator`.
+(real Graph/KV/ARM/Blob/GitHub calls) + `src/run-monitor.ts` (one pass) +
+`src/main.ts` (the one-shot job entrypoint).
 
 ## Infrastructure
 
-`platform/fiab/bicep/modules/admin-plane/secret-expiry-monitor-function.bicep`
-(Linux Y1 Consumption, system-assigned identity, **identity-based
-`AzureWebJobsStorage__accountName` — no storage keys**), wired into
-`admin-plane/main.bicep` via the `functionAppsConfig` R0 bag
-(`secretExpiryEnabled` default ON, `secretExpiryCron`, `secretExpiryWarnDays`).
+`platform/fiab/bicep/modules/admin-plane/secret-expiry-monitor-job.bicep`
+(`Microsoft.App/jobs`, Schedule trigger, in the console's VNet-integrated
+Container Apps Environment, running as the **console UAMI** — no host storage
+account, no keys), wired into `admin-plane/main.bicep` via the
+`functionAppsConfig` R0 bag (`secretExpiryEnabled` default ON,
+`secretExpiryCron` — now a **standard 5-field cron**, `secretExpiryWarnDays`).
 
 Roles declared in bicep (`skipRoleGrants`-aware, `guid()` names):
 
@@ -49,34 +62,36 @@ Roles declared in bicep (`skipRoleGrants`-aware, `guid()` names):
 | Monitoring Contributor | the admin RG | action-group read + `createNotifications` |
 
 **One-time admin consent (cannot be ARM-granted):** the Graph app role
-`Application.Read.All` on the Function's system identity — exact script in
+`Application.Read.All` on the **console UAMI** (the identity the job runs as) —
+which is the same grant `scripts/csa-loom/grant-identity-graph-approles.sh`
+already performs for the Identity Picker; exact script in
 `docs/fiab/runbooks/secret-rotation.md`. Until granted, the Graph half
 honest-gates (logged) while the Key Vault half still works.
 
 ## Deploy the code
 
-Same path as the sibling Functions (`func azure functionapp publish`):
+Build the image and create/refresh the job:
 
 ```bash
-cd azure-functions/secret-expiry-monitor
-npm install && npm run build
-func azure functionapp publish <secretExpiryFunctionName output> --typescript
+ADMIN_RG=rg-csa-loom-admin-centralus SUB=<sub> CAE=cae-csa-loom-centralus CONSOLE_UAMI_ID=<uami-resource-id> CONSOLE_UAMI_CLIENT_ID=<uami-client-id> ACR=<acr>.azurecr.io ./scripts/csa-loom/deploy-secret-expiry-job.sh
 ```
+
+One-shot run: `az containerapp job start -n loom-secret-expiry-monitor -g $ADMIN_RG`.
 
 ## Rollback
 
-- **Disable alerting only:** clear `LOOM_ALERT_ACTION_GROUP_ID` on the
-  Function app (`az functionapp config appsettings set … LOOM_ALERT_ACTION_GROUP_ID=""`)
+- **Disable alerting only:** clear `LOOM_ALERT_ACTION_GROUP_ID` on the job
+  (`az containerapp job update … --set-env-vars LOOM_ALERT_ACTION_GROUP_ID=""`)
   — the inventory keeps running, alerts stop.
-- **Stop the Function:** `az functionapp stop -n <name> -g <admin-rg>` (or set
-  `functionAppsConfig.secretExpiryEnabled=false` and redeploy admin-plane —
-  removes the module cleanly; it owns only its own SA/plan/site + role grants).
-- **Roll back code:** re-publish the previous commit of this folder with
-  `func azure functionapp publish` — the Function is stateless apart from the
-  state blob, which is forward/backward compatible JSON (unknown keys ignored).
+- **Stop the job:** `az containerapp job stop -n loom-secret-expiry-monitor -g <admin-rg>`
+  (or set `functionAppsConfig.secretExpiryEnabled=false` and redeploy
+  admin-plane — removes the job cleanly; it owns nothing else).
+- **Roll back code:** `az containerapp job update --image <prev-tag>` — the job
+  is stateless apart from the state blob, which is forward/backward compatible
+  JSON (unknown keys ignored).
 - **Console surface:** the `/admin/health` Secret-health section and
   `/api/admin/secret-health` read Graph + KV live and do NOT depend on this
-  Function — they keep working during any rollback.
+  job — they keep working during any rollback.
 
 ## Per-cloud
 
