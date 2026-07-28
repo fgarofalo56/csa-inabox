@@ -14,8 +14,8 @@ export const ENRICHMENT_GATE_META: Record<string, GateMeta> = {
   },
   'graph-group-sync': {
     surfaces: [
-      { path: '/admin/access-reviews', label: 'Access reviews — group-targeted packages' },
-      { path: '/admin/access-packages', label: 'Access packages — Entra group targets' },
+      { path: '/admin/access-governance?tab=reviews', label: 'Access reviews — group-targeted packages' },
+      { path: '/admin/access-governance?tab=packages', label: 'Access packages — Entra group targets' },
       { path: '/api/access-governance/group-sync', label: 'Group-sync reconcile' },
     ],
     fixit: { kind: 'role-grant', grantNote: 'Set LOOM_GRAPH_GROUP_SYNC_ENABLED=true and grant the Console UAMI Microsoft Graph Group.Read.All + GroupMember.Read.All (application, admin-consented). Read-only on Entra — Loom never mutates tenant groups.' },

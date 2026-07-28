@@ -184,7 +184,9 @@ describe('token-budget — hot-path enforcement', () => {
       expect(r.usedTokens).toBe(1100);
       expect(r.limitTokens).toBe(1000);
       expect(r.resetsAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-      expect(r.fixit.href).toContain('/admin/copilot-quality');
+      // IA-04: the budgets surface is now the AI-operations hub's Copilot-quality
+      // tab (?sub=budgets). /admin/copilot-quality still redirects there.
+      expect(r.fixit.href).toContain('/admin/ai-operations?tab=quality&sub=budgets');
       expect(r.fixit.remediation).toMatch(/raise/i);
       expect(r.message).toMatch(/refused rather than truncated/i);
     }

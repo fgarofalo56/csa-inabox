@@ -348,7 +348,7 @@ export function buildRefusal(v: BudgetVerdict): TokenBudgetRefusal {
     resetsAt: v.resetsAt,
     fixit: {
       label: 'Raise the budget',
-      href: '/admin/copilot-quality?tab=budgets',
+      href: '/admin/ai-operations?tab=quality&sub=budgets',
       remediation:
         `Open Admin → Copilot quality → Budgets and raise (or disable) the ${noun} budget for "${v.scopeId}". ` +
         'Budget changes are audited and take effect on the next turn — no revision roll. ' +

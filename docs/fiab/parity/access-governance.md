@@ -12,7 +12,7 @@ dependency.** Entra/Graph is Azure, allowed per `no-fabric-dependency.md`.
 
 | Entra ID Governance capability | Loom coverage | Backend |
 |---|---|---|
-| Access review campaign (scope: package / resource / principal / group / all) | ✅ `/admin/access-reviews` builder wizard (pickers, no JSON) | `POST /api/access-governance/reviews` → snapshots ledger grants into `access-reviews` |
+| Access review campaign (scope: package / resource / principal / group / all) | ✅ `/admin/access-governance?tab=reviews` builder wizard (pickers, no JSON) | `POST /api/access-governance/reviews` → snapshots ledger grants into `access-reviews` |
 | Reviewer decides attest / revoke per item | ✅ Reviewer inbox, per-item checkbox | `POST /api/access-governance/reviews/[id]/decision` |
 | **Bulk** approve/deny in a review | ✅ Attest/Revoke selected + "all remaining" | same route (`itemIds[]` / `all:true`) |
 | Reviewer delegation | ✅ Delegate dialog (IdentityPicker) | `PATCH …/reviews/[id] {action:'delegate'}` |

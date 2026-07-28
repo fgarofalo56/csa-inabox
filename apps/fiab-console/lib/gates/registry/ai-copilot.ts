@@ -72,7 +72,7 @@ export const AI_COPILOT_GATE_META: Record<string, GateMeta> = {
   },
   'svc-copilot-evaluator': {
     surfaces: [
-      { path: '/admin/copilot-quality', label: 'Copilot quality — eval runs + "Run now"' },
+      { path: '/admin/ai-operations?tab=quality', label: 'AI operations — Copilot quality tab (eval runs + "Run now")' },
       { path: '/api/internal/copilot/eval-probe', label: 'Eval probe (internal, evaluator Function)' },
     ],
     // Fix-it: deploy-the-Function wizard — the one-time action is a bicep

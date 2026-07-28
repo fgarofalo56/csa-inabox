@@ -148,7 +148,7 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     description:
       'The /admin/copilot-quality surface: per-surface Copilot eval scorecards (retrieval hit-rate / grounding / pass-rate), run-history trends, floor status, and "Run now". OFF hides the page body (a guided notice replaces it) without a roll — the kill-switch for a rendering regression on this new admin surface. The copilot-evaluator Function, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only admin view is gated.',
     ownerItem: 'E5',
-    surface: '/admin/copilot-quality',
+    surface: '/admin/ai-operations?tab=quality',
   },
   {
     id: 'e6-tier-routing-tab',
@@ -156,15 +156,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     description:
       'The E6 "Tier routing" tab on /admin/copilot-quality: tier-router decision accuracy, the tier confusion heatmap, per-task-class accuracy, and the per-tier cost-per-quality view over the copilot-evaluator tier-run docs. OFF hides the tab body behind a guided notice (no roll) — the kill-switch for a rendering regression on this new tab. The copilot-evaluator tier mode, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only view is gated.',
     ownerItem: 'E6',
-    surface: '/admin/copilot-quality (Tier routing tab)',
+    surface: '/admin/ai-operations?tab=quality&sub=tier',
   },
   {
     id: 'c4-finops-hub',
-    label: 'FinOps hub (/admin/finops)',
+    label: 'FinOps cockpit (/admin/finops?tab=cockpit)',
     description:
-      'The C4 FinOps cockpit (/admin/finops): forecast chart, cost-anomaly feed + rules editor, per-scope breakdown, and real Azure Budgets CRUD. OFF reverts the surface to a pointer at the existing /admin/chargeback + /admin/usage-chargeback pages (which keep working) on the next load — the hub is additive, nothing else changes. The scheduled C3 cost-anomaly monitor keeps running either way; this only controls the admin surface.',
+      'The C4 FinOps cockpit: forecast chart, cost-anomaly feed + rules editor, per-scope breakdown, and real Azure Budgets CRUD. OFF hides ONLY the Cockpit tab of the FinOps hub on the next load — the Capacity & LCU and Chargeback-report tabs (the pre-C4 surfaces, formerly /admin/usage-chargeback and /admin/chargeback) stay fully available and the hub simply opens on Capacity & LCU. The scheduled C3 cost-anomaly monitor keeps running either way; this only controls the admin surface.',
     ownerItem: 'C4',
-    surface: '/admin/finops',
+    surface: '/admin/finops?tab=cockpit',
   },
   {
     id: 'rum1-client-telemetry',
@@ -236,7 +236,7 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     description:
       'The N13 "Prompts" tab on /admin/copilot-quality: semver\'d prompt versions with their REAL copilot-evaluator scores, publish (which requests a run from the EXISTING E2 evaluator), and the audited approve / rollback controls. OFF hides the tab body behind a guided notice on the next load (no roll) — the registry Cosmos store, the runtime getActivePrompt() read, and the evaluator itself are unaffected; only this authoring surface is gated. Approval history is never deleted by a flip.',
     ownerItem: 'N13',
-    surface: '/admin/copilot-quality (Prompts tab)',
+    surface: '/admin/ai-operations?tab=quality&sub=prompts',
   },
   {
     id: 'n13-token-budgets',

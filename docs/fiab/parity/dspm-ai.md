@@ -15,7 +15,7 @@ dashboard).
 > policies** from Microsoft Purview."*
 
 This is the Fabric Build 2026 #34 ask: Copilot usage was tracked (token meter,
-`/admin/copilot-usage`) but there was **no DSPM posture report** answering "which
+`/admin/ai-operations?tab=usage`) but there was **no DSPM posture report** answering "which
 agents / Copilots touch sensitive-labeled data." This surface fills that gap,
 Azure-native — **no Microsoft Fabric / Power BI dependency** (Cosmos + Microsoft
 Graph Information Protection + Azure Monitor only).
