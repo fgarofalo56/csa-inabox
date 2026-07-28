@@ -65,7 +65,7 @@ import {
 
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
 // without also importing the orchestrator.
-export { NoAoaiDeploymentError } from './copilot-orchestrator';
+export { NoAoaiDeploymentError, AoaiDiscoveryTimeoutError } from './copilot-orchestrator';
 export type { AoaiTarget } from './copilot-orchestrator';
 export type { AoaiChatMessage, AoaiResponseFormat } from './aoai-model-contract';
 

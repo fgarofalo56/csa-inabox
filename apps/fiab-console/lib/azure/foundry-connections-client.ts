@@ -28,7 +28,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
-import { FoundryError, type FoundryConnection } from './foundry-client';
+import { FoundryError, invalidateFoundryConnections, type FoundryConnection } from './foundry-client';
 import {
   buildConnectionBody,
   isValidConnectionName,
@@ -158,6 +158,9 @@ export async function createConnection(input: CreateConnectionInput): Promise<Fo
     body: JSON.stringify(body),
   });
   const j = await readOrThrow<any>(res, `create connection ${name}`);
+  // foundry-client memoizes the connections list (#2557) — drop it so this
+  // create is visible on the very next read, not after the TTL.
+  invalidateFoundryConnections();
   return shapeConnection({ ...j, name: j?.name || name });
 }
 
@@ -186,12 +189,14 @@ export async function updateConnection(input: CreateConnectionInput): Promise<Fo
     body: JSON.stringify(body),
   });
   const j = await readOrThrow<any>(res, `update connection ${name}`);
+  invalidateFoundryConnections(); // see createConnection — keep the memo honest
   return shapeConnection({ ...j, name: j?.name || name });
 }
 
 /** DELETE a connection. 404/204 → ok (idempotent). */
 export async function deleteConnection(name: string): Promise<void> {
   const res = await armFetch(`${workspaceBase()}/connections/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  invalidateFoundryConnections(); // see createConnection — keep the memo honest
   if (res.status === 404 || res.status === 204 || res.ok) return;
   await readOrThrow(res, `delete connection ${name}`);
 }

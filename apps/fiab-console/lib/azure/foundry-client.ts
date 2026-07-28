@@ -23,6 +23,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope, cogScope } from './cloud-endpoints';
+import { walkPagedListResult, type PagingBudgetOptions, type PagedWalkResult, type PagingTruncation } from './paging-budget';
+import { cachedConnections, CONNECTIONS_PAGING } from './foundry-connections-cache';
 import { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } from './resolve-aml-target';
 import { firstEnvEndpoint, AI_SERVICES_FALLBACK_ENVS } from './cognitive-common';
 
@@ -68,7 +70,8 @@ export class FoundryError extends Error {
 
 async function foundryFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string>; apiVersion?: string } = {},
+  // timeoutMs: per-request ceiling override — paged walks pass their REMAINING budget.
+  init: RequestInit & { query?: Record<string, string>; apiVersion?: string; timeoutMs?: number } = {},
 ): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for AI Foundry');
@@ -78,7 +81,7 @@ async function foundryFetch(
     ? '&' + new URLSearchParams(init.query).toString()
     : '';
   const url = `${foundryBase()}${path}${sep}api-version=${apiVer}${query}`;
-  const { query: _q, apiVersion: _av, ...rest } = init;
+  const { query: _q, apiVersion: _av, timeoutMs, ...rest } = init;
   return fetchWithTimeout(url, {
     ...rest,
     headers: {
@@ -86,7 +89,7 @@ async function foundryFetch(
       authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
 }
 
 async function readJson<T>(res: Response): Promise<T | null> {
@@ -126,19 +129,36 @@ async function readJsonOrThrow<T>(res: Response): Promise<T> {
   return (parsed as T) ?? ({} as T);
 }
 
-// Paged value collector — ARM returns { value: [], nextLink?: string }
-async function pagedList(path: string, init: Parameters<typeof foundryFetch>[1] = {}): Promise<any[]> {
-  const out: any[] = [];
-  let res = await foundryFetch(path, init);
-  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  while (j) {
-    if (Array.isArray(j.value)) out.push(...j.value);
-    if (!j.nextLink) break;
-    const token = await credential.getToken(ARM_SCOPE);
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  }
-  return out;
+/**
+ * Paged value collector — ARM returns `{ value: [], nextLink?: string }`.
+ * BOUNDED (#2557): this was a bare `while (j.nextLink)` — each page inherited
+ * fetchWithTimeout's 30s ceiling but the LOOP had none (one cold /connections
+ * walk took 22.9s inside a `maxDuration = 60` route). The `Result` form also
+ * reports `truncatedBy`, for callers that must know the list is COMPLETE.
+ */
+function walkFoundryPages(
+  label: string,
+  firstPage: (timeoutMs: number) => Promise<Response>,
+  budgetOpts?: PagingBudgetOptions,
+): Promise<PagedWalkResult<any>> {
+  return walkPagedListResult(`foundry ${label}`, async (next, timeoutMs) => {
+    const res = next
+      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
+      : await firstPage(timeoutMs);
+    return readJson<{ value?: any[]; nextLink?: string }>(res); // 404 -> null -> stop
+  }, budgetOpts);
+}
+
+function pagedListResult(
+  path: string,
+  init: Parameters<typeof foundryFetch>[1] = {},
+  budgetOpts?: PagingBudgetOptions,
+): Promise<PagedWalkResult<any>> {
+  return walkFoundryPages(path, (timeoutMs) => foundryFetch(path, { ...init, timeoutMs }), budgetOpts);
+}
+
+async function pagedList(path: string, init: Parameters<typeof foundryFetch>[1] = {}, budgetOpts?: PagingBudgetOptions): Promise<any[]> {
+  return (await pagedListResult(path, init, budgetOpts)).rows;
 }
 
 // ---------------- Workspace (hub) info ----------------
@@ -212,9 +232,26 @@ function shapeConnection(raw: any): FoundryConnection {
   };
 }
 
-export async function listConnections(): Promise<FoundryConnection[]> {
-  const rows = await pagedList('/connections');
-  return rows.map(shapeConnection);
+// `/connections` policy (budget + memo + truncation) lives in its own module —
+// see foundry-connections-cache.ts for WHY a truncated walk is never cached.
+export { invalidateFoundryConnections } from './foundry-connections-cache';
+
+/**
+ * List the Foundry hub's connections — bounded + memoized (#2557).
+ * `resolveAoaiTarget` falls through to this discovery on EVERY turn when the
+ * tenant config carries no endpoint and LOOM_AOAI_ENDPOINT is unset, and a cold
+ * walk measured 22.9s. `requireComplete` makes a truncated walk THROW a
+ * PagingDeadlineError instead of returning a partial list a caller would
+ * mis-read as "the connection does not exist"; `force` skips the memo
+ * (`?refresh=1`).
+ */
+export async function listConnections(
+  opts?: { force?: boolean; requireComplete?: boolean; onTruncated?: (t: PagingTruncation) => void },
+): Promise<FoundryConnection[]> {
+  return cachedConnections(async () => {
+    const walk = await pagedListResult('/connections', {}, CONNECTIONS_PAGING);
+    return { rows: walk.rows.map(shapeConnection), walk };
+  }, opts);
 }
 
 // ---------------- Models (registered models) ----------------
@@ -478,16 +515,7 @@ export async function listComputes(): Promise<FoundryCompute[]> {
   // Compute targets live on the standalone AML WORKSPACE, not the Foundry hub
   // (LOOM_FOUNDRY_NAME may be an AOAI account). Target amlWorkspaceBase().
   const base = amlWorkspaceBase();
-  const out: any[] = [];
-  let res = await armFetch(`${base}/computes`, { apiVersion: ML_API });
-  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  while (j) {
-    if (Array.isArray(j.value)) out.push(...j.value);
-    if (!j.nextLink) break;
-    const token = await credential.getToken(ARM_SCOPE);
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  }
+  const out = await armPagedList(`${base}/computes`, 'listComputes'); // bounded (#2557)
   return out.map(shapeCompute);
 }
 
@@ -581,14 +609,15 @@ export async function listDatastores(): Promise<FoundryDatastore[]> {
 
 async function armFetch(
   fullPath: string,
-  init: RequestInit & { query?: Record<string, string>; apiVersion: string } = { apiVersion: ML_API },
+  // timeoutMs: per-request ceiling override — paged walks pass their REMAINING budget.
+  init: RequestInit & { query?: Record<string, string>; apiVersion: string; timeoutMs?: number } = { apiVersion: ML_API },
 ): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token');
   const sep = fullPath.includes('?') ? '&' : '?';
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${init.apiVersion}${query}`;
-  const { query: _q, apiVersion: _av, ...rest } = init;
+  const { query: _q, apiVersion: _av, timeoutMs, ...rest } = init;
   return fetchWithTimeout(url, {
     ...rest,
     headers: {
@@ -596,7 +625,12 @@ async function armFetch(
       authorization: `Bearer ${token.token}`,
       'content-type': 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+}
+
+/** {@link pagedList}'s sibling for the absolute-ARM-path lists (`armFetch`). */
+async function armPagedList(fullPath: string, label: string): Promise<any[]> {
+  return (await walkFoundryPages(label, (timeoutMs) => armFetch(fullPath, { apiVersion: ML_API, timeoutMs }))).rows;
 }
 
 // Data-plane fetch against the AML regional endpoint.
@@ -2449,16 +2483,7 @@ function shapeSchedule(raw: any): AmlSchedule {
 export async function listNotebookSchedules(prefix: string): Promise<AmlSchedule[]> {
   const cfg = amlScheduleConfig();
   const base = amlScheduleArmBase(cfg);
-  const all: any[] = [];
-  let res = await armFetch(base, { apiVersion: ML_API });
-  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  while (j) {
-    if (Array.isArray(j.value)) all.push(...j.value);
-    if (!j.nextLink) break;
-    const token = await credential.getToken(ARM_SCOPE);
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  }
+  const all = await armPagedList(base, 'listNotebookSchedules'); // bounded (#2557)
   return all.map(shapeSchedule).filter((s) => !prefix || (s.name || '').startsWith(prefix));
 }
 

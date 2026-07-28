@@ -31,6 +31,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, serviceBusSuffix } from './cloud-endpoints';
+import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 
 const ARM_SCOPE = armScope();
 // Stable GA api-version covering eventhubs, consumergroups, schemagroups,
@@ -105,7 +106,7 @@ export function eventHubsNamespaceResourceId(): string {
   return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
-async function callArm(url: string, init?: RequestInit): Promise<Response> {
+async function callArm(url: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token');
   return fetchWithTimeout(url, {
@@ -115,20 +116,30 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
       authorization: `Bearer ${t.token}`,
       'content-type': 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
 }
 
-/** GET a paged ARM list, walking `nextLink` so counts are real. */
+/**
+ * GET a paged ARM list, walking `nextLink` so counts are real — BOUNDED by a
+ * shared {@link PagingBudget} (page cap + wall clock, #2557) so the walk can
+ * never out-live the request path awaiting it. The fetch runs through
+ * {@link PagingBudget.runPage}, so a deadline landing INSIDE it truncates (rows
+ * kept) rather than throwing — the same semantics as a breach at the loop top.
+ */
 async function armList<T = any>(url: string): Promise<T[]> {
   const out: T[] = [];
-  let next: string | undefined = url;
-  while (next) {
-    const r: Response = await callArm(next);
+  const budget = new PagingBudget('eventhubs armList');
+  let next: string = url;
+  while (budget.claimPage()) {
+    const r = await budget.runPage((timeoutMs) => callArm(next, undefined, timeoutMs));
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     if (!r.ok) throw new EventHubsArmError(r.status, await r.text(), `list failed ${r.status}`);
     const body: any = await r.json();
     if (Array.isArray(body?.value)) out.push(...body.value);
-    next = body?.nextLink;
+    if (!body?.nextLink) break;
+    next = body.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 
