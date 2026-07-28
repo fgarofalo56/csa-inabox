@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.78.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.78.0...csa-inabox-v0.78.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* **apex-a4:** /admin/rum 500 → honest empty state; make route-smoke self-diagnosing ([#2552](https://github.com/fgarofalo56/csa-inabox/issues/2552)) ([96900d4](https://github.com/fgarofalo56/csa-inabox/commit/96900d4ba7563e6a5a7a0165de8002aba2ea6edd))
+
+
+### Performance Improvements
+
+* **capacity:** defer per-row cost/utilization to visible rows (44s mount -&gt; ~0 calls) ([#2554](https://github.com/fgarofalo56/csa-inabox/issues/2554)) ([7bcf850](https://github.com/fgarofalo56/csa-inabox/commit/7bcf850d597817ccfda640819ca1a4e9f08820a5))
+
 ## [0.78.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.77.1...csa-inabox-v0.78.0) (2026-07-28)
 
 
