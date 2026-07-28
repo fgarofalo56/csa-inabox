@@ -96,6 +96,8 @@ jobs:
     if: ${{ !inputs.skip_build }}
     runs-on: ubuntu-latest
     steps:
+      # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -109,9 +111,15 @@ jobs:
       - name: Enable ACR public access + admin user + disable quarantine/trust
         run: |
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
-          az acr update --name "$ACR_NAME" \
-            --public-network-enabled true --default-action Allow \
-            --admin-enabled true
+          # #2603: the network open is a LEASE ACQUISITION, not a bare toggle.
+          # The close-acr job below only re-locks if this run is still the
+          # recorded holder, so it can no longer slam the door on a concurrent
+          # build's in-flight push. This job is the from-scratch deploy path and
+          # holds the registry for the whole matrix build, so it takes a long
+          # lease. See docs/fiab/acr-firewall-lease.md.
+          LOOM_ACR_LEASE_TTL_MINUTES=180 \
+            bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR_NAME"
+          az acr update --name "$ACR_NAME" --admin-enabled true -o none
           # Disable quarantine + trust policies — they block reads of
           # newly-pushed unsigned/unscanned images. NOTE (SC1): ACR
           # content-trust is Docker Content Trust (Notary v1) — NOT the
@@ -413,6 +421,8 @@ jobs:
     if: always() && !inputs.skip_build
     runs-on: ubuntu-latest
     steps:
+      # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -425,10 +435,16 @@ jobs:
             }
       - name: Disable ACR public access + admin user
         run: |
-          az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
-            --public-network-enabled false --default-action Deny \
-            --admin-enabled false
-          echo "::notice::ACR ${{ needs.resolve.outputs.acr_name }} re-locked (private endpoint only, no admin user)."
+          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
+          # The admin user is this run's to turn off either way — it is not part
+          # of the shared network toggle.
+          az acr update --name "$ACR_NAME" --admin-enabled false -o none || true
+          # #2603: `release` re-locks the network ONLY if this run still holds
+          # the firewall lease. If another run holds it (a build that started
+          # while this deploy was finishing), the registry is left open for
+          # them and they re-lock on their own release. If NOBODY holds it, this
+          # re-locks anyway — fail closed.
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR_NAME"
 
   redeploy-with-apps:
     name: Roll Container Apps to new image

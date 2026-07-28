@@ -72,20 +72,20 @@ echo "[deploy-lineage-extractor] repo root : $REPO_ROOT"
 echo "[deploy-lineage-extractor] app dir   : $APP_DIR"
 echo "[deploy-lineage-extractor] image     : $IMAGE"
 
-# 1 — enable ACR public access (temp)
-echo "[deploy-lineage-extractor] 1/4 Enabling ACR public access (temporary)..."
-az acr update --name "$ACR_NAME" --public-network-enabled true --default-action Allow \
-  -o tsv --query "publicNetworkAccess" --subscription "$SUB" || true
-echo "[deploy-lineage-extractor] Waiting 35s for ACR network rule propagation..."
-sleep 35
+# 1 — take the ACR firewall lease (opens the registry)
+#
+# #2603: the old bare open + unconditional `restore_acr` EXIT trap was a shared
+# mutex with no ownership check — this script's cleanup would re-lock the
+# registry under a CI build that was mid-push, and vice versa. The lease records
+# ownership as ARM tags on the registry; `release` re-locks only if this process
+# is still the holder, and re-locks unconditionally when nobody is (fail
+# closed). See docs/fiab/acr-firewall-lease.md.
+echo "[deploy-lineage-extractor] 1/4 Acquiring the ACR firewall lease (opens the registry)..."
+bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
 
-# 2 — build + push (restore ACR access even on failure)
+# 2 — build + push (release the lease even on failure)
 restore_acr() {
-  echo "[deploy-lineage-extractor] Restoring ACR public access=Disabled..."
-  az acr update --name "$ACR_NAME" --default-action Deny \
-    -o tsv --query "networkRuleSet.defaultAction" --subscription "$SUB" || true
-  az acr update --name "$ACR_NAME" --public-network-enabled false \
-    -o tsv --query "publicNetworkAccess" --subscription "$SUB" || true
+  bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"
 }
 trap restore_acr EXIT
 

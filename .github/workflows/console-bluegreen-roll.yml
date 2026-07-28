@@ -146,7 +146,11 @@ jobs:
           SHA=$(git rev-parse --short=8 HEAD)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "::notice::Building loom-console:$SHA on $ACR"
-          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          # #2603: take the ACR firewall lease instead of a bare toggle, so this
+          # job's re-lock below cannot deny a concurrent build's in-flight push
+          # (and vice versa). See docs/fiab/acr-firewall-lease.md.
+          LOOM_ACR_LEASE_TTL_MINUTES=120 \
+            bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # 2026-07-16: console builds run on the dedicated 16 GB S3 pool —
           # the default 8 GB agent cgroup-OOM-SIGKILLs the compile (cjdq..cjdv).
@@ -165,7 +169,19 @@ jobs:
             apps/fiab-console
           q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
           [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
-          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none
+          # Re-locks only if this run still holds the lease; re-locks
+          # unconditionally when nobody does (fail closed).
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
+
+      # Safety net: if the build step above dies before its inline release (a
+      # failed `az acr build`, a cancelled run), the registry would otherwise be
+      # left publicly reachable until the scheduled sweeper notices. `release`
+      # is idempotent, so running it again here is free.
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: |
+          bash scripts/csa-loom/acr-firewall-lease.sh release \
+            --acr "${{ steps.resolve.outputs.acr }}" || true
 
       # ── Deploy green as a NEW revision at 0% traffic ──────────────────────────
       - name: Deploy green revision (0% traffic)
