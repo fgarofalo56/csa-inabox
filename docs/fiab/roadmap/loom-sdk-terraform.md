@@ -1,27 +1,34 @@
 # Loom SDK + Terraform provider — roadmap
 
-> **Status: ROADMAP / not yet shipped.** This document describes *planned* work.
-> Neither a language SDK (`packages/loom-sdk-*`) nor a Terraform provider
-> (`terraform-provider-loom`) exists in the repository today. Nothing here is
-> installable yet — it is the design and sequencing for the developer-platform
-> Phase 7 (P7) of the [Fabric-parity PRP](../../../PRPs/completed/fabric-parity/README.md).
-> Per `.claude/rules/no-vaporware.md`, this is disclosed as roadmap, not
-> presented as a working feature.
+> **Status: LARGELY SHIPPED (2026-07-28, B-N19b).** Both remaining roadmap
+> artifacts now exist in the repository:
 >
-> **Update — the developer platform shipped.** Four working pieces this roadmap
-> builds on are now live: an **OpenAPI 3.1 spec** (`GET /api/openapi.json`) + an
-> in-app explorer (`/developer/api`); **SCIM 2.0 provisioning**
-> (`/api/scim/v2/{Users,Groups}`); a **real, `terraform`-consumable module** at
+> - **`csa-loom` Python SDK** — [`sdk/python/csa-loom`](https://github.com/fgarofalo56/csa-inabox/tree/main/sdk/python/csa-loom).
+>   Core client **generated** from `sdk/openapi.json` (the dump of the document
+>   the console serves at `GET /api/openapi.json`); zero runtime dependencies;
+>   `mypy --strict` + `ruff` clean; contract tests assert the generated surface
+>   and the document agree in both directions.
+> - **`terraform-provider-loom`** — [`sdk/terraform-provider-loom`](https://github.com/fgarofalo56/csa-inabox/tree/main/sdk/terraform-provider-loom).
+>   A Go provider on `terraform-plugin-framework` with `loom_workspace` +
+>   `loom_item` resources, a `loom_workspace` data source, import support, a
+>   standard-library-only API client, acceptance-test scaffolding and its own
+>   contract test against the same document.
+>
+> **Neither is published.** B-N19b is packaging + CI only: no PyPI push, no
+> Terraform Registry push. Both are built from source, gated by the
+> `sdk-contract` CI lane (snapshot drift → regenerate → ruff/mypy/pytest →
+> go vet/build/test → LIC0). Publishing is a separate operator decision.
+>
+> Also already shipped and unchanged: the **OpenAPI 3.1 spec**
+> (`GET /api/openapi.json`) + the in-app explorer (`/developer/api`); **SCIM 2.0
+> provisioning**; the **`Mastercard/restapi`-backed Terraform module** at
 > [`tools/terraform`](https://github.com/fgarofalo56/csa-inabox/tree/main/tools/terraform)
-> built on the community `Mastercard/restapi` provider (creates a Loom workspace +
-> item via the API today); and the **`@csa-loom/sdk`** TypeScript client
-> ([`apps/loom-sdk`](https://github.com/fgarofalo56/csa-inabox/tree/main/apps/loom-sdk))
-> — a typed `LoomClient` (workspaces / items / catalog / thread / tokens), cookie
-> **or** scoped-token auth, built + unit-tested, released by `publish-loom-sdk.yml`.
-> The **Python SDK** (`csa-loom`) and the dedicated **Go `terraform-provider-loom`**
-> remain the roadmap items below — until then, generate a Python client from the
-> OpenAPI spec (`openapi-generator-cli -i <host>/api/openapi.json -g python`) and
-> use the shipped `restapi`-backed Terraform module.
+> (the zero-build IaC path, still supported); and the **`@csa-loom/sdk`**
+> TypeScript client ([`apps/loom-sdk`](https://github.com/fgarofalo56/csa-inabox/tree/main/apps/loom-sdk)).
+>
+> The design and sequencing below is retained as the record of how these were
+> scoped; read it as history plus the residual items (registry/PyPI publication,
+> the async client, richer resource coverage), not as unbuilt work.
 
 Fabric ships a Python SDK-style surface (via the Fabric REST API + the
 `fabric-cli`) and a community Terraform provider (`microsoft/fabric`). To reach
