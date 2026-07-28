@@ -41,7 +41,9 @@
  * an AsyncIterable so the BFF can SSE-pipe them straight to the UI.
  */
 
-import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
+import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import { PagingDeadlineError } from '@/lib/azure/paging-budget';
+import { NoAoaiDeploymentError, aoaiDiscoveryTimeout } from '@/lib/azure/aoai-errors';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -194,12 +196,9 @@ const credential = uamiClientId
 
 // ---------- AOAI discovery ----------
 
-export class NoAoaiDeploymentError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NoAoaiDeploymentError';
-  }
-}
+// Re-exported for the many `instanceof` importers; see aoai-errors.ts for why
+// "nothing is deployed" and "ARM was slow" are separate types (#2557).
+export { NoAoaiDeploymentError, AoaiDiscoveryTimeoutError } from './aoai-errors';
 
 export interface AoaiTarget {
   endpoint: string;    // e.g. https://aoai-foo.openai.azure.com
@@ -322,11 +321,15 @@ async function resolveAoaiTargetRaw(
     return t;
   }
 
-  // 3. Discover via Foundry hub connections
+  // 3. Discover via Foundry hub connections. requireComplete: a TRUNCATED list
+  // must NOT read as "no AOAI connection exists", and a deadline must NOT be
+  // rethrown as NoAoaiDeploymentError — that told the operator to deploy a
+  // model that already existed (#2557 review; no-vaporware honest-gate rule).
   let conns: Awaited<ReturnType<typeof listConnections>> = [];
   try {
-    conns = await listConnections();
+    conns = await listConnections({ requireComplete: true });
   } catch (e: any) {
+    if (e instanceof PagingDeadlineError || e instanceof FetchTimeoutError) throw aoaiDiscoveryTimeout(e);
     throw new NoAoaiDeploymentError(
       `No AOAI deployment on Foundry hub. Deploy a gpt-4o / gpt-4.1-class model first. ` +
         `${expectedSuffixHint()} (Foundry connection lookup failed: ${e?.message || e})`,

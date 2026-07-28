@@ -128,3 +128,11 @@ added to the common Container App env block in
 `platform/fiab/bicep/modules/admin-plane/app-deployments.bicep` (tunable per
 sovereign region). No new resource / role / Cosmos container required —
 transport-only.
+
+## Follow-up: bounding the LOOP, not just the round-trip
+`fetchWithTimeout` bounds ONE request and explicitly leaves the loop that issues
+them to bound itself. Nothing did, so an N-page `nextLink` walk still had no
+ceiling. That gap — and its four operator knobs
+(`LOOM_ARM_PAGING_MAX_PAGES`, `LOOM_ARM_PAGING_BUDGET_MS`,
+`LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS`, `LOOM_FOUNDRY_CONNECTIONS_TTL_MS`) — is
+covered in [`../arm-paging-budget.md`](../arm-paging-budget.md) (#2557).

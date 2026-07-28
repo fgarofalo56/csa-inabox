@@ -27,7 +27,7 @@
 import { NextResponse } from 'next/server';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { PagingBudget } from '@/lib/azure/paging-budget';
+import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -70,17 +70,24 @@ function subFromId(id: string): string {
  * this ran on a bare `fetch` (no per-request timeout) inside a bare
  * `while (next)` — two missing ceilings on a request path. Each page now
  * inherits the walk's remaining wall clock.
+ *
+ * `budget` is passed IN and shared across the whole scan (1 + N subscriptions),
+ * so the route is bounded in aggregate rather than per call — N x 15s of awaits
+ * was still unbounded for the request.
+ *
+ * A deadline is TRUNCATION, never a throw: `runPage` absorbs the budget's own
+ * FetchTimeoutError so one slow subscription degrades the scan exactly the way
+ * an unreadable one already does (the `!r.ok` break below) instead of 502-ing
+ * the whole thing — which is what the un-absorbed throw did.
  */
-async function armGetAll(url: string, token: string): Promise<any[]> {
+async function armGetAll(url: string, token: string, budget: PagingBudget): Promise<any[]> {
   const out: any[] = [];
-  const budget = new PagingBudget('setup scan-cosmos armGetAll');
   let next = url;
   while (budget.claimPage()) {
-    const r: Response = await fetchWithTimeout(
-      next,
-      { headers: { authorization: `Bearer ${token}` } },
-      budget.remainingMs(),
+    const r = await budget.runPage((timeoutMs) =>
+      fetchWithTimeout(next, { headers: { authorization: `Bearer ${token}` } }, timeoutMs),
     );
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep what we have
     if (!r.ok) {
       // A single sub the identity can't read shouldn't fail the whole scan.
       break;
@@ -90,7 +97,6 @@ async function armGetAll(url: string, token: string): Promise<any[]> {
     if (!j.nextLink) break;
     next = j.nextLink;
   }
-  budget.warnIfTruncated(out.length);
   return out;
 }
 
@@ -111,15 +117,20 @@ export const GET = withSession(async () => {
   }
 
   // 1) list visible subscriptions, 2) list Cosmos accounts in each.
+  // ONE budget for the whole fan-out: the per-sub walks share a single wall
+  // clock, so a tenant with 40 subscriptions cannot turn this into 40 x 15s.
+  const budget = new PagingBudget('setup scan-cosmos');
   const existing: ExistingCosmos[] = [];
   try {
-    const subs = await armGetAll(`${arm()}/subscriptions?api-version=2022-12-01`, token);
+    const subs = await armGetAll(`${arm()}/subscriptions?api-version=2022-12-01`, token, budget);
     for (const s of subs) {
+      if (budget.truncatedBy) break; // aggregate ceiling spent — return what we have
       const subId = s.subscriptionId;
       if (!subId || (s.state && s.state !== 'Enabled')) continue;
       const accounts = await armGetAll(
         `${arm()}/subscriptions/${subId}/providers/Microsoft.DocumentDB/databaseAccounts?api-version=2024-11-15`,
         token,
+        budget,
       );
       for (const a of accounts) {
         const mode = a.properties?.capacityMode || 'None';
@@ -139,6 +150,7 @@ export const GET = withSession(async () => {
       { status: 502 },
     );
   }
+  budget.warnIfTruncated(existing.length);
 
   existing.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 

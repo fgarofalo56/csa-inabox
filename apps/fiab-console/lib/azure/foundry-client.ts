@@ -23,8 +23,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope, cogScope } from './cloud-endpoints';
-import { walkPagedList, type PagingBudgetOptions } from './paging-budget';
-import { createTtlMemo } from './ttl-memo';
+import { walkPagedListResult, type PagingBudgetOptions, type PagedWalkResult, type PagingTruncation } from './paging-budget';
+import { cachedConnections, CONNECTIONS_PAGING } from './foundry-connections-cache';
 import { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } from './resolve-aml-target';
 import { firstEnvEndpoint, AI_SERVICES_FALLBACK_ENVS } from './cognitive-common';
 
@@ -44,12 +44,6 @@ function required(k: string): string {
   const v = process.env[k];
   if (!v) throw new Error(`Missing env var: ${k}`);
   return v;
-}
-
-/** Positive-number env override with a code default (budgets / TTLs). */
-function envPositive(k: string, def: number): number {
-  const n = Number(process.env[k]);
-  return Number.isFinite(n) && n > 0 ? n : def;
 }
 
 // LOOM_FOUNDRY_SUB wins for a reused Foundry hub/AOAI account in another
@@ -138,21 +132,33 @@ async function readJsonOrThrow<T>(res: Response): Promise<T> {
 /**
  * Paged value collector — ARM returns `{ value: [], nextLink?: string }`.
  * BOUNDED (#2557): this was a bare `while (j.nextLink)` — each page inherited
- * fetchWithTimeout's 30s ceiling but the LOOP had none, and on the AOAI
- * target-resolution path one cold walk took 22.9s inside a `maxDuration = 60`
- * route. walkPagedList caps pages AND wall clock (see paging-budget.ts).
+ * fetchWithTimeout's 30s ceiling but the LOOP had none (one cold /connections
+ * walk took 22.9s inside a `maxDuration = 60` route). The `Result` form also
+ * reports `truncatedBy`, for callers that must know the list is COMPLETE.
  */
+function walkFoundryPages(
+  label: string,
+  firstPage: (timeoutMs: number) => Promise<Response>,
+  budgetOpts?: PagingBudgetOptions,
+): Promise<PagedWalkResult<any>> {
+  return walkPagedListResult(`foundry ${label}`, async (next, timeoutMs) => {
+    const res = next
+      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
+      : await firstPage(timeoutMs);
+    return readJson<{ value?: any[]; nextLink?: string }>(res); // 404 -> null -> stop
+  }, budgetOpts);
+}
+
+function pagedListResult(
+  path: string,
+  init: Parameters<typeof foundryFetch>[1] = {},
+  budgetOpts?: PagingBudgetOptions,
+): Promise<PagedWalkResult<any>> {
+  return walkFoundryPages(path, (timeoutMs) => foundryFetch(path, { ...init, timeoutMs }), budgetOpts);
+}
+
 async function pagedList(path: string, init: Parameters<typeof foundryFetch>[1] = {}, budgetOpts?: PagingBudgetOptions): Promise<any[]> {
-  return walkPagedList(
-    `foundry ${path}`,
-    async (next, timeoutMs) => {
-      const res = next
-        ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
-        : await foundryFetch(path, { ...init, timeoutMs });
-      return readJson<{ value?: any[]; nextLink?: string }>(res); // 404 -> null -> stop
-    },
-    budgetOpts,
-  );
+  return (await pagedListResult(path, init, budgetOpts)).rows;
 }
 
 // ---------------- Workspace (hub) info ----------------
@@ -226,39 +232,26 @@ function shapeConnection(raw: any): FoundryConnection {
   };
 }
 
-// `/connections` sits on the AOAI target-resolution HOT PATH, so it gets a
-// TIGHTER budget than the shared 15s default plus a short-TTL memo. Knobs:
-// LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS / LOOM_FOUNDRY_CONNECTIONS_TTL_MS.
-const CONNECTIONS_PAGING: PagingBudgetOptions = {
-  maxPages: 10,
-  budgetMs: envPositive('LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS', 8_000),
-};
-const connectionsMemo = createTtlMemo<FoundryConnection[]>(
-  envPositive('LOOM_FOUNDRY_CONNECTIONS_TTL_MS', 300_000),
-);
-
-/** Drop the memo so a create/update/delete through foundry-connections-client
- *  is visible on the very NEXT read rather than after the TTL. */
-export function invalidateFoundryConnections(): void {
-  connectionsMemo.invalidate();
-}
+// `/connections` policy (budget + memo + truncation) lives in its own module —
+// see foundry-connections-cache.ts for WHY a truncated walk is never cached.
+export { invalidateFoundryConnections } from './foundry-connections-cache';
 
 /**
- * List the Foundry hub's connections — CACHED (issue #2557).
- *
- * Near-static ARM config on the AOAI target-resolution hot path:
- * `resolveAoaiTarget` falls through to discovery whenever the tenant config
- * carries no endpoint and LOOM_AOAI_ENDPOINT is unset — on EVERY such turn,
- * since that is the one branch it never memoizes. A cold walk measured 22.9s.
- * See ttl-memo.ts for why this is in-process, not `getOrComputeCached`.
- *
- * @param opts.force skip the memo and re-walk ARM (wire to `?refresh=1`).
+ * List the Foundry hub's connections — bounded + memoized (#2557).
+ * `resolveAoaiTarget` falls through to this discovery on EVERY turn when the
+ * tenant config carries no endpoint and LOOM_AOAI_ENDPOINT is unset, and a cold
+ * walk measured 22.9s. `requireComplete` makes a truncated walk THROW a
+ * PagingDeadlineError instead of returning a partial list a caller would
+ * mis-read as "the connection does not exist"; `force` skips the memo
+ * (`?refresh=1`).
  */
-export async function listConnections(opts?: { force?: boolean }): Promise<FoundryConnection[]> {
-  return connectionsMemo.get(
-    async () => (await pagedList('/connections', {}, CONNECTIONS_PAGING)).map(shapeConnection),
-    opts?.force,
-  );
+export async function listConnections(
+  opts?: { force?: boolean; requireComplete?: boolean; onTruncated?: (t: PagingTruncation) => void },
+): Promise<FoundryConnection[]> {
+  return cachedConnections(async () => {
+    const walk = await pagedListResult('/connections', {}, CONNECTIONS_PAGING);
+    return { rows: walk.rows.map(shapeConnection), walk };
+  }, opts);
 }
 
 // ---------------- Models (registered models) ----------------
@@ -637,12 +630,7 @@ async function armFetch(
 
 /** {@link pagedList}'s sibling for the absolute-ARM-path lists (`armFetch`). */
 async function armPagedList(fullPath: string, label: string): Promise<any[]> {
-  return walkPagedList(`foundry ${label}`, async (next, timeoutMs) => {
-    const res = next
-      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
-      : await armFetch(fullPath, { apiVersion: ML_API, timeoutMs });
-    return readJson<{ value?: any[]; nextLink?: string }>(res);
-  });
+  return (await walkFoundryPages(label, (timeoutMs) => armFetch(fullPath, { apiVersion: ML_API, timeoutMs }))).rows;
 }
 
 // Data-plane fetch against the AML regional endpoint.

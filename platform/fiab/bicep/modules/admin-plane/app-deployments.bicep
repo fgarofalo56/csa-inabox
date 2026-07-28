@@ -154,6 +154,20 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
               // generation isn't aborted at the 30s metadata budget — still
               // bounded so a wedged inference endpoint can't pin a worker.
               { name: 'LOOM_LLM_FETCH_TIMEOUT_MS', value: '120000' }
+              // Paging ceiling for ARM/data-plane `nextLink` walks
+              // (lib/azure/paging-budget). fetch-with-timeout bounds ONE
+              // round-trip; these bound the LOOP that issues them, so an
+              // N-page list can't out-live the request it is made of (#2557).
+              // On a breach the caller keeps the rows already collected and
+              // logs one warn line naming the knob — a truncated picker beats a
+              // wedged request path. Both match the in-code defaults.
+              { name: 'LOOM_ARM_PAGING_MAX_PAGES', value: '50' }
+              { name: 'LOOM_ARM_PAGING_BUDGET_MS', value: '15000' }
+              // Tighter budget + short-TTL memo for the Foundry hub's
+              // /connections list — the one ARM list on the AOAI
+              // target-resolution hot path (a cold walk measured 22.9s).
+              { name: 'LOOM_FOUNDRY_CONNECTIONS_BUDGET_MS', value: '8000' }
+              { name: 'LOOM_FOUNDRY_CONNECTIONS_TTL_MS', value: '300000' }
               // Deployment planner cost estimator → public Azure Retail Prices
               // API. Empty = default prices.azure.com (no auth, Commercial cloud).
               // Read only by the Console app; ignored elsewhere.

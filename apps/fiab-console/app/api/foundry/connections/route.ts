@@ -11,6 +11,8 @@
  */
 import { NextResponse } from 'next/server';
 import { listConnections, FoundryError } from '@/lib/azure/foundry-client';
+import { PagingDeadlineError, type PagingTruncation } from '@/lib/azure/paging-budget';
+import { FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
 import {
   createConnection,
   updateConnection,
@@ -30,9 +32,24 @@ export const GET = withSession(async (req: Request) => {
     // on the AOAI target-resolution hot path). Loom's own writes invalidate it;
     // `?refresh=1` is the escape hatch for a change made outside Loom.
     const force = new URL(req.url).searchParams.get('refresh') === '1';
-    const connections = await listConnections({ force });
-    return NextResponse.json({ ok: true, connections });
+    // Truncation is REPORTED, never hidden: "the walk ran out of wall clock" is
+    // not the same as "the hub has fewer connections", and a caller that can't
+    // tell them apart draws the wrong conclusion.
+    const truncations: PagingTruncation[] = [];
+    const connections = await listConnections({
+      force,
+      onTruncated: (t) => { truncations.push(t); },
+    });
+    return NextResponse.json({ ok: true, connections, truncated: truncations[0] });
   } catch (e: any) {
+    if (e instanceof PagingDeadlineError || e instanceof FetchTimeoutError) {
+      // A deadline is a deadline. 504, and the message says outright that
+      // nothing is missing — do not let this read as "no connections exist".
+      return NextResponse.json(
+        { ok: false, code: 'paging_deadline', error: e.message },
+        { status: 504 },
+      );
+    }
     const status = e instanceof FoundryError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }

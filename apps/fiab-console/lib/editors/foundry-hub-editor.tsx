@@ -293,7 +293,15 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
 function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
   // Connections live on the hub workspace, not the CS account — no account selector.
-  const [st, reload] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active, nonce);
+  // `?refresh=1` on an EXPLICIT reload (the ribbon Reload button bumps `nonce`):
+  // the server memoizes this ARM list for 5 min (#2557), so without it the
+  // Reload button could not surface a connection created outside Loom. Loom's
+  // own create/update/delete invalidate the memo server-side already.
+  const [st, reload] = useLazyFetch<{ ok: boolean; connections: any[] }>(
+    nonce > 0 ? `/api/foundry/connections?refresh=1` : `/api/foundry/connections`,
+    active,
+    nonce,
+  );
   const [createOpen, setCreateOpen] = useState(false);
   const [editConn, setEditConn] = useState<any | null>(null);
   const [delTarget, setDelTarget] = useState<string | null>(null);
