@@ -535,6 +535,31 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'B-N14c',
     surface: 'Pipeline / Dataflow Gen2 / SQL copilots + POST /api/governance/contract-check + Answer Receipt',
   },
+  // ── #2585 — Copilot docs-retrieval ranking (P0/P1) ──
+  {
+    id: 'copilot-bm25-retrieval',
+    label: 'Copilot docs retrieval — BM25 ranking + per-document diversification',
+    description:
+      'Ranks the Copilot docs corpus with real BM25 (token matching, IDF, term-frequency saturation, chunk-length normalisation, stopwords removed) and caps how many chunks of any ONE document may occupy the returned window, backfilling from the next document. OFF reverts the Cosmos-fallback backend to the pre-#2585 boolean substring/term-presence ranker BYTE-IDENTICALLY and leaves the backend order untouched — the seconds-fast revert if the new ranking ever retrieves worse. Measured on the golden eval sets: doc-level hit-rate@5 0.185 → 0.548 from the ranker alone, zero surfaces regressing. Also disables the surface boost, which is meaningless without it. The corpus, the index, and the AI Search backend are unaffected either way.',
+    ownerItem: '#2585-P0',
+    surface: 'Every Copilot docs lookup (searchDocs) — help Copilot dock + /api/internal/copilot/eval-probe',
+  },
+  {
+    id: 'copilot-surface-scoped-retrieval',
+    label: 'Copilot docs retrieval — surface topical boost',
+    description:
+      'Applies the surface a question was asked from (the open item\'s type, e.g. `lakehouse`) as a topical score MULTIPLIER over the docs corpus, so a question asked on a lakehouse prefers lakehouse documentation. A boost, never a filter — nothing becomes unreachable, and a cross-cutting surface with no topical slice (help) is simply unaffected. OFF reverts to un-scoped global retrieval on the very next query. Measured on the golden eval sets at top-8: 0.637 → 0.760 overall, zero surfaces regressing (kql-database +0.266, lakehouse +0.267, cost +0.083).',
+    ownerItem: '#2585-P1b',
+    surface: 'Copilot docs lookups made with an open item (searchDocs surface option) + the eval probe',
+  },
+  {
+    id: 'copilot-retrieval-window-8',
+    label: 'Copilot docs retrieval — 8-chunk window',
+    description:
+      'Widens the DEFAULT docs-retrieval window from 5 chunks to 8. More evidence per answer: measured hit-rate@8 0.760 vs @5 0.712 at a fixed ranker, zero surfaces regressing. The cost is real — three additional ≤1500-character excerpts in every grounded answer prompt — so this carries its own switch: OFF restores the 5-chunk window on the very next query with no roll, leaving the ranker and the surface boost in place. An explicit top_k from the model or the eval probe is still honoured up to 10.',
+    ownerItem: '#2585-P1',
+    surface: 'Every Copilot docs lookup (searchDocs default top) + /api/internal/copilot/eval-probe',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

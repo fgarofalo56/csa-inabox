@@ -66,7 +66,15 @@ const DEFAULT_SEARCH_K = 5;
 export interface RunSummary {
   ran: boolean;
   reason?: string;
-  surfaces: { surface: string; questions: number; retrievalHitRate: number; groundingAvg: number | null; passRate: number }[];
+  surfaces: {
+    surface: string;
+    questions: number;
+    retrievalHitRate: number;
+    groundingAvg: number | null;
+    passRate: number;
+    /** Which retrieval backend served the questions (#2585 — see RunTotals). */
+    backends?: Record<string, number>;
+  }[];
 }
 
 export async function runEvals(
@@ -204,7 +212,8 @@ export async function runEvals(
     }
     context.log(
       `[copilot-evaluator] run ${set.surface}: ${totals.questions} Q, hit-rate ${totals.retrievalHitRate}, ` +
-        `grounding ${totals.groundingAvg ?? 'deferred'} (judged=${totals.judged} deferred=${totals.deferred} auto-fail=${totals.autoFailed})`,
+        `grounding ${totals.groundingAvg ?? 'deferred'} (judged=${totals.judged} deferred=${totals.deferred} auto-fail=${totals.autoFailed}) ` +
+        `backend=${JSON.stringify(totals.backends ?? {})}`,
     );
     summary.surfaces.push({
       surface: set.surface,
@@ -212,6 +221,7 @@ export async function runEvals(
       retrievalHitRate: totals.retrievalHitRate,
       groundingAvg: totals.groundingAvg,
       passRate: totals.passRate,
+      backends: totals.backends,
     });
   }
   return summary;

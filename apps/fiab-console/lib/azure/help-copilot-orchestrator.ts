@@ -37,6 +37,7 @@ import { isSafetyConfigured, shieldPrompt, moderateContent } from './foundry-cli
 import {
   searchDocs as ragSearchDocs,
   isSearchConfigured,
+  DEFAULT_DOC_RETRIEVAL_TOP,
   type DocHit,
 } from './loom-docs-index';
 import { NAV_ITEMS } from '@/lib/nav/nav-items';
@@ -213,6 +214,13 @@ function buildTools(deps: {
   /** The open item, so readReceipts/proposeFix default to it without the
    *  model having to restate ids it can't see. */
   receiptScope?: ReceiptScope;
+  /**
+   * The surface the question is being asked from (the open item's type, e.g.
+   * `lakehouse`). Passed to searchDocs as a TOPICAL BOOST — never a filter —
+   * so a question asked on a lakehouse prefers lakehouse documentation without
+   * making anything else unreachable. Issue #2585 P1b.
+   */
+  surface?: string;
 }): ToolDef[] {
   return [
     {
@@ -222,15 +230,15 @@ function buildTools(deps: {
         type: 'object',
         properties: {
           query: { type: 'string', description: '2-5 keyword phrase' },
-          top_k: { type: 'number', description: 'Max results (default 5, max 10)' },
+          top_k: { type: 'number', description: 'Max results (default 8, max 10)' },
           kind: { type: 'string', enum: ['docs', 'prp', 'adr'], description: 'Optional filter' },
         },
         required: ['query'],
         additionalProperties: false,
       },
       handler: async ({ query, top_k, kind }) => {
-        const top = Math.min(Math.max(top_k || 5, 1), 10);
-        const { hits, backend } = await ragSearchDocs(query, top, kind);
+        const top = Math.min(Math.max(top_k || DEFAULT_DOC_RETRIEVAL_TOP, 1), 10);
+        const { hits, backend } = await ragSearchDocs(query, top, kind, { surface: deps.surface });
         const citations = hits.map(citationFromHit);
         deps.recordCitations(citations);
         return {
@@ -666,6 +674,8 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
       name: process.env.LOOM_FEEDBACK_REPO_NAME || 'csa-inabox',
     },
     githubToken: process.env.LOOM_FEEDBACK_GITHUB_TOKEN,
+    // The open item's type is the retrieval surface (#2585 P1b).
+    surface: opts.pageContext?.itemType || undefined,
     receiptScope:
       opts.pageContext?.receiptScope ||
       (opts.pageContext?.itemId

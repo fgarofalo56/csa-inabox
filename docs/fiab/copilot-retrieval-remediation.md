@@ -1,0 +1,254 @@
+# Copilot retrieval remediation — P0/P1/P3 measured results
+
+**Issue:** [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585) ·
+**Diagnosis:** [`copilot-quality-triage.md`](copilot-quality-triage.md) ·
+**Status:** P0, P1, P1b, P3 implemented and measured offline; P2 (corpus
+hygiene) and P4 (floor re-baseline) NOT started ·
+**Floors:** `content/evals/eval-floors.json` is **unchanged** — re-baselining is
+P4 and happens last, from ≥3 real runs through the existing raise-only ratchet.
+
+Everything below is labelled **MEASURED** (reproducible from this repo with no
+Azure access and zero judge-token spend) or **INFERRED** (reasoning from code,
+not executed).
+
+Reproduce every number here with:
+
+```bash
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8 --surface-boost 1.0
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --explain lakehouse
+```
+
+`scripts/csa-loom/measure-retrieval.mjs` **imports the shipping ranker**
+(`apps/fiab-console/lib/azure/docs-ranker.ts`) through Node's native
+type-stripping, so the "after" column is the code that runs in the console — not
+a second implementation that could agree with itself while both disagree with
+production. (The triage script it sits beside,
+`scripts/csa-loom/diagnose-retrieval.mjs`, measured a *port*, because at the
+time the ranker was module-private.)
+
+---
+
+## 1. Headline — before vs after
+
+**MEASURED**, doc-level hit-rate under the evaluator's own `scoreRetrieval`,
+146 golden rows / 10 surfaces, corpus 49,593 chunks / 2,588 documents.
+
+"Before" is production as it shipped: substring/term-presence ranking in a
+top-5 window. "After" is production as this change ships it: BM25 +
+per-document diversification + surface boost, in the new top-8 window.
+
+| surface | before (substring@5) | **after (shipped@8)** | Δ | floor |
+|---|---|---|---|---|
+| cost | 0.167 | **1.000** | +0.833 | 0.5 |
+| data-agent | 0.133 | **0.867** | +0.734 | 0.5 |
+| deploy-planner | 0.333 | **0.800** | +0.467 | 0.5 |
+| eventstream | 0.083 | **0.833** | +0.750 | 0.5 |
+| health | 0.133 | **0.467** | +0.334 | 0.5 ⚠️ |
+| help | 0.250 | **0.600** | +0.350 | 0.5 |
+| kql-database | 0.133 | **0.733** | +0.600 | 0.5 |
+| lakehouse | **0.000** | **0.667** | +0.667 | 0.5 |
+| rbac | 0.333 | **0.917** | +0.584 | 0.5 |
+| report | 0.267 | **0.867** | +0.600 | 0.5 |
+| **OVERALL** | **0.185** | **0.760** | **+0.575** | — |
+
+**Zero surfaces regress.** Nine of ten clear the seeded 0.5 floor offline;
+`health` (0.467) does not — see §5.
+
+> These are OFFLINE numbers over the Cosmos-fallback ranking path. They are not
+> a prediction of the next live `copilot-quality-evals` run. Do not treat them
+> as a reason to touch the floors.
+
+---
+
+## 2. Lever by lever, at a fixed window
+
+**MEASURED** at top-5 (left) and top-8 (right). Each column adds one lever to
+the one before it, except `title2` and `sfc-filter`, which are alternatives that
+were measured and **rejected** (§4).
+
+| surface | substring@5 | bm25@5 | +div@5 | +sfc@5 | | substring@8 | bm25@8 | +div@8 | +sfc@8 |
+|---|---|---|---|---|---|---|---|---|---|
+| cost | 0.167 | 0.750 | 0.750 | 1.000 | | 0.250 | 0.917 | 0.917 | 1.000 |
+| data-agent | 0.133 | 0.667 | 0.667 | 0.867 | | 0.267 | 0.800 | 0.800 | 0.867 |
+| deploy-planner | 0.333 | 0.600 | 0.600 | 0.800 | | 0.333 | 0.667 | 0.667 | 0.800 |
+| eventstream | 0.083 | 0.667 | 0.667 | 0.833 | | 0.083 | 0.750 | 0.750 | 0.833 |
+| health | 0.133 | 0.467 | 0.467 | 0.467 | | 0.133 | 0.467 | 0.467 | 0.467 |
+| help | 0.250 | 0.400 | 0.400 | 0.400 | | 0.300 | 0.600 | 0.600 | 0.600 |
+| kql-database | 0.133 | 0.333 | 0.333 | 0.733 | | 0.200 | 0.467 | 0.467 | 0.733 |
+| lakehouse | 0.000 | 0.333 | 0.333 | 0.600 | | 0.000 | 0.333 | 0.333 | 0.667 |
+| rbac | 0.333 | 0.667 | 0.667 | 0.833 | | 0.333 | 0.750 | 0.750 | 0.917 |
+| report | 0.267 | 0.733 | 0.733 | 0.800 | | 0.333 | 0.733 | 0.733 | 0.867 |
+| **OVERALL** | **0.185** | **0.548** | **0.548** | **0.712** | | **0.226** | **0.637** | **0.637** | **0.760** |
+| *distinct docs* | 4.45 | 4.51 | 4.60 | 4.47 | | 7.05 | 6.92 | 7.17 | 6.95 |
+
+Read that honestly:
+
+* **The ranker is the dominant lever** — +0.363 at top-5, +0.411 at top-8, at a
+  fixed corpus and window. This is P0 and it is the whole reason the change
+  exists.
+* **The surface boost is the second lever** — +0.164 at top-5, +0.123 at top-8,
+  with **no surface worse off**. It is what finally moves `kql-database`
+  (0.333 → 0.733) and `lakehouse` (0.333 → 0.667), the two surfaces the triage
+  flagged as resisting plain BM25.
+* **Diversification does NOT move hit-rate at the shipped window.** 0.548 →
+  0.548 at top-5, 0.637 → 0.637 at top-8. Its measured effect is +0.15 (top-5) /
+  +0.25 (top-8) *distinct documents* per window, and +0.021 hit-rate at top-10
+  (0.671 → 0.692). It ships because evidence diversity is the actual product
+  complaint in #2585 — not because it lifts the metric, which it does not.
+* **Widening 5 → 8 is worth +0.048** at the shipped ranker (0.712 → 0.760) with
+  zero regressions. Top-10 would give a further +0.021 (0.781); it was not taken
+  because the token cost of a 10-chunk grounded prompt was not measured against
+  any answer-quality benefit.
+
+---
+
+## 3. What shipped
+
+| lever | where | flag | default |
+|---|---|---|---|
+| BM25 ranking (tokens, IDF, TF saturation, length normalisation, stopwords) | `lib/azure/docs-ranker.ts` → `searchCosmos` | `copilot-bm25-retrieval` | **ON** |
+| Per-document diversification (max 2 chunks/doc, over-fetch ×4, backfill) | `searchDocs` | `copilot-bm25-retrieval` | **ON** |
+| Surface topical boost (×1.35 on-topic) | `searchDocs` + eval probe + Copilot tool | `copilot-surface-scoped-retrieval` | **ON** |
+| Retrieval window 5 → 8 | `DEFAULT_DOC_RETRIEVAL_TOP` | `copilot-retrieval-window-8` | **ON** |
+
+All three default **ON** per `loom_default_on_opt_out`, and all three fail
+**open** to the new path if the flag store is unreachable — the new path is the
+measured-better one, so a flag-subsystem outage must not silently restore the
+worse ranker. OFF on `copilot-bm25-retrieval` restores the pre-#2585 scorer
+**byte-identically** (the old function is preserved verbatim in `docs-ranker.ts`
+as the revert target, not re-derived).
+
+### Surface scoping is a boost, never a filter
+
+`surfaceTopicTerms()` derives topic terms **mechanically from the surface slug**
+(`kql-database` → `kql`, `database`). That is deliberate: a hand-curated
+surface→topic map would be written by someone who has already seen which
+documents the golden sets expect, which fits the metric rather than improving
+retrieval. The mechanical mapping is why `health` → `health` gains nothing (its
+gold document is `parity/monitor.md`) and why `help` → `help` is a no-op — both
+are correct outcomes, and both are visible in the table above.
+
+In production the surface is the open item's type (`pageContext.itemType`), so
+this is a real product change, not an eval-only one.
+
+### Backend asymmetry, stated plainly
+
+On the Cosmos/BM25 path the surface boost is folded into **scoring**, so it can
+promote a document from anywhere in the corpus. On the Azure AI Search path the
+ranking happens inside the service, so the boost can only **re-sort the
+over-fetched window**. The offline harness exercises the Cosmos path only —
+**the AI Search variant is a weaker approximation that has not been measured.**
+
+---
+
+## 4. What was measured and deliberately NOT shipped
+
+### Filename / heading boost — rejected
+
+**MEASURED** (BM25 + diversification, boost 2.0 vs 0):
+
+| | top-5 | top-8 |
+|---|---|---|
+| overall | 0.548 → 0.575 (+0.027) | 0.637 → 0.664 (+0.027) |
+| `kql-database` | 0.333 → **0.200** (−0.133) | 0.467 → **0.400** (−0.067) |
+| `health` | 0.467 → **0.400** (−0.067) | — |
+| `eventstream` | — | 0.750 → **0.667** (−0.083) |
+| `cost` | — | 0.917 → **0.833** (−0.084) |
+| `help` | 0.400 → 0.550 (+0.150) | 0.600 → 0.550 (−0.050) |
+| `report` | 0.733 → 0.867 (+0.134) | 0.733 → 1.000 (+0.267) |
+
+It buys +0.027 overall and costs up to −0.133 on a single surface, and its sign
+flips between windows (`help` +0.150 at top-5, −0.050 at top-8). That is a tuned
+parameter, not a ranking improvement. `Bm25RankOptions.titleBoost` exists and
+**defaults to 0**; a unit test asserts it stays off.
+
+### Hard surface filter — rejected
+
+**MEASURED** — restrict the window to documents whose path carries a surface
+term, backfilling when too few match:
+
+| | top-5 | top-8 | top-10 |
+|---|---|---|---|
+| soft boost (shipped) | **0.712** | 0.760 | 0.781 |
+| hard filter | 0.692 | 0.767 | 0.788 |
+| `rbac`, boost vs filter | 0.833 / **0.667** | 0.917 / **0.750** | 0.917 / **0.750** |
+
+The filter's aggregate edge at top-8/10 is ≤0.007 — **one golden row out of
+146**, i.e. noise. Its `rbac` regression is −0.167 at every window, which is not.
+A filter also makes a document *unreachable* rather than merely lower-ranked,
+which is the wrong failure mode for cross-cutting questions. The plan said
+"apply the surface filter"; the measurement says apply it as a prior, not a
+gate, so that is what shipped.
+
+### Top-10 window — not taken
+
++0.021 over top-8, at the cost of two more ≤1500-character excerpts in every
+grounded prompt. Answer quality was not measured (zero judge spend by design),
+so there is no evidence the extra context is worth the tokens. The route still
+honours an explicit `top` up to 10.
+
+### AI Search scoring profile — not attempted
+
+Triage §P0.2 proposed a scoring profile weighting `path` and `heading` above
+`content`. That is precisely the filename/heading boost measured above, which is
+**not** a free win — and the offline harness cannot exercise the AI Search
+backend at all, so shipping it would be an unmeasured change to a path the
+measurement cannot see. Left for a follow-up that can measure it live.
+
+---
+
+## 5. `health` is still below floor
+
+**MEASURED** — `health` moves 0.133 → 0.467 and stops there. 12 of its 15 rows
+expect `docs/fiab/parity/monitor.md`, a document whose name shares no token with
+the word "health", so neither the surface boost nor a filename boost can reach
+it; only the body text can. This is a **corpus/content** problem (P2 territory),
+not a ranking one, and it is the honest reason one surface will still sit under
+0.5 on the next run.
+
+That is not a reason to lower its floor. It is a reason to fix the content or
+the golden set, tracked under #2585.
+
+---
+
+## 6. Harness defects fixed (P3)
+
+1. **Judge evidence ≠ generation evidence.** The judge graded grounding on
+   `slice(0, 300)` while the model answered from `slice(0, 1500)` of the same
+   chunk (`eval-probe/route.ts:45` vs `:117`), so any claim drawn from
+   characters 301–1500 looked ungrounded. Both call sites now read one exported
+   constant, `EVIDENCE_CHARS = 1500`, and a route test asserts the preview is
+   the exact slice the prompt contains. **`groundingAvg` is not comparable
+   across this change** — runs before it were graded on 20% of the evidence.
+2. **`surface` was a no-op.** Accepted, echoed, never applied. Now applied as
+   the topical boost above, and asserted by a test that an echo-only
+   implementation fails.
+3. **The receipt never said which backend answered.** `backend` was written on
+   every per-question Cosmos doc but never rolled up, so the triage had to
+   *infer* whether run 30373810035 was served by AI Search or the Cosmos
+   fallback — which is what made the offline model impossible to anchor.
+   `RunTotals.backends` now counts it per surface and it appears in
+   `eval-run.json` and the run log.
+
+---
+
+## 7. Limits — what this does NOT establish
+
+1. **No live run.** Every number is the offline Cosmos-fallback path. Per G1
+   this change is not "done" until a real `copilot-quality-evals` run and a
+   browser walk of the Copilot dock confirm it.
+2. **No answer-quality measurement.** Zero judge calls were made. Retrieval
+   hit-rate is not answer quality, and the widened window's effect on grounding,
+   verbosity, latency and token cost is unmeasured.
+3. **The AI Search path is unmeasured** (§3). If production is served by AI
+   Search, the realised gain will be smaller than the table above — the ranker
+   change does not apply there at all, and only diversification, the window, and
+   the weaker post-rank surface re-sort do.
+4. **Diversification's hit-rate value is 0 at the shipped window.** It is
+   shipped for evidence diversity, on a measurement that says so.
+5. **Floors untouched.** No conclusion here licenses a floor change; P4 requires
+   ≥3 real runs through `scripts/csa-loom/ratchet-eval-floors.mjs`.
+6. **The corpus differs from run 30373810035's by one document** (2,588 vs
+   2,586 files). It does not affect any conclusion.
