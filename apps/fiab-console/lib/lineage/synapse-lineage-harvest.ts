@@ -36,6 +36,7 @@ import {
   type MappedOpenLineageEdge,
 } from '@/lib/azure/openlineage-ingest';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { canonicalDatasetIdentity, parseStorageAccountUrl } from '@/lib/lineage/dataset-naming';
 import {
   loadWorkspacePathItems,
@@ -106,6 +107,39 @@ function markHarvested(key: string): void {
 export function __resetHarvestDedupe(): void {
   harvested.clear();
   inFlight.clear();
+}
+
+/**
+ * The session the edges are WRITTEN with — `recordThreadEdge` partitions on
+ * `session.claims.oid`, so this decides whose lineage canvas can see them.
+ *
+ * It must be the workspace OWNER, not the caller. A workspace shared with ACL
+ * members admits any `canWrite` member through `loadOwnedItem`; writing with
+ * that member's oid would drop the edges into the member's private thread-edge
+ * partition, where the workspace owner's canvas never renders them and every
+ * member accumulates their own duplicate copy of the same lineage. This mirrors
+ * the L2 ingest route's `machineSession(ws.tenantId)` and its documented reason.
+ *
+ * `createdBy` still carries the REAL caller (recordThreadEdge prefers `upn`), and
+ * the audit rows are keyed on the caller's oid — attribution is not lost, only
+ * the partition is normalized. Falls back to the caller when the workspace is
+ * unreadable, which is the pre-existing behaviour and never worse.
+ */
+async function writerSession(session: SessionPayload, workspaceId: string): Promise<SessionPayload> {
+  try {
+    const ws = await workspacesContainer();
+    const { resources } = await ws.items
+      .query<{ tenantId: string }>({
+        query: 'SELECT TOP 1 c.tenantId FROM c WHERE c.id = @id',
+        parameters: [{ name: '@id', value: workspaceId }],
+      })
+      .fetchAll();
+    const ownerOid = resources?.[0]?.tenantId;
+    if (!ownerOid || ownerOid === session.claims.oid) return session;
+    return { ...session, claims: { ...session.claims, oid: ownerOid } };
+  } catch {
+    return session;
+  }
 }
 
 export interface HarvestReceipt {
@@ -383,7 +417,7 @@ export async function harvestPipelineRunLineage(
       activities,
     });
     const ctx: WriteContext = {
-      session,
+      session: await writerSession(session, input.workspaceId),
       workspaceId: input.workspaceId,
       principal: session.claims.oid,
       producer: 'adf-pipeline-harvest',
@@ -502,7 +536,7 @@ export async function harvestSparkBatchLineage(
       };
     }
     const ctx: WriteContext = {
-      session,
+      session: await writerSession(session, input.workspaceId),
       workspaceId: input.workspaceId,
       principal: session.claims.oid,
       producer: 'synapse-spark-harvest',

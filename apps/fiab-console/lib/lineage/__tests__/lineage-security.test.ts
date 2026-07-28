@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   getLinkedService: vi.fn(),
   listActivityRuns: vi.fn(async () => []),
   queryItems: vi.fn(),
+  /** ws1 is owned by `owner-1` unless a spec says otherwise. */
+  workspaceRows: vi.fn(() => [{ tenantId: 'owner-1' }]),
 }));
 
 vi.mock('@/lib/azure/adf-client', () => ({
@@ -56,6 +58,9 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   auditLogContainer: async () => ({
     items: { create: async (d: any) => { auditRows.push(d); return { resource: d }; } },
   }),
+  workspacesContainer: async () => ({
+    items: { query: () => ({ fetchAll: async () => ({ resources: mocks.workspaceRows() }) }) },
+  }),
 }));
 
 vi.mock('@/lib/admin/audit-stream', () => ({
@@ -63,8 +68,15 @@ vi.mock('@/lib/admin/audit-stream', () => ({
 }));
 
 vi.mock('@/lib/thread/thread-edges', () => ({
-  recordThreadEdge: vi.fn(async (_s: unknown, e: any) => {
-    edgesWritten.push({ ...e, id: `e${edgesWritten.length}`, tenantId: 't', createdAt: '2026-07-28T00:00:00Z' });
+  // Mirror the real sink's partitioning: tenantId comes from the WRITE session.
+  recordThreadEdge: vi.fn(async (s: any, e: any) => {
+    edgesWritten.push({
+      ...e,
+      id: `e${edgesWritten.length}`,
+      tenantId: s?.claims?.oid,
+      createdBy: s?.claims?.upn,
+      createdAt: '2026-07-28T00:00:00Z',
+    });
   }),
   listThreadEdges: vi.fn(async () => edgesWritten),
 }));
@@ -131,6 +143,7 @@ beforeEach(() => {
   __resetHarvestDedupe();
   vi.clearAllMocks();
   wireItems();
+  mocks.workspaceRows.mockReturnValue([{ tenantId: 'owner-1' }]);
 });
 
 // ===========================================================================
@@ -494,7 +507,35 @@ describe('a SQL sink collapses onto the uc: node, not a sqlserver:// island', ()
 });
 
 // ===========================================================================
-// 7. ONELAKE identities must not be silently re-keyed
+// 7. WRITE PARTITION — shared workspaces must not get split, private lineage
+// ===========================================================================
+
+describe('harvested edges land in the workspace OWNER partition', () => {
+  it('an ACL member harvest writes to the OWNER partition, attributed to the member', async () => {
+    // loadOwnedItem admits any canWrite ACL member, so `session` here is a
+    // MEMBER, not the owner. Writing with the member's oid would bury the edges
+    // in the member's private thread-edge partition: the owner's lineage canvas
+    // would never render them and every member would accumulate a duplicate.
+    mocks.workspaceRows.mockReturnValue([{ tenantId: 'the-owner-oid' }]);
+    const member = { claims: { oid: 'member-9', upn: 'member@b.com' }, exp: Date.now() / 1000 + 3600 } as any;
+    const r = await harvestSparkBatchLineage(member, {
+      workspaceId: 'ws1', synapseWorkspaceName: 'syn-loom', poolName: 'loompool',
+      batchId: 77, jobName: 'shared', state: 'success', attributed: true,
+      args: [
+        '--input', 'abfss://data@stloom.dfs.core.windows.net/bronze/sales',
+        '--output', 'abfss://data@stloom.dfs.core.windows.net/silver/sales',
+      ],
+    });
+    expect(r.written).toBe(1);
+    expect(edgesWritten[0].tenantId).toBe('the-owner-oid');
+    // Attribution is NOT lost — the real actor is on the row and on the audit.
+    expect(edgesWritten[0].createdBy).toBe('member@b.com');
+    expect(auditRows.find((a) => a.kind === 'lineage.harvested').actorOid).toBe('member-9');
+  });
+});
+
+// ===========================================================================
+// 8. ONELAKE identities must not be silently re-keyed
 // ===========================================================================
 
 describe('OneLake keeps its own spelling', () => {
