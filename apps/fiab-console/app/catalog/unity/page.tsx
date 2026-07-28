@@ -152,14 +152,21 @@ function useJson<T = any>() {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [gated, setGated] = useState<string | null>(null);
+  const [code, setCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const run = useCallback(async (url: string, init?: RequestInit) => {
-    setLoading(true); setError(null); setGated(null);
+    setLoading(true); setError(null); setGated(null); setCode(null);
     try {
       const r = await clientFetch(url, init);
       const j = await r.json();
       if (!j.ok) {
-        if (j.gated || j.code === 'not_configured') setGated(j.error || 'Not configured');
+        setCode(j.code || null);
+        if (j.code === 'admin_only') {
+          // A 403 from the shared tenant-admin gate carries `error:'forbidden'`,
+          // which is useless on its own — surface the reason + remediation the
+          // gate actually returns.
+          setError([j.reason, j.remediation].filter(Boolean).join(' ') || 'Tenant admin required.');
+        } else if (j.gated || j.code === 'not_configured') setGated(j.error || 'Not configured');
         else setError(j.error || `HTTP ${r.status}`);
         setData(null);
         return null;
@@ -168,7 +175,7 @@ function useJson<T = any>() {
     } catch (e: any) { setError(e?.message || String(e)); setData(null); return null; }
     finally { setLoading(false); }
   }, []);
-  return { data, error, gated, loading, run, setError };
+  return { data, error, gated, code, loading, run, setError };
 }
 
 function BackendBadge({ cap }: { cap: CapabilitiesPayload | null }) {
@@ -1105,6 +1112,9 @@ type SysRow = Record<string, unknown>;
 interface SysPayload {
   ok: boolean; backend: 'oss' | 'databricks'; table: string;
   columns: string[]; rows: SysRow[]; executionMs?: number; recordCount?: number; kql?: string;
+  /** TRUE when the read hit `limit` — the counts then describe the most recent
+   *  `limit` calls, not the whole window. Surfaced verbatim in the status strip. */
+  truncated?: boolean; limit?: number;
 }
 
 /** Views offered per backend — Loom Unity's are Loom-native, Databricks' are system.*. */
@@ -1224,14 +1234,33 @@ function SystemTablesPane({ oss }: { oss: boolean }) {
           </MessageBarBody>
         </MessageBar>
       )}
-      {q.error && <MessageBar intent="error" className={s.mb}><MessageBarBody>{q.error}</MessageBarBody></MessageBar>}
+      {q.error && q.code === 'admin_only' ? (
+        <MessageBar intent="warning" className={s.mb}>
+          <MessageBarBody>
+            <MessageBarTitle>Tenant admin required</MessageBarTitle>
+            This pane serves the ORG-WIDE catalog access trail — every user&apos;s calls, the securables they
+            touched, and who was refused. It is restricted to tenant admins, like /admin/audit-logs. {q.error}
+          </MessageBarBody>
+        </MessageBar>
+      ) : q.error ? (
+        <MessageBar intent="error" className={s.mb}><MessageBarBody>{q.error}</MessageBarBody></MessageBar>
+      ) : null}
 
       {q.loading ? <Spinner label="Reading…" className={s.spinner} /> : !q.gated && !q.error && payload && (
         <>
           <div className={s.actionsRow}>
             <Badge appearance="tint" color="brand">{rows.length} row(s)</Badge>
             {typeof payload.executionMs === 'number' && <Caption1 className={s.muted}>{payload.executionMs} ms</Caption1>}
-            {typeof payload.recordCount === 'number' && <Caption1 className={s.muted}>{payload.recordCount} access record(s) in window</Caption1>}
+            {typeof payload.recordCount === 'number' && (
+              <Caption1 className={s.muted}>
+                {payload.truncated
+                  // Honest scope: with a full page the numbers describe the most
+                  // recent N calls, NOT the whole window. "2 denials in 7 days"
+                  // and "2 denials in the last 200 calls" are different claims.
+                  ? `${payload.recordCount} access record(s) — window TRUNCATED at the ${payload.limit ?? payload.recordCount}-row limit; counts cover the most recent ${payload.recordCount} calls, not the whole window. Raise Limit or narrow Days for window totals.`
+                  : `${payload.recordCount} access record(s) in window`}
+              </Caption1>
+            )}
           </div>
           {rows.length === 0 ? (
             <EmptyState

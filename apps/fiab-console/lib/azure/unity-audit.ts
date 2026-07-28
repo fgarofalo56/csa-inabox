@@ -1,18 +1,42 @@
 /**
  * LU-3 — the Loom Unity / Unity Catalog **audit choke point**.
  *
- * Every catalog call the Console BFF makes — against the self-hosted Loom Unity
- * (OSS Unity Catalog) server in Gov OR against Databricks Unity Catalog in
- * Commercial — funnels through ONE place: the `finally` block of `ucFetch` in
- * `lib/azure/unity-catalog-client.ts`, which calls {@link recordUnityAccess}.
- * There is exactly one outbound `fetch` in that client, so a new call site
- * physically cannot reach the catalog without producing an audit row.
+ * Every Unity Catalog **REST** call the Console BFF makes funnels through one of
+ * TWO audited transports, both of which call {@link recordUnityAccess} from a
+ * `finally` block:
  *
- * That property is enforced, not merely documented:
- * `scripts/ci/check-unity-audit-chokepoint.mjs` FAILS the build when
- *   (a) any file outside the choke point builds a Loom Unity request URL, or
- *   (b) `unity-catalog-client.ts` grows a second outbound fetch, or
- *   (c) the `recordUnityAccess(` call inside `ucFetch` disappears.
+ *   - `ucFetch` in `lib/azure/unity-catalog-client.ts` — the backend-agnostic
+ *     client (Loom Unity / OSS Unity Catalog in Gov, Databricks UC in
+ *     Commercial). It holds that file's only outbound fetch.
+ *   - `dbxFetch` in `lib/azure/databricks-client.ts` — the Databricks workspace
+ *     client. It audits the calls whose path is a Unity Catalog REST path
+ *     (`/api/2.x/unity-catalog/**`, lineage-tracking), which is where catalog
+ *     OWNER CHANGE (`patchUcCatalog`), catalog DELETE (`deleteUcCatalog`) and
+ *     GRANT MUTATION (`updateUcPermissions`) live on the Commercial default
+ *     path. Non-catalog Databricks REST (jobs, warehouses, clusters, files) is
+ *     out of scope for this trail and is NOT recorded.
+ *
+ * ### What this trail does NOT cover (read this before trusting it)
+ *
+ * `unity-catalog-client.ts` also reaches the catalog through ~25
+ * `executeStatement(...)` calls — the Databricks **SQL Statement Execution**
+ * API, not the UC REST API. Those produce NO row here, and they include
+ * governance DDL: `createUcPolicy` / `dropUcPolicy` (ABAC row filters + column
+ * masks), `mutateUcGovernedTag`, and `setUcTags`. They are covered by the
+ * Databricks-side `system.access.audit` table on the Commercial backend, not by
+ * this trail. Tracked for choke-pointing — see the issue linked from
+ * `scripts/ci/check-unity-audit-chokepoint.mjs` (`SQL_EXIT_BASELINE`), which
+ * ratchets the count so a NEW un-audited SQL exit fails the build.
+ *
+ * What IS enforced, not merely documented, by
+ * `scripts/ci/check-unity-audit-chokepoint.mjs` (merge-blocking):
+ *   (a) any file outside the allowlist that combines a Loom Unity address OR a
+ *       Unity Catalog REST path with request-shaped code fails the build;
+ *   (b) `unity-catalog-client.ts` growing a second outbound fetch fails;
+ *   (c) `recordUnityAccess(` leaving the `finally` of EITHER `ucFetch` or
+ *       `dbxFetch` fails — the check brace-matches the actual finally block
+ *       rather than substring-scanning the rest of the file;
+ *   (d) `unity-catalog-client.ts` growing a new `executeStatement(` exit fails.
  * The guard is the point of this item; the recorder below is the easy half.
  *
  * ## What each row carries (FedRAMP AU-2/AU-3: who / what / when / outcome)
@@ -33,12 +57,25 @@
  * ## Two sinks, one call
  *
  *   1. **Cosmos `_auditLog`** — the authoritative Loom trail (`itemType:
- *      'loom-unity'`), read back by the "Loom Unity system tables" pane and by
- *      /admin/audit-logs.
+ *      'loom-unity'`), read back by the "Loom Unity system tables" pane. NOTE:
+ *      /admin/audit-logs scopes its Cosmos read to `c.tenantId = <session oid>`
+ *      while these rows carry the Entra **tenant** id, so they do NOT appear on
+ *      that surface — the tenant-admin-gated system-tables pane is their reader.
  *   2. **`LoomAudit_CL`** — fanned out through `emitAuditEvent`, the existing
  *      Azure Monitor Logs-Ingestion (DCR) stream that Sentinel/any SIEM reads.
  *      Un-provisioned DCR = silent no-op (see lib/admin/audit-stream.ts); the
  *      Cosmos trail is unaffected, so this module has NO day-one gate.
+ *
+ * ## Boundary egress — READS NEVER LEAVE THE ESTATE
+ *
+ * `emitAuditEvent` additionally fans events out to any tenant-registered
+ * OUTBOUND WEBHOOK (`emitLoomEvent`, lib/events/webhook-emitter.ts) — a
+ * third-party URL outside the Loom boundary. A catalog READ is high-volume and
+ * carries actor UPN + securable FQN, so read rows are emitted with
+ * `{ webhook: false }`: they reach Cosmos and the in-boundary SIEM stream and
+ * stop there. Only catalog MUTATIONS (create/update/delete/grant change,
+ * credential vend) — the events an external SOC actually subscribes to — are
+ * allowed past the boundary. See {@link isUnityMutation}.
  *
  * Writes are fire-and-forget by contract: an audit-store hiccup must never turn
  * a working catalog read into a 500, and must never add latency to a federation
@@ -318,6 +355,52 @@ async function resolveUnityActor(): Promise<UnityActor> {
 const inFlight = new Set<Promise<void>>();
 
 /**
+ * Is this call a MUTATION of the catalog (rather than a read)?
+ *
+ * Drives the boundary-egress decision: only mutations are allowed out to
+ * tenant-registered outbound webhooks. A read is decided by BOTH signals —
+ * a safe HTTP method AND a read-shaped operation verb — so a mutation that
+ * arrives with a mislabelled method (or an un-modelled `unity.request` on a
+ * POST) is treated as a mutation and audited conservatively, never leaked as a
+ * read. `temporary-credential.vend` is a mutation: it hands out a live storage
+ * token and is the highest-signal row an external SOC subscribes to.
+ *
+ * PURE — unit-tested.
+ */
+export function isUnityMutation(ev: Pick<UnityAccessEvent, 'method' | 'operation'>): boolean {
+  const method = (ev.method || 'GET').toUpperCase();
+  const safeMethod = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+  const verb = (ev.operation || '').split('.').pop() || '';
+  const readVerb = verb === 'get' || verb === 'list' || verb === 'read';
+  return !(safeMethod && readVerb);
+}
+
+/**
+ * Cosmos logical-partition key for one access row.
+ *
+ * `_auditLog` is partitioned on `/itemId` (cosmos-client.ts) with the usual
+ * 20 GB / 10k RU-per-second logical-partition caps. Keying every row on the
+ * securable FQN keeps one object's history together — but EVERY collection read
+ * (`catalog.list`, `schema.list`, `table.list`, the LU-2 health probe) resolves
+ * to the `'*'` sentinel, so the estate's highest-volume operation would pile
+ * into ONE logical partition and eventually start throwing on write. Since
+ * `recordUnityAccess` swallows write errors by contract, that failure would be
+ * SILENT — the trail simply stops growing on the rows the pane shows by default.
+ *
+ * So collection-scope rows are spread across `unity:<operation>:<YYYY-MM-DD>`
+ * buckets instead. Every reader here queries cross-partition on `c.itemType`
+ * (never on `itemId`), so nothing depends on the sentinel value.
+ *
+ * PURE — unit-tested.
+ */
+export function unityAuditPartitionKey(securableFqn: string, operation: string, at: string): string {
+  const scope = securableFqn || UNITY_SECURABLE_ALL;
+  if (scope !== UNITY_SECURABLE_ALL) return scope;
+  const day = (at || new Date().toISOString()).slice(0, 10);
+  return `unity:${operation || 'unknown'}:${day}`;
+}
+
+/**
  * Write ONE `_auditLog` row for a catalog call and fan it out to `LoomAudit_CL`.
  * Never throws, never rejects — audit is additive telemetry on the hot path and
  * an audit-store outage must not break the catalog.
@@ -331,6 +414,7 @@ export function recordUnityAccess(ev: UnityAccessEvent): Promise<void> {
   const path = (ev.path || '').split('?')[0];
   const scope = ev.securableFqn || UNITY_SECURABLE_ALL;
   const action = `${UNITY_AUDIT_ACTION_PREFIX}${ev.operation}`;
+  const mutation = isUnityMutation(ev);
 
   const write = (async () => {
     const actor = await resolveUnityActor();
@@ -345,10 +429,9 @@ export function recordUnityAccess(ev: UnityAccessEvent): Promise<void> {
       const c = await auditLogContainer();
       await c.items.create({
         id: crypto.randomUUID(),
-        // `_auditLog` is partitioned on /itemId — the securable FQN keeps one
-        // object's whole access history in a single partition, exactly like the
-        // Iceberg data-plane trail (iceberg-catalog-client.ts).
-        itemId: scope,
+        // `_auditLog` is partitioned on /itemId — see unityAuditPartitionKey for
+        // why collection-scope rows do NOT all land on the '*' sentinel.
+        itemId: unityAuditPartitionKey(scope, ev.operation, at),
         itemType: UNITY_AUDIT_ITEM_TYPE,
         tenantId: actor.tenantId,
         action,
@@ -364,8 +447,13 @@ export function recordUnityAccess(ev: UnityAccessEvent): Promise<void> {
         status: ev.status ?? 0,
         durationMs: ev.durationMs ?? 0,
         resultCount: ev.resultCount ?? null,
+        mutation,
         viaApiToken: actor.viaApiToken,
         actorOid: actor.oid,
+        // `actorUpn` is the field the pane + the actor filter read; `upn`/`who`
+        // keep the shape the generic /admin/audit-logs rows use. Writing only
+        // the latter left every `actor` cell in the pane blank.
+        actorUpn: actor.upn,
         upn: actor.upn,
         who: actor.upn,
         ...(ev.detail ? { detail: ev.detail.slice(0, 400) } : {}),
@@ -398,7 +486,9 @@ export function recordUnityAccess(ev: UnityAccessEvent): Promise<void> {
           viaApiToken: actor.viaApiToken,
           ...(ev.detail ? { detail: ev.detail.slice(0, 400) } : {}),
         },
-      });
+      // BOUNDARY EGRESS: reads stay inside. Only a mutation may be forwarded to
+      // a tenant-registered outbound webhook (a third-party URL).
+      }, { webhook: mutation });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('[unity-audit] SIEM fan-out failed:', (e as Error)?.message || e);
@@ -414,13 +504,80 @@ export function recordUnityAccess(ev: UnityAccessEvent): Promise<void> {
 }
 
 /**
- * Await every audit write started so far. `ucFetch` fires the recorder
- * fire-and-forget (`void`), so a route that must guarantee durability before
- * responding — and every test that asserts on the trail — calls this.
+ * Await every audit write started so far.
+ *
+ * Drains a SNAPSHOT, bounded — it awaits the writes that existed when it was
+ * called plus at most {@link FLUSH_MAX_PASSES} follow-on generations. Looping
+ * `while (inFlight.size)` would never terminate on a live server under
+ * sustained catalog traffic, because each pass re-reads a set the request
+ * handlers keep refilling.
  */
+export const FLUSH_MAX_PASSES = 5;
+
 export async function flushUnityAudit(): Promise<void> {
-  while (inFlight.size) {
-    await Promise.allSettled(Array.from(inFlight));
+  for (let pass = 0; pass < FLUSH_MAX_PASSES; pass++) {
+    const batch = Array.from(inFlight);
+    if (!batch.length) return;
+    await Promise.allSettled(batch);
+  }
+}
+
+/**
+ * Is `path` a Unity Catalog REST path? Used to pick the Unity Catalog calls out
+ * of the general Databricks workspace client, which also carries jobs, clusters,
+ * warehouses, SQL and Files traffic that this trail does not claim to cover.
+ * PURE — unit-tested.
+ */
+export function isUnityCatalogPath(path: string): boolean {
+  const p = (path || '').split('?')[0];
+  return /\/api\/2\.\d+\/unity-catalog\//.test(p) || /\/api\/2\.\d+\/lineage-tracking\//.test(p);
+}
+
+/**
+ * The Databricks-side half of the choke point, called from the `finally` of
+ * `dbxFetch` (lib/azure/databricks-client.ts).
+ *
+ * WHY THIS EXISTS: on the Commercial DEFAULT backend the live routes call
+ * `lib/azure/databricks-client.ts` directly — `patchUcCatalog` (catalog OWNER
+ * TRANSFER), `deleteUcCatalog` (catalog DELETE) and `updateUcPermissions`
+ * (`PATCH /api/2.1/unity-catalog/permissions/...` — a GRANT MUTATION) all live
+ * there, not behind `ucFetch`. Before this, those wrote no audit row at all
+ * while the trail was advertised as complete. Ownership transfer and grant
+ * change are precisely the rows an ATO reviewer hunts for.
+ *
+ * Non-catalog Databricks REST is ignored (returns without writing) so the trail
+ * stays a CATALOG access trail rather than a general workspace request log.
+ * Never throws — same fire-and-forget contract as {@link recordUnityAccess}.
+ */
+export function recordDatabricksUnityAccess(opts: {
+  path: string;
+  method?: string;
+  status?: number;
+  durationMs?: number;
+  error?: unknown;
+  workspaceHost?: string;
+}): void {
+  try {
+    if (!isUnityCatalogPath(opts.path)) return;
+    const method = (opts.method || 'GET').toUpperCase();
+    const status = Number(opts.status || (opts.error as { status?: number } | null)?.status || 0);
+    // A non-2xx response is a failure even when fetch itself resolved — the
+    // Databricks client throws on !ok downstream, but the audit row is written
+    // here, before that throw, so classify from the status.
+    const failed = !!opts.error || (status >= 400);
+    void recordUnityAccess({
+      ...classifyUnityCall(method, opts.path),
+      backend: 'databricks',
+      method,
+      path: opts.path,
+      workspaceHost: opts.workspaceHost || process.env.LOOM_DATABRICKS_HOSTNAME || '',
+      status,
+      durationMs: opts.durationMs ?? 0,
+      outcome: failed ? unityOutcomeForError(opts.error, status) : 'success',
+      detail: opts.error ? String((opts.error as Error)?.message || opts.error).slice(0, 400) : undefined,
+    });
+  } catch {
+    /* audit is never allowed to break a catalog call */
   }
 }
 
@@ -459,6 +616,16 @@ export function normalizeUnityAuditQuery(q: UnityAuditQuery = {}): Required<Pick
  * Read Loom Unity access rows from the authoritative Cosmos `_auditLog` trail.
  * Cross-partition by design: the pane asks "what happened across the catalog",
  * not "what happened to one securable".
+ *
+ * EVERY caller filter is pushed INTO the Cosmos query — none is applied in JS
+ * after `SELECT TOP @top`. Post-filtering a truncated page is the exact
+ * "auditor concludes nothing happened" failure this item exists to prevent:
+ * searching for one user would return rows only if that user appeared in the
+ * most recent N records of the window, and would otherwise render the pane's
+ * "no catalog activity" empty state on a user who was very active.
+ *
+ * `CONTAINS(LOWER(...), @x)` is the Cosmos substring form; the needle is passed
+ * as a bound parameter (never concatenated into the query text).
  */
 export async function listUnityAccessRecords(q: UnityAuditQuery = {}): Promise<UnityAuditRecord[]> {
   const nq = normalizeUnityAuditQuery(q);
@@ -471,6 +638,18 @@ export async function listUnityAccessRecords(q: UnityAuditQuery = {}): Promise<U
   ];
   if (nq.until) { where.push('c.at <= @until'); parameters.push({ name: '@until', value: nq.until }); }
   if (nq.outcome) { where.push('c.outcome = @outcome'); parameters.push({ name: '@outcome', value: nq.outcome }); }
+  if (nq.operation) {
+    where.push('CONTAINS(LOWER(c.operation), @operation)');
+    parameters.push({ name: '@operation', value: nq.operation.toLowerCase() });
+  }
+  if (nq.securable) {
+    where.push('CONTAINS(LOWER(c.securableFqn), @securable)');
+    parameters.push({ name: '@securable', value: nq.securable.toLowerCase() });
+  }
+  if (nq.actor) {
+    where.push('(CONTAINS(LOWER(c.actorUpn), @actor) OR CONTAINS(LOWER(c.actorOid), @actor) OR CONTAINS(LOWER(c.upn), @actor))');
+    parameters.push({ name: '@actor', value: nq.actor.toLowerCase() });
+  }
   const { resources } = await c.items
     .query({
       query: `SELECT TOP @top * FROM c WHERE ${where.join(' AND ')} ORDER BY c.at DESC`,
@@ -478,12 +657,7 @@ export async function listUnityAccessRecords(q: UnityAuditQuery = {}): Promise<U
     })
     .fetchAll();
 
-  const lower = (v: unknown) => String(v ?? '').toLowerCase();
-  let rows = resources as unknown as UnityAuditRecord[];
-  if (nq.operation) rows = rows.filter((r) => lower(r.operation).includes(nq.operation!.toLowerCase()));
-  if (nq.securable) rows = rows.filter((r) => lower(r.securableFqn).includes(nq.securable!.toLowerCase()));
-  if (nq.actor) rows = rows.filter((r) => lower(r.actorUpn).includes(nq.actor!.toLowerCase()) || lower(r.actorOid).includes(nq.actor!.toLowerCase()));
-  return rows;
+  return resources as unknown as UnityAuditRecord[];
 }
 
 /** Aggregated shape backing the pane's summary strip. */
@@ -595,6 +769,15 @@ export interface UnitySystemTableResult {
   executionMs: number;
   /** How many raw access records the view was computed from. */
   recordCount: number;
+  /**
+   * TRUE when the read hit the row limit, so `recordCount` (and every number in
+   * the `summary` view) describes the most recent `limit` records in the window
+   * rather than the whole window. The pane MUST say so — "2 denials in the last
+   * 7 days" is a different claim from "2 denials in the last 200 calls".
+   */
+  truncated: boolean;
+  /** The row limit the read was capped at (what `truncated` is relative to). */
+  limit: number;
   /** The equivalent KQL against `LoomAudit_CL`, for SIEM/Sentinel. */
   kql: string;
 }
@@ -638,11 +821,15 @@ export async function readUnitySystemTable(
   );
   const sinceHours = Math.max(1, Math.round((Date.now() - new Date(nq.since).getTime()) / 3_600_000));
   const kql = unityAuditKql({ sinceHours, deniedOnly: table === 'denials', limit: nq.limit });
+  // A full page means the window was cut off at `limit`, so the summary numbers
+  // below are "within the most recent N records", not "within the window".
+  const truncated = records.length >= nq.limit;
 
   if (table === 'summary') {
     const s = summarizeUnityAccess(records);
+    const scopeLabel = truncated ? `most recent ${nq.limit} calls` : 'window';
     const rows: Record<string, unknown>[] = [
-      { scope: 'window', key: 'all operations', calls: s.total, denied: s.denied, failed: s.failure, distinct_actors: s.actors },
+      { scope: scopeLabel, key: 'all operations', calls: s.total, denied: s.denied, failed: s.failure, distinct_actors: s.actors },
       ...s.byOperation.map((o) => ({ scope: 'operation', key: o.operation, calls: o.count, denied: o.denied, failed: '', distinct_actors: '' })),
       ...s.bySecurable.map((o) => ({ scope: 'securable', key: o.securableFqn, calls: o.count, denied: o.denied, failed: '', distinct_actors: '' })),
     ];
@@ -651,6 +838,8 @@ export async function readUnitySystemTable(
       rows,
       executionMs: Date.now() - started,
       recordCount: records.length,
+      truncated,
+      limit: nq.limit,
       kql,
     };
   }
@@ -660,6 +849,8 @@ export async function readUnitySystemTable(
     rows: records.map(auditRow),
     executionMs: Date.now() - started,
     recordCount: records.length,
+    truncated,
+    limit: nq.limit,
     kql,
   };
 }

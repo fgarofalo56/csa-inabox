@@ -141,11 +141,21 @@ so before LU-3 that whole question returned an honest-but-dead gate in Gov:
 
 **Where the trail comes from.** `loom-unity` has internal ingress and (post-LU-2)
 rejects anonymous callers, so the Console BFF is its only credentialed client.
-Loom leans on that: **every** catalog call — on the Loom Unity backend *and* on
-Databricks — goes through a single function, `ucFetch` in
-`apps/fiab-console/lib/azure/unity-catalog-client.ts`, which holds the file's only
-outbound fetch. Its `finally` block calls `recordUnityAccess()`
-(`lib/azure/unity-audit.ts`) with:
+Loom leans on that: every Unity Catalog **REST** call goes through one of **two**
+audited transports, each recording from a `finally` block:
+
+| Transport | File | Covers |
+|---|---|---|
+| `ucFetch` | `lib/azure/unity-catalog-client.ts` | the backend-agnostic client — Loom Unity in Gov, Databricks UC in Commercial. Holds that file's only outbound fetch. |
+| `dbxFetch` | `lib/azure/databricks-client.ts` | the Databricks workspace client. The Commercial default routes call it **directly** for catalog owner change (`patchUcCatalog`), catalog delete (`deleteUcCatalog`) and grant mutation (`updateUcPermissions` → `PATCH /api/2.1/unity-catalog/permissions/…`). Only `/api/2.x/unity-catalog/**` paths are recorded; jobs/warehouses/SQL/Files are not catalog access. |
+
+Two further modules keep their own transport for a real reason and record their
+own rows: `dq-monitor-client.ts` (Lakehouse Monitoring resolves a monitored table
+over UC REST) and `iceberg-catalog-client.ts` (`listNamespaceGrants` reads UC
+schema permissions with the Iceberg auth header). Both are allowlisted **with**
+an asserted audit call.
+
+`recordUnityAccess()` (`lib/azure/unity-audit.ts`) writes:
 
 | Field | Source |
 |---|---|
@@ -160,32 +170,84 @@ or a timeout records as `failure`, so the denial signal stays clean. Recording
 happens in `finally` rather than on the success path precisely so a refused call
 — the row an auditor actually hunts for — cannot be dropped.
 
-**Two sinks.** Cosmos `_auditLog` (`itemType: 'loom-unity'`, the authoritative
-trail) and, through `emitAuditEvent`, the `LoomAudit_CL` custom table via the
-Azure Monitor Logs-Ingestion DCR that Microsoft Sentinel reads. An
-un-provisioned DCR is a silent no-op — the Cosmos trail is unaffected, so there
-is no day-one gate here. Writes are fire-and-forget: an audit-store hiccup never
-fails a catalog read.
+**Two sinks, and a boundary.** Cosmos `_auditLog` (`itemType: 'loom-unity'`, the
+authoritative trail) and, through `emitAuditEvent`, the `LoomAudit_CL` custom
+table via the Azure Monitor Logs-Ingestion DCR that Microsoft Sentinel reads.
+Both are **inside** the estate. `emitAuditEvent` also fans events out to any
+tenant-registered **outbound webhook** (a third-party URL) — so catalog **reads**
+are emitted with `{ webhook: false }` and stop at the boundary. Only catalog
+**mutations** (create / update / delete / grant change / credential vend) are
+allowed to egress. An un-provisioned DCR is a silent no-op — the Cosmos trail is
+unaffected, so there is no day-one gate here. Writes are fire-and-forget: an
+audit-store hiccup never fails a catalog read.
 
 **The choke point is enforced, not just documented.**
 `scripts/ci/check-unity-audit-chokepoint.mjs` is a merge-blocking guardrail that
-fails the build when (a) any file outside the allowlist combines a Loom Unity
-address with outbound-request code, (b) `unity-catalog-client.ts` grows a second
-outbound fetch, (c) the `recordUnityAccess(` call leaves the `finally`, or (d)
-`unity-audit.ts` stops writing either sink or stops classifying denials. One
-allowlisted bypass exists and is justified in the guard: the LU-2
-`probe-loom-unity-authz` health probe, whose *whole point* is an unauthenticated
-request — it records its own audit row.
+fails the build when:
 
-**Where you read it.** `/catalog/unity → System tables` serves three real views
-over the trail — `access.audit`, `access.denied`, and `access.summary` (calls +
-denials per operation and per securable) — and prints the equivalent KQL for
-Sentinel. `billing` and `query-history` have no Loom Unity equivalent (there is
-no DBU meter and no query engine); those name `/admin/finops` and the engine
-surfaces instead of rendering an empty grid. The BFF is
+1. any file outside the allowlist combines a Loom Unity address **or a Unity
+   Catalog REST path** with outbound-request code;
+2. `unity-catalog-client.ts` grows a second outbound fetch, or
+   `databricks-client.ts` grows a fourth (it is allowlisted because it *holds*
+   `dbxFetch`, so its outbound count is ratcheted instead);
+3. the recorder call leaves the `finally` of **either** `ucFetch` or `dbxFetch` —
+   the check brace-matches the real function body and the real `finally` block,
+   with comments and string literals masked, so a decoy call elsewhere in the
+   file does not satisfy it;
+4. `unity-audit.ts` stops writing either sink or stops classifying denials;
+5. `unity-catalog-client.ts` grows a new `executeStatement(` exit (see gaps).
+
+The guard's own bypasses are covered by negative tests in
+`apps/fiab-console/lib/azure/__tests__/unity-audit-guard.test.ts`, which replay
+each demonstrated attack against the analysis and assert it now fails.
+
+### Audit (LU-3) — known gaps
+
+The trail is **not** complete, and this section is the honest inventory. Trusting
+a trail with an undisclosed hole is worse than having none.
+
+- **SQL-DDL governance mutations are not in this trail.**
+  `unity-catalog-client.ts` reaches the catalog through ~25
+  `executeStatement(...)` calls — the Databricks **SQL Statement Execution** API,
+  a different surface from UC REST. These include `createUcPolicy` /
+  `dropUcPolicy` (ABAC row filters + column masks), `mutateUcGovernedTag` and
+  `setUcTags`. On the Commercial backend they land in Databricks'
+  `system.access.audit`; they produce **no Loom row**. The count is ratcheted
+  (`SQL_EXIT_BASELINE`) so a new un-audited SQL exit fails the build (issue #2622).
+- **`lib/azure/shortcut-credentials.ts` is un-audited.** Its own private
+  `ucFetch` issues storage-credential and external-location CREATE/DELETE. It is
+  listed in the guard's `KNOWN_UNAUDITED` map, which prints the gap on every
+  passing run and fails the build if any *other* file joins it (issue #2622).
+- **`unity-catalog-account-client.ts`** (Databricks account-plane metastore
+  assignment) never talks to Loom Unity and is not routed through the choke
+  point; its account-admin mutations are unaudited (issue #2622).
+- **No in-browser E2E receipt** for the System tables pane (`ux-baseline.md` G1).
+  This surface is CI-verified only (issue #2624).
+
+**Where you read it — tenant admins only.** `/catalog/unity → System tables`
+serves three real views over the trail — `access.audit`, `access.denied`, and
+`access.summary` (calls + denials per operation and per securable) — and prints
+the equivalent KQL for Sentinel. The BFF is
 `GET /api/databricks/unity-catalog/system-tables?table=audit|denials|summary`,
 which keeps the `{ columns, rows, executionMs }` contract, so the existing UC
 audit dialog works unchanged in Gov.
+
+The route is `withTenantAdmin`, **not** a bare session check. Neither backend
+scopes its rows to the caller: `system.access.audit` is the whole metastore's
+activity, and the Loom Unity views read every `loom-unity` row across every user
+— actor UPNs, Entra oids, securable FQNs, and the denial rows, which are a map of
+what other people tried to reach and were refused. That is the same reason
+`/admin/audit-logs` is admin-gated. A non-admin gets the canonical 403
+`admin_only` envelope, and the pane renders it as a designed MessageBar.
+
+Summary numbers are honest about truncation: when a read fills the row limit the
+response carries `truncated: true` and the pane says the counts describe the most
+recent *N* calls, not the whole window. Every caller filter (actor / operation /
+securable) is pushed **into** the Cosmos query, so a search cannot silently
+under-report by filtering a page that was already cut off. `billing` and
+`query-history` have no Loom Unity equivalent (there is no DBU meter and no query
+engine); those name `/admin/finops` and the engine surfaces instead of rendering
+an empty grid.
 
 ## Honest capability matrix — OSS Unity Catalog vs Databricks Unity Catalog
 

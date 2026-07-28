@@ -33,10 +33,21 @@
  * backend, `billing` and `query-history` have no equivalent (there is no
  * Databricks billing meter and no warehouse query engine); those name the real
  * Loom surface that answers the question instead of pretending.
+ *
+ * ## AUTHORIZATION — tenant admin, org-wide
+ *
+ * This is an ORG-WIDE AUDIT surface. Neither backend scopes its rows to the
+ * caller: `system.access.audit` is the whole metastore's activity, and the Loom
+ * Unity views read every `itemType:'loom-unity'` row in `_auditLog` across every
+ * user. The rows carry actor UPNs + Entra oids, securable FQNs, and DENIALS — a
+ * map of what other people tried to reach and were refused. A bare session check
+ * would let any signed-in user read all of it, so the whole route (GET + POST) is
+ * `withTenantAdmin`, exactly like the sibling reader of the same container
+ * (app/api/admin/audit-logs/route.ts).
  */
 
 import { NextResponse } from 'next/server';
-import { withSession } from '@/lib/api/route-toolkit';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { databricksConfigGate, listWarehouses } from '@/lib/azure/databricks-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import { isOssUc } from '@/lib/azure/uc-backend';
@@ -51,7 +62,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface Gate { gated: true; error: string }
+interface Gate { gated: true; error: string; code: string }
 
 function resolveGate(): Gate | null {
   // LU-3 — on the Loom Unity (OSS) backend there is nothing to gate on: the
@@ -60,11 +71,12 @@ function resolveGate(): Gate | null {
   if (isOssUc()) return null;
   const cfg = databricksConfigGate();
   if (cfg) {
-    return { gated: true, error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
+    return { gated: true, code: 'svc-databricks', error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
   }
   if (isGovCloud()) {
     return {
       gated: true,
+      code: 'uc_backend_not_oss',
       error:
         `Databricks Unity Catalog system tables (audit / billing / query history) are not available at the ${cloudBoundaryLabel()} boundary — ` +
         `they require a Commercial or GCC Databricks account. This deployment is on the Databricks backend ` +
@@ -116,9 +128,22 @@ const numOr = (v: string | null, def?: number): number | undefined => {
   return Number.isFinite(n) ? n : def;
 };
 
-export const GET = withSession(async (req) => {
+/**
+ * A window must look BACKWARD. `days=-30` would compute a `since` 30 days in the
+ * FUTURE, `c.at >= @since` would match nothing, and the pane would render its
+ * "no catalog activity in this window" empty state — an audit surface reporting
+ * "nothing happened" for a malformed input is the same false-negative class the
+ * rest of this route is built to avoid. Reject it instead.
+ */
+function invalidWindow(days: number | undefined, limit: number | undefined): string | null {
+  if (days !== undefined && !(days > 0)) return 'days must be a positive number of days to look back';
+  if (limit !== undefined && !(limit > 0)) return 'limit must be a positive number of rows';
+  return null;
+}
+
+export const GET = withTenantAdmin(async (req) => {
   const gate = resolveGate();
-  if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
+  if (gate) return NextResponse.json({ ok: false, gated: true, code: gate.code, error: gate.error }, { status: 200 });
 
   const sp = req.nextUrl.searchParams;
   const oss = isOssUc();
@@ -158,11 +183,13 @@ export const GET = withSession(async (req) => {
   const table = (sp.get('table') || 'audit').toLowerCase().trim();
   const days = numOr(sp.get('days'));
   const limit = numOr(sp.get('limit'));
+  const badWindow = invalidWindow(days, limit);
+  if (badWindow) return NextResponse.json({ ok: false, error: badWindow }, { status: 400 });
 
   // ---- Loom Unity (OSS) backend — the Loom-native access audit ----
   if (oss) {
     const unsupported = OSS_UNSUPPORTED[table];
-    if (unsupported) return NextResponse.json({ ok: false, gated: true, backend: 'oss', error: unsupported }, { status: 200 });
+    if (unsupported) return NextResponse.json({ ok: false, gated: true, backend: 'oss', code: 'not_applicable', error: unsupported }, { status: 200 });
     const view = OSS_TABLE_ALIASES[table];
     if (!view) {
       return NextResponse.json({
@@ -190,7 +217,7 @@ export const GET = withSession(async (req) => {
   try {
     warehouseId = await resolveWarehouseId(sp.get('warehouseId')?.trim() || undefined);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, gated: true, error: e?.message || String(e) }, { status: 200 });
+    return NextResponse.json({ ok: false, gated: true, code: 'svc-databricks-sql', error: e?.message || String(e) }, { status: 200 });
   }
 
   try {
@@ -208,14 +235,14 @@ export const GET = withSession(async (req) => {
   } catch (e: any) {
     // The client throws a typed gate (schema not enabled / UAMI missing grants)
     // with a 403; surface it as a gated MessageBar rather than a hard error.
-    if (e?.status === 403) return NextResponse.json({ ok: false, gated: true, error: e?.message || String(e) }, { status: 200 });
+    if (e?.status === 403) return NextResponse.json({ ok: false, gated: true, code: 'uc_system_schema_grant', error: e?.message || String(e) }, { status: 200 });
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
 });
 
-export const POST = withSession(async (req, { session }) => {
+export const POST = withTenantAdmin(async (req, { session }) => {
   const gate = resolveGate();
-  if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
+  if (gate) return NextResponse.json({ ok: false, gated: true, code: gate.code, error: gate.error }, { status: 200 });
 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -250,7 +277,7 @@ export const POST = withSession(async (req, { session }) => {
     // Enabling needs metastore/account admin — a 403 is an honest admin-action gate.
     if (e?.status === 403) {
       return NextResponse.json({
-        ok: false, gated: true,
+        ok: false, gated: true, code: 'uc_system_schema_grant',
         error: `Enabling the system.${schema} schema requires a metastore or account admin. The Console UAMI is not one — ask an admin to run \`databricks system-schemas enable <metastore_id> system.${schema}\` (or PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas/${schema}).`,
       }, { status: 200 });
     }

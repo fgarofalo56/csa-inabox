@@ -815,10 +815,30 @@ async function probeDrRestorePosture(h: ProbeHelpers): Promise<CheckResult> {
  * pulled in by admin routes whose specs mock those modules). Never throws: a
  * failed audit write must not turn a security probe into an error.
  */
+/**
+ * Audit outcome for the LU-2 anonymous-read probe, given the HTTP status the
+ * catalog answered with. PURE — unit-tested.
+ *
+ * The row must AGREE with the probe's own verdict:
+ *   401/403 → `denied`   the catalog rejected the anonymous read (posture OK,
+ *                        probe status `pass`)
+ *   2xx     → `success`  the catalog ANSWERED an anonymous read (it is OPEN;
+ *                        probe status `fail`)
+ *   other   → `failure`  neither — the posture is UNVERIFIED (probe status
+ *                        `warn`). Recording a 404/500/502 as `success` would
+ *                        show a reviewer filtering the pane a false
+ *                        "anonymous read succeeded" alarm, or bury a real one.
+ */
+export function unityProbeAuditOutcome(status: number): 'denied' | 'success' | 'failure' {
+  if (status === 401 || status === 403) return 'denied';
+  if (status >= 200 && status < 300) return 'success';
+  return 'failure';
+}
+
 async function recordUnityAuthzProbe(url: string, status: number): Promise<void> {
   try {
-    const { recordUnityAccess, unityOutcomeForError } = await import('@/lib/azure/unity-audit');
-    const denied = status === 401 || status === 403;
+    const { recordUnityAccess } = await import('@/lib/azure/unity-audit');
+    const outcome = unityProbeAuditOutcome(status);
     await recordUnityAccess({
       operation: 'probe.anonymous-read',
       securableType: 'catalog',
@@ -828,10 +848,12 @@ async function recordUnityAuthzProbe(url: string, status: number): Promise<void>
       path: '/api/2.1/unity-catalog/catalogs',
       status,
       durationMs: 0,
-      outcome: denied ? unityOutcomeForError(null, status) : 'success',
-      detail: denied
+      outcome,
+      detail: outcome === 'denied'
         ? `probe-loom-unity-authz: ${url} rejected an unauthenticated read (HTTP ${status}) — authorization enforced.`
-        : `probe-loom-unity-authz: ${url} answered an UNAUTHENTICATED read with HTTP ${status}.`,
+        : outcome === 'success'
+          ? `probe-loom-unity-authz: ${url} answered an UNAUTHENTICATED read with HTTP ${status} — the catalog is OPEN.`
+          : `probe-loom-unity-authz: ${url} answered HTTP ${status} — neither an authorization rejection nor an anonymous success, so the posture is UNVERIFIED (probe status: warn).`,
     });
   } catch {
     /* audit is additive telemetry — never fail the probe on it */

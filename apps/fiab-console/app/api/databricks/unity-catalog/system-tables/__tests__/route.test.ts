@@ -56,6 +56,9 @@ const post = (body: unknown) => ({ json: async () => body }) as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The surface is tenant-admin-gated (it serves ORG-WIDE audit). The bootstrap
+  // OID is the mechanism isTenantAdmin() checks; the 403 case below clears it.
+  process.env.LOOM_TENANT_ADMIN_OID = 'oid-1';
   (getSession as never as ReturnType<typeof vi.fn>).mockReturnValue(SESSION);
   (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(false);
   (isGovCloud as never as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -156,5 +159,94 @@ describe('GET — Databricks backend is unchanged', () => {
     (getSession as never as ReturnType<typeof vi.fn>).mockReturnValue(null);
     const res = await GET(req('?table=audit'));
     expect(res.status).toBe(401);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ATTACK — authorization. This surface serves the ORG-WIDE audit trail: actor
+// UPNs + Entra oids, securable FQNs, and the DENIAL rows, which are a map of
+// what other people tried to reach and were refused. Neither backend scopes its
+// rows to the caller, so a bare session check leaks all of it to any signed-in
+// user. Proving "an admin can read it" proves nothing about the non-admin.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('AUTHORIZATION — org-wide audit is tenant-admin only', () => {
+  beforeEach(() => {
+    // A perfectly valid, signed-in, NON-admin session.
+    delete process.env.LOOM_TENANT_ADMIN_OID;
+    delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
+    (getSession as never as ReturnType<typeof vi.fn>).mockReturnValue({
+      claims: { upn: 'mallory@contoso.com', oid: 'oid-mallory', groups: [] },
+      exp: 9_999_999_999,
+    });
+  });
+
+  it('403s a signed-in NON-admin on the Loom Unity access audit — and reads nothing', async () => {
+    (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const res = await GET(req('?table=audit&days=7'));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('admin_only');
+    // The gate must fire BEFORE the trail is touched — a 403 body with the rows
+    // already fetched would still have hit Cosmos with a cross-user query.
+    expect(readUnitySystemTable).not.toHaveBeenCalled();
+  });
+
+  it('403s a signed-in NON-admin on the DENIALS view (who-was-refused is the most sensitive view)', async () => {
+    (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const res = await GET(req('?table=denials'));
+    expect(res.status).toBe(403);
+    expect(readUnitySystemTable).not.toHaveBeenCalled();
+  });
+
+  it('403s a signed-in NON-admin on the Databricks system.access.audit path too', async () => {
+    (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const res = await GET(req('?table=audit'));
+    expect(res.status).toBe(403);
+    expect(readAccessAudit).not.toHaveBeenCalled();
+  });
+
+  it('403s a signed-in NON-admin on the enablement-state read and on POST', async () => {
+    (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    expect((await GET(req('?info=schemas'))).status).toBe(403);
+    expect((await POST(post({ action: 'enable-schema', schema: 'audit' }))).status).toBe(403);
+  });
+
+  it('lets a tenant admin through (the gate is authorization, not a wall)', async () => {
+    process.env.LOOM_TENANT_ADMIN_OID = 'oid-mallory';
+    (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const res = await GET(req('?table=audit'));
+    expect(res.status).toBe(200);
+    expect(readUnitySystemTable).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A malformed window must be REJECTED, not answered with "nothing happened".
+// ─────────────────────────────────────────────────────────────────────────────
+describe('window validation', () => {
+  beforeEach(() => {
+    process.env.LOOM_TENANT_ADMIN_OID = 'oid-1';
+    (isOssUc as never as ReturnType<typeof vi.fn>).mockReturnValue(true);
+  });
+
+  it('400s a negative days instead of computing a future `since` and rendering the empty state', async () => {
+    const res = await GET(req('?table=audit&days=-30'));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/days must be a positive/);
+    expect(readUnitySystemTable).not.toHaveBeenCalled();
+  });
+
+  it('400s days=0 and a non-positive limit', async () => {
+    expect((await GET(req('?table=audit&days=0'))).status).toBe(400);
+    expect((await GET(req('?table=audit&limit=-1'))).status).toBe(400);
+    expect(readUnitySystemTable).not.toHaveBeenCalled();
+  });
+
+  it('carries a machine-readable gate code on every gated answer', async () => {
+    const res = await GET(req('?table=billing'));
+    const j = await res.json();
+    expect(j.gated).toBe(true);
+    expect(j.code).toBe('not_applicable');
   });
 });
