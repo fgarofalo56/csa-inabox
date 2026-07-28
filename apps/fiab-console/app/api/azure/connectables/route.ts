@@ -44,7 +44,7 @@
  * sovereign cloud.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 import {
   DefaultAzureCredential,
@@ -60,6 +60,10 @@ import {
   CONNECTABLE_ARM_TYPES, armTypeToConnType, normalizeHost, CONN_TYPE_AUTH_OPTIONS,
   type ConnectableResource,
 } from '@/lib/azure/connectable-types';
+import { fetchWithTimeout, FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import {
+  PagingBudget, PAGE_DEADLINE, type PageDeadline, type PagingTruncation,
+} from '@/lib/azure/paging-budget';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -90,7 +94,49 @@ const MAX_PAGES_PER_LIST = 50;
 // register-existing-source-dialog.tsx). At the old 25s the server aborted the
 // fallback mid-enumeration and returned a premature "no access" gate even though
 // resources were still being discovered. Kept in step with the client timeout.
-const ARM_FALLBACK_BUDGET_MS = 40_000;
+//
+// #2582: that budget is now a shared {@link PagingBudget} rather than a bespoke
+// AbortController, so (a) each page fetch gets the REMAINING wall clock as its
+// own `timeoutMs` (the first page is bounded too), (b) a breach TRUNCATES via
+// `runPage` instead of throwing, and (c) the truncation is REPORTED — the old
+// abort-mid-enumeration path could still fall through to `code:'no_access'`,
+// telling the operator to grant Reader for what was actually a deadline.
+//
+// Both budgets are read PER REQUEST (not once at module load), so retuning them
+// for a slow sovereign region takes effect on the next call without a container
+// restart — the same posture as LOOM_ARM_PAGING_BUDGET_MS.
+function armFallbackBudgetMs(): number {
+  const n = Number(process.env.LOOM_CONNECTABLES_ARM_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 40_000;
+}
+// Total pages the whole cross-sub sweep may fetch. Per-list cycles are already
+// stopped by MAX_PAGES_PER_LIST; this is the estate-wide backstop.
+const ARM_FALLBACK_MAX_PAGES = 2_000;
+// Wall clock for the ARG ($skipToken) fast path. ARG answers a whole estate in
+// one or two round-trips, so it gets a much tighter ceiling than the crawl —
+// and, before this, no ceiling at all (a bare `fetch`, no timeout).
+function argBudgetMs(): number {
+  const n = Number(process.env.LOOM_CONNECTABLES_ARG_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 20_000;
+}
+
+/** The honest deadline error surfaced when a walk ran out of wall clock and
+ *  collected nothing. Deliberately NOT `code:'no_access'` — a slow ARM must
+ *  never be reported as a missing role. */
+function pagingTimeoutBody(truncatedBy: PagingTruncation) {
+  return {
+    ok: false as const,
+    code: 'paging_timeout' as const,
+    error:
+      `Azure resource discovery hit its ${truncatedBy} ceiling before any resource was returned. ` +
+      `This is a PAGING DEADLINE — Azure Resource Manager was slow (or the estate is larger than ` +
+      `the page cap), NOT a missing permission. Retry; if it persists, check ARM / private-endpoint ` +
+      `reachability, then raise ` +
+      `${truncatedBy === 'pages'
+        ? 'MAX_PAGES_PER_LIST / LOOM_ARM_PAGING_MAX_PAGES'
+        : 'LOOM_CONNECTABLES_ARG_BUDGET_MS / LOOM_CONNECTABLES_ARM_BUDGET_MS'}.`,
+  };
+}
 
 interface ArgRow {
   id: string;
@@ -157,28 +203,33 @@ function buildQuery(): string {
   ].join('\n');
 }
 
-/** Run the ARG query with a token, following $skipToken paging to completion. */
+/**
+ * Run the ARG query with a token, following $skipToken paging to completion —
+ * BOUNDED by a {@link PagingBudget} (#2582). Previously a bare `fetch` with no
+ * deadline at all inside a `do/while`: an unbounded await on a request path.
+ */
 async function runArg(
   token: string,
-): Promise<{ ok: true; rows: ArgRow[] } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; rows: ArgRow[]; truncatedBy: PagingTruncation | null } | { ok: false; status: number; error: string }> {
   const query = buildQuery();
   const rows: ArgRow[] = [];
+  const budget = new PagingBudget('connectables ARG', { budgetMs: argBudgetMs(), maxPages: 50 });
   let skipToken: string | undefined;
-  let guard = 0;
-  // Page until ARG stops returning a $skipToken (bounded for safety).
-  do {
+  while (budget.claimPage()) {
     const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000 };
     if (skipToken) options.$skipToken = skipToken;
-    let res: Response;
+    let page: Response | PageDeadline;
     try {
-      res = await fetch(ARG_URL, {
+      page = await budget.runPage((timeoutMs) => fetchWithTimeout(ARG_URL, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ query, options }),
-      });
+      }, timeoutMs));
     } catch (e: any) {
       return { ok: false, status: 502, error: sanitize(e?.message || String(e)) };
     }
+    if (page === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
+    const res = page;
     const text = await res.text();
     if (!res.ok) {
       let msg = text;
@@ -189,8 +240,10 @@ async function runArg(
     try { body = text ? JSON.parse(text) : {}; } catch { return { ok: false, status: 502, error: 'Resource Graph returned a non-JSON body' }; }
     if (Array.isArray(body?.data)) rows.push(...body.data);
     skipToken = typeof body?.$skipToken === 'string' ? body.$skipToken : undefined;
-  } while (skipToken && guard++ < 50);
-  return { ok: true, rows };
+    if (!skipToken) break; // finished cleanly — NOT a truncation
+  }
+  budget.warnIfTruncated(rows.length);
+  return { ok: true, rows, truncatedBy: budget.truncatedBy };
 }
 
 /** Extract `subscriptionId` and `resourceGroup` out of a full ARM resource id. */
@@ -200,20 +253,29 @@ function coordsFromId(id: string): { subscriptionId: string; resourceGroup: stri
   return { subscriptionId: sub, resourceGroup: rg };
 }
 
-/** GET helper with a bearer token and an AbortSignal; returns text + status. */
+/**
+ * GET helper with a bearer token and a per-page deadline; returns text + status.
+ *
+ * A {@link FetchTimeoutError} raised by the deadline the caller's
+ * {@link PagingBudget} handed down is RE-THROWN, never folded into the
+ * `{ok:false}` descriptor: `runPage` has to see it to absorb it as a
+ * truncation. Swallowing it here would make a walk deadline look like a network
+ * failure and, downstream, like `code:'no_access'` — telling the operator to
+ * grant a role for what was actually a slow ARM.
+ */
 async function armGet(
   url: string,
   token: string,
-  signal: AbortSignal,
+  timeoutMs: number,
 ): Promise<{ ok: true; body: any } | { ok: false; status: number; error: string }> {
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'GET',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      signal,
-    });
+    }, timeoutMs);
   } catch (e: any) {
+    if (e instanceof FetchTimeoutError) throw e;
     return { ok: false, status: 502, error: sanitize(e?.message || String(e)) };
   }
   const text = await res.text();
@@ -227,23 +289,29 @@ async function armGet(
   return { ok: true, body };
 }
 
-/** List every subscription the token can read, following nextLink paging. */
+/**
+ * List every subscription the token can read, following nextLink paging under
+ * the sweep's shared {@link PagingBudget} (page cap + one wall clock across the
+ * whole enumeration).
+ */
 async function listSubscriptions(
   token: string,
-  signal: AbortSignal,
+  budget: PagingBudget,
 ): Promise<{ ok: true; subs: { id: string; name?: string }[] } | { ok: false; status: number; error: string }> {
   const subs: { id: string; name?: string }[] = [];
-  let url: string | undefined = SUBS_URL;
-  let guard = 0;
-  while (url && guard++ < MAX_PAGES_PER_LIST && subs.length < MAX_SUBSCRIPTIONS) {
-    const r = await armGet(url, token, signal);
+  let url: string = SUBS_URL;
+  let pages = 0;
+  while (pages++ < MAX_PAGES_PER_LIST && subs.length < MAX_SUBSCRIPTIONS && budget.claimPage()) {
+    const r = await budget.runPage((timeoutMs) => armGet(url, token, timeoutMs));
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep subs
     if (!r.ok) return r;
     const arr = Array.isArray(r.body?.value) ? r.body.value : [];
     for (const s of arr) {
       const subId = typeof s?.subscriptionId === 'string' ? s.subscriptionId : '';
       if (subId) subs.push({ id: subId, name: typeof s?.displayName === 'string' ? s.displayName : undefined });
     }
-    url = typeof r.body?.nextLink === 'string' ? r.body.nextLink : undefined;
+    if (typeof r.body?.nextLink !== 'string' || !r.body.nextLink) break; // finished cleanly
+    url = r.body.nextLink;
   }
   return { ok: true, subs: subs.slice(0, MAX_SUBSCRIPTIONS) };
 }
@@ -254,15 +322,16 @@ async function listResourcesOfType(
   subId: string,
   armType: string,
   subName: string | undefined,
-  signal: AbortSignal,
+  budget: PagingBudget,
 ): Promise<ArgRow[]> {
   const rows: ArgRow[] = [];
   const filter = encodeURIComponent(`resourceType eq '${armType}'`);
-  let url: string | undefined =
+  let url: string =
     `${armBase()}/subscriptions/${subId}/resources?$filter=${filter}&api-version=${ARM_LIST_API_VERSION}`;
-  let guard = 0;
-  while (url && guard++ < MAX_PAGES_PER_LIST) {
-    const r = await armGet(url, token, signal);
+  let pages = 0;
+  while (pages++ < MAX_PAGES_PER_LIST && budget.claimPage()) {
+    const r = await budget.runPage((timeoutMs) => armGet(url, token, timeoutMs));
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     if (!r.ok) {
       // A single sub that 403s / 404s shouldn't sink the whole enumeration —
       // skip it and let the other subscriptions contribute their resources.
@@ -286,7 +355,8 @@ async function listResourcesOfType(
         host: '',
       });
     }
-    url = typeof r.body?.nextLink === 'string' ? r.body.nextLink : undefined;
+    if (typeof r.body?.nextLink !== 'string' || !r.body.nextLink) break; // finished cleanly
+    url = r.body.nextLink;
   }
   return rows;
 }
@@ -297,30 +367,37 @@ async function listResourcesOfType(
  * plane rows into the same ArgRow shape the ARG path produces. Returns rows on
  * success (possibly empty) or an error descriptor if even the subscriptions
  * list is unreachable (true no-access).
+ *
+ * ONE {@link PagingBudget} spans the whole sweep, so the 40s wall clock is
+ * shared across the subscriptions list and every per-sub/per-type list, and each
+ * page fetch is bounded by whatever is LEFT of it. `truncatedBy` is returned so
+ * the caller can tell "we saw nothing" apart from "we ran out of time before we
+ * could see anything" — the latter must never render as the grant-Reader gate.
  */
 async function runArmList(
   token: string,
-): Promise<{ ok: true; rows: ArgRow[] } | { ok: false; status: number; error: string }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ARM_FALLBACK_BUDGET_MS);
+): Promise<{ ok: true; rows: ArgRow[]; truncatedBy: PagingTruncation | null } | { ok: false; status: number; error: string }> {
+  const budget = new PagingBudget('connectables ARM control-plane list', {
+    budgetMs: armFallbackBudgetMs(),
+    maxPages: ARM_FALLBACK_MAX_PAGES,
+  });
   try {
-    const subsResult = await listSubscriptions(token, controller.signal);
+    const subsResult = await listSubscriptions(token, budget);
     if (!subsResult.ok) return subsResult;
     const rows: ArgRow[] = [];
     for (const sub of subsResult.subs) {
-      if (controller.signal.aborted) break;
+      if (budget.truncatedBy) break;
       for (const c of CONNECTABLE_ARM_TYPES) {
-        if (controller.signal.aborted) break;
-        const typeRows = await listResourcesOfType(token, sub.id, c.armType, sub.name, controller.signal);
+        if (budget.truncatedBy) break;
+        const typeRows = await listResourcesOfType(token, sub.id, c.armType, sub.name, budget);
         rows.push(...typeRows);
       }
     }
     rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    return { ok: true, rows };
+    budget.warnIfTruncated(rows.length);
+    return { ok: true, rows, truncatedBy: budget.truncatedBy };
   } catch (e: any) {
     return { ok: false, status: 502, error: sanitize(e?.message || String(e)) };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -404,19 +481,22 @@ const GATE_MESSAGE =
   '"Reader" role at the tenant root management group so the UAMI fallback can ' +
   'enumerate resources. Once either is in place, resources you can access appear here.';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, code: 'unauthenticated', error: 'Not signed in.' }, { status: 401 });
-  }
-
+export const GET = withSession(async (_req, { session }) => {
   type Via = 'user' | 'uami' | 'user-arm' | 'uami-arm';
-  const finalize = (rows: ArgRow[], via: Via) => {
+  const finalize = (rows: ArgRow[], via: Via, truncatedBy: PagingTruncation | null = null) => {
     const resources = rows
       .map(toConnectable)
       .filter((r): r is ConnectableResource => r !== null);
-    return NextResponse.json({ ok: true, resources, via });
+    // `truncated` is additive and only set on a short walk — a picker that found
+    // what it wanted in a truncated list has a perfectly good answer, but a
+    // caller that cares can tell the list is not the whole estate.
+    return NextResponse.json({ ok: true, resources, via, truncated: truncatedBy ?? undefined });
   };
+
+  // Any walk that ran out of wall clock / pages WITHOUT collecting a row. Kept
+  // separate from the no-access gate so a slow ARM is never reported as a
+  // missing role (the failure mode the old 25s abort produced verbatim).
+  let deadlineTruncation: PagingTruncation | null = null;
 
   // Tokens captured on the ARG pass so the ARM-list fallback can reuse them
   // without re-acquiring (the user token is per-user RBAC; the UAMI token is
@@ -433,7 +513,8 @@ export async function GET() {
       // Return immediately only when ARG succeeded AND saw rows; an empty ARG
       // result with a healthy token falls through to the ARM-list fallback,
       // which is proven to enumerate where ARG silently returns nothing.
-      if (r.ok && r.rows.length > 0) return finalize(r.rows, 'user');
+      if (r.ok && r.rows.length > 0) return finalize(r.rows, 'user', r.truncatedBy);
+      if (r.ok && r.truncatedBy) deadlineTruncation ??= r.truncatedBy;
       if (!r.ok) userArgError = { status: r.status, error: r.error };
     }
   } catch {
@@ -447,7 +528,8 @@ export async function GET() {
     uamiToken = tok?.token || null;
     if (uamiToken) {
       const r = await runArg(uamiToken);
-      if (r.ok && r.rows.length > 0) return finalize(r.rows, 'uami');
+      if (r.ok && r.rows.length > 0) return finalize(r.rows, 'uami', r.truncatedBy);
+      if (r.ok && r.truncatedBy) deadlineTruncation ??= r.truncatedBy;
       if (!r.ok) uamiArgError = { status: r.status, error: r.error };
     }
   } catch (e: any) {
@@ -460,14 +542,26 @@ export async function GET() {
   // user RBAC), then UAMI (Reader at root). First path that yields rows wins.
   if (userToken) {
     const r = await runArmList(userToken);
-    if (r.ok && r.rows.length > 0) return finalize(r.rows, 'user-arm');
+    if (r.ok && r.rows.length > 0) return finalize(r.rows, 'user-arm', r.truncatedBy);
+    if (r.ok && r.truncatedBy) deadlineTruncation ??= r.truncatedBy;
   }
   if (uamiToken) {
     const r = await runArmList(uamiToken);
-    if (r.ok && r.rows.length > 0) return finalize(r.rows, 'uami-arm');
+    if (r.ok && r.rows.length > 0) return finalize(r.rows, 'uami-arm', r.truncatedBy);
+    if (r.ok && r.truncatedBy) deadlineTruncation ??= r.truncatedBy;
   }
 
-  // ---- (d) Honest gate — BOTH ARG and the ARM-list fallback saw nothing --
+  // ---- (d) A DEADLINE, not a permission problem --------------------------
+  // Every path came back empty, but at least one of them stopped early because
+  // it ran out of wall clock / pages. "Not found in a truncated list" is not an
+  // answer (see docs/fiab/arm-paging-budget.md), so say deadline — the
+  // no_access gate below would tell the operator to grant Reader for what is
+  // actually a slow ARM.
+  if (deadlineTruncation) {
+    return NextResponse.json(pagingTimeoutBody(deadlineTruncation), { status: 200 });
+  }
+
+  // ---- (e) Honest gate — BOTH ARG and the ARM-list fallback saw nothing ---
   const detail =
     uamiArgError ? ` (Resource Graph error via UAMI: ${uamiArgError.error})`
     : userArgError ? ` (Resource Graph error via user token: ${userArgError.error})`
@@ -476,4 +570,4 @@ export async function GET() {
     { ok: false, code: 'no_access', error: `${GATE_MESSAGE}${detail}` },
     { status: 200 },
   );
-}
+});

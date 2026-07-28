@@ -19,6 +19,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
+import { walkPagedList, type PagedEnvelope } from './paging-budget';
 import { loomSubscriptionScope } from './loom-subscriptions';
 
 const ARM_SCOPE = armScope();
@@ -56,12 +57,12 @@ export interface StorageAccountSummary {
 
 type DataPlaneCred = { getToken(s: string): Promise<{ token: string } | null> };
 
-async function armGet<T = any>(path: string, cred: DataPlaneCred = credential): Promise<T> {
+async function armGet<T = any>(path: string, cred: DataPlaneCred = credential, timeoutMs?: number): Promise<T> {
   const t = await cred.getToken(ARM_SCOPE);
   if (!t?.token) throw new StorageDiscoveryError('Failed to acquire ARM token', 401);
   const res = await fetchWithTimeout(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = text; }
@@ -72,17 +73,18 @@ async function armGet<T = any>(path: string, cred: DataPlaneCred = credential): 
   return (json as T) ?? ({} as T);
 }
 
+/**
+ * Walk an ARM `nextLink` list BOUNDED by the shared paging budget (page cap +
+ * wall clock, #2557/#2582). `guard < 50` bounded pages only; the wall clock is
+ * handed down as each page's `timeoutMs` and a breach inside a fetch truncates
+ * (rows kept) rather than throwing — the account picker showing FEWER accounts
+ * on a slow ARM beats it failing with "no storage accounts found".
+ */
 async function armList<T = any>(firstPath: string, cred: DataPlaneCred = credential): Promise<T[]> {
-  const out: T[] = [];
-  let next: string | null = firstPath; let guard = 0;
-  while (next && guard < 50) {
-    guard += 1;
-    const p = stripArmBase(next);
-    const page: { value?: T[]; nextLink?: string } = await armGet(p, cred);
-    if (Array.isArray(page.value)) out.push(...page.value);
-    next = page.nextLink || null;
-  }
-  return out;
+  return walkPagedList<T>(
+    `storage-discovery ${firstPath.split('?')[0]}`,
+    (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), cred, timeoutMs),
+  );
 }
 
 async function subscriptionIds(cred: DataPlaneCred = credential): Promise<string[]> {

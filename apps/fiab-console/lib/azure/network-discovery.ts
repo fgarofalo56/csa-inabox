@@ -36,6 +36,7 @@ import {
   type LoomCloud,
 } from './cloud-endpoints';
 import { DOMAIN_TAG_KEY } from './domain-registry';
+import { walkPagedList, PagingBudget, PAGE_DEADLINE, type PagedEnvelope } from './paging-budget';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const ARM_SCOPE = armScope();
@@ -116,12 +117,12 @@ async function armToken(): Promise<string> {
   return t.token;
 }
 
-async function armGet<T = any>(path: string): Promise<T> {
+async function armGet<T = any>(path: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
   const res = await fetchWithTimeout(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = text; }
@@ -133,19 +134,18 @@ async function armGet<T = any>(path: string): Promise<T> {
   return (json as T) ?? ({} as T);
 }
 
+/**
+ * Walk an ARM `nextLink` list BOUNDED by the shared paging budget (page cap +
+ * wall clock, #2557/#2582). The old `guard < 50` literal bounded pages only —
+ * 50 pages x the 30s per-request ceiling is 25 minutes. A deadline landing
+ * inside a page fetch truncates (rows kept) rather than throwing, so a slow ARM
+ * is never re-read by a caller as "this subscription has no private endpoints".
+ */
 async function armList<T = any>(firstPath: string): Promise<T[]> {
-  const out: T[] = [];
-  let next: string | null = firstPath;
-  let guard = 0;
-  while (next && guard < 50) {
-    guard += 1;
-    const path: string = stripArmBase(next);
-    const page: { value?: T[]; nextLink?: string } =
-      await armGet<{ value?: T[]; nextLink?: string }>(path);
-    if (Array.isArray(page.value)) out.push(...page.value);
-    next = page.nextLink || null;
-  }
-  return out;
+  return walkPagedList<T>(
+    `network-discovery ${firstPath.split('?')[0]}`,
+    (next, timeoutMs) => armGet<PagedEnvelope<T>>(stripArmBase(next ?? firstPath), timeoutMs),
+  );
 }
 
 async function targetSubscriptionIds(): Promise<string[]> {
@@ -283,22 +283,30 @@ async function nicPrivateIps(nicId: string): Promise<string[]> {
  * ARG spans every subscription the token can read by default; only when a single
  * subscription is pinned (LOOM_SUBSCRIPTION_ID) do we scope it explicitly.
  */
-async function listPrivateEndpointsViaArg(subs: string[]): Promise<PrivateEndpointInfo[]> {
-  const query = [
-    'resources',
-    "| where type =~ 'microsoft.network/privateEndpoints'",
-    '| project id, name, location, resourceGroup, subscriptionId, properties',
-  ].join('\n');
-  const out: PrivateEndpointInfo[] = [];
+/**
+ * Run an ARG query, walking `$skipToken`, BOUNDED by a {@link PagingBudget}
+ * (#2557/#2582). The old `guard < 20` capped PAGES only — 20 ARG POSTs x the
+ * 30s per-request ceiling is 10 minutes. `runPage` hands each POST the walk's
+ * remaining wall clock and absorbs the resulting abort, so a slow ARG truncates
+ * (rows already read are kept, and the caller's per-sub crawl fallback still
+ * runs) instead of throwing a `NetworkDiscoveryError` that reads as "this
+ * subscription has no private endpoints".
+ */
+async function argPagedQuery<T>(
+  label: string,
+  query: string,
+  baseOptions: Record<string, unknown>,
+  shapeRow: (row: any) => T,
+  failLabel: string,
+): Promise<T[]> {
+  const out: T[] = [];
+  const budget = new PagingBudget(label, { maxPages: 20 });
   let skipToken: string | undefined;
-  let guard = 0;
-  do {
-    guard += 1;
-    const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000 };
-    if (subs.length === 1) options.subscriptions = subs;
+  while (budget.claimPage()) {
+    const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000, ...baseOptions };
     if (skipToken) options.$skipToken = skipToken;
     const token = await armToken();
-    const res = await fetchWithTimeout(
+    const page = await budget.runPage((timeoutMs) => fetchWithTimeout(
       `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
       {
         method: 'POST',
@@ -310,19 +318,38 @@ async function listPrivateEndpointsViaArg(subs: string[]): Promise<PrivateEndpoi
         body: JSON.stringify({ query, options }),
         cache: 'no-store',
       },
-    );
-    const text = await res.text();
+      timeoutMs,
+    ));
+    if (page === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
+    const text = await page.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-    if (!res.ok) {
-      const msg = json?.error?.message || json?.message || `ARG private-endpoint query failed ${res.status}`;
-      throw new NetworkDiscoveryError(msg, res.status, json);
+    if (!page.ok) {
+      const msg = json?.error?.message || json?.message || `${failLabel} failed ${page.status}`;
+      throw new NetworkDiscoveryError(msg, page.status, json);
     }
     const data: any[] = Array.isArray(json?.data) ? json.data : [];
-    for (const row of data) out.push(shape(row, row?.subscriptionId || ''));
+    for (const row of data) out.push(shapeRow(row));
     skipToken = (json?.$skipToken as string) || undefined;
-  } while (skipToken && guard < 20);
+    if (!skipToken) break; // finished cleanly — NOT a truncation
+  }
+  budget.warnIfTruncated(out.length);
   return out;
+}
+
+async function listPrivateEndpointsViaArg(subs: string[]): Promise<PrivateEndpointInfo[]> {
+  const query = [
+    'resources',
+    "| where type =~ 'microsoft.network/privateEndpoints'",
+    '| project id, name, location, resourceGroup, subscriptionId, properties',
+  ].join('\n');
+  return argPagedQuery(
+    'network-discovery ARG private-endpoints',
+    query,
+    subs.length === 1 ? { subscriptions: subs } : {},
+    (row) => shape(row, row?.subscriptionId || ''),
+    'ARG private-endpoint query',
+  );
 }
 
 /**
@@ -457,39 +484,13 @@ async function queryResourceBindings(resourceIds: string[]): Promise<LoomService
     '| project id, type, tags',
   ].join('\n');
 
-  const out: LoomServiceBinding[] = [];
-  let skipToken: string | undefined;
-  let guard = 0;
-  do {
-    guard += 1;
-    const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000 };
-    if (skipToken) options.$skipToken = skipToken;
-    const token = await armToken();
-    const res = await fetchWithTimeout(
-      `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${token}`,
-          accept: 'application/json',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ query, options }),
-        cache: 'no-store',
-      },
-    );
-    const text = await res.text();
-    let json: any = null;
-    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-    if (!res.ok) {
-      const msg = json?.error?.message || json?.message || `ARG query failed ${res.status}`;
-      throw new NetworkDiscoveryError(msg, res.status, json);
-    }
-    const data: any[] = Array.isArray(json?.data) ? json.data : [];
-    for (const row of data) out.push(shapeLoomBinding(row));
-    skipToken = (json?.$skipToken as string) || undefined;
-  } while (skipToken && guard < 20);
-  return out;
+  return argPagedQuery(
+    'network-discovery ARG resource-bindings',
+    query,
+    {},
+    shapeLoomBinding,
+    'ARG query',
+  );
 }
 
 /**

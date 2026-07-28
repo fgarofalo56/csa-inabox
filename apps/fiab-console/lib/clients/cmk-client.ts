@@ -38,6 +38,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, kvScope } from '@/lib/azure/cloud-endpoints';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { walkPagedList, type PagedEnvelope } from '@/lib/azure/paging-budget';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = uamiClientId
@@ -107,12 +109,14 @@ async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T>
   return json as T;
 }
 
-async function kvGet<T = any>(url: string): Promise<T> {
+async function kvGet<T = any>(url: string, timeoutMs?: number): Promise<T> {
   const token = await kvToken();
-  const res = await fetch(url, {
+  // fetchWithTimeout, not bare fetch: an un-deadlined data-plane round-trip on a
+  // BFF request path is the unbounded await #2557 exists to remove.
+  const res = await fetchWithTimeout(url, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
     cache: 'no-store',
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
@@ -216,52 +220,56 @@ function versionFromKid(kid: string): string {
   return parts.length >= 2 ? parts[1] : '';
 }
 
-/** List the keys in a vault (newest-created first). Requires keys/read on the vault. */
+/**
+ * List the keys in a vault (newest-created first). Requires keys/read on the vault.
+ *
+ * BOUNDED by the shared paging budget (#2557/#2582): the old `guard < 40`
+ * capped pages only. A deadline inside a page fetch truncates (keys already
+ * read are kept, so the CMK key picker still populates) instead of throwing a
+ * `CmkError` the panel would render as an inaccessible vault.
+ */
 export async function listVaultKeys(vaultUri: string): Promise<KvKeyItem[]> {
   const base = vaultUri.replace(/\/+$/, '');
-  const out: KvKeyItem[] = [];
-  let next: string | null = `${base}/keys?api-version=${KV_API}&maxresults=25`;
-  // Follow KV's nextLink pagination, capped to avoid unbounded walks.
-  let guard = 0;
-  while (next && guard < 40) {
-    const page: { value?: any[]; nextLink?: string } = await kvGet(next);
-    for (const k of page.value || []) {
-      const kid = k.kid || '';
-      out.push({
-        name: keyNameFromKid(kid),
-        kid,
-        enabled: k.attributes?.enabled !== false,
-        created: typeof k.attributes?.created === 'number' ? k.attributes.created : undefined,
-      });
-    }
-    next = page.nextLink || null;
-    guard++;
-  }
+  const first = `${base}/keys?api-version=${KV_API}&maxresults=25`;
+  const rows = await walkPagedList<any>(
+    'key-vault keys',
+    (next, timeoutMs) => kvGet<PagedEnvelope<any>>(next ?? first, timeoutMs),
+    { maxPages: 40 },
+  );
+  const out: KvKeyItem[] = rows.map((k) => {
+    const kid = k.kid || '';
+    return {
+      name: keyNameFromKid(kid),
+      kid,
+      enabled: k.attributes?.enabled !== false,
+      created: typeof k.attributes?.created === 'number' ? k.attributes.created : undefined,
+    };
+  });
   out.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
   return out;
 }
 
-/** List the versions of a key (newest-created first). Requires keys/read on the vault. */
+/**
+ * List the versions of a key (newest-created first). Requires keys/read on the
+ * vault. Bounded exactly like {@link listVaultKeys}.
+ */
 export async function listKeyVersions(vaultUri: string, keyName: string): Promise<KvKeyVersionItem[]> {
   const base = vaultUri.replace(/\/+$/, '');
-  const out: KvKeyVersionItem[] = [];
-  let next: string | null =
-    `${base}/keys/${encodeURIComponent(keyName)}/versions?api-version=${KV_API}&maxresults=25`;
-  let guard = 0;
-  while (next && guard < 40) {
-    const page: { value?: any[]; nextLink?: string } = await kvGet(next);
-    for (const v of page.value || []) {
-      const kid = v.kid || '';
-      out.push({
-        version: versionFromKid(kid),
-        kid,
-        enabled: v.attributes?.enabled !== false,
-        created: typeof v.attributes?.created === 'number' ? v.attributes.created : undefined,
-      });
-    }
-    next = page.nextLink || null;
-    guard++;
-  }
+  const first = `${base}/keys/${encodeURIComponent(keyName)}/versions?api-version=${KV_API}&maxresults=25`;
+  const rows = await walkPagedList<any>(
+    `key-vault key-versions ${keyName}`,
+    (next, timeoutMs) => kvGet<PagedEnvelope<any>>(next ?? first, timeoutMs),
+    { maxPages: 40 },
+  );
+  const out: KvKeyVersionItem[] = rows.map((v) => {
+    const kid = v.kid || '';
+    return {
+      version: versionFromKid(kid),
+      kid,
+      enabled: v.attributes?.enabled !== false,
+      created: typeof v.attributes?.created === 'number' ? v.attributes.created : undefined,
+    };
+  });
   out.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
   return out;
 }

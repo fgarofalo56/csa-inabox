@@ -58,6 +58,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
@@ -169,7 +170,7 @@ function assertEnabled(): void {
 // Low-level fetch
 // ----------------------------------------------------------------------------
 
-async function graphFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function graphFetch(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
   const token = await credential.getToken(GRAPH_SCOPE);
   if (!token?.token) throw new GraphIdentityError(500, null, 'Failed to acquire Microsoft Graph token');
   const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
@@ -184,7 +185,7 @@ async function graphFetch(path: string, init: RequestInit = {}): Promise<Respons
       ConsistencyLevel: 'eventual',
       'user-agent': 'CSA-Loom-Console/1.0',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
 }
 
 async function readJson<T>(res: Response, endpoint: string): Promise<T | null> {
@@ -378,7 +379,12 @@ export async function searchAll(q: string, topPerKind = 10): Promise<IdentityHit
  * recursively by Graph server-side.
  *
  * Backing call: GET /v1.0/groups/{id}/transitiveMembers
- * Paginated via @odata.nextLink up to `max` results.
+ * Paginated via @odata.nextLink up to `max` results, BOUNDED by a
+ * {@link PagingBudget} (#2557/#2582) — the old `guard < 25` capped pages only,
+ * and 25 Graph pages x the 30s per-request ceiling is 12 minutes. A deadline
+ * inside a page fetch truncates (members already resolved are kept) rather than
+ * rejecting, so a slow Graph shows a SHORTER membership list instead of an
+ * error the panel would render as an empty/absent group.
  */
 export async function getGroupTransitiveMembers(groupId: string, max = 200): Promise<IdentityHit[]> {
   assertEnabled();
@@ -390,9 +396,13 @@ export async function getGroupTransitiveMembers(groupId: string, max = 200): Pro
     `&$top=${pageSize}`;
   const out: IdentityHit[] = [];
   const seen = new Set<string>();
-  // Bound the page-walk so a huge group can't run unbounded.
-  for (let guard = 0; guard < 25 && endpoint && out.length < max; guard++) {
-    const res = await graphFetch(endpoint);
+  // Bound the page-walk (pages AND wall clock) so a huge or slow group can't run
+  // unbounded on the request path. The `out.length < max` row cap is why this is
+  // a hand-rolled budget loop rather than `walkPagedList`.
+  const budget = new PagingBudget(`graph transitiveMembers ${groupId}`, { maxPages: 25 });
+  while (endpoint && out.length < max && budget.claimPage()) {
+    const res = await budget.runPage((timeoutMs) => graphFetch(endpoint, {}, timeoutMs));
+    if (res === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     const j = await readJson<{ value?: any[]; '@odata.nextLink'?: string }>(res, endpoint);
     for (const m of j?.value || []) {
       if (!m?.id || seen.has(m.id)) continue;
@@ -411,6 +421,7 @@ export async function getGroupTransitiveMembers(groupId: string, max = 200): Pro
     }
     endpoint = j?.['@odata.nextLink'] || '';
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 

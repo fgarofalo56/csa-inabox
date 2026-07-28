@@ -35,6 +35,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 // ARM endpoint is sovereign-cloud aware — canonical resolver, not a local copy
 // (keeps the management host literal solely in cloud-endpoints.ts).
 import { armBase } from './cloud-endpoints';
+import { PagingBudget, PAGE_DEADLINE } from './paging-budget';
 
 // Stable GA api-version for Microsoft.Devices/IotHubs.
 const IOTHUB_API = '2023-06-30';
@@ -83,7 +84,7 @@ function resolveScope(opts?: { subscriptionId?: string; resourceGroup?: string }
   return { subscriptionId, resourceGroup };
 }
 
-async function callArm(url: string, init?: RequestInit): Promise<Response> {
+async function callArm(url: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const scope = `${armBase()}/.default`;
   const t = await credential.getToken(scope);
   if (!t?.token) throw new IoTHubArmError(401, undefined, 'Failed to acquire ARM token');
@@ -94,7 +95,7 @@ async function callArm(url: string, init?: RequestInit): Promise<Response> {
       authorization: `Bearer ${t.token}`,
       'content-type': 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
 }
 
 /** The resolved built-in Event Hubs-compatible endpoint of an IoT Hub. */
@@ -159,7 +160,17 @@ export interface IoTHubConsumerGroup {
   hubName: string;
 }
 
-/** List the consumer groups on an IoT Hub's built-in `events` endpoint. */
+/**
+ * List the consumer groups on an IoT Hub's built-in `events` endpoint.
+ *
+ * BOUNDED by a {@link PagingBudget} (#2557/#2582): the old `guard < 20` capped
+ * pages only, and 20 pages x the 30s per-request ceiling is 10 minutes on the
+ * connect dialog's request path. The remaining wall clock is handed to each
+ * page's fetch through {@link PagingBudget.runPage}, so a deadline landing
+ * INSIDE a fetch truncates (groups already collected are kept and the dropdown
+ * still populates) instead of throwing an `IoTHubArmError` the dialog would
+ * render as "the hub has no consumer groups".
+ */
 export async function listIoTHubConsumerGroups(
   hubName: string,
   opts?: { subscriptionId?: string; resourceGroup?: string },
@@ -169,11 +180,11 @@ export async function listIoTHubConsumerGroups(
   const scope = resolveScope(opts);
   const base = `${armBase()}/subscriptions/${scope.subscriptionId}/resourceGroups/${encodeURIComponent(scope.resourceGroup)}/providers/Microsoft.Devices/IotHubs/${encodeURIComponent(name)}/eventHubEndpoints/events/ConsumerGroups?api-version=${IOTHUB_API}`;
   const out: IoTHubConsumerGroup[] = [];
-  let next: string | undefined = base;
-  let guard = 0;
-  while (next && guard < 20) {
-    guard++;
-    const r: Response = await callArm(next);
+  const budget = new PagingBudget(`iothub consumer-groups ${name}`, { maxPages: 20 });
+  let next: string = base;
+  while (budget.claimPage()) {
+    const r = await budget.runPage((timeoutMs) => callArm(next, undefined, timeoutMs));
+    if (r === PAGE_DEADLINE) break; // wall clock spent mid-fetch — keep rows
     if (!r.ok) throw new IoTHubArmError(r.status, await r.text(), `listIoTHubConsumerGroups(${name}) failed ${r.status}`);
     const body: any = await r.json();
     const rows: any[] = Array.isArray(body?.value) ? body.value : [];
@@ -182,8 +193,10 @@ export async function listIoTHubConsumerGroups(
       const cgName = typeof row === 'string' ? row : (row?.name || row?.properties?.name);
       if (cgName) out.push({ name: String(cgName), hubName: name });
     }
-    next = body?.nextLink;
+    if (!body?.nextLink) break; // finished cleanly — NOT a truncation
+    next = body.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 
