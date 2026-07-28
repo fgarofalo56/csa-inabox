@@ -80,16 +80,26 @@ test('LU-2: the sovereign authority host flows into every derived Entra URL (Gov
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.us\/tenant-guid\/v2\.0/);
-  // Substring-ABSENCE assertion, deliberately not a regex: CodeQL's
-  // js/regex/missing-regexp-anchor flags an unanchored host pattern because an
-  // unanchored regex used to VALIDATE a URL is a real hole. Here the intent is
-  // the opposite - assert the commercial endpoint appears NOWHERE in the Gov
-  // config - so anchoring would weaken the check. A plain includes() states
-  // that intent unambiguously to both the analyzer and the next reader.
-  assert.ok(
-    !r.stdout.includes('login.microsoftonline.com'),
-    'Gov render must never emit the commercial Entra endpoint',
-  );
+  // Assert on the PARSED hosts, not on a substring of the whole render.
+  // Earlier revisions used doesNotMatch(/login\.microsoftonline\.com/) and then
+  // !includes('login.microsoftonline.com'); CodeQL flagged both
+  // (js/regex/missing-regexp-anchor, then js/incomplete-url-substring-sanitization)
+  // because a bare hostname substring-checked against a URL is the shape of a
+  // broken sanitizer. Both were false positives HERE - the intent is absence,
+  // not validation - but rather than suppress the rule, extract every URL the
+  // entrypoint rendered and compare its host EXACTLY. That is structurally
+  // unambiguous and a strictly stronger guarantee: it would also catch a
+  // sovereign-boundary leak like `login.microsoftonline.us.evil.example`,
+  // which a substring check would have happily accepted.
+  const renderedHosts = [...r.stdout.matchAll(/https:\/\/([^/\s]+)/g)].map((m) => m[1]);
+  assert.ok(renderedHosts.length > 0, 'expected the Gov render to emit at least one URL');
+  for (const host of renderedHosts) {
+    assert.equal(
+      host,
+      'login.microsoftonline.us',
+      `Gov render leaked a non-sovereign Entra host: ${host}`,
+    );
+  }
 });
 
 test('LU-2: authorization=enable with no pinned issuer FAILS CLOSED (never boots half-secured)', { skip: !shAvailable }, () => {
