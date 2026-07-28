@@ -223,7 +223,7 @@ class TestDoGet:
 
     def test_a_handle_is_single_use(self, wire: Wire) -> None:
         # A leaked handle is worthless after one fetch. NOTE this bounds the
-        # HANDLE only, not the ticket — see the bare-SQL note on
+        # HANDLE only, not the ticket, while the bare-SQL path is on — see
         # `test_a_bare_sql_ticket_executes_and_is_still_audited` (#2577).
         ticket = wire.plan("SELECT 1").endpoints[0].ticket
         wire.fetch(ticket)
@@ -254,20 +254,69 @@ class TestDoGet:
             wire.fetch(forged)
 
     def test_a_bare_sql_ticket_executes_and_is_still_audited(self, wire: Wire) -> None:
-        # DOCUMENTED, NOT ENDORSED. This path (flightsql.py:216-219) executes
-        # the ticket bytes as raw SQL when they do not decode as a known Flight
-        # SQL command, entirely skipping the GetFlightInfo -> handle handshake.
-        # It exists to serve simple ADBC/JDBC clients, and it means the handle
-        # lifecycle asserted above (single-use / ticket-bound / TTL) is a
-        # RESOURCE-HYGIENE control, not a replay-authorization boundary: a
-        # leaked handle is worthless after one fetch, but a leaked ticket buys
-        # arbitrary read SQL for the rest of its TTL. Tracked in #2577.
-        # What still holds on this path, and is asserted here and below: the
-        # read-only guard and the audit log.
+        # SCOPED AND DECLARED (#2577), not silently allowed. This path
+        # (flightsql.py `do_get`) executes the ticket bytes as raw SQL when they
+        # do not decode as a known Flight SQL command, skipping the
+        # GetFlightInfo -> handle handshake. It serves plain Arrow Flight
+        # clients, so it stays ON by default (Loom's default-ON rule) — but it
+        # is now switched off with LOOM_FLIGHT_ALLOW_BARE_SQL=0 (below),
+        # reported on /capabilities as `flight.bareSqlTickets`, and logged under
+        # its OWN audit operation so a reviewer can tell it from a redeemed
+        # handle. The consequence it carries is documented on the module: the
+        # handle lifecycle bounds a leaked HANDLE, not a leaked TICKET.
         table = wire.fetch(flight.Ticket(b"SELECT 5 AS n"))
         assert table.to_pylist() == [{"n": 5}]
-        assert wire.audit[-1]["operation"] == "flight.doGet"
+        assert wire.audit[-1]["operation"] == flightsql.BARE_SQL_OPERATION
         assert wire.audit[-1]["outcome"] == "success"
+
+    def test_the_bare_sql_path_is_distinguishable_from_a_redeemed_handle(
+        self, wire: Wire
+    ) -> None:
+        # BUG CAUGHT (#2577, audit half): both paths used to log
+        # `operation: "flight.doGet"` with an identical row shape, so the access
+        # log — the ATO artifact — could not answer "did this caller go through
+        # the plan/handle handshake, or present arbitrary SQL on a ticket?".
+        # Collapse the two operation names back into one and this goes RED.
+        info = wire.plan("SELECT 1 AS n")
+        wire.fetch(info.endpoints[0].ticket)
+        handshake = wire.audit[-1]["operation"]
+
+        wire.fetch(flight.Ticket(b"SELECT 1 AS n"))
+        bare = wire.audit[-1]["operation"]
+
+        assert handshake == "flight.doGet"
+        assert bare == flightsql.BARE_SQL_OPERATION
+        assert handshake != bare
+
+    def test_the_bare_sql_path_can_be_turned_off_so_the_handshake_is_the_boundary(
+        self, wire: Wire, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # BUG CAUGHT (#2577, scoping half): before this there was NO way to make
+        # the plan->handle handshake a real replay boundary — any holder of a
+        # valid, unexpired ticket could DoGet arbitrary read SQL for the rest of
+        # its TTL. With LOOM_FLIGHT_ALLOW_BARE_SQL=0 that path is refused, and
+        # the refusal is audited like every other one. Delete the flag check in
+        # `do_get` and this goes RED (the query executes and returns a table).
+        monkeypatch.setenv("LOOM_FLIGHT_ALLOW_BARE_SQL", "0")
+        with pytest.raises(flight.FlightUnauthorizedError) as err:
+            wire.fetch(flight.Ticket(b"SELECT 5 AS n"))
+        # The refusal has to tell the client what to do instead, or it is a
+        # silent break of the simple-client contract.
+        assert "GetFlightInfo" in str(err.value)
+        assert "LOOM_FLIGHT_ALLOW_BARE_SQL=0" in str(err.value)
+        assert wire.audit[-1]["operation"] == flightsql.BARE_SQL_OPERATION
+        assert wire.audit[-1]["outcome"] == "refused"
+
+    def test_turning_the_bare_sql_path_off_does_not_break_conformant_clients(
+        self, wire: Wire, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The reason this is an opt-OUT and not a removal: a conformant Flight
+        # SQL / ADBC / JDBC client always calls GetFlightInfo first, so the
+        # hardened posture costs it nothing. If closing the bare path also broke
+        # the handshake path, this goes RED.
+        monkeypatch.setenv("LOOM_FLIGHT_ALLOW_BARE_SQL", "0")
+        info = wire.plan("SELECT i FROM range(20) t(i)")
+        assert wire.fetch(info.endpoints[0].ticket).num_rows == 20
 
     def test_do_get_streams_the_full_result_not_the_one_row_plan(
         self, wire: Wire
@@ -282,12 +331,14 @@ class TestDoGet:
             wire.fetch(flight.Ticket(b"DELETE FROM sales"))
         assert "read-only" in str(err.value)
         assert wire.audit[-1]["outcome"] == "refused"
+        assert wire.audit[-1]["operation"] == flightsql.BARE_SQL_OPERATION
 
     def test_a_failing_query_reports_failure_and_is_audited(self, wire: Wire) -> None:
         with pytest.raises(flight.FlightServerError) as err:
             wire.fetch(flight.Ticket(b"SELECT * FROM no_such_table"))
         assert "Query failed" in str(err.value)
         assert wire.audit[-1]["outcome"] == "failure"
+        assert wire.audit[-1]["operation"] == flightsql.BARE_SQL_OPERATION
 
     def test_a_get_sql_info_ticket_yields_the_typed_empty_table(self, wire: Wire) -> None:
         table = wire.fetch(flight.Ticket(pbcodec.pack_any(pbcodec.TYPE_GET_SQL_INFO, b"")))

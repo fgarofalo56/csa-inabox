@@ -10,7 +10,10 @@ the startup wiring itself is tested separately with `serve_forever` replaced.
 """
 from __future__ import annotations
 
+import importlib.util
+import sys
 import threading
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -28,7 +31,7 @@ import duckdb
 import pyarrow as pa
 from fastapi.testclient import TestClient
 
-from .conftest import load
+from .conftest import PACKAGE, load
 
 ARROW = "application/vnd.apache.arrow.stream"
 
@@ -166,20 +169,42 @@ class TestQueryJson:
         assert body["truncated"] is True
         assert body["maxRows"] == 25
 
-    def test_a_snake_case_max_rows_is_ignored_rather_than_bounding_the_page(
+    def test_a_snake_case_max_rows_is_rejected_rather_than_silently_unbounding(
         self, client: TestClient
     ) -> None:
-        # `maxRows` is the wire contract (`QueryRequest.maxRows`); the BFF sends
-        # camelCase. Pydantic's default `extra='ignore'` means a client that
-        # sends `max_rows` instead gets an UNBOUNDED query rather than a 422.
-        # That is pinned here so a change to it is VISIBLE — it is not an
-        # endorsement. Making the model `extra='forbid'` is a wire behaviour
-        # change tracked in #2576.
-        body = client.post(
+        # BUG CAUGHT (#2576): `maxRows` is the wire contract; the BFF sends
+        # camelCase. Under Pydantic's default `extra='ignore'` a client that
+        # typed `max_rows` got 200 with an UNBOUNDED result (bounded only by
+        # DEFAULT_MAX_ROWS = 200000) instead of a loud rejection — a typo
+        # silently became a full-table scan against the serving tier. Drop
+        # `model_config = ConfigDict(extra='forbid')` from `QueryRequest` and
+        # this returns 200 with rowCount 30 again.
+        response = client.post(
             "/query", json={"sql": "SELECT * FROM range(30) t(i)", "max_rows": 5}
+        )
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        # The 422 must NAME the offending key, or the caller cannot fix the typo.
+        assert any("max_rows" in str(item.get("loc", "")) for item in detail), detail
+
+    def test_the_camel_case_contract_the_bff_actually_sends_still_works(
+        self, client: TestClient
+    ) -> None:
+        # The complement of the test above: `extra='forbid'` must reject the
+        # typo WITHOUT rejecting the real contract. This is the exact body
+        # `apps/fiab-console/lib/azure/duckdb-client.ts` posts.
+        body = client.post(
+            "/query", json={"sql": "SELECT * FROM range(30) t(i)", "maxRows": 5}
         ).json()
-        assert body["rowCount"] == 30
-        assert body["truncated"] is False
+        assert body["ok"] is True
+        assert body["rowCount"] == 5
+        assert body["truncated"] is True
+
+    def test_an_unknown_key_on_explain_is_rejected_too(self, client: TestClient) -> None:
+        # `ExplainRequest` carries the same guarantee; without `extra='forbid'`
+        # on it a caller could pass `maxRows` to /explain and believe it applied.
+        response = client.post("/explain", json={"sql": "SELECT 1", "maxRows": 5})
+        assert response.status_code == 422
 
 
 # ── POST /query — Arrow IPC ──────────────────────────────────────────────────
@@ -392,8 +417,10 @@ class TestFlightStartupWiring:
         assert flight_threads == []
         assert not called.is_set()
 
-    # The dying thread's traceback is the POINT of this test; pytest would
-    # otherwise re-raise it as an unhandled-thread-exception warning.
+    # The dying thread's traceback used to be the POINT of this test. It is now
+    # CAUGHT by the supervisor in `_start_flight` (#2578), so pytest no longer
+    # sees an unhandled thread exception — the mark is kept only so the test
+    # still passes if a future refactor lets one escape again.
     @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
     def test_a_crashing_serve_forever_is_isolated_on_its_own_thread(
         self,
@@ -402,17 +429,12 @@ class TestFlightStartupWiring:
         flight_threads: list[threading.Thread],
         client: TestClient,
     ) -> None:
-        # What this establishes (the earlier version of this test did NOT):
-        # `_start_flight()` hands `serve_forever` to a separate thread, that
-        # thread really runs and really dies, and the HTTP tier keeps serving
-        # afterwards. Inline the call (`serve_forever()` instead of
-        # `Thread(target=serve_forever).start()`) and no `flight-sql` thread is
+        # What this establishes: `_start_flight()` hands `serve_forever` to a
+        # separate thread, that thread really runs and really dies, and the HTTP
+        # tier keeps serving afterwards. Inline the call (`serve_forever()`
+        # instead of `Thread(target=...).start()`) and no `flight-sql` thread is
         # constructed -> RED. Drop `thread.start()` and the crash never happens
         # -> RED.
-        #
-        # What it does NOT establish, and no test here does: `/capabilities`
-        # still reports `flight.enabled: true` after this thread has died.
-        # That is a real defect, tracked in #2578.
         entered = threading.Event()
 
         def boom() -> None:
@@ -429,3 +451,194 @@ class TestFlightStartupWiring:
         flight_threads[0].join(timeout=5)  # deterministic — no sleep
         assert not flight_threads[0].is_alive()
         assert client.get("/health").status_code == 200
+
+
+# ── /capabilities must tell the truth about the Flight thread (#2578) ────────
+class TestCapabilitiesTracksFlightLiveness:
+    def test_capabilities_reports_the_wire_as_up_while_the_thread_is_alive(
+        self, app_module: Any, monkeypatch: pytest.MonkeyPatch, client: TestClient
+    ) -> None:
+        # The live half of the pair below. Without it the crashed-case assertion
+        # could be satisfied by hard-coding `enabled: false`, which would be a
+        # different lie.
+        entered = threading.Event()
+        release = threading.Event()
+
+        def block_until_released() -> None:
+            entered.set()
+            release.wait(timeout=30)
+
+        monkeypatch.setenv("LOOM_FLIGHT_ENABLED", "1")
+        monkeypatch.setattr(load("flightsql"), "serve_forever", block_until_released)
+        try:
+            app_module._start_flight()
+            assert entered.wait(timeout=5)
+            flight = client.get("/capabilities").json()["flight"]
+            assert flight["enabled"] is True
+            assert flight["configured"] is True
+            assert flight["running"] is True
+            assert flight["error"] is None
+        finally:
+            release.set()
+
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+    def test_capabilities_stops_claiming_the_wire_is_up_once_the_thread_dies(
+        self,
+        app_module: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        flight_threads: list[threading.Thread],
+        client: TestClient,
+    ) -> None:
+        # BUG CAUGHT (#2578): `_start_flight()` used to wrap only the import and
+        # `thread.start()`, so an exception raised INSIDE `serve_forever` died
+        # unhandled in the daemon thread while `/capabilities` kept computing
+        # `flight.enabled` from `LOOM_FLIGHT_ENABLED` alone — it went on
+        # claiming the wire was up. `/capabilities` is the honest-gate surface
+        # the console reads, so that is a `no-vaporware` lie, not just noise.
+        #
+        # Revert `enabled` to the bare env read and this goes RED on the first
+        # assertion; drop the `_supervised` wrapper and it goes RED on `error`.
+        monkeypatch.setenv("LOOM_FLIGHT_ENABLED", "1")
+
+        def boom() -> None:
+            raise RuntimeError("Address already in use: 8815")
+
+        monkeypatch.setattr(load("flightsql"), "serve_forever", boom)
+        app_module._start_flight()
+        assert [t.name for t in flight_threads] == ["flight-sql"]
+        flight_threads[0].join(timeout=5)
+        assert not flight_threads[0].is_alive()
+
+        flight = client.get("/capabilities").json()["flight"]
+        assert flight["enabled"] is False, "capabilities still claims a dead wire is up"
+        assert flight["running"] is False
+        # `configured` stays true — the deployment DID ask for the wire. The
+        # degraded state is reported, not hidden.
+        assert flight["configured"] is True
+        # A capability endpoint that reports a degraded state must say WHY.
+        assert "Address already in use" in flight["error"]
+
+    def test_a_wire_that_could_not_be_imported_is_reported_not_claimed_up(
+        self, app_module: Any, monkeypatch: pytest.MonkeyPatch, client: TestClient
+    ) -> None:
+        # The honest-gate case for a deployment whose image is missing
+        # `pyarrow.flight`: the import inside `_start_flight()` fails, no thread
+        # is ever constructed, and `/capabilities` has to say so with the reason
+        # rather than reporting the wire as up (#2578).
+        monkeypatch.setenv("LOOM_FLIGHT_ENABLED", "1")
+        monkeypatch.delattr(load("flightsql"), "serve_forever")
+
+        app_module._start_flight()  # must not raise
+
+        flight = client.get("/capabilities").json()["flight"]
+        assert flight["enabled"] is False
+        assert flight["running"] is False
+        assert flight["configured"] is True
+        assert "serve_forever" in flight["error"]
+
+    def test_a_thread_that_will_not_start_is_reported_not_claimed_up(
+        self, app_module: Any, monkeypatch: pytest.MonkeyPatch, client: TestClient
+    ) -> None:
+        # A host out of threads: `thread.start()` itself raises. The handle must
+        # NOT be left on the state (a never-started Thread reports
+        # `is_alive() == False`, but keeping it would mean `error` and `thread`
+        # disagree about what happened).
+        class _WontStart:
+            name = "flight-sql"
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def start(self) -> None:
+                raise RuntimeError("can't start new thread")
+
+        monkeypatch.setenv("LOOM_FLIGHT_ENABLED", "1")
+        monkeypatch.setattr(load("flightsql"), "serve_forever", lambda: None)
+        monkeypatch.setattr(
+            app_module, "threading", _ThreadingShim(app_module.threading, _WontStart),
+        )
+
+        app_module._start_flight()  # must not raise
+
+        assert app_module.FLIGHT.thread is None
+        flight = client.get("/capabilities").json()["flight"]
+        assert flight["enabled"] is False
+        assert "can't start new thread" in flight["error"]
+
+    def test_a_disabled_wire_reports_no_error_rather_than_a_fabricated_one(
+        self, client: TestClient
+    ) -> None:
+        # The `client` fixture starts the app with LOOM_FLIGHT_ENABLED=0.
+        # "Turned off" and "crashed" must not look the same to the console.
+        flight = client.get("/capabilities").json()["flight"]
+        assert flight == {
+            "enabled": False,
+            "configured": False,
+            "running": False,
+            "error": None,
+            "port": 8815,
+            "ticketRequired": True,
+            "ticketSigned": False,
+            "bareSqlTickets": True,
+        }
+
+    def test_capabilities_reports_the_bare_sql_ticket_posture(
+        self, monkeypatch: pytest.MonkeyPatch, client: TestClient
+    ) -> None:
+        # #2577: the bare-SQL DoGet path is ON by default and switched off with
+        # LOOM_FLIGHT_ALLOW_BARE_SQL=0. Whichever posture is live has to be
+        # DISCOVERABLE from /capabilities rather than implied by the docstring.
+        assert client.get("/capabilities").json()["flight"]["bareSqlTickets"] is True
+        monkeypatch.setenv("LOOM_FLIGHT_ALLOW_BARE_SQL", "0")
+        assert client.get("/capabilities").json()["flight"]["bareSqlTickets"] is False
+
+
+# ── lifespan migration (#2579) ───────────────────────────────────────────────
+class TestLifespanWiring:
+    def test_the_app_module_constructs_with_no_deprecated_startup_hook(
+        self, app_module: Any
+    ) -> None:
+        # BUG CAUGHT (#2579): `app/main.py` used `@app.on_event("startup")`,
+        # deprecated since FastAPI 0.93 and removed in starlette 1.x. Under
+        # `-W error::DeprecationWarning` the decorator RAISES, so re-executing
+        # the real source file with warnings-as-errors is a direct test: restore
+        # `@app.on_event("startup")` and this goes RED with
+        # `DeprecationWarning: on_event is deprecated`.
+        #
+        # A FRESH module object is used (not `load("main")`, which is cached
+        # session-wide) so the warning is emitted here rather than at first
+        # import. The relative imports still resolve through the synthetic
+        # package, so `ENGINE` stays the one process-wide singleton.
+        source = Path(app_module.__file__)
+        key = f"{PACKAGE}.main_deprecation_probe"
+        spec = importlib.util.spec_from_file_location(key, source)
+        assert spec is not None
+        assert spec.loader is not None
+        probe = importlib.util.module_from_spec(spec)
+        # `@dataclass` resolves its own module out of `sys.modules`, so the
+        # probe has to be registered before it executes — and removed after, so
+        # this scratch copy is not left visible to the rest of the session.
+        sys.modules[key] = probe
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", DeprecationWarning)
+                spec.loader.exec_module(probe)
+        finally:
+            sys.modules.pop(key, None)
+        assert probe.app.title == "loom-duckdb"
+
+    def test_the_lifespan_handler_is_what_starts_the_flight_thread(
+        self, app_module: Any, monkeypatch: pytest.MonkeyPatch,
+        flight_threads: list[threading.Thread],
+    ) -> None:
+        # The migration is only done if startup is still WIRED. This drives the
+        # real ASGI lifespan through TestClient rather than calling
+        # `_start_flight()` by hand: drop `lifespan=lifespan` from the
+        # `FastAPI(...)` call and no thread is ever constructed -> RED.
+        entered = threading.Event()
+        monkeypatch.setenv("LOOM_FLIGHT_ENABLED", "1")
+        monkeypatch.setattr(load("flightsql"), "serve_forever", entered.set)
+        with TestClient(app_module.app) as started:
+            assert started.get("/health").status_code == 200
+            assert [t.name for t in flight_threads] == ["flight-sql"]
+            assert entered.wait(timeout=5)

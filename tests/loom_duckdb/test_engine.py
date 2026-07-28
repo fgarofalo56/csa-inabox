@@ -11,6 +11,7 @@ in-memory `range()` / literals, so there is no Azure dependency and no network.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -233,16 +234,12 @@ class TestExecution:
     def test_the_fallback_branch_still_bounds_and_flags_the_result(
         self, isolated_engine: Any
     ) -> None:
-        # The fallback re-executes the RAW statement with NO `LIMIT` (engine.py
-        # :203), so bounding on this branch is purely post-hoc
-        # (`table.slice(0, cap)`). That post-hoc slice was previously
-        # unasserted: every row-bounding case used a wrappable SELECT. This
-        # pins it.
-        #
-        # It also means a LARGE unwrappable statement is fully materialized
-        # before it is sliced — the memory blow-up the cap exists to prevent.
-        # That is a source behaviour change, out of scope for a test PR, and is
-        # tracked in #2575.
+        # The fallback re-executes the RAW statement (it cannot carry a LIMIT —
+        # see `TestUnwrappableFallbackIsStreamed`), so the cap on this branch is
+        # applied by the caller: the reader is stopped at `cap + 1` rows and the
+        # table is sliced to `cap`. This pins that post-hoc slice, which every
+        # other row-bounding case misses because they all use a wrappable
+        # SELECT.
         result = isolated_engine.run("PRAGMA table_info('duckdb_types')", max_rows=5)
         assert result.row_count == 5
         assert result.table.num_rows == 5
@@ -275,6 +272,127 @@ class TestExecution:
         assert payload["rowCount"] == 1
         assert payload["engine"] == "duckdb"
         assert payload["truncated"] is False
+
+
+# ── the unwrappable fallback must not materialize the whole result (#2575) ──
+class _CursorThatRefusesTheWrapper:
+    """The REAL DuckDB cursor, with `SELECT * FROM (...) AS loom_q` refused."""
+
+    def __init__(self, real: Any) -> None:
+        self._real = real
+
+    def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        if "AS loom_q" in sql:
+            raise engine.duckdb.ParserException(
+                "Parser Error: injected — this statement cannot be wrapped in a subquery",
+            )
+        return self._real.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class _ConnectionThatRefusesTheWrapper:
+    """The REAL DuckDB connection, handing out wrapper-refusing cursors.
+
+    This injects ONE condition — "DuckDB will not wrap this statement" — which
+    is exactly what DuckDB already does for PRAGMA / EXPLAIN. It is what lets a
+    LARGE statement take the fallback, i.e. the "larger unwrappable shape is
+    admitted" case #2575 says turns the latent defect live. Every other part of
+    the path (the guard, the cap arithmetic, the fetch, DuckDB itself) is real.
+    """
+
+    def __init__(self, real: Any) -> None:
+        self._real = real
+
+    def cursor(self) -> _CursorThatRefusesTheWrapper:
+        return _CursorThatRefusesTheWrapper(self._real.cursor())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class TestUnwrappableFallbackIsStreamed:
+    #: ~4M rows / ~200 MB of Arrow once materialized; ~10 ms to stream one batch.
+    HEAVY = "SELECT i, i * 2 AS d, md5(i::VARCHAR) AS h FROM range(4000000) t(i)"
+
+    def test_an_unwrappable_statement_is_bounded_without_materializing_it_whole(
+        self, isolated_engine: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # BUG CAUGHT (#2575): the fallback used to re-execute the raw statement
+        # with `fetch_arrow_table()` and NO limit, so an unwrappable statement
+        # over a large source was materialized IN FULL and only then sliced to
+        # the cap — the exact memory blow-up the cap exists to prevent. The
+        # slice hides it from the response, so the ONLY way to see it is to
+        # measure the work actually done.
+        #
+        # Revert `_bounded_direct_fetch` to `cursor.execute(statement)
+        # .fetch_arrow_table()` and this test goes RED: the fallback takes as
+        # long as the control, because it does the same work.
+        connection = isolated_engine.connection()
+
+        # CONTROL, measured FIRST against plain DuckDB with no Loom code in the
+        # path: this statement really IS a blow-up when materialized whole.
+        # Without it the subject's timing would be an unanchored number, and the
+        # bar below would not adapt to the runner.
+        started = time.perf_counter()
+        materialized_rows = connection.cursor().execute(self.HEAVY).fetch_arrow_table().num_rows
+        materialized_ms = (time.perf_counter() - started) * 1000
+        assert materialized_rows == 4_000_000
+        assert materialized_ms > 100, (
+            "the control did not measure a real materialization cost, so the "
+            "comparison below would be meaningless"
+        )
+
+        monkeypatch.setattr(
+            isolated_engine, "_con", _ConnectionThatRefusesTheWrapper(connection),
+        )
+        started = time.perf_counter()
+        result = isolated_engine.run(self.HEAVY, max_rows=5)
+        fallback_ms = (time.perf_counter() - started) * 1000
+
+        # Correct answer, still bounded and still flagged.
+        assert result.row_count == 5
+        assert result.truncated is True
+        assert result.table.column("i").to_pylist() == [0, 1, 2, 3, 4]
+        # Measured locally the gap is ~80x (780 ms vs 10 ms). A 4x bar leaves an
+        # order of magnitude of headroom for a loaded CI runner while remaining
+        # impossible to clear by materializing 4M rows.
+        assert fallback_ms < materialized_ms / 4, (
+            f"the fallback took {fallback_ms:.0f} ms against a "
+            f"{materialized_ms:.0f} ms full materialization — it is still "
+            "materializing the whole result before slicing it"
+        )
+
+    def test_the_fallback_bounds_by_streaming_not_by_rewriting_the_statement(
+        self, isolated_engine: Any
+    ) -> None:
+        # GUARDS THE WRONG FIX (not the shipped bug — that is the test above).
+        # The other obvious way to bound #2575 is to append `LIMIT n` to the raw
+        # statement, and it is silently wrong: `EXPLAIN <query> LIMIT 2` is an
+        # EXPLAIN *of* `<query> LIMIT 2`, a different plan than the caller asked
+        # for. Implement the fallback that way and this goes RED. EXPLAIN is
+        # genuinely unwrappable (asserted below), so this rides the real
+        # fallback rather than a simulated one.
+        statement = "EXPLAIN SELECT i FROM range(1000) t(i)"
+        with pytest.raises(engine.duckdb.Error):
+            isolated_engine.connection().execute(
+                f"SELECT * FROM ({statement}) AS loom_q LIMIT 2",
+            )
+
+        through_the_fallback = isolated_engine.run(statement, max_rows=2)
+        rewritten = (
+            isolated_engine.connection()
+            .execute(f"{statement} LIMIT 2")
+            .fetch_arrow_table()
+        )
+        assert through_the_fallback.table.to_pylist() != rewritten.to_pylist(), (
+            "the fallback produced the plan of the LIMIT-appended statement, so "
+            "it rewrote the caller's SQL instead of streaming the real one"
+        )
+        # And it is the plan of the statement as submitted.
+        unbounded = isolated_engine.connection().execute(statement).fetch_arrow_table()
+        assert through_the_fallback.table.to_pylist() == unbounded.to_pylist()
 
 
 # ── Arrow IPC (the wire the console, duckdb-wasm and ADBC all read) ──────────

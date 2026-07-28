@@ -10,6 +10,11 @@ Protocol coverage (honest, and mirrored in the parity doc):
 
   * `GetFlightInfo(CommandStatementQuery)`   → plans the query, returns a ticket
   * `DoGet(TicketStatementQuery)`            → streams real Arrow RecordBatches
+  * `DoGet(<raw SQL bytes>)`                 → the BARE-SQL path for plain
+    Arrow Flight clients that never call GetFlightInfo. ON by default (Loom's
+    default-ON rule); set `LOOM_FLIGHT_ALLOW_BARE_SQL=0` to serve ONLY the
+    two-step handshake. See "handle lifecycle" below — this path is why the
+    handle controls bound a leaked HANDLE and not a leaked TICKET.
   * `GetSchema(CommandStatementQuery)`       → the result schema, no execution
   * `GetFlightInfo(CommandGetSqlInfo)`       → an empty, correctly-typed table
     (this deployment advertises no optional SQL-info capabilities; clients
@@ -22,6 +27,21 @@ Entra-scoped ticket minted by the Loom BFF (`app/tickets.py`). Session creation
 and every ticket redemption are logged with principal, scope, statement and
 outcome, and the console reads them back through the audited proxy. There is no
 anonymous path and no long-lived secret on the wire.
+
+HANDLE LIFECYCLE — what it does and does NOT bound (#2577). A statement handle
+minted by GetFlightInfo is single-use, bound to the minting ticket, and expires
+after `HANDLE_TTL_S`. While the bare-SQL path is enabled that is a
+RESOURCE-HYGIENE control, not a replay/authorization boundary: a leaked handle
+is worthless after one fetch, but a holder of a valid, unexpired ticket can
+`DoGet(Ticket(b"SELECT ..."))` with arbitrary READ SQL for the rest of the
+ticket's TTL, skipping GetFlightInfo entirely. The read-only guard and the
+audit log apply on both paths (bare-SQL redemptions are logged under their own
+`flight.doGet.bareSql` operation so an ATO reviewer can tell them apart), and
+`GET /capabilities` reports `flight.bareSqlTickets` so the live posture is
+discoverable rather than implied. A deployment that wants the handshake to BE
+the boundary sets `LOOM_FLIGHT_ALLOW_BARE_SQL=0`; conformant Flight SQL / ADBC
+/ JDBC clients are unaffected either way, because they always call
+GetFlightInfo first.
 
 IL5: gRPC/HTTP2 on Container Apps works in Commercial and Gov; in IL5 the
 service stays INTERNAL-ingress only and the ticket is minted in-boundary by the
@@ -40,7 +60,7 @@ import pyarrow as pa
 import pyarrow.flight as flight
 
 from . import pbcodec
-from .engine import ENGINE
+from .engine import ENGINE, env_enabled
 from .sqlguard import SqlNotAllowedError
 from .tickets import TicketInvalidError, verify_ticket
 
@@ -52,6 +72,22 @@ AUTH_HEADER = "authorization"
 #: How long a planned statement handle stays redeemable (seconds). A DoGet is
 #: expected to follow its GetFlightInfo immediately; anything longer is a replay.
 HANDLE_TTL_S = 120
+
+#: Opt-OUT flag for the bare-SQL DoGet path (see the module docstring). Default
+#: ON so plain Arrow Flight clients keep working out of the box per Loom's
+#: default-ON rule; `=0` leaves ONLY the audited GetFlightInfo -> handle -> DoGet
+#: handshake, which makes the handle lifecycle a real replay boundary.
+BARE_SQL_FLAG = "LOOM_FLIGHT_ALLOW_BARE_SQL"
+
+#: Audit `operation` for a DoGet that skipped the plan->handle handshake. It is
+#: deliberately DISTINCT from `flight.doGet` so the access log distinguishes a
+#: redeemed handle from arbitrary SQL presented on a ticket.
+BARE_SQL_OPERATION = "flight.doGet.bareSql"
+
+
+def bare_sql_tickets_allowed() -> bool:
+    """Whether `DoGet(Ticket(b"SELECT ..."))` is served by this deployment."""
+    return env_enabled(BARE_SQL_FLAG)
 
 
 def _sql_info_schema() -> pa.Schema:
@@ -209,29 +245,46 @@ class LoomFlightSqlServer(flight.FlightServerBase):
 
         if type_url == pbcodec.TYPE_TICKET_STATEMENT_QUERY:
             sql = self._redeem(pbcodec.decode_ticket_statement_query(value), principal)
+            operation = "flight.doGet"
         elif type_url:
             raise flight.FlightUnavailableError(
                 f"{type_url.rsplit('.', 1)[-1]} tickets are not served by the Loom DuckDB Flight tier."
             )
         else:
-            # A bare SQL ticket (simple Flight clients). Still fully authorized
-            # + audited; it just skips the two-step plan/fetch handshake.
+            # A bare SQL ticket (plain Arrow Flight clients that never call
+            # GetFlightInfo). Fully authenticated and audited, but it SKIPS the
+            # plan->handle handshake, so the handle lifecycle bounds a leaked
+            # handle and not a leaked ticket (#2577, module docstring). Logged
+            # under its own operation so the two are distinguishable, and
+            # switched off with LOOM_FLIGHT_ALLOW_BARE_SQL=0.
             sql = value.decode("utf-8", "replace")
+            operation = BARE_SQL_OPERATION
+            if not bare_sql_tickets_allowed():
+                self._log(
+                    principal, operation, sql, "refused",
+                    f"{BARE_SQL_FLAG}=0 on this deployment.",
+                )
+                raise flight.FlightUnauthorizedError(
+                    "This deployment does not serve bare-SQL Flight tickets "
+                    f"({BARE_SQL_FLAG}=0). Call GetFlightInfo(CommandStatementQuery) "
+                    "first and DoGet the ticket it returns — every conformant Flight "
+                    "SQL / ADBC / JDBC client already does.",
+                )
 
         started = time.perf_counter()
         try:
             result = ENGINE.run(sql)
         except SqlNotAllowedError as exc:
-            self._log(principal, "flight.doGet", sql, "refused", str(exc))
+            self._log(principal, operation, sql, "refused", str(exc))
             raise flight.FlightServerError(str(exc)) from exc
         except Exception as exc:
-            self._log(principal, "flight.doGet", sql, "failure", str(exc))
+            self._log(principal, operation, sql, "failure", str(exc))
             raise flight.FlightServerError(f"Query failed: {exc}") from exc
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         self._log(
             principal,
-            "flight.doGet",
+            operation,
             sql,
             "success",
             f"{result.row_count} rows in {elapsed_ms} ms",
