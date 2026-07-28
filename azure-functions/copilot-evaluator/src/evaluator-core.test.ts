@@ -17,6 +17,7 @@ import {
   parseJudge,
   computePass,
   rollupRun,
+  rollupBackends,
   resolveEvalRoot,
   loadSearchEvalSets,
   normalizeSearchId,
@@ -216,6 +217,22 @@ describe('computePass + rollupRun', () => {
   });
   it('empty run → zeroed totals with null judge averages', () => {
     expect(rollupRun([])).toMatchObject({ questions: 0, groundingAvg: null, answerAvg: null });
+  });
+
+  // Catches the #2585 observability gap: `backend` was recorded on every
+  // per-question doc but never rolled up, so the CI receipt could not say which
+  // retrieval backend served a run and the triage had to infer it. A rollup
+  // that drops the field passes every other assertion here and fails this one.
+  it('counts which retrieval backend served the run', () => {
+    expect(rollupBackends([
+      { backend: 'ai-search' }, { backend: 'ai-search' }, { backend: 'cosmos' },
+      { backend: undefined }, { backend: '  ' },
+    ])).toEqual({ 'ai-search': 2, cosmos: 1 });
+    expect(rollupBackends([])).toEqual({});
+    expect(rollupRun([
+      { ...base, backend: 'cosmos' },
+      { ...base, questionId: 'q2', backend: 'cosmos' },
+    ]).backends).toEqual({ cosmos: 2 });
   });
 });
 

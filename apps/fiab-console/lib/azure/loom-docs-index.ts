@@ -35,6 +35,18 @@ import type { Container } from '@azure/cosmos';
 
 import { copilotSessionsContainer } from './cosmos-client';
 import { recordRetrieval } from '@/lib/perf/retrieval-metrics';
+import { runtimeFlag } from '@/lib/admin/runtime-flags';
+import {
+  buildBm25Index,
+  bm25Rank,
+  diversifyByDocument,
+  rankSubstring,
+  surfaceBoostFactor,
+  surfaceTopicTerms,
+  DEFAULT_MAX_CHUNKS_PER_DOC,
+  DEFAULT_SURFACE_BOOST,
+  type Bm25Index,
+} from './docs-ranker';
 
 // ---------- Types ----------
 
@@ -329,21 +341,71 @@ async function deleteChunksFromCosmos(
   }
 }
 
-function rankSubstring(query: string, content: string, heading?: string): number {
-  const q = query.toLowerCase();
-  const terms = q.split(/\s+/).filter((t) => t.length > 2);
-  if (terms.length === 0) return 0;
-  const text = `${heading || ''}\n${content}`.toLowerCase();
-  let score = 0;
-  for (const term of terms) {
-    if (text.includes(term)) score += 1;
-    // Boost matches in headings
-    if (heading && heading.toLowerCase().includes(term)) score += 1;
+// ---------- Cosmos-fallback ranking (issue #2585 P0) ----------
+
+/**
+ * BM25 needs corpus-wide statistics (document frequency, mean chunk length), so
+ * unlike the per-chunk `rankSubstring` it cannot be evaluated one row at a time.
+ * The index is therefore built once per corpus SNAPSHOT and reused across
+ * queries: building it over the ~50k-chunk corpus costs ~850 ms, ranking against
+ * it costs microseconds because the postings walk touches only the query's own
+ * terms instead of scanning every chunk.
+ *
+ * Cache key = chunk count + an order-independent hash of the chunk ids, so a
+ * reindex (new/removed/renamed chunks) invalidates it automatically without a
+ * process restart, and Cosmos returning rows in a different order does not.
+ * Content-only edits that keep every id stable are picked up on the next
+ * `resetDocsRankerCache()` (called by `reindex`) or process roll.
+ */
+let bm25Cache: { signature: string; index: Bm25Index } | null = null;
+
+/** FNV-1a over one id — cheap, and combined order-independently below. */
+function idHash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
   }
-  return score / (terms.length * 2);
+  return h >>> 0;
 }
 
-async function searchCosmos(query: string, top: number, kind?: DocChunk['kind']): Promise<DocHit[]> {
+function corpusSignature(chunks: DocChunk[]): string {
+  let sum = 0;
+  let xor = 0;
+  for (const c of chunks) {
+    const h = idHash(c.id || c.path);
+    sum = (sum + h) >>> 0;
+    xor ^= h;
+  }
+  return `${chunks.length}:${sum}:${xor >>> 0}`;
+}
+
+/** Drop the memoised BM25 index (called after a reindex; exported for tests). */
+export function resetDocsRankerCache(): void {
+  bm25Cache = null;
+}
+
+function bm25IndexFor(chunks: DocChunk[]): Bm25Index {
+  const signature = corpusSignature(chunks);
+  if (bm25Cache && bm25Cache.signature === signature) return bm25Cache.index;
+  const index = buildBm25Index(chunks);
+  bm25Cache = { signature, index };
+  return index;
+}
+
+/**
+ * How many candidates to pull before per-document diversification trims back to
+ * `top`. Without an over-fetch the diversifier has nothing to backfill from and
+ * is a no-op.
+ */
+const RETRIEVAL_OVERFETCH = 4;
+
+async function searchCosmos(
+  query: string,
+  top: number,
+  kind?: DocChunk['kind'],
+  opts?: { bm25?: boolean; surfaceTerms?: readonly string[] },
+): Promise<DocHit[]> {
   try {
     const c = await helpCorpusContainer();
     // Pull ALL chunks for the kind (or all kinds) and rank in-memory.
@@ -353,12 +415,24 @@ async function searchCosmos(query: string, top: number, kind?: DocChunk['kind'])
       ? { query: 'SELECT * FROM c WHERE c.kind = @k', parameters: [{ name: '@k', value: kind }] }
       : { query: 'SELECT * FROM c WHERE c.kind != @meta', parameters: [{ name: '@meta', value: META_KIND }] };
     const { resources } = await c.items.query<DocChunk>(q).fetchAll();
-    const ranked = resources
-      .map((r) => ({ ...r, score: rankSubstring(query, r.content, r.heading) }))
-      .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, top);
-    return ranked;
+    if (opts?.bm25 === false) {
+      // Kill-switch path — byte-identical to the pre-#2585 ranker.
+      return resources
+        .map((r) => ({ ...r, score: rankSubstring(query, r.content, r.heading) }))
+        .filter((r) => r.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, top);
+    }
+    const index = bm25IndexFor(resources);
+    const ranked = bm25Rank(index, query, top, {
+      surfaceTerms: opts?.surfaceTerms,
+      surfaceBoost: opts?.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
+    });
+    // Normalise to the 0..1 `DocHit.score` contract the AI Search path also
+    // honours (BM25 is unbounded above and only comparable within one result
+    // set) — citations and the Copilot tool render this number.
+    const max = ranked.length > 0 ? ranked[0].score : 1;
+    return ranked.map((r) => ({ ...resources[r.index], score: max > 0 ? r.score / max : 0 }));
   } catch (e: any) {
     console.warn('[loom-docs-index] cosmos search failed', e?.message);
     return [];
@@ -368,20 +442,82 @@ async function searchCosmos(query: string, top: number, kind?: DocChunk['kind'])
 // ---------- Public search API ----------
 
 /**
+ * Default retrieval window. Raised 5 → 8 for #2585 (P1): measured over the
+ * golden sets at a fixed ranker, doc-level hit-rate@8 is 0.760 vs 0.712 at
+ * top-5, with ZERO surfaces regressing. The cost is real (three more ≤1500-char
+ * excerpts in the answer prompt), which is why it carries its own kill-switch —
+ * `copilot-retrieval-window-8`, OFF reverts to 5 without a roll.
+ */
+export const DEFAULT_DOC_RETRIEVAL_TOP = 8;
+/** Pre-#2585 window, restored when the widening flag is OFF. */
+export const LEGACY_DOC_RETRIEVAL_TOP = 5;
+
+/** Optional retrieval scoping. */
+export interface SearchDocsOptions {
+  /**
+   * The Copilot surface the question was asked from (an item type such as
+   * `lakehouse`, or an eval-set name). Applied as a topical BOOST, never a
+   * filter — see `docs-ranker.surfaceBoostFactor`.
+   */
+  surface?: string | null;
+}
+
+/**
  * Hybrid: try AI Search first; fall back to Cosmos substring if Search
  * isn't configured or returns nothing.
+ *
+ * Pipeline (#2585 P0/P1): over-fetch `top * RETRIEVAL_OVERFETCH` candidates →
+ * apply the surface boost → cap chunks-per-document → slice to `top`.
+ *
+ * Backend asymmetry, stated plainly: on the Cosmos/BM25 path the surface boost
+ * is folded into SCORING, so it can promote a document from anywhere in the
+ * corpus. On the AI Search path the ranking happens in the service, so the
+ * boost can only re-sort the over-fetched window. The offline harness
+ * (`scripts/csa-loom/measure-retrieval.mjs`) exercises the Cosmos path only —
+ * the AI Search variant is a weaker approximation that has NOT been measured.
  */
-export async function searchDocs(query: string, top = 5, kind?: DocChunk['kind']): Promise<{
+export async function searchDocs(
+  query: string,
+  top = DEFAULT_DOC_RETRIEVAL_TOP,
+  kind?: DocChunk['kind'],
+  opts?: SearchDocsOptions,
+): Promise<{
   hits: DocHit[];
   backend: 'ai-search' | 'cosmos' | 'none';
 }> {
   if (!query.trim()) return { hits: [], backend: 'none' };
   const started = Date.now();
   let fellBack = false;
+
+  // Kill-switches (default-ON per loom_default_on_opt_out; a flag-store outage
+  // fails open to the new path, which is the measured-better one).
+  const [bm25Enabled, surfaceEnabled, wideWindow] = await Promise.all([
+    runtimeFlag('copilot-bm25-retrieval'),
+    runtimeFlag('copilot-surface-scoped-retrieval'),
+    runtimeFlag('copilot-retrieval-window-8'),
+  ]);
+  const want = wideWindow ? top : Math.min(top, LEGACY_DOC_RETRIEVAL_TOP);
+  const surfaceTerms = surfaceEnabled && bm25Enabled ? surfaceTopicTerms(opts?.surface) : [];
+  const overfetch = bm25Enabled ? Math.max(want * RETRIEVAL_OVERFETCH, want) : want;
+
+  const finish = (hits: DocHit[]): DocHit[] => {
+    if (!bm25Enabled) return hits.slice(0, want);
+    return diversifyByDocument(hits, want, DEFAULT_MAX_CHUNKS_PER_DOC);
+  };
+
   if (isSearchConfigured()) {
     try {
-      const hits = await searchSearch(query, top, kind);
-      if (hits.length > 0) {
+      const raw = await searchSearch(query, overfetch, kind);
+      if (raw.length > 0) {
+        // AI Search ranks server-side, so the surface prior can only re-sort the
+        // window we were given (see the note above).
+        const boosted = surfaceTerms.length
+          ? [...raw]
+              .map((h) => ({ h, s: h.score * surfaceBoostFactor(surfaceTerms, h) }))
+              .sort((a, b) => b.s - a.s)
+              .map(({ h, s }) => ({ ...h, score: s }))
+          : raw;
+        const hits = finish(boosted);
         recordRetrieval({ backend: 'ai-search', latencyMs: Date.now() - started, resultCount: hits.length, fallback: false });
         return { hits, backend: 'ai-search' };
       }
@@ -393,7 +529,8 @@ export async function searchDocs(query: string, top = 5, kind?: DocChunk['kind']
       fellBack = true;
     }
   }
-  const hits = await searchCosmos(query, top, kind);
+  const raw = await searchCosmos(query, overfetch, kind, { bm25: bm25Enabled, surfaceTerms });
+  const hits = finish(raw);
   const backend = hits.length > 0 || !isSearchConfigured() ? 'cosmos' : 'ai-search';
   recordRetrieval({ backend, latencyMs: Date.now() - started, resultCount: hits.length, fallback: fellBack });
   return { hits, backend };
@@ -885,6 +1022,10 @@ export async function buildCorpus(): Promise<DocChunk[]> {
 
 export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult> {
   const warnings: string[] = [];
+  // The BM25 index is keyed on chunk IDS, which are stable across a pure content
+  // edit — so a reindex must drop it explicitly or this replica would keep
+  // ranking against the pre-reindex text.
+  resetDocsRankerCache();
   const { chunks, files, statFingerprint: statFp, contentFingerprint } = collectSources();
   const byKind: Record<string, number> = {};
   for (const c of chunks) byKind[c.kind] = (byKind[c.kind] || 0) + 1;

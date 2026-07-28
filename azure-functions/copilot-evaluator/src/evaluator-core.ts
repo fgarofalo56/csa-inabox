@@ -380,6 +380,26 @@ export interface RunTotals {
   judged: number;
   deferred: number;
   autoFailed: number;
+  /**
+   * Which retrieval backend actually answered, counted per question
+   * (`{"ai-search": 15}`). Issue #2585: `backend` was captured on every
+   * per-question doc but never rolled up, so the CI receipt could not say
+   * whether a run was served by AI Search or the Cosmos fallback — and the
+   * triage had to INFER it, which made the offline hit-rate model impossible to
+   * anchor to a live number. Absent on legacy docs written before this field.
+   */
+  backends?: Record<string, number>;
+}
+
+/** Count per-question backends into the run rollup (`{}` when none reported). */
+export function rollupBackends(results: Pick<EvalResult, 'backend'>[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of results) {
+    const b = (r.backend || '').trim();
+    if (!b) continue;
+    out[b] = (out[b] || 0) + 1;
+  }
+  return out;
 }
 
 /** Roll one surface's per-question results up into the `eval-run` totals. */
@@ -389,6 +409,7 @@ export function rollupRun(results: EvalResult[]): RunTotals {
     return {
       questions: 0, retrievalHitRate: 0, mrrAvg: 0, groundingAvg: null,
       answerAvg: null, passRate: 0, judged: 0, deferred: 0, autoFailed: 0,
+      backends: {},
     };
   }
   const judgedResults = results.filter((r) => r.judgeStatus === 'scored' && r.judge);
@@ -410,6 +431,7 @@ export function rollupRun(results: EvalResult[]): RunTotals {
     judged: judgedResults.length,
     deferred: results.filter((r) => r.judgeStatus === 'deferred').length,
     autoFailed: results.filter((r) => r.judgeStatus === 'auto-fail').length,
+    backends: rollupBackends(results),
   };
 }
 

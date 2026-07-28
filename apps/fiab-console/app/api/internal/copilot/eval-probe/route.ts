@@ -24,13 +24,27 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isValidInternalToken, INTERNAL_TOKEN_HEADER } from '@/lib/auth/internal-token';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
-import { searchDocs } from '@/lib/azure/loom-docs-index';
+import { searchDocs, DEFAULT_DOC_RETRIEVAL_TOP } from '@/lib/azure/loom-docs-index';
 import { aoaiChat, NoAoaiDeploymentError, type AoaiChatMessage } from '@/lib/azure/aoai-chat-client';
 import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
 import { routeTurnTier } from '@/lib/foundry/model-tier-router';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Characters of each retrieved chunk that count as EVIDENCE — the single source
+ * of truth for both the answer prompt and the `preview` the evaluator hands the
+ * judge.
+ *
+ * Issue #2585 P3: these were 1500 and 300 respectively, so the judge was asked
+ * "is this claim supported by the excerpts?" while holding 20% of the text the
+ * model actually answered from. Any claim drawn from characters 301–1500 looked
+ * ungrounded to the judge even when it was perfectly grounded, which made
+ * `groundingAvg` untrustworthy in both directions. One constant, both call
+ * sites — they cannot drift apart again.
+ */
+export const EVIDENCE_CHARS = 1500;
 
 function authed(req: NextRequest): boolean {
   const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
@@ -42,7 +56,7 @@ function authed(req: NextRequest): boolean {
 function buildTurnMessages(question: string, excerpts: { path: string; heading?: string; content: string }[]): AoaiChatMessage[] {
   const context = excerpts.length
     ? excerpts
-        .map((e, i) => `[${i + 1}] ${e.path}${e.heading ? ` — ${e.heading}` : ''}\n${e.content.slice(0, 1500)}`)
+        .map((e, i) => `[${i + 1}] ${e.path}${e.heading ? ` — ${e.heading}` : ''}\n${e.content.slice(0, EVIDENCE_CHARS)}`)
         .join('\n\n')
     : '(no documentation excerpts were retrieved)';
   return [
@@ -87,13 +101,17 @@ export async function POST(req: NextRequest) {
   }
   const question = String(body?.question || '').trim();
   if (!question) return apiError('question is required', 400);
-  const top = Math.min(Math.max(Number(body?.top) || 5, 1), 10);
+  const surface = String(body?.surface || '').trim() || null;
+  const top = Math.min(Math.max(Number(body?.top) || DEFAULT_DOC_RETRIEVAL_TOP, 1), 10);
 
   try {
     const t0 = Date.now();
     // 1. REAL retrieval — the exact hybrid searchDocs (AI Search → Cosmos
     //    fallback) the docs Copilot rides; telemetry recorded as production.
-    const { hits, backend } = await searchDocs(question, top);
+    //    `surface` is now APPLIED (a topical boost), not merely echoed: before
+    //    #2585 P1b it was accepted and dropped, so every surface competed
+    //    against the whole 2,587-document corpus in a top-5 window.
+    const { hits, backend } = await searchDocs(question, top, undefined, { surface });
     const retrievalMs = Date.now() - t0;
 
     // 2. REAL Copilot turn through the unified aoai-chat-client. The tier
@@ -108,13 +126,14 @@ export async function POST(req: NextRequest) {
 
     return apiOk({
       question,
-      surface: body?.surface || null,
+      surface,
       retrievedChunks: hits.map((h) => ({
         id: `${h.path}${h.heading ? `#${h.heading.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}` : ''}`,
         path: h.path,
         heading: h.heading ?? null,
         kind: h.kind,
-        preview: h.content.slice(0, 300),
+        // Same slice the model answered from — see EVIDENCE_CHARS.
+        preview: h.content.slice(0, EVIDENCE_CHARS),
       })),
       backend,
       answer,
