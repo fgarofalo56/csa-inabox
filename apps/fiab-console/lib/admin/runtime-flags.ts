@@ -509,6 +509,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N14d',
     surface: 'Agent runs + /api/agents/[id]/memory (read/write/purge)',
   },
+  // ── N19a — Reactive notebook mode (dep-DAG re-run + deploy-as-app) ──
+  {
+    id: 'n19a-reactive-notebook',
+    label: 'Notebook — reactive mode + deploy-as-app',
+    description:
+      'The N19a reactive layer on the Loom notebook editor: the cell dependency DAG derived from the variables each Python/PySpark cell defines and reads, the Reactive pane, staleness marks, reactive re-run (running or editing a cell re-executes ONLY its invalidated downstream cells, on the same Spark/Livy session a manual run uses), and "Deploy as app" (POST /api/items/notebook/[id]/deploy-app, which publishes through the SHARED loom-app publish path). OFF hides the Reactive pane + its toggle on the next render and makes the deploy-app route return a guided 503 — cells, manual per-cell Run, Run all, .py/.ipynb export/import, and every already-deployed app keep working unchanged (no roll needed). Reactive AUTO-RUN is additionally a per-notebook user toggle that defaults to OFF, so this flag governs availability, not behaviour changes behind the user\'s back.',
+    ownerItem: 'N19a',
+    surface: 'Notebook editor (/items/notebook/[id]) — Reactive pane + Deploy as app + POST /api/items/notebook/[id]/deploy-app',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

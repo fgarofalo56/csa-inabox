@@ -1,8 +1,9 @@
 // helpers.ts — pure utility functions for the notebook-editor.
 // No JSX; no 'use client' needed. Extracted verbatim from notebook-editor.tsx.
 
-import { type NotebookCell, emptyCell } from '@/lib/types/notebook-cell';
+import { type NotebookCell, type NotebookCellLang, emptyCell } from '@/lib/types/notebook-cell';
 import { STARTER_PY, SPARK_MAGICS, COMPUTE_RUNNING, CI_STOPPED } from './constants';
+import { cellsToPercentPy, percentPyFilename, percentPyConflicts } from '@/lib/notebook/py-roundtrip';
 
 export function cellRoutesToSpark(source: string): boolean {
   const line = source.split('\n').find(l => l.trim() !== '');
@@ -39,6 +40,62 @@ export function downloadJson(filename: string, data: unknown): void {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch { /* download blocked — no-op */ }
+}
+
+/** Trigger a client-side download of a text file (e.g. the `.py` export). */
+export function downloadText(filename: string, text: string, mime = 'text/plain'): void {
+  try {
+    const blob = new Blob([text], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch { /* download blocked — no-op */ }
+}
+
+/**
+ * R4-NB-8 — export the notebook as a portable `.ipynb` and download it.
+ * Returns the status line to show. Lives here (not in the editor) so the two
+ * notebook export formats share one module.
+ */
+export function exportIpynbFile(
+  cells: NotebookCell[],
+  defaultLang: NotebookCellLang,
+  displayName: string,
+): string {
+  const isR = defaultLang === 'sparkr';
+  const nb = {
+    nbformat: 4, nbformat_minor: 5,
+    metadata: {
+      kernelspec: { name: isR ? 'ir' : 'python3', display_name: isR ? 'R' : 'Python 3', language: isR ? 'R' : 'python' },
+      language_info: { name: isR ? 'R' : 'python' },
+    },
+    cells: cells.map((c) => c.type === 'markdown'
+      ? { cell_type: 'markdown', metadata: {}, source: splitKeep(c.source) }
+      : { cell_type: 'code', execution_count: c.executionCount ?? null, metadata: c.parameters ? { tags: ['parameters'] } : {}, outputs: [], source: splitKeep(c.source) }),
+  };
+  downloadJson(`${displayName}.ipynb`, nb);
+  return `Exported ${displayName}.ipynb (${cells.length} cell${cells.length === 1 ? '' : 's'}).`;
+}
+
+/**
+ * N19a — export the notebook as a percent-format `.py` script and download it.
+ * Returns the status line to show (including an honest warning when a cell body
+ * would collide with the `# %%` separator on re-import).
+ */
+export function exportPercentPy(
+  cells: NotebookCell[],
+  defaultLang: NotebookCellLang,
+  displayName: string,
+): string {
+  const filename = percentPyFilename(displayName);
+  downloadText(filename, cellsToPercentPy(cells, defaultLang, displayName), 'text/x-python');
+  const conflicts = percentPyConflicts(cells);
+  const base = `Exported ${filename} (${cells.length} cell${cells.length === 1 ? '' : 's'}, percent format — re-importable with Import notebook).`;
+  return conflicts.length === 0
+    ? base
+    : `${base} WARNING: ${conflicts.length} cell${conflicts.length === 1 ? '' : 's'} contain a line starting with "# %%", which re-imports as a cell break — edit those lines before round-tripping.`;
 }
 
 export function decodePy(b64: string): string {

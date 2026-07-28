@@ -178,9 +178,38 @@ function parseDatabricksBlock(blockLines: string[], defaultLang: NotebookCellLan
   return codeCell(lines.join('\n'), defaultLang);
 }
 
+/**
+ * Language tag inside a percent marker (`# %% [sql]`) → Loom cell language.
+ * jupytext only standardizes `[markdown]`/`[raw]`; the language tags are the
+ * Loom percent-export convention (lib/notebook/py-roundtrip.ts) so a
+ * multi-language notebook survives the `.py` round trip. An unknown tag falls
+ * back to the notebook default — never an error.
+ */
+const PERCENT_LANG_TAGS: Record<string, NotebookCellLang> = {
+  pyspark: 'pyspark',
+  python: 'python',
+  py: 'python',
+  scala: 'spark',
+  spark: 'spark',
+  sql: 'sparksql',
+  sparksql: 'sparksql',
+  r: 'sparkr',
+  sparkr: 'sparkr',
+  tsql: 'tsql',
+  csharp: 'csharp',
+};
+
+/** Read the `[lang]` tag off a percent marker, if it names a known language. */
+export function percentMarkerLang(headerMarker: string): NotebookCellLang | null {
+  const m = /\[([A-Za-z#]+)\]/.exec(headerMarker || '');
+  if (!m) return null;
+  return PERCENT_LANG_TAGS[m[1].toLowerCase()] ?? null;
+}
+
 function parsePercentBlock(headerMarker: string, bodyLines: string[], defaultLang: NotebookCellLang): NotebookCell {
   const isMarkdown = /\[markdown\]/i.test(headerMarker) || /\[md\]/i.test(headerMarker);
   const body = bodyLines.join('\n').replace(/^\n+/, '').replace(/\n+$/, '');
+  const tagged = percentMarkerLang(headerMarker);
   if (isMarkdown) {
     // jupytext markdown bodies are commonly comment-prefixed (`# text`).
     const stripped = bodyLines
@@ -190,7 +219,7 @@ function parsePercentBlock(headerMarker: string, bodyLines: string[], defaultLan
       .replace(/\n+$/, '');
     return markdownCell(stripped || body);
   }
-  return codeCell(body, defaultLang);
+  return codeCell(body, tagged ?? defaultLang);
 }
 
 function parsePy(text: string, defaultLang: NotebookCellLang): ParsedNotebook {
@@ -218,9 +247,13 @@ function parsePy(text: string, defaultLang: NotebookCellLang): ParsedNotebook {
     let body: string[] = [];
     const flush = () => {
       if (marker === null) {
-        // Preamble before the first `# %%` marker — keep as a code cell.
+        // Preamble before the first `# %%` marker. A comment-only preamble is
+        // front matter (jupytext's `# ---` YAML header, Loom's percent-export
+        // header) — it is metadata, not a cell, so it is dropped. Any real
+        // code before the first marker is kept as a leading code cell.
         const pre = body.join('\n').trim();
-        if (pre) cells.push(codeCell(pre, defaultLang));
+        const isFrontMatter = body.every((ln) => ln.trim() === '' || ln.trim().startsWith('#'));
+        if (pre && !isFrontMatter) cells.push(codeCell(pre, defaultLang));
       } else {
         cells.push(parsePercentBlock(marker, body, defaultLang));
       }

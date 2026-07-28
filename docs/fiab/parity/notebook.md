@@ -84,3 +84,32 @@ Source UI: Azure ML studio Notebooks — https://learn.microsoft.com/azure/machi
 Sovereign clouds: Commercial / GCC use `management.azure.com` + `dfs.core.windows.net`; GCC-High / IL5 use the USGov suffixes automatically (`cloud-endpoints.armBase()` / `dfsSuffix()`). AML isn't offered in DoD/IL6 — `amlIsConfigured()` returns false there and the toggle simply gates.
 
 Grade: **A (Azure-native default, real ARM backend, contract-tested in `__tests__/aml-client.test.ts`).**
+
+## N19a — reactive notebook mode (beyond Fabric)
+
+Fabric notebooks have NO reactive execution model: editing an upstream cell
+leaves every downstream output silently stale, and there is no dependency graph
+surface. Loom adds one (Marimo semantics on the existing per-cell run path), so
+this section is a Loom-exceeds-baseline extension rather than a Fabric parity row.
+
+| # | Capability | Status | Loom implementation |
+|---|---|---|---|
+| N1 | Cell dependency DAG (what each cell defines / reads) | ✅ | `lib/notebook/reactive-dag.ts` — indent-0 binding analysis (assign / aug-assign / unpack / for / with-as / except-as / def / class / import / walrus / global), comment + string scrubbing, definer to user edges in BOTH directions, cycle detection (Kahn residue), duplicate-definition collisions. Unit-tested: `lib/notebook/__tests__/reactive-dag.test.ts` (31 cases). |
+| N2 | Staleness marks on out-of-date cells | ✅ | Editing a cell marks it + its transitive downstream stale (`staleAfterEdit`); a `Stale` badge renders above the cell and the Reactive pane lists them. Tracked even with auto-run OFF, so the notebook never shows a number that no longer follows from the code. |
+| N3 | Reactive re-run (downstream only, dependency order) | ✅ | `useReactiveNotebook` (`lib/editors/notebook-editor/reactive.ts`) calls the editor's REAL `runCell` for each cell in `reactiveRunPlan` order — same Livy / Spark / AML session, same receipts. Cascade stops on the first failed cell. Cycle members are never auto-run. |
+| N4 | Dependency-graph pane | ✅ | `lib/components/notebook/reactive-pane.tsx` — per-cell defines/reads, upstream/downstream counts, stale + cycle badges, click-to-jump, Run stale, Mark fresh, cycle + redefined-variable warnings. Fluent v9 + Loom tokens only. |
+| N5 | `.py` round trip (export + import, lossless) | ✅ | `lib/notebook/py-roundtrip.ts` writes percent format (`# %% [pyspark]`, `# %% [sql]`, `# %% [markdown]`); the reverse is the EXISTING `parseNotebookFile` reader (extended to honor the language tag and to drop front matter) so there is one reader and one writer. Round-trip tested (`py-roundtrip.test.ts`, 15 cases) for cell count, type, per-cell language and verbatim source, twice over. Ribbon: Home to Item to `Export .py`; import is the existing `Import notebook`. |
+| N6 | Deploy as app | ✅ | `POST /api/items/notebook/[id]/deploy-app` creates-or-updates a real `loom-app` item and publishes it through the SHARED helpers (`publishBlocker` / `stampPublish` / `stampUnpublish` / `upsertContentEntry` in `lib/editors/loom-app-model.ts`) that the loom-app publish route also calls — no forked publish path, no second version counter. Consumers open the existing `/apps/view/<id>`. `GET` returns the live deployment (version, publishedAt, URL). UI: `lib/components/notebook/deploy-app-dialog.tsx` (name, description, access list, Deploy / Re-deploy / Retract). |
+
+Non-goals (documented, not silently wrong): SQL / Scala / R / T-SQL / C# cells are
+listed in the graph but not statically analyzed, so they are never auto-invalidated;
+function-local names never leak into the module-level graph; a name defined by two
+cells links readers to both (a wider re-run) and is reported.
+
+FLAG0: `n19a-reactive-notebook` (default-ON) is the admin kill switch for the pane,
+the reactive re-run and the deploy-app route. Reactive AUTO-RUN is additionally a
+per-notebook USER toggle that defaults to OFF, so nothing re-runs behind the user's
+back. There is NO day-one gate: the DAG, the pane and the `.py` export work on a
+fresh deployment with no extra configuration (G2).
+
+Grade: **A (real per-cell run backend, DAG + invalidation unit-tested, shared publish path).**
