@@ -23,10 +23,11 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Spinner, tokens, Badge, Button, Text, Tooltip,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles,
 } from '@fluentui/react-components';
 import { ArrowDownload20Regular, AppsAddIn24Regular, Search24Regular } from '@fluentui/react-icons';
@@ -158,14 +159,25 @@ export default function AppsPage() {
     }
   }, [view]);
 
-  useEffect(() => {
+  // A3 (silent-failure fix): a rejected /api/apps-catalog fetch must NOT
+  // render as "No apps in this tenant yet" — that masks an outage as an empty
+  // catalog. Track the failure and surface an honest error state with Retry.
+  const [appsError, setAppsError] = useState<string | null>(null);
+  const loadApps = useCallback(() => {
+    setAppsError(null);
+    setApps(null);
     clientFetch('/api/apps-catalog').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setApps([]); return null; }
       return r.json();
     }).then(d => {
       if (d) setApps(Array.isArray(d?.apps) ? d.apps : []);
-    }).catch(() => setApps([]));
+    }).catch((e: unknown) => {
+      setApps([]);
+      setAppsError(e instanceof Error && e.message ? e.message : 'The request failed before the service answered (network or timeout).');
+    });
   }, []);
+
+  useEffect(() => { loadApps(); }, [loadApps]);
 
   const filter = q.toLowerCase().trim();
   const visible = useMemo(() => (apps ?? []).filter(a =>
@@ -336,7 +348,7 @@ export default function AppsPage() {
         onSearch={setQ}
         searchPlaceholder="Filter by name, category, or bundled item type…"
         actions={
-          apps !== null ? (
+          apps !== null && !appsError ? (
             <div className={styles.countBadges}>
               <Badge appearance="outline">
                 {filter ? `${shownCount} of ${totalCount} apps` : `${totalCount} apps`}
@@ -355,7 +367,19 @@ export default function AppsPage() {
         </div>
       )}
 
-      {apps !== null && apps.length === 0 && (
+      {apps !== null && appsError && (
+        <MessageBar intent="error" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Could not load the apps catalog</MessageBarTitle>
+            {appsError} The catalog may still have apps — this is a transport failure, not an empty tenant.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" onClick={loadApps}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
+
+      {apps !== null && apps.length === 0 && !appsError && (
         <>
           <EmptyState
             icon={<AppsAddIn24Regular />}
