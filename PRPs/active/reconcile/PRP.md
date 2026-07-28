@@ -38,7 +38,7 @@ catalogued as **future programs**, not reconcile work, so they don't dilute the 
 | RC-N7BCD | N7b CDC control plane + N7c reverse-ETL activation + N7d data-quality/data-diff | **IN PROGRESS — batch4** (wf_ec337237). part1 LNL-TAIL |
 | RC-N7AE | N7a RisingWave streaming SQL + N7e Trino/Starburst federation (opt-in carve-out) | loom-next-level ws-north-star N7a/N7e |
 | RC-N8 | N8 openness Tier-3 labs (DuckLake, Malloy/PRQL, s3-compat via permissive path — MinIO DROPPED) | ws-north-star N8 |
-| RC-PILLAR3 | **Pillar-3 governed analytics (N15–N20):** N15 headless metrics layer (MetricFlow-spec, compiled natively) → N16 code-report BI-as-code item + N18 embedded-analytics SDK w/ RLS; L2→N17 OpenLineage incident console → N19g catalog interop; N19a–f; N20 labs. **Largest coherent unbuilt block; blocks the north-star three-way-metric proof.** | part1 LNL-PILLAR3 |
+| RC-PILLAR3 | **Pillar-3 governed analytics (N15–N20):** N15 headless metrics layer (MetricFlow-spec, compiled natively) → N16 code-report BI-as-code item + N18 embedded-analytics SDK w/ RLS; L2→N17 OpenLineage incident console → N19g catalog interop; N19a–f; N20 labs. **Largest coherent unbuilt block; blocks the north-star three-way-metric proof.** **2026-07-27 A7 correction:** two N19 rows here are ALREADY-BUILT — **N19c** access-review/recert campaigns shipped via access-governance W4 (`lib/access/{access-reviews,close-campaign,revoke-assignment,leaver}.ts` + `app/admin/access-reviews/` + `azure-functions/access-governance-sweeper/`; only the signed-evidence residual remains, scheduled as loom-apex **B-N19c′**), and **N19f** webhooks/Event Grid platform events shipped (`lib/events/{webhook-emitter,webhook-registry,webhook-signing}.ts` — Event Grid path at `webhook-emitter.ts:73-81` — + `app/admin/webhooks/` + `app/api/admin/webhooks/`). Evidence: `PRPs/active/loom-apex/research/prps-audit.md:69,72`. | part1 LNL-PILLAR3 |
 | RC-MIGRATION | **WS-M inbound migration (M1–M3):** M1 estate assessment/inventory importer (ship FIRST as the on-ramp) → M2 schema+data copy-in → M3 best-effort code translation. **PRE-CHECK:** confirm whether `lib/estate/*` (estate-planner/executor/model, estate-console.tsx) already satisfies M1 or is unrelated deploy tooling. | part1 LNL-MIGRATION |
 
 ### P2 — loom-next-level TAIL (absent from DONE ledger; verify-then-schedule)
@@ -75,7 +75,12 @@ catalogued as **future programs**, not reconcile work, so they don't dilute the 
 
 ### Future programs (catalogued, NOT reconcile scope — each is its own initiative when prioritized)
 - **domain-mesh** (16 items, execution-ready DRAFT; mesh §4 half-built) — part1 DOMAIN-MESH
-- **access-governance** (entitlement-management breadth, W1–W4 DRAFT) — part1 ACCESS-GOV
+- ~~**access-governance** (entitlement-management breadth, W1–W4 DRAFT) — part1 ACCESS-GOV~~
+  **CORRECTED 2026-07-27 (A7): access-governance is BUILT, not a future program** — W1–W4 shipped
+  (`lib/access/*` + `app/api/access-governance/*` + Cosmos `access-assignments`/`access-packages` +
+  `azure-functions/access-governance-sweeper/`); its PRP status header now reads BUILT/SHIPPED.
+  Evidence: `PRPs/active/loom-apex/research/prps-audit.md:148-155` (and reconcile's own §P0 note
+  that it was "misfiled here", prps-audit.md:112). Residual = B-N19c′ signed evidence only.
 - **geo-graph-ml** (GEO-2/3/4 unbuilt; GEO-1 partial) — part1 GEO-234
 - **bridge-services** (4 control-plane services, 23 items, proposed) — part1 BRIDGE-SVC
 - **next-waves** 8 large proposed PRPs + `enterprise-hardening` Phases 2–4 + OPEN-REGISTER §P3 — part1 NEXTWAVES-P3
