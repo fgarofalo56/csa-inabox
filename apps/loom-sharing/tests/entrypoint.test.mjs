@@ -107,13 +107,28 @@ test('ADLS OAuth renders per-account hadoop properties for the SOVEREIGN endpoin
     /<value>https:\/\/login\.microsoftonline\.us\/tenant-guid\/oauth2\/token<\/value>/,
   );
   // A Commercial authority leaking into a Gov deployment is a sovereignty bug.
-  // Plain substring, not a regex: this asserts ABSENCE, so an unanchored host
-  // pattern is both what we want and what CodeQL flags (js/regex/missing-regexp-anchor).
+  //
+  // Checked by parsing every URL out of the render and comparing HOSTS exactly.
+  // Neither an unanchored regex (js/regex/missing-regexp-anchor) nor a substring
+  // test (js/incomplete-url-substring-sanitization) is a sound way to reason
+  // about a URL, and both are CodeQL-HIGH on a data-egress surface — so do the
+  // thing they are telling us to do and compare the parsed host.
+  const renderedHosts = [...r.stdout.matchAll(/https:\/\/[^<\s"']+/g)].map((m) => {
+    try {
+      return new URL(m[0]).host.toLowerCase();
+    } catch {
+      return '';
+    }
+  });
   assert.ok(
-    !r.stdout.includes('login.microsoftonline.com'),
-    'a Commercial Entra authority leaked into a Gov core-site.xml render',
+    renderedHosts.length > 0,
+    'no authority URL was rendered at all — the OAuth config is missing',
   );
-  // Account keys are never an option — only OAuth.
+  assert.ok(
+    !renderedHosts.includes('login.microsoftonline.com'),
+    `a Commercial Entra authority leaked into a Gov core-site.xml render: ${renderedHosts.join(', ')}`,
+  );
+  // Account keys are never an option — only OAuth. (A config key, not a URL.)
   assert.ok(
     !r.stdout.includes('fs.azure.account.key'),
     'shared-key storage auth was rendered; the sharing server must be OAuth-only',
