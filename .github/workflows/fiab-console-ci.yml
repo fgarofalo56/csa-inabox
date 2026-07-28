@@ -29,9 +29,24 @@ on:
   push:
     branches: [main]
 
+# CONCURRENCY: keyed per-COMMIT on main, per-ref on PRs.
+#
+# WHY: `vitest (node 20)` from this workflow is the ROLL GATE —
+# loom-roll-and-validate refuses to roll a SHA whose vitest did not conclude
+# `success`. With a ref-keyed group, merging any follow-up PR CANCELS the
+# still-running main CI of the PREVIOUS commit, permanently marking that SHA
+# `cancelled` and making it unrollable even though nothing was wrong with it.
+# That is not hypothetical: it blocked a production roll on 2026-07-28 (the
+# Phase-A image was built and signed, but its vitest had been cancelled by the
+# next merge, so the gate correctly refused an unverified SHA).
+#
+# On main each commit is an independent, rollable artifact, so its CI must run
+# to completion — cancel-in-progress is FALSE there. On PR refs a new push
+# genuinely supersedes the old one, so cancelling still applies (and still
+# saves the CI minutes).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'push' && github.sha || '' }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
