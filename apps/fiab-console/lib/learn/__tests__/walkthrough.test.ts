@@ -14,6 +14,7 @@ import {
   loomStepImageUrl,
   getLearn,
   EDITOR_THUMB_SLUGS,
+  EDITOR_DOC_SLUGS,
   EDITOR_STEP_IMAGE_COUNTS,
   LOOM_DOCS_BASE,
 } from '@/lib/learn/content';
@@ -63,8 +64,13 @@ describe('loomStepImageUrl honesty gate', () => {
   });
 
   it('returns undefined for a slug with no captured screenshot at all', () => {
-    // A slug NOT in EDITOR_THUMB_SLUGS has no landing shot → never a URL.
-    const notThumbed = 'workshop-app';
+    // A slug NOT in EDITOR_THUMB_SLUGS has no landing shot -> never a URL.
+    // The fixture is DERIVED, not hardcoded: this used to pin 'workshop-app',
+    // which later had its screenshot captured and registered (loom-apex D1),
+    // so the test failed on a correct change. Pick whatever doc slug currently
+    // has no capture; skip only if every doc slug is captured.
+    const notThumbed = [...EDITOR_DOC_SLUGS].find((s) => !EDITOR_THUMB_SLUGS.has(s));
+    if (!notThumbed) return; // every guide has a capture — nothing to assert
     expect(EDITOR_THUMB_SLUGS.has(notThumbed)).toBe(false);
     expect(loomStepImageUrl(notThumbed, 1)).toBeUndefined();
   });
