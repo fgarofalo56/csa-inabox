@@ -124,8 +124,15 @@ test('ADLS OAuth renders per-account hadoop properties for the SOVEREIGN endpoin
     renderedHosts.length > 0,
     'no authority URL was rendered at all — the OAuth config is missing',
   );
-  assert.ok(
-    !renderedHosts.includes('login.microsoftonline.com'),
+  // Strict per-host equality, not Array#includes: CodeQL's
+  // js/incomplete-url-substring-sanitization cannot distinguish
+  // `arr.includes(urlish)` from `str.includes(urlish)` and flags both, and the
+  // pattern it is asking for — an exact comparison of a PARSED host — is what
+  // this actually wants anyway.
+  const commercialLeaks = renderedHosts.filter((h) => h === 'login.microsoftonline.com');
+  assert.equal(
+    commercialLeaks.length,
+    0,
     `a Commercial Entra authority leaked into a Gov core-site.xml render: ${renderedHosts.join(', ')}`,
   );
   // Account keys are never an option — only OAuth. (A config key, not a URL.)
