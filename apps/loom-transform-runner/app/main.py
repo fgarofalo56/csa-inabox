@@ -40,11 +40,36 @@ app = FastAPI(title="loom-transform-runner", version="1.0.0")
 
 Backend = Literal["dbt", "sqlmesh"]
 
-# The dbt adapters bundled in this image. `fabric` is present but is NEVER the
-# default — it is only reachable when a project explicitly selects it
+# The dbt adapters this image is BUILT to carry. `fabric` is present but is
+# NEVER the default — it is only reachable when a project explicitly selects it
 # (no-fabric-dependency.md); synapse / databricks / duckdb are the Azure-native
 # and sovereign-OSS defaults.
-BUNDLED_DBT_ADAPTERS = ["synapse", "databricks", "duckdb", "fabric"]
+#
+# This is the DECLARED set, not the reported one. `/capabilities` probes each
+# module for real (see `_installed_dbt_adapters`) so that if a pin change ever
+# drops an adapter, the endpoint says so instead of advertising a dead code
+# path. The endpoint's whole job is an honest capability report, and a
+# hardcoded list cannot be honest about what the image actually installed.
+EXPECTED_DBT_ADAPTERS = {
+    "synapse": "dbt.adapters.synapse",
+    "databricks": "dbt.adapters.databricks",
+    "duckdb": "dbt.adapters.duckdb",
+    "fabric": "dbt.adapters.fabric",
+}
+
+
+def _installed_dbt_adapters() -> tuple[list[str], list[str]]:
+    """(importable, missing) — probed, never asserted."""
+    import importlib.util  # noqa: PLC0415
+
+    installed, missing = [], []
+    for name, module in EXPECTED_DBT_ADAPTERS.items():
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            found = False
+        (installed if found else missing).append(name)
+    return installed, missing
 
 
 class TransformRequest(BaseModel):
@@ -84,8 +109,18 @@ def capabilities() -> dict[str, Any]:
     try:
         import dbt.version  # noqa: PLC0415
 
+        installed, missing = _installed_dbt_adapters()
         engines["dbt"] = {"available": True, "version": dbt.version.get_installed_version().to_version_string(),
-                          "adapters": BUNDLED_DBT_ADAPTERS}
+                          "adapters": installed}
+        if missing:
+            # Honest gate, not a silent omission: the image was built without an
+            # adapter it is supposed to carry.
+            engines["dbt"]["missingAdapters"] = missing
+            engines["dbt"]["note"] = (
+                "This image is missing dbt adapter(s) it is expected to bundle: "
+                f"{', '.join(missing)}. Projects targeting them will fail. Check "
+                "apps/loom-transform-runner/requirements.txt."
+            )
     except Exception as exc:  # noqa: BLE001
         engines["dbt"] = {"available": False, "error": str(exc)}
     try:
