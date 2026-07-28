@@ -33,7 +33,7 @@ the navigator + editor still render the gate MessageBar.
 | Drop catalog / schema (force/cascade) | ✅ built (Drop dialog) | `DELETE …/catalogs?name=&force=`, `…/schemas?full_name=&force=` → `deleteUcCatalog/Schema()` → UC REST DELETE |
 | Drop table / volume | ✅ built (Drop dialog) | `DELETE …/tables?full_name=`, `…/volumes?full_name=` → `deleteUcTable/Volume()` → UC REST DELETE |
 | GRANT / REVOKE on securable (CATALOG/SCHEMA/TABLE/VOLUME/FUNCTION/**METASTORE**) | ✅ built (Manage grants dialog) | `GET/PATCH …/grants` → `getUcPermissions/updateUcPermissions()` → `GET/PATCH /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
-| Effective (inherited) permissions view | ✅ built (effective toggle) | `getUcEffectivePermissions()` → `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}` |
+| Effective (inherited) permissions view | ✅ built (effective toggle, both backends) | `listEffectivePermissions()` → Databricks: `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}`; Loom Unity / OSS: the BFF resolves the inheritance walk itself (LU-4 — containment chain + ownership + transitive groups, `lib/azure/uc-effective-permissions.ts`) |
 | Column masks / row filters | ✅ built (Column & row security panel) | `uc-security-builders.ts` → SQL exec on the warehouse (Commercial/GCC) |
 | Clone table (SHALLOW/DEEP) | ✅ built | warehouse SQL `CREATE TABLE … {SHALLOW\|DEEP} CLONE` |
 | **Table lineage** graph (upstream + downstream) | ✅ built (Lineage tab + per-table button) | `GET /api/databricks/unity-catalog/lineage?full_name=` → `getTableLineage()` → `POST /api/2.0/lineage-tracking/table-lineage`; rendered on the shared React Flow `LineageCanvas` |

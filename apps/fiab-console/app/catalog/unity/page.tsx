@@ -22,6 +22,7 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
+import { UC_PRIVILEGES_BY_SECURABLE, ucPrivilegesFor } from '@/lib/azure/uc-effective-permissions';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
@@ -66,21 +67,11 @@ interface ExtLocRow { name: string; url: string; credential_name?: string; read_
 interface CredRow { name: string; comment?: string; owner?: string; read_only?: boolean; azure_managed_identity?: { access_connector_id?: string }; }
 interface ShareRow { name: string; comment?: string; owner?: string; }
 
-// Curated privilege sets per securable — the union both backends accept; the
-// BFF normalizes spelling (underscores ↔ spaces) per backend.
-const PRIVS_BY_SECURABLE: Record<string, string[]> = {
-  METASTORE: ['CREATE_CATALOG', 'CREATE_EXTERNAL_LOCATION', 'CREATE_STORAGE_CREDENTIAL', 'CREATE_CONNECTION', 'CREATE_SHARE', 'CREATE_RECIPIENT', 'CREATE_PROVIDER'],
-  CATALOG: ['USE_CATALOG', 'USE_SCHEMA', 'CREATE_SCHEMA', 'CREATE_TABLE', 'CREATE_FUNCTION', 'CREATE_VOLUME', 'CREATE_MODEL', 'SELECT', 'MODIFY', 'EXECUTE', 'READ_VOLUME', 'WRITE_VOLUME', 'BROWSE', 'MANAGE'],
-  SCHEMA: ['USE_SCHEMA', 'CREATE_TABLE', 'CREATE_FUNCTION', 'CREATE_VOLUME', 'CREATE_MODEL', 'SELECT', 'MODIFY', 'EXECUTE', 'READ_VOLUME', 'WRITE_VOLUME', 'MANAGE'],
-  TABLE: ['SELECT', 'MODIFY', 'MANAGE'],
-  VOLUME: ['READ_VOLUME', 'WRITE_VOLUME', 'MANAGE'],
-  FUNCTION: ['EXECUTE', 'MANAGE'],
-  REGISTERED_MODEL: ['EXECUTE', 'MANAGE'],
-  EXTERNAL_LOCATION: ['CREATE_EXTERNAL_TABLE', 'CREATE_EXTERNAL_VOLUME', 'READ_FILES', 'WRITE_FILES', 'CREATE_MANAGED_STORAGE', 'BROWSE', 'MANAGE'],
-  STORAGE_CREDENTIAL: ['CREATE_EXTERNAL_LOCATION', 'CREATE_EXTERNAL_TABLE', 'READ_FILES', 'WRITE_FILES', 'MANAGE'],
-};
-// Databricks-only privileges hidden on the OSS backend (OSS UC 0.5 spec set).
-const DBX_ONLY_PRIVS = new Set(['BROWSE', 'MANAGE', 'CREATE_CONNECTION', 'CREATE_SHARE', 'CREATE_RECIPIENT', 'CREATE_PROVIDER', 'CREATE_MANAGED_STORAGE']);
+// Privilege sets per securable + the OSS-unsupported subset come from the
+// shared LU-4 model (lib/azure/uc-effective-permissions.ts) — the SAME table the
+// effective-permissions resolver uses to decide which parent privileges inherit
+// down to a child, so the checkbox grid and the inheritance walk can never drift.
+const SECURABLE_TYPES = Object.keys(UC_PRIVILEGES_BY_SECURABLE);
 
 const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
@@ -639,12 +630,32 @@ function CreateVolumeDialog({ catalog, schema, onCreated }: { catalog: string; s
 // Grants — securable ACLs (both backends)
 // ============================================================
 
+/** A privilege can only be revoked where it was granted. Anything the BFF
+ *  annotated as inherited (from a parent securable, or from owning one) has
+ *  nothing to revoke HERE — go to the securable it came from. */
+function isRevocableHere(privilege: string): boolean {
+  return !/\(.*\b(?:inherited|owner)\b/.test(privilege);
+}
+
+/** brand = granted right here · informative = inherited from a parent ·
+ *  important = implied by ownership. */
+function privilegeBadgeColor(privilege: string): 'brand' | 'informative' | 'important' {
+  if (/\bowner\b/.test(privilege)) return 'important';
+  if (privilege.includes('inherited')) return 'informative';
+  return 'brand';
+}
+
 function GrantsPane({ oss }: { oss: boolean }) {
   const s = useStyles();
   const [securable, setSecurable] = useState('CATALOG');
   const [fullName, setFullName] = useState('');
   const [effective, setEffective] = useState(false);
   const [grants, setGrants] = useState<GrantRow[] | null>(null);
+  // "What can THIS principal do here?" — scopes the effective walk to one
+  // principal and unions in its transitive Entra group memberships.
+  const [forPrincipal, setForPrincipal] = useState('');
+  const [closure, setClosure] = useState<string[] | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [gated, setGated] = useState<string | null>(null);
@@ -663,17 +674,17 @@ function GrantsPane({ oss }: { oss: boolean }) {
     return () => window.removeEventListener('uc-grant-seed', h);
   }, []);
 
-  const privileges = useMemo(
-    () => (PRIVS_BY_SECURABLE[securable] || []).filter((p) => !oss || !DBX_ONLY_PRIVS.has(p)),
-    [securable, oss],
-  );
+  const privileges = useMemo(() => ucPrivilegesFor(securable, { oss }), [securable, oss]);
 
   const load = useCallback(async () => {
     if (!fullName.trim() && securable !== 'METASTORE') { setErr('Enter the securable full name (e.g. main.sales or main.sales.orders).'); return; }
-    setBusy(true); setErr(null); setGated(null); setNote(null);
+    setBusy(true); setErr(null); setGated(null); setNote(null); setWarnings([]); setClosure(null);
     try {
       const p = new URLSearchParams({ securable_type: securable, full_name: fullName.trim() });
-      if (effective) p.set('effective', 'true');
+      if (effective) {
+        p.set('effective', 'true');
+        if (forPrincipal.trim()) p.set('principal', forPrincipal.trim());
+      }
       const r = await clientFetch(`/api/databricks/unity-catalog/grants?${p.toString()}`);
       const j = await r.json();
       if (!j.ok) {
@@ -682,10 +693,12 @@ function GrantsPane({ oss }: { oss: boolean }) {
         setGrants(null); return;
       }
       setGrants(j.grants || []);
+      setWarnings(Array.isArray(j.warnings) ? j.warnings : []);
+      setClosure(Array.isArray(j.principalClosure) ? j.principalClosure : null);
       if (j.note) setNote(j.note);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [securable, fullName, effective]);
+  }, [securable, fullName, effective, forPrincipal]);
 
   const apply = useCallback(async (mode: 'add' | 'remove', principalOverride?: string, privsOverride?: string[]) => {
     const prin = (principalOverride ?? principal).trim();
@@ -711,11 +724,13 @@ function GrantsPane({ oss }: { oss: boolean }) {
   const grantColumns: LoomColumn<GrantRow>[] = [
     { key: 'principal', label: 'Principal', width: 280, filterType: 'text', getValue: (g) => g.principal, render: (g) => <strong>{g.principal}</strong> },
     { key: 'privileges', label: 'Privileges', filterType: 'text', getValue: (g) => g.privileges.join(' '), render: (g) => (
-      <span className={s.actionsRow}>{g.privileges.map((p) => <Badge key={p} appearance="tint" color={p.includes('inherited') ? 'informative' : 'brand'}>{p}</Badge>)}</span>) },
+      <span className={s.actionsRow}>{g.privileges.map((p) => (
+        <Badge key={p} appearance="tint" color={privilegeBadgeColor(p)}>{p}</Badge>
+      ))}</span>) },
     { key: 'actions', label: '', width: 130, getValue: () => '', render: (g) => (
       <Button size="small" appearance="subtle" icon={<Delete24Regular />}
         disabled={effective}
-        onClick={() => apply('remove', g.principal, g.privileges.filter((p) => !p.includes('inherited')))}>
+        onClick={() => apply('remove', g.principal, g.privileges.filter(isRevocableHere))}>
         Revoke all
       </Button>) },
   ];
@@ -733,11 +748,16 @@ function GrantsPane({ oss }: { oss: boolean }) {
       {gated && <MessageBar intent="warning" className={s.mb}><MessageBarBody>{gated}</MessageBarBody></MessageBar>}
       {err && <MessageBar intent="error" className={s.mb}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
       {note && <MessageBar intent="info" className={s.mb}><MessageBarBody>{note}</MessageBarBody></MessageBar>}
+      {warnings.map((w) => (
+        <MessageBar key={w} intent="warning" layout="multiline" className={s.mb}>
+          <MessageBarBody><MessageBarTitle>Partial answer</MessageBarTitle>{w}</MessageBarBody>
+        </MessageBar>
+      ))}
 
       <div className={s.grantsRow}>
         <Field label="Securable type">
           <Dropdown value={securable} selectedOptions={[securable]} onOptionSelect={(_, d) => { setSecurable(d.optionValue || 'CATALOG'); setPrivs(new Set()); }}>
-            {Object.keys(PRIVS_BY_SECURABLE).map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+            {SECURABLE_TYPES.map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
           </Dropdown>
         </Field>
         <Field label="Full name" hint={securable === 'METASTORE' ? 'Not needed for the metastore' : 'e.g. main, main.sales, main.sales.orders'}>
@@ -746,12 +766,35 @@ function GrantsPane({ oss }: { oss: boolean }) {
         <Checkbox
           label="Effective (inherited)"
           checked={effective}
-          disabled={oss}
-          onChange={(_, d) => setEffective(!!d.checked)}
+          onChange={(_, d) => { setEffective(!!d.checked); if (!d.checked) { setForPrincipal(''); setClosure(null); } }}
         />
         <Button appearance="primary" disabled={busy} onClick={load}>{busy ? 'Loading…' : 'Load grants'}</Button>
       </div>
-      {oss && <Caption1 className={s.mutedBlock}>Effective (inherited) permission expansion is Databricks-only — the OSS backend shows the direct grants.</Caption1>}
+      {effective && (
+        <div className={s.formGrid}>
+          <Field
+            label="Effective for principal (optional)"
+            hint="Answers “what can this one principal actually do here?” — its transitive Entra group memberships are unioned in."
+          >
+            <Input
+              value={forPrincipal}
+              onChange={(_, d) => setForPrincipal(d.value)}
+              placeholder="ada@contoso.com or data-engineers"
+            />
+          </Field>
+        </div>
+      )}
+      <Caption1 className={s.mutedBlock}>
+        {effective
+          ? `Effective permissions resolve inheritance down the containment chain (catalog → schema → object), add the full privilege set implied by ownership at every level, and — with a principal — its transitive group memberships. ${oss ? 'Resolved by the Loom BFF from the OSS catalog’s direct grants.' : 'Resolved by the Databricks effective-permissions API.'}`
+          : 'Showing the grants recorded directly on this securable. Tick “Effective (inherited)” to include everything inherited from its parents and from ownership.'}
+      </Caption1>
+      {closure && closure.length > 1 && (
+        <span className={s.actionsRow}>
+          <Caption1 className={s.muted}>Group memberships applied:</Caption1>
+          {closure.slice(1).map((g) => <Badge key={g} appearance="tint" color="informative">{g}</Badge>)}
+        </span>
+      )}
 
       {grants && (
         <LoomDataTable<GrantRow>
@@ -759,7 +802,11 @@ function GrantsPane({ oss }: { oss: boolean }) {
           columns={grantColumns}
           rows={grants}
           getRowId={(g) => g.principal}
-          empty="No grants on this securable yet — add one below."
+          empty={effective
+            ? (forPrincipal.trim()
+              ? `${forPrincipal.trim()} holds no privileges here — not directly, not from a parent, and not through ownership or any group it belongs to.`
+              : 'Nobody holds any privilege here — no direct grant, no inherited grant, no owner.')
+            : 'No grants on this securable yet — add one below.'}
         />
       )}
 

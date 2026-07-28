@@ -4,35 +4,40 @@
  * self-hosted OSS Unity Catalog server (loom-unity, the Azure-Government
  * default) — both implement GET/PATCH /permissions/{securable_type}/{full_name}.
  *
- *   GET   /api/databricks/unity-catalog/grants?securable_type=SCHEMA&full_name=main.sales[&effective=true]
- *           → { ok, grants: [{ principal, privileges }] }
+ *   GET   /api/databricks/unity-catalog/grants?securable_type=SCHEMA&full_name=main.sales
+ *           [&effective=true][&principal=ada@contoso.com]
+ *           → { ok, effective, grants: [{ principal, privileges }], warnings?, principalClosure? }
  *   PATCH /api/databricks/unity-catalog/grants
  *           body { securable_type, full_name, changes: [{ principal, add?, remove? }] }
  *           → { ok, grants }
  *
  * Real Unity Catalog REST (api 2.1, both backends):
  *   GET   /api/2.1/unity-catalog/permissions/{securable_type}/{full_name}
- *   GET   /api/2.1/unity-catalog/effective-permissions/{securable_type}/{full_name}   (Databricks only)
  *   PATCH /api/2.1/unity-catalog/permissions/{securable_type}/{full_name}
  * Learn: https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/
  * OSS spec: github.com/unitycatalog/unitycatalog api/all.yaml (permissions family)
  *
- * Effective (inherited) permissions are Databricks-only; on the OSS backend
- * `effective=true` transparently falls back to the direct grants and flags it
- * (`effective: false`) so the UI can annotate honestly.
+ * `effective=true` works on BOTH backends (LU-4). Databricks answers with its
+ * native `GET /effective-permissions/...`; on the OSS backend the client
+ * resolves the inheritance walk in-process from the direct grants + owners of
+ * the containment chain, so there is no Databricks-only gate here any more.
+ * Add `principal=` to ask "what can THIS principal actually do here?" — that
+ * form additionally unions in the principal's transitive Entra group
+ * membership, and reports honestly (`warnings[]`) if any of it was unreadable.
  *
  * Console UAMI must be the object owner / metastore admin / have MANAGE on the
  * securable (else UC 403s, surfaced verbatim).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { databricksConfigGate } from '@/lib/azure/databricks-client';
 import { isOssUc } from '@/lib/azure/uc-backend';
+import { formatUcPrivilege } from '@/lib/azure/uc-effective-permissions';
 import {
   primaryWorkspaceHost, listPermissions, listEffectivePermissions, updatePermissions,
   type UCSecurableType, type UCPermissionAssignment,
 } from '@/lib/azure/unity-catalog-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,29 +61,24 @@ function gate() {
   return null;
 }
 
-function grantsOf(p: { privilege_assignments?: UCPermissionAssignment[] }): UCPermissionAssignment[] {
+function grantsOf(p: { privilege_assignments?: Array<{ principal: string; privileges?: unknown[] }> }): UCPermissionAssignment[] {
   return (p.privilege_assignments || []).map((a) => ({
     principal: a.principal,
-    // Databricks spells privileges USE_CATALOG; OSS UC spells them "USE CATALOG".
-    // Normalize to the underscore form the UI uses for both. Effective
-    // (inherited) rows arrive as { privilege, inherited_from_type } objects —
-    // flatten them with the inheritance annotation the dialog shows.
-    privileges: (a.privileges || []).map((v: unknown) => {
-      if (typeof v === 'string') return v.toUpperCase().replace(/ /g, '_');
-      const o = v as { privilege?: string; inherited_from_type?: string };
-      const name = String(o?.privilege || '').toUpperCase().replace(/ /g, '_');
-      return o?.inherited_from_type ? `${name} (inherited)` : name;
-    }),
+    // One formatter for every shape: OSS spells privileges "USE CATALOG" and
+    // Databricks "USE_CATALOG" (both normalized to the UI's underscore form),
+    // while effective rows arrive as { privilege, inherited_from_type, … }
+    // objects from either the Databricks endpoint or the Loom resolver and are
+    // rendered with their provenance ("SELECT (inherited from CATALOG main)").
+    privileges: (a.privileges || []).map(formatUcPrivilege).filter(Boolean),
   }));
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const securableType = (req.nextUrl.searchParams.get('securable_type') || '').toUpperCase().trim() as UCSecurableType;
   const fullName = req.nextUrl.searchParams.get('full_name')?.trim();
   const effective = req.nextUrl.searchParams.get('effective') === 'true';
+  const principal = (req.nextUrl.searchParams.get('principal') || '').trim();
   if (!SECURABLES.has(securableType)) {
     return NextResponse.json({ ok: false, error: `securable_type must be one of ${[...SECURABLES].join(', ')}` }, { status: 400 });
   }
@@ -87,27 +87,27 @@ export async function GET(req: NextRequest) {
   }
   try {
     const host = await primaryWorkspaceHost();
-    if (effective && !isOssUc()) {
-      const p = await listEffectivePermissions(host, securableType, fullName || '');
-      return NextResponse.json({ ok: true, effective: true, grants: grantsOf(p) });
+    if (effective) {
+      // Works on BOTH backends: native on Databricks, BFF-resolved inheritance
+      // walk on the OSS / Loom Unity backend (LU-4).
+      const p = await listEffectivePermissions(host, securableType, fullName || '', principal ? { principal } : undefined);
+      return NextResponse.json({
+        ok: true,
+        effective: true,
+        grants: grantsOf(p),
+        ...(p.warnings?.length ? { warnings: p.warnings } : {}),
+        ...(p.principal_closure ? { principalClosure: p.principal_closure } : {}),
+        ...(principal ? { principal } : {}),
+      });
     }
     const p = await listPermissions(host, securableType, fullName || '');
-    return NextResponse.json({
-      ok: true,
-      effective: false,
-      ...(effective && isOssUc()
-        ? { note: 'Effective (inherited) permissions are Databricks-only; showing the direct grants from the OSS Unity Catalog backend.' }
-        : {}),
-      grants: grantsOf(p),
-    });
+    return NextResponse.json({ ok: true, effective: false, grants: grantsOf(p) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function PATCH(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -150,4 +150,4 @@ export async function PATCH(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

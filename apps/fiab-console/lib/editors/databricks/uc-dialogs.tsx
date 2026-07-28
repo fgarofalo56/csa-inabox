@@ -517,12 +517,12 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
       const r = await clientFetch(`/api/databricks/unity-catalog/grants?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
-      // effective shape differs (privileges is array of objects) — normalize for display.
+      // The BFF already renders provenance into the privilege string
+      // ("SELECT (inherited from CATALOG main)") for BOTH backends — see
+      // formatUcPrivilege in lib/azure/uc-effective-permissions.ts.
       const grants: UcGrant[] = (j.grants || []).map((g: any) => ({
         principal: g.principal,
-        privileges: Array.isArray(g.privileges)
-          ? g.privileges.map((p: any) => (typeof p === 'string' ? p : `${p.privilege}${p.inherited_from_type ? ` (inherited)` : ''}`))
-          : [],
+        privileges: Array.isArray(g.privileges) ? g.privileges.map(String) : [],
       }));
       setGrGrants(grants);
     } catch (e: any) { setGrErr(e?.message || String(e)); }

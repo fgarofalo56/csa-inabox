@@ -3,7 +3,9 @@
  * Databricks UC (Commercial) and OSS UC (loom-unity, Gov). Covers auth (401),
  * the Databricks config gate (503, skipped on OSS), validation (400), privilege
  * spelling normalization per backend (underscores ↔ spaces), the
- * REGISTERED_MODEL securable, and the OSS effective→direct fallback.
+ * REGISTERED_MODEL securable, and the LU-4 effective-permissions path (which now
+ * works on BOTH backends — the client resolves the inheritance walk itself on
+ * OSS — including the `principal=` scope and the honest `warnings[]` passthrough).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -72,24 +74,52 @@ describe('GET /grants', () => {
     expect(listPermissions).toHaveBeenCalledWith('adb-1.7.azuredatabricks.net', 'REGISTERED_MODEL', 'main.sales.churn');
   });
 
-  it('effective=true uses the effective-permissions API on databricks', async () => {
+  it('effective=true uses the effective-permissions path and renders provenance', async () => {
     (listEffectivePermissions as any).mockResolvedValue({
-      privilege_assignments: [{ principal: 'g', privileges: [{ privilege: 'SELECT', inherited_from_type: 'CATALOG' }] }],
+      privilege_assignments: [{ principal: 'g', privileges: [{ privilege: 'SELECT', inherited_from_type: 'CATALOG', inherited_from_name: 'main' }] }],
     });
     const res = await GET(getReq('?securable_type=TABLE&full_name=main.sales.orders&effective=true'));
     const j = await res.json();
     expect(j.effective).toBe(true);
-    expect(j.grants[0].privileges).toEqual(['SELECT (inherited)']);
+    // The securable the grant actually lives on must reach the UI — "(inherited)"
+    // alone does not tell the operator WHERE to go to revoke it.
+    expect(j.grants[0].privileges).toEqual(['SELECT (inherited from CATALOG main)']);
   });
 
-  it('effective=true falls back to direct grants on OSS with an honest note', async () => {
+  it('LU-4: effective=true is served on the OSS backend too (no Databricks-only fallback)', async () => {
     (isOssUc as any).mockReturnValue(true);
-    (listPermissions as any).mockResolvedValue({ privilege_assignments: [] });
+    (listEffectivePermissions as any).mockResolvedValue({
+      privilege_assignments: [{ principal: 'dana@contoso.com', privileges: [{ privilege: 'MANAGE', source: 'OWNERSHIP', inherited_from_type: 'CATALOG', inherited_from_name: 'main' }] }],
+    });
     const res = await GET(getReq('?securable_type=TABLE&full_name=main.sales.orders&effective=true'));
     const j = await res.json();
     expect(j.ok).toBe(true);
+    expect(j.effective).toBe(true);
+    expect(j.note).toBeUndefined();
+    expect(listEffectivePermissions).toHaveBeenCalledWith('adb-1.7.azuredatabricks.net', 'TABLE', 'main.sales.orders', undefined);
+    expect(listPermissions).not.toHaveBeenCalled();
+    expect(j.grants[0].privileges).toEqual(['MANAGE (inherited: owner of CATALOG main)']);
+  });
+
+  it('passes principal= through and returns the group closure + warnings', async () => {
+    (listEffectivePermissions as any).mockResolvedValue({
+      privilege_assignments: [{ principal: 'ada@contoso.com', privileges: [{ privilege: 'SELECT', via_principal: 'analysts' }] }],
+      warnings: ['Could not read grants on CATALOG main: PERMISSION_DENIED.'],
+      principal_closure: ['ada@contoso.com', 'analysts'],
+    });
+    const res = await GET(getReq('?securable_type=TABLE&full_name=main.sales.orders&effective=true&principal=ada%40contoso.com'));
+    const j = await res.json();
+    expect(listEffectivePermissions).toHaveBeenCalledWith('adb-1.7.azuredatabricks.net', 'TABLE', 'main.sales.orders', { principal: 'ada@contoso.com' });
+    expect(j.principalClosure).toEqual(['ada@contoso.com', 'analysts']);
+    expect(j.warnings).toHaveLength(1);
+    expect(j.grants[0].privileges).toEqual(['SELECT (via analysts)']);
+  });
+
+  it('does NOT ask for effective permissions unless effective=true', async () => {
+    (listPermissions as any).mockResolvedValue({ privilege_assignments: [{ principal: 'g', privileges: ['SELECT'] }] });
+    const res = await GET(getReq('?securable_type=TABLE&full_name=main.sales.orders&principal=ada%40contoso.com'));
+    const j = await res.json();
     expect(j.effective).toBe(false);
-    expect(j.note).toMatch(/Databricks-only/);
     expect(listEffectivePermissions).not.toHaveBeenCalled();
   });
 });

@@ -107,7 +107,8 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | # | Catalog Explorer capability | Loom | Where / backend |
 |---|---|---|---|
 | E1 | View direct grants on a securable | ✅ built | grants dialog "Load grants" → `GET /grants` `getUcPermissions` |
-| E2 | View **effective** (inherited) grants | ✅ built | "effective" toggle → `getUcEffectivePermissions` |
+| E2 | View **effective** (inherited) grants | ✅ built | "effective" toggle → `GET /grants?effective=true`. Databricks: native `/effective-permissions`. Loom Unity / OSS: the BFF's own inheritance walk (LU-4, `uc-effective-permissions.ts`) — containment chain + ownership + transitive group membership. |
+| E2b | Scope effective grants to ONE principal ("what can Ada do here?") | ✅ built | `GET /grants?effective=true&principal=` → `?principal=` on Databricks; on Loom Unity the resolver unions the principal's transitive Entra groups (cycle-safe) and reports honestly when Graph cannot be read |
 | E3 | Securable picker (CATALOG/SCHEMA/TABLE/VOLUME/FUNCTION) | ✅ built | dropdown; drives the valid-privilege chip list |
 | E4 | Grant privileges to a principal | ✅ built | privilege chips + "Grant selected" → `PATCH /grants` `add` |
 | E5 | Revoke privileges from a principal | ✅ built | "Revoke selected" → `PATCH /grants` `remove` |
@@ -224,7 +225,7 @@ securables (G3), lakehouse data-quality monitoring (G4), and data classification
 | Lineage graph (F1) | `GET …/lineage` | `getTableLineage` / `getTableLineageSystemTables` | `POST /api/2.0/lineage-tracking/table-lineage` + `system.access.{table,column}_lineage` |
 | Drop table | `DELETE …/tables?full_name=` | `deleteUcTable` | `DELETE /api/2.1/unity-catalog/tables/{full_name}` |
 | View grants | `GET …/grants?securable_type=&full_name=` | `getUcPermissions` | `GET /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
-| View effective grants | `GET …/grants?…&effective=true` | `getUcEffectivePermissions` | `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}` |
+| View effective grants | `GET …/grants?…&effective=true[&principal=]` | `listEffectivePermissions` | dbx: `GET /api/2.1/unity-catalog/effective-permissions/{type}/{full_name}` · OSS: `GET /permissions/{type}/{name}` for every node of the containment chain + the per-node owner GET, resolved in-process |
 | Grant / revoke | `PATCH …/grants` | `updateUcPermissions` | `PATCH /api/2.1/unity-catalog/permissions/{type}/{full_name}` |
 | Create foreign / Delta-Sharing catalog | `POST …/catalogs` (catalog_type) | `createUcCatalog` | `POST /api/2.1/unity-catalog/catalogs` |
 | Catalog / schema tags | `POST …/{catalogs,schemas}` (properties) | `createUcCatalog`/`createUcSchema` | `POST /api/2.1/unity-catalog/{catalogs,schemas}` |

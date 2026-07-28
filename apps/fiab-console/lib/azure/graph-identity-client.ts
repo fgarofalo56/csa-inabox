@@ -426,6 +426,64 @@ export async function getGroupTransitiveMembers(groupId: string, max = 200): Pro
 }
 
 /**
+ * LU-4 — the groups a principal is a **direct** member of, returned by the NAME
+ * that access-control lists are keyed on (UPN for users, display name for groups
+ * and service principals). One hop only: the caller
+ * ({@link expandPrincipalClosure} in `uc-effective-permissions.ts`) does its own
+ * breadth-first closure over a visited set, which is what makes a nested-group
+ * CYCLE terminate. Graph's own `transitiveMemberOf` cannot be used for that
+ * because it collapses the hops and would hide a cycle rather than survive one.
+ *
+ * Backing calls (one $filter lookup to resolve the name, then one memberOf):
+ *   GET /v1.0/users/{upn}/memberOf                       (name contains '@')
+ *   GET /v1.0/groups?$filter=displayName eq '<name>'     then
+ *   GET /v1.0/groups/{id}/memberOf
+ *
+ * Returns `[]` — never throws — when the principal cannot be resolved in the
+ * directory: a Unity Catalog grant can name a principal that is not an Entra
+ * object (an OSS-server-local account), and that must not fail the whole
+ * effective-permissions answer.
+ */
+export async function getPrincipalDirectGroups(principalName: string): Promise<string[]> {
+  assertEnabled();
+  const name = (principalName || '').trim();
+  if (!name) return [];
+
+  let memberOfPath: string;
+  if (name.includes('@')) {
+    memberOfPath = `/users/${encodeURIComponent(name)}/memberOf`;
+  } else {
+    const lookup = `/groups?$filter=${encodeURIComponent(`displayName eq '${escapeSqlLiteral(name)}'`)}&$select=id&$top=1`;
+    const found = await readJson<{ value?: any[] }>(await graphFetch(lookup), lookup);
+    const id = (found?.value || [])[0]?.id;
+    if (!id) return [];
+    memberOfPath = `/groups/${encodeURIComponent(id)}/memberOf`;
+  }
+
+  const endpoint = `${memberOfPath}?$select=id,displayName&$top=100`;
+  let res: Response;
+  try {
+    res = await graphFetch(endpoint);
+  } catch {
+    return [];
+  }
+  // 404 → the UPN is not a directory object; readJson maps that to null.
+  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const g of j?.value || []) {
+    // memberOf also returns directoryRole / administrativeUnit objects — grants
+    // are only ever keyed on groups.
+    if (odataTypeToKind(g?.['@odata.type']) !== 'group') continue;
+    const label = String(g?.displayName || '').trim();
+    if (!label || seen.has(label.toLowerCase())) continue;
+    seen.add(label.toLowerCase());
+    out.push(label);
+  }
+  return out;
+}
+
+/**
  * Bulk-resolve Entra group display names by object ID. Used at tenant-settings
  * load time to turn the stored scope `groupIds` back into display names without
  * N serial GET /groups/{id} calls.

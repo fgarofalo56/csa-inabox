@@ -28,6 +28,10 @@ and Delta preview commits. **Not** in OSS 0.5: Delta Sharing
 (Lakehouse Federation), workspace bindings, system schemas/tables, tags DDL,
 ABAC policies, online tables, quality monitors, clean rooms, Marketplace.
 
+**LU-4 note:** `effective-permissions` is missing from the OSS *server*, but the
+capability is NOT missing from Loom. The BFF composes the same answer from the
+direct grants the server does expose — see row 10.
+
 Legend: ✅ full · ⚠️ partial · ❌ not in backend (Loom-native fallback wired) ·
 **Wired in Loom** names the primary file(s).
 
@@ -42,7 +46,7 @@ Legend: ✅ full · ⚠️ partial · ❌ not in backend (Loom-native fallback w
 | 7 | **Functions** (list/get/delete; create via engine DDL) | ✅ | ✅ | **NEW** `functions/route.ts` (backend-aware), `listFunctionsUc`/`getFunctionUc`/`deleteFunctionUc` | /catalog/unity → Explore | ✅ both |
 | 8 | **Registered models + versions** | ✅ | ✅ | `models/route.ts` (OSS gate removed) | /catalog/unity → Explore | ✅ both |
 | 9 | **Grants / privileges** (securable ACLs) | ✅ grants API | ✅ permissions API (spelling + securable-name mapping handled) | `grants/route.ts` rebuilt backend-aware; `permissionPath` maps `REGISTERED_MODEL`→`function`(dbx)/`registered_model`(oss), `STORAGE_CREDENTIAL`→`credential`(oss) | /catalog/unity → Grants (+ SQL-warehouse UC dialogs) | ✅ both |
-| 10 | **Effective (inherited) permissions** | ✅ | ❌ → falls back to direct grants with an honest note | `listEffectivePermissions` + grants route fallback | /catalog/unity → Grants | ✅ dbx / ⚠️ oss note |
+| 10 | **Effective (inherited) permissions** | ✅ native endpoint | ✅ **resolved by Loom** (LU-4): containment walk + ownership + transitive groups | `uc-effective-permissions.ts` (pure resolver) + `computeEffectivePermissions` in `unity-catalog-client.ts`; `listEffectivePermissions` picks the backend | /catalog/unity → Grants ("Effective (inherited)" + optional principal) | ✅ both |
 | 11 | **External locations** (full CRUD) | ✅ | ✅ | `external-locations/route.ts` (Gov gate replaced with backend-awareness) | /catalog/unity → Storage | ✅ both |
 | 12 | **Storage credentials** (full CRUD) | ✅ | ✅ (as `credentials`, path rewritten via `ossUcRewritePath`; `purpose=STORAGE` added on create) | `storage-credentials/route.ts` (backend-aware) | /catalog/unity → Storage | ✅ both |
 | 13 | **Temporary credential vending** (table/volume/path) | ✅ | ✅ (needs `LOOM_UNITY_ADLS_*` SP on loom-unity — honest remediation) | **NEW** `temporary-credentials/route.ts`, `vendTable/Volume/PathCredentials` | /catalog/unity → Storage (programmatic) | ✅ both (config-gated vending) |
