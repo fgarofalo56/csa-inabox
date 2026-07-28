@@ -33,13 +33,13 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import {
   Badge, Body1, Button, Caption1, Checkbox, Dialog, DialogActions, DialogBody,
   DialogContent, DialogSurface, DialogTitle, DialogTrigger, Dropdown, Field,
-  Input, MessageBar, MessageBarBody, MessageBarTitle, Option, Spinner, Subtitle2,
+  Input, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Option, Spinner, Subtitle2,
   Tab, TabList, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Add24Regular, ArrowSync24Regular, Delete24Regular, Database24Regular,
   Key24Regular, LockClosed24Regular, Share24Regular, CloudArrowUp24Regular,
-  CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular,
+  CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 
 // ============================================================
@@ -62,7 +62,34 @@ interface TableRow { name: string; full_name?: string; table_type?: string; data
 interface VolumeRow { name: string; full_name?: string; volume_type?: string; storage_location?: string; comment?: string; }
 interface FunctionRow { name: string; full_name?: string; data_type?: string; full_data_type?: string; comment?: string; external_language?: string; }
 interface ModelRow { name: string; full_name?: string; comment?: string; owner?: string; }
-interface GrantRow { principal: string; privileges: string[]; }
+/** Structured provenance for one effective privilege, as the BFF returns it.
+ *  The pane reads THESE fields — it never re-parses the display string. */
+interface GrantPrivilegeDetail {
+  privilege: string;
+  inherited_from_type?: string;
+  inherited_from_name?: string;
+  via_principal?: string;
+  source?: 'GRANT' | 'OWNERSHIP';
+  implied_by?: string;
+  blocked_by?: string[];
+  revocableHere: boolean;
+  blocked: boolean;
+}
+interface UsagePrereq {
+  privilege: string;
+  securable_type: string;
+  securable_name: string;
+  status: 'held' | 'missing' | 'unknown';
+  via_principal?: string;
+  source?: 'GRANT' | 'OWNERSHIP';
+}
+interface GrantRow {
+  principal: string;
+  privileges: string[];
+  /** Present on the effective answer; absent for plain direct grants. */
+  detail?: GrantPrivilegeDetail[];
+  usage?: UsagePrereq[];
+}
 interface ExtLocRow { name: string; url: string; credential_name?: string; read_only?: boolean; comment?: string; owner?: string; }
 interface CredRow { name: string; comment?: string; owner?: string; read_only?: boolean; azure_managed_identity?: { access_connector_id?: string }; }
 interface ShareRow { name: string; comment?: string; owner?: string; }
@@ -630,19 +657,29 @@ function CreateVolumeDialog({ catalog, schema, onCreated }: { catalog: string; s
 // Grants — securable ACLs (both backends)
 // ============================================================
 
-/** A privilege can only be revoked where it was granted. Anything the BFF
- *  annotated as inherited (from a parent securable, or from owning one) has
- *  nothing to revoke HERE — go to the securable it came from. */
-function isRevocableHere(privilege: string): boolean {
-  return !/\(.*\b(?:inherited|owner)\b/.test(privilege);
+/** brand = granted right here · informative = inherited from a parent or held
+ *  through a group · important = implied by ownership · danger = present but NOT
+ *  exercisable because a USE CATALOG / USE SCHEMA prerequisite is missing.
+ *
+ *  Reads the STRUCTURED provenance the BFF returns alongside the display text.
+ *  It used to regex the display string, which mis-tinted a securable literally
+ *  named `owner`. */
+function privilegeBadgeColor(d: GrantPrivilegeDetail | undefined): 'brand' | 'informative' | 'important' | 'danger' {
+  if (!d) return 'brand';
+  if (d.blocked) return 'danger';
+  if (d.source === 'OWNERSHIP') return 'important';
+  if (d.inherited_from_type || d.via_principal) return 'informative';
+  return 'brand';
 }
 
-/** brand = granted right here · informative = inherited from a parent ·
- *  important = implied by ownership. */
-function privilegeBadgeColor(privilege: string): 'brand' | 'informative' | 'important' {
-  if (/\bowner\b/.test(privilege)) return 'important';
-  if (privilege.includes('inherited')) return 'informative';
-  return 'brand';
+/** The privileges on this row that can actually be revoked HERE. Anything
+ *  inherited from a parent, implied by ownership, or held through a group lives
+ *  somewhere else and must be revoked there — issuing the REVOKE against the
+ *  queried principal would silently do nothing (or hit the wrong grantee).
+ *  Structured — no string parsing. */
+function revocableHere(g: GrantRow): string[] {
+  if (!g.detail) return g.privileges;   // direct-grants mode: plain names
+  return g.detail.filter((d) => d.revocableHere).map((d) => d.privilege);
 }
 
 function GrantsPane({ oss }: { oss: boolean }) {
@@ -655,8 +692,11 @@ function GrantsPane({ oss }: { oss: boolean }) {
   // principal and unions in its transitive Entra group memberships.
   const [forPrincipal, setForPrincipal] = useState('');
   const [closure, setClosure] = useState<string[] | null>(null);
+  // Whether the transitive group closure was ACTUALLY resolved from Entra. When
+  // Graph is unavailable the closure is just [principal], and the pane must not
+  // then claim "…nor through any group it belongs to".
+  const [closureResolved, setClosureResolved] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [gated, setGated] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -678,7 +718,7 @@ function GrantsPane({ oss }: { oss: boolean }) {
 
   const load = useCallback(async () => {
     if (!fullName.trim() && securable !== 'METASTORE') { setErr('Enter the securable full name (e.g. main.sales or main.sales.orders).'); return; }
-    setBusy(true); setErr(null); setGated(null); setNote(null); setWarnings([]); setClosure(null);
+    setBusy(true); setErr(null); setGated(null); setWarnings([]); setClosure(null); setClosureResolved(false);
     try {
       const p = new URLSearchParams({ securable_type: securable, full_name: fullName.trim() });
       if (effective) {
@@ -689,13 +729,16 @@ function GrantsPane({ oss }: { oss: boolean }) {
       const j = await r.json();
       if (!j.ok) {
         if (j.code === 'not_configured') setGated(j.error);
+        // The directory-enumeration guard: honest 403 with its remediation,
+        // not a bare "forbidden".
+        else if (j.code === 'principal_probe_forbidden') setErr(`${j.reason} ${j.remediation}`);
         else setErr(j.error || `HTTP ${r.status}`);
         setGrants(null); return;
       }
       setGrants(j.grants || []);
       setWarnings(Array.isArray(j.warnings) ? j.warnings : []);
       setClosure(Array.isArray(j.principalClosure) ? j.principalClosure : null);
-      if (j.note) setNote(j.note);
+      setClosureResolved(j.closureResolved === true);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [securable, fullName, effective, forPrincipal]);
@@ -724,15 +767,32 @@ function GrantsPane({ oss }: { oss: boolean }) {
   const grantColumns: LoomColumn<GrantRow>[] = [
     { key: 'principal', label: 'Principal', width: 280, filterType: 'text', getValue: (g) => g.principal, render: (g) => <strong>{g.principal}</strong> },
     { key: 'privileges', label: 'Privileges', filterType: 'text', getValue: (g) => g.privileges.join(' '), render: (g) => (
-      <span className={s.actionsRow}>{g.privileges.map((p) => (
-        <Badge key={p} appearance="tint" color={privilegeBadgeColor(p)}>{p}</Badge>
-      ))}</span>) },
-    { key: 'actions', label: '', width: 130, getValue: () => '', render: (g) => (
-      <Button size="small" appearance="subtle" icon={<Delete24Regular />}
-        disabled={effective}
-        onClick={() => apply('remove', g.principal, g.privileges.filter(isRevocableHere))}>
-        Revoke all
-      </Button>) },
+      <span className={s.actionsRow}>
+        {g.privileges.map((p, i) => (
+          <Badge key={p} appearance="tint" color={privilegeBadgeColor(g.detail?.[i])}>{p}</Badge>
+        ))}
+        {g.usage?.filter((u) => u.status !== 'held').map((u) => (
+          <Badge key={`usage-${u.privilege}-${u.securable_name}`} appearance="outline" color={u.status === 'missing' ? 'danger' : 'warning'}>
+            {u.status === 'missing' ? 'missing ' : 'unknown '}{u.privilege} on {u.securable_type} {u.securable_name || '(unqualified)'}
+          </Badge>
+        ))}
+      </span>) },
+    { key: 'actions', label: '', width: 130, getValue: () => '', render: (g) => {
+      // Only privileges that live on THIS securable are revocable here; in
+      // effective mode a row can be entirely inherited, in which case there is
+      // nothing to revoke and the button is off.
+      const revocable = revocableHere(g);
+      return (
+        <Button size="small" appearance="subtle" icon={<Delete24Regular />}
+          disabled={busy || revocable.length === 0}
+          title={revocable.length === 0
+            ? 'Everything on this row is inherited, implied by ownership, or held through a group — revoke it where it lives.'
+            : `Revoke ${revocable.join(', ')} on this securable`}
+          onClick={() => apply('remove', g.principal, revocable)}>
+          Revoke all
+        </Button>
+      );
+    } },
   ];
 
   return (
@@ -747,12 +807,22 @@ function GrantsPane({ oss }: { oss: boolean }) {
       </Body1>
       {gated && <MessageBar intent="warning" className={s.mb}><MessageBarBody>{gated}</MessageBarBody></MessageBar>}
       {err && <MessageBar intent="error" className={s.mb}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-      {note && <MessageBar intent="info" className={s.mb}><MessageBarBody>{note}</MessageBarBody></MessageBar>}
-      {warnings.map((w) => (
-        <MessageBar key={w} intent="warning" layout="multiline" className={s.mb}>
-          <MessageBarBody><MessageBarTitle>Partial answer</MessageBarTitle>{w}</MessageBarBody>
-        </MessageBar>
-      ))}
+      {warnings.map((w) => {
+        // G2 — a remediation banner is only compliant with an inline Fix it that
+        // lands on the registered gate. The resolver names the gate id in the
+        // warning; this extracts it rather than guessing.
+        const gateId = /Gate:\s*([a-z0-9-]+)/.exec(w)?.[1];
+        return (
+          <MessageBar key={w} intent="warning" layout="multiline" className={s.mb}>
+            <MessageBarBody><MessageBarTitle>Partial answer</MessageBarTitle>{w}</MessageBarBody>
+            {gateId && (
+              <MessageBarActions>
+                <Button size="small" icon={<Wrench16Regular />} as="a" href={`/admin/gates?gate=${encodeURIComponent(gateId)}`}>Fix it</Button>
+              </MessageBarActions>
+            )}
+          </MessageBar>
+        );
+      })}
 
       <div className={s.grantsRow}>
         <Field label="Securable type">
@@ -786,7 +856,7 @@ function GrantsPane({ oss }: { oss: boolean }) {
       )}
       <Caption1 className={s.mutedBlock}>
         {effective
-          ? `Effective permissions resolve inheritance down the containment chain (catalog → schema → object), add the full privilege set implied by ownership at every level, and — with a principal — its transitive group memberships. ${oss ? 'Resolved by the Loom BFF from the OSS catalog’s direct grants.' : 'Resolved by the Databricks effective-permissions API.'}`
+          ? `Effective permissions resolve inheritance down the containment chain (catalog → schema → object), expand ALL PRIVILEGES, add what ownership implies (the owner of THIS securable holds everything applicable to it; the owner of a PARENT gets MANAGE on it and nothing more — ownership does not inherit downward in Unity Catalog), check the USE CATALOG / USE SCHEMA prerequisites, and — with a principal — union in its transitive group memberships. ${oss ? 'Resolved by the Loom BFF from the OSS catalog’s direct grants.' : 'Resolved by the Databricks effective-permissions API.'}`
           : 'Showing the grants recorded directly on this securable. Tick “Effective (inherited)” to include everything inherited from its parents and from ownership.'}
       </Caption1>
       {closure && closure.length > 1 && (
@@ -804,7 +874,11 @@ function GrantsPane({ oss }: { oss: boolean }) {
           getRowId={(g) => g.principal}
           empty={effective
             ? (forPrincipal.trim()
-              ? `${forPrincipal.trim()} holds no privileges here — not directly, not from a parent, and not through ownership or any group it belongs to.`
+              ? (closureResolved
+                // Only claim the group dimension when the directory ACTUALLY
+                // answered. With Graph unavailable the closure is [principal].
+                ? `${forPrincipal.trim()} holds no privileges here — not directly, not from a parent, not through ownership, and not through any group it belongs to.`
+                : `${forPrincipal.trim()} holds no privileges here from any grant, parent or owner that Loom could read. Group memberships were NOT resolved (see the warning above), so a privilege held via a group would not appear.`)
               : 'Nobody holds any privilege here — no direct grant, no inherited grant, no owner.')
             : 'No grants on this securable yet — add one below.'}
         />

@@ -25,6 +25,15 @@
  * form additionally unions in the principal's transitive Entra group
  * membership, and reports honestly (`warnings[]`) if any of it was unreadable.
  *
+ * AUTHORIZATION (LU-4 remediation). The `principal=` form resolves that
+ * principal's directory membership through the Console UAMI's Graph app role,
+ * which makes it a directory-membership oracle if left on `withSession` alone.
+ * It is therefore restricted to a **tenant admin** or to the caller asking
+ * about ITSELF (`lib/auth/uc-principal-probe.ts`); anything else is a 403
+ * `principal_probe_forbidden`. EVERY effective query — allowed and denied —
+ * writes a `uc-access-review` audit row (`lib/azure/uc-access-review-audit.ts`)
+ * so an enumeration sweep cannot run untraced.
+ *
  * Console UAMI must be the object owner / metastore admin / have MANAGE on the
  * securable (else UC 403s, surfaced verbatim).
  */
@@ -32,7 +41,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { databricksConfigGate } from '@/lib/azure/databricks-client';
 import { isOssUc } from '@/lib/azure/uc-backend';
-import { formatUcPrivilege } from '@/lib/azure/uc-effective-permissions';
+import {
+  formatUcPrivilege, isUcPrivilegeRevocableHere, isUcPrivilegeBlocked,
+  type UcEffectivePrivilege, type UcUsagePrerequisite,
+} from '@/lib/azure/uc-effective-permissions';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { decidePrincipalProbe } from '@/lib/auth/uc-principal-probe';
+import { auditUcAccessReview } from '@/lib/azure/uc-access-review-audit';
 import {
   primaryWorkspaceHost, listPermissions, listEffectivePermissions, updatePermissions,
   type UCSecurableType, type UCPermissionAssignment,
@@ -61,19 +76,50 @@ function gate() {
   return null;
 }
 
-function grantsOf(p: { privilege_assignments?: Array<{ principal: string; privileges?: unknown[] }> }): UCPermissionAssignment[] {
-  return (p.privilege_assignments || []).map((a) => ({
-    principal: a.principal,
+/** One row as the pane consumes it: the display strings (unchanged wire
+ *  contract) PLUS the structured provenance. The pane tints badges and decides
+ *  revocability from `detail[]`, never by re-parsing the display text — a
+ *  securable literally named `owner` used to mis-tint, and a `via <group>` row
+ *  used to look locally revocable. */
+interface GrantRowOut {
+  principal: string;
+  privileges: string[];
+  detail?: Array<UcEffectivePrivilege & { revocableHere: boolean; blocked: boolean }>;
+  usage?: UcUsagePrerequisite[];
+}
+
+type RawAssignment = {
+  principal: string;
+  privileges?: unknown[];
+  usage?: UcUsagePrerequisite[];
+};
+
+function grantsOf(p: { privilege_assignments?: RawAssignment[] }): GrantRowOut[] {
+  return (p.privilege_assignments || []).map((a) => {
     // One formatter for every shape: OSS spells privileges "USE CATALOG" and
     // Databricks "USE_CATALOG" (both normalized to the UI's underscore form),
     // while effective rows arrive as { privilege, inherited_from_type, … }
-    // objects from either the Databricks endpoint or the Loom resolver and are
-    // rendered with their provenance ("SELECT (inherited from CATALOG main)").
-    privileges: (a.privileges || []).map(formatUcPrivilege).filter(Boolean),
-  }));
+    // objects from either the Databricks endpoint or the Loom resolver.
+    const raw = a.privileges || [];
+    const structured = raw.filter((v): v is UcEffectivePrivilege => !!v && typeof v === 'object');
+    return {
+      principal: a.principal,
+      privileges: raw.map(formatUcPrivilege).filter(Boolean),
+      ...(structured.length
+        ? {
+          detail: structured.map((v) => ({
+            ...v,
+            revocableHere: isUcPrivilegeRevocableHere(v),
+            blocked: isUcPrivilegeBlocked(v),
+          })),
+        }
+        : {}),
+      ...(a.usage?.length ? { usage: a.usage } : {}),
+    };
+  });
 }
 
-export const GET = withSession(async (req: NextRequest) => {
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   const securableType = (req.nextUrl.searchParams.get('securable_type') || '').toUpperCase().trim() as UCSecurableType;
   const fullName = req.nextUrl.searchParams.get('full_name')?.trim();
@@ -85,18 +131,49 @@ export const GET = withSession(async (req: NextRequest) => {
   if (!fullName && securableType !== 'METASTORE') {
     return NextResponse.json({ ok: false, error: 'full_name is required' }, { status: 400 });
   }
+
+  // Directory-enumeration guard: probing a principal that is not you resolves
+  // ITS Entra group membership with the platform identity, so it is tenant-admin
+  // only. The denial is audited too — a silent 403 tells no one an enumeration
+  // sweep is in progress.
+  if (effective && principal) {
+    const decision = decidePrincipalProbe(session, principal, isTenantAdmin(session));
+    if (!decision.allowed) {
+      void auditUcAccessReview(session, {
+        securableType, securableName: fullName || '', effective: true,
+        probedPrincipal: principal, decision: 'denied-principal-probe', nowIso: new Date().toISOString(),
+      });
+      return NextResponse.json(
+        { ok: false, error: 'forbidden', code: 'principal_probe_forbidden', reason: decision.reason, remediation: decision.remediation },
+        { status: 403 },
+      );
+    }
+  }
+
   try {
     const host = await primaryWorkspaceHost();
     if (effective) {
       // Works on BOTH backends: native on Databricks, BFF-resolved inheritance
       // walk on the OSS / Loom Unity backend (LU-4).
       const p = await listEffectivePermissions(host, securableType, fullName || '', principal ? { principal } : undefined);
+      const grants = grantsOf(p);
+      void auditUcAccessReview(session, {
+        securableType, securableName: fullName || '', effective: true,
+        ...(principal ? { probedPrincipal: principal } : {}),
+        decision: 'allowed', resultPrincipals: grants.length,
+        ...(p.principal_closure ? { closureSize: p.principal_closure.length } : {}),
+        nowIso: new Date().toISOString(),
+      });
       return NextResponse.json({
         ok: true,
         effective: true,
-        grants: grantsOf(p),
+        grants,
         ...(p.warnings?.length ? { warnings: p.warnings } : {}),
         ...(p.principal_closure ? { principalClosure: p.principal_closure } : {}),
+        // Whether the closure was ACTUALLY resolved from the directory. The pane
+        // must not assert "nor through any group it belongs to" off a closure
+        // that is just [principal] because Graph was unavailable.
+        ...(p.principal_closure ? { closureResolved: p.closure_resolved === true } : {}),
         ...(principal ? { principal } : {}),
       });
     }

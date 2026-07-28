@@ -29,8 +29,23 @@ and Delta preview commits. **Not** in OSS 0.5: Delta Sharing
 ABAC policies, online tables, quality monitors, clean rooms, Marketplace.
 
 **LU-4 note:** `effective-permissions` is missing from the OSS *server*, but the
-capability is NOT missing from Loom. The BFF composes the same answer from the
-direct grants the server does expose — see row 10.
+capability is NOT missing from Loom: the BFF composes the answer from the direct
+grants + owners the server does expose, following the Unity Catalog permissions
+model documented on Learn (downward privilege inheritance filtered by the child
+type; `ALL PRIVILEGES` expanded minus `MANAGE` / `EXTERNAL USE *`; ownership that
+does NOT inherit downward — the owner of an ancestor gets `MANAGE` on a
+descendant and nothing else; `USE CATALOG` / `USE SCHEMA` prerequisites
+evaluated and reported). See row 10.
+
+It is **not byte-identical to the Databricks endpoint**, and the differences are
+returned as warnings rather than hidden:
+
+| Difference | Why | Reported as |
+|---|---|---|
+| No `MANAGE` / `BROWSE` / `APPLY TAG` on OSS | Not in the OSS 0.5 vocabulary, so nothing there enforces them — and ancestor ownership confers only `MANAGE`, hence confers nothing on OSS | a warning on every OSS answer |
+| A partially-qualified name yields direct grants only | Neither ancestor is knowable from `main.orders`; inventing a `CATALOG main` hop would attribute a real catalog's grants to a securable that does not exist | a warning naming the full form to use |
+| An unreadable ancestor degrades to a partial answer | The caller may legitimately lack permission on a parent; a truthful partial beats a 502 | a warning per unreadable node, and its usage prerequisites report `unknown` rather than `missing` |
+| A privilege spelling Loom does not model is omitted from the inherited answer | The applicability filter cannot place it | a warning naming the privilege and where it was granted |
 
 Legend: ✅ full · ⚠️ partial · ❌ not in backend (Loom-native fallback wired) ·
 **Wired in Loom** names the primary file(s).
@@ -46,7 +61,7 @@ Legend: ✅ full · ⚠️ partial · ❌ not in backend (Loom-native fallback w
 | 7 | **Functions** (list/get/delete; create via engine DDL) | ✅ | ✅ | **NEW** `functions/route.ts` (backend-aware), `listFunctionsUc`/`getFunctionUc`/`deleteFunctionUc` | /catalog/unity → Explore | ✅ both |
 | 8 | **Registered models + versions** | ✅ | ✅ | `models/route.ts` (OSS gate removed) | /catalog/unity → Explore | ✅ both |
 | 9 | **Grants / privileges** (securable ACLs) | ✅ grants API | ✅ permissions API (spelling + securable-name mapping handled) | `grants/route.ts` rebuilt backend-aware; `permissionPath` maps `REGISTERED_MODEL`→`function`(dbx)/`registered_model`(oss), `STORAGE_CREDENTIAL`→`credential`(oss) | /catalog/unity → Grants (+ SQL-warehouse UC dialogs) | ✅ both |
-| 10 | **Effective (inherited) permissions** | ✅ native endpoint | ✅ **resolved by Loom** (LU-4): containment walk + ownership + transitive groups | `uc-effective-permissions.ts` (pure resolver) + `computeEffectivePermissions` in `unity-catalog-client.ts`; `listEffectivePermissions` picks the backend | /catalog/unity → Grants ("Effective (inherited)" + optional principal) | ✅ both |
+| 10 | **Effective (inherited) permissions** | ✅ native endpoint | ⚠️ **resolved by Loom** (LU-4): containment walk + ALL-PRIVILEGES expansion + non-inheriting ownership + usage prerequisites + transitive groups. Narrower than the native endpoint on the OSS vocabulary — every narrowing returned as a warning (see the LU-4 note above). | `uc-effective-permissions.ts` (pure resolver) + `uc-effective-permissions-live.ts` (I/O adapter); `listEffectivePermissions` picks the backend. Scoping to a principal is tenant-admin-or-self and audited (`uc-access-review-audit.ts`). | /catalog/unity → Grants ("Effective (inherited)" + optional principal) | ✅ dbx / ⚠️ oss (disclosed narrowing) |
 | 11 | **External locations** (full CRUD) | ✅ | ✅ | `external-locations/route.ts` (Gov gate replaced with backend-awareness) | /catalog/unity → Storage | ✅ both |
 | 12 | **Storage credentials** (full CRUD) | ✅ | ✅ (as `credentials`, path rewritten via `ossUcRewritePath`; `purpose=STORAGE` added on create) | `storage-credentials/route.ts` (backend-aware) | /catalog/unity → Storage | ✅ both |
 | 13 | **Temporary credential vending** (table/volume/path) | ✅ | ✅ (needs `LOOM_UNITY_ADLS_*` SP on loom-unity — honest remediation) | **NEW** `temporary-credentials/route.ts`, `vendTable/Volume/PathCredentials` | /catalog/unity → Storage (programmatic) | ✅ both (config-gated vending) |

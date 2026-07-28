@@ -107,9 +107,12 @@ describe('ossUcUnsupportedPath', () => {
     expect(ossUcUnsupportedPath('/api/2.1/marketplace-consumer/listings')).toMatch(/Marketplace/);
     // Implemented by OSS UC 0.5 — must NOT gate:
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/permissions/catalog/sales')).toBeNull();
-    // LU-4 — no longer gated: the BFF resolves the inheritance walk locally and
-    // never builds this upstream path on OSS.
-    expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/effective-permissions/catalog/sales')).toBeNull();
+    // LU-4 — the FEATURE is available on both backends (the BFF resolves the
+    // inheritance walk itself), but the upstream OSS server still has no such
+    // endpoint, so the gate STAYS as defence in depth. If a future caller ever
+    // builds this path on OSS it gets the honest 501, not an opaque 404.
+    expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/effective-permissions/catalog/sales'))
+      .toMatch(/effective-permissions/);
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/catalogs')).toBeNull();
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/schemas')).toBeNull();
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/tables')).toBeNull();
@@ -250,8 +253,33 @@ describe('ucFetch backend routing', () => {
     );
     // Inherited from the catalog grant …
     expect(byPrincipal['analysts']).toEqual(['SELECT']);
-    // … and the catalog OWNER holds the table's full privilege set.
-    expect(byPrincipal['dana@contoso.com']).toEqual(['MANAGE', 'MODIFY', 'SELECT']);
+    // … and the catalog OWNER gets NOTHING on this table on the OSS backend.
+    // Ownership does not inherit downward in Unity Catalog (Learn: "you do
+    // automatically get the MANAGE privilege on all new and existing child
+    // objects" — and nothing else), and the OSS Unity Catalog server does not
+    // implement MANAGE at all. This assertion is the regression guard for the
+    // original defect, where dana came back holding SELECT + MODIFY + MANAGE on
+    // every table under a catalog she owns, with no grant existing anywhere.
+    expect(byPrincipal['dana@contoso.com']).toBeUndefined();
+    // The narrowing is DISCLOSED, not silent.
+    expect(res.warnings?.join(' ')).toMatch(/MANAGE \/ BROWSE \/ APPLY TAG/);
+  });
+
+  it('LU-4: on DATABRICKS the same chain gives the catalog owner MANAGE — and only MANAGE', async () => {
+    process.env.LOOM_UC_BACKEND = 'databricks';
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.7.azuredatabricks.net';
+    // Force the local resolver on the Databricks vocabulary by driving it
+    // directly — the native endpoint is used on that backend, so this pins the
+    // model rather than the routing.
+    const { resolveEffectivePermissions } = await import('../uc-effective-permissions');
+    const out = resolveEffectivePermissions([
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [] },
+      { type: 'SCHEMA', name: 'main.sales', assignments: [] },
+      { type: 'CATALOG', name: 'main', owner: 'dana@contoso.com', assignments: [] },
+    ]);
+    expect(out.map((a) => [a.principal, a.privileges.map((p) => p.privilege)])).toEqual([
+      ['dana@contoso.com', ['MANAGE']],
+    ]);
   });
 
   it('LU-4: a chain read the caller cannot see becomes a warning, not a 502', async () => {
