@@ -31,15 +31,18 @@ dependency** (the eval sets ship in-image; scores live in Cosmos).
 | 4 | Run-history trend | ✅ built | Per-surface trend sparkline (LoomChart line, oldest→newest) + program overview tiles |
 | 5 | Row-level drill-in | ✅ built | Drill-in dialog: run picker + worst-questions table + evidence panel (expected vs retrieved chunks + the judge's own rationale + graded answer) — `worstQuestions` |
 | 6 | Floor / regression signal | ✅ built | E3 `eval-floors.json` per-surface floor status (hit-rate / grounding / pass-rate ≥ floor), "below floor" alarm count; provisional-floor labeled |
-| 7 | On-demand run | ✅ built (honest-gate) | "Run now" → `POST /api/admin/copilot-quality/run` → E2 HTTP trigger; honest gate + Fix-it when `LOOM_COPILOT_EVALUATOR_URL` unwired |
+| 7 | On-demand run | ✅ built (honest-gate) | "Run now" → `POST /api/admin/copilot-quality/run` → ARM start of the `loom-copilot-evaluator` Container App Job; honest gate + Fix-it when `LOOM_COPILOT_EVALUATOR_JOB_ID` unwired |
 | 8 | Honest unconfigured state | ✅ built | `HonestGate` (svc-copilot-evaluator) banner + guided `EmptyState` naming the exact deploy/run step; clean first-open (no red banner) |
 
 **Zero ❌.** The only non-functional state is the honest infra-gate (Run-now
-needs the evaluator Function URL / host key) — the full surface still renders and
-historical scores still show. Per the 2026-07-23 estate note, the evaluator
-Function's live runs are pending the estate Function-fleet decision; until then
-the page renders honestly from whatever eval-run docs exist in Cosmos (empty →
-guided EmptyState), which is the intended behaviour.
+needs `LOOM_COPILOT_EVALUATOR_JOB_ID`, i.e. the evaluator job deployed and its
+image built) — the full surface still renders and historical scores still show.
+B-FN (2026-07-27) closed the 2026-07-23 estate note by migrating the evaluator
+off the undeployable Y1 Function onto the in-VNet ACA-job pattern
+([`docs/fiab/functions-to-aca-jobs.md`](../functions-to-aca-jobs.md)), which is
+what makes the gate resolvable at all. Until the image is built the page renders
+honestly from whatever eval-run docs exist in Cosmos (empty → guided
+EmptyState), which is the intended behaviour.
 
 ## Backend per control
 
@@ -48,7 +51,7 @@ guided EmptyState), which is the intended behaviour.
 | Scorecard / overview / trend | `GET /api/admin/copilot-quality` → Cosmos `loom-copilot-evals` (`eval-run` docs, PK /surface) via `copilotEvalsContainer()`; cached 5 min (`getOrComputeCached`, budget + serve-stale) |
 | Floors | `content/evals/eval-floors.json` (staged in-image `copilot-corpus/evals/`) via `loadEvalFloors()` |
 | Drill-in | `GET /api/admin/copilot-quality/[surface]` → Cosmos `eval-result` docs (single-partition) + `eval-run` history |
-| Run now | `POST /api/admin/copilot-quality/run` → `triggerEvaluatorRun` → E2 `POST {LOOM_COPILOT_EVALUATOR_URL}/api/copilotEvaluatorHttp`; writes an `_auditLog` row (`kind:'copilot.eval-run-trigger'`) |
+| Run now | `POST /api/admin/copilot-quality/run` → `triggerEvaluatorRun` → ARM `POST {LOOM_COPILOT_EVALUATOR_JOB_ID}/start` with an execution-template override (mode / surfaces / domains / trigger); writes an `_auditLog` row (`kind:'copilot.eval-run-trigger'`) |
 | Kill-switch | FLAG0 `e5-copilot-quality-page` runtime flag (`/admin/runtime-flags`) |
 
 ## SRCH1 — Search relevance tab (federated `/catalog` search evals)
@@ -63,8 +66,8 @@ catalog search users type into directly (`lib/azure/catalog-search.ts`).
 | 3 | Run-history trend | ✅ built | Per-domain trend sparkline + run count |
 | 4 | Floor / regression | ✅ built | `searchFloors` in eval-floors.json; enforced by `check-eval-regression.mjs` (search gate) |
 | 5 | Drill-in | ✅ built | Per-query table + expected-vs-retrieved-results panel |
-| 6 | On-demand run | ✅ built (honest-gate) | "Run search evals" → E2 HTTP trigger `mode:'search'`; honest gate when unwired |
-| 7 | Honest unconfigured state | ✅ built | Guided EmptyState naming `LOOM_EVAL_SEARCH_PRINCIPAL_OID` + the Function URL |
+| 6 | On-demand run | ✅ built (honest-gate) | "Run search evals" → ARM job start with `COPILOT_EVAL_MODE=search`; honest gate when unwired |
+| 7 | Honest unconfigured state | ✅ built | Guided EmptyState naming `LOOM_EVAL_SEARCH_PRINCIPAL_OID` + `LOOM_COPILOT_EVALUATOR_JOB_ID` |
 
 **Backend:** `GET /api/admin/copilot-quality/search` → Cosmos `search-run` /
 `search-result` docs (written by the evaluator's `searchRelevance` mode, which

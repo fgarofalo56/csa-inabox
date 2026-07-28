@@ -1,7 +1,7 @@
 /**
- * secret-expiry-monitor — timer trigger (S1).
+ * secret-expiry-monitor — the S1 monitor pass (one-shot, ACA-job hosted).
  *
- * On SECRET_EXPIRY_CRON (default daily 06:00 UTC) the Function:
+ * On each scheduled execution (SECRET_EXPIRY_CRON, default daily 06:00 UTC) it:
  *   1. reads the Console MSAL app registration's passwordCredentials[] via
  *      Microsoft Graph (/applications(appId='…') — Application.Read.All),
  *   2. reads attributes (exp / updated) for every tracked Key Vault secret
@@ -14,12 +14,18 @@
  *      (LOOM_ALERT_ACTION_GROUP_ID, O1 convention) and opens/updates a dedup
  *      GitHub issue per credential (optional, token-gated).
  *
- * State (last-alerted band per credential) persists in a blob on the
- * Function's own storage account so a daily cron alerts once per escalation,
- * not once per day. Every dependency is a REAL call under the managed
- * identity; missing config → an honest early-exit log (no-vaporware).
+ * State (last-alerted band per credential) persists as a blob on the Loom
+ * storage account (LOOM_OPS_STATE_ACCOUNT / LOOM_OPS_STATE_CONTAINER, the
+ * bicep-created `ops-state` container) so a daily cron alerts once per
+ * escalation, not once per day. Every dependency is a REAL call under the
+ * console UAMI; missing config → an honest early-exit log (no-vaporware).
+ *
+ * B-FN migration (2026-07-27): this body is the former timer-Function handler,
+ * unchanged apart from (a) the logger interface and (b) the state-blob account
+ * env (the Y1 host storage `AzureWebJobsStorage__accountName` no longer exists —
+ * the job runs as the console UAMI against the Loom storage account, which
+ * already holds the UAMI's Storage Blob Data Contributor grant).
  */
-import { app, InvocationContext, Timer } from '@azure/functions';
 import {
   missingConfig,
   parseTrackedSecrets,
@@ -33,7 +39,7 @@ import {
   type AlertState,
   type GraphPasswordCredential,
   type KvSecretInfo,
-} from '../expiry-core';
+} from './expiry-core';
 import {
   readAppCredentials,
   readKvSecretAttributes,
@@ -41,17 +47,36 @@ import {
   readStateBlob,
   writeStateBlob,
   upsertGithubIssue,
-} from '../azure-clients';
+} from './azure-clients';
+import type { RunLogger } from './run-logger';
 
-const CRON = process.env.SECRET_EXPIRY_CRON || '0 0 6 * * *';
 const STATE_BLOB = 'secret-expiry-state.json';
 
-export async function secretExpiryMonitor(_timer: Timer, context: InvocationContext): Promise<void> {
+export interface MonitorSummary {
+  /** false = the honest early-exit gate fired (nothing to inventory). */
+  ran: boolean;
+  /** Credentials + tracked secrets inventoried this pass. */
+  inventory: number;
+  /** Credentials whose band ESCALATED this pass (an alert was attempted). */
+  escalated: number;
+  /** Worst band seen, e.g. `warn30:22d`. */
+  worst: string;
+  /** Set when `ran` is false — the config keys that must be supplied. */
+  gate?: string;
+}
+
+/**
+ * Run one monitor pass. Never throws for an expected/honest gate — a missing
+ * Graph consent or an unset action group is logged and the pass continues, so
+ * a Failed job execution always means a REAL regression.
+ */
+export async function runSecretExpiryMonitor(log: RunLogger): Promise<MonitorSummary> {
   const env = process.env;
   const gates = missingConfig(env);
   if (gates.fatal.length) {
-    context.warn(`[secret-expiry] honest-gate: nothing to inventory — set ${gates.fatal.join(', ')}. No-op tick.`);
-    return;
+    const gate = gates.fatal.join(', ');
+    log.warn(`[secret-expiry] honest-gate: nothing to inventory — set ${gate}. No-op tick.`);
+    return { ran: false, inventory: 0, escalated: 0, worst: 'n/a', gate };
   }
 
   const warnDays = parseWarnDays(env.LOOM_SECRET_EXPIRY_WARN_DAYS);
@@ -73,10 +98,10 @@ export async function secretExpiryMonitor(_timer: Timer, context: InvocationCont
       appDisplayName = read.displayName;
     } catch (e: any) {
       // 403 = the one-time Application.Read.All admin consent has not been run.
-      context.error(`[secret-expiry] Graph app read failed (grant Application.Read.All per docs/fiab/runbooks/secret-rotation.md): ${e?.message || e}`);
+      log.error(`[secret-expiry] Graph app read failed (grant Application.Read.All per docs/fiab/runbooks/secret-rotation.md): ${e?.message || e}`);
     }
   } else {
-    context.warn(`[secret-expiry] honest-gate: ${gates.graph.join(', ')} unset — skipping the app-registration inventory.`);
+    log.warn(`[secret-expiry] honest-gate: ${gates.graph.join(', ')} unset — skipping the app-registration inventory.`);
   }
 
   // 2. Key Vault — tracked secret attributes.
@@ -85,10 +110,10 @@ export async function secretExpiryMonitor(_timer: Timer, context: InvocationCont
     try {
       kvSecrets = await readKvSecretAttributes(env.LOOM_KEY_VAULT_URI, trackedSecrets);
     } catch (e: any) {
-      context.error(`[secret-expiry] Key Vault read failed: ${e?.message || e}`);
+      log.error(`[secret-expiry] Key Vault read failed: ${e?.message || e}`);
     }
   } else if (!env.LOOM_KEY_VAULT_URI) {
-    context.warn(`[secret-expiry] honest-gate: ${gates.keyVault.join(', ')} unset — skipping the vault inventory.`);
+    log.warn(`[secret-expiry] honest-gate: ${gates.keyVault.join(', ')} unset — skipping the vault inventory.`);
   }
 
   // 3. Merge + band.
@@ -102,42 +127,45 @@ export async function secretExpiryMonitor(_timer: Timer, context: InvocationCont
     msalKvSecretName: 'loom-msal-client-secret',
   });
   const worst = items[0];
-  context.log(
-    `[secret-expiry] inventory=${items.length} (app-creds=${appCreds.length} kv=${kvSecrets.length}) ` +
-    `worst=${worst ? `${worst.band}${worst.daysToExpiry !== null ? `:${worst.daysToExpiry}d` : ''}` : 'n/a'}`,
+  const worstLabel = worst ? `${worst.band}${worst.daysToExpiry !== null ? `:${worst.daysToExpiry}d` : ''}` : 'n/a';
+  log.log(
+    `[secret-expiry] inventory=${items.length} (app-creds=${appCreds.length} kv=${kvSecrets.length}) worst=${worstLabel}`,
   );
 
-  // 4. Escalation dedup state (blob on the Function's own storage account).
-  const stateAccount = env.AzureWebJobsStorage__accountName || '';
+  // 4. Escalation dedup state (blob on the Loom storage account's ops-state
+  //    container — the Y1 host storage account is gone with the Function).
+  const stateAccount = env.LOOM_OPS_STATE_ACCOUNT || '';
   const storageSuffix = env.LOOM_STORAGE_SUFFIX || 'core.windows.net';
-  const stateContainer = env.SECRET_EXPIRY_STATE_CONTAINER || 'secret-expiry-state';
+  const stateContainer = env.LOOM_OPS_STATE_CONTAINER || 'ops-state';
   let state: AlertState = {};
   if (stateAccount) {
     try { state = (await readStateBlob(stateAccount, storageSuffix, stateContainer, STATE_BLOB)) as AlertState; }
-    catch (e: any) { context.warn(`[secret-expiry] state read failed (alerting without dedup this tick): ${e?.message || e}`); }
+    catch (e: any) { log.warn(`[secret-expiry] state read failed (alerting without dedup this tick): ${e?.message || e}`); }
+  } else {
+    log.warn('[secret-expiry] LOOM_OPS_STATE_ACCOUNT unset — escalation dedup disabled for this tick (every non-ok band re-alerts).');
   }
 
   const firing = alertingItems(items, state);
   if (!firing.length) {
-    context.log('[secret-expiry] no band escalations — no alert this tick.');
+    log.log('[secret-expiry] no band escalations — no alert this tick.');
   } else {
     const { subject, body } = buildAlertMessage(firing, warnDays);
     // O1 severity routing: worst escalated band decides the P-band (firing is
     // sorted worst-first by mergeInventory order) — expired/critical page (P1),
     // warn30 urgent (P2), warn60 email-band (P3). docs/fiab/runbooks/on-call.md.
     const severity = severityForBand(firing[0].band);
-    context.warn(`[secret-expiry] ESCALATION (${severity}): ${subject}`);
+    log.warn(`[secret-expiry] ESCALATION (${severity}): ${subject}`);
 
     // 4a. Shared action group (O1 convention — LOOM_ALERT_ACTION_GROUP_ID).
     if (env.LOOM_ALERT_ACTION_GROUP_ID) {
       try {
         const out = await fireActionGroup(armEndpoint, env.LOOM_ALERT_ACTION_GROUP_ID, subject, severity);
-        context.log(`[secret-expiry] action group fired (${severity}, status ${out.status}).`);
+        log.log(`[secret-expiry] action group fired (${severity}, status ${out.status}).`);
       } catch (e: any) {
-        context.error(`[secret-expiry] action group dispatch failed: ${e?.message || e}`);
+        log.error(`[secret-expiry] action group dispatch failed: ${e?.message || e}`);
       }
     } else {
-      context.warn(`[secret-expiry] honest-gate: ${gates.alerting.join(', ')} unset — alert logged only.`);
+      log.warn(`[secret-expiry] honest-gate: ${gates.alerting.join(', ')} unset — alert logged only.`);
     }
 
     // 4b. Dedup GitHub issue per escalated credential (optional, token-gated).
@@ -148,13 +176,13 @@ export async function secretExpiryMonitor(_timer: Timer, context: InvocationCont
       for (const item of firing) {
         try {
           const out = await upsertGithubIssue(ghToken, ghOwner, ghRepo, issueTitle(item), body);
-          context.log(`[secret-expiry] GitHub issue ${out.action} (#${out.number}) for ${item.id}.`);
+          log.log(`[secret-expiry] GitHub issue ${out.action} (#${out.number}) for ${item.id}.`);
         } catch (e: any) {
-          context.error(`[secret-expiry] GitHub issue upsert failed for ${item.id}: ${e?.message || e}`);
+          log.error(`[secret-expiry] GitHub issue upsert failed for ${item.id}: ${e?.message || e}`);
         }
       }
     } else {
-      context.log('[secret-expiry] LOOM_SECRET_EXPIRY_GITHUB_TOKEN unset — GitHub dedup issue skipped (optional).');
+      log.log('[secret-expiry] LOOM_SECRET_EXPIRY_GITHUB_TOKEN unset — GitHub dedup issue skipped (optional).');
     }
   }
 
@@ -162,12 +190,8 @@ export async function secretExpiryMonitor(_timer: Timer, context: InvocationCont
   //    clears the entry so a future regression re-alerts).
   if (stateAccount) {
     try { await writeStateBlob(stateAccount, storageSuffix, stateContainer, STATE_BLOB, nextState(items, nowIso)); }
-    catch (e: any) { context.warn(`[secret-expiry] state write failed: ${e?.message || e}`); }
+    catch (e: any) { log.warn(`[secret-expiry] state write failed: ${e?.message || e}`); }
   }
-}
 
-app.timer('secretExpiryMonitor', {
-  schedule: CRON,
-  runOnStartup: false,
-  handler: secretExpiryMonitor,
-});
+  return { ran: true, inventory: items.length, escalated: firing.length, worst: worstLabel };
+}

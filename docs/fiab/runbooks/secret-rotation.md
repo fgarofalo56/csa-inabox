@@ -82,26 +82,40 @@ az keyvault secret set --vault-name "$KV" --name synthetic-login-secret --value 
 # The synthetic-monitor job reads the secretRef at next run — verify J1 goes green.
 ```
 
-## 4. One-time setup — Graph consent for the S1 monitor Function
+## 4. One-time setup — Graph consent for the S1 monitor
 
-The `secret-expiry-monitor` Function reads the app registration via Graph.
-`Application.Read.All` is a Graph **app role** (not ARM) — grant it ONCE per
-estate to the Function's system identity (`secretExpiryPrincipalId` output of
-`admin-plane/main.bicep`):
+> **B-FN (2026-07-27):** S1 is now the in-VNet `loom-secret-expiry-monitor`
+> **Container App Job**, not a Y1 Function (Y1 is structurally broken on this
+> estate — see [`docs/fiab/functions-to-aca-jobs.md`](../functions-to-aca-jobs.md)).
+> It runs as the **Console UAMI**, so the consent below is the *same* grant the
+> Identity Picker already needs. Estates that ran
+> `scripts/csa-loom/grant-identity-graph-approles.sh` have **nothing to do
+> here** — the separate Function-identity consent this section used to require
+> no longer exists.
+
+The monitor reads the app registration via Graph. `Application.Read.All` is a
+Graph **app role** (not ARM) — grant it ONCE per estate to the Console UAMI
+(`uamiConsolePrincipalId` output of `admin-plane/main.bicep`). The supported
+path is the script:
 
 ```bash
-FUNC_MI="<secretExpiryPrincipalId>"
+./scripts/csa-loom/grant-identity-graph-approles.sh
+```
+
+Equivalent manual call, if you are granting only this one role:
+
+```bash
+CONSOLE_MI="<uamiConsolePrincipalId>"
 GRAPH_SP=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
 APP_ROLE="9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30"   # Application.Read.All
 az rest --method POST \
-  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$FUNC_MI/appRoleAssignments" \
-  --body "{\"principalId\":\"$FUNC_MI\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$APP_ROLE\"}"
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$CONSOLE_MI/appRoleAssignments" \
+  --body "{\"principalId\":\"$CONSOLE_MI\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$APP_ROLE\"}"
 # Gov: --url https://graph.microsoft.us/... (DoD: dod-graph.microsoft.us)
 ```
 
-Until granted, the Function logs an honest gate and still monitors the Key
-Vault half; the `/admin/health` section works regardless (the Console UAMI
-already holds Application.Read.All from post-deploy bootstrap).
+Until granted, the job logs an honest gate and still monitors the Key Vault
+half; the `/admin/health` section works regardless.
 
 ## 5. Verify the monitoring loop end-to-end (acceptance drill)
 

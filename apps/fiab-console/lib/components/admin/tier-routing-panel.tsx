@@ -13,7 +13,7 @@
  * a misrouted-prompt drill-in, and a "Run tier evals" trigger.
  *
  * States mirror the answer + search panels: Skeleton, guided EmptyState,
- * HonestGate + Fix-it when the evaluator Function is unwired, FLAG0 kill-switch
+ * HonestGate + Fix-it when the evaluator job is unwired, FLAG0 kill-switch
  * notice (e6-tier-routing-tab), clean first-open. Fluent v9 + Loom tokens only;
  * badge rows wrap (minWidth:0 + flexWrap) so nothing overlaps at narrow widths.
  * Azure-native, no Fabric/Power BI dependency.
@@ -187,7 +187,7 @@ export function TierRoutingPanel() {
         </div>
         <div className={styles.badges}>
           <Button appearance="secondary" icon={<ArrowSync20Regular />} onClick={() => q.refetch()} disabled={q.isFetching}>Refresh</Button>
-          <Tooltip content={data.evaluatorConfigured ? 'Run the golden tier-label set through the real router.' : 'Configure LOOM_COPILOT_EVALUATOR_URL to enable on-demand runs.'} relationship="label">
+          <Tooltip content={data.evaluatorConfigured ? 'Run the golden tier-label set through the real router.' : 'Deploy the copilot-evaluator job (LOOM_COPILOT_EVALUATOR_JOB_ID) to enable on-demand runs.'} relationship="label">
             <Button appearance="primary" icon={runNow.isPending ? <Spinner size="tiny" /> : <Play20Regular />}
               disabled={!data.evaluatorConfigured || runNow.isPending} onClick={() => runNow.mutate()}>
               Run tier evals
@@ -219,7 +219,7 @@ export function TierRoutingPanel() {
           title="No tier-routing runs yet"
           body={data.evaluatorConfigured
             ? 'The evaluator is wired but has no tier-run docs yet. Click "Run tier evals" (or wait for the nightly run) to route the golden _tier-labels.jsonl prompts through the real model-tier-router and score each decision.'
-            : 'Deploy the copilot-evaluator Function and set LOOM_COPILOT_EVALUATOR_URL, then run the tier-label set. Tier accuracy, the confusion heatmap, and cost-per-quality will trend here.'}
+            : 'Deploy the copilot-evaluator Container App Job (LOOM_COPILOT_EVALUATOR_JOB_ID), then run the tier-label set. Tier accuracy, the confusion heatmap, and cost-per-quality will trend here.'}
           primaryAction={data.evaluatorConfigured ? { label: 'Run tier evals', onClick: () => runNow.mutate() } : { label: 'Gate registry', href: '/admin/gates' }}
           secondaryAction={{ label: 'Runtime flags', href: '/admin/runtime-flags' }}
         />
