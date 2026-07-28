@@ -314,6 +314,26 @@ describe('query-run tagging', () => {
     expect(statementFingerprint(undefined)).toBeNull();
   });
 
+  it('does NOT backtrack exponentially on unterminated quoted literals (ReDoS regression)', () => {
+    // CodeQL js/redos (HIGH): the literal-stripping alternations originally read
+    // `(?:''|\\.|[^'])*` / `(?:\\.|[^"])*`, where `\\.` and the negated class BOTH
+    // match a backslash. That ambiguity is exponential on an unterminated literal
+    // full of escapes — and statements come straight from the query editors, so a
+    // crafted query could pin the event loop. Excluding the backslash from the
+    // class makes the alternation unambiguous.
+    //
+    // These payloads took ~600ms (and doubling per added escape) before the fix;
+    // they are sub-millisecond after it. A generous budget still fails loudly if
+    // the ambiguity ever returns.
+    const doubleQuoted = `SELECT "${'\\&'.repeat(30)}`;
+    const singleQuoted = `SELECT '${"\\!".repeat(30)}`;
+    for (const payload of [doubleQuoted, singleQuoted]) {
+      const started = Date.now();
+      expect(statementFingerprint(payload)).toHaveLength(16);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    }
+  });
+
   it('meters query-second engines on wall-clock and leaves per-query engines at 1', () => {
     expect(queryRunQuantity('synapse-sql', 2_500)).toBeCloseTo(2.5, 3);
     expect(queryRunQuantity('duckdb', 120)).toBeCloseTo(0.12, 3);

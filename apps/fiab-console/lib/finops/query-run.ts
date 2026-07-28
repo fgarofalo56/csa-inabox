@@ -49,8 +49,13 @@ export function statementFingerprint(statement: string | undefined | null): stri
     .replace(/\/\*[\s\S]*?\*\//g, ' ')      // block comments
     .replace(/--[^\n\r]*/g, ' ')            // SQL line comments
     .replace(/\/\/[^\n\r]*/g, ' ')          // KQL/Trino line comments
-    .replace(/'(?:''|\\.|[^'])*'/g, "'?'")  // single-quoted literals
-    .replace(/"(?:\\.|[^"])*"/g, '"?"')     // double-quoted literals
+    // ReDoS-safe: the negated classes EXCLUDE the backslash so `\\.` and the
+    // class cannot both match it. The original `[^']` / `[^"]` overlapped with
+    // `\\.`, making the alternation ambiguous and exponential on an unterminated
+    // literal (CodeQL js/redos, HIGH) — reachable because these run on
+    // user-authored SQL/KQL/DAX from the query editors.
+    .replace(/'(?:''|\\.|[^'\\])*'/g, "'?'")  // single-quoted literals
+    .replace(/"(?:\\.|[^"\\])*"/g, '"?"')     // double-quoted literals
     .replace(/\b\d+(?:\.\d+)?\b/g, '?')     // numeric literals
     .replace(/\s+/g, ' ')
     .trim()
