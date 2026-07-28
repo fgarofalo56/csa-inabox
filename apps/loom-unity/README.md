@@ -9,8 +9,16 @@ works day one**. It is the Azure-native default Unity Catalog backend; no
 Microsoft Fabric / Power BI dependency (`.claude/rules/no-fabric-dependency.md`).
 
 This is **packaging, not a fork**. The image starts `FROM
-unitycatalog/unitycatalog:0.5.0` (the official published server image) and
-overlays one thin entrypoint that renders config from environment variables.
+unitycatalog/unitycatalog:v0.5.0` (the official published server image) and
+overlays one thin entrypoint that renders config from environment variables, plus
+the Postgres JDBC driver and a small Entra authentication plugin (LU-1).
+
+> **Image pin (re-verified 2026-07-28).** Upstream released **v0.5.1** on GitHub
+> (2026-07-18) but **has not published a v0.5.1 container image** — Docker Hub
+> returns `404 tag 'v0.5.1' not found`, and the newest released tag there is
+> still `v0.5.0`. The pin therefore stays at v0.5.0. Move as soon as the image
+> appears: 0.5.1 fixes permission **GET** routes returning HTTP 500 when
+> server-side authorization is enabled, which is precisely the LU-2 posture.
 
 ## What it exposes
 
@@ -23,10 +31,50 @@ bound); see `apps/fiab-console/lib/azure/uc-backend.ts`.
 
 ## Persistence
 
+**LU-1: PostgreSQL is the default.** The catalog lives on an Azure Database for
+PostgreSQL Flexible Server created **Entra-only** (`authConfig.passwordAuth=Disabled`)
+and **private-endpoint-only** (`publicNetworkAccess=Disabled`) by
+`platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep`.
+
 | Mode | How | Notes |
 |---|---|---|
-| **H2 file DB (default)** | `.mv.db` on a mounted Azure Files volume (`LOOM_UNITY_DB_DIR`) | Survives restarts; the bicep module mounts the share. Seeded from the image schema on first boot. |
-| **Postgres (opt-in)** | `LOOM_UNITY_DB_URL=jdbc:postgresql://…` + `LOOM_UNITY_DB_USER`/`LOOM_UNITY_DB_PASSWORD` | Requires the Postgres JDBC driver on the server classpath and a one-time UC schema migration — see `docs/fiab/unity-gov.md`. |
+| **Postgres + Entra (DEFAULT)** | `LOOM_UNITY_DB_URL=jdbc:postgresql://…` + `LOOM_UNITY_DB_USER=<uami-name>` + `LOOM_UNITY_DB_AUTH=entra` (+ `AZURE_CLIENT_ID`) | **No password exists anywhere.** pgjdbc mints a fresh Entra token per physical connection through the plugin below. Durable, PITR-backed, multi-writer — so the Container App can run more than one replica. Hibernate creates/updates the UC schema on first boot (`hibernate.hbm2ddl.auto=update`). |
+| **Postgres + password (BYO opt-out)** | `LOOM_UNITY_DB_AUTH=password` + `LOOM_UNITY_DB_PASSWORD` (Key Vault secretref) | For a bring-your-own server that still uses password auth. Warns on every boot; fails closed if the password is missing. |
+| **H2 file DB (legacy fallback)** | `.mv.db` in `LOOM_UNITY_DB_DIR` (Azure Files) or `LOOM_UNITY_DB_LOCAL=1` (ephemeral) | Only when no `LOOM_UNITY_DB_URL` is wired. **Single-writer** (the app is forced to exactly one replica), **no backup/PITR**, and known to **CrashLoopBackOff on Azure Government's SMB mount**. The entrypoint prints a NOTICE naming the remediation on every boot. |
+
+### Passwordless Postgres — how it actually works
+
+Azure Database for PostgreSQL with Entra-only auth expects a short-lived access
+token *as the password*. Rendering one into `hibernate.properties` at container
+start does **not** work: the token expires within the hour while Hibernate keeps
+opening new physical connections, so the catalog would start healthy and then
+hard-fail authentication later.
+
+The image therefore installs two jars next to the server (see the Dockerfile):
+
+* `postgresql-42.7.7.jar` — the JDBC driver (upstream v0.5.0 ships only H2), pulled
+  from Maven Central and **SHA-256-verified at build time**.
+* `loom-unity-entra-auth.jar` — `ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin`
+  (source: `apps/loom-unity/java`), a **dependency-free** implementation of pgjdbc's
+  `org.postgresql.plugin.AuthenticationPlugin`. pgjdbc calls it for every physical
+  connection, so the token is always fresh. It reads the Container Apps managed-identity
+  endpoint (`IDENTITY_ENDPOINT` / `IDENTITY_HEADER`, App-Service protocol — **not**
+  classic IMDS, which ACA does not serve) with an IMDS fallback, never logs the token,
+  and caches for 60 s purely to stop pool warm-up from stampeding the endpoint.
+
+  *Why not Microsoft's `azure-identity-extensions` plugin?* It is the same seam, but it
+  drags azure-identity + msal4j + reactor + netty + jackson onto the classpath of a
+  netty/jackson application. One ~200-line dependency-free class cannot conflict with
+  the server it is hosted in.
+
+### Migrating an existing H2 catalog
+
+`scripts/csa-loom/loom-unity-migrate-catalog.py` copies catalogs → schemas →
+tables/volumes/functions/models from a still-running H2-backed instance into the
+Postgres-backed one **over the UC REST API** (idempotent, `--dry-run` first).
+Metadata only — storage locations and grants are covered in
+`docs/fiab/unity-gov.md`. `scripts/csa-loom/loom-unity-postgres-bootstrap.sh`
+does the PostgreSQL-side principal registration and grants.
 
 ## Auth (LU-2 — hardened; Entra by default)
 
@@ -74,9 +122,15 @@ paths. See the honest capability matrix in `docs/fiab/unity-gov.md`.
 | Var | Default | Purpose |
 |---|---|---|
 | `LOOM_UNITY_PORT` | `8080` | Listen port. |
-| `LOOM_UNITY_DB_DIR` | `etc/db` | Directory for the H2 file DB (mount Azure Files here). |
-| `LOOM_UNITY_DB_URL` | *(unset → H2)* | `jdbc:postgresql://…` to use Postgres. |
-| `LOOM_UNITY_DB_USER` / `LOOM_UNITY_DB_PASSWORD` | *(unset)* | Postgres credentials. |
+| `LOOM_UNITY_DB_URL` | *(unset → H2 fallback)* | `jdbc:postgresql://host:5432/db`. The entrypoint appends `sslmode=require` and (in entra mode) the authentication plugin, preserving any query string you already set. |
+| `LOOM_UNITY_DB_USER` | *(unset)* | PostgreSQL role = the Entra principal name of the loom-unity identity. **Required** whenever `LOOM_UNITY_DB_URL` is set — missing it fails the boot closed. |
+| `LOOM_UNITY_DB_AUTH` | `entra` | `entra` (passwordless, the default) or `password` (audited BYO opt-out). |
+| `AZURE_CLIENT_ID` | *(unset)* | Client id of the user-assigned identity the Entra plugin mints tokens for. Unset → boot WARNS (a UAMI-bearing container cannot infer it). |
+| `LOOM_UNITY_DB_AAD_RESOURCE` | `https://ossrdbms-aad.database.windows.net` | Sovereign OSS-RDBMS resource (`…usgovcloudapi.net` in Gov); bicep derives it per cloud. |
+| `LOOM_UNITY_DB_PASSWORD` | *(unset)* | Only for `LOOM_UNITY_DB_AUTH=password` — **Key Vault secretref only**. |
+| `LOOM_UNITY_DB_DDL` | `update` | `hibernate.hbm2ddl.auto`. Set `none` to manage the schema with your own migrations. |
+| `LOOM_UNITY_DB_DIR` | `etc/db` | Directory for the H2 fallback file DB (Azure Files mount point). |
+| `LOOM_UNITY_DB_LOCAL` | *(unset)* | `1` forces the H2 fallback onto a local ephemeral dir (no SMB mount). |
 | `LOOM_UNITY_AUTH` | *(derived: `enable` when a tenant is wired)* | `enable` / `disable`. `disable` is an audited opt-out that warns on every boot. |
 | `LOOM_UNITY_ENTRA_TENANT_ID` | *(unset)* | Entra tenant whose tokens are accepted; drives the derived issuer + endpoints. |
 | `LOOM_UNITY_ENTRA_CLIENT_ID` | *(unset)* | App registration fronting Loom Unity; drives the derived audiences. |
@@ -91,7 +145,7 @@ paths. See the honest capability matrix in `docs/fiab/unity-gov.md`.
 
 ```bash
 docker build -t loom-unity apps/loom-unity
-docker run -p 8080:8080 loom-unity                    # H2 file DB, authorization off + warned
+docker run -p 8080:8080 loom-unity                    # H2 fallback, authorization off + warned
 docker run -p 8080:8080 \
   -e LOOM_UNITY_ENTRA_TENANT_ID=<tenant> \
   -e LOOM_UNITY_ENTRA_CLIENT_ID=<app-client-id> loom-unity   # Entra bearer enforced
@@ -106,6 +160,8 @@ Deploy to Azure: `platform/fiab/bicep/modules/compute/loom-unity-app.bicep`
 cd apps/loom-unity && npm test
 ```
 
-Runs the entrypoint in dry-run mode (10 tests) and asserts the persistence,
+Runs the entrypoint in dry-run mode (15 tests) and asserts the persistence
+(Postgres passwordless / password opt-out / H2 fallback, incl. three fail-closed
+boot paths),
 Entra-authorization (including both fail-closed boot paths and the sovereign
 authority host), and ADLS-vending config-rendering branches.
