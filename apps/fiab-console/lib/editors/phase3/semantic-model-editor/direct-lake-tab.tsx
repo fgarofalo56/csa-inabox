@@ -17,6 +17,7 @@
 // dependency arrays stay byte-identical to the pre-refactor ones.
 
 import { useCallback, useEffect, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Field,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -25,7 +26,8 @@ import {
 } from '@fluentui/react-components';
 import { Save20Regular, ArrowSync20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
-import type { TableLite } from './types';
+import type { TableLite, SemanticModelTab } from './types';
+import type { Phase3Styles } from '../styles';
 
 export type DlPolicy = 'Partition' | 'Full' | 'DirectQueryFallback' | 'Composite';
 export type DlTableRow = { tableName: string; policy: DlPolicy; partitionColumn: string };
@@ -49,9 +51,9 @@ export interface DirectLakeApi {
   dlEnabled: boolean | null;
   dlHint: string;
   dlDeltaPath: string;
-  setDlDeltaPath: (v: string) => void;
+  setDlDeltaPath: Dispatch<SetStateAction<string>>;
   dlSla: number;
-  setDlSla: (v: number) => void;
+  setDlSla: Dispatch<SetStateAction<number>>;
   dlTables: DlTableRow[];
   dlRuns: DlShimRun[];
   dlEventGrid: DlEventGrid | null;
@@ -66,7 +68,7 @@ export interface DirectLakeApi {
 
 export function useSemanticModelDirectLake({
   tab, datasetId, workspaceId, tables,
-}: { tab: string; datasetId: string; workspaceId: string; tables: TableLite[] | undefined }): DirectLakeApi {
+}: { tab: SemanticModelTab; datasetId: string; workspaceId: string; tables: TableLite[] | undefined }): DirectLakeApi {
   const [dlEnabled, setDlEnabled] = useState<boolean | null>(null); // null = unknown until first load
   const [dlHint, setDlHint] = useState<string>('');
   const [dlDeltaPath, setDlDeltaPath] = useState('');
@@ -162,7 +164,7 @@ export function useSemanticModelDirectLake({
 export function SemanticModelDirectLakeTab({
   s, dl, datasetId, workspaceId,
 }: {
-  s: Record<string, string>;
+  s: Phase3Styles;
   dl: DirectLakeApi;
   datasetId: string;
   workspaceId: string;

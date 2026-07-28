@@ -78,7 +78,7 @@ import { AskAffordance } from '@/lib/components/ask/AskAffordance';
 // (below) and SemanticModelPrepForAiPane (re-exported here) keep their original
 // import paths so callers resolve unchanged (registry.ts, phase3-editors.tsx,
 // and the prep-for-ai vitest smoke test).
-import type { DatasetLite, TableLite, RefreshLite, SmTable, SmColumn } from './semantic-model-editor/types';
+import type { DatasetLite, TableLite, RefreshLite, SmTable, SmColumn, SemanticModelTab } from './semantic-model-editor/types';
 import {
   SM_DATA_CATEGORIES, SM_SUMMARIZE, SM_DATA_TYPES, SM_FORMATS,
   INGEST_STARTER_M, INGEST_SOURCES,
@@ -98,7 +98,8 @@ import { VerifiedQueriesPane } from './semantic-model-editor/verified-queries-pa
 // presentational body) moved to sibling modules. Purely structural.
 import { useSemanticModelAggregations, SemanticModelAggregationsTab } from './semantic-model-editor/aggregations-tab';
 import { useSemanticModelDirectLake, SemanticModelDirectLakeTab } from './semantic-model-editor/direct-lake-tab';
-import { useSemanticModelIncrementalRefresh, SemanticModelIncrementalRefreshTab } from './semantic-model-editor/incremental-refresh-tab';
+import { useSemanticModelIncrementalRefreshState, useSemanticModelIncrementalRefreshActions, SemanticModelIncrementalRefreshTab } from './semantic-model-editor/incremental-refresh-tab';
+import type { IncrementalRefreshApi } from './semantic-model-editor/incremental-refresh-tab';
 
 // Re-export so `import { SemanticModelPrepForAiPane } from '.../semantic-model-editor'`
 // keeps resolving unchanged (the prep-for-ai smoke test imports it from here).
@@ -142,7 +143,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot' | 'prep-for-ai' | 'ask' | 'verified-queries'>('tables');
+  const [tab, setTab] = useState<SemanticModelTab>('tables');
   // Loom-native Model-view sub-tab — the DEFAULT surface when no Power BI dataset
   // is selected (the Power BI dataset tab strip needs a datasetId; without one
   // the body was empty). Model / Tables / Measures over the item's own Cosmos
@@ -406,6 +407,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     finally { setCalcBusy(false); }
   }, [datasetId, workspaceId, calcTableName, calcTableExpr, loadModel]);
 
+  // --- Incremental refresh policy + hybrid table (current-period DirectQuery) ---
+  // Extracted to ./semantic-model-editor/incremental-refresh-tab (R10). The
+  // cluster's `useState` block lived HERE in the monolith and its `useCallback`s
+  // lived ~360 lines further down (after `loadRefreshes`), so it is exported as
+  // two hooks called at those two exact positions — this component's hook
+  // sequence is therefore byte-identical to the pre-refactor one.
+  const irState = useSemanticModelIncrementalRefreshState();
 
   // --- Security tab (RLS row filters + OLS object permissions) -------------
   // Authors model roles through the Analysis-Services XMLA endpoint (Azure
@@ -766,10 +774,14 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     finally { setTakeoverBusy(false); }
   }, [workspaceId, datasetId, loadDetail]);
 
-  // Incremental-refresh policy + hybrid table + enhanced refresh — extracted
-  // to ./semantic-model-editor/incremental-refresh-tab (R10). Called
-  // unconditionally so the tab keeps its draft across tab switches.
-  const ir = useSemanticModelIncrementalRefresh({ workspaceId, datasetId, loadRefreshes });
+  // Incremental-refresh callbacks — extracted to
+  // ./semantic-model-editor/incremental-refresh-tab (R10). Called here, at the
+  // position the raw `loadIrPolicy` / `saveIrPolicy` / `triggerEnhancedRefresh`
+  // declarations occupied, i.e. after `loadRefreshes` which the last of them
+  // closes over. The state half was registered further up (see `irState`), so
+  // the cluster's draft survives tab switches exactly as before.
+  const irActions = useSemanticModelIncrementalRefreshActions(irState, { workspaceId, datasetId, loadRefreshes });
+  const ir: IncrementalRefreshApi = { ...irState, ...irActions };
 
   // Apply the per-table storage modes: builds a composite model.bim TMSL with a
   // per-partition `mode` (import/directQuery/dual) and applies it via the

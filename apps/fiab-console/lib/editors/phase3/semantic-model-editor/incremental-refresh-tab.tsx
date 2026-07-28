@@ -11,11 +11,25 @@
 // (TMSL Alter + Refresh applyRefreshPolicy). Opt-in AAS backend; default stays
 // loom-native.
 //
-// The cluster has no effects — only `useState` + `useCallback` — so the parent
-// calls the hook once, unconditionally, where the callbacks used to sit (after
-// `loadRefreshes`, which `triggerEnhancedRefresh` closes over).
+// The cluster has no effects — only `useState` + `useCallback`. In the
+// pre-refactor monolith this cluster was NOT contiguous: the 17 `useState`
+// calls sat at ~line 411 (before the Security tab and the aggregations block)
+// while its 3 `useCallback`s sat at ~line 979, after `loadRefreshes` (which
+// `triggerEnhancedRefresh` closes over). Collapsing both halves into a single
+// hook would therefore have MOVED the `useState` block ~360 hook-positions
+// later in `SemanticModelEditorInner`'s hook sequence.
+//
+// So the cluster is exported as TWO hooks that the parent calls at the exact
+// two positions the original blocks occupied:
+//   useSemanticModelIncrementalRefreshState()    <- the old state block
+//   useSemanticModelIncrementalRefreshActions()  <- the old callback block
+// This keeps `SemanticModelEditorInner`'s hook sequence byte-identical to the
+// pre-refactor component — enforced by
+// lib/editors/__tests__/semantic-model-hook-order.test.ts against a golden
+// captured from commit 20b3fe93 (the 3,025-LOC monolith).
 
 import { useCallback, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Field,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -25,51 +39,69 @@ import {
 import { Play20Regular, Save20Regular, ArrowSync20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import type { TableLite } from './types';
+import type { Phase3Styles } from '../styles';
 
 export const GRAINS = ['day', 'month', 'quarter', 'year'] as const;
 export type Grain = typeof GRAINS[number];
 
-export interface IncrementalRefreshApi {
+export type IrPartition = { name: string; storageMode: string; queryDefinition?: string };
+export type IrMessage = { ok: boolean; text: string } | null;
+export type EnhCommitMode = 'transactional' | 'partialBatch';
+
+/**
+ * The raw state half of the cluster — exactly the `useState` block that used to
+ * sit at ~line 411 of the monolith. Setters keep React's own
+ * `Dispatch<SetStateAction<T>>` type so the functional-updater form
+ * (`setIrPartitions((prev) => …)`) stays available to callers.
+ */
+export interface IncrementalRefreshState {
   irTableName: string;
-  setIrTableName: (v: string) => void;
+  setIrTableName: Dispatch<SetStateAction<string>>;
   irRollingWindowPeriods: number;
-  setIrRollingWindowPeriods: (v: number) => void;
+  setIrRollingWindowPeriods: Dispatch<SetStateAction<number>>;
   irRollingWindowGranularity: Grain;
-  setIrRollingWindowGranularity: (v: Grain) => void;
+  setIrRollingWindowGranularity: Dispatch<SetStateAction<Grain>>;
   irIncrementalPeriods: number;
-  setIrIncrementalPeriods: (v: number) => void;
+  setIrIncrementalPeriods: Dispatch<SetStateAction<number>>;
   irIncrementalGranularity: Grain;
-  setIrIncrementalGranularity: (v: Grain) => void;
+  setIrIncrementalGranularity: Dispatch<SetStateAction<Grain>>;
   irEnableHybrid: boolean;
-  setIrEnableHybrid: (v: boolean) => void;
+  setIrEnableHybrid: Dispatch<SetStateAction<boolean>>;
   irPollingExpression: string;
-  setIrPollingExpression: (v: string) => void;
+  setIrPollingExpression: Dispatch<SetStateAction<string>>;
   irEffectiveDate: string;
-  setIrEffectiveDate: (v: string) => void;
+  setIrEffectiveDate: Dispatch<SetStateAction<string>>;
   irBusy: boolean;
-  irMsg: { ok: boolean; text: string } | null;
-  irPartitions: Array<{ name: string; storageMode: string; queryDefinition?: string }>;
+  setIrBusy: Dispatch<SetStateAction<boolean>>;
+  irMsg: IrMessage;
+  setIrMsg: Dispatch<SetStateAction<IrMessage>>;
+  irPartitions: IrPartition[];
+  setIrPartitions: Dispatch<SetStateAction<IrPartition[]>>;
   irGate: string | null;
+  setIrGate: Dispatch<SetStateAction<string | null>>;
   enhBusy: boolean;
-  enhMsg: { ok: boolean; text: string } | null;
+  setEnhBusy: Dispatch<SetStateAction<boolean>>;
+  enhMsg: IrMessage;
+  setEnhMsg: Dispatch<SetStateAction<IrMessage>>;
   enhApplyPolicy: boolean;
-  setEnhApplyPolicy: (v: boolean) => void;
+  setEnhApplyPolicy: Dispatch<SetStateAction<boolean>>;
   enhEffectiveDate: string;
-  setEnhEffectiveDate: (v: string) => void;
-  enhCommitMode: 'transactional' | 'partialBatch';
-  setEnhCommitMode: (v: 'transactional' | 'partialBatch') => void;
+  setEnhEffectiveDate: Dispatch<SetStateAction<string>>;
+  enhCommitMode: EnhCommitMode;
+  setEnhCommitMode: Dispatch<SetStateAction<EnhCommitMode>>;
+}
+
+/** The callback half — the three `useCallback`s that used to sit at ~line 979. */
+export interface IncrementalRefreshActions {
   loadIrPolicy: () => Promise<void>;
   saveIrPolicy: () => Promise<void>;
   triggerEnhancedRefresh: () => Promise<void>;
 }
 
-export function useSemanticModelIncrementalRefresh({
-  workspaceId, datasetId, loadRefreshes,
-}: {
-  workspaceId: string;
-  datasetId: string;
-  loadRefreshes: (wsId: string, dsId: string) => Promise<void> | void;
-}): IncrementalRefreshApi {
+/** What the tab body consumes: both halves merged. */
+export type IncrementalRefreshApi = IncrementalRefreshState & IncrementalRefreshActions;
+
+export function useSemanticModelIncrementalRefreshState(): IncrementalRefreshState {
   const [irTableName, setIrTableName] = useState('');
   const [irRollingWindowPeriods, setIrRollingWindowPeriods] = useState(3);
   const [irRollingWindowGranularity, setIrRollingWindowGranularity] = useState<Grain>('year');
@@ -89,6 +121,51 @@ export function useSemanticModelIncrementalRefresh({
   const [enhEffectiveDate, setEnhEffectiveDate] = useState('');
   const [enhCommitMode, setEnhCommitMode] = useState<'transactional' | 'partialBatch'>('transactional');
 
+  return {
+    irTableName, setIrTableName,
+    irRollingWindowPeriods, setIrRollingWindowPeriods,
+    irRollingWindowGranularity, setIrRollingWindowGranularity,
+    irIncrementalPeriods, setIrIncrementalPeriods,
+    irIncrementalGranularity, setIrIncrementalGranularity,
+    irEnableHybrid, setIrEnableHybrid,
+    irPollingExpression, setIrPollingExpression,
+    irEffectiveDate, setIrEffectiveDate,
+    irBusy, setIrBusy,
+    irMsg, setIrMsg,
+    irPartitions, setIrPartitions,
+    irGate, setIrGate,
+    enhBusy, setEnhBusy,
+    enhMsg, setEnhMsg,
+    enhApplyPolicy, setEnhApplyPolicy,
+    enhEffectiveDate, setEnhEffectiveDate,
+    enhCommitMode, setEnhCommitMode,
+  };
+}
+
+/** What the callback half needs from the parent scope. */
+export interface IncrementalRefreshDeps {
+  workspaceId: string;
+  datasetId: string;
+  loadRefreshes: (wsId: string, dsId: string) => Promise<void> | void;
+}
+
+/**
+ * The callback half of the cluster. Called by the parent at the position the
+ * raw `loadIrPolicy` / `saveIrPolicy` / `triggerEnhancedRefresh` declarations
+ * occupied — i.e. after `loadRefreshes`, which `triggerEnhancedRefresh` closes
+ * over. Dependency arrays are byte-identical to the pre-refactor originals.
+ */
+export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefreshState, deps: IncrementalRefreshDeps): IncrementalRefreshActions {
+  const { workspaceId, datasetId, loadRefreshes } = deps;
+  const {
+    irTableName, irRollingWindowPeriods, irRollingWindowGranularity,
+    irIncrementalPeriods, irIncrementalGranularity, irEnableHybrid,
+    irPollingExpression, irEffectiveDate,
+    enhApplyPolicy, enhEffectiveDate, enhCommitMode,
+    setIrBusy, setIrMsg, setIrPartitions, setIrGate,
+    setEnhBusy, setEnhMsg,
+  } = st;
+
   // Load the live partition schema (TMSCHEMA_PARTITIONS via AAS XMLA). Surfaces
   // the honest AAS config gate when LOOM_SEMANTIC_BACKEND!=analysis-services.
   const loadIrPolicy = useCallback(async () => {
@@ -100,6 +177,11 @@ export function useSemanticModelIncrementalRefresh({
       if (!j.ok) { setIrGate(j.error); return; }
       setIrPartitions(j.partitions || []);
     } catch (e: any) { setIrGate(e?.message || String(e)); }
+    // The `set*` functions come from `useState` (stable for the component's
+    // lifetime) but reach this hook through `st`, so the rule can't prove it.
+    // The array below is byte-identical to the pre-decomposition original;
+    // adding the setters would change it and break the structural guarantee.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, datasetId, irTableName]);
 
   // Apply an incremental refresh policy: TMSL Alter (set policy) + TMSL Refresh
@@ -131,6 +213,11 @@ export function useSemanticModelIncrementalRefresh({
       setIrMsg({ ok: true, text: `Policy applied. ${j.partitions?.length ?? 0} partition(s)${dq ? `, including ${dq} live DirectQuery partition` : ''}.` });
     } catch (e: any) { setIrMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setIrBusy(false); }
+    // The `set*` functions come from `useState` (stable for the component's
+    // lifetime) but reach this hook through `st`, so the rule can't prove it.
+    // The array below is byte-identical to the pre-decomposition original;
+    // adding the setters would change it and break the structural guarantee.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, datasetId, irTableName, irRollingWindowGranularity, irRollingWindowPeriods, irIncrementalGranularity, irIncrementalPeriods, irEnableHybrid, irPollingExpression, irEffectiveDate]);
 
   // Enhanced (async) refresh — POST /refreshes with commitMode + applyRefreshPolicy
@@ -155,22 +242,14 @@ export function useSemanticModelIncrementalRefresh({
       setTimeout(() => loadRefreshes(workspaceId, datasetId), 2000);
     } catch (e: any) { setEnhMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setEnhBusy(false); }
+    // The `set*` functions come from `useState` (stable for the component's
+    // lifetime) but reach this hook through `st`, so the rule can't prove it.
+    // The array below is byte-identical to the pre-decomposition original;
+    // adding the setters would change it and break the structural guarantee.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, datasetId, enhCommitMode, enhApplyPolicy, enhEffectiveDate, loadRefreshes]);
 
   return {
-    irTableName, setIrTableName,
-    irRollingWindowPeriods, setIrRollingWindowPeriods,
-    irRollingWindowGranularity, setIrRollingWindowGranularity,
-    irIncrementalPeriods, setIrIncrementalPeriods,
-    irIncrementalGranularity, setIrIncrementalGranularity,
-    irEnableHybrid, setIrEnableHybrid,
-    irPollingExpression, setIrPollingExpression,
-    irEffectiveDate, setIrEffectiveDate,
-    irBusy, irMsg, irPartitions, irGate,
-    enhBusy, enhMsg,
-    enhApplyPolicy, setEnhApplyPolicy,
-    enhEffectiveDate, setEnhEffectiveDate,
-    enhCommitMode, setEnhCommitMode,
     loadIrPolicy, saveIrPolicy, triggerEnhancedRefresh,
   };
 }
@@ -178,7 +257,7 @@ export function useSemanticModelIncrementalRefresh({
 export function SemanticModelIncrementalRefreshTab({
   s, ir, tables, workspaceId, datasetId,
 }: {
-  s: Record<string, string>;
+  s: Phase3Styles;
   ir: IncrementalRefreshApi;
   tables: TableLite[] | undefined;
   workspaceId: string;

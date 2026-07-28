@@ -2,6 +2,19 @@
 // Extracted byte-for-byte from ../semantic-model-editor.tsx (pure move).
 // No JSX; no 'use client' needed.
 
+/**
+ * The editor's tab union. Single-sourced here so sibling tab modules that need
+ * the active tab (e.g. direct-lake-tab's seed/load effects) are typo-checked
+ * against it — `tab !== 'direct-lakes'` is then a compile error, not a silently
+ * always-true comparison.
+ */
+export type SemanticModelTab =
+  | 'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures'
+  | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh'
+  | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security'
+  | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams'
+  | 'datasource' | 'copilot' | 'prep-for-ai' | 'ask' | 'verified-queries';
+
 export interface DatasetLite {
   id: string; name: string; configuredBy?: string; isRefreshable?: boolean; targetStorageMode?: string; createdDate?: string;
   isEffectiveIdentityRolesRequired?: boolean;

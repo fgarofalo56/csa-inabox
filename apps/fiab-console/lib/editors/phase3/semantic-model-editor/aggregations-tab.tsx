@@ -17,6 +17,7 @@
 // below is presentational and receives that api object.
 
 import { useCallback, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import {
   Subtitle2, Caption1, Button, Input, Field,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -27,6 +28,7 @@ import { Save20Regular, Add20Regular, Delete20Regular } from '@fluentui/react-ic
 import { clientFetch } from '@/lib/client-fetch';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { TableLite } from './types';
+import type { Phase3Styles } from '../styles';
 
 const AGG_SUMMARIZATIONS = ['GroupBy', 'Sum', 'Count', 'Min', 'Max'] as const;
 const AGG_DATATYPES = ['int64', 'double', 'decimal', 'dateTime', 'string', 'boolean'] as const;
@@ -35,12 +37,12 @@ type AltMap = { aggColumn: string; dataType: typeof AGG_DATATYPES[number]; summa
 
 export interface AggregationsApi {
   aggTableName: string;
-  setAggTableName: (v: string) => void;
+  setAggTableName: Dispatch<SetStateAction<string>>;
   aggPartitionExpr: string;
-  setAggPartitionExpr: (v: string) => void;
+  setAggPartitionExpr: Dispatch<SetStateAction<string>>;
   aggAltMaps: AltMap[];
   aggProbeQuery: string;
-  setAggProbeQuery: (v: string) => void;
+  setAggProbeQuery: Dispatch<SetStateAction<string>>;
   aggBusy: boolean;
   aggMsg: { ok: boolean; text: string } | null;
   aggProbeResult: Array<Record<string, unknown>> | null;
@@ -141,7 +143,7 @@ export function useSemanticModelAggregations({
 export function SemanticModelAggregationsTab({
   s, agg, tables, targetStorageMode, datasetId,
 }: {
-  s: Record<string, string>;
+  s: Phase3Styles;
   agg: AggregationsApi;
   tables: TableLite[] | undefined;
   targetStorageMode: string | undefined;
