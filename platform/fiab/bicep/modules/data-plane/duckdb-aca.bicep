@@ -65,6 +65,12 @@ Optional keys:
   targetPort             Internal HTTP ingress port (default 8080).
   flightPort             Flight SQL gRPC port (default 8815). Set flightEnabled=false to disable.
   flightEnabled          Default true — the ADBC/JDBC serving wire.
+  flightAllowBareSql     Default true — serve DoGet(Ticket(b'SELECT ...')) for plain
+                         Arrow Flight clients that never call GetFlightInfo. Set
+                         false so ONLY the GetFlightInfo->handle->DoGet handshake is
+                         served, which makes the single-use/TTL statement handle a
+                         real replay boundary. Conformant Flight SQL / ADBC / JDBC
+                         clients are unaffected either way.
   ticketSecretUri        Key Vault secret URI holding the Flight ticket HMAC key.
                          Empty => Flight runs on in-VNet trust and every access
                          row is honestly marked ticketVerified:false.
@@ -90,6 +96,7 @@ var lakeStorageAccountName = duckdbConfig.lakeStorageAccountName
 var targetPort = int(duckdbConfig.?targetPort ?? 8080)
 var flightPort = int(duckdbConfig.?flightPort ?? 8815)
 var flightEnabled = bool(duckdbConfig.?flightEnabled ?? true)
+var flightAllowBareSql = bool(duckdbConfig.?flightAllowBareSql ?? true)
 var ticketSecretUri = string(duckdbConfig.?ticketSecretUri ?? '')
 var maxRows = int(duckdbConfig.?maxRows ?? 200000)
 var threads = int(duckdbConfig.?threads ?? 4)
@@ -132,6 +139,7 @@ var baseEnv = [
   { name: 'LOOM_DUCKDB_THREADS', value: string(threads) }
   { name: 'LOOM_DUCKDB_MEMORY_LIMIT', value: memoryLimit }
   { name: 'LOOM_FLIGHT_ENABLED', value: flightEnabled ? '1' : '0' }
+  { name: 'LOOM_FLIGHT_ALLOW_BARE_SQL', value: flightAllowBareSql ? '1' : '0' }
   { name: 'LOOM_FLIGHT_PORT', value: string(flightPort) }
 ]
 

@@ -48,6 +48,26 @@ DEFAULT_MAX_ROWS = int(os.environ.get("LOOM_DUCKDB_MAX_ROWS", "200000") or 20000
 #: Wall-clock budget for one statement (seconds).
 QUERY_TIMEOUT_S = float(os.environ.get("LOOM_DUCKDB_QUERY_TIMEOUT_S", "120") or 120)
 
+#: Rows pulled per batch when a statement cannot be subquery-wrapped and has to
+#: be bounded on the client side (see `_bounded_direct_fetch`). Small enough
+#: that a huge unwrappable result never materializes, large enough that the
+#: common (tiny) PRAGMA / EXPLAIN case is a single pull.
+FALLBACK_BATCH_ROWS = 2048
+
+
+def env_enabled(name: str, *, default: bool = True) -> bool:
+    """Read an OPT-OUT boolean env flag.
+
+    Loom's default-ON rule (`.claude/rules/ux-baseline.md` G2) says a capability
+    works out of the box: an absent or blank value means `default`, and only an
+    explicit off-word turns it off. Shared by the HTTP tier and the Flight wire
+    so both parse `LOOM_FLIGHT_*` the same way.
+    """
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in {"0", "false", "no", "off"}
+
 
 @dataclass
 class QueryResult:
@@ -78,6 +98,40 @@ class QueryResult:
             "engine": "duckdb",
             "extensions": self.extensions,
         }
+
+
+def _bounded_direct_fetch(
+    cursor: duckdb.DuckDBPyConnection, statement: str, cap: int,
+) -> pa.Table:
+    """Execute `statement` RAW, but pull at most ``cap + 1`` rows off the result.
+
+    Statements DuckDB refuses to wrap in a subquery (PRAGMA / EXPLAIN and
+    friends) cannot carry the LIMIT *inside* the query, and appending one to the
+    raw text is not an option either: ``EXPLAIN SELECT 1 LIMIT 5`` parses as an
+    EXPLAIN *of* ``SELECT 1 LIMIT 5``, i.e. it silently rewrites the statement
+    the caller submitted.
+
+    So the bound is applied by STREAMING the result and stopping as soon as
+    ``cap + 1`` rows are in hand. `fetch_record_batch` pulls lazily, so an
+    unwrappable statement over a large source never materializes in full — which
+    is the blow-up the cap exists to prevent (#2575). ``cap + 1`` rather than
+    ``cap`` so the caller can still tell "exactly at the cap" from "truncated".
+    """
+    reader = cursor.execute(statement).fetch_record_batch(FALLBACK_BATCH_ROWS)
+    schema = reader.schema
+    batches: list[pa.RecordBatch] = []
+    rows = 0
+    try:
+        for batch in reader:
+            batches.append(batch)
+            rows += batch.num_rows
+            if rows > cap:
+                break
+    finally:
+        # Releases the streaming result even when we stopped early; without it
+        # the abandoned reader would hold the query open on the cursor.
+        reader.close()
+    return pa.Table.from_batches(batches, schema=schema)
 
 
 def arrow_ipc_bytes(table: pa.Table) -> bytes:
@@ -199,8 +253,9 @@ class DuckDbEngine:
                     table = cursor.execute(wrapped).fetch_arrow_table()
                 except duckdb.Error:
                     # Statements that cannot be wrapped in a subquery (SHOW,
-                    # DESCRIBE, PRAGMA, EXPLAIN) run directly.
-                    table = cursor.execute(statement).fetch_arrow_table()
+                    # DESCRIBE, PRAGMA, EXPLAIN) run directly — but STREAMED and
+                    # stopped at the cap, never materialized whole (#2575).
+                    table = _bounded_direct_fetch(cursor, statement, cap)
             assert table is not None
             truncated = table.num_rows > cap
             if truncated:

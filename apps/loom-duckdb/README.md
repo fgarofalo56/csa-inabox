@@ -70,6 +70,27 @@ unmodified.
 | `LOOM_FLIGHT_ENABLED` | `0` disables the Flight wire (HTTP tier keeps working) |
 | `LOOM_FLIGHT_PORT` | Flight gRPC port (default 8815) |
 | `LOOM_FLIGHT_TICKET_SECRET` | Key-Vault-injected HMAC key for ticket verification |
+| `LOOM_FLIGHT_ALLOW_BARE_SQL` | default **on**. `0` serves ONLY the `GetFlightInfo` → handle → `DoGet` handshake, which makes the statement-handle lifecycle a real replay boundary (see below). Conformant Flight SQL / ADBC / JDBC clients are unaffected either way |
+
+### Flight statement handles — what they bound
+
+A handle minted by `GetFlightInfo` is single-use, bound to the minting ticket
+and expires after 120 s. While `LOOM_FLIGHT_ALLOW_BARE_SQL` is on (the default,
+so plain Arrow Flight clients that never call `GetFlightInfo` keep working),
+that is a **resource-hygiene** control rather than a replay/authorization
+boundary: a leaked *handle* is worthless after one fetch, but a holder of a
+valid, unexpired *ticket* can `DoGet(Ticket(b"SELECT ..."))` with arbitrary
+**read** SQL for the rest of the ticket's TTL. The read-only guard and the audit
+log apply on both paths — bare-SQL redemptions are logged under their own
+`flight.doGet.bareSql` operation so they are distinguishable in the access log —
+and `GET /capabilities` reports the live posture as `flight.bareSqlTickets`.
+Set `LOOM_FLIGHT_ALLOW_BARE_SQL=0` for a deployment that needs the handshake to
+BE the boundary.
+
+`GET /capabilities` reports the Flight wire's REAL state, not the operator's
+intent: `flight.configured` is what the env asked for, `flight.running` is
+whether the serving thread is alive right now, `flight.enabled` is both, and
+`flight.error` carries the last startup/serve failure verbatim.
 
 ## Deploy
 

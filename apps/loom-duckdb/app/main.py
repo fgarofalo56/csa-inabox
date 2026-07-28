@@ -30,45 +30,127 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from .engine import ENGINE, arrow_ipc_bytes
+from .engine import ENGINE, arrow_ipc_bytes, env_enabled
 from .sqlguard import SqlNotAllowedError
 
 logging.basicConfig(level=os.environ.get("LOOM_DUCKDB_LOG_LEVEL", "INFO"))
 log = logging.getLogger("loom-duckdb")
 
-app = FastAPI(title="loom-duckdb", version="1.0.0")
-
 ARROW_STREAM_MIME = "application/vnd.apache.arrow.stream"
+
+#: Env flag names, named once so `/capabilities` and the starter cannot drift.
+FLIGHT_ENABLED_FLAG = "LOOM_FLIGHT_ENABLED"
+BARE_SQL_FLAG = "LOOM_FLIGHT_ALLOW_BARE_SQL"
 
 
 class QueryRequest(BaseModel):
+    # `extra='forbid'`: an unknown key is a 422, not a silent no-op. Pydantic's
+    # default (`ignore`) meant a `max_rows` typo for `maxRows` returned 200 with
+    # an UNBOUNDED result instead of a loud rejection (#2576). The BFF
+    # (`apps/fiab-console/lib/azure/duckdb-client.ts`) posts exactly
+    # `{sql, maxRows}` — `JSON.stringify` drops `maxRows` when it is undefined —
+    # so nothing in Loom sends a key this rejects.
+    model_config = ConfigDict(extra="forbid")
+
     sql: str
     # The BFF sends camelCase on the wire; the field name IS the contract.
     maxRows: int | None = None  # noqa: N815
 
 
 class ExplainRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     sql: str
 
 
-@app.on_event("startup")
+@dataclass
+class FlightState:
+    """What the Flight wire is ACTUALLY doing, for `/capabilities` to report.
+
+    `/capabilities` is the honest-gate surface the console reads, so it must
+    report the thread's real liveness rather than re-deriving "enabled" from the
+    env var the operator set. A `serve_forever` that raises inside the daemon
+    thread used to leave `/capabilities` claiming the wire was up (#2578).
+    """
+
+    thread: threading.Thread | None = None
+    #: Last startup / serve failure, verbatim. `None` once a start succeeds.
+    error: str | None = None
+
+    def running(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
+
+
+FLIGHT = FlightState()
+
+
 def _start_flight() -> None:
     """Start the Flight SQL server alongside the HTTP API (same process, same engine)."""
-    if (os.environ.get("LOOM_FLIGHT_ENABLED", "1") or "1").strip().lower() in {"0", "false", "no"}:
-        log.info("Flight SQL disabled by LOOM_FLIGHT_ENABLED")
+    FLIGHT.thread = None
+    FLIGHT.error = None
+    if not env_enabled(FLIGHT_ENABLED_FLAG):
+        log.info("Flight SQL disabled by %s", FLIGHT_ENABLED_FLAG)
         return
     try:
         from .flightsql import serve_forever
+    except Exception as exc:
+        FLIGHT.error = f"{type(exc).__name__}: {exc}"
+        log.warning("Flight SQL server did not start: %s", exc)
+        return
 
-        thread = threading.Thread(target=serve_forever, name="flight-sql", daemon=True)
+    def _supervised() -> None:
+        """Run the wire and RECORD its death instead of dying unhandled.
+
+        Without this the exception vanished into the daemon thread and only the
+        thread's liveness (invisible to `/capabilities`) changed.
+        """
+        try:
+            serve_forever()
+        except BaseException as exc:  # the thread boundary IS the handler
+            FLIGHT.error = f"{type(exc).__name__}: {exc}"
+            log.warning("Flight SQL server stopped: %s", exc)
+
+    thread = threading.Thread(target=_supervised, name="flight-sql", daemon=True)
+    FLIGHT.thread = thread
+    try:
         thread.start()
     except Exception as exc:
+        FLIGHT.thread = None
+        FLIGHT.error = f"{type(exc).__name__}: {exc}"
         log.warning("Flight SQL server did not start: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Startup/shutdown. Replaces the deprecated `@app.on_event` (#2579).
+
+    NOTE: this migration does NOT lift the `starlette>=0.40,<0.42` pin in
+    `.github/workflows/test.yml`. That pin exists because the SHARED Python CI
+    env also installs the apps that pin `fastapi==0.115.x`
+    (platform/runners/script-runner, apps/fiab-dbt-runner, apps/loom-migrate,
+    apps/fiab-wrangler-host, apps/loom-transform-runner), and fastapi 0.115.x
+    passes `on_startup=` to `starlette.routing.Router.__init__`, which starlette
+    1.x removed — that breaks every `FastAPI()` CONSTRUCTION regardless of
+    whether any app calls `on_event`. Verified: fastapi 0.115.6 + starlette
+    1.3.1 -> `TypeError: Router.__init__() got an unexpected keyword argument
+    'on_startup'`. The pin goes when those apps move off fastapi 0.115.x.
+
+    The Flight thread is a daemon and is torn down with the process, so there is
+    nothing to unwind after the yield.
+    """
+    _start_flight()
+    yield
+
+
+app = FastAPI(title="loom-duckdb", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -79,12 +161,25 @@ def health() -> dict[str, bool]:
 @app.get("/capabilities")
 def capabilities() -> dict[str, object]:
     caps = ENGINE.capabilities()
+    configured = env_enabled(FLIGHT_ENABLED_FLAG)
+    running = FLIGHT.running()
     caps["flight"] = {
-        "enabled": (os.environ.get("LOOM_FLIGHT_ENABLED", "1") or "1").strip().lower()
-        not in {"0", "false", "no"},
+        # The TRUTH, not the intent: a configured wire whose thread has died
+        # reports `enabled: false` with the reason in `error` (#2578).
+        "enabled": configured and running,
+        #: What the deployment asked for.
+        "configured": configured,
+        #: Whether the serving thread is alive right now.
+        "running": running,
+        #: Last startup / serve failure, or null.
+        "error": FLIGHT.error,
         "port": int(os.environ.get("LOOM_FLIGHT_PORT", "8815")),
         "ticketRequired": True,
         "ticketSigned": bool((os.environ.get("LOOM_FLIGHT_TICKET_SECRET") or "").strip()),
+        # Whether `DoGet(Ticket(b"SELECT ..."))` is served without the
+        # plan->handle handshake. Reported so the posture is discoverable
+        # instead of implied (#2577).
+        "bareSqlTickets": env_enabled(BARE_SQL_FLAG),
     }
     return {"ok": True, **caps}
 
