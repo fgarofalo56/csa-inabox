@@ -36,6 +36,7 @@ RUN apt-get update && apt-get dist-upgrade -y \
 
 WORKDIR /app
 COPY requirements.txt requirements-security.txt ./
+COPY scripts ./scripts
 
 # Two passes on purpose. requirements.txt is the resolvable pin set;
 # requirements-security.txt then OVERRIDES transitive pins that would otherwise
@@ -45,26 +46,18 @@ COPY requirements.txt requirements-security.txt ./
 #
 # The override deliberately conflicts with a declared range, so pip emits a
 # "dependency conflicts" advisory and still exits 0 — which means a typo would
-# fail SILENTLY. The assertion below turns that back into a build failure.
+# fail SILENTLY. scripts/assert_security_pins.py turns that back into a build
+# failure.
+#
+# That assertion lives in a FILE, not an inline heredoc: ACR Tasks' classic
+# builder does not support Dockerfile heredocs (they require BuildKit). A
+# heredoc here builds fine under a local `docker build` and then dies in CI with
+# `failed to run step ID: build: failed to scan dependencies: exit status 1`
+# after ~3s, before any layer runs — an opaque message that names neither the
+# heredoc nor the parser. Keep this Dockerfile BuildKit-feature-free.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir -r requirements-security.txt \
-    && python - <<'PY'
-import sys
-from importlib.metadata import version
-
-# Every pin in requirements-security.txt must actually be the installed version.
-expected = {}
-for raw in open("requirements-security.txt"):
-    line = raw.split("#", 1)[0].strip()
-    if "==" in line:
-        name, _, want = line.partition("==")
-        expected[name.strip()] = want.strip()
-
-bad = {n: (w, version(n)) for n, w in expected.items() if version(n) != w}
-if bad:
-    sys.exit(f"security override did not apply: {bad}")
-print(f"security overrides applied: {expected}")
-PY
+    && python scripts/assert_security_pins.py
 
 COPY app ./app
 
