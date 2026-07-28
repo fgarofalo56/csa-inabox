@@ -26,7 +26,7 @@ function render(env) {
 
 const shAvailable = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 
-test('default persistence is the H2 file DB (no external DB required)', { skip: !shAvailable }, () => {
+test('no Postgres wired => the H2 fallback still renders (local dev / not-yet-provisioned)', { skip: !shAvailable }, () => {
   const r = render({});
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /org\.h2\.Driver/);
@@ -35,17 +35,77 @@ test('default persistence is the H2 file DB (no external DB required)', { skip: 
   assert.doesNotMatch(r.stdout, /adls\.storageAccountName/);
 });
 
-test('LOOM_UNITY_DB_URL=jdbc:postgresql routes persistence to Postgres', { skip: !shAvailable }, () => {
+test('LU-1: the DEFAULT Postgres path is PASSWORDLESS — plugin + sslmode, no password line', { skip: !shAvailable }, () => {
   const r = render({
-    LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog',
-    LOOM_UNITY_DB_USER: 'uc',
-    LOOM_UNITY_DB_PASSWORD: 'secret',
+    LOOM_UNITY_DB_URL: 'jdbc:postgresql://psql-loom-unity.postgres.database.usgovcloudapi.net:5432/unitycatalog',
+    LOOM_UNITY_DB_USER: 'uami-loom-unity',
+    AZURE_CLIENT_ID: 'uami-client-guid',
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /org\.postgresql\.Driver/);
-  assert.match(r.stdout, /jdbc:postgresql:\/\/pg\.example:5432\/unitycatalog/);
-  assert.match(r.stdout, /hibernate\.connection\.username=uc/);
+  assert.match(r.stdout, /hibernate\.connection\.username=uami-loom-unity/);
+  assert.match(r.stdout, /sslmode=require/);
+  assert.match(
+    r.stdout,
+    /authenticationPluginClassName=ai\.limitlessdata\.loom\.unity\.EntraPostgresAuthPlugin/,
+  );
+  // The whole point: with an Entra-only server there is NO password anywhere.
+  assert.doesNotMatch(r.stdout, /hibernate\.connection\.password/);
   assert.doesNotMatch(r.stdout, /org\.h2\.Driver/);
+  // Schema is created/updated by Hibernate on first boot — not a manual migration.
+  assert.match(r.stdout, /hibernate\.hbm2ddl\.auto=update/);
+});
+
+test('LU-1: Postgres with no DB user FAILS CLOSED (Entra role name is mandatory)', { skip: !shAvailable }, () => {
+  const r = render({ LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /FATAL: .*LOOM_UNITY_DB_USER is empty/);
+});
+
+test('LU-1: a missing AZURE_CLIENT_ID still boots but WARNS with the exact remediation', { skip: !shAvailable }, () => {
+  const r = render({
+    LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog',
+    LOOM_UNITY_DB_USER: 'uami-loom-unity',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /AZURE_CLIENT_ID is unset/);
+  assert.match(r.stderr, /unityUamiClientId/);
+});
+
+test('LU-1: an operator query string on the JDBC URL is preserved, not clobbered', { skip: !shAvailable }, () => {
+  const r = render({
+    LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog?ApplicationName=loom-unity&sslmode=verify-full',
+    LOOM_UNITY_DB_USER: 'uami-loom-unity',
+    AZURE_CLIENT_ID: 'uami-client-guid',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /ApplicationName=loom-unity/);
+  // sslmode already present => not appended a second time.
+  assert.doesNotMatch(r.stdout, /sslmode=require/);
+  assert.match(r.stdout, /sslmode=verify-full&authenticationPluginClassName=/);
+});
+
+test('LU-1: LOOM_UNITY_DB_AUTH=password is an explicit, warned BYO opt-out', { skip: !shAvailable }, () => {
+  const r = render({
+    LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog',
+    LOOM_UNITY_DB_USER: 'uc',
+    LOOM_UNITY_DB_AUTH: 'password',
+    LOOM_UNITY_DB_PASSWORD: 'secret',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /hibernate\.connection\.password=secret/);
+  assert.doesNotMatch(r.stdout, /authenticationPluginClassName/);
+  assert.match(r.stderr, /NOTICE: Postgres is using PASSWORD authentication/);
+});
+
+test('LU-1: password mode with no password FAILS CLOSED', { skip: !shAvailable }, () => {
+  const r = render({
+    LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog',
+    LOOM_UNITY_DB_USER: 'uc',
+    LOOM_UNITY_DB_AUTH: 'password',
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /FATAL: LOOM_UNITY_DB_AUTH=password but LOOM_UNITY_DB_PASSWORD is empty/);
 });
 
 test('no Entra tenant wired => authorization stays off but the boot WARNS loudly (LU-2)', { skip: !shAvailable }, () => {

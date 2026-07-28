@@ -1,8 +1,13 @@
 # Unity Catalog for Azure Government — loom-unity (self-hosted OSS Unity Catalog)
 
-**Status:** opt-in, Azure-native, default backend in Azure Government.
-**Scope:** `apps/loom-unity`, `platform/fiab/bicep/modules/compute/loom-unity-app.bicep`,
+**Status:** Azure-native, default catalog backend in Azure Government.
+**Scope:** `apps/loom-unity`,
+`platform/fiab/bicep/modules/compute/loom-unity-app.bicep`,
+`platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep`,
 `apps/fiab-console/lib/azure/uc-backend.ts` (+ `unity-catalog-client.ts`).
+
+> **Naming.** The platform is **Loom Unity** — Loom's Unity-Catalog-**compatible**
+> metastore. It is not a Databricks product and is never presented as one.
 
 ## Why this exists — the Gov gap
 
@@ -18,9 +23,20 @@ Databricks dependency (`.claude/rules/no-fabric-dependency.md`,
 `loom-unity` closes that gap by packaging the **open-source Unity Catalog server**
 ([unitycatalog.io](https://www.unitycatalog.io/), LF AI & Data;
 [github.com/unitycatalog/unitycatalog](https://github.com/unitycatalog/unitycatalog),
-**v0.5.0**, 2026-06-18) as a Loom Container App. It exposes the **same REST API**
-the Loom client already speaks, so the switch is a base-URL + auth change — not a
-new client.
+**v0.5.0**) as a Loom Container App. It exposes the **same REST API** the Loom
+client already speaks, so the switch is a base-URL + auth change — not a new client.
+
+**Image pin — re-verified 2026-07-28 (LU-1), unchanged at `v0.5.0`.** Upstream cut
+GitHub release **v0.5.1** on 2026-07-18 (credential-cache scoping, plus a fix for
+permission **GET** routes returning HTTP 500 when server-side authorization is
+enabled — exactly the LU-2 posture). There is nothing to bump to: Docker Hub
+publishes **no v0.5.1 image** —
+`GET https://hub.docker.com/v2/repositories/unitycatalog/unitycatalog/tags/v0.5.1`
+returns `404 {"message":"httperror 404: tag 'v0.5.1' not found"}`, and the only
+released tags there are `v0.5.0` (last pushed 2026-07-03), `v0.4.0`, `v0.3.1`,
+`v0.3.0`, `v0.2.1`. We do **not** switch to `latest` to chase it and we do not fork
+the server to build it. Re-check on each release; the permissions-GET fix is the
+reason to move promptly once the image exists.
 
 ## Architecture
 
@@ -35,9 +51,11 @@ Console (fiab-console)                         loom-unity Container App (interna
         LOOM_UNITY_TOKEN (KV secretref)            server.authorization=enable
         | UAMI ⇒ api://<client-id>/.default        server.allowed-issuers  (pinned)
         | anonymous (reported, never silent)       server.audiences        (pinned)
-                                                 persistence:
-                                                   H2 file DB on Azure Files (default)
-                                                   Postgres via LOOM_UNITY_DB_URL (opt-in)
+                                                 persistence (LU-1, default):
+                                                   PostgreSQL Flexible Server
+                                                     Entra-only  (no password)
+                                                     private endpoint, no public net
+                                                   (legacy fallback: H2 file DB)
 ```
 
 **The BFF is the only caller.** No engine, notebook, or user talks to Loom Unity
@@ -53,10 +71,11 @@ catalog access attributable (and is what LU-3 hangs the audit rows on).
   functions to `LOOM_UNITY_URL` — the OSS server returns the same JSON shapes, so
   the existing catalog browse, CRUD, and search work unchanged. `ossUcAuthHeader()`
   attaches the Console's credential to every one of those calls (LU-2).
-- **Persistence**: default **H2 file DB** on a mounted **Azure Files** share (the
-  bicep module creates the share + storage link; the entrypoint seeds the schema
-  on first boot and it survives restarts). **Postgres** is opt-in via
-  `LOOM_UNITY_DB_URL`.
+- **Persistence (LU-1 — Postgres by default)**: an **Azure Database for PostgreSQL
+  Flexible Server**, created **Entra-only** (`passwordAuth=Disabled`) and
+  **private-endpoint-only** (`publicNetworkAccess=Disabled`). See
+  [Persistence](#persistence-lu-1) — including why the old H2-on-Azure-Files
+  default was wrong, and how to migrate an existing deployment.
 - **Auth (LU-2 — hardened)**: the server enforces **Microsoft Entra bearer
   authorization by default** (`authMode='entra'`), with the token **issuer and
   audience both pinned**; the Console BFF injects the credential on every call and
@@ -141,21 +160,168 @@ and the SQL-warehouse families are Databricks-UC features OSS UC does not (yet)
 provide; Loom **gates them honestly** and routes each through its named
 Azure-native equivalent instead.
 
+## Persistence (LU-1)
+
+> **This section corrects the pre-LU-1 documentation, which recommended
+> H2-on-Azure-Files as "the recommended day-one path". That was wrong, and it was
+> contradicted by the repo itself** — `loom-unity-app.bicep`'s own `dbEphemeral`
+> parameter documents that the CIFS mount blocks container start with
+> CrashLoopBackOff on Azure Government, and the live Gov deployment has been
+> running Postgres since 2026-07-14.
+
+### The finding
+
+| Problem with the old H2-on-Azure-Files default | Consequence |
+|---|---|
+| The SMB/CIFS mount blocks container start on Azure Government (observed live 2026-07-14; not reproducible in local Docker) | The catalog **CrashLoopBackOffs before the JVM runs** — the workaround was an *ephemeral* EmptyDir, i.e. a catalog that silently loses every object on restart |
+| H2's file DB is **single-writer**, and its file-lock protocol has no reliable CIFS semantics (we had to set `FILE_LOCK=NO`) | The Container App was pinned to `minReplicas: 1, maxReplicas: 1` — no horizontal headroom and **no rolling restart without a catalog outage** |
+| No backup, no point-in-time restore, no server-side encryption story | A deleted share is an unrecoverable metastore |
+
+### The default now
+
+`platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep` provisions an
+**Azure Database for PostgreSQL Flexible Server**:
+
+| Control | Setting |
+|---|---|
+| Authentication | `activeDirectoryAuth: Enabled`, **`passwordAuth: Disabled`** — there is **no database credential** to rotate, leak, or land in ARM deployment history. The loom-unity UAMI is the server's Entra administrator. |
+| Network | **`publicNetworkAccess: Disabled`** + an in-module **private endpoint** (`groupIds: ['postgresqlServer']`) and a `privatelink.postgres.<sovereign-suffix>` private DNS zone linked to the VNet. There is no public endpoint at all; firewall rules are not even evaluated. |
+| Durability | PITR with a configurable retention window (default 14 days), optional `SameZone` / `ZoneRedundant` HA. |
+| Observability | `PostgreSQLLogs` + `PostgreSQLFlexSessions` + metrics to the Loom Log Analytics workspace. |
+
+Because Postgres is multi-writer, `loom-unity-app.bicep` now lifts the replica cap
+(`maxReplicas`, default 3, with an HTTP-concurrency scale rule) **only on the
+Postgres path** — the module still **forces `maxReplicas: 1` whenever the H2
+fallback is in use**, whatever you pass, because a second writer would corrupt the
+`.mv.db`.
+
+### How passwordless actually works (and why the obvious approach doesn't)
+
+Entra-only PostgreSQL expects a short-lived access token *as the password*.
+Rendering one into `hibernate.properties` at container start **does not work**: the
+token expires within the hour while Hibernate keeps opening new physical
+connections, so the catalog starts healthy and then hard-fails authentication long
+after anyone is watching.
+
+The token has to be minted **per physical connection**, which is exactly what
+pgjdbc's `authenticationPluginClassName` hook is for — the same seam Microsoft's
+own `AzurePostgresqlAuthenticationPlugin` uses ([Learn: passwordless JDBC
+connections](https://learn.microsoft.com/azure/postgresql/connectivity/connect-java)).
+The image installs two jars beside the server:
+
+* **`postgresql-42.7.7.jar`** — upstream UC v0.5.0's `build.sbt` ships only H2, so
+  the driver is added by us. Pulled from Maven Central and **SHA-256-verified in
+  the build** (a tampered or truncated download fails the image build).
+* **`loom-unity-entra-auth.jar`** — `ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin`
+  (`apps/loom-unity/java`), a **dependency-free** `AuthenticationPlugin`. It calls the
+  Container Apps managed-identity endpoint (`IDENTITY_ENDPOINT` / `IDENTITY_HEADER`
+  — the App Service protocol, **not** classic IMDS, which ACA does not serve; the
+  same gotcha as `lib/azure/aca-managed-identity.ts`) with an IMDS fallback, never
+  logs or persists the token, and caches 60 s purely to stop pool warm-up from
+  stampeding the endpoint.
+
+  We deliberately did **not** take `com.azure:azure-identity-extensions`: it drags
+  azure-identity + msal4j + reactor + netty + jackson onto the classpath of a
+  netty/jackson application, which is an untestable version-conflict risk for
+  "GET one URL, read one field".
+
+The Dockerfile **fails the build** if it cannot find and rewrite the server's
+classpath file — an image that quietly lacks the Postgres driver would boot on H2
+while the deployment reports Postgres.
+
+`LOOM_UNITY_DB_AUTH=password` remains as an explicit, warned opt-out for a BYO
+server that still uses password auth; the password then arrives as
+`dbPasswordSecretUri` (a Key Vault secretref), never inline.
+
+### Migrating an existing H2 deployment
+
+There is no honest offline path: the H2 file is a JVM-specific binary written by
+Hibernate, and hand-translating its dialect is the kind of "probably works"
+migration that silently drops objects. Migrate through the **server's own REST
+API** instead.
+
+```bash
+# 0. Deploy the Postgres store + apply the data-plane grants (run IN-VNET —
+#    the server has no public endpoint).
+az deployment group create -g <admin-rg> \
+  -f platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep \
+  -p location=<region> privateEndpointSubnetId=<pe-subnet-id> \
+     unityPrincipalId=<loom-unity-UAMI-principalId> \
+     unityPrincipalName=<loom-unity-UAMI-name> \
+     additionalAdministrators='[{"principalId":"<deploy-sp-oid>","principalName":"<deploy-sp>","principalType":"ServicePrincipal"}]' \
+     workspaceId=<law-id> complianceTags='{ "env": "gov" }'
+
+SUB=<sub> UNITY_RG=<admin-rg> UNITY_PG_SERVER=<server-name> \
+UNITY_UAMI_NAME=<loom-unity-UAMI-name> \
+PG_HOST_SUFFIX=postgres.database.usgovcloudapi.net \
+PG_AAD_RESOURCE=https://ossrdbms-aad.database.usgovcloudapi.net \
+  bash scripts/csa-loom/loom-unity-postgres-bootstrap.sh
+
+# 1. Deploy a SECOND loom-unity app (different name) pointed at Postgres, so the
+#    old H2-backed app and the new one are reachable at the same time.
+# 2. Copy the catalog (idempotent; dry-run first). Also runs in-VNet.
+LOOM_UNITY_SOURCE_URL=https://<old-fqdn> \
+LOOM_UNITY_TARGET_URL=https://<new-fqdn> \
+  python3 scripts/csa-loom/loom-unity-migrate-catalog.py --dry-run
+LOOM_UNITY_SOURCE_URL=... LOOM_UNITY_TARGET_URL=... \
+  python3 scripts/csa-loom/loom-unity-migrate-catalog.py
+
+# 3. Repoint the Console and retire the old app.
+az containerapp update -n <console-app> -g <admin-rg> \
+  --set-env-vars LOOM_UNITY_URL=https://<new-fqdn>
+```
+
+**What the copy moves:** catalogs → schemas → tables, volumes, functions,
+registered models (parent-before-child, existing objects left alone).
+**What it does not:** table/volume **data** (storage locations are unchanged — the
+same ADLS paths are simply re-registered), metastore-level external locations and
+storage credentials (re-create them on the target), and **grants** — the OSS
+permissions **GET** routes return HTTP 500 with authorization enabled on v0.5.0
+(fixed in v0.5.1, which has no published image yet), so re-apply grants from
+`/catalog/unity → Grants` after the cutover. The script prints that reminder.
+
+A greenfield deployment needs none of this: deploy the Postgres module first and
+the catalog is created directly on it (Hibernate builds the UC schema on first
+boot, `hibernate.hbm2ddl.auto=update`; set `LOOM_UNITY_DB_DDL=none` to own the
+schema yourself).
+
 ## Deploy
 
-`admin-plane/main.bicep` is at the ARM 256-parameter ceiling, so `loom-unity` is a
-**standalone out-of-band entrypoint** (orphan-allowlisted in
+`admin-plane/main.bicep` is at the ARM 256-parameter ceiling, so both Loom Unity
+modules are **standalone out-of-band entrypoints** (orphan-allowlisted in
 `scripts/ci/check-bicep-sync.mjs`), the same pattern the Hyperscale-band apps use.
 
-1. **Build + push the image** into the deployment's ACR (server-side, no local
-   Docker needed):
+1. **Provision the catalog store** — Entra-only, private-endpoint-only Postgres:
+
+   ```bash
+   az deployment group create -g <admin-resource-group> \
+     -f platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep \
+     -p location=<region> \
+        privateEndpointSubnetId=<private-endpoint-subnet-resource-id> \
+        unityPrincipalId=<principal-id-of-the-loom-unity-UAMI> \
+        unityPrincipalName=<name-of-the-loom-unity-UAMI> \
+        workspaceId=<log-analytics-workspace-resource-id> \
+        complianceTags='{ "env": "gov" }'
+   ```
+
+   Outputs to carry forward: `fqdn`, `databaseName`, `aadUser`. Then run
+   `scripts/csa-loom/loom-unity-postgres-bootstrap.sh` **from inside the VNet** —
+   it proves the token-only login works before anything depends on it.
+
+2. **Build + push the image** into the deployment's ACR (server-side, no local
+   Docker needed). This is also what compiles the Entra auth plugin and installs
+   the Postgres driver:
 
    ```bash
    az acr build -r <acr-name> -t loom-unity:<tag> apps/loom-unity
    ```
 
-2. **Deploy the Container App** (creates the persistent Azure Files share + mount,
-   and enforces Entra authorization — see [Authorization](#authorization-lu-2)):
+   > The build pulls `postgresql-42.7.7.jar` from Maven Central. In an
+   > egress-restricted ACR, pre-seed that artifact (or mirror Maven Central) —
+   > the checksum is pinned in the Dockerfile, so a substituted jar fails the build.
+
+3. **Deploy the Container App** (wires Postgres and enforces Entra authorization —
+   see [Authorization](#authorization-lu-2)):
 
    ```bash
    az deployment group create -g <admin-resource-group> \
@@ -165,6 +331,10 @@ Azure-native equivalent instead.
         acrLoginServer=<acr-name>.azurecr.io \
         image=<acr-name>.azurecr.io/loom-unity:<tag> \
         unityUamiId=<uami-resource-id-with-AcrPull-and-KeyVaultSecretsUser> \
+        unityUamiClientId=<client-id-of-that-same-UAMI> \
+        unityPostgresFqdn=<fqdn-output-from-step-1> \
+        unityPostgresDatabase=<databaseName-output-from-step-1> \
+        unityDbAadUser=<aadUser-output-from-step-1> \
         workspaceId=<log-analytics-workspace-resource-id> \
         authMode=entra \
         entraClientId=<entra-app-registration-client-id> \
@@ -172,10 +342,17 @@ Azure-native equivalent instead.
         complianceTags='{ "env": "gov" }'
    ```
 
-   Useful outputs: `authorizationEnforced` (must be `true`), `ingressIpRestricted`,
-   and `acceptedAudiences` (set `LOOM_UNITY_CLIENT_ID` on the Console to match).
+   Useful outputs: `persistenceBackend` (must be `postgres`), `dbEntraTokenAuth`
+   (must be `true`), `effectiveMaxReplicas`, `authorizationEnforced` (must be
+   `true`), `ingressIpRestricted`, and `acceptedAudiences` (set
+   `LOOM_UNITY_CLIENT_ID` on the Console to match).
 
-3. **Point the Console at it** (default-ON, no approval gate):
+   Omitting `unityPostgresFqdn` is legal but lands on the legacy H2 fallback: the
+   deployment reports `persistenceBackend: h2-azure-files` (or `h2-ephemeral`),
+   the replica ceiling is forced back to 1, and the container prints a NOTICE
+   naming the remediation on every boot.
+
+4. **Point the Console at it** (default-ON, no approval gate):
 
    ```bash
    az containerapp update -n <console-app> -g <admin-resource-group> \
@@ -189,14 +366,6 @@ Azure-native equivalent instead.
    it the `svc-loom-unity-authz` gate and the `probe-loom-unity-authz` probe both report
    the unauthenticated posture.)
 
-### Optional: Postgres persistence
-
-Pass `unityDbUrl=jdbc:postgresql://<host>:5432/unitycatalog` to the bicep module (and
-set `LOOM_UNITY_DB_USER` / `LOOM_UNITY_DB_PASSWORD` on the app). Postgres requires
-the Postgres JDBC driver on the server classpath and a one-time UC schema migration
-— verify against the upstream release before relying on it. The **H2-on-Azure-Files
-default needs none of this** and is the recommended day-one path.
-
 ### Optional: ADLS credential vending
 
 Pass `adlsAccount` (+ `adlsTenantId` / `adlsClientId`) to the bicep module to let
@@ -209,16 +378,24 @@ Unset, data access stays on Loom's managed-identity / ACL paths.
 
 ## Government endpoint notes
 
-- Azure Container Apps, Azure Files, user-assigned managed identities, Log Analytics,
-  and ACR are all GA in GCC-High / IL5 / DoD — `loom-unity` needs no managed-service
-  substitution to run in Government.
+- Azure Container Apps, **Azure Database for PostgreSQL Flexible Server**, Azure
+  Private Link / private DNS, user-assigned managed identities, Log Analytics, and
+  ACR are all GA in GCC-High / IL5 / DoD — Loom Unity needs no managed-service
+  substitution to run in Government. (Azure Files is no longer on the default path
+  at all: with Postgres there is no share, no storage account, and no account key.)
+- The Postgres store is created **Entra-only and private-endpoint-only**, so the
+  FedRAMP posture holds with no compensating control: no credential exists, and
+  the server has no internet-reachable endpoint.
 - The service reaches **no** `api.fabric.microsoft.com` / `api.powerbi.com` /
   `*.azuredatabricks.net` host — it IS the Azure-native Unity Catalog backend.
 - Sovereign host suffixes (Storage, ARM, Log Analytics) are resolved by the Console
-  through `lib/azure/cloud-endpoints.ts`. `loom-unity` itself only talks to its own
-  H2/Postgres store, the sovereign Entra endpoint for token validation (issuer host
-  derived from `environment().authentication.loginEndpoint`), and — if enabled — the
-  ADLS SP you wire.
+  through `lib/azure/cloud-endpoints.ts`. Loom Unity itself only talks to its own
+  Postgres store over the private endpoint, the sovereign Entra endpoint for token
+  validation *and* for minting its DB token (issuer host derived from
+  `environment().authentication.loginEndpoint`; DB resource derived from
+  `environment().suffixes.sqlServerHostname` →
+  `https://ossrdbms-aad.database.usgovcloudapi.net` in Gov), and — if enabled — the
+  ADLS SP you wire. Nothing sovereign is hard-coded on a code path.
 
 ## Verification
 
@@ -229,16 +406,36 @@ Unset, data access stays on Loom's managed-identity / ACL paths.
 - **LU-2 authorization**: `apps/fiab-console/lib/azure/__tests__/uc-authz.test.ts`
   (17 tests — bearer injection reaches the real REST call, fail-closed on an
   unmintable token, no hardening inferred from `LOOM_MSAL_CLIENT_ID`).
-- The entrypoint config rendering (H2 default / Postgres / **Entra authorization,
-  including both fail-closed boot paths** / ADLS vending) is covered by
-  `apps/loom-unity/tests/entrypoint.test.mjs` (dry-run, 10 tests).
+- The entrypoint config rendering is covered by
+  `apps/loom-unity/tests/entrypoint.test.mjs` (dry-run, **15 tests**):
+  **LU-1** — the passwordless Postgres default (plugin + `sslmode`, and the
+  assertion that **no** `hibernate.connection.password` line is ever rendered), an
+  operator-supplied JDBC query string surviving intact, the password-mode opt-out,
+  the `AZURE_CLIENT_ID` warning, and two fail-closed boot paths (missing DB user,
+  password mode with no password); **LU-2** — Entra authorization, the sovereign
+  authority host, and both of its fail-closed boot paths; plus ADLS vending and
+  the H2 fallback.
 - Live posture: `probe-loom-unity-authz` on `/admin/health` — the G1 receipt.
-- `check-bicep-sync`, `check-bicep-param-cap`, `check-env-sync`,
-  `check-duplicate-env`, `check-health-coverage`, and `tsc --noEmit` pass.
+- `az bicep build` is clean on both `compute/loom-unity-app.bicep` and
+  `data-plane/loom-unity-postgres.bicep`; `check-bicep-sync`,
+  `check-bicep-param-cap`, `check-env-sync`, `check-duplicate-env`,
+  `check-health-coverage`, and `tsc --noEmit` pass.
+- **Still owed (G1 / no-vaporware):** a live receipt from a Gov deployment showing
+  `persistenceBackend: postgres`, the container logging
+  `rendering config (db=postgres/entra …)`, and a catalog CRUD round-trip
+  surviving a revision restart. The image layer that installs the Postgres driver
+  and compiles the Entra plugin is built by `az acr build` and has not been built
+  in CI here — that build **is** the compile-time verification of both.
 
 ## Cross-references
 
 - `apps/loom-unity/README.md` — the packaged server + env-var reference.
+- `platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep` — the
+  Entra-only, private-endpoint-only catalog store (LU-1).
+- `scripts/csa-loom/loom-unity-postgres-bootstrap.sh` — PostgreSQL principals +
+  grants, and the token-only connectivity proof (run in-VNet).
+- `scripts/csa-loom/loom-unity-migrate-catalog.py` — H2 → Postgres catalog copy
+  over the UC REST API.
 - `docs/fiab/security/loom-unity-threat-model.md` — the LU-2 STRIDE threat model.
 - `.claude/rules/no-fabric-dependency.md` — why every item works Azure-native.
 - `docs/fiab/hyperscale.md` — the sibling out-of-band ACA-app deploy pattern.
