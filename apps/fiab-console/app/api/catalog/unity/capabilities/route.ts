@@ -12,7 +12,7 @@
  * (per .claude/rules/no-vaporware.md + no-fabric-dependency.md).
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { resolveUcBackend, UC_CAPABILITIES, ossUcBase, OssUcNotConfiguredError, unityAuthorizationPosture } from '@/lib/azure/uc-backend';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import { databricksConfigGate } from '@/lib/azure/databricks-client';
@@ -20,9 +20,7 @@ import { databricksConfigGate } from '@/lib/azure/databricks-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
 
   const backend = resolveUcBackend();
   let configured = true;
@@ -75,4 +73,4 @@ export async function GET() {
       support: backend === 'oss' ? c.oss : c.databricks,
     })),
   });
-}
+});
