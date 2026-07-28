@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.79.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.78.2...csa-inabox-v0.79.0) (2026-07-28)
+
+
+### Features
+
+* **loom-apex:** Phase B wave 2 — NL governance copilot, contract-validating copilots, A2A cards, agent publish, reactive notebook, insights/interop, Function→ACA ([#2556](https://github.com/fgarofalo56/csa-inabox/issues/2556)) ([bd4336a](https://github.com/fgarofalo56/csa-inabox/commit/bd4336a44c609ccdbb67c1be0b047526b9887c33))
+* **lu2:** Loom Unity AuthN/Z hardening — close the anonymous-in-VNet catalog ([#2553](https://github.com/fgarofalo56/csa-inabox/issues/2553)) ([0c011be](https://github.com/fgarofalo56/csa-inabox/commit/0c011be8b1d43740cfeac75f7bf81c34a1a2aca5))
+
+
+### Bug Fixes
+
+* **model-fabric:** pass the tenant tier config to the loop — reasoning tier read as unset ([#2562](https://github.com/fgarofalo56/csa-inabox/issues/2562)) ([47f1d95](https://github.com/fgarofalo56/csa-inabox/commit/47f1d950940e00c6113484d18430e613a225e6e0))
+
 ## [0.78.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.78.1...csa-inabox-v0.78.2) (2026-07-28)
 
 
