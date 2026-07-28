@@ -146,6 +146,15 @@ data-plane host resolves through `cloud-endpoints` (`armBase()`,
 - If direct browser/CLI reach is restricted, run the script from an **ACA job
   exec** on the in-boundary Console (the gov CI recipe — `az containerapp exec`),
   so the call originates in-VNet.
+- **CI receipt — `gov-workspace-identity.yml`** (`workflow_dispatch`): the Gov
+  E2E lane for I1–I3. It parses the expected grant matrix straight out of
+  `lib/azure/workspace-grants.ts` (so it can never assert a stale matrix), reads
+  the live console's identity view with a minted admin session, cross-checks the
+  UAMI against ARM + Entra with `az`, scans the payload for Commercial host
+  literals, and — with `create_ephemeral=true` — creates and deletes a throwaway
+  workspace to prove provision-on-create plus the delete cascade. It skips
+  honestly (never green-by-omission) when the estate has no workspace or when
+  `LOOM_WORKSPACE_IDENTITY_MODE` is still `off`, naming the exact remediation.
 
 ### IL5 / IL5-DoD (air-gapped)
 
@@ -165,3 +174,5 @@ data-plane host resolves through `cloud-endpoints` (`armBase()`,
 - `apps/fiab-console/lib/azure/workspace-identity-shadow.ts` — I3 shadow audit.
 - `scripts/csa-loom/workspace-identity-enforce.mjs` — the enumerate/preflight/
   apply script.
+- `.github/workflows/gov-workspace-identity.yml` — the Gov per-cloud CI lane
+  (the I1–I3 receipt in GCC-High).
