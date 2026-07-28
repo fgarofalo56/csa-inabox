@@ -168,6 +168,11 @@ jobs:
           # Keep stderr: swallowing it turned a precise ARM error into a guess
           # ("image may not be built yet, or the CI principal lacks Contributor")
           # and the real cause was neither of those.
+          # UTC stamp taken BEFORE the start, used to window the Log Analytics
+          # lookup below (ContainerAppConsoleLogs_CL has no documented
+          # execution-name column, so container + time window is the reliable
+          # filter — and only ONE execution is ever in flight here).
+          EVAL_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           START_ERR=$(mktemp)
           EXEC=$(az containerapp job start -g "$RG" -n "$JOB" \
             --image "$IMAGE" \
@@ -193,21 +198,53 @@ jobs:
           done
           echo "execution status: $STATUS"
 
-          # Lift the machine-readable receipt out of the execution's console
-          # logs. Log Analytics ingestion lags a little, so retry briefly.
+          # Lift the machine-readable receipt out of the execution's logs.
+          #
+          # This CANNOT use `az containerapp job logs show`: that command reads
+          # LIVE REPLICAS, and we only reach here after polling the execution to
+          # a terminal state — by which point the replica is gone and it fails
+          # with "No replicas found for execution". It silently yielded an empty
+          # receipt on every completed run, so the gate reported "ZERO surface
+          # runs" and went GREEN having measured nothing at all.
+          #
+          # Log Analytics is the durable path, and the one the evaluator module
+          # header has always documented (ContainerAppConsoleLogs_CL, filtered to
+          # ContainerName_s == 'evaluator'). Ingestion lags the execution, so retry.
+          ENVID=$(az containerapp job show -g "$RG" -n "$JOB" \
+            --query "properties.environmentId" -o tsv 2>&1 | tr -d '\r')
+          LAW=""
+          if [ -n "$ENVID" ] && [ "${ENVID#ERROR}" = "$ENVID" ]; then
+            LAW=$(az containerapp env show --ids "$ENVID" \
+              --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" -o tsv 2>&1 | tr -d '\r')
+          fi
+          if [ -z "$LAW" ] || [ "${LAW#ERROR}" != "$LAW" ]; then
+            echo "::warning::could not resolve the Log Analytics workspace behind $JOB (envId=$ENVID law=$LAW) - cannot lift the eval receipt."
+            LAW=""
+          fi
+          # `az monitor log-analytics query` lives in an extension; install it
+          # explicitly rather than relying on dynamic-install prompting.
+          az extension add --name log-analytics --only-show-errors 2>/dev/null || true
           RECEIPT=""
-          for _ in 1 2 3 4 5 6; do
-            LOGS=$(az containerapp job logs show -g "$RG" -n "$JOB" --container evaluator \
-              --execution "$EXEC" --tail 500 2>/dev/null || true)
-            RECEIPT=$(printf '%s\n' "$LOGS" | grep -o '::eval-run::.*' | tail -n1 | sed 's/^::eval-run:://' || true)
-            [ -n "$RECEIPT" ] && break
-            sleep 20
-          done
-          if [ -n "$RECEIPT" ] && printf '%s' "$RECEIPT" | jq -e . >/dev/null 2>&1; then
-            printf '%s' "$RECEIPT" > eval-run.json
-            node -e "const r=require('./eval-run.json');for(const s of r.surfaces||[])console.log(\`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, grounding \${s.groundingAvg ?? 'deferred'}, pass-rate \${s.passRate}\`)"
+          if [ -n "$LAW" ]; then
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              LA_ERR=$(mktemp)
+              LINE=$(az monitor log-analytics query -w "$LAW" \
+                --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime($EVAL_SINCE) | where ContainerName_s == 'evaluator' | where Log_s startswith '::eval-run::' | project TimeGenerated, Log_s | order by TimeGenerated desc | take 1" \
+                --query "[0].Log_s" -o tsv 2>"$LA_ERR" | tr -d '\r')
+              if [ -n "$LINE" ] && [ "$LINE" != "None" ]; then
+                RECEIPT=${LINE#::eval-run::}
+                break
+              fi
+              LA_MSG=$(tr '\n' " " < "$LA_ERR" | head -c 200)
+              [ -n "$LA_MSG" ] && echo "  (log-analytics not ready yet: $LA_MSG)"
+              sleep 20
+            done
+          fi
+          if [ -n "$RECEIPT" ] && printf "%s" "$RECEIPT" | jq -e . >/dev/null 2>&1; then
+            printf "%s" "$RECEIPT" > eval-run.json
+            node -e "const r=require('./eval-run.json');for(const s of r.surfaces||[])console.log(`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, grounding \${s.groundingAvg ?? 'deferred'}, pass-rate \${s.passRate}`)"
           else
-            echo "::warning::no ::eval-run:: receipt in the execution logs (status $STATUS) - the run may have honest-gated on config, or the logs have not landed in Log Analytics yet. Gating on an empty artifact."
+            echo "::warning::no ::eval-run:: receipt in Log Analytics for execution $EXEC (status $STATUS) - the run may have honest-gated on config, or ingestion has not caught up. Gating on an empty artifact."
           fi
           echo "merged $(jq '.surfaces | length' eval-run.json) surface run(s) into eval-run.json"
 
