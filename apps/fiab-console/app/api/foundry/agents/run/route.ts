@@ -80,8 +80,17 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     };
     const actorUpn = session.claims.upn || session.claims.email || userOid;
     if (memoryEnabled()) {
-      const serviceRecall = await recallAgentMemories(agent, memActor, { actorUpn });
-      const preamble = [serviceRecall.block, memoryPreamble(await retrieveMemories(agent, userOid))]
+      // B-N14d hardening: memory RECALL is an enrichment, never a dependency.
+      // An unavailable/failing memory service must degrade the answer (no
+      // remembered context), NOT 502 the agent run - the run itself does not
+      // need memory to be correct. Failures are logged, not swallowed silently.
+      let serviceRecall: Awaited<ReturnType<typeof recallAgentMemories>> | null = null;
+      try {
+        serviceRecall = await recallAgentMemories(agent, memActor, { actorUpn });
+      } catch (e) {
+        console.warn('[foundry/agents/run] agent-memory recall unavailable; continuing without it:', e);
+      }
+      const preamble = [serviceRecall?.block, memoryPreamble(await retrieveMemories(agent, userOid))]
         .filter((p) => p)
         .join('\n');
       if (preamble) {

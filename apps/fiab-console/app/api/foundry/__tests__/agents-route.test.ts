@@ -15,7 +15,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ---- session mock (toggle authed/unauthed per test) ----
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 }) as any);
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: () => getSessionMock(),
+  // B-N14d added `tenantScopeId` to this route's imports; without it in the mock
+  // the module resolves to undefined and EVERY request 502s (which is how this
+  // surfaced - 501/429 cases all returned 502 too).
+  tenantScopeId: () => 'tenant-test',
+}));
+
+// ---- agent-memory service mock (B-N14d) - the real one talks to Cosmos ----
+vi.mock('@/lib/azure/agent-memory-service', () => ({
+  recallAgentMemories: vi.fn(async () => ({ block: '', rows: [] })),
+  writeAgentMemory: vi.fn(async () => undefined),
+}));
 
 // ---- foundry-agent-client mock (the real client is unit-tested elsewhere) ----
 // Honest gate is a REAL error subclass so `instanceof` works in the route.
