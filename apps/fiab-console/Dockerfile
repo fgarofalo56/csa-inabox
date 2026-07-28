@@ -27,6 +27,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
+# A1 (loom-apex): re-declare the CI-passed build SHA in the BUILDER stage so it
+# is visible to `next build` — next.config.mjs wires it into `deploymentId`
+# (deploy-skew / ChunkLoadError protection). Previously the ARG existed only in
+# the runner stage, i.e. AFTER the build had already run without it.
+ARG LOOM_BUILD_SHA=unknown
+ENV LOOM_BUILD_SHA=${LOOM_BUILD_SHA}
 # The Next build OOMed in the ACR Tasks container (JS heap out of memory) as the
 # app grew — give Node a larger old-space heap. 4096 became the ceiling again on
 # 2026-07-02 (run cj9h: Mark-Compact 3.6GB → SIGABRT), so 6144; the default ACR
