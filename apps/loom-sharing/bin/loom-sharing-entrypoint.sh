@@ -56,7 +56,7 @@ die() {
 # ---------------------------------------------------------------------------
 # delta-sharing-server.yaml
 #
-# The `shares:` block is authored by the Console (lib/sharing/manifest.ts) and
+# The `shares:` block is authored by the Console (lib/sharing/model.ts) and
 # handed over base64-encoded, because a YAML document does not survive an ACA
 # env-var round trip intact (newlines, quoting, and `az containerapp update`
 # argument splitting all mangle it). base64 is transport, not obfuscation.

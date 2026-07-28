@@ -19,6 +19,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   getShare, updateShareObjects, deleteShare, getSharePermissions, updateSharePermissions,
 } from '@/lib/azure/unity-catalog-client';
@@ -30,10 +31,10 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const GET = withSession<{ name: string }>(async (req, { params }) => {
+export const GET = withSession<{ name: string }>(async (req, { params, session }) => {
   try {
     const name = decodeURIComponent(params.name);
-    if (isLoomSharingBackend()) return await loomGetShare(name);
+    if (isLoomSharingBackend()) return await loomGetShare(name, { full: isTenantAdmin(session) });
     const host = await resolveShareHost(req.nextUrl.searchParams.get('host'));
     const [share, permissions] = await Promise.all([
       getShare(host, name, true),
