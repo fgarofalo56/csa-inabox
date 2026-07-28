@@ -276,7 +276,12 @@ describe('admin/env-config registry', () => {
     // call), +3: 186 → 189. LOOM_UNITY_TOKEN is deliberately NOT in the spec: a
     // bearer is a Key Vault secretref, not an env-config field (same treatment as
     // LOOM_ICEBERG_CATALOG_TOKEN).
-    expect(EDITABLE_ENV.length).toBe(189);
+    // Bumped to 190 by LU-9 (Loom Sharing — the open Delta Sharing server): the
+    // svc-loom-sharing spec adds LOOM_SHARING_URL, the Console half that points
+    // the sharing BFF at the deployed reference server, +1: 189 -> 190.
+    // LOOM_SHARING_BEARER is deliberately NOT in the spec: it is a Key Vault
+    // secretref, not an env-config field (same treatment as LOOM_UNITY_TOKEN).
+    expect(EDITABLE_ENV.length).toBe(190);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -405,6 +410,12 @@ describe('admin/env-config registry', () => {
       'LOOM_RESULT_CACHE_REDIS',
       // RUM1 svc-client-rum — default-ON knobs (unset = enabled @ 100%).
       'LOOM_RUM_ENABLED', 'LOOM_RUM_SAMPLE_RATE',
+      // LU-9 svc-loom-sharing — unset is fully functional wherever Databricks
+      // Delta Sharing is available: the Marketplace Data-shares surface uses
+      // that backend. On the sovereign path (no Databricks UC endpoint in Gov)
+      // there is no sharing backend at all until loom-sharing is deployed,
+      // which is exactly the gap this closes.
+      'LOOM_SHARING_URL',
       // A11/A12/A13 Spark reliability — all default-ON/opt-out (chaos default-OFF
       // is the intended production posture): auto-recovery enable + thrash cap,
       // the vCore-budget + session-cap ceiling, and the chaos-drill switch.
