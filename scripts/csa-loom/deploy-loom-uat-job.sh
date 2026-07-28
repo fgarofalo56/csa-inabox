@@ -107,18 +107,32 @@ echo "[deploy-loom-uat-job] image     : $UAT_IMAGE"
 echo "[deploy-loom-uat-job] loom url  : $LOOM_URL"
 
 # ---------------------------------------------------------------------------
-# Step 1 — Enable ACR public access (temp) so az acr build can reach it
+# Step 1 — Acquire the ACR firewall lease (opens the registry for az acr build)
 # ---------------------------------------------------------------------------
+#
+# #2603: this used to be a bare `az acr update --public-network-enabled true`
+# in Step 1 and an unconditional re-lock in Step 3. Two defects:
+#   1. NO OWNERSHIP. The Step 3 re-lock fired regardless of who had opened the
+#      registry, so running this script while CI was mid-`az acr build` denied
+#      that build's push after minutes of work (and vice versa).
+#   2. FAIL OPEN. Step 3 is inline, not a trap — a failed build under `set -e`
+#      exited before it, leaving the registry publicly reachable.
+# Both are fixed by taking a lease here and releasing it from an EXIT trap.
+# See docs/fiab/acr-firewall-lease.md.
 echo ""
-echo "[deploy-loom-uat-job] 1/5 Enabling ACR public access (temporary)..."
-az acr update --name "$ACR_NAME" --public-network-enabled true \
-  -o tsv --query "publicNetworkAccess" --subscription "$SUB" || true
-az acr update --name "$ACR_NAME" --default-action Allow \
-  -o tsv --query "networkRuleSet.defaultAction" --subscription "$SUB" || true
+echo "[deploy-loom-uat-job] 1/5 Acquiring the ACR firewall lease (opens the registry)..."
+bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
 
-# Wait for the change to propagate (mirrors the 30s sleep in the GHA workflow).
-echo "[deploy-loom-uat-job] Waiting 35s for ACR network rule propagation..."
-sleep 35
+# Release the lease + restore .dockerignore on ANY exit, including a failed
+# build. `release` re-locks only if this process is still the recorded holder,
+# and re-locks unconditionally when nobody is (fail closed).
+uat_cleanup() {
+  if [ -f "$APP_DIR/.dockerignore.bak" ]; then
+    mv "$APP_DIR/.dockerignore.bak" "$APP_DIR/.dockerignore" || true
+  fi
+  bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB" || true
+}
+trap uat_cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # Step 2 — Build + push loom-uat:latest via ACR Tasks
@@ -147,15 +161,14 @@ grep -vxE 'e2e|tests' "$APP_DIR/.dockerignore.bak" > "$APP_DIR/.dockerignore"
 echo "[deploy-loom-uat-job] Image built: $UAT_IMAGE"
 
 # ---------------------------------------------------------------------------
-# Step 3 — Restore ACR public access=Disabled (always, even on build failure)
+# Step 3 — Release the ACR firewall lease + restore .dockerignore
 # ---------------------------------------------------------------------------
+# Released eagerly here so the registry isn't held open through Steps 4-5; the
+# EXIT trap makes this idempotent (a second `release` finds no live holder or a
+# registry that is already locked).
 echo ""
-echo "[deploy-loom-uat-job] 3/5 Restoring ACR public access=Disabled + .dockerignore..."
-[ -f "$APP_DIR/.dockerignore.bak" ] && mv "$APP_DIR/.dockerignore.bak" "$APP_DIR/.dockerignore"
-az acr update --name "$ACR_NAME" --default-action Deny \
-  -o tsv --query "networkRuleSet.defaultAction" --subscription "$SUB" || true
-az acr update --name "$ACR_NAME" --public-network-enabled false \
-  -o tsv --query "publicNetworkAccess" --subscription "$SUB" || true
+echo "[deploy-loom-uat-job] 3/5 Releasing the ACR firewall lease + restoring .dockerignore..."
+uat_cleanup
 
 # ---------------------------------------------------------------------------
 # Step 4 — Resolve CAE resource ID

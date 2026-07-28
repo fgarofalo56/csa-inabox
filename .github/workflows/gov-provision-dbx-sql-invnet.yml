@@ -64,7 +64,11 @@ jobs:
           set -euo pipefail
           SHA=$(git rev-parse --short=8 HEAD)
           echo "SHA=$SHA" >> "$GITHUB_ENV"
-          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          # #2603: lease the ACR firewall instead of a bare toggle. This job
+          # deliberately holds the registry open past the build (see the note
+          # below), so an ownership lease is exactly right: the final re-lock
+          # step re-locks only if this run is still the holder.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           az acr build --registry "$ACR" --no-logs \
             --image "loom-dbx-init:$SHA" --image "loom-dbx-init:latest" \
@@ -72,8 +76,8 @@ jobs:
           # NOTE: leave the ACR public-Allow through job create+start below — ARM's
           # container-app-job image-existence validation runs OUTSIDE the VNet and
           # gets "UNAUTHORIZED: authentication required" against a network-Denied
-          # ACR. The final "Re-lock ACR" step (if: always) restores Deny.
-          echo "::notice::loom-dbx-init:$SHA built on Gov ACR (ACR left Allow for job create; re-locked at end)."
+          # ACR. The final "Re-lock ACR" step (if: always) releases the lease.
+          echo "::notice::loom-dbx-init:$SHA built on Gov ACR (ACR lease held through job create; released at end)."
 
       - name: Run the warehouse-create job in-VNet + wait
         if: ${{ inputs.apply == 'true' }}
@@ -107,4 +111,8 @@ jobs:
 
       - name: Re-lock ACR to Deny
         if: ${{ always() && inputs.apply == 'true' }}
-        run: az acr update -n "$ACR" --default-action Deny -o none || true
+        # Re-locks only if this run still holds the firewall lease; re-locks
+        # unconditionally when nobody does (fail closed). Unlike the old
+        # `--default-action Deny`, this also restores
+        # publicNetworkAccess=Disabled.
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true

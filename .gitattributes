@@ -19,3 +19,10 @@ scripts/csa-loom/gen-apps-catalog-fixture.mjs text eol=lf
 # Both generators always write LF, and `gofmt` requires LF, so pin the whole
 # sdk/ tree to LF or a CRLF checkout would falsely fail every one of them.
 sdk/** text eol=lf
+
+# #2603 — the ACR firewall lease + its regression test are executed by `bash` on
+# Linux GitHub runners and are also invoked from the deploy-*-job.sh scripts. A
+# CRLF checkout makes bash choke on the trailing \r ("$'\r': command not
+# found"), so pin them to LF regardless of core.autocrlf.
+scripts/csa-loom/acr-firewall-lease.sh text eol=lf
+scripts/ci/test-acr-firewall-lease.sh text eol=lf

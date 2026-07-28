@@ -237,23 +237,34 @@ jobs:
         # CRITICAL gate passed). Unsigned/unknown-identity images are REFUSED
         # before anything ships. The ACR is publicNetworkAccess=Disabled at
         # rest, and both the digest resolution and the cosign signature fetch
-        # are data-plane calls — so the gate temporarily opens the ACR (same
-        # toggle the image-build workflow uses) and the restore step below
-        # re-locks it ONLY if this step opened it (never clobbering a
-        # concurrent build's open window; rolls auto-trigger after builds
-        # complete, so overlap is rare by construction).
+        # are data-plane calls — so the gate temporarily opens the ACR.
+        #
+        # #2603: "the restore step below re-locks it ONLY if this step opened
+        # it" was NOT enough. Opening is not owning: this step could open a
+        # registry a concurrent build had ALREADY opened and then re-lock it
+        # under that build's in-flight push. The open is now a lease
+        # acquisition, so the restore step re-locks only if this RUN is still
+        # the recorded holder. See docs/fiab/acr-firewall-lease.md.
         if: steps.vars.outputs.skip_verify != 'true'
         run: |
           set -e
           TAG="${{ steps.vars.outputs.tag }}"
           echo "acr_opened=false" >> "$GITHUB_OUTPUT"
 
-          # Reach the ACR data plane; open it temporarily if network-locked.
+          # Reach the ACR data plane; take the firewall lease if network-locked.
           if ! az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then
             PNA=$(az acr show -n "${{ env.ACR_NAME }}" --query publicNetworkAccess -o tsv | tr -d '\r')
-            echo "ACR data plane unreachable (publicNetworkAccess=$PNA) — opening temporarily for signature verification ..."
-            az acr update --name "${{ env.ACR_NAME }}" --public-network-enabled true --default-action Allow -o none
-            echo "acr_opened=true" >> "$GITHUB_OUTPUT"
+            echo "ACR data plane unreachable (publicNetworkAccess=$PNA) — acquiring the firewall lease for signature verification ..."
+            # A short lease + short wait: this is a ~1 min data-plane read, and a
+            # roll must not sit behind a 2-hour build lease. If a build holds the
+            # registry we fall through to the same "cannot verify" warning below.
+            if LOOM_ACR_LEASE_TTL_MINUTES=20 LOOM_ACR_LEASE_WAIT_MINUTES=5 \
+               bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "${{ env.ACR_NAME }}"; then
+              echo "acr_opened=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not take the ACR firewall lease (another build/roll holds it) — CANNOT verify the image signature. SKIPPING the SC1 gate for this roll. Re-run once the holding run finishes."
+              exit 0
+            fi
             REACHABLE=false
             for i in $(seq 1 18); do
               if az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then REACHABLE=true; echo "ACR reachable after $i attempt(s)."; break; fi
@@ -294,9 +305,7 @@ jobs:
       - name: Restore ACR network lock (post-verify)
         if: always() && steps.sigverify.outputs.acr_opened == 'true'
         run: |
-          az acr update --name "${{ env.ACR_NAME }}" --default-action Deny -o none || true
-          az acr update --name "${{ env.ACR_NAME }}" --public-network-enabled false -o none || true
-          echo "::notice::ACR ${{ env.ACR_NAME }} re-locked after signature verification."
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${{ env.ACR_NAME }}"
 
       - name: Roll Container App to new image
         id: roll

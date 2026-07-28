@@ -124,17 +124,22 @@ fi
 
 # ---------------------------------------------------------------------------
 # Step 1 — Build the runner image via ACR Tasks (server-side `az acr build`).
-#   Toggle ACR public access on/off around the build (the Loom ACR is
-#   PE-only / publicNetworkAccess=Disabled), mirroring deploy-loom-uat-job.sh.
+#   The Loom ACR is PE-only / publicNetworkAccess=Disabled, so the registry has
+#   to be opened for the build. #2603: that open/restore pair was a shared mutex
+#   with no ownership check — this script's restore re-locked the registry no
+#   matter who had opened it, killing a concurrent CI build's push. It now takes
+#   an ownership lease (ARM tags on the registry) and releases it from an EXIT
+#   trap, so it re-locks only when it is still the holder and re-locks
+#   unconditionally when nobody is (fail closed).
+#   See docs/fiab/acr-firewall-lease.md.
 # ---------------------------------------------------------------------------
 echo ""
-echo "[provision-gh-runner] 1/3 Enabling ACR public access (temporary)..."
-az acr update --name "$ACR_NAME" --public-network-enabled true \
-  --subscription "$SUB" -o tsv --query "publicNetworkAccess" || true
-az acr update --name "$ACR_NAME" --default-action Allow \
-  --subscription "$SUB" -o tsv --query "networkRuleSet.defaultAction" || true
-echo "[provision-gh-runner] Waiting 35s for ACR network rule propagation..."
-sleep 35
+echo "[provision-gh-runner] 1/3 Acquiring the ACR firewall lease (opens the registry)..."
+bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
+release_acr_lease() {
+  bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB" || true
+}
+trap release_acr_lease EXIT
 
 echo "[provision-gh-runner] Building gh-aca-runner:${IMAGE_TAG} via ACR Tasks..."
 BUILD_ARGS=( "RUNNER_VERSION=${RUNNER_VERSION}" )
@@ -156,14 +161,13 @@ build_rc=0
     . ) || build_rc=$?
 
 # ---------------------------------------------------------------------------
-# Step 2 — Restore ACR public access=Disabled (ALWAYS, even on build failure).
+# Step 2 — Release the ACR firewall lease (ALWAYS, even on build failure).
+#   Released eagerly so the registry isn't held open through Step 3; the EXIT
+#   trap makes this idempotent.
 # ---------------------------------------------------------------------------
 echo ""
-echo "[provision-gh-runner] 2/3 Restoring ACR public access=Disabled..."
-az acr update --name "$ACR_NAME" --default-action Deny \
-  --subscription "$SUB" -o tsv --query "networkRuleSet.defaultAction" || true
-az acr update --name "$ACR_NAME" --public-network-enabled false \
-  --subscription "$SUB" -o tsv --query "publicNetworkAccess" || true
+echo "[provision-gh-runner] 2/3 Releasing the ACR firewall lease..."
+release_acr_lease
 
 if [[ $build_rc -ne 0 ]]; then
   echo "[provision-gh-runner][FATAL] az acr build failed (rc=$build_rc). Job not deployed." >&2

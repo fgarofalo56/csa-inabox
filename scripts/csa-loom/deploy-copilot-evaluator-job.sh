@@ -111,20 +111,22 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 echo "[deploy-copilot-evaluator] repo root : $REPO_ROOT"
 echo "[deploy-copilot-evaluator] image     : $IMAGE"
 
-# 1 — enable ACR public access (temp)
-echo "[deploy-copilot-evaluator] 1/4 Enabling ACR public access (temporary)..."
-az acr update --name "$ACR_NAME" --public-network-enabled true --default-action Allow \
-  -o tsv --query "publicNetworkAccess" --subscription "$SUB" || true
-echo "[deploy-copilot-evaluator] Waiting 35s for ACR network rule propagation..."
-sleep 35
+# 1 — take the ACR firewall lease (opens the registry)
+#
+# #2603: this used to be a bare `az acr update --public-network-enabled true`
+# with an unconditional `restore_acr` EXIT trap. That trap re-locked the
+# registry no matter who had opened it — so running this script while CI was
+# mid-`az acr build` denied that build's push after minutes of work, and vice
+# versa. `acquire` records an ownership lease as ARM tags on the registry and
+# waits (bounded) if someone else holds it; `release` only re-locks when this
+# process is still the recorded holder, and re-locks unconditionally when
+# nobody is (fail closed). See docs/fiab/acr-firewall-lease.md.
+echo "[deploy-copilot-evaluator] 1/4 Acquiring the ACR firewall lease (opens the registry)..."
+bash "$SCRIPT_DIR/acr-firewall-lease.sh" acquire --acr "$ACR_NAME" --subscription "$SUB"
 
-# 2 — build + push (restore ACR access even on failure)
+# 2 — build + push (release the lease even on failure)
 restore_acr() {
-  echo "[deploy-copilot-evaluator] Restoring ACR public access=Disabled..."
-  az acr update --name "$ACR_NAME" --default-action Deny \
-    -o tsv --query "networkRuleSet.defaultAction" --subscription "$SUB" || true
-  az acr update --name "$ACR_NAME" --public-network-enabled false \
-    -o tsv --query "publicNetworkAccess" --subscription "$SUB" || true
+  bash "$SCRIPT_DIR/acr-firewall-lease.sh" release --acr "$ACR_NAME" --subscription "$SUB"
 }
 trap restore_acr EXIT
 
