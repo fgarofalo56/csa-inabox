@@ -9,17 +9,17 @@
  * a pool-online check and an honest config gate when Synapse isn't provisioned.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
+import { recordQueryRun } from '@/lib/finops/query-run';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
@@ -55,7 +55,15 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const started = Date.now();
     const result = await executeQuery(target, sqlText);
+    // B-N19e — FOCUS cost attribution for this Warehouse run (best-effort).
+    void recordQueryRun({
+      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+      engine: 'synapse-sql', statement: sqlText, durationMs: Date.now() - started,
+      rowCount: (result as { rowCount?: number }).rowCount,
+      itemType: 'warehouse', resourceId: process.env.LOOM_SYNAPSE_DEDICATED_POOL,
+    });
     // Shape: { columns, rows, rowCount } — what the Warehouse pane renders.
     return NextResponse.json({
       ok: true,
@@ -71,4 +79,4 @@ export async function POST(req: NextRequest) {
       { status: 502 },
     );
   }
-}
+});

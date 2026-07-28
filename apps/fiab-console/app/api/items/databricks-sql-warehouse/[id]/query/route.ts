@@ -12,16 +12,16 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { executeStatement, getWarehouse, registerPendingStatement, clearPendingStatement, type DbxQueryParam } from '@/lib/azure/databricks-client';
+import { recordQueryRun } from '@/lib/finops/query-run';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session, params: routeParams }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
@@ -54,10 +54,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const started = Date.now();
     const result = await executeStatement(
       warehouseId, sql, catalog, schema, parameters,
       clientQueryId ? (sid) => registerPendingStatement(clientQueryId, sid) : undefined,
     );
+    // B-N19e — FOCUS cost attribution for this SQL-warehouse run (best-effort).
+    void recordQueryRun({
+      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+      engine: 'databricks-sql', statement: sql, durationMs: Date.now() - started,
+      rowCount: (result as { rowCount?: number }).rowCount,
+      queryId: clientQueryId || undefined,
+      itemId: routeParams.id, itemType: 'databricks-sql-warehouse',
+      resourceId: warehouseId,
+    });
     return NextResponse.json({
       ok: true,
       ...result,
@@ -84,4 +94,4 @@ export async function POST(req: NextRequest) {
   } finally {
     if (clientQueryId) clearPendingStatement(clientQueryId);
   }
-}
+});

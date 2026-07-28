@@ -10,22 +10,22 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { serverlessTarget, serverlessEndpoint, executeQuery, executeQueryAsUser, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
+import { recordQueryRun } from '@/lib/finops/query-run';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session, params }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
-  const { id } = await ctx.params;
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
   const sqlText = (body?.sql || '').toString().trim();
   const database = (body?.database || 'master').toString();
@@ -42,6 +42,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   try {
     let result;
+    const started = Date.now();
     if (accessMode === 'user') {
       const userToken = await getUserSqlToken(session.claims.oid);
       if (!userToken) {
@@ -63,6 +64,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // return no columns. Flag isDdl so the editor switches to the Messages pane
     // and shows "Command(s) completed successfully." instead of an empty grid.
     const isDdl = result.columns.length === 0;
+    // B-N19e — FOCUS cost attribution for this Serverless SQL run (best-effort).
+    void recordQueryRun({
+      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+      engine: 'synapse-serverless', statement: sqlText, durationMs: Date.now() - started,
+      rowCount: (result as { rowCount?: number }).rowCount,
+      queryId, itemId: id, itemType: 'synapse-serverless-sql-pool', resourceId: database,
+    });
     return NextResponse.json({
       ok: true,
       ...result,
@@ -91,4 +99,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       { status: canceled ? 200 : 502 },
     );
   }
-}
+});

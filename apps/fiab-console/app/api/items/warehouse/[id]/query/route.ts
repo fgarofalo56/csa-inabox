@@ -7,17 +7,17 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { dedicatedTarget, executeQuery, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
+import { recordQueryRun } from '@/lib/finops/query-run';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session, params }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
@@ -47,7 +47,18 @@ export async function POST(req: NextRequest) {
     : baseTarget;
 
   try {
+    const started = Date.now();
     const result = await executeQuery(target, sqlText, 60_000, parameters, queryId);
+    // B-N19e — FOCUS cost attribution: tag this run with WHO ran it and WHICH
+    // warehouse item + workspace it belongs to (best-effort, never blocks).
+    void recordQueryRun({
+      tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+      engine: 'synapse-sql', statement: sqlText, durationMs: Date.now() - started,
+      rowCount: (result as { rowCount?: number }).rowCount,
+      queryId,
+      itemId: params.id, itemType: 'warehouse',
+      resourceId: target.database,
+    });
     return NextResponse.json({
       ok: true,
       ...result,
@@ -73,4 +84,4 @@ export async function POST(req: NextRequest) {
       { status: canceled ? 200 : 502 },
     );
   }
-}
+});

@@ -161,6 +161,9 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/monitor', label: 'Monitor hub — Cost tab' },
       { path: '/admin/usage-chargeback', label: 'Usage & chargeback (FinOps)' },
       { path: '/admin/capacity', label: 'Capacity — $/mo cost column' },
+      // B-N19e — the FOCUS cost-per-query / per-dashboard mart degrades to
+      // recorded consumption (LCU) without this role; it never disappears.
+      { path: '/admin/finops', label: 'FOCUS cost per query / per dashboard' },
     ],
     fixit: {
       kind: 'role-grant',

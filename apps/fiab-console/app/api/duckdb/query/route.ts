@@ -27,6 +27,7 @@
  */
 import { apiError, apiOk, apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
+import { recordQueryRun } from '@/lib/finops/query-run';
 import {
   ARROW_STREAM_MIME,
   DuckDbError,
@@ -119,6 +120,12 @@ export const POST = withSession(async (req, { session }) => {
         rowCount: res.rowCount,
         elapsedMs: res.elapsedMs,
       });
+      // B-N19e — FOCUS cost attribution for this run (best-effort, never blocks).
+      void recordQueryRun({
+        tenantId, userOid: session.claims.oid, userName: session.claims.upn,
+        engine: 'duckdb', statement: sql, durationMs: Date.now() - started,
+        rowCount: res.rowCount, itemId, itemType: 'sql-lab', workspaceId,
+      });
       return new Response(res.arrow, {
         status: 200,
         headers: {
@@ -155,6 +162,16 @@ export const POST = withSession(async (req, { session }) => {
       outcome: 'success',
       rowCount: result.rowCount,
       elapsedMs: result.elapsedMs,
+    });
+    // B-N19e — attribute the run to the engine that ACTUALLY answered (DuckDB
+    // when the serving tier is wired, Synapse Serverless on the fallback), so
+    // the FOCUS mart prices it against the right ARM resource type.
+    void recordQueryRun({
+      tenantId, userOid: session.claims.oid, userName: session.claims.upn,
+      engine: result.engine === 'duckdb' ? 'duckdb' : 'synapse-serverless',
+      statement: sql,
+      durationMs: result.totalMs ?? result.elapsedMs,
+      rowCount: result.rowCount, itemId, itemType: 'sql-lab', workspaceId,
     });
     return apiOk({
       engine: result.engine,

@@ -24,6 +24,7 @@
 import { apiError, apiOk } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
 import { backendGateResponse } from '@/lib/api/gate-envelope';
+import { recordQueryRun } from '@/lib/finops/query-run';
 import {
   TRINO_GATE_ID,
   TrinoError,
@@ -131,6 +132,13 @@ export const POST = withSession(async (req, { session }) => {
       outcome: 'success',
       rowCount: result.rowCount,
       elapsedMs: result.totalMs,
+    });
+    // B-N19e — FOCUS cost attribution (best-effort, never blocks the response).
+    void recordQueryRun({
+      tenantId, userOid: session.claims.oid, userName: session.claims.upn,
+      engine: 'trino', statement: sql, durationMs: result.totalMs,
+      rowCount: result.rowCount, itemId, itemType: 'sql-lab', workspaceId,
+      resourceId: (result.catalogs || []).join(','),
     });
     return apiOk({
       engine: result.engine,

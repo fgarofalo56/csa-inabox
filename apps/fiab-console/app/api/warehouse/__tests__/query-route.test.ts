@@ -11,7 +11,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 }) as any);
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: () => getSessionMock(),
+  // B-N19e: the route tags each run for FOCUS cost attribution.
+  tenantScopeId: (s: any) => s?.claims?.tid || s?.claims?.oid,
+}));
+
+// The attribution write is best-effort observability, not part of the query
+// contract — stub it so the test asserts the QUERY path, and prove it is called
+// with the right identity.
+const recordQueryRunMock = vi.fn(async () => undefined);
+vi.mock('@/lib/finops/query-run', () => ({ recordQueryRun: (...a: any[]) => recordQueryRunMock(...a) }));
 
 const dedicatedTargetMock = vi.fn();
 const executeQueryMock = vi.fn();
@@ -24,6 +34,7 @@ const getPoolStateMock = vi.fn();
 vi.mock('@/lib/azure/synapse-pool-arm', () => ({ getPoolState: () => getPoolStateMock() }));
 
 beforeEach(() => {
+  recordQueryRunMock.mockClear();
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
   dedicatedTargetMock.mockReturnValue({ server: 'syn.sql', database: 'loompool' });
   getPoolStateMock.mockResolvedValue({ state: 'Online', sku: 'DW100c' });
@@ -74,6 +85,16 @@ describe('POST /api/warehouse/query', () => {
       { server: 'syn.sql', database: 'loompool' },
       'SELECT region, SUM(revenue) FROM gold.sales GROUP BY region',
     );
+    // B-N19e — the run is tagged for FOCUS cost attribution with the real
+    // caller + engine (never fabricated), so cost-per-query can roll it up.
+    expect(recordQueryRunMock).toHaveBeenCalledTimes(1);
+    expect(recordQueryRunMock.mock.calls[0][0]).toMatchObject({
+      tenantId: 'oid-test',
+      userOid: 'oid-test',
+      engine: 'synapse-sql',
+      itemType: 'warehouse',
+      rowCount: 2,
+    });
   });
 
   it('503 honest config gate when the pool target cannot resolve', async () => {
