@@ -253,10 +253,24 @@ export interface ScreenAgentMemoryOptions {
 }
 
 function defaultId(): string {
-  const c: { randomUUID?: () => string } | undefined =
-    typeof globalThis.crypto !== 'undefined' ? (globalThis.crypto as unknown as { randomUUID?: () => string }) : undefined;
-  const uuid = c?.randomUUID ? c.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  return `amem:${uuid}`;
+  // CSPRNG only. The previous fallback used Math.random() when
+  // globalThis.crypto.randomUUID was absent (CodeQL js/insecure-randomness,
+  // HIGH). These ids name Cosmos documents holding distilled user facts, so a
+  // guessable id is a real weakness even though access is separately scoped by
+  // agent + workspace + actor. globalThis.crypto.randomUUID exists on Node 18+
+  // and every modern browser; the getRandomValues path is a belt-and-braces
+  // fallback that is still cryptographically strong, and we THROW rather than
+  // silently degrade to a weak source.
+  const c = globalThis.crypto as
+    | { randomUUID?: () => string; getRandomValues?: (a: Uint8Array) => Uint8Array }
+    | undefined;
+  if (c?.randomUUID) return `amem:${c.randomUUID()}`;
+  if (c?.getRandomValues) {
+    const b = c.getRandomValues(new Uint8Array(16));
+    const hex = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `amem:${hex}`;
+  }
+  throw new Error('agent-memory: no cryptographic RNG available to mint a record id');
 }
 
 /**
