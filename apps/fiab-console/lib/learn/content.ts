@@ -367,9 +367,10 @@ const REGISTRY: Record<string, LearnEntry> = {
     steps: [
       'Add a Copy Data activity for source→sink ingestion (300+ connectors).',
       'Add a Notebook activity to call PySpark transformations.',
+      'Debug the pipeline — per-activity run status paints on the canvas nodes; the eyeglass opens the run input/output/error JSON.',
       'Configure a trigger (schedule, tumbling window, event-based) to automate runs.',
     ],
-    docsUrl: 'https://learn.microsoft.com/fabric/data-factory/data-factory-overview',
+    docsUrl: 'https://learn.microsoft.com/azure/data-factory/introduction',
   },
   'dataflow': {
     title: 'Dataflow Gen2',
@@ -453,8 +454,8 @@ const REGISTRY: Record<string, LearnEntry> = {
   },
   'kql-dashboard': {
     title: 'KQL dashboard',
-    summary: 'Real-time dashboard backed by KQL queries. Auto-refresh, parameters, drilldowns, time-pickers.',
-    docsUrl: 'https://learn.microsoft.com/fabric/real-time-intelligence/dashboard-real-time-create',
+    summary: 'Real-time dashboard backed by KQL queries on the Azure Data Explorer cluster. Query and markdown tiles, pages, parameters that cross-filter the grid, drill-through, and auto-refresh.',
+    docsUrl: 'https://learn.microsoft.com/azure/data-explorer/azure-data-explorer-dashboards',
   },
   'apim-api': {
     title: 'APIM API',

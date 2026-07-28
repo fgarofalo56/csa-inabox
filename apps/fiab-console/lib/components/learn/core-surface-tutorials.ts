@@ -47,9 +47,13 @@ export const CORE_SURFACE_SPECS: ReadonlyArray<CoreSurfaceSpec> = [
     slug: 'data-pipelines-and-dataflows',
     title: 'Data pipelines & Mapping Data Flow',
     summary:
-      'Orchestrate Copy, Notebook, and Dataflow activities on the visual canvas; transform code-free with Dataflow Gen2; validate, run, and schedule.',
+      'Orchestrate Copy data, Notebook, and control-flow activities on the visual canvas; Publish, Run, and Debug with live per-activity status; transform with Dataflow Gen2 (Power Query / M) or Mapping data flow (Spark) — two distinct item types — then schedule.',
     visualType: 'data-pipeline',
-    msLearnUrl: 'https://learn.microsoft.com/fabric/data-factory/data-factory-overview',
+    // ADF/Synapse is the default backend Loom pipelines run on
+    // (.claude/rules/no-fabric-dependency.md); the Fabric Data Factory page is
+    // a parity reference, not the primary doc. Kept in sync with
+    // docs/fiab/learn/data-pipelines-and-dataflows.md.
+    msLearnUrl: 'https://learn.microsoft.com/azure/data-factory/concepts-pipelines-activities',
   },
   {
     slug: 'notebooks-spark',

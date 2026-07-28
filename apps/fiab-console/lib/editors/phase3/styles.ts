@@ -46,3 +46,11 @@ export function useStyles() {
   const local = usePhase3Styles();
   return useMemo(() => ({ ...shared, ...local }), [shared, local]);
 }
+
+/**
+ * The class-name map `useStyles()` returns. Sibling modules that receive `s`
+ * as a prop should type it with this instead of `Record<string, string>` — the
+ * key union is then checked, so a typo (`s.tabelWrap`) is a compile error
+ * rather than a silently-undefined className.
+ */
+export type Phase3Styles = ReturnType<typeof useStyles>;
