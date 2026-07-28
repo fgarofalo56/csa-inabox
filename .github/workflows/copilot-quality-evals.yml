@@ -168,10 +168,35 @@ jobs:
           # Keep stderr: swallowing it turned a precise ARM error into a guess
           # ("image may not be built yet, or the CI principal lacks Contributor")
           # and the real cause was neither of those.
+          # UTC stamp taken BEFORE the start, used to window the Log Analytics
+          # lookup below (ContainerAppConsoleLogs_CL has no documented
+          # execution-name column, so container + time window is the reliable
+          # filter — and only ONE execution is ever in flight here).
+          EVAL_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # `--env-vars` REPLACES the execution template env set; it does not
+          # merge into it. Passing only the three run knobs therefore stripped
+          # LOOM_COSMOS_ENDPOINT / LOOM_EVAL_PROBE_URL / LOOM_INTERNAL_TOKEN and
+          # the evaluator honest-gated with
+          #   {"ok":false,"reason":"missing config: ..."}
+          # i.e. a receipt with ZERO surfaces — so the gate passed having
+          # measured nothing. Rebuild the FULL env set off the job and layer the
+          # three overrides on top. secretRef entries are re-emitted as
+          # NAME=secretref:REF so the internal token keeps flowing.
+          mapfile -t BASE_ENV < <(az containerapp job show -g "$RG" -n "$JOB" \
+            --query "properties.template.containers[0].env" -o json 2>/dev/null \
+            | jq -r '(. // [])[]
+                     | select(.name | test("^COPILOT_EVAL_(MODE|TRIGGER|SURFACES)$") | not)
+                     | if .secretRef then .name + "=secretref:" + .secretRef else .name + "=" + (.value // "") end')
+          if [ ${#BASE_ENV[@]} -eq 0 ]; then
+            echo "::warning::could not read $JOB's env set - the execution would honest-gate on missing config. Skipping the eval run."
+            echo "started=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "carrying ${#BASE_ENV[@]} env var(s) from the job into the override"
           START_ERR=$(mktemp)
           EXEC=$(az containerapp job start -g "$RG" -n "$JOB" \
             --image "$IMAGE" \
-            --env-vars "COPILOT_EVAL_MODE=copilot" "COPILOT_EVAL_TRIGGER=$TRIGGER" "COPILOT_EVAL_SURFACES=$SURFACES" \
+            --env-vars "${BASE_ENV[@]}" "COPILOT_EVAL_MODE=copilot" "COPILOT_EVAL_TRIGGER=$TRIGGER" "COPILOT_EVAL_SURFACES=$SURFACES" \
             --query name -o tsv 2>"$START_ERR" | tr -d '\r' || true)
           if [ -z "$EXEC" ]; then
             echo "::warning::could not start a $JOB execution - skipping the eval run. az said: $(tr '\n' ' ' < "$START_ERR" | head -c 500)"
@@ -193,21 +218,67 @@ jobs:
           done
           echo "execution status: $STATUS"
 
-          # Lift the machine-readable receipt out of the execution's console
-          # logs. Log Analytics ingestion lags a little, so retry briefly.
+          # Lift the machine-readable receipt out of the execution's logs.
+          #
+          # This CANNOT use `az containerapp job logs show`: that command reads
+          # LIVE REPLICAS, and we only reach here after polling the execution to
+          # a terminal state — by which point the replica is gone and it fails
+          # with "No replicas found for execution". It silently yielded an empty
+          # receipt on every completed run, so the gate reported "ZERO surface
+          # runs" and went GREEN having measured nothing at all.
+          #
+          # Log Analytics is the durable path, and the one the evaluator module
+          # header has always documented. Two details the first attempt got wrong:
+          #
+          #   * TABLE NAME. Container Apps writes to ContainerAppConsoleLogs_CL
+          #     under the classic schema and ContainerAppConsoleLogs under the
+          #     resource-specific one, and which you get depends on how the
+          #     workspace was provisioned. `union isfuzzy=true` over both tolerates
+          #     whichever is absent instead of erroring or silently matching zero.
+          #
+          #   * NO ContainerName FILTER. The column is ContainerName_s in one
+          #     schema and ContainerName in the other, and filtering on the wrong
+          #     one returns zero rows while looking perfectly healthy — the exact
+          #     failure being fixed. The '::eval-run::' prefix is emitted by
+          #     nothing else, so the marker plus the time window already identify
+          #     the line uniquely.
+          #
+          # Ingestion lags the execution, so retry.
+          ENVID=$(az containerapp job show -g "$RG" -n "$JOB" \
+            --query "properties.environmentId" -o tsv 2>&1 | tr -d '\r')
+          LAW=""
+          if [ -n "$ENVID" ] && [ "${ENVID#ERROR}" = "$ENVID" ]; then
+            LAW=$(az containerapp env show --ids "$ENVID" \
+              --query "properties.appLogsConfiguration.logAnalyticsConfiguration.customerId" -o tsv 2>&1 | tr -d '\r')
+          fi
+          if [ -z "$LAW" ] || [ "${LAW#ERROR}" != "$LAW" ]; then
+            echo "::warning::could not resolve the Log Analytics workspace behind $JOB (envId=$ENVID law=$LAW) - cannot lift the eval receipt."
+            LAW=""
+          fi
+          # `az monitor log-analytics query` lives in an extension; install it
+          # explicitly rather than relying on dynamic-install prompting.
+          az extension add --name log-analytics --only-show-errors 2>/dev/null || true
           RECEIPT=""
-          for _ in 1 2 3 4 5 6; do
-            LOGS=$(az containerapp job logs show -g "$RG" -n "$JOB" --container evaluator \
-              --execution "$EXEC" --tail 500 2>/dev/null || true)
-            RECEIPT=$(printf '%s\n' "$LOGS" | grep -o '::eval-run::.*' | tail -n1 | sed 's/^::eval-run:://' || true)
-            [ -n "$RECEIPT" ] && break
-            sleep 20
-          done
-          if [ -n "$RECEIPT" ] && printf '%s' "$RECEIPT" | jq -e . >/dev/null 2>&1; then
-            printf '%s' "$RECEIPT" > eval-run.json
-            node -e "const r=require('./eval-run.json');for(const s of r.surfaces||[])console.log(\`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, grounding \${s.groundingAvg ?? 'deferred'}, pass-rate \${s.passRate}\`)"
+          if [ -n "$LAW" ]; then
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              LA_ERR=$(mktemp)
+              LINE=$(az monitor log-analytics query -w "$LAW" \
+                --analytics-query "union isfuzzy=true (ContainerAppConsoleLogs_CL | where TimeGenerated >= datetime($EVAL_SINCE) | where Log_s startswith '::eval-run::' | project TimeGenerated, Line=Log_s), (ContainerAppConsoleLogs | where TimeGenerated >= datetime($EVAL_SINCE) | where Log_s startswith '::eval-run::' | project TimeGenerated, Line=Log_s) | order by TimeGenerated desc | take 1" \
+                --query "[0].Line" -o tsv 2>"$LA_ERR" | tr -d '\r')
+              if [ -n "$LINE" ] && [ "$LINE" != "None" ]; then
+                RECEIPT=${LINE#::eval-run::}
+                break
+              fi
+              LA_MSG=$(tr '\n' " " < "$LA_ERR" | head -c 200)
+              [ -n "$LA_MSG" ] && echo "  (log-analytics not ready yet: $LA_MSG)"
+              sleep 20
+            done
+          fi
+          if [ -n "$RECEIPT" ] && printf "%s" "$RECEIPT" | jq -e . >/dev/null 2>&1; then
+            printf "%s" "$RECEIPT" > eval-run.json
+            node -e "const r=require('./eval-run.json');for(const s of r.surfaces||[])console.log(`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, grounding \${s.groundingAvg ?? 'deferred'}, pass-rate \${s.passRate}`)"
           else
-            echo "::warning::no ::eval-run:: receipt in the execution logs (status $STATUS) - the run may have honest-gated on config, or the logs have not landed in Log Analytics yet. Gating on an empty artifact."
+            echo "::warning::no ::eval-run:: receipt in Log Analytics for execution $EXEC (status $STATUS) - the run may have honest-gated on config, or ingestion has not caught up. Gating on an empty artifact."
           fi
           echo "merged $(jq '.surfaces | length' eval-run.json) surface run(s) into eval-run.json"
 
