@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.78.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.78.1...csa-inabox-v0.78.2) (2026-07-28)
+
+
+### Documentation
+
+* **loom-apex:** Phase D wave 1 — 18 item guides, 19 feature deep-dives, 15 app tutorials ([#2558](https://github.com/fgarofalo56/csa-inabox/issues/2558)) ([c35b343](https://github.com/fgarofalo56/csa-inabox/commit/c35b343dbf69021d0465f1a55e1b564a90bcb787))
+
 ## [0.78.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.78.0...csa-inabox-v0.78.1) (2026-07-28)
 
 
