@@ -12,9 +12,13 @@
  */
 
 import {
-  buildAgentCard, messageText, type A2aAgentCard, type A2aServerContext,
+  messageText, type A2aServerContext,
   type A2aExecuteResult, type A2aTask,
 } from './a2a-protocol';
+import {
+  generateAgentCard, itemAgentSkillId, registeredAgentFromItem,
+  type A2aSpecAgentCard,
+} from './a2a-agent-card';
 import { agentMcpToolName } from './data-agent-mcp';
 import { saveA2aTask, loadA2aTask } from '@/lib/azure/a2a-task-store';
 import { auditA2aDelegation } from '@/lib/azure/a2a-audit';
@@ -25,28 +29,38 @@ export function agentA2aSkillId(nameOrId: string): string {
   return agentMcpToolName(nameOrId).replace(/^ask_/, 'ask-');
 }
 
-/** Build the per-agent A2A card for a published data-agent / agent-flow. */
+/**
+ * Build the per-agent A2A card for a published data-agent / agent-flow.
+ *
+ * Delegates to the ONE spec-conformant generator (B-N14d) fed from the item's
+ * REGISTERED metadata, so the per-agent card carries the current-spec
+ * `supportedInterfaces` (with the §4.4.6 `tenant` routing id) and the 0.3-line
+ * aliases. `platformEndpoint`, when given, is registered as a second interface
+ * so a client that only knows `/api/a2a` can still address this agent.
+ */
 export function buildItemAgentCard(opts: {
+  id?: string;
   name: string;
   description?: string;
   endpoint: string;
   kind: 'data agent' | 'agent flow';
-}): A2aAgentCard {
-  const skillId = agentA2aSkillId(opts.name);
-  return buildAgentCard({
-    name: opts.name,
-    description: opts.description || `A published CSA Loom ${opts.kind}, delegable over A2A. It answers grounded on its configured backend.`,
-    url: opts.endpoint,
-    skills: [{
-      id: skillId,
-      name: `Ask ${opts.name}`,
-      description: `Delegate a natural-language task to the "${opts.name}" Loom ${opts.kind}. Send a text part with the request; it runs the ${opts.kind}'s real, governed backend and returns the answer.`,
-      tags: [opts.kind === 'agent flow' ? 'agent-flow' : 'data-agent', 'nl-query', 'grounded'],
-      examples: [`Ask ${opts.name}: "summarize the latest results"`],
-      inputModes: ['text/plain'],
-      outputModes: ['text/plain'],
-    }],
-  });
+  platformEndpoint?: string;
+  state?: Record<string, unknown> | null;
+}): A2aSpecAgentCard {
+  const kind = opts.kind === 'agent flow' ? 'agent-flow' : 'data-agent';
+  return generateAgentCard(
+    registeredAgentFromItem({
+      item: { id: opts.id || opts.name, displayName: opts.name, description: opts.description, state: opts.state },
+      kind,
+      endpoint: opts.endpoint,
+      platformEndpoint: opts.platformEndpoint,
+    }),
+  );
+}
+
+/** The A2A skill id the generated per-item card advertises (for callers/tests). */
+export function itemCardSkillId(name: string): string {
+  return itemAgentSkillId(name);
 }
 
 /**
@@ -54,7 +68,7 @@ export function buildItemAgentCard(opts: {
  * backend for one question; `audit` identifies the delegating caller.
  */
 export function buildItemA2aContext(opts: {
-  card: A2aAgentCard;
+  card: A2aSpecAgentCard;
   ask: (question: string) => Promise<string>;
   tenantId: string;
   actorOid: string;
