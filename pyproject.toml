@@ -314,7 +314,7 @@ serving = [
     # file: an unbounded floor lets a major bump land in CI unannounced, which
     # is the failure mode this extra exists to close.
     "duckdb>=1.1.0,<2.0.0",
-    "pyarrow>=18.0.0,<24.0.0",
+    "pyarrow>=18.0.0,<26.0.0",
     # The HTTP tier is FastAPI; TestClient needs httpx. Both are already on the
     # bff/portal extras — re-declared so `pip install -e .[serving]` alone is
     # enough to run tests/loom_duckdb.
