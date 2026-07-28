@@ -11,6 +11,10 @@ on:
       - 'domains/**'
       - 'scripts/**'
       - 'tests/**'
+      # apps/loom-duckdb is a deployed container app whose ONLY automated
+      # signal is tests/loom_duckdb (#2543). Its requirements.txt pins duckdb
+      # and pyarrow, so a dependency bump has to reach this lane.
+      - 'apps/loom-duckdb/**'
       - 'pyproject.toml'
       - '.github/workflows/test.yml'
   schedule:
@@ -64,7 +68,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if printf '%s\n' "$changed" \
-              | grep -qE '^(csa_platform/|domains/|scripts/|tests/|tools/|pyproject\.toml|\.github/workflows/test\.yml)'; then
+              | grep -qE '^(csa_platform/|domains/|scripts/|tests/|tools/|apps/loom-duckdb/|pyproject\.toml|\.github/workflows/test\.yml)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -84,8 +88,11 @@ jobs:
           python -m pip install --upgrade pip
           # Install the project with dev + governance + functions extras so
           # ruff / pytest / pytest-cov / mypy and all Azure SDK deps come
-          # from pyproject.toml.
-          pip install -e ".[dev,governance,functions,portal,bff,postgres,tutorials,streaming]"
+          # from pyproject.toml. `serving` adds duckdb + pyarrow for
+          # tests/loom_duckdb (#2543) — the app's own requirements.txt is
+          # installed by the loop below and re-pins them to the exact runtime
+          # versions, which is what makes a dependabot bump a real signal.
+          pip install -e ".[dev,governance,functions,portal,bff,postgres,tutorials,streaming,serving]"
           # Install any additional per-domain requirements.
           for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
             pip install -r "$req" || true

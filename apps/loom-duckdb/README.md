@@ -79,5 +79,20 @@ set `LOOM_DUCKDB_URL` (and optionally `LOOM_FLIGHTSQL_URL`) on the console app.
 
 ## Tests
 
-`tests/loom_duckdb/` covers the read-only guard, the Flight SQL protobuf codec,
-and ticket verification — all pure-Python, no engine and no Azure required.
+`tests/loom_duckdb/` — run with `pytest tests/loom_duckdb`. Nothing here needs
+Azure, a lake account or the network: every query reads DuckDB's own in-memory
+`range()`/literals.
+
+| File | What it exercises |
+| --- | --- |
+| `test_sqlguard.py` | read-only admission control (pure Python) |
+| `test_flight_wire.py` | the Flight SQL protobuf codec + ticket verification (pure Python) |
+| `test_engine.py` | a **real** embedded DuckDB — execution, row bounding, Arrow IPC round-trip, the managed-identity secret DDL, config locking |
+| `test_flightsql.py` | the **real** Flight server over a loopback gRPC port with a real `pyarrow.flight` client — auth middleware, `GetFlightInfo`/`DoGet`/`GetSchema`, handle single-use + expiry, the access log |
+| `test_http_tier.py` | the **real** FastAPI app via `TestClient` — `/query` JSON + Arrow IPC, `/explain`, `/capabilities`, every error path, Flight startup wiring |
+
+The last three need `duckdb`, `pyarrow` and `fastapi`/`httpx` — installed in CI
+by the `serving` extra plus this app's own `requirements.txt`
+(`pip install -e ".[dev,serving]"` locally). They are deliberately NOT mocked:
+this app is the only pin of `duckdb`/`pyarrow` in the repo, so these tests are
+the signal a dependency bump gets (#2543).
