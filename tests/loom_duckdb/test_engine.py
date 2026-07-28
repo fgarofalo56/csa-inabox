@@ -12,15 +12,30 @@ in-memory `range()` / literals, so there is no Azure dependency and no network.
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
-import pyarrow as pa
 import pytest
+
+# `duckdb` / `pyarrow` come from the `serving` extra. Skip rather than ERROR at
+# collection when they are absent, so `pytest tests/` on a lean install (the old
+# `EXTRAS ?= dev,governance,functions` default) still reports honestly instead of
+# failing to collect. `make setup` / `make setup-all` now install `serving`.
+pytest.importorskip("duckdb", reason="tests/loom_duckdb needs the `serving` extra")
+pytest.importorskip("pyarrow", reason="tests/loom_duckdb needs the `serving` extra")
+
+import pyarrow as pa
 
 from .conftest import load
 
 engine = load("engine")
 sqlguard = load("sqlguard")
+
+#: Statements DuckDB refuses to wrap in a subquery, so `run()` re-executes them
+#: raw (engine.py:203). `TestExecution.test_the_unwrappable_premise_still_holds`
+#: proves this list really is unwrappable on the DuckDB under test, so the
+#: fallback tests cannot quietly stop covering the fallback after an upgrade.
+UNWRAPPABLE = ["PRAGMA version", "PRAGMA database_size", "PRAGMA table_info('duckdb_types')"]
 
 
 @pytest.fixture
@@ -57,10 +72,29 @@ class RecordingConnection:
         return getattr(self.inner, name)
 
 
+class _DuckDbShim:
+    """`duckdb` with only `connect` swapped, for the engine module ONLY.
+
+    Patching `duckdb.connect` itself would be a process-global mutation of the
+    real duckdb module for the duration of the test — every other consumer in
+    the interpreter would see the fake. Binding this shim to `engine.duckdb`
+    instead scopes the swap to the one module under test; `duckdb.Error` and
+    everything else still resolve to the real module through `__getattr__`.
+    """
+
+    def __init__(self, real: ModuleType, connect: Any) -> None:
+        self._real = real
+        self.connect = connect
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
 @pytest.fixture
 def recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Factory: build an engine whose connection records its setup statements."""
-    real_connect = engine.duckdb.connect
+    real_duckdb = engine.duckdb
+    real_connect = real_duckdb.connect
     monkeypatch.setenv("LOOM_DUCKDB_EXT_DIR", str(tmp_path))
 
     def factory() -> RecordingConnection:
@@ -71,7 +105,7 @@ def recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
             captured.append(wrapper)
             return wrapper
 
-        monkeypatch.setattr(engine.duckdb, "connect", fake_connect)
+        monkeypatch.setattr(engine, "duckdb", _DuckDbShim(real_duckdb, fake_connect))
         instance = engine.DuckDbEngine()
         instance.connection()
         return captured[0]
@@ -163,17 +197,57 @@ class TestExecution:
         assert result.table.schema.names == ["second"]
         assert result.table.to_pylist() == [{"second": 2}]
 
-    @pytest.mark.parametrize(
-        "sql",
-        ["SHOW TABLES", "PRAGMA version", "DESCRIBE SELECT 1 AS a"],
-    )
+    @pytest.mark.parametrize("sql", ["SHOW TABLES", "DESCRIBE SELECT 1 AS a", "SUMMARIZE SELECT 1 AS a"])
+    def test_introspection_statements_return_a_real_result(
+        self, isolated_engine: Any, sql: str
+    ) -> None:
+        # NOTE: these three ARE subquery-wrappable in DuckDB 1.1.3, so they go
+        # down the normal wrapped path — they are NOT fallback coverage. An
+        # earlier version of this test claimed they were; `UNWRAPPABLE` below
+        # is the set that actually takes the fallback, and
+        # `test_the_unwrappable_premise_still_holds` keeps that honest.
+        result = isolated_engine.run(sql)
+        assert result.table.num_columns > 0
+
+    @pytest.mark.parametrize("sql", UNWRAPPABLE)
+    def test_the_unwrappable_premise_still_holds(
+        self, isolated_engine: Any, sql: str
+    ) -> None:
+        # The fallback at engine.py:203 only ever runs because DuckDB refuses
+        # `SELECT * FROM (<stmt>)` for these. If a DuckDB upgrade makes them
+        # wrappable, every fallback test below silently stops covering the
+        # fallback — this test turns RED instead of letting that happen quietly.
+        with pytest.raises(engine.duckdb.Error):
+            isolated_engine.connection().execute(f"SELECT * FROM ({sql}) AS loom_q LIMIT 2")
+
+    @pytest.mark.parametrize("sql", UNWRAPPABLE)
     def test_statements_that_cannot_be_wrapped_fall_back_to_direct_execution(
         self, isolated_engine: Any, sql: str
     ) -> None:
-        # `SELECT * FROM (SHOW TABLES)` is a DuckDB parse error; the engine
-        # retries unwrapped. Without that fallback these three would 400.
+        # Without the fallback these would 400 — the wrapped form is a DuckDB
+        # parse error.
         result = isolated_engine.run(sql)
         assert result.table.num_columns > 0
+        assert result.table.num_rows > 0
+
+    def test_the_fallback_branch_still_bounds_and_flags_the_result(
+        self, isolated_engine: Any
+    ) -> None:
+        # The fallback re-executes the RAW statement with NO `LIMIT` (engine.py
+        # :203), so bounding on this branch is purely post-hoc
+        # (`table.slice(0, cap)`). That post-hoc slice was previously
+        # unasserted: every row-bounding case used a wrappable SELECT. This
+        # pins it.
+        #
+        # It also means a LARGE unwrappable statement is fully materialized
+        # before it is sliced — the memory blow-up the cap exists to prevent.
+        # That is a source behaviour change, out of scope for a test PR, and is
+        # tracked in #2575.
+        result = isolated_engine.run("PRAGMA table_info('duckdb_types')", max_rows=5)
+        assert result.row_count == 5
+        assert result.table.num_rows == 5
+        assert result.truncated is True
+        assert result.max_rows == 5
 
     def test_the_result_carries_honest_timing_and_the_submitted_sql(
         self, isolated_engine: Any
@@ -246,23 +320,23 @@ class TestSetupAndCapabilities:
         assert caps["maxRows"] == engine.DEFAULT_MAX_ROWS
         assert caps["queryTimeoutSeconds"] == engine.QUERY_TIMEOUT_S
 
-    def test_extensions_report_what_actually_loaded_not_the_bundled_constant(
-        self, isolated_engine: Any
-    ) -> None:
-        # With an empty extension_directory nothing can load. Reporting the
-        # BUNDLED_EXTENSIONS constant here would be the vaporware answer.
-        assert isolated_engine.capabilities()["extensions"] == []
-        assert engine.BUNDLED_EXTENSIONS == ("httpfs", "azure", "delta", "iceberg")
-
     def test_a_load_that_succeeds_is_recorded_and_one_that_fails_is_omitted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # This is the ONLY honest form of the "reports the outcome, not the
+        # BUNDLED_EXTENSIONS wish list" assertion. The earlier version of this
+        # test asserted `capabilities()['extensions'] == []` with an empty
+        # extension directory: that is an assertion about the ABSENCE of
+        # behaviour in a third-party wheel (it holds only while none of
+        # httpfs/azure/delta/iceberg is statically linked and no LOAD
+        # auto-installs over the network), and it survived the
+        # `self._loaded.append(ext)` -> `pass` mutation, i.e. it could not
+        # detect the defect its name claimed. It was DELETED, not kept
+        # alongside this one.
+        #
         # `json` is statically linked into the DuckDB wheel, so it loads with
         # no extension directory and no network — which makes the pair
-        # (one real load, one impossible load) assertable anywhere. The point
-        # is that the reported list is the OUTCOME, not the wish list: a
-        # missing extension must fail loudly at query time, not be papered
-        # over by a capabilities response that claims it is present.
+        # (one real load, one impossible load) assertable anywhere.
         monkeypatch.setenv("LOOM_DUCKDB_EXT_DIR", str(tmp_path))
         monkeypatch.delenv("LOOM_LAKE_ACCOUNT", raising=False)
         monkeypatch.setattr(engine, "BUNDLED_EXTENSIONS", ("json", "not_a_real_extension"))

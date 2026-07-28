@@ -20,9 +20,15 @@ import time
 from collections.abc import Iterator
 from typing import Any
 
+import pytest
+
+# `pyarrow` (and `pyarrow.flight`) come from the `serving` extra. Skip rather
+# than ERROR at collection when it is absent (see test_engine.py).
+pytest.importorskip("duckdb", reason="tests/loom_duckdb needs the `serving` extra")
+pytest.importorskip("pyarrow.flight", reason="tests/loom_duckdb needs the `serving` extra")
+
 import pyarrow as pa
 import pyarrow.flight as flight
-import pytest
 
 from .conftest import load
 
@@ -216,7 +222,9 @@ class TestDoGet:
         assert table.to_pylist()[7] == {"i": 7, "doubled": 14}
 
     def test_a_handle_is_single_use(self, wire: Wire) -> None:
-        # Replay protection: a leaked handle is worthless after one fetch.
+        # A leaked handle is worthless after one fetch. NOTE this bounds the
+        # HANDLE only, not the ticket — see the bare-SQL note on
+        # `test_a_bare_sql_ticket_executes_and_is_still_audited` (#2577).
         ticket = wire.plan("SELECT 1").endpoints[0].ticket
         wire.fetch(ticket)
         with pytest.raises(flight.FlightServerError) as err:
@@ -246,6 +254,16 @@ class TestDoGet:
             wire.fetch(forged)
 
     def test_a_bare_sql_ticket_executes_and_is_still_audited(self, wire: Wire) -> None:
+        # DOCUMENTED, NOT ENDORSED. This path (flightsql.py:216-219) executes
+        # the ticket bytes as raw SQL when they do not decode as a known Flight
+        # SQL command, entirely skipping the GetFlightInfo -> handle handshake.
+        # It exists to serve simple ADBC/JDBC clients, and it means the handle
+        # lifecycle asserted above (single-use / ticket-bound / TTL) is a
+        # RESOURCE-HYGIENE control, not a replay-authorization boundary: a
+        # leaked handle is worthless after one fetch, but a leaked ticket buys
+        # arbitrary read SQL for the rest of its TTL. Tracked in #2577.
+        # What still holds on this path, and is asserted here and below: the
+        # read-only guard and the audit log.
         table = wire.fetch(flight.Ticket(b"SELECT 5 AS n"))
         assert table.to_pylist() == [{"n": 5}]
         assert wire.audit[-1]["operation"] == "flight.doGet"

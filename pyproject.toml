@@ -310,8 +310,11 @@ serving = [
     # dependabot bump is what actually gets exercised (#2543 — the pyarrow
     # 18 -> 23 bump in #2504 had no automated signal at all).
     # `pyarrow.flight` is bundled in the manylinux / macos / windows wheels.
+    # Both carry a next-major ceiling, same as every other dependency in this
+    # file: an unbounded floor lets a major bump land in CI unannounced, which
+    # is the failure mode this extra exists to close.
     "duckdb>=1.1.0,<2.0.0",
-    "pyarrow>=18.0.0",
+    "pyarrow>=18.0.0,<24.0.0",
     # The HTTP tier is FastAPI; TestClient needs httpx. Both are already on the
     # bff/portal extras — re-declared so `pip install -e .[serving]` alone is
     # enough to run tests/loom_duckdb.
@@ -541,6 +544,12 @@ source = [
     "csa_platform/functions/validation",
     "csa_platform/ai_integration/rag",
     "csa_platform/ai_integration/enrichment",
+    # apps/loom-duckdb is a deployed Container App (N2b serving tier + N3
+    # Flight SQL). Measured here so the "coverage" claim on tests/loom_duckdb
+    # is an instrument reading rather than a self-assessment, and so a future
+    # regression in it is visible. Requires the `serving` extra — installed by
+    # `make setup` / `make setup-all` and by the Test Suite lane.
+    "apps/loom-duckdb/app",
     # Modules below have inline tests in csa_platform/*/tests/ and are
     # excluded from coverage until their test suites are consolidated
     # into the root test runner (tracked as follow-up).
@@ -555,6 +564,16 @@ omit = [
     "**/__init__.py",
     "**/conftest.py",
     "**/test_*.py",
+    # coverage.py CANNOT measure this file: pyarrow.flight dispatches every
+    # server callback (`start_call`, `get_flight_info`, `get_schema`, `do_get`,
+    # `_log`, ...) on gRPC's own C++-managed threads, and `sys.settrace` is
+    # per-thread — coverage only traces threads created through the `threading`
+    # module. Proof it is an artifact and not a gap: test_flightsql.py asserts
+    # on `wire.audit[-1]['principalOid']`, which can only exist because `_log`
+    # (flightsql.py:141) ran, yet coverage reports that line as missed. Gating
+    # on the fictitious 26% it reports would misstate reality. Tracked in #2580;
+    # the real signal for this surface is its 30 behavioural tests.
+    "apps/loom-duckdb/app/flightsql.py",
 ]
 
 [tool.coverage.report]
@@ -699,6 +718,13 @@ module = [
     "docx",
     "pyarrow",
     "pyarrow.*",
+    # `fastapi` ships inline types, but it is an OPTIONAL extra here (`serving`
+    # / `bff` / `portal`). Without this entry a lean install turns `mypy`
+    # (whose default `files` includes `tests`) into an import-not-found
+    # failure on tests/loom_duckdb rather than a clean run. Same rationale as
+    # duckdb/pyarrow above.
+    "fastapi",
+    "fastapi.*",
     # ``requests`` ships type stubs as a separate ``types-requests``
     # package on PyPI.  We pin types-requests in the dev extra; this
     # entry covers environments where it is unavailable (e.g. minimal
