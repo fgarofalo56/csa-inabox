@@ -136,6 +136,27 @@ interface FetchState {
   error?: string;
 }
 
+/**
+ * Why the panel is empty, in the operator's words. Three distinct realities —
+ * never collapsed into one vague "no data" (no-vaporware.md):
+ *   - capture off            → the actionable fix (flag / env var)
+ *   - tables never ingested  → the workspace is fine, nothing has been written
+ *   - capture on, tables live → genuinely no sessions in this window
+ */
+function emptyStateBody(rum: RumRollup): string {
+  if (!(rum.capture.envEnabled && rum.capture.flagEnabled)) {
+    return 'Capture is currently off. Enable the rum1-client-telemetry runtime flag (and LOOM_RUM_ENABLED) to start collecting browser telemetry.';
+  }
+  if (rum.missingTables?.length) {
+    return (
+      `Capture is on and the Log Analytics workspace is readable, but no browser telemetry has ever ` +
+      `reached it — App Insights creates ${rum.missingTables.join(', ')} on the first ingested row. ` +
+      'Open a few console pages in a real browser and refresh; rows appear a few minutes later.'
+    );
+  }
+  return 'Capture is on — browser page loads, Web Vitals and client errors appear here a few minutes after real sessions hit the console. Open a few pages and refresh.';
+}
+
 async function fetchRum(window: string): Promise<FetchState> {
   // A3 (silent-failure fix): clientFetch REJECTS on transport failures (20 s
   // timeout, network). Catch those into the same structured FetchState.error
@@ -252,11 +273,7 @@ export function RumPanel() {
         <EmptyState
           icon={<PulseSquare24Regular />}
           title="No real-user telemetry yet"
-          body={
-            rum.capture.envEnabled && rum.capture.flagEnabled
-              ? 'Capture is on — browser page loads, Web Vitals and client errors appear here a few minutes after real sessions hit the console. Open a few pages and refresh.'
-              : 'Capture is currently off. Enable the rum1-client-telemetry runtime flag (and LOOM_RUM_ENABLED) to start collecting browser telemetry.'
-          }
+          body={emptyStateBody(rum)}
           primaryAction={
             rum.capture.envEnabled && rum.capture.flagEnabled
               ? undefined

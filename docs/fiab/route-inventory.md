@@ -18,7 +18,7 @@ same classic + WS-D1 toolkit export styles).
 | Session-only | 571 |
 | Owner-scoped | 684 |
 | Admin | 274 |
-| Gated (backend config) | 528 |
+| Gated (backend config) | 529 |
 | Areas | 117 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -206,7 +206,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/readiness/route.ts` | GET | admin | ● | — |
 | `admin/refresh-summary/route.ts` | GET | admin | ● | ADF, Azure Monitor, Cosmos |
 | `admin/reindex-items/route.ts` | POST | admin |  | Cosmos |
-| `admin/rum/route.ts` | GET | admin |  | Azure Monitor |
+| `admin/rum/route.ts` | GET | admin | ● | Azure Monitor |
 | `admin/runtime-flags/[id]/route.ts` | PUT | admin |  | — |
 | `admin/runtime-flags/route.ts` | GET | admin |  | — |
 | `admin/scaling/adx/route.ts` | GET POST PUT | admin |  | ADX ARM |
