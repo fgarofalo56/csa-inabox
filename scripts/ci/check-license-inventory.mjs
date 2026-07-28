@@ -129,6 +129,47 @@ function isBaseImage(repo) {
   return BASE_IMAGE_PREFIXES.some((p) => (p.endsWith('/') ? repo.startsWith(p) : repo === p || repo.startsWith(`${p}/`)));
 }
 
+/**
+ * Yield only the REAL Dockerfile instructions - never a line inside a RUN
+ * heredoc, a shell continuation, or a comment.
+ *
+ * A naive per-line `/^\s*FROM\s+/i` is wrong, and wrong in a way that fails the
+ * build for an unrelated app: apps/loom-transform-runner/Dockerfile embeds a
+ * Python snippet containing `from importlib.metadata import version`, which the
+ * naive scan read as `FROM importlib.metadata` and reported as an unreviewed
+ * container-baked OSS image. A license gate that invents dependencies is worse
+ * than no gate, because the fix people reach for is to allowlist the phantom.
+ *
+ * Also drops build-stage aliases (`FROM x AS builder` then `FROM builder`):
+ * a stage is internal plumbing, not a third-party image to license.
+ */
+function* dockerfileInstructions(src) {
+  const lines = src.split('\n');
+  const stages = new Set();
+  let heredocEnd = null;      // terminator we are waiting for, if inside a heredoc
+  let continuing = false;     // previous instruction line ended with a backslash
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (heredocEnd !== null) {
+      if (line.trim() === heredocEnd) heredocEnd = null;
+      continue;
+    }
+    const wasContinuing = continuing;
+    // A trailing backslash continues the CURRENT instruction into the next line.
+    continuing = /\\\s*$/.test(line);
+    // `<<EOF` / `<<-'EOF'` opens a heredoc whose body is shell input, not Dockerfile.
+    const here = line.match(/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
+    if (here && !continuing) heredocEnd = here[1];
+    if (wasContinuing) continue;                    // body of a multi-line instruction
+    if (/^\s*(#|$)/.test(line)) continue;           // comment / blank
+    const alias = line.match(/^\s*FROM\s+.*?\sAS\s+(\S+)\s*$/i);
+    if (alias) stages.add(alias[1].toLowerCase());
+    const ref = line.match(/^\s*FROM\s+(\S+)/i);
+    if (ref && stages.has(ref[1].toLowerCase())) continue;
+    yield { line, lineNo: i + 1 };
+  }
+}
+
 function listAppDockerfiles() {
   const out = execSync('git ls-files "apps/*/Dockerfile" "apps/*/*/Dockerfile"', { cwd: REPO_ROOT, encoding: 'utf8' });
   return out.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -192,7 +233,7 @@ function main() {
   for (const rel of listAppDockerfiles()) {
     let src;
     try { src = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'); } catch { continue; }
-    for (const line of src.split('\n')) {
+    for (const { line } of dockerfileInstructions(src)) {
       if (!/^\s*FROM\s+/i.test(line)) continue;
       const repo = imageRepo(line.trim());
       if (!repo || isBaseImage(repo)) continue;
