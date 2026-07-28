@@ -10,13 +10,18 @@
 # It renders two config files into the UC config dir from environment variables,
 # then execs the upstream start script:
 #
-#   etc/conf/hibernate.properties   persistence (H2 file DB default, Postgres opt-in)
+#   etc/conf/hibernate.properties   persistence (Postgres default, H2 fallback)
 #   etc/conf/server.properties      Entra authorization (LU-2) + optional ADLS vending
 #
-# Persistence is the DEFAULT H2 file DB placed on a mounted Azure Files volume so
-# the catalog survives container restarts (the bicep module mounts the share at
-# $LOOM_UNITY_DB_DIR). On first boot, if that dir is empty (fresh share), the
-# image's seeded schema is copied in so the server starts against a valid DB.
+# Persistence (LU-1): the DEFAULT deployed posture is an Entra-only, private-
+# endpoint-only Azure Database for PostgreSQL Flexible Server — the bicep module
+# passes LOOM_UNITY_DB_URL + LOOM_UNITY_DB_USER + LOOM_UNITY_DB_AUTH=entra and no
+# password exists anywhere. When no LOOM_UNITY_DB_URL is wired at all (local dev,
+# or a deployment that has not provisioned Postgres yet) this falls back to the
+# legacy H2 file DB in $LOOM_UNITY_DB_DIR; on first boot, if that dir is empty,
+# the image's seeded schema is copied in so the server starts against a valid DB.
+# The H2 fallback is single-writer and is known to CrashLoopBackOff on Azure
+# Government's SMB mount — see the resilience block below and docs/fiab/unity-gov.md.
 #
 # Azure-native only. No api.fabric.microsoft.com / api.powerbi.com is ever
 # reached (.claude/rules/no-fabric-dependency.md) — this IS the Azure-native
@@ -29,6 +34,11 @@ UC_HOME="${UC_HOME:-/home/unitycatalog}"
 CONF_DIR="${UC_HOME}/etc/conf"
 DB_DIR="${LOOM_UNITY_DB_DIR:-${UC_HOME}/etc/db}"
 DB_SEED_DIR="${UC_HOME}/etc/db.seed"
+
+die() {
+  echo "[loom-unity] FATAL: $*" >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------------------
 # H2-on-Azure-Files (SMB/CIFS) resilience.
@@ -70,27 +80,85 @@ resolve_db_dir() {
 
 # ---------------------------------------------------------------------------
 # hibernate.properties — persistence backend
+#
+# LU-1. Postgres is the DEPLOYED DEFAULT (the bicep module wires it); H2 is the
+# fallback for local dev and for deployments that have not provisioned Postgres.
+#
+# Entra ("passwordless") mode is the default whenever Postgres is in play, and it
+# matches the server: loom-unity-postgres.bicep creates the flexible server with
+# authConfig.passwordAuth=Disabled, so there is NO database password to render,
+# rotate, or leak. pgjdbc's `authenticationPluginClassName` hook makes the driver
+# mint a fresh Microsoft Entra access token for every physical connection — the
+# only correct mechanism here, because a token baked into this file at boot
+# expires within the hour and the catalog would fail authentication long after it
+# looked healthy. The plugin class ships in the image (apps/loom-unity/java,
+# installed on the classpath by the Dockerfile).
 # ---------------------------------------------------------------------------
 render_hibernate() {
   db_url="${LOOM_UNITY_DB_URL:-}"
   if [ -n "${db_url}" ] && printf '%s' "${db_url}" | grep -qi '^jdbc:postgresql:'; then
-    # Postgres — OPT-IN / experimental. Requires the postgres JDBC driver on the
-    # server classpath and the UC schema migrated once by the operator (see
-    # docs/fiab/unity-gov.md). We render the config faithfully; we do not pretend
-    # the driver/migration are guaranteed present.
-    cat <<EOF
+    db_auth="${LOOM_UNITY_DB_AUTH:-entra}"
+    db_user="${LOOM_UNITY_DB_USER:-}"
+    # FAIL CLOSED. With Entra-only auth the PostgreSQL ROLE name must equal the
+    # Entra principal name the token was minted for; an empty username silently
+    # becomes a connection attempt as the OS user, which the server rejects with
+    # an opaque auth error minutes into the boot. Name the exact variable instead.
+    if [ -z "${db_user}" ]; then
+      die "Postgres persistence is wired (LOOM_UNITY_DB_URL) but LOOM_UNITY_DB_USER is empty. Set it to the Entra principal name of the loom-unity managed identity (the loom-unity-postgres.bicep 'aadUser' output). See docs/fiab/unity-gov.md."
+    fi
+
+    # Query-string assembly: preserve anything the operator already put on the
+    # URL, then add TLS (mandatory on Azure Database for PostgreSQL) and, in
+    # Entra mode, the authentication plugin.
+    db_sep='?'
+    case "${db_url}" in
+      *\?*) db_sep='&' ;;
+    esac
+    db_params=''
+    case "${db_url}" in
+      *sslmode=*) ;;
+      *) db_params="${db_sep}sslmode=require"; db_sep='&' ;;
+    esac
+
+    if [ "${db_auth}" = "password" ]; then
+      # Explicit, audited opt-out for a BYO Postgres that still uses password
+      # auth. The password arrives as a Key Vault secretref, never inline.
+      if [ -z "${LOOM_UNITY_DB_PASSWORD:-}" ]; then
+        die "LOOM_UNITY_DB_AUTH=password but LOOM_UNITY_DB_PASSWORD is empty. Wire dbPasswordSecretUri (a Key Vault secret URI) on loom-unity-app.bicep, or use the default LOOM_UNITY_DB_AUTH=entra with an Entra-only server."
+      fi
+      echo "[loom-unity] NOTICE: Postgres is using PASSWORD authentication (LOOM_UNITY_DB_AUTH=password). The Loom-provisioned server is Entra-only (passwordAuth=Disabled) and needs no credential; this path exists for a BYO server only." >&2
+      cat <<EOF
 hibernate.connection.driver_class=org.postgresql.Driver
-hibernate.connection.url=${db_url}
-hibernate.connection.username=${LOOM_UNITY_DB_USER:-}
-hibernate.connection.password=${LOOM_UNITY_DB_PASSWORD:-}
+hibernate.connection.url=${db_url}${db_params}
+hibernate.connection.username=${db_user}
+hibernate.connection.password=${LOOM_UNITY_DB_PASSWORD}
 hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
-hibernate.hbm2ddl.auto=none
+hibernate.hbm2ddl.auto=${LOOM_UNITY_DB_DDL:-update}
 hibernate.show_sql=false
+hibernate.archive.autodetection=class
 EOF
+    else
+      if [ -z "${AZURE_CLIENT_ID:-}" ]; then
+        echo "[loom-unity] WARNING: AZURE_CLIENT_ID is unset. The Entra Postgres plugin will ask the managed-identity endpoint for a SYSTEM-assigned token; on a Container App with a user-assigned identity that request fails or returns the wrong identity. Set unityUamiClientId on loom-unity-app.bicep. See docs/fiab/unity-gov.md." >&2
+      fi
+      db_params="${db_params}${db_sep}authenticationPluginClassName=ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin"
+      # NOTE: no hibernate.connection.password line at all — the driver plugin
+      # supplies the token. Rendering an empty password here would make pgjdbc
+      # skip the plugin and send an empty cleartext password.
+      cat <<EOF
+hibernate.connection.driver_class=org.postgresql.Driver
+hibernate.connection.url=${db_url}${db_params}
+hibernate.connection.username=${db_user}
+hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+hibernate.hbm2ddl.auto=${LOOM_UNITY_DB_DDL:-update}
+hibernate.show_sql=false
+hibernate.archive.autodetection=class
+EOF
+    fi
   else
-    # DEFAULT — H2 file DB on the mounted (persistent) volume. DB_CLOSE_DELAY=-1
-    # keeps the in-JVM DB alive across connection close; the .mv.db file is what
-    # persists on Azure Files.
+    # FALLBACK — H2 file DB on the mounted (or local ephemeral) volume.
+    # DB_CLOSE_DELAY=-1 keeps the in-JVM DB alive across connection close; the
+    # .mv.db file is what persists on Azure Files.
     #
     # CONTRACT: mirror the upstream image's own hibernate.properties exactly
     # except the file path. The image's SEEDED h2db.mv.db was created with an
@@ -101,10 +169,11 @@ EOF
     # `hbm2ddl.auto=update` also matches upstream so a fresh (unseeded) dir gets
     # its schema created.
     # FILE_LOCK=FS is refused outright on CIFS; FILE_LOCK=NO skips H2's lock-file
-    # protocol entirely — safe here because loom-unity is the ONLY writer
-    # (minReplicas=1, single container, internal ingress) and Azure Files (SMB)
-    # can't honor H2's default file-lock semantics (the second Gov first-boot
-    # crash after the credentials fix).
+    # protocol entirely — safe ONLY because this path pins the Container App to
+    # exactly one replica (loom-unity-app.bicep forces maxReplicas:1 whenever
+    # Postgres is absent) and Azure Files (SMB) can't honor H2's default
+    # file-lock semantics (the second Gov first-boot crash after the
+    # credentials fix).
     cat <<EOF
 hibernate.connection.driver_class=org.h2.Driver
 hibernate.connection.url=jdbc:h2:file:${DB_DIR}/h2db;DB_CLOSE_DELAY=-1;FILE_LOCK=NO
@@ -143,11 +212,6 @@ EOF
 # `server.access-token-timeout` exists on upstream main but NOT in v0.5.0/v0.5.1, so
 # it is deliberately not rendered here (we pin the image tag; see the Dockerfile).
 # ---------------------------------------------------------------------------
-
-die() {
-  echo "[loom-unity] FATAL: $*" >&2
-  exit 1
-}
 
 # Entra authority host — Commercial by default; Azure Government deployments pass
 # login.microsoftonline.us. Sovereign hosts are NEVER hard-coded on a code path;
@@ -262,7 +326,13 @@ fi
 # Resolve a writable DB dir BEFORE rendering hibernate.properties (which bakes
 # the path into the JDBC URL) — this is what makes the H2/SMB fallback take.
 resolve_db_dir
-echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-${LOOM_UNITY_ENTRA_TENANT_ID:+enable}${LOOM_UNITY_ENTRA_TENANT_ID:-disable}} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
+echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres/${LOOM_UNITY_DB_AUTH:-entra}}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-${LOOM_UNITY_ENTRA_TENANT_ID:+enable}${LOOM_UNITY_ENTRA_TENANT_ID:-disable}} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
+if [ -z "${LOOM_UNITY_DB_URL:-}" ]; then
+  # LU-1: the H2 fallback is not the recommended posture anywhere it can be
+  # avoided. Say so on every boot rather than letting a deployment quietly sit on
+  # a single-writer, unbacked-up, SMB-fragile store.
+  echo "[loom-unity] NOTICE: no LOOM_UNITY_DB_URL — running on the LEGACY H2 file DB. It is single-writer (so this app is pinned to ONE replica), has no backup or point-in-time restore, and is known to CrashLoopBackOff on Azure Government's SMB mount. Provision the Entra-only Postgres store (platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep) and pass unityPostgresFqdn to loom-unity-app.bicep. See docs/fiab/unity-gov.md." >&2
+fi
 seed_db_if_empty
 write_config
 
