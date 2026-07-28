@@ -1,12 +1,13 @@
 /**
  * secret-expiry-monitor — REAL data-plane clients (Microsoft Graph app read,
  * Key Vault secret attributes, action-group createNotifications, blob state,
- * GitHub issue dedup). All Azure calls use the Function's managed identity via
- * DefaultAzureCredential — identity-based, no keys, no mocks (no-vaporware).
+ * GitHub issue dedup). All Azure calls use the job's managed identity (the
+ * console UAMI, injected as AZURE_CLIENT_ID) via DefaultAzureCredential —
+ * identity-based, no keys, no mocks (no-vaporware).
  *
  * Sovereign-cloud aware: the Graph base, ARM endpoint, and storage suffix are
  * injected via env (LOOM_GRAPH_BASE / LOOM_ARM_ENDPOINT / LOOM_STORAGE_SUFFIX)
- * by secret-expiry-monitor-function.bicep; the Key Vault scope derives from the
+ * by secret-expiry-monitor-job.bicep; the Key Vault scope derives from the
  * vault URI host so `.us` vaults acquire a Gov-scoped token.
  */
 import { DefaultAzureCredential } from '@azure/identity';
@@ -90,10 +91,10 @@ export async function readKvSecretAttributes(vaultUri: string, names: string[]):
  * API, mirroring its live receivers — the same mechanism the Console's
  * sendActionGroupTestNotification uses (monitor-client.ts) and O1's unified
  * `lib/azure/alert-dispatch.ts` (dispatchAlert) formalizes. Needs Monitoring
- * Contributor on the admin RG (granted in bicep).
+ * Contributor on the admin RG (held by the console UAMI the job runs as).
  *
  * O1 severity routing (aligned with alert-dispatch.receiversForSeverity —
- * the Function cannot import the console module across packages, so the
+ * the job cannot import the console module across packages, so the
  * routing convention is mirrored here): 'P3' = email band — webhook + Logic
  * App receivers are dropped from the notification; 'P1'/'P2' (and legacy
  * callers passing no severity) mirror ALL receivers incl. the on-call

@@ -180,22 +180,22 @@ type functionAppsConfigT = {
   @description('NCRONTAB schedule (6-field) for the report-subscriptions timer tick. Default every 15 minutes so per-subscription schedules fire close to their intended time.')
   reportSubscriptionsCron: string?
 
-  @description('Deploy the secret-expiry monitor timer Function (S1) — inventories the MSAL app registration passwordCredentials + tracked Key Vault secrets, computes days-to-expiry, and fires the shared loom-default-alerts action group + a dedup GitHub issue at the 60/30/7-day thresholds (prevention for the 2026-07-19 expired-MSAL-secret sign-in outage class). Default ON.')
+  @description('Deploy the secret-expiry monitor (S1) as an in-VNet scheduled Container App Job — inventories the MSAL app registration passwordCredentials + tracked Key Vault secrets, computes days-to-expiry, and fires the shared loom-default-alerts action group + a dedup GitHub issue at the 60/30/7-day thresholds (prevention for the 2026-07-19 expired-MSAL-secret sign-in outage class). Default ON. B-FN (2026-07-27): this was a Y1 Function; Y1 is structurally broken on this estate, so it now rides the ACA-job pattern.')
   secretExpiryEnabled: bool?
 
-  @description('NCRONTAB schedule (6-field) for the secret-expiry tick. Default daily 06:00 UTC.')
+  @description('Schedule cron for the secret-expiry tick — STANDARD 5-FIELD, UTC (Container Apps jobs; B-FN replaced the 6-field NCRONTAB the retired Y1 Function used). Default daily 06:00 UTC.')
   secretExpiryCron: string?
 
   @description('Days-to-expiry OUTER warning threshold (LOOM_SECRET_EXPIRY_WARN_DAYS). Inner 30/7-day bands are fixed. Default 60.')
   secretExpiryWarnDays: int?
 
-  @description('Deploy the copilot-evaluator Function (loom-next-level E2) — nightly + on-demand Copilot quality evals (retrieval hit-rate/MRR + capped LLM-judge grounding) over the E1 golden sets, written to Cosmos loom-copilot-evals. Default ON (~$0 idle Y1; judge token spend is capped/day); a no-op without a Cosmos account.')
+  @description('Deploy the copilot-evaluator (loom-next-level E2) as an in-VNet scheduled Container App Job — nightly + on-demand Copilot quality evals (retrieval hit-rate/MRR + capped LLM-judge grounding) over the E1 golden sets, written to Cosmos loom-copilot-evals. Default ON (~$0 idle scale-to-zero job; judge token spend is capped/day); a no-op without a Cosmos account. B-FN (2026-07-27): this was a Y1 Function; Y1 is structurally broken on this estate, so it now rides the ACA-job pattern.')
   copilotEvaluatorEnabled: bool?
 
-  @description('NCRONTAB schedule (6-field) for the copilot-evaluator nightly run. Default 07:00 UTC — off-peak so judge spend never competes with business-hours Copilot AOAI TPM.')
+  @description('Schedule cron for the copilot-evaluator nightly run — STANDARD 5-FIELD, UTC (Container Apps jobs; B-FN replaced the 6-field NCRONTAB the retired Y1 Function used). Default 07:00 UTC — off-peak so judge spend never competes with business-hours Copilot AOAI TPM.')
   copilotEvaluatorCron: string?
 
-  @description('DEDICATED judge deployment name (LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT) to isolate judge TPM from production Copilot quota. Empty → the Function falls back strong → mini → default at runtime.')
+  @description('DEDICATED judge deployment name (LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT) to isolate judge TPM from production Copilot quota. Empty → the job falls back strong → mini → default at runtime.')
   copilotEvalJudgeDeployment: string?
 
   @description('Daily LLM-judge call cap for the copilot-evaluator (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred.')
@@ -419,11 +419,11 @@ var labelPropagationEnabled = functionAppsConfig.?labelPropagationEnabled ?? tru
 var labelPropagationCron = functionAppsConfig.?labelPropagationCron ?? '0 */15 * * * *'
 var reportSubscriptionsCron = functionAppsConfig.?reportSubscriptionsCron ?? '0 */15 * * * *'
 var secretExpiryEnabled = functionAppsConfig.?secretExpiryEnabled ?? true
-var secretExpiryCron = functionAppsConfig.?secretExpiryCron ?? '0 0 6 * * *'
+var secretExpiryCron = functionAppsConfig.?secretExpiryCron ?? '0 6 * * *'
 var secretExpiryWarnDays = functionAppsConfig.?secretExpiryWarnDays ?? 60
 // E2 copilot-evaluator (R0 bag) — default-ON per loom_default_on_opt_out.
 var copilotEvaluatorEnabled = functionAppsConfig.?copilotEvaluatorEnabled ?? true
-var copilotEvaluatorCron = functionAppsConfig.?copilotEvaluatorCron ?? '0 0 7 * * *'
+var copilotEvaluatorCron = functionAppsConfig.?copilotEvaluatorCron ?? '0 7 * * *'
 var copilotEvalJudgeDeployment = functionAppsConfig.?copilotEvalJudgeDeployment ?? ''
 var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 500
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
@@ -4699,9 +4699,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
             { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : byoFoundryEndpoint) }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
-            // E2 copilot-evaluator — the eval-harness Function's base URL so the
-            // admin "Run now" (E5) + gate surface can reach its HTTP trigger.
-            { name: 'LOOM_COPILOT_EVALUATOR_URL',  value: copilotEvaluatorEnabled ? 'https://${copilotEvaluator!.outputs.defaultHostName}' : '' }
+            // E2 copilot-evaluator — the eval-harness JOB's ARM resource id so
+            // the admin "Run now" (E5) + gate surface can start an execution.
+            // B-FN (2026-07-27): the evaluator is an ACA job, not a Y1 Function,
+            // so this is an ARM id instead of an https host with a host key.
+            // Computed with resourceId() rather than the module output ON
+            // PURPOSE: the job module consumes containerPlatformModule outputs,
+            // so reading its output here would make the two modules circular.
+            // The name is fixed by copilot-evaluator-job.bicep, so the id is
+            // deterministic.
+            { name: 'LOOM_COPILOT_EVALUATOR_JOB_ID', value: copilotEvaluatorActive ? resourceId('Microsoft.App/jobs', 'loom-copilot-evaluator') : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }
@@ -5457,26 +5464,39 @@ module labelPropagation 'label-propagation-function.bicep' = if (labelPropagatio
   }
 }
 
-// Secret-expiry monitor timer Function (S1) — MSAL app-registration credential
-// + tracked KV secret expiry inventory, 60/30/7-day band alerts through the
-// shared loom-default-alerts action group (the O1 alert convention). Default ON
-// (functionAppsConfig.secretExpiryEnabled). Every ARM role is granted inside
-// the module (own SA, hub KV Secrets User, RG Monitoring Contributor); the
-// Graph app-role Application.Read.All is the documented ONE-TIME admin consent
-// (docs/fiab/runbooks/secret-rotation.md) using the principalId output.
-module secretExpiry 'secret-expiry-monitor-function.bicep' = if (secretExpiryEnabled) {
-  name: 'secret-expiry-monitor-function'
+// Secret-expiry monitor (S1) — MSAL app-registration credential + tracked KV
+// secret expiry inventory, 60/30/7-day band alerts through the shared
+// loom-default-alerts action group (the O1 alert convention). Default ON
+// (functionAppsConfig.secretExpiryEnabled).
+//
+// B-FN (2026-07-27): an in-VNet scheduled Container App Job, NOT a Y1 Function
+// (Y1 is structurally broken on this estate — sealed storage data-plane,
+// AAD-only, no PE, and Y1 is not a trusted service). It runs as the CONSOLE
+// UAMI, so its Key Vault Secrets User + RG Monitoring Contributor grants land
+// on the same principal the Console already uses, its host storage account is
+// gone entirely, and the ONE-TIME Graph Application.Read.All consent is the one
+// scripts/csa-loom/grant-identity-graph-approles.sh already performs for the
+// Identity Picker (docs/fiab/runbooks/secret-rotation.md).
+var secretExpiryActive = secretExpiryEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module secretExpiry 'secret-expiry-monitor-job.bicep' = if (secretExpiryActive) {
+  name: 'secret-expiry-monitor-job'
   params: {
     location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    consoleUamiPrincipalId: identity.outputs.uamiConsolePrincipalId
+    acrLoginServer: registry.outputs.acrLoginServer
     msalClientId: effectiveMsalClientId
     keyVaultName: keyvault.outputs.keyVaultName
     keyVaultUri: keyvault.outputs.keyVaultUri
     warnDays: secretExpiryWarnDays
-    secretExpiryCron: secretExpiryCron
+    cronExpression: secretExpiryCron
     actionGroupId: defaultAlerts.outputs.actionGroupId
     graphBase: boundary == 'GCC-High' ? 'https://graph.microsoft.us' : (boundary == 'IL5' ? 'https://dod-graph.microsoft.us' : 'https://graph.microsoft.com')
+    opsStateAccount: loomStorageAccount
     skipRoleGrants: skipRoleGrants
-    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }
 }
@@ -5522,38 +5542,46 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
   }
 }
 
-// copilot-evaluator Function (loom-next-level E2) — nightly + on-demand Copilot
-// quality evals over the E1 golden sets: REAL retrieval + one REAL Copilot turn
-// via the console's internal eval-probe route (shared internal trust token),
+// copilot-evaluator (loom-next-level E2) — nightly + on-demand Copilot quality
+// evals over the E1 golden sets: REAL retrieval + one REAL Copilot turn via the
+// console's internal eval-probe route (shared internal trust token),
 // deterministic guards gated BEFORE the capped LLM judge, results to Cosmos
 // loom-copilot-evals. Default-ON (R0 functionAppsConfig bag); a clean no-op
-// tick without a Cosmos account. Every role grant (host storage Blob Owner +
-// Queue Contributor, Search Index Data Reader, Cognitive Services OpenAI User,
-// Cosmos data-plane contributor on the same-RG hub account) is declared in the
-// module (guid() names, skipRoleGrants-aware) — no post-deploy bootstrap grant
-// needed on the hub topology.
-module copilotEvaluator 'copilot-evaluator-function.bicep' = if (copilotEvaluatorEnabled) {
-  name: 'copilot-evaluator-function'
+// execution without a Cosmos account.
+//
+// B-FN (2026-07-27): an in-VNet scheduled Container App Job, NOT a Y1 Function.
+// It runs as the CONSOLE UAMI, which already holds every data-plane role the
+// evaluator needs (Cognitive Services OpenAI User, Search Index Data Reader,
+// Cosmos Built-in Data Contributor), so the module declares exactly ONE grant:
+// Contributor scoped to the job itself, which is what lets the Console's
+// "Run now" (E5) start an execution. The Function host key and the public
+// *.azurewebsites.net surface are gone, and — because the job is inside the
+// CAE — the eval probe now stays in-VNet instead of looping through Front Door.
+var copilotEvaluatorActive = copilotEvaluatorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module copilotEvaluator 'copilot-evaluator-job.bicep' = if (copilotEvaluatorActive) {
+  name: 'copilot-evaluator-job'
   params: {
     location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    consoleUamiPrincipalId: identity.outputs.uamiConsolePrincipalId
+    acrLoginServer: registry.outputs.acrLoginServer
     loomCosmosEndpoint: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
     loomCosmosDatabase: 'loom'
-    cosmosAccountName: (deployConsoleCosmos && !empty(loomCosmosAccount)) ? loomCosmosAccount : ''
-    copilotEvaluatorCron: copilotEvaluatorCron
-    // The probe rides the public Front Door URL when FD is on (a Consumption
-    // plan has no VNet integration into the CAE); otherwise the CAE FQDN.
-    consoleBaseUrl: fdOn ? frontDoor!.outputs.frontDoorPublicUrl : 'https://loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    cronExpression: copilotEvaluatorCron
+    // In-VNet probe: the job runs inside the CAE, so it reaches the console
+    // over the internal name — no Front Door hop, no public egress.
+    consoleBaseUrl: 'http://loom-console'
     internalToken: loomInternalToken
     aoaiEndpoint: loomAoaiEndpointValue
-    aoaiAccountName: agentFoundryEnabled ? agentFoundry!.outputs.accountNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : '')
     judgeDeployment: copilotEvalJudgeDeployment
     strongDeployment: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : ''
     miniDeployment: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : ''
     defaultDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
     judgeDailyCap: copilotEvalJudgeDailyCap
-    aiSearchServiceName: effBuiltinMcpAiSearch
     skipRoleGrants: skipRoleGrants
-    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }
 }
@@ -5962,12 +5990,14 @@ output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropa
 output reportSubscriptionsFunctionName string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : ''
 output reportSubscriptionsPrincipalId string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.principalId : ''
 output reportSubscriptionLogicAppName string = reportSubscriptionsEnabled ? reportSubscriptionLogicApp.outputs.workflowName : ''
-// S1 secret-expiry monitor timer Function. ARM roles (own SA, hub KV Secrets
-// User, RG Monitoring Contributor) are granted inside the module; principalId
-// feeds the ONE-TIME Graph Application.Read.All admin consent
-// (docs/fiab/runbooks/secret-rotation.md).
-output secretExpiryFunctionName string = secretExpiryEnabled ? secretExpiry.outputs.siteName : ''
-output secretExpiryPrincipalId string = secretExpiryEnabled ? secretExpiry.outputs.principalId : ''
+// S1 secret-expiry monitor — an in-VNet scheduled Container App Job (B-FN,
+// 2026-07-27; it was a Y1 Function). ARM roles (hub KV Secrets User, RG
+// Monitoring Contributor) are granted inside the module to the CONSOLE UAMI,
+// which is also the principal that needs the ONE-TIME Graph
+// Application.Read.All admin consent (docs/fiab/runbooks/secret-rotation.md) —
+// the same grant scripts/csa-loom/grant-identity-graph-approles.sh performs.
+output secretExpiryJobName string = secretExpiryActive ? secretExpiry.outputs.jobName : ''
+output secretExpiryJobId string = secretExpiryActive ? secretExpiry.outputs.jobId : ''
 
 // MAF orchestration tier (GCC-High / IL5). Internal endpoint the Console reads
 // as LOOM_MAF_ENDPOINT; empty when the tier isn't active.

@@ -5,7 +5,7 @@
  *
  * Renders REAL per-surface Copilot eval scores from GET
  * /api/admin/copilot-quality (Cosmos loom-copilot-evals, written by the E2
- * copilot-evaluator Function): a headline overview, per-surface scorecards
+ * copilot-evaluator job): a headline overview, per-surface scorecards
  * (composite grade + retrieval hit-rate / grounding / pass-rate + floor status
  * + run-history sparkline), a "Run now" trigger (POST …/run → the E2 HTTP
  * trigger, honest-gated when the Function URL is unwired), and a per-surface
@@ -14,7 +14,7 @@
  *
  * States (ux-baseline): Skeleton while loading; guided EmptyState naming the
  * exact unblocking step when no runs exist yet; HonestGate + Fix-it when the
- * evaluator Function is unconfigured (never a red first-open — the page still
+ * evaluator job is unconfigured (never a red first-open — the page still
  * renders whatever history exists); FLAG0 kill-switch notice when the
  * e5-copilot-quality-page flag is OFF. Fluent v9 + Loom tokens only; badge rows
  * wrap (minWidth:0 + flexWrap) so nothing overlaps at narrow widths.
@@ -228,7 +228,7 @@ export function CopilotQualityPanel() {
           <Tooltip
             content={data.evaluatorConfigured
               ? 'Fire an on-demand evaluation across every surface (the E2 HTTP trigger).'
-              : 'Configure LOOM_COPILOT_EVALUATOR_URL to enable on-demand runs.'}
+              : 'Deploy the copilot-evaluator job (LOOM_COPILOT_EVALUATOR_JOB_ID) to enable on-demand runs.'}
             relationship="label">
             <Button appearance="primary" icon={runNow.isPending ? <Spinner size="tiny" /> : <Play20Regular />}
               disabled={!data.evaluatorConfigured || runNow.isPending}
@@ -256,8 +256,8 @@ export function CopilotQualityPanel() {
           icon={<DocumentSearch24Regular />}
           title="No Copilot evaluations yet"
           body={data.evaluatorConfigured
-            ? 'The copilot-evaluator Function is wired but has not written any eval-run docs yet. Click "Run now" to fire an on-demand evaluation, or wait for the nightly / per-roll run. Scores appear here once the run finishes writing to Cosmos.'
-            : 'Deploy the copilot-evaluator Function (modules/admin-plane/copilot-evaluator-function.bicep, default-ON) and set LOOM_COPILOT_EVALUATOR_URL, then run the golden eval sets. Retrieval hit-rate / MRR and LLM-judge grounding will trend here per surface.'}
+            ? 'The copilot-evaluator job is wired but has not written any eval-run docs yet. Click "Run now" to start an on-demand execution, or wait for the nightly run. Scores appear here once the run finishes writing to Cosmos.'
+            : 'Deploy the copilot-evaluator Container App Job (modules/admin-plane/copilot-evaluator-job.bicep, default-ON) so LOOM_COPILOT_EVALUATOR_JOB_ID is wired, then run the golden eval sets. Retrieval hit-rate / MRR and LLM-judge grounding will trend here per surface.'}
           primaryAction={data.evaluatorConfigured
             ? { label: 'Run now', onClick: () => runNow.mutate(allSurfaces) }
             : { label: 'Gate registry', href: '/admin/gates' }}

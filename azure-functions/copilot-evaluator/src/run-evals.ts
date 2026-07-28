@@ -1,5 +1,7 @@
 /**
- * copilot-evaluator — the run orchestrator shared by the timer + HTTP triggers.
+ * copilot-evaluator — the run orchestrator the Container App Job entrypoint
+ * (`main.ts`) drives, for both the scheduled nightly pass and an on-demand
+ * "Run now" execution started from the admin Copilot-quality page.
  *
  * For each requested surface it loads the E1 golden set, and per question:
  *   1. POSTs the console eval-probe (REAL searchDocs + one REAL Copilot turn —
@@ -12,10 +14,10 @@
  *   5. writes the per-question `eval-result` (ttl 180d) and the per-surface
  *      `eval-run` rollup to Cosmos `loom-copilot-evals`.
  *
- * Every external dependency is a REAL call under the Function's managed
+ * Every external dependency is a REAL call under the job's managed
  * identity; missing config → an honest early-exit log (no-vaporware).
  */
-import type { InvocationContext } from '@azure/functions';
+import type { RunLogger } from './run-logger';
 import {
   missingConfig,
   evalEnabled,
@@ -70,7 +72,7 @@ export interface RunSummary {
 export async function runEvals(
   trigger: 'corpus' | 'nightly' | 'manual',
   surfaces: string[] | undefined,
-  context: InvocationContext,
+  context: RunLogger,
 ): Promise<RunSummary> {
   const env = process.env;
   if (!evalEnabled(env)) {
@@ -233,7 +235,7 @@ export interface SearchRunSummary {
 export async function runSearchEvals(
   trigger: 'corpus' | 'nightly' | 'manual',
   domains: string[] | undefined,
-  context: InvocationContext,
+  context: RunLogger,
 ): Promise<SearchRunSummary> {
   const env = process.env;
   if (!evalEnabled(env)) {
@@ -342,7 +344,7 @@ export interface TierRunSummary {
  */
 export async function runTierEvals(
   trigger: 'corpus' | 'nightly' | 'manual',
-  context: InvocationContext,
+  context: RunLogger,
 ): Promise<TierRunSummary> {
   const env = process.env;
   if (!evalEnabled(env)) {

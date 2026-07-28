@@ -10,7 +10,7 @@
  * trigger.
  *
  * States mirror the answer-quality panel: skeleton, guided EmptyState naming the
- * unblocking step, HonestGate + Fix-it when the evaluator Function is unwired,
+ * unblocking step, HonestGate + Fix-it when the evaluator job is unwired,
  * clean first-open. Fluent v9 + Loom tokens; badge rows wrap.
  */
 import { useState } from 'react';
@@ -137,7 +137,7 @@ export function SearchQualityPanel() {
         </div>
         <div className={styles.badges}>
           <Button appearance="secondary" icon={<ArrowSync20Regular />} onClick={() => q.refetch()} disabled={q.isFetching}>Refresh</Button>
-          <Tooltip content={data.evaluatorConfigured ? 'Run the golden search queries through the real /catalog search.' : 'Configure LOOM_COPILOT_EVALUATOR_URL to enable on-demand runs.'} relationship="label">
+          <Tooltip content={data.evaluatorConfigured ? 'Run the golden search queries through the real /catalog search.' : 'Deploy the copilot-evaluator job (LOOM_COPILOT_EVALUATOR_JOB_ID) to enable on-demand runs.'} relationship="label">
             <Button appearance="primary" icon={runNow.isPending ? <Spinner size="tiny" /> : <Play20Regular />}
               disabled={!data.evaluatorConfigured || runNow.isPending} onClick={() => runNow.mutate(allDomains)}>
               Run search evals
@@ -155,7 +155,7 @@ export function SearchQualityPanel() {
           title="No search relevance runs yet"
           body={data.evaluatorConfigured
             ? 'The evaluator is wired but has no search-run docs yet. Click "Run search evals" (or wait for the nightly run) to score the golden /catalog queries against real search results. Requires LOOM_EVAL_SEARCH_PRINCIPAL_OID (the demo/admin principal whose workspaces hold the golden items).'
-            : 'Deploy the copilot-evaluator Function and set LOOM_COPILOT_EVALUATOR_URL + LOOM_EVAL_SEARCH_PRINCIPAL_OID, then run the golden search sets. Hit-rate@k / NDCG per domain will trend here.'}
+            : 'Deploy the copilot-evaluator Container App Job (LOOM_COPILOT_EVALUATOR_JOB_ID) and set LOOM_EVAL_SEARCH_PRINCIPAL_OID, then run the golden search sets. Hit-rate@k / NDCG per domain will trend here.'}
           primaryAction={data.evaluatorConfigured ? { label: 'Run search evals', onClick: () => runNow.mutate(allDomains) } : { label: 'Gate registry', href: '/admin/gates' }}
         />
       ) : (
