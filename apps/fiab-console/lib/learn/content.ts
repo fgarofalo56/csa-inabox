@@ -921,33 +921,6 @@ export const USE_CASES: ReadonlyArray<UseCase> = [
   { id: 'ind-energy-utilities', title: 'Energy & Utilities Blueprint', summary: 'Grid telemetry, smart-meter, and outage analytics.', category: 'Industry', visualType: 'kql-database', docPath: 'industries/energy-utilities' },
   { id: 'ind-telco', title: 'Telecommunications Blueprint', summary: 'Network performance, churn, and usage analytics for telco.', category: 'Industry', visualType: 'eventstream', docPath: 'industries/telco' },
   { id: 'ind-life-sciences', title: 'Life Sciences & Genomics Blueprint', summary: 'Genomics, clinical-trial, and research analytics for life sciences.', category: 'Industry', visualType: 'notebook', docPath: 'industries/life-sciences' },
-
-  // ── App deep dives (docs/fiab/tutorials/apps/) — loom-apex D4 ─────────────
-  // From-scratch → working walkthroughs for the catalog apps that previously
-  // had NO Gallery card and no tutorial (help-center audit §4: 15 uncovered).
-  // Each docPath is an authored deep dive; each appId is registered in BOTH the
-  // bundle REGISTRY and CATALOG_META so the card's "Install live example"
-  // button resolves (enforced by use-case-install-wiring.test.ts).
-  { id: 'app-rag-builder', title: 'RAG Builder', summary: 'Stand up a hybrid AI Search index, a grounded prompt flow, and a 7-metric evaluation suite — from install to a cited answer.', category: 'App deep dives', visualType: 'ai-search-index', docPath: 'fiab/tutorials/apps/rag-builder', appId: 'app-rag-builder' },
-  { id: 'app-fedramp-tracker', title: 'FedRAMP Compliance Tracker', summary: 'A 13-family NIST 800-53 scorecard with worst-child rollup plus an ADX compliance-events dashboard.', category: 'App deep dives', visualType: 'scorecard', docPath: 'fiab/tutorials/apps/fedramp-tracker', appId: 'app-fedramp-tracker' },
-  { id: 'app-finops-cost', title: 'FinOps Cost Optimizer', summary: 'A seeded cost lakehouse, a semantic model, and a 5-page executive report that renders real spend on first open.', category: 'App deep dives', visualType: 'report', docPath: 'fiab/tutorials/apps/finops-cost', appId: 'app-finops-cost' },
-  { id: 'app-data-steward', title: 'Data Steward Console', summary: 'Four Purview data products, a 17-term glossary, and the Promoted → Certified steward sign-off workflow.', category: 'App deep dives', visualType: 'data-product', docPath: 'fiab/tutorials/apps/data-steward', appId: 'app-data-steward' },
-  { id: 'app-pipeline-designer', title: 'Pipeline Designer', summary: 'The same medallion ETL on three orchestrators — Synapse, ADF, and Databricks — feeding one gold star schema.', category: 'App deep dives', visualType: 'synapse-pipeline', docPath: 'fiab/tutorials/apps/pipeline-designer', appId: 'app-pipeline-designer' },
-  { id: 'app-lakehouse-inspector', title: 'Lakehouse Inspector', summary: 'A bronze/silver/gold Delta lakehouse with 10 seeded tables, a self-contained shortcut, and a profiling notebook.', category: 'App deep dives', visualType: 'lakehouse', docPath: 'fiab/tutorials/apps/lakehouse-inspector', appId: 'app-lakehouse-inspector' },
-  { id: 'app-fabric-mirror-onboard', title: 'Mirror Onboarding', summary: 'Replicate an Azure SQL source into ADLS Bronze via ADF CDC (Azure-native default), then verify row-count parity.', category: 'App deep dives', visualType: 'mirrored-database', docPath: 'fiab/tutorials/apps/fabric-mirror-onboard', appId: 'app-fabric-mirror-onboard' },
-  { id: 'app-workspace-monitoring', title: 'Workspace Monitoring', summary: 'A read-only ADX telemetry database fed by Azure Monitor diagnostic settings, with a six-tile dashboard.', category: 'App deep dives', visualType: 'workspace-monitor', docPath: 'fiab/tutorials/apps/workspace-monitoring', appId: 'app-workspace-monitoring' },
-
-  // ── Supercharge notebook packs (117 notebooks across 7 apps) ──────────────
-  // One shared deep dive: pack shape + ONE representative bronze→silver→gold
-  // chain walked end to end + an index of the rest. Each pack gets its own card
-  // so every catalog app is installable from the Gallery.
-  { id: 'app-supercharge-bronze', title: 'Supercharge — Bronze Ingestion', summary: '28 raw-ingestion Spark notebooks landing ADLS Gen2 Bronze Delta. Part of the 117-notebook Azure-native conversion.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-bronze' },
-  { id: 'app-supercharge-silver', title: 'Supercharge — Silver Cleanse', summary: '28 cleanse/conform Spark notebooks over ADLS Gen2 Delta, including late-arriving backfill and GDPR cascading delete.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-silver' },
-  { id: 'app-supercharge-gold', title: 'Supercharge — Gold Aggregates', summary: '34 business-aggregate and dimension notebooks — player 360, fraud scoring, OEE, MDM golden record, SCD type-2.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-gold' },
-  { id: 'app-supercharge-ml', title: 'Supercharge — ML & MLOps', summary: '8 ML notebooks — churn, fraud, AutoML, model registry, drift, feature store, RAG-over-ADX, responsible-AI audit.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-ml' },
-  { id: 'app-supercharge-streaming', title: 'Supercharge — Streaming & CDC', summary: '9 streaming/CDC notebooks — SQL Server, Oracle, DB2, Cosmos, Kafka, IoT Hub — on Event Hubs + Structured Streaming.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-streaming' },
-  { id: 'app-supercharge-utils', title: 'Supercharge — Pipeline Utilities', summary: '3 shared Spark utility notebooks (Bronze helpers, lineage, execution log) attachable to any medallion notebook via %run.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-utils' },
-  { id: 'app-supercharge-guide', title: "Supercharge — Hitchhiker's Guide", summary: '7 platform recipes — connectivity, lakehouse ops, security, governance, automation, troubleshooting — rewritten Azure-native.', category: 'Supercharge notebooks', visualType: 'notebook', docPath: 'fiab/tutorials/apps/supercharge-medallion', appId: 'app-supercharge-guide' },
 ];
 
 export interface LearnTopic {
