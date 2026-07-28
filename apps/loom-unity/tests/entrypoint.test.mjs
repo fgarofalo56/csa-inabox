@@ -80,7 +80,16 @@ test('LU-2: the sovereign authority host flows into every derived Entra URL (Gov
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.us\/tenant-guid\/v2\.0/);
-  assert.doesNotMatch(r.stdout, /login\.microsoftonline\.com/);
+  // Substring-ABSENCE assertion, deliberately not a regex: CodeQL's
+  // js/regex/missing-regexp-anchor flags an unanchored host pattern because an
+  // unanchored regex used to VALIDATE a URL is a real hole. Here the intent is
+  // the opposite - assert the commercial endpoint appears NOWHERE in the Gov
+  // config - so anchoring would weaken the check. A plain includes() states
+  // that intent unambiguously to both the analyzer and the next reader.
+  assert.ok(
+    !r.stdout.includes('login.microsoftonline.com'),
+    'Gov render must never emit the commercial Entra endpoint',
+  );
 });
 
 test('LU-2: authorization=enable with no pinned issuer FAILS CLOSED (never boots half-secured)', { skip: !shAvailable }, () => {
