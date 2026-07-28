@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1657 |
-| Public (no session) | 116 |
-| Session-only | 570 |
+| Total routes | 1659 |
+| Public (no session) | 117 |
+| Session-only | 566 |
 | Owner-scoped | 696 |
-| Admin | 275 |
-| Gated (backend config) | 530 |
-| Areas | 119 |
+| Admin | 280 |
+| Gated (backend config) | 531 |
+| Areas | 120 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -686,6 +686,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `debug/cookie/route.ts` | GET | public |  | — |
+
+## delta-sharing
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `delta-sharing/[...path]/route.ts` | GET POST | public | ● | Cosmos |
 
 ## demo
 
@@ -1806,13 +1812,14 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `marketplace/products/[id]/subscribe/route.ts` | POST | owner-scoped |  | — |
 | `marketplace/products/route.ts` | GET POST | owner-scoped |  | — |
 | `marketplace/sharing/catalogs/route.ts` | GET DELETE | session-only |  | — |
+| `marketplace/sharing/manifest/route.ts` | GET | admin |  | — |
 | `marketplace/sharing/providers/[name]/route.ts` | GET POST DELETE | session-only |  | — |
 | `marketplace/sharing/providers/route.ts` | GET POST | session-only | ● | — |
 | `marketplace/sharing/query/route.ts` | POST | session-only | ● | Databricks |
-| `marketplace/sharing/recipients/[name]/route.ts` | GET DELETE | session-only |  | — |
-| `marketplace/sharing/recipients/route.ts` | GET POST | session-only |  | — |
-| `marketplace/sharing/shares/[name]/route.ts` | GET PATCH DELETE | session-only |  | — |
-| `marketplace/sharing/shares/route.ts` | GET POST | session-only |  | — |
+| `marketplace/sharing/recipients/[name]/route.ts` | GET PATCH DELETE | admin |  | — |
+| `marketplace/sharing/recipients/route.ts` | GET POST | admin |  | — |
+| `marketplace/sharing/shares/[name]/route.ts` | GET PATCH DELETE | admin |  | — |
+| `marketplace/sharing/shares/route.ts` | GET POST | admin |  | — |
 | `marketplace/subscriptions/[sid]/keys/regenerate/route.ts` | POST | session-only |  | APIM |
 | `marketplace/subscriptions/[sid]/keys/route.ts` | POST | session-only |  | APIM |
 | `marketplace/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only |  | APIM |
