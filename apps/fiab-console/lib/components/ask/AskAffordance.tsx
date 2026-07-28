@@ -257,7 +257,7 @@ export function AskAffordance({
   const [open, setOpen] = useState(alwaysOpen);
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
-  const [gate, setGate] = useState<{ error: string; hint?: string; missing?: string } | null>(null);
+  const [gate, setGate] = useState<{ error: string; hint?: string; missing?: string; transport?: boolean } | null>(null);
   const [turns, setTurns] = useState<Array<{ question: string; answer: AskAnswer | null }>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
@@ -275,24 +275,38 @@ export function AskAffordance({
     setTurns((prev) => [...prev, { question: q, answer: null }]);
     setQuestion('');
 
-    const t0 = Date.now();
-    const res = await postAsk(q, surfaceKind, itemId, itemType, context);
-    const durationMs = Date.now() - t0;
+    // A3 (silent-failure fix): postAsk -> clientFetch REJECTS on transport
+    // failure (20 s timeout, network). Un-tried, that left `loading` stuck
+    // true (disabled input + ghost "Thinking…" turn) and fired an unhandled
+    // rejection. Catch it into a visible error and ALWAYS release the spinner.
+    try {
+      const t0 = Date.now();
+      const res = await postAsk(q, surfaceKind, itemId, itemType, context);
+      const durationMs = Date.now() - t0;
 
-    if (!res.ok) {
-      setGate({ error: res.error ?? 'Unknown error', hint: res.hint, missing: res.missing });
+      if (!res.ok) {
+        setGate({ error: res.error ?? 'Unknown error', hint: res.hint, missing: res.missing });
+        setTurns((prev) => prev.filter((_, i) => i !== idx));
+      } else {
+        const answer: AskAnswer = {
+          answer: res.answer ?? '',
+          tools: res.tools as VizTool[] | undefined,
+          usage: res.usage,
+          model: res.model,
+          durationMs,
+        };
+        setTurns((prev) => prev.map((t, i) => i === idx ? { ...t, answer } : t));
+      }
+    } catch (err) {
+      setGate({
+        error: err instanceof Error && err.message ? err.message : 'The request failed before the Ask service answered.',
+        hint: 'Transport failure (network or timeout) — your question was not lost; try sending it again.',
+        transport: true,
+      });
       setTurns((prev) => prev.filter((_, i) => i !== idx));
-    } else {
-      const answer: AskAnswer = {
-        answer: res.answer ?? '',
-        tools: res.tools as VizTool[] | undefined,
-        usage: res.usage,
-        model: res.model,
-        durationMs,
-      };
-      setTurns((prev) => prev.map((t, i) => i === idx ? { ...t, answer } : t));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
 
     // Scroll history to bottom
     requestAnimationFrame(() => {
@@ -387,11 +401,11 @@ export function AskAffordance({
         )}
       </div>
 
-      {/* Gate — honest AOAI-not-configured error */}
+      {/* Gate — honest AOAI-not-configured warning, or a transport-failure error */}
       {gate && (
-        <MessageBar intent="warning" layout="multiline">
+        <MessageBar intent={gate.transport ? 'error' : 'warning'} layout="multiline">
           <MessageBarBody>
-            <MessageBarTitle>AI not configured</MessageBarTitle>
+            <MessageBarTitle>{gate.transport ? 'Ask request failed' : 'AI not configured'}</MessageBarTitle>
             {gate.error}
             {gate.hint && (
               <span style={{ display: 'block', marginTop: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 }}>
