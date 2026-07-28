@@ -22,7 +22,8 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { shorthands,
+import {
+  shorthands,
   Dialog,
   DialogTrigger,
   DialogSurface,
@@ -128,31 +129,41 @@ function defaultChoiceValue(choices?: CreateConfigChoice[]): string {
 
 const useStyles = makeStyles({
   surface: { maxWidth: '960px', width: '90vw' },
-  layout: { display: 'grid', gridTemplateColumns: '200px 1fr', gap: '16px', minHeight: '480px' },
+  layout: {
+    display: 'grid',
+    gridTemplateColumns: '200px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    minHeight: '480px',
+  },
   catList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
-    paddingRight: '8px',
+    gap: tokens.spacingVerticalXXS,
+    borderRight: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    paddingRight: tokens.spacingHorizontalS,
   },
   catItem: {
     textAlign: 'left',
-    padding: '8px 12px',
-    borderRadius: '4px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium,
     background: 'transparent',
     border: 'none',
     cursor: 'pointer',
     color: tokens.colorNeutralForeground1,
-    fontSize: '14px',
+    fontSize: tokens.fontSizeBase300,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
   catItemActive: {
     backgroundColor: tokens.colorBrandBackground2,
     color: tokens.colorBrandForeground1,
-    fontWeight: '600',
+    fontWeight: tokens.fontWeightSemibold,
   },
-  rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
+  rightCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    minHeight: 0,
+  },
   searchRow: {
     display: 'flex',
     alignItems: 'center',
@@ -164,18 +175,23 @@ const useStyles = makeStyles({
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: '12px',
+    gap: tokens.spacingHorizontalM,
     overflowY: 'auto',
-    paddingRight: '4px',
+    paddingRight: tokens.spacingHorizontalXS,
   },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px',
-    padding: '12px',
+    // griffel types the border LONGHANDS as `undefined` (they must go through
+    // `shorthands.*`), so the resting border stays the `border` shorthand and
+    // the :hover accent uses `shorthands.borderColor` — no shorthand/longhand
+    // mixing, and every value is a token.
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingHorizontalM,
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
+    gap: tokens.spacingVerticalSNudge,
+    minWidth: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     // Native <button> text otherwise inherits UA ButtonText (near-black, not
     // theme-aware) — Fluent Text presets set no color of their own.
@@ -185,10 +201,22 @@ const useStyles = makeStyles({
       boxShadow: tokens.shadow4,
     },
   },
-  cardHeader: { display: 'flex', alignItems: 'center', gap: '6px' },
+  cardHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalSNudge,
+    minWidth: 0,
+  },
+  cardCategory: { color: tokens.colorNeutralForeground3 },
   // flexWrap + minWidth:0 so Preview/Core/status badges wrap instead of
   // colliding on narrow item cards (ux-baseline: badges never overlap).
-  badges: { display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', minWidth: 0 },
+  badges: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalXS,
+    flexWrap: 'wrap',
+    minWidth: 0,
+  },
   // WAVE C — configure step (Name + per-axis RadioGroup). Loom tokens only.
   configPane: {
     display: 'flex',
@@ -660,7 +688,7 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
                         <Subtitle2>{i.displayName}</Subtitle2>
                       </div>
                       <Body1>{i.description}</Body1>
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{i.category}</Caption1>
+                      <Caption1 className={styles.cardCategory}>{i.category}</Caption1>
                       <div className={styles.badges}>
                         {i.preview && <Badge appearance="outline" color="warning">Preview</Badge>}
                         {isLabs(i) && <Badge appearance="tint" color="brand">Labs</Badge>}
