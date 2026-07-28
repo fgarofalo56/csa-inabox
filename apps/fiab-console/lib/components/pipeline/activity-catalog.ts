@@ -169,10 +169,6 @@ export interface ActivityTypeDef {
   type: string;
   /** Auto-name prefix when stamped onto the canvas. */
   namePrefix: string;
-  /** Default tile background colour. */
-  color: string;
-  /** Foreground colour (white/black for contrast). */
-  fg: string;
   /**
    * Whether the activity can actually execute end-to-end against the
    * deployed ADF / Synapse backing today. `false` means save+validate
@@ -191,7 +187,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Copy', label: 'Copy data',
     description: 'Copy data between any supported source and sink.',
     category: 'move-transform', type: 'Copy', namePrefix: 'Copy',
-    color: '#0078d4', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Copy', dependsOn: [],
       typeProperties: {
@@ -214,7 +210,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       'On the Azure-native path Loom publishes a WranglingDataFlow resource and ' +
       'runs it — no Fabric capacity or workspace required.',
     category: 'move-transform', type: 'ExecuteWranglingDataflow', namePrefix: 'Dataflow',
-    color: '#7719aa', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'ExecuteWranglingDataflow', dependsOn: [],
       typeProperties: {
@@ -228,7 +224,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'ExecuteDataFlow', label: 'Mapping data flow',
     description: 'Execute a published mapping data flow on an integration runtime.',
     category: 'move-transform', type: 'ExecuteDataFlow', namePrefix: 'DataFlow',
-    color: '#7719aa', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'ExecuteDataFlow', dependsOn: [],
       typeProperties: {
@@ -242,7 +238,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Lookup', label: 'Lookup',
     description: 'Read a single row or a row set from a dataset for downstream activities.',
     category: 'move-transform', type: 'Lookup', namePrefix: 'Lookup',
-    color: '#5c2d91', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Lookup', dependsOn: [],
       typeProperties: {
@@ -256,7 +252,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'GetMetadata', label: 'Get metadata',
     description: 'Retrieve metadata (existence, size, item count, structure) of a dataset.',
     category: 'move-transform', type: 'GetMetadata', namePrefix: 'GetMetadata',
-    color: '#5c2d91', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'GetMetadata', dependsOn: [],
       typeProperties: {
@@ -269,7 +265,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Delete', label: 'Delete data',
     description: 'Delete files or folders from a store after processing.',
     category: 'move-transform', type: 'Delete', namePrefix: 'Delete',
-    color: '#a4262c', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Delete', dependsOn: [],
       typeProperties: {
@@ -285,7 +281,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Notebook', label: 'Notebook',
     description: 'Run a Fabric / Synapse / Databricks notebook.',
     category: 'orchestration', type: 'DatabricksNotebook', namePrefix: 'Notebook',
-    color: '#0078d4', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'DatabricksNotebook', dependsOn: [],
       typeProperties: { notebookPath: '', baseParameters: {} },
@@ -296,7 +292,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'SparkJob', label: 'Spark Job Definition',
     description: 'Run a Synapse Spark batch job (JAR or .py).',
     category: 'orchestration', type: 'SynapseSparkJobDefinitionActivity', namePrefix: 'SparkJob',
-    color: '#0a4f7a', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'SynapseSparkJobDefinitionActivity', dependsOn: [],
       typeProperties: {
@@ -308,7 +304,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'ExecutePipeline', label: 'Invoke pipeline',
     description: 'Invoke another pipeline from this one (Execute Pipeline activity).',
     category: 'orchestration', type: 'ExecutePipeline', namePrefix: 'InvokePipeline',
-    color: '#0078d4', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'ExecutePipeline', dependsOn: [],
       typeProperties: {
@@ -322,7 +318,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Script', label: 'Script',
     description: 'Run inline SQL / Hive / Pig / U-SQL against a linked service.',
     category: 'orchestration', type: 'Script', namePrefix: 'Script',
-    color: '#3aaaaa', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Script', dependsOn: [],
       typeProperties: {
@@ -338,7 +334,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'StoredProcedure', label: 'Stored procedure',
     description: 'Invoke a SQL stored procedure against a linked SQL server.',
     category: 'orchestration', type: 'SqlServerStoredProcedure', namePrefix: 'StoredProc',
-    color: '#3aaaaa', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'SqlServerStoredProcedure', dependsOn: [],
       typeProperties: { storedProcedureName: '', storedProcedureParameters: {} },
@@ -363,7 +359,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       'Run a command on an Azure Batch pool (Custom activity) — bulk parallel / ' +
       'HPC fan-out across a managed VM fleet. Azure-native, no Fabric.',
     category: 'orchestration', type: 'Custom', namePrefix: 'BatchExecute',
-    color: '#8661c5', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Custom', dependsOn: [],
       linkedServiceName: { referenceName: batchLinkedService(), type: 'LinkedServiceReference' },
@@ -390,7 +386,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'HDInsightHive', label: 'HDInsight Hive',
     description: 'Execute a Hive query (.hql) on an HDInsight cluster.',
     category: 'orchestration', type: 'HDInsightHive', namePrefix: 'HiveActivity',
-    color: '#c05c1f', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'HDInsightHive', dependsOn: [],
       linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
@@ -407,7 +403,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'HDInsightSpark', label: 'HDInsight Spark',
     description: 'Run a Spark program (.py or .jar) on an HDInsight cluster.',
     category: 'orchestration', type: 'HDInsightSpark', namePrefix: 'SparkActivity',
-    color: '#c05c1f', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'HDInsightSpark', dependsOn: [],
       linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
@@ -424,7 +420,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'HDInsightMapReduce', label: 'HDInsight MapReduce',
     description: 'Run a MapReduce JAR on an HDInsight cluster.',
     category: 'orchestration', type: 'HDInsightMapReduce', namePrefix: 'MapReduceActivity',
-    color: '#c05c1f', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'HDInsightMapReduce', dependsOn: [],
       linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
@@ -442,7 +438,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'HDInsightStreaming', label: 'HDInsight Streaming',
     description: 'Execute a Hadoop Streaming job (mapper + reducer) on an HDInsight cluster.',
     category: 'orchestration', type: 'HDInsightStreaming', namePrefix: 'StreamingActivity',
-    color: '#c05c1f', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'HDInsightStreaming', dependsOn: [],
       linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
@@ -464,7 +460,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'HDInsightPig', label: 'HDInsight Pig',
     description: 'Execute a Pig Latin script (.pig) on an HDInsight cluster.',
     category: 'orchestration', type: 'HDInsightPig', namePrefix: 'PigActivity',
-    color: '#c05c1f', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'HDInsightPig', dependsOn: [],
       linkedServiceName: { referenceName: hdiCluster(), type: 'LinkedServiceReference' },
@@ -486,7 +482,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'SynapseNotebook', label: 'Notebook (Synapse)',
     description: 'Run an Azure Synapse Analytics Spark notebook on a big-data pool, with parameters.',
     category: 'orchestration', type: 'SynapseNotebook', namePrefix: 'SynapseNotebook',
-    color: '#0a4f7a', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'SynapseNotebook', dependsOn: [],
       typeProperties: {
@@ -499,7 +495,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'DatabricksSparkJar', label: 'Jar (Databricks)',
     description: 'Run a JAR main class on an Azure Databricks cluster.',
     category: 'orchestration', type: 'DatabricksSparkJar', namePrefix: 'DatabricksJar',
-    color: '#d04a02', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'DatabricksSparkJar', dependsOn: [],
       typeProperties: { mainClassName: '', parameters: [], libraries: [] },
@@ -510,7 +506,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'DatabricksSparkPython', label: 'Python (Databricks)',
     description: 'Run a Python file on an Azure Databricks cluster (DBFS path), passing parameters.',
     category: 'orchestration', type: 'DatabricksSparkPython', namePrefix: 'DatabricksPython',
-    color: '#d04a02', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'DatabricksSparkPython', dependsOn: [],
       typeProperties: { pythonFile: '', parameters: [], libraries: [] },
@@ -526,7 +522,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'AzureFunction', label: 'Azure Function',
     description: 'Call an Azure Function in a Function App via its Azure Function linked service.',
     category: 'orchestration', type: 'AzureFunctionActivity', namePrefix: 'AzureFunction',
-    color: '#0062ad', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'AzureFunctionActivity', dependsOn: [],
       typeProperties: { functionName: '', method: 'POST', headers: {} },
@@ -537,7 +533,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'AzureMLExecutePipeline', label: 'ML Execute Pipeline',
     description: 'Run a published Azure Machine Learning pipeline via an Azure ML linked service.',
     category: 'orchestration', type: 'AzureMLExecutePipeline', namePrefix: 'MLExecutePipeline',
-    color: '#5c2d91', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'AzureMLExecutePipeline', dependsOn: [],
       typeProperties: { mlPipelineId: '' },
@@ -548,7 +544,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'AzureMLBatchExecution', label: 'ML Batch Execution',
     description: 'Invoke an ML Studio (classic) batch execution web service.',
     category: 'orchestration', type: 'AzureMLBatchExecution', namePrefix: 'MLBatchExecution',
-    color: '#5c2d91', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'AzureMLBatchExecution', dependsOn: [],
       typeProperties: { webServiceInputs: {}, webServiceOutputs: {}, globalParameters: {} },
@@ -559,7 +555,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'DataLakeAnalyticsUSQL', label: 'U-SQL (Data Lake Analytics)',
     description: 'Run a U-SQL script on an Azure Data Lake Analytics account.',
     category: 'orchestration', type: 'DataLakeAnalyticsU-SQL', namePrefix: 'USQLActivity',
-    color: '#3aaaaa', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'DataLakeAnalyticsU-SQL', dependsOn: [],
       typeProperties: {
@@ -575,7 +571,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Web', label: 'Web',
     description: 'Invoke a custom REST endpoint (GET/POST/PUT/DELETE).',
     category: 'control-flow', type: 'WebActivity', namePrefix: 'Web',
-    color: '#107c10', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'WebActivity', dependsOn: [],
       typeProperties: { url: 'https://example.com', method: 'GET', headers: {} },
@@ -585,7 +581,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Webhook', label: 'Webhook',
     description: 'Call an endpoint and pause until a callback URI signals completion.',
     category: 'control-flow', type: 'WebHook', namePrefix: 'Webhook',
-    color: '#107c10', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'WebHook', dependsOn: [],
       typeProperties: { url: 'https://example.com/hook', method: 'POST', timeout: '00:10:00', headers: {} },
@@ -608,7 +604,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       'approval-logicapp.bicep deployed and LOOM_APPROVAL_LOGIC_APP_NAME set; ' +
       'fetch the trigger URL in the Settings tab.',
     category: 'control-flow', type: 'WebHook', namePrefix: 'Approval',
-    color: '#0062ad', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'WebHook', dependsOn: [],
       typeProperties: {
@@ -633,7 +629,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Fail', label: 'Fail',
     description: 'Stop the pipeline with a custom error message and error code.',
     category: 'control-flow', type: 'Fail', namePrefix: 'Fail',
-    color: '#a4262c', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Fail', dependsOn: [],
       typeProperties: { message: 'Pipeline failed.', errorCode: '1' },
@@ -643,7 +639,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Validation', label: 'Validation',
     description: 'Wait until a dataset exists / meets a condition before continuing.',
     category: 'control-flow', type: 'Validation', namePrefix: 'Validation',
-    color: '#bd7800', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Validation', dependsOn: [],
       typeProperties: {
@@ -657,7 +653,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Office365Outlook', label: 'Office 365 Outlook',
     description: 'Send an email via an Office 365 connection.',
     category: 'control-flow', type: 'Office365OutlookSendEmail', namePrefix: 'Email',
-    color: '#0062ad', fg: '#fff', runnable: false,
+    runnable: false,
     remediation: 'Office 365 Outlook send-email is a Fabric pipeline activity. ADF backing has no native equivalent — use Web activity against Microsoft Graph instead.',
     build: (name) => ({
       name, type: 'Office365OutlookSendEmail', dependsOn: [],
@@ -668,7 +664,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'SetVariable', label: 'Set variable',
     description: 'Set a pipeline-scoped variable.',
     category: 'control-flow', type: 'SetVariable', namePrefix: 'SetVar',
-    color: '#444', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'SetVariable', dependsOn: [],
       typeProperties: { variableName: '', value: '' },
@@ -678,7 +674,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'AppendVariable', label: 'Append variable',
     description: 'Append a value to a pipeline array variable.',
     category: 'control-flow', type: 'AppendVariable', namePrefix: 'AppendVar',
-    color: '#444', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'AppendVariable', dependsOn: [],
       typeProperties: { variableName: '', value: '' },
@@ -688,7 +684,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Filter', label: 'Filter',
     description: 'Apply a filter expression to an input array.',
     category: 'control-flow', type: 'Filter', namePrefix: 'Filter',
-    color: '#bd7800', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Filter', dependsOn: [],
       typeProperties: {
@@ -701,7 +697,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'ForEach', label: 'ForEach',
     description: 'Iterate over an array, running child activities for each item.',
     category: 'control-flow', type: 'ForEach', namePrefix: 'ForEach',
-    color: '#dca900', fg: '#000', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'ForEach', dependsOn: [],
       typeProperties: {
@@ -716,7 +712,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'IfCondition', label: 'If condition',
     description: 'Branch the pipeline on a boolean expression.',
     category: 'control-flow', type: 'IfCondition', namePrefix: 'If',
-    color: '#bd7800', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'IfCondition', dependsOn: [],
       typeProperties: {
@@ -730,7 +726,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Switch', label: 'Switch',
     description: 'Branch the pipeline to one of N cases.',
     category: 'control-flow', type: 'Switch', namePrefix: 'Switch',
-    color: '#bd7800', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Switch', dependsOn: [],
       typeProperties: {
@@ -744,7 +740,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Until', label: 'Until',
     description: 'Loop until an expression evaluates true.',
     category: 'control-flow', type: 'Until', namePrefix: 'Until',
-    color: '#bd7800', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Until', dependsOn: [],
       typeProperties: {
@@ -758,7 +754,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'Wait', label: 'Wait',
     description: 'Pause for a fixed number of seconds.',
     category: 'control-flow', type: 'Wait', namePrefix: 'Wait',
-    color: '#666', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => ({
       name, type: 'Wait', dependsOn: [],
       typeProperties: { waitTimeInSeconds: 5 },
@@ -778,7 +774,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'DocumentIntelligenceAnalyze', label: 'Document Intelligence',
     description: 'Extract layout / prebuilt fields (OCR, tables, key-value pairs) from a document with Azure AI Document Intelligence. Requires LOOM_DOCINTEL_ENDPOINT.',
     category: 'ai-enrich', type: 'WebActivity', namePrefix: 'DocIntel',
-    color: '#7c3aed', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => aiEnrichWebActivity(
       name, 'doc-intel', 'DocumentIntelligenceAnalyze',
       { urlSource: '' },
@@ -789,7 +785,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'VisionAnalyzeImage', label: 'Vision analyze image',
     description: 'Analyze an image with Azure AI Vision — caption, OCR read, tags, objects, people. Requires LOOM_VISION_ENDPOINT.',
     category: 'ai-enrich', type: 'WebActivity', namePrefix: 'VisionAnalyze',
-    color: '#7c3aed', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => aiEnrichWebActivity(
       name, 'vision', 'VisionAnalyzeImage',
       { url: '' },
@@ -799,7 +795,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'LanguageAnalyzeText', label: 'Language analyze text',
     description: 'Enrich free text with Azure AI Language — PII detection, sentiment, entity recognition, key phrases. Requires LOOM_LANGUAGE_ENDPOINT.',
     category: 'ai-enrich', type: 'WebActivity', namePrefix: 'LanguageAnalyze',
-    color: '#7c3aed', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => aiEnrichWebActivity(
       name, 'language', 'LanguageAnalyzeText',
       { kind: 'PiiEntityRecognition', analysisInput: { documents: [{ id: '1', language: 'en', text: '' }] } },
@@ -809,7 +805,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'TranslateText', label: 'Translate text',
     description: 'Translate free text into one or more target languages with Azure AI Translator. Requires LOOM_TRANSLATOR_ENDPOINT.',
     category: 'ai-enrich', type: 'WebActivity', namePrefix: 'Translate',
-    color: '#7c3aed', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => aiEnrichWebActivity(
       name, 'translator', 'TranslateText',
       [{ Text: '' }] as unknown as Record<string, unknown>,
@@ -820,7 +816,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     key: 'ModerateText', label: 'Moderate text (Content Safety)',
     description: 'Screen a free-text column for harmful content (Hate / SelfHarm / Sexual / Violence) with Azure AI Content Safety before it lands in silver/gold. Requires LOOM_CONTENT_SAFETY_ENDPOINT.',
     category: 'ai-enrich', type: 'WebActivity', namePrefix: 'ModerateText',
-    color: '#7c3aed', fg: '#fff', runnable: true,
+    runnable: true,
     build: (name) => aiEnrichWebActivity(
       name, 'content-safety', 'ModerateText',
       { text: '' },

@@ -27,9 +27,12 @@ const useStyles = makeStyles({
 
 type TabKey = 'answers' | 'search' | 'tier' | 'prompts' | 'budgets';
 
-export function CopilotQualityTabs() {
+/** Every value the `?sub=` deep-link accepts on /admin/ai-operations?tab=quality. */
+export const COPILOT_QUALITY_SUBTABS: readonly TabKey[] = ['answers', 'search', 'tier', 'prompts', 'budgets'] as const;
+
+export function CopilotQualityTabs({ initialTab }: { initialTab?: TabKey } = {}) {
   const styles = useStyles();
-  const [tab, setTab] = useState<TabKey>('answers');
+  const [tab, setTab] = useState<TabKey>(initialTab ?? 'answers');
   return (
     <div className={styles.root}>
       <TabList

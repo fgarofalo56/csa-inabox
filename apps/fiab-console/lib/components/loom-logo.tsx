@@ -17,6 +17,7 @@
  */
 
 import { useState, useId } from 'react';
+import { tokens } from '@fluentui/react-components';
 
 export interface LoomLogoProps {
   variant?: 'icon' | 'horizontal' | 'stacked';
@@ -72,15 +73,15 @@ export function LoomLogo({
 
   const wordmark = (
     <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', lineHeight: 1.1 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalSNudge }}>
         <span style={{ fontSize: size * 0.65, fontWeight: 700, letterSpacing: '-0.01em' }}>CSA</span>
         <span style={{ fontSize: size * 0.65, fontWeight: 400, opacity: 0.85 }}>Loom</span>
       </div>
       {showTagline && (
         <>
           <span style={{
-            fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase',
-            fontWeight: 600, opacity: 0.75, marginTop: 2,
+            fontSize: tokens.fontSizeBase100, letterSpacing: '0.12em', textTransform: 'uppercase',
+            fontWeight: 600, opacity: 0.75, marginTop: tokens.spacingVerticalXXS,
           }}>
             Cloud Scale Analytics
           </span>
@@ -94,7 +95,7 @@ export function LoomLogo({
 
   if (variant === 'stacked') {
     return (
-      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalSNudge }}>
         {markEl}
         {wordmark}
       </div>
@@ -102,7 +103,7 @@ export function LoomLogo({
   }
 
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge }}>
       {markEl}
       {wordmark}
     </div>

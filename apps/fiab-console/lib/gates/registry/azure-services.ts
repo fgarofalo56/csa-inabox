@@ -159,8 +159,11 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
   'svc-cost-management': {
     surfaces: [
       { path: '/monitor', label: 'Monitor hub — Cost tab' },
-      { path: '/admin/usage-chargeback', label: 'Usage & chargeback (FinOps)' },
+      { path: '/admin/finops?tab=capacity', label: 'FinOps & chargeback — Capacity & LCU tab' },
       { path: '/admin/capacity', label: 'Capacity — $/mo cost column' },
+      // B-N19e — the FOCUS cost-per-query / per-dashboard mart degrades to
+      // recorded consumption (LCU) without this role; it never disappears.
+      { path: '/admin/finops', label: 'FOCUS cost per query / per dashboard' },
     ],
     fixit: {
       kind: 'role-grant',
@@ -176,7 +179,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
   'svc-cost-forecast': {
     surfaces: [
       { path: '/monitor', label: 'Monitor hub — Cost tab (period-end forecast)' },
-      { path: '/admin/usage-chargeback', label: 'Usage & chargeback — forecast KPI' },
+      { path: '/admin/finops?tab=cockpit', label: 'FinOps & chargeback — forecast KPI (Cockpit tab)' },
       { path: '/api/admin/finops/forecast', label: 'FinOps forecast feed (admin cost surfaces)' },
     ],
     fixit: { kind: 'env-picker' },
@@ -220,7 +223,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     autoResolveNote: 'Unset LOOM_COST_ANOMALY_ENABLED = default-ON: the bicep-provisioned monitor job seeds a whole-estate 3σ watch and alerts via the shared action group + in-product notifications with zero operator input.',
   },
   'svc-loom-capacity-broker': {
-    surfaces: [{ path: '/admin/usage-chargeback', label: 'LCU admission control (scale-out)' }],
+    surfaces: [{ path: '/admin/finops?tab=capacity', label: 'LCU admission control (scale-out)' }],
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → job submission proceeds unthrottled (the broker constrains, it never blocks the platform).',
   },

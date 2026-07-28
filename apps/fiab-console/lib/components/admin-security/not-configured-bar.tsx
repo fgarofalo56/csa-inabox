@@ -12,7 +12,7 @@
  * upstream portal.
  */
 
-import { MessageBar, MessageBarBody, MessageBarTitle, Caption1 } from '@fluentui/react-components';
+import { MessageBar, MessageBarBody, MessageBarTitle, Caption1, tokens } from '@fluentui/react-components';
 
 export interface RoleRequirement {
   name: string;
@@ -43,7 +43,7 @@ export function NotConfiguredBar({ surface, hint, rawError, portalLink, portalLa
       <MessageBarBody>
         <MessageBarTitle>{surface} is not wired in this deployment</MessageBarTitle>
         {rawError && (
-          <Caption1 block style={{ marginBottom: 6 }}>
+          <Caption1 block style={{ marginBottom: tokens.spacingVerticalSNudge }}>
             Upstream: {rawError}
           </Caption1>
         )}
@@ -60,8 +60,8 @@ export function NotConfiguredBar({ surface, hint, rawError, portalLink, portalLa
         )}
         {Array.isArray(hint?.rolesRequired) && hint.rolesRequired.length > 0 && (
           <>
-            <Caption1 block style={{ marginTop: 6 }}><strong>Roles required:</strong></Caption1>
-            <ul style={{ marginTop: 4, marginBottom: 6, paddingLeft: 18 }}>
+            <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}><strong>Roles required:</strong></Caption1>
+            <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalSNudge, paddingLeft: 18 }}>
               {hint.rolesRequired.map((r) => (
                 <li key={r.name}>
                   <code>{r.name}</code>
@@ -75,12 +75,12 @@ export function NotConfiguredBar({ surface, hint, rawError, portalLink, portalLa
           </>
         )}
         {hint?.followUp && (
-          <Caption1 block style={{ marginTop: 6 }}>
+          <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>
             <strong>Next step:</strong> {hint.followUp}
           </Caption1>
         )}
         {portalLink && (
-          <Caption1 block style={{ marginTop: 6 }}>
+          <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>
             Until wired:{' '}
             <a href={portalLink} target="_blank" rel="noreferrer">{portalLabel || portalLink}</a>
           </Caption1>

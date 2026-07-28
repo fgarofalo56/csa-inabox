@@ -275,6 +275,13 @@ var loomContainers = [
   // per-assignment decisions). PK /tenantId. createIfNotExists in
   // cosmos-client.ts ensure() is the hotfix fallback.
   { name: 'access-reviews',     partitionKey: '/tenantId' }
+  // loom-apex B-N19c' — APPEND-ONLY, hash-chained signed evidence records sealed
+  // when a review campaign closes (campaign metadata + every decision + the
+  // resulting revocations + a SHA-256 content hash linked to the prior record for
+  // the tenant). PK /tenantId matches access-reviews so the chain-head read and
+  // the per-campaign evidence-pack read stay single-partition. createIfNotExists
+  // in cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'access-review-evidence', partitionKey: '/tenantId' }
   // WS-10.4 Living Marketplace (BTB-11) — the UNIFIED product exchange. One row
   // per published product across all five kinds (data|agent|mcp|app|ontology),
   // PK /tenantId so the exchange list + publish + subscribe all hit a single

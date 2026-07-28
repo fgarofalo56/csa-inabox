@@ -127,14 +127,16 @@ function scan() {
 }
 
 // __BASELINE_START__  (regenerate with --update-baseline)
-// 5 files, 18 grandfathered raw-px inline-style values remaining after the
-// rel-T56 codemod. These are no-token files (SVG sizing in loom-logo, the
-// not-configured-bar) or out-of-tolerance display values (a 48px score glyph).
+// 5 files, 7 grandfathered raw-px inline-style values remaining after the
+// rel-T56 codemod + the B-U12 token sweep (18 -> 7). What's left has no exact
+// Fluent token: a list indent (paddingLeft:18), an 11px tagline + 1px optical
+// nudge in the SVG wordmark, a 48px score glyph, a 22px KPI figure, and two
+// 44px empty-state icon glyphs.
 const BASELINE = {
-  "apps/fiab-console/lib/components/admin-security/not-configured-bar.tsx": 7,
+  "apps/fiab-console/lib/components/admin-security/not-configured-bar.tsx": 1,
   "apps/fiab-console/lib/components/admin/health-pane.tsx": 1,
   "apps/fiab-console/lib/components/foundry/foundry-charts.tsx": 1,
-  "apps/fiab-console/lib/components/loom-logo.tsx": 7,
+  "apps/fiab-console/lib/components/loom-logo.tsx": 2,
   "apps/fiab-console/lib/editors/data-product-detail.tsx": 2,
 };
 // __BASELINE_END__

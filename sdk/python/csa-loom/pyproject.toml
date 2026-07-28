@@ -1,0 +1,99 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "csa-loom"
+description = "Official Python SDK for the CSA Loom API — generated from the deployment's own OpenAPI 3.1 contract."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "CSA Loom" }]
+keywords = ["csa-loom", "loom", "azure", "analytics", "sdk", "openapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+# ZERO runtime dependencies on purpose (LIC0 + air-gap posture): the transport
+# is urllib from the standard library. See ../../../THIRD_PARTY_LICENSES.md.
+dependencies = []
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://csa-loom.limitlessdata.ai"
+Source = "https://github.com/fgarofalo57/csa-inabox/tree/main/sdk/python/csa-loom"
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.11,<3.0.0",
+    "pytest>=8.0.0,<10.0.0",
+    "ruff>=0.6.0,<1.0.0",
+]
+
+[tool.hatch.version]
+path = "src/csa_loom/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/csa_loom"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "scripts", "README.md", "LICENSE"]
+
+# --------------------------------------------------------------------------- #
+# ruff — this section makes the SDK use ITS OWN config even under a repo-wide
+# `ruff check .` (ruff resolves the closest pyproject.toml containing [tool.ruff]).
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.format]
+# The generated client is emitted deterministically by scripts/generate_client.py;
+# letting the formatter rewrite it would make the drift gate unfalsifiable.
+exclude = ["src/csa_loom/_generated/*.py"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "I", "N", "UP", "B", "A", "C4", "DTZ", "ISC", "PIE",
+    "PT", "RSE", "RET", "SIM", "ARG", "ERA", "S", "RUF",
+]
+ignore = [
+    "E501",   # line length (long generated docstrings quote the API verbatim)
+    "ISC001", # conflicts with the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Generated code mirrors the wire format; naming is not ours to choose.
+"src/csa_loom/_generated/*.py" = ["A002", "N815", "RUF012"]
+"tests/*.py" = ["S101", "S105", "S106"]  # pytest asserts + fake credentials in fixtures
+"scripts/*.py" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["csa_loom"]
+
+# --------------------------------------------------------------------------- #
+# mypy — strict, including the generated modules and the tests.
+# --------------------------------------------------------------------------- #
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+files = ["src", "tests", "scripts"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "live: hits a real deployment (opt-in; requires LOOM_BASE_URL)",
+]

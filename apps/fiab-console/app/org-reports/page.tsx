@@ -28,7 +28,7 @@ import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { OrgReportsPane } from '@/lib/coe-library/org-reports-pane';
 import { CopilotUsagePane } from '@/lib/components/admin/copilot-usage';
 import { UsageMetricsPane } from '@/app/admin/usage/page';
-import { ChargebackPane } from '@/app/admin/usage-chargeback/page';
+import { CapacityChargebackPane } from '@/lib/components/admin/capacity-chargeback-pane';
 import { useIsTenantAdmin } from '@/lib/components/session-context';
 
 type TabKey = 'reports' | 'usage' | 'copilot' | 'chargeback';
@@ -72,7 +72,7 @@ export default function OrgReportsHubPage(): React.ReactElement {
         {tab === 'reports' && <OrgReportsPane />}
         {tab === 'usage' && isAdmin && <UsageMetricsPane />}
         {tab === 'copilot' && isAdmin && <CopilotUsagePane />}
-        {tab === 'chargeback' && isAdmin && <ChargebackPane />}
+        {tab === 'chargeback' && isAdmin && <CapacityChargebackPane />}
       </div>
     </PageShell>
   );

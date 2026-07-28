@@ -6,10 +6,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { enforceAdmissionControl } from '@/lib/azure/capacity-guardrails';
-import { recordCostAttribution } from '@/lib/azure/cost-attribution';
+import { recordQueryRun } from '@/lib/finops/query-run';
 import { tenantScopeId } from '@/lib/auth/session';
 import {
   executeQuery, executeQueryCached, executeMgmtCommand, loadKustoItem, resolveDatabase, clusterUri, KustoError,
@@ -22,9 +22,7 @@ import { jsonWithQueryCache } from '@/lib/api/query-cache-headers';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session, params }) => {
   const limited = await enforceRateLimit(session, 'query');
   if (limited) return limited;
 
@@ -34,7 +32,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (kql.length > 65_536) return NextResponse.json({ ok: false, error: 'kql too large (>64KB)' }, { status: 413 });
 
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'kql-database', session.claims.oid);
+    const startedAt = Date.now();
+    const item = await loadKustoItem(params.id, 'kql-database', session.claims.oid);
 
     // Follower (database-shortcut) databases are strictly read-only. Block any
     // write/control command before it reaches ADX so the user gets a clear
@@ -99,11 +98,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         ? await executeQuery(database, kql, { userToken, page })
         : await executeQueryCached(database, kql, { page });
     // BR-COSTATTR — tag each ADX query for the chargeback per-user drill-down.
+    // B-N19e extends the SAME record with the query identity (statement
+    // fingerprint, duration, rows) the FOCUS cost-per-query mart rolls up. The
+    // 'adx' rate stays per-query, so the recorded LCU is unchanged.
     if (!isMgmt) {
-      void recordCostAttribution({
+      void recordQueryRun({
         tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
         engine: 'adx', workspaceId: item?.workspaceId, itemId: item?.id, itemType: 'kql-database',
         resourceId: database, domainId: (item as any)?.domainId,
+        statement: kql, durationMs: Date.now() - startedAt,
+        rowCount: Array.isArray(result?.rows) ? result.rows.length : undefined,
       });
     }
 
@@ -130,4 +134,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});

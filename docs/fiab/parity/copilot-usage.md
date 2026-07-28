@@ -1,6 +1,7 @@
 # copilot-usage — parity with Azure OpenAI usage metering + cost analytics
 
-**Surface:** Admin → Copilot usage (`/admin/copilot-usage`) + inline panel in
+**Surface:** Admin → AI operations → Usage (`/admin/ai-operations?tab=usage`;
+`/admin/copilot-usage` redirects here, IA-04) + inline panel in
 Monitor → Cost. Per-persona Copilot token consumption.
 
 **Source UI:** Azure Monitor / Application Insights "Usage" + Log Analytics

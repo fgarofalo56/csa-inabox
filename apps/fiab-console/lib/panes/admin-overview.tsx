@@ -67,8 +67,10 @@ const TILE_SPECS: TileSpec[] = [
     description: 'Directory users (Graph $count)' },
   { key: 'capacity', href: '/admin/capacity', label: 'Capacity & compute', icon: Server24Regular,
     description: 'Azure resources Loom orchestrates' },
-  { key: 'finops', href: '/admin/finops', label: 'FinOps', icon: Money24Regular,
-    description: 'Forecast, cost anomalies, breakdown & budgets' },
+  // IA-03: the FinOps hub absorbed /admin/usage-chargeback + /admin/chargeback
+  // as tabs, so this one tile now fronts all three cost surfaces.
+  { key: 'finops', href: '/admin/finops', label: 'FinOps & chargeback', icon: Money24Regular,
+    description: 'Forecast, anomalies, budgets, capacity & chargeback' },
   { key: 'openAuditItems', href: '/admin/health', label: 'Health & Reliability', icon: Heart24Regular,
     description: 'Self-audit, exercise probes & synthetic journeys' },
   { key: 'sensitivityLabels', href: '/admin/security', label: 'Security & governance', icon: ShieldCheckmark24Regular,

@@ -1,0 +1,173 @@
+name: sdk-contract
+
+# B-N19b — the SDK drift gate.
+#
+# `sdk/openapi.json` is the artifact BOTH first-party SDKs are generated from:
+# the `csa-loom` Python client and the Go Terraform provider. This workflow
+# proves, on every change that could affect them, that:
+#
+#   1. the snapshot still equals `buildOpenApiSpec('')` (the document the console
+#      serves at GET /api/openapi.json);
+#   2. the committed Python client is exactly what the generator produces from
+#      that snapshot — regenerate + `git diff --exit-code`;
+#   3. the Python SDK is ruff-clean, mypy-strict-clean and its contract tests
+#      pass on every supported interpreter;
+#   4. the Terraform provider builds, vets, is gofmt-clean, and its own contract
+#      test still finds every route it calls in the document;
+#   5. the license inventory (LIC0) is clean.
+#
+# Nothing here publishes to PyPI or the Terraform Registry — packaging + CI only.
+
+on:
+  pull_request:
+    paths:
+      - 'sdk/**'
+      - 'apps/fiab-console/lib/openapi/**'
+      - '.github/workflows/sdk-contract.yml'
+      - 'THIRD_PARTY_LICENSES.md'
+      - 'scripts/ci/check-license-inventory.mjs'
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/**'
+      - 'apps/fiab-console/lib/openapi/**'
+      - '.github/workflows/sdk-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openapi-snapshot:
+    name: OpenAPI snapshot is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          # >= 22 for built-in TypeScript type-stripping (the dumper imports spec.ts).
+          node-version: '22'
+
+      - name: sdk/openapi.json matches buildOpenApiSpec()
+        run: node sdk/scripts/dump-openapi.mjs --check
+
+      - name: Re-dump and fail on any diff (belt and braces)
+        run: |
+          node sdk/scripts/dump-openapi.mjs
+          git diff --exit-code -- sdk/openapi.json || {
+            echo "::error file=sdk/openapi.json::The API contract changed but the snapshot was not re-dumped."
+            echo "Fix: node sdk/scripts/dump-openapi.mjs && python sdk/python/csa-loom/scripts/generate_client.py"
+            exit 1
+          }
+
+  python-sdk:
+    name: csa-loom (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: openapi-snapshot
+    defaults:
+      run:
+        working-directory: sdk/python/csa-loom
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dev tooling (the SDK itself has ZERO runtime deps)
+        run: pip install --disable-pip-version-check -e ".[dev]"
+
+      - name: Regenerate the client and fail on drift
+        run: |
+          python scripts/generate_client.py
+          cd "$GITHUB_WORKSPACE"
+          git diff --exit-code -- sdk/python/csa-loom/src/csa_loom/_generated || {
+            echo "::error::The committed client does not match sdk/openapi.json."
+            echo "Fix: python sdk/python/csa-loom/scripts/generate_client.py"
+            exit 1
+          }
+
+      - name: ruff
+        run: python -m ruff check .
+
+      - name: mypy (strict)
+        run: python -m mypy
+
+      - name: pytest (contract + client + generator)
+        run: python -m pytest -q
+
+      - name: Build the wheel (packaging only — never published here)
+        if: matrix.python-version == '3.12'
+        run: |
+          pip install --disable-pip-version-check build
+          python -m build --wheel --outdir dist
+          ls -l dist
+
+  terraform-provider:
+    name: terraform-provider-loom
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: openapi-snapshot
+    defaults:
+      run:
+        working-directory: sdk/terraform-provider-loom
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Not SHA-pinned yet: no other workflow in this repo uses setup-go, so
+      # there is no verified digest to copy. Dependabot's github-actions
+      # ecosystem pins + bumps it on its next run.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: sdk/terraform-provider-loom/go.mod
+
+      - name: Resolve dependencies (writes go.sum; see README "Why go.sum is not committed")
+        run: go mod tidy
+
+      - name: go.mod stays minimal — only the four plugin SDKs are direct deps
+        run: |
+          direct=$(go mod edit -json | jq -r '.Require[] | select(.Indirect != true) | .Path')
+          echo "direct dependencies:"; echo "$direct"
+          unexpected=$(echo "$direct" | grep -v '^github.com/hashicorp/terraform-plugin-' || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error file=sdk/terraform-provider-loom/go.mod::Unexpected direct dependency: $unexpected"
+            echo "The provider must use only the standard library plus HashiCorp's plugin SDKs (LIC0)."
+            exit 1
+          fi
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -ldflags "-X main.version=ci" -o terraform-provider-loom .
+
+      - name: Unit + contract + example tests (acceptance tests stay opt-in via TF_ACC)
+        run: go test ./... -count=1 -v
+
+  license-inventory:
+    name: LIC0 license inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20'
+      - name: check-license-inventory
+        run: node scripts/ci/check-license-inventory.mjs

@@ -12,3 +12,10 @@
 # stay LF or the --check drift gate would falsely fail on a CRLF checkout.
 scripts/csa-loom/fixtures/apps-catalog.json text eol=lf
 scripts/csa-loom/gen-apps-catalog-fixture.mjs text eol=lf
+
+# B-N19b — the SDK contract artifacts are byte-compared by drift gates
+# (`dump-openapi.mjs --check`, `generate_client.py --check`, the SHA-256
+# tripwire in `csa_loom._generated.contract`, and the vitest snapshot pin).
+# Both generators always write LF, and `gofmt` requires LF, so pin the whole
+# sdk/ tree to LF or a CRLF checkout would falsely fail every one of them.
+sdk/** text eol=lf

@@ -21,13 +21,27 @@
  */
 import { costAttributionContainer } from '@/lib/azure/cosmos-client';
 
-export type AttributionEngine = 'spark' | 'databricks' | 'adx' | 'aoai' | 'pipeline' | 'marketplace';
+export type AttributionEngine =
+  | 'spark' | 'databricks' | 'adx' | 'aoai' | 'pipeline' | 'marketplace'
+  // B-N19e query engines — every interactive SQL/KQL/DAX execution path.
+  | 'synapse-sql' | 'synapse-serverless' | 'duckdb' | 'trino'
+  | 'databricks-sql' | 'aas-dax';
 
 /**
  * Published LCU coefficients per engine's billable unit. Aligned with the
  * normalized-CU model in cost-management-client.ts (1 LCU ≈ one smoothed
  * compute-hour of a baseline engine slice). Echoed on every record so the
  * derivation is transparent.
+ *
+ * B-N19e query engines meter in `query-second` (real wall-clock of the run) so
+ * a 10-second query on a distributed engine lands on the SAME 0.5 LCU as the
+ * pre-existing per-query `adx` rate — the reference point every query-engine
+ * coefficient below is derived from, scaled by relative engine footprint:
+ *   distributed pool / cluster (synapse-sql, trino, databricks-sql) → 0.05 /s
+ *   pay-per-scan serverless (synapse-serverless) + tabular (aas-dax) → 0.02 /s
+ *   single-node embedded serving tier (duckdb)                      → 0.01 /s
+ * These normalize SHARE only — the FOCUS mart prices each run from the REAL
+ * Cost Management dollars of the engine's ARM resource type (focus-mart.ts).
  */
 export const ATTRIBUTION_RATES: Record<AttributionEngine, { unit: string; lcuPerUnit: number }> = {
   spark: { unit: 'session', lcuPerUnit: 30 }, // a Spark session ≈ a compute-hour slice
@@ -40,6 +54,12 @@ export const ATTRIBUTION_RATES: Record<AttributionEngine, { unit: string; lcuPer
   // `quantity` carries the product's declared `lcuPerSubscription`, so
   // lcuPerUnit=1 makes the recorded LCU equal that declared figure (transparent).
   marketplace: { unit: 'subscription', lcuPerUnit: 1 },
+  'synapse-sql': { unit: 'query-second', lcuPerUnit: 0.05 },
+  'synapse-serverless': { unit: 'query-second', lcuPerUnit: 0.02 },
+  duckdb: { unit: 'query-second', lcuPerUnit: 0.01 },
+  trino: { unit: 'query-second', lcuPerUnit: 0.05 },
+  'databricks-sql': { unit: 'query-second', lcuPerUnit: 0.05 },
+  'aas-dax': { unit: 'query-second', lcuPerUnit: 0.02 },
 };
 
 /** Transparent published USD-per-LCU used for the estimate column. */
@@ -68,6 +88,23 @@ export interface CostAttributionRow {
   lcu: number;
   /** Transparent USD estimate (lcu × USD_PER_LCU). */
   estCostUsd: number;
+  // ── B-N19e query identity (optional; set by lib/finops/query-run.ts) ──────
+  /** Engine-native or Loom-generated id for THIS execution. */
+  queryId?: string;
+  /**
+   * Fingerprint of the normalized statement (literals stripped) — NEVER the
+   * statement text, so the ledger carries no query payload / PII. Repeated runs
+   * of the same query share a fingerprint, which is how cost-per-query rolls up.
+   */
+  statementHash?: string;
+  /** Wall-clock of the execution, ms. */
+  durationMs?: number;
+  /** Rows the execution returned. */
+  rowCount?: number;
+  /** Dashboard the run was issued for (per-dashboard cost attribution). */
+  dashboardId?: string;
+  /** Tile within that dashboard. */
+  dashboardTile?: string;
   ttl: number;
 }
 
@@ -87,6 +124,13 @@ export interface AttributionContext {
   occurredAt?: string;
   /** Override id (defaults to a random uuid) — used by deterministic tests. */
   id?: string;
+  // ── B-N19e query identity (optional) ─────────────────────────────────────
+  queryId?: string;
+  statementHash?: string;
+  durationMs?: number;
+  rowCount?: number;
+  dashboardId?: string;
+  dashboardTile?: string;
 }
 
 const round = (n: number, dp = 4): number => {
@@ -122,6 +166,14 @@ export function buildAttributionRecord(ctx: AttributionContext): CostAttribution
     quantity,
     lcu,
     estCostUsd,
+    // Query identity — only present on the keys the caller actually supplied,
+    // so a non-query submit's record shape is byte-identical to before.
+    ...(ctx.queryId ? { queryId: ctx.queryId } : {}),
+    ...(ctx.statementHash ? { statementHash: ctx.statementHash } : {}),
+    ...(Number.isFinite(ctx.durationMs) ? { durationMs: Math.max(0, Math.round(ctx.durationMs as number)) } : {}),
+    ...(Number.isFinite(ctx.rowCount) ? { rowCount: Math.max(0, Math.round(ctx.rowCount as number)) } : {}),
+    ...(ctx.dashboardId ? { dashboardId: ctx.dashboardId } : {}),
+    ...(ctx.dashboardTile ? { dashboardTile: ctx.dashboardTile } : {}),
     ttl: ATTRIBUTION_TTL_SECONDS,
   };
 }
@@ -283,4 +335,50 @@ export async function queryAttributionRollup(
     .query<CostAttributionRow>({ query: `SELECT * FROM c WHERE ${where}`, parameters: params as any }, { partitionKey: tenantId })
     .fetchAll();
   return rollupAttribution(resources || [], windowDays);
+}
+
+/**
+ * B-N19e — raw ledger rows for the FOCUS mart, scoped to the QUERY engines.
+ *
+ * The mart needs the per-run detail (statement fingerprint, duration, dashboard)
+ * that `rollupAttribution` folds away, so this returns rows verbatim. Real
+ * Cosmos read over the same partition; an empty array is the honest empty state
+ * (nothing recorded yet) — never fabricated rows. Optionally narrowed to one
+ * item / dashboard / workspace for a drill-down.
+ */
+export async function queryRunAttributionRows(
+  tenantId: string,
+  opts: {
+    windowDays?: number;
+    engines?: readonly string[];
+    itemId?: string;
+    dashboardId?: string;
+    workspaceId?: string;
+    /** Hard cap on rows scanned (protects the panel from an unbounded ledger). */
+    maxRows?: number;
+  } = {},
+): Promise<CostAttributionRow[]> {
+  const windowDays = Math.max(1, Math.min(90, opts.windowDays || 30));
+  const since = new Date(Date.now() - windowDays * 24 * 3600 * 1000).toISOString();
+  const maxRows = Math.max(1, Math.min(20_000, opts.maxRows || 5_000));
+  const c = await costAttributionContainer();
+  const params: { name: string; value: unknown }[] = [
+    { name: '@t', value: tenantId },
+    { name: '@since', value: since },
+  ];
+  let where = 'c.tenantId=@t AND c.occurredAt >= @since';
+  if (opts.engines?.length) {
+    where += ' AND ARRAY_CONTAINS(@engines, c.engine)';
+    params.push({ name: '@engines', value: [...opts.engines] });
+  }
+  if (opts.itemId) { where += ' AND c.itemId=@item'; params.push({ name: '@item', value: opts.itemId }); }
+  if (opts.dashboardId) { where += ' AND c.dashboardId=@dash'; params.push({ name: '@dash', value: opts.dashboardId }); }
+  if (opts.workspaceId) { where += ' AND c.workspaceId=@ws'; params.push({ name: '@ws', value: opts.workspaceId }); }
+  const { resources } = await c.items
+    .query<CostAttributionRow>(
+      { query: `SELECT TOP ${maxRows} * FROM c WHERE ${where} ORDER BY c.occurredAt DESC`, parameters: params as any },
+      { partitionKey: tenantId },
+    )
+    .fetchAll();
+  return resources || [];
 }

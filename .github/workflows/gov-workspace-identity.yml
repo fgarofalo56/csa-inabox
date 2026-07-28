@@ -1,0 +1,728 @@
+name: gov-workspace-identity
+
+# The GOV E2E receipt for workspace-scoped managed identity — loom-next-level
+# I1 (provision-on-create + delete cascade), I2 (per-backend grant matrix),
+# I3/I5 (shadow seam through the credential factory); apex item B-X3.
+#
+# WHY THIS LANE EXISTS. Every I-section probe (ARM UAMI PUT/GET, role-assignment
+# list, Cosmos sqlRoleAssignments, Synapse `sys.database_principals`, ADX
+# `.show database principals`) resolves its host through cloud-endpoints, so the
+# SAME code must work against `management.usgovcloudapi.net` /
+# `dfs.core.usgovcloudapi.net` / `kusto.usgovcloudapi.net`. Commercial-only lanes
+# cannot prove that. This lane exercises the real Gov path and FAILS LOUDLY when
+# it diverges from the Commercial contract:
+#
+#   1. the expected grant matrix is PARSED OUT OF THE SOURCE OF TRUTH
+#      (apps/fiab-console/lib/azure/workspace-grants.ts → WORKSPACE_GRANTS), so a
+#      backend added there but missing in Gov is a hard failure, and the lane can
+#      never silently assert a stale matrix;
+#   2. the live Gov console's own view is read with a minted admin session
+#      (GET /api/admin/workspaces/{id}/identity → I7 preflight, which evaluates
+#      every grant against LIVE RBAC / data-plane — no mocks);
+#   3. that view is CROSS-CHECKED against ARM + Entra with `az` (identity show,
+#      role assignment list, ad sp show) so a console that reports a UAMI Azure
+#      does not have is caught;
+#   4. the payload is scanned for COMMERCIAL host literals — a Gov response
+#      carrying `dfs.core.windows.net` / `kusto.windows.net` / `documents.azure.com`
+#      means a straggler literal broke the sovereign path (the X1 ratchet's
+#      runtime twin);
+#   5. with `create_ephemeral`, a throwaway workspace is created and deleted so
+#      the I1 provision + cascade path itself is proven (`az identity show` 200
+#      then 404).
+#
+# HONEST SKIPS (no-vaporware: an honest gate, never a green lie).
+#   • The Gov estate has no workspace to exercise → the lane SKIPS with the exact
+#     remediation (re-dispatch with create_ephemeral=true, or pass workspace_id).
+#   • LOOM_WORKSPACE_IDENTITY_MODE is `off` on the live gov console (the day-one
+#     default — the phased shadow→enforce rollout is operator-gated) → the lane
+#     asserts the mode-off CONTRACT (identity recorded as `skipped`, never
+#     `failed`) and then honestly skips the UAMI/grant assertions, naming
+#     gov-apply-env.yml + LOOM_WORKSPACE_IDENTITY_MODE=shadow as the way to get
+#     the full receipt.
+#   • A pre-existing workspace created BEFORE the mode flip has no UAMI (not a
+#     Gov divergence) → skipped with the remediation. A workspace this lane
+#     created itself and that has no UAMI IS a hard failure.
+#
+# Pattern siblings: gov-exercise.yml (mint-session + real-backend probes),
+# gov-bff-verify.yml (minted-cookie BFF probes), gov-gates.yml (gates score).
+# Runbooks: docs/fiab/runbooks/workspace-identity-migration.md (shadow→enforce),
+# docs/fiab/runbooks/workspace-identity-grants.md (the I2 matrix + verify cmds).
+on:
+  workflow_dispatch:
+    inputs:
+      workspace_id:
+        description: 'Workspace id to exercise (default: pick one from the Gov tenant inventory)'
+        required: false
+        type: string
+      create_ephemeral:
+        description: 'Create a throwaway workspace, exercise it, then delete it and assert the UAMI cascade (the full I1 receipt)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  BASE: https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us
+
+jobs:
+  identity:
+    name: Gov workspace-scoped identity E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (workspace-grants.ts is the grant-matrix source of truth)
+        uses: actions/checkout@v4
+
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve SESSION_SECRET + admin identity + identity config
+        run: |
+          set -euo pipefail
+          # Same secret resolution as gov-exercise/gov-bff-verify: inline secrets
+          # return a raw value, keyvaultref-backed ones return the KV URI.
+          J=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret -o json)
+          SS=$(echo "$J" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('value') or '')")
+          KVURL=$(echo "$J" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('keyVaultUrl') or '')")
+          if [ -z "$SS" ] && [ -n "$KVURL" ]; then SS=$(az keyvault secret show --id "$KVURL" --query value -o tsv | tr -d '\r'); fi
+          case "$SS" in https://*) SS=$(az keyvault secret show --id "$SS" --query value -o tsv | tr -d '\r');; esac
+          [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
+          echo "::add-mask::$SS"; echo "SS=$SS" >> "$GITHUB_ENV"
+
+          # Non-secret identity coordinates off the LIVE revision (an allow-list —
+          # never the whole env, which can carry plain-value settings).
+          az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env" -o json > container-env.json
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          env = {x['name']: (x.get('value') or '') for x in json.load(open('container-env.json'))}
+          keep = [
+              'LOOM_WORKSPACE_IDENTITY_MODE', 'LOOM_WS_IDENTITY_SUB', 'LOOM_WS_IDENTITY_RG',
+              'LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_BRONZE_URL', 'LOOM_LANDING_URL',
+              'LOOM_ADLS_ACCOUNT', 'LOOM_COSMOS_ENDPOINT', 'LOOM_SYNAPSE_WORKSPACE',
+              'LOOM_SYNAPSE_DEDICATED_POOL', 'LOOM_KUSTO_CLUSTER_URI', 'LOOM_KUSTO_DEFAULT_DB',
+              'LOOM_EVENTHUB_NAMESPACE', 'LOOM_CLOUD', 'AZURE_CLOUD',
+          ]
+          json.dump({k: env.get(k, '') for k in keep}, open('identity-config.json', 'w'), indent=2)
+          print('AOID=' + env.get('LOOM_TENANT_ADMIN_OID', ''))
+          print('AGRP=' + env.get('LOOM_TENANT_ADMIN_GROUP_ID', ''))
+          print('ID_MODE=' + (env.get('LOOM_WORKSPACE_IDENTITY_MODE', '') or 'off'))
+          print('WS_SUB=' + (env.get('LOOM_WS_IDENTITY_SUB', '') or env.get('LOOM_SUBSCRIPTION_ID', '')))
+          print('WS_RG=' + (env.get('LOOM_WS_IDENTITY_RG', '') or env.get('LOOM_DLZ_RG', '')))
+          PY
+          rm -f container-env.json
+          # This repo is PUBLIC: run logs and artifacts are world-readable, so
+          # estate coordinates are never printed — only whether they are set
+          # (docs-hygiene's rule applied to CI output).
+          echo "--- workspace-identity config on the live gov console (values withheld) ---"
+          python3 -c "import json; [print(('  set   ' if v else '  UNSET ') + k) for k, v in json.load(open('identity-config.json')).items()]"
+
+      - name: Mask the estate coordinates in logs
+        run: |
+          set -euo pipefail
+          for V in "${WS_SUB:-}" "${WS_RG:-}" "${AOID:-}" "${AGRP:-}"; do
+            [ -n "$V" ] && echo "::add-mask::$V" || true
+          done
+
+      - name: Write the lane helper (minted admin session + receipt)
+        run: |
+          set -euo pipefail
+          cat > x3.cjs <<'EOF'
+          // gov-workspace-identity lane helper. Mints the same encrypted
+          // loom_session cookie the browser carries (session crypto + the app's
+          // own session-secret) so every probe exercises the full
+          // session -> BFF -> Azure backend path, and accumulates findings into
+          // one receipt the verdict step grades.
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+
+          const BASE = process.env.BASE;
+          const RECEIPT = 'gov-workspace-identity.json';
+
+          function cookie() {
+            const secret = process.env.SS;
+            if (!secret) throw new Error('SS (session secret) was not resolved');
+            const key = Buffer.from(
+              crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32),
+            );
+            const claims = {
+              oid: process.env.AOID || '00000000-0000-0000-0000-000000000000',
+              name: 'gov-workspace-identity',
+              email: 'workspace-identity@automation.inv',
+              upn: 'gov-workspace-identity@automation',
+            };
+            const grp = process.env.AGRP || '';
+            if (grp) claims.groups = grp.split(',').map((s) => s.trim()).filter(Boolean);
+            const iv = crypto.randomBytes(12);
+            const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+            const enc = Buffer.concat([
+              c.update(Buffer.from(JSON.stringify({ claims, exp: Math.floor(Date.now() / 1000) + 7200 }))),
+              c.final(),
+            ]);
+            return 'loom_session=' + Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64url');
+          }
+
+          async function call(method, path, body) {
+            const init = { method, headers: { cookie: cookie(), 'content-type': 'application/json' } };
+            if (body !== undefined) init.body = JSON.stringify(body);
+            const r = await fetch(BASE + path, init);
+            const text = await r.text();
+            let json = null;
+            try { json = JSON.parse(text); } catch { /* HTML / empty body */ }
+            return { status: r.status, json, text };
+          }
+
+          const get = (p) => call('GET', p);
+          const post = (p, b) => call('POST', p, b);
+          const del = (p) => call('DELETE', p);
+
+          function read() {
+            try { return JSON.parse(fs.readFileSync(RECEIPT, 'utf8')); } catch { return { findings: [] }; }
+          }
+          function write(r) { fs.writeFileSync(RECEIPT, JSON.stringify(r, null, 2)); }
+          function set(patch) { const r = read(); write({ ...r, ...patch }); }
+
+          /** severity: 'fail' (divergence — the job goes red) | 'warn' (the lane
+           * could not certify this check) | 'pass' | 'skip' | 'info'. */
+          function record(severity, check, detail) {
+            const r = read();
+            r.findings = r.findings || [];
+            r.findings.push({ severity, check, detail, at: new Date().toISOString() });
+            write(r);
+            const line = '[' + severity.toUpperCase() + '] ' + check + ' - ' + detail;
+            if (severity === 'fail') console.log('::error::' + line);
+            else if (severity === 'warn') console.log('::warning::' + line);
+            else console.log(line);
+          }
+
+          function exportEnv(k, v) {
+            fs.appendFileSync(process.env.GITHUB_ENV, k + '=' + String(v) + '\n');
+          }
+
+          /** This repo is PUBLIC — mask every estate coordinate we learn at
+           * runtime so it never lands in a world-readable run log. */
+          function mask(v) {
+            if (v && String(v).length >= 8) console.log('::add-mask::' + v);
+            return v;
+          }
+
+          /** Artifact-safe copy: every GUID / ARM id / sovereign host redacted
+           * (docs-hygiene's rule applied to the uploaded receipt). */
+          function redact(text) {
+            return String(text)
+              .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (g) =>
+                BUILTIN_ROLE_GUIDS.has(g.toLowerCase()) ? g : '<guid-redacted>')
+              .replace(/\/subscriptions\/[^/"]+/gi, '/subscriptions/<sub-redacted>')
+              .replace(/\/resourceGroups\/[^/"]+/gi, '/resourceGroups/<rg-redacted>')
+              .replace(/https:\/\/[a-z0-9-]+\.(dfs|blob|documents|kusto|vault|servicebus)\.[a-z0-9.]+/gi, 'https://<host-redacted>');
+          }
+
+          /** Azure BUILT-IN role definition ids are public constants (the same
+           * carve-out scripts/ci/check-docs-hygiene.mjs makes) — keep them
+           * readable in the receipt so a reviewer can see WHICH role failed. */
+          const BUILTIN_ROLE_GUIDS = new Set([
+            'ba92f5b4-2d11-453d-a403-e96b0029c9fe', // Storage Blob Data Contributor
+            'a638d3c7-ab3a-418d-83e6-5f17a39d4fde', // Event Hubs Data Receiver
+            '2b629674-e913-4c01-ae53-ef4638d8f975', // Event Hubs Data Sender
+            '749f88d5-cbae-40b8-bcfc-e573ddc772fa', // Monitoring Contributor
+            '4633458b-17de-408a-b874-0445c86b69e6', // Key Vault Secrets User
+            '00000000-0000-0000-0000-000000000002', // Cosmos DB Built-in Data Contributor
+          ]);
+
+          /** Run `az` and return { ok, out, err }. Never throws. */
+          function az(args) {
+            try {
+              const out = execFileSync('az', args, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+              return { ok: true, out, err: '' };
+            } catch (e) {
+              return { ok: false, out: (e.stdout || '').toString(), err: ((e.stderr || '') + '').toString() || e.message };
+            }
+          }
+
+          /** Commercial-only host suffixes. Any occurrence in a GOV response body
+           * is a straggler literal that broke the sovereign path (X1's runtime
+           * twin). Gov equivalents: usgovcloudapi.net / azure.us / *.us. */
+          const COMMERCIAL_HOSTS = [
+            'management.azure.com', 'vault.azure.net', 'dfs.core.windows.net',
+            'blob.core.windows.net', 'kusto.windows.net', 'documents.azure.com',
+            'database.windows.net', 'servicebus.windows.net', 'search.windows.net',
+            'graph.microsoft.com', 'analysis.windows.net',
+          ];
+
+          module.exports = { BASE, cookie, call, get, post, del, read, write, set, record, exportEnv, mask, redact, az, COMMERCIAL_HOSTS };
+          EOF
+          node -e "require('./x3.cjs'); console.log('lane helper loaded')"
+
+      - name: Derive the expected grant matrix from workspace-grants.ts
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const x3 = require('./x3.cjs');
+          const SRC = 'apps/fiab-console/lib/azure/workspace-grants.ts';
+          const src = fs.readFileSync(SRC, 'utf-8');
+          const i = src.indexOf('export const WORKSPACE_GRANTS');
+          if (i < 0) {
+            x3.record('fail', 'grant-matrix-source', 'WORKSPACE_GRANTS not found in ' + SRC + ' — the source of truth moved; update this lane before it can certify anything.');
+            process.exit(1);
+          }
+          const j = src.indexOf('\n];', i);
+          const block = src.slice(i, j < 0 ? src.length : j);
+          // Role GUIDs are exported consts in the same module — resolve the symbol
+          // so the lane never carries its own copy of a role definition id.
+          const roleConsts = Object.fromEntries(
+            [...src.matchAll(/export const ([A-Z0-9_]+)\s*=\s*'([^']+)'/g)].map((m) => [m[1], m[2]]),
+          );
+          const rows = [...block.matchAll(/backend:\s*'([^']+)',\s*kind:\s*'([^']+)',\s*roleDefinitionId:\s*([^,]+),/g)].map((m) => {
+            const raw = m[3].trim();
+            const role = raw.startsWith("'") ? raw.replace(/'/g, '') : (roleConsts[raw] || raw);
+            return { backend: m[1], kind: m[2], role };
+          });
+          const backends = [...block.matchAll(/backend:\s*'([^']+)'/g)].map((m) => m[1]);
+          if (rows.length === 0 || rows.length !== backends.length) {
+            x3.record('fail', 'grant-matrix-source',
+              'Parsed ' + rows.length + ' grant spec(s) but found ' + backends.length + ' backend key(s) in WORKSPACE_GRANTS — the lane would assert an INCOMPLETE matrix. Update the parser in this workflow to match the new shape.');
+            process.exit(1);
+          }
+          fs.writeFileSync('expected-grants.json', JSON.stringify(rows, null, 2));
+          x3.set({ expectedGrants: rows, source: SRC });
+          x3.record('pass', 'grant-matrix-source', 'Expected matrix (' + rows.length + ' backends) parsed from ' + SRC + ': ' + rows.map((r) => r.backend + '/' + r.kind).join(', '));
+          EOF
+
+      - name: Select the target workspace (honest skip when the estate has none)
+        env:
+          WSID_INPUT: ${{ inputs.workspace_id }}
+          CREATE: ${{ inputs.create_ephemeral }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const x3 = require('./x3.cjs');
+          (async () => {
+            const wanted = (process.env.WSID_INPUT || '').trim();
+            const create = String(process.env.CREATE || '') === 'true';
+            const inv = await x3.get('/api/admin/workspaces');
+            if (inv.status === 401) {
+              x3.record('fail', 'minted-session', 'GET /api/admin/workspaces -> 401. The minted loom_session was rejected — the console session-secret rotated (re-run after gov-console-roll.yml) or the cookie scheme changed.');
+              process.exit(1);
+            }
+            if (inv.status === 403) {
+              x3.record('fail', 'admin-gate', 'GET /api/admin/workspaces -> 403. The minted session is not a tenant admin: set LOOM_TENANT_ADMIN_OID (or LOOM_TENANT_ADMIN_GROUP_ID) on the gov loom-console via gov-apply-env.yml.');
+              process.exit(1);
+            }
+            if (inv.status !== 200 || !inv.json || inv.json.ok !== true) {
+              x3.record('fail', 'workspace-inventory', 'GET /api/admin/workspaces -> ' + inv.status + ' ' + inv.text.slice(0, 220));
+              process.exit(1);
+            }
+            const list = Array.isArray(inv.json.workspaces) ? inv.json.workspaces : [];
+            console.log('gov tenant workspaces: ' + list.length);
+
+            if (wanted) {
+              const hit = list.find((w) => w.id === wanted);
+              if (!hit) {
+                x3.record('fail', 'workspace-select', "workspace_id '" + wanted + "' is not in the Gov tenant inventory (" + list.length + ' workspace(s) visible to the admin session).');
+                process.exit(1);
+              }
+              x3.mask(hit.id);
+              x3.exportEnv('WS_ID', hit.id);
+              x3.set({ workspaceId: hit.id, workspaceName: hit.name || '', ephemeral: false });
+              x3.record('info', 'workspace-select', "Exercising the pinned workspace '" + (hit.name || hit.id) + "' (" + hit.id + ').');
+              return;
+            }
+
+            if (create) {
+              const name = 'x3-gov-identity-' + (process.env.RUN_ID || Date.now());
+              const r = await x3.post('/api/admin/workspaces', {
+                name,
+                description: 'Ephemeral workspace created by gov-workspace-identity.yml (B-X3) — deleted at the end of the run.',
+              });
+              if (r.status !== 201 || !r.json || r.json.ok !== true || !r.json.workspace) {
+                x3.record('fail', 'workspace-create', 'POST /api/admin/workspaces -> ' + r.status + ' ' + r.text.slice(0, 260));
+                process.exit(1);
+              }
+              const ws = r.json.workspace;
+              x3.mask(ws.id);
+              x3.exportEnv('WS_ID', ws.id);
+              x3.exportEnv('EPHEMERAL', '1');
+              x3.set({ workspaceId: ws.id, workspaceName: ws.name, ephemeral: true, createIdentityBlock: ws.workspaceIdentity || null });
+              x3.record('pass', 'workspace-create', 'Created ephemeral workspace ' + ws.id + '; create-time workspaceIdentity = ' + JSON.stringify(ws.workspaceIdentity || null).slice(0, 400));
+              return;
+            }
+
+            if (list.length === 0) {
+              x3.record('skip', 'honest-skip',
+                'The Gov estate has NO workspace to exercise, so the workspace-scoped identity path cannot be validated. Re-dispatch this workflow with create_ephemeral=true (it creates a throwaway workspace and deletes it again), or pass workspace_id for an existing one.');
+              x3.exportEnv('SKIP', '1');
+              x3.set({ skipped: true, skipReason: 'no workspace in the Gov tenant inventory' });
+              return;
+            }
+
+            // Prefer a workspace that already carries an identity block — it gives
+            // the richest receipt; otherwise take the first one.
+            const provisioned = list.find((w) => w.workspaceIdentity && w.workspaceIdentity.status === 'provisioned');
+            const anyIdentity = list.find((w) => w.workspaceIdentity);
+            const pick = provisioned || anyIdentity || list[0];
+            x3.mask(pick.id);
+            x3.exportEnv('WS_ID', pick.id);
+            x3.set({ workspaceId: pick.id, workspaceName: pick.name || '', ephemeral: false });
+            x3.record('info', 'workspace-select', "Exercising '" + (pick.name || pick.id) + "' (" + pick.id + ') — chosen from ' + list.length + ' Gov workspace(s).');
+          })().catch((e) => { console.log('::error::workspace select failed: ' + e.message); process.exit(1); });
+          EOF
+
+      - name: Assert the identity contract (real ARM + data-plane, minted session)
+        if: env.SKIP != '1'
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const x3 = require('./x3.cjs');
+          const WS = process.env.WS_ID;
+          const MODE = (process.env.ID_MODE || 'off').trim().toLowerCase();
+          const EPHEMERAL = process.env.EPHEMERAL === '1';
+          const expected = JSON.parse(fs.readFileSync('expected-grants.json', 'utf-8'));
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+          (async () => {
+            const r = await x3.get('/api/admin/workspaces/' + WS + '/identity');
+            if (r.status === 404) {
+              x3.record('fail', 'identity-route',
+                'GET /api/admin/workspaces/{id}/identity -> 404. The gov console image predates the I6 identity route — roll it with gov-console-roll.yml, then re-run this lane.');
+              return;
+            }
+            if (r.status !== 200 || !r.json || r.json.ok !== true) {
+              x3.record('fail', 'identity-route', 'GET /api/admin/workspaces/{id}/identity -> ' + r.status + ' ' + r.text.slice(0, 260));
+              return;
+            }
+            const d = r.json.data || {};
+            x3.set({ identity: d });
+
+            // ── 1. Sovereign-endpoint divergence: a Gov payload must never carry
+            //       a Commercial host suffix (the X1 ratchet's runtime twin).
+            const blob = JSON.stringify(d);
+            const leaked = x3.COMMERCIAL_HOSTS.filter((h) => blob.includes(h));
+            if (leaked.length) {
+              x3.record('fail', 'sovereign-endpoints',
+                'The Gov identity payload carries Commercial host literal(s): ' + leaked.join(', ') + '. A client is bypassing lib/azure/cloud-endpoints.ts — the Gov path diverges from Commercial.');
+            } else {
+              x3.record('pass', 'sovereign-endpoints', 'No Commercial host literal in the Gov identity payload (' + x3.COMMERCIAL_HOSTS.length + ' suffixes checked).');
+            }
+
+            // ── 2. The route's effective mode must match the live revision env.
+            if ((d.mode || 'off') !== MODE) {
+              x3.record('fail', 'identity-mode',
+                'The identity route reports mode=' + d.mode + ' but the live revision env has LOOM_WORKSPACE_IDENTITY_MODE=' + MODE + ' — the running revision predates the env change (roll it) or the env was applied to a non-active revision.');
+            } else {
+              x3.record('pass', 'identity-mode', 'Effective workspace-identity mode = ' + MODE + ' (route and live revision env agree).');
+            }
+
+            const identity = d.identity || null;
+            const preflight = d.preflight || {};
+
+            // ── 3. mode=off: assert the honest contract, then skip honestly.
+            if (MODE === 'off') {
+              const status = identity ? identity.status : 'skipped';
+              if (identity && status === 'failed') {
+                x3.record('fail', 'mode-off-contract',
+                  'With mode=off the workspaceIdentity block must record `skipped` (an honest no-op), not `failed`: ' + JSON.stringify(identity).slice(0, 300));
+              } else {
+                x3.record('pass', 'mode-off-contract', 'mode=off and the workspace records workspaceIdentity.status=' + status + ' — the honest no-op contract holds.');
+              }
+              x3.record('skip', 'honest-skip',
+                'LOOM_WORKSPACE_IDENTITY_MODE is off on the live gov console (the operator-gated day-one default), so no uami-ws-* exists to assert. For the FULL receipt set LOOM_WORKSPACE_IDENTITY_MODE=shadow via gov-apply-env.yml, then re-run this lane with create_ephemeral=true.');
+              return;
+            }
+
+            // ── 4. shadow/enforce: the UAMI must exist in ARM (I7 preflight is the
+            //       live truth; the doc block can be stale for older workspaces).
+            const uamiName = (identity && identity.uamiName) || ('uami-ws-' + WS);
+            if (preflight.uamiProvisioned !== true) {
+              const detail = 'The I7 preflight reports uamiProvisioned=false for ' + uamiName + ' (reasons: ' + JSON.stringify(preflight.reasons || []).slice(0, 300) + ').';
+              if (EPHEMERAL) {
+                x3.record('fail', 'uami-provisioned',
+                  detail + ' This workspace was created by THIS run with mode=' + MODE + ', so I1 provision-on-create failed on the Gov path.');
+              } else {
+                x3.record('skip', 'honest-skip',
+                  detail + ' This pre-existing workspace was created before the mode flip, so a missing UAMI is not a Gov divergence. Re-dispatch with create_ephemeral=true for the provision-on-create receipt.');
+              }
+              return;
+            }
+            x3.record('pass', 'uami-provisioned', uamiName + ' exists in ARM (I7 preflight, live GET).');
+            x3.exportEnv('UAMI_NAME', uamiName);
+            if (identity && identity.principalId) x3.exportEnv('WS_PRINCIPAL', x3.mask(identity.principalId));
+            if (identity && identity.uamiClientId) x3.exportEnv('WS_CLIENT', x3.mask(identity.uamiClientId));
+
+            // ── 5. Grant-matrix coverage — every backend in workspace-grants.ts
+            //       must be evaluated on the Gov path. A missing one means Gov
+            //       silently skipped a backend Commercial grants.
+            const evals = Array.isArray(preflight.grantEvaluations) ? preflight.grantEvaluations : [];
+            const seen = new Set(evals.map((e) => e.backend));
+            const missing = expected.map((e) => e.backend).filter((b) => !seen.has(b));
+            if (missing.length) {
+              x3.record('fail', 'grant-matrix-coverage',
+                'The Gov preflight evaluated ' + seen.size + '/' + expected.length + ' backends — missing: ' + missing.join(', ') + '. workspace-grants.ts declares them, so the Gov path diverges from Commercial.');
+            } else {
+              x3.record('pass', 'grant-matrix-coverage', 'All ' + expected.length + ' backends from workspace-grants.ts were evaluated against live Gov RBAC / data-plane.');
+            }
+
+            // ── 6. Per-backend verdicts.
+            for (const e of evals) {
+              const where = 'backend ' + e.backend + ' (' + e.source + ')';
+              if (e.wouldAllow === false) {
+                x3.record('fail', 'grant/' + e.backend, where + ' would DENY the workspace UAMI: ' + (e.reason || 'no reason given') + '. The I2 grant is missing or was never applied in Gov.');
+              } else if (e.wouldAllow === true) {
+                x3.record('pass', 'grant/' + e.backend, where + ' allows the workspace UAMI: ' + (e.reason || ''));
+              } else if (e.source === 'error') {
+                x3.record('fail', 'grant/' + e.backend, where + ' could not be probed: ' + (e.reason || '') + '. An unreadable probe cannot certify the Gov path.');
+              } else {
+                x3.record('skip', 'grant/' + e.backend, where + ' is not applicable in this deployment: ' + (e.reason || ''));
+              }
+            }
+
+            // ── 7. The recorded I1/I2 apply outcomes (create-time) must carry no
+            //       failures.
+            const grants = (identity && Array.isArray(identity.grants)) ? identity.grants : [];
+            for (const g of grants.filter((g) => g.status === 'failed')) {
+              x3.record('fail', 'grant-apply/' + g.backend, 'The recorded I2 grant apply FAILED in Gov: ' + (g.error || '').slice(0, 300));
+            }
+            if (grants.length) {
+              const ok = grants.filter((g) => g.status === 'granted' || g.status === 'exists').length;
+              x3.record('info', 'grant-apply', ok + '/' + grants.length + ' recorded grants are granted|exists; ' + grants.filter((g) => g.status === 'skipped').length + ' skipped (backend not configured).');
+            }
+
+            // ── 8. Real workspace-scoped CREDENTIAL probe. In shadow mode a call
+            //       through the I5 credential factory with a workspace context
+            //       (adls-client -> workspaceScopedCredential{backend:'adls-lake'})
+            //       fires the I3 observation and writes an identity.shadow row.
+            //       An observedCalls delta proves the seam actually executes in Gov.
+            const before = Number(preflight.observedCalls || 0);
+            const items = await x3.get('/api/items?type=lakehouse');
+            const lake = ((items.json && (items.json.items || items.json.value)) || []).find((it) => it.workspaceId === WS);
+            if (!lake) {
+              x3.record('skip', 'credential-seam',
+                'No lakehouse item in this workspace, so the ambient workspace-context call (GET /api/lakehouse/tables) could not be made. Create a lakehouse in the workspace (or run with create_ephemeral=true against a seeded workspace) for the shadow-observation delta.');
+            } else {
+              const t = await x3.get('/api/lakehouse/tables?lakehouseId=' + encodeURIComponent(lake.id) + '&workspaceId=' + encodeURIComponent(WS));
+              console.log('GET /api/lakehouse/tables -> ' + t.status + ' ' + t.text.slice(0, 160));
+              let after = before;
+              for (let i = 0; i < 6 && after <= before; i++) {
+                await sleep(6000);
+                const again = await x3.get('/api/admin/workspaces/' + WS + '/identity');
+                after = Number(((again.json || {}).data || {}).preflight?.observedCalls || 0);
+              }
+              if (after > before) {
+                x3.record('pass', 'credential-seam',
+                  'The workspace-scoped credential seam executed in Gov: identity.shadow observations for ' + WS + ' went ' + before + ' -> ' + after + ' after a workspace-context data-plane call.');
+              } else {
+                x3.record('fail', 'credential-seam',
+                  'A workspace-context data-plane call (GET /api/lakehouse/tables, HTTP ' + t.status + ') recorded NO identity.shadow observation in Gov (observedCalls stayed at ' + before + '). The I3/I5 shadow seam is not firing on the Gov path — check LOOM_WS_IDENTITY_SHADOW_SAMPLE and the audit-log container.');
+              }
+            }
+          })().catch((e) => { x3.record('fail', 'identity-contract', 'lane error: ' + e.message); });
+          EOF
+
+      - name: Cross-check the UAMI against ARM + Entra with az
+        if: env.SKIP != '1' && env.UAMI_NAME != ''
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const x3 = require('./x3.cjs');
+          const NAME = process.env.UAMI_NAME;
+          const SUB = process.env.WS_SUB || '';
+          const RG = process.env.WS_RG || '';
+          const expected = JSON.parse(fs.readFileSync('expected-grants.json', 'utf-8'));
+          const receipt = x3.read();
+          const identity = (receipt.identity || {}).identity || {};
+
+          if (!SUB || !RG) {
+            x3.record('warn', 'arm-crosscheck',
+              'Cannot cross-check with az: the live console has no workspace-identity ARM coordinates (set LOOM_WS_IDENTITY_SUB/LOOM_SUBSCRIPTION_ID and LOOM_WS_IDENTITY_RG/LOOM_DLZ_RG on the gov loom-console).');
+            return;
+          }
+
+          const shown = x3.az(['identity', 'show', '-n', NAME, '-g', RG, '--subscription', SUB, '-o', 'json']);
+          if (!shown.ok) {
+            if (/ResourceNotFound|was not found|could not be found/i.test(shown.err)) {
+              x3.record('fail', 'arm-crosscheck',
+                'The console reports ' + NAME + ' as provisioned but ARM returns NOT FOUND in ' + SUB + '/' + RG + ' — the Gov console is asserting an identity Azure does not have.');
+            } else {
+              x3.record('warn', 'arm-crosscheck',
+                'az identity show failed (not a divergence — the lane simply cannot certify): ' + shown.err.slice(0, 300) + '. Grant the gov deploy SP Reader on ' + RG + ' to enable this cross-check.');
+            }
+            return;
+          }
+          const uami = JSON.parse(shown.out);
+          x3.mask(uami.principalId); x3.mask(uami.clientId);
+          x3.record('pass', 'arm-crosscheck', 'az identity show ' + NAME + ' -> principalId ' + uami.principalId + ', clientId ' + uami.clientId + ' (' + uami.location + ').');
+          if (identity.principalId && identity.principalId !== uami.principalId) {
+            x3.record('fail', 'arm-crosscheck',
+              'principalId mismatch: the workspace doc records ' + identity.principalId + ' but ARM has ' + uami.principalId + ' — the recorded grants point at a stale principal.');
+          }
+          if (identity.uamiClientId && identity.uamiClientId !== uami.clientId) {
+            x3.record('fail', 'arm-crosscheck',
+              'clientId mismatch: the workspace doc records ' + identity.uamiClientId + ' but ARM has ' + uami.clientId + ' — the ADX data-plane principal would be wrong.');
+          }
+
+          // ARM role assignments the workspace principal actually holds — the
+          // independent view of the arm-rbac half of the I2 matrix.
+          const ra = x3.az(['role', 'assignment', 'list', '--assignee', uami.principalId, '--all', '--subscription', SUB, '-o', 'json']);
+          if (!ra.ok) {
+            x3.record('warn', 'rbac-crosscheck',
+              'az role assignment list failed (cannot certify): ' + ra.err.slice(0, 260) + '. The gov deploy SP needs Microsoft.Authorization/roleAssignments/read on ' + SUB + '.');
+          } else {
+            const rows = JSON.parse(ra.out || '[]');
+            const held = new Set(rows.map((x) => String(x.roleDefinitionId || '').split('/').pop().toLowerCase()));
+            console.log('role assignments held by ' + NAME + ': ' + rows.length);
+            const recorded = Array.isArray(identity.grants) ? identity.grants : [];
+            for (const spec of expected.filter((e) => e.kind === 'arm-rbac')) {
+              const rec = recorded.find((g) => g.backend === spec.backend);
+              if (!rec || (rec.status !== 'granted' && rec.status !== 'exists')) continue; // not claimed -> nothing to verify
+              if (held.has(String(spec.role).toLowerCase())) {
+                x3.record('pass', 'rbac-crosscheck/' + spec.backend, 'ARM confirms role ' + spec.role + ' is assigned to ' + NAME + '.');
+              } else {
+                x3.record('fail', 'rbac-crosscheck/' + spec.backend,
+                  'The console recorded the ' + spec.backend + ' grant as ' + rec.status + ' but ARM lists NO assignment of role ' + spec.role + ' for ' + NAME + ' — the Gov grant did not stick.');
+              }
+            }
+          }
+
+          // The identity must have a live Entra service principal, or no token can
+          // ever be minted for it (the credential-acquisition precondition).
+          const sp = x3.az(['ad', 'sp', 'show', '--id', uami.clientId, '-o', 'json']);
+          if (sp.ok) {
+            const obj = JSON.parse(sp.out);
+            if ((obj.servicePrincipalType || '') === 'ManagedIdentity') {
+              x3.record('pass', 'entra-crosscheck', 'The Entra service principal for ' + NAME + ' exists (' + obj.id + ', type ManagedIdentity) — workspace-scoped token acquisition is possible.');
+            } else {
+              x3.record('fail', 'entra-crosscheck', 'The Entra object for ' + uami.clientId + ' is type ' + obj.servicePrincipalType + ', not ManagedIdentity.');
+            }
+          } else if (/does not exist|not found|Resource .* does not exist/i.test(sp.err)) {
+            x3.record('fail', 'entra-crosscheck',
+              'No Entra service principal for ' + NAME + ' (' + uami.clientId + ') — the workspace identity cannot mint a token, so enforce mode would fail closed in Gov.');
+          } else {
+            x3.record('warn', 'entra-crosscheck',
+              'az ad sp show could not be executed (cannot certify): ' + sp.err.slice(0, 260) + '. The gov deploy SP needs Entra directory read (Directory Readers) for this check.');
+          }
+          EOF
+
+      - name: Delete the ephemeral workspace + assert the identity cascade
+        if: always() && env.EPHEMERAL == '1' && env.WS_ID != ''
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const x3 = require('./x3.cjs');
+          const WS = process.env.WS_ID;
+          const NAME = process.env.UAMI_NAME || ('uami-ws-' + WS);
+          const SUB = process.env.WS_SUB || '';
+          const RG = process.env.WS_RG || '';
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+          (async () => {
+            const r = await x3.del('/api/admin/workspaces/' + WS);
+            if (r.status !== 200 || !r.json || r.json.ok !== true) {
+              x3.record('fail', 'ephemeral-cleanup',
+                'DELETE /api/admin/workspaces/' + WS + ' -> ' + r.status + ' ' + r.text.slice(0, 260) + '. The ephemeral workspace may still exist — delete it from Admin -> Workspaces.');
+              return;
+            }
+            const cascade = r.json.identityCascade || null;
+            x3.record('info', 'ephemeral-cleanup', 'Workspace ' + WS + ' deleted; identityCascade = ' + JSON.stringify(cascade));
+
+            if (!SUB || !RG) return;
+            // The I1 cascade is best-effort + asynchronous on the ARM side: poll.
+            let gone = false;
+            for (let i = 0; i < 6 && !gone; i++) {
+              const shown = x3.az(['identity', 'show', '-n', NAME, '-g', RG, '--subscription', SUB, '-o', 'json']);
+              if (!shown.ok && /ResourceNotFound|was not found|could not be found/i.test(shown.err)) { gone = true; break; }
+              if (!shown.ok) {
+                x3.record('warn', 'identity-cascade', 'az identity show could not be executed while asserting the cascade: ' + shown.err.slice(0, 240));
+                return;
+              }
+              await sleep(10000);
+            }
+            if (gone) {
+              x3.record('pass', 'identity-cascade', NAME + ' is gone from ARM after the workspace delete — the I1 delete cascade works on the Gov path.');
+            } else {
+              x3.record('fail', 'identity-cascade',
+                NAME + ' still exists in ' + SUB + '/' + RG + ' ~60s after the workspace was deleted — the I1 cascade leaked a per-workspace identity in Gov. Delete it manually: az identity delete -n ' + NAME + ' -g ' + RG);
+            }
+          })().catch((e) => { x3.record('fail', 'ephemeral-cleanup', 'lane error: ' + e.message); });
+          EOF
+
+      - name: Verdict + job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const x3 = require('./x3.cjs');
+          const r = x3.read();
+          const f = r.findings || [];
+          const count = (s) => f.filter((x) => x.severity === s).length;
+          const fails = f.filter((x) => x.severity === 'fail');
+          const warns = f.filter((x) => x.severity === 'warn');
+          const skips = f.filter((x) => x.severity === 'skip');
+
+          const lines = [];
+          lines.push('## gov-workspace-identity — I1/I2/I3 Gov receipt');
+          lines.push('');
+          lines.push('- workspace: `' + (r.workspaceId || 'n/a') + '`' + (r.ephemeral ? ' (ephemeral, deleted)' : ''));
+          lines.push('- mode: `' + (process.env.ID_MODE || 'off') + '`');
+          lines.push('- expected grant matrix: ' + ((r.expectedGrants || []).length) + ' backends from `' + (r.source || 'workspace-grants.ts') + '`');
+          lines.push('- results: **' + count('fail') + ' fail** / ' + count('warn') + ' warn / ' + count('pass') + ' pass / ' + count('skip') + ' skip');
+          lines.push('');
+          lines.push('| severity | check | detail |');
+          lines.push('| --- | --- | --- |');
+          for (const x of f) {
+            lines.push('| ' + x.severity + ' | `' + x.check + '` | ' + String(x.detail).replace(/\|/g, '\\|').slice(0, 400) + ' |');
+          }
+          const md = lines.join('\n');
+          console.log(md);
+          if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, x3.redact(md) + '\n');
+
+          // PUBLIC repo: the uploaded receipt is the redacted copy (built-in role
+          // ids survive so a reviewer still sees WHICH grant diverged).
+          fs.writeFileSync('gov-workspace-identity.redacted.json', x3.redact(JSON.stringify(r, null, 2)));
+
+          if (fails.length) {
+            console.log('::error::gov-workspace-identity FAILED — ' + fails.length + ' divergence(s): ' + fails.map((x) => x.check).join(', '));
+            process.exit(1);
+          }
+          if (skips.length && count('pass') === 0) {
+            console.log('::notice::gov-workspace-identity SKIPPED — ' + skips.map((x) => x.detail).join(' | '));
+            process.exit(0);
+          }
+          if (warns.length) console.log('::warning::gov-workspace-identity passed with ' + warns.length + ' uncertified check(s).');
+          console.log('::notice::gov-workspace-identity PASSED — ' + count('pass') + ' check(s) green on the Gov path.');
+          EOF
+
+      - name: Upload the receipt (redacted — this repo is public)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gov-workspace-identity
+          path: |
+            gov-workspace-identity.redacted.json
+            expected-grants.json
+          if-no-files-found: warn
