@@ -11,12 +11,15 @@
  * commit 20b3fe93 (`apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx`
  * at 3,025 LOC, before any R10 slice landed). It is 193 entries.
  *
- * This guard is not theoretical. The first push of PR #2565 collapsed the
- * incremental-refresh cluster into one hook, which moved its 17-`useState` run
+ * This guard is not theoretical. The first push of PR #2565 (commit 25e464b0)
+ * collapsed the incremental-refresh cluster into a single
+ * `useSemanticModelIncrementalRefresh()` hook, which moved its 17-`useState` run
  * from sequence position 92 to position 162 — 70 hook registrations later —
  * while the PR body claimed "hook order and effect order in
- * SemanticModelEditorInner are unchanged". Running this spec against that tree
- * fails at index 92.
+ * SemanticModelEditorInner are unchanged". Point the expansion map below at that
+ * tree's single-hook export and the golden diff reports the divergence at index
+ * 92; run this spec unmodified against that tree and `extractFunctionSource`
+ * throws on the missing `…State` / `…Actions` exports. Either way it is red.
  *
  * When a future slice legitimately ADDS or REMOVES a hook (as opposed to moving
  * one), regenerate the golden in the same commit — the fixture diff is then the
