@@ -106,7 +106,41 @@ jobs:
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
           else
-            APPS=$(echo "$INPUT" | jq -cR 'split(",") | map({name: ., ctx: ("./apps/fiab-" + (sub("^loom-"; "") | sub("loom-mcp"; "mcp-config") | sub("loom-setup-orchestrator"; "setup-orchestrator") | sub("loom-activator"; "activator-engine") | sub("loom-mirroring"; "mirroring-engine") | sub("loom-direct-lake-shim"; "direct-lake-shim")))})')
+            # Resolve each app to its build context. The ./apps/fiab-* convention
+            # covers most images, but not all — loom-copilot-maf, loom-duckdb,
+            # loom-transform-runner and loom-migrate live at ./apps/<name>. The old
+            # jq-only mapping ALWAYS produced ./apps/fiab-<stem>, so asking this
+            # workflow for one of those resolved to a directory that does not exist
+            # and the only way to build them was full-app-deploy-commercial.yml,
+            # which rebuilds and rolls the entire estate. Prefer a real directory;
+            # fall back to the convention.
+            APPS="[]"
+            IFS="," read -ra REQ <<< "$INPUT"
+            for APP in "${REQ[@]}"; do
+              APP="$(echo "$APP" | tr -d '[:space:]')"
+              [ -z "$APP" ] && continue
+              if [ -d "./apps/$APP" ]; then
+                CTX="./apps/$APP"
+              else
+                # Legacy ./apps/fiab-* convention, with the handful of names whose
+                # directory stem does not match the image name.
+                case "$APP" in
+                  loom-mcp)                 STEM=mcp-config ;;
+                  loom-setup-orchestrator)  STEM=setup-orchestrator ;;
+                  loom-activator)           STEM=activator-engine ;;
+                  loom-mirroring)           STEM=mirroring-engine ;;
+                  loom-direct-lake-shim)    STEM=direct-lake-shim ;;
+                  *)                        STEM="${APP#loom-}" ;;
+                esac
+                CTX="./apps/fiab-$STEM"
+              fi
+              if [ ! -f "$CTX/Dockerfile" ]; then
+                echo "::error::no Dockerfile for '$APP' at $CTX — check the app name."
+                exit 1
+              fi
+              APPS=$(jq -c --arg n "$APP" --arg c "$CTX" '. + [{name:$n, ctx:$c}]' <<< "$APPS")
+              echo "::notice::$APP -> $CTX"
+            done
           fi
           echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
 
