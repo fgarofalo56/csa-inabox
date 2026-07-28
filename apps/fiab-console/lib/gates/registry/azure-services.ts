@@ -315,7 +315,12 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     // saves to Cosmos regardless; actual scheduled delivery needs the timer
     // Function + Logic App. Registered here so the honest delivery gate is
     // discoverable on the Admin gate page with a Fix-it (G2).
-    surfaces: [{ path: '/items/report', label: 'Report → Subscriptions (scheduled delivery)' }],
+    surfaces: [
+      { path: '/items/report', label: 'Report → Subscriptions (scheduled delivery)' },
+      // B-N19d rides the SAME timer Function + delivery Logic App, so it shares
+      // this gate rather than introducing a second one.
+      { path: '/governance/insights', label: 'Insights → Scheduled digests (delivery)' },
+    ],
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Subscriptions you save are stored in Cosmos and begin delivering automatically once the report-subscriptions Function + Logic App are deployed (reportSubscriptionsEnabled=true). No Fabric required.',
     legacyCodes: ['report_subscription_delivery_not_configured', 'subscription_delivery_not_configured'],

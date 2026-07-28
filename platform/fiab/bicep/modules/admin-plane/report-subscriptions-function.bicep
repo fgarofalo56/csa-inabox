@@ -57,6 +57,28 @@ param loomDlzRg string = ''
 @description('Application Insights connection string for telemetry. Empty skips wiring.')
 param appInsightsConnectionString string = ''
 
+// ── B-N19d — scheduled insights / anomaly-narration digests ────────────────
+// The SAME timer tick also processes `insight-digests`: it samples Azure
+// Monitor platform metrics over two back-to-back windows, folds fired alert
+// instances in, narrates the movement on the Loom Azure OpenAI deployment, and
+// delivers an HTML body through the SAME delivery Logic App. No second
+// scheduler, no second Logic App, no Fabric.
+
+@description('B-N19d: Azure OpenAI / Foundry inference endpoint used to narrate insight digests (LOOM_AOAI_ENDPOINT). Empty = digests fall back to the deterministic (non-LLM) summary, which still delivers.')
+param aoaiEndpoint string = ''
+
+@description('B-N19d: chat deployment name used for digest narration (LOOM_AOAI_DEPLOYMENT). Empty = deterministic summary.')
+param aoaiDeployment string = ''
+
+@description('B-N19d: Azure OpenAI Chat Completions API version (LOOM_AOAI_API_VERSION).')
+param aoaiApiVersion string = '2024-10-21'
+
+@description('B-N19d: AOAI/Foundry ACCOUNT NAME in this RG for the in-module Cognitive Services OpenAI User grant. Empty skips the grant (BYO / cross-RG account: grant documented in the runbook).')
+param aoaiAccountName string = ''
+
+@description('Skip role-assignment grants (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator).')
+param skipRoleGrants bool = false
+
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
@@ -111,6 +133,10 @@ var baseAppSettings = [
   // Sovereign-cloud endpoints derived from the deployment environment so the
   // Function reaches the correct Power BI / ARM hosts in Gov clouds.
   { name: 'LOOM_ARM_ENDPOINT', value: environment().resourceManager }
+  // B-N19d digest narration + Monitor sampling.
+  { name: 'LOOM_AOAI_ENDPOINT', value: aoaiEndpoint }
+  { name: 'LOOM_AOAI_DEPLOYMENT', value: aoaiDeployment }
+  { name: 'LOOM_AOAI_API_VERSION', value: aoaiApiVersion }
 ]
 
 resource site 'Microsoft.Web/sites@2024-04-01' = {
@@ -133,8 +159,28 @@ resource site 'Microsoft.Web/sites@2024-04-01' = {
   }
 }
 
+// ── B-N19d — Cognitive Services OpenAI User on the AOAI/Foundry account so the
+// digest narration call authenticates with the Function's managed identity
+// (same in-module grant pattern as copilot-evaluator-function.bicep). Skipped
+// when the account is BYO / cross-RG — the runbook documents that grant.
+var cognitiveServicesOpenAiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+
+resource aoaiAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = if (!empty(aoaiAccountName)) {
+  name: aoaiAccountName
+}
+
+resource digestOpenAiUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(aoaiAccountName) && !skipRoleGrants) {
+  scope: aoaiAccount
+  name: guid(resourceGroup().id, siteName, aoaiAccountName, cognitiveServicesOpenAiUserRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAiUserRoleId)
+    principalId: site.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output siteId string = site.id
 output siteName string = site.name
 output defaultHostName string = site.properties.defaultHostName
-@description('System-assigned identity principalId — grant it Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor + Logic App Contributor in post-deploy bootstrap / the delivery Logic App module.')
+@description('System-assigned identity principalId — grant it Cosmos DB Built-in Data Contributor + Storage Blob Data Contributor + Logic App Contributor in post-deploy bootstrap / the delivery Logic App module. B-N19d also grants it Monitoring Reader at subscription scope (admin-plane/monitoring-reader-rbac.bicep) so digests can read platform metrics + fired alerts.')
 output principalId string = site.identity.principalId

@@ -2289,6 +2289,9 @@ module consoleMonitoringReaderRbac 'modules/admin-plane/monitoring-reader-rbac.b
   scope: subscription()
   params: {
     consolePrincipalId: hub.consolePrincipalId
+    // B-N19d — the report-subscriptions timer Function reads platform metrics +
+    // fired alerts when it processes scheduled insight digests on its tick.
+    digestPrincipalId: deployAdminPlane ? adminPlane!.outputs.reportSubscriptionsPrincipalId : ''
     skipRoleGrants: skipRoleGrants
   }
 }

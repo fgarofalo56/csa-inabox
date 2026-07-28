@@ -13,9 +13,15 @@
  *
  * No Microsoft Fabric dependency — exports run against the Power BI ExportTo
  * REST API and delivery uses an Azure Consumption Logic App.
+ *
+ * B-N19d: the SAME tick also processes scheduled insight digests
+ * (`insights-engine.runInsightDigests`) — Azure Monitor metric/alert deltas,
+ * Copilot narration, delivered through the SAME Logic App. Deliberately one
+ * scheduler: a digest failure never blocks report delivery and vice versa.
  */
 import { app, InvocationContext, Timer } from '@azure/functions';
 import { runSubscriptions } from '../subscription-engine';
+import { runInsightDigests } from '../insights-engine';
 
 const SCHEDULE = process.env.REPORT_SUBSCRIPTIONS_CRON || '0 0 8 * * 1-5';
 // Fallback lookback when scheduleStatus is absent (first run / cold start).
@@ -45,6 +51,23 @@ app.timer('reportSubscriptions', {
     } catch (e: any) {
       context.error(`report-subscriptions tick failed: ${e?.message || e}`);
       throw e;
+    }
+
+    // B-N19d — scheduled insight digests ride the same tick. Isolated so a
+    // digest problem (Monitor RBAC, AOAI outage) can never fail or delay the
+    // report-subscription deliveries above.
+    try {
+      await runInsightDigests(
+        {
+          log: (m: string) => context.log(m),
+          warn: (m: string) => context.warn(m),
+          error: (m: string) => context.error(m),
+        },
+        windowStart,
+        now,
+      );
+    } catch (e: any) {
+      context.error(`insight-digests tick failed: ${e?.message || e}`);
     }
   },
 });

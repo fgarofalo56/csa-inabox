@@ -22,6 +22,8 @@ describe('GOVERNANCE_SECTIONS (shared sidebar + overview registry)', () => {
     '/governance/catalog',
     '/admin/domains',
     '/governance/glossary',
+    // B-N19g — DataHub / OpenMetadata catalog interop.
+    '/governance/interop',
     '/governance/scans',
     '/admin/classifications',
     '/admin/sensitivity-labels',

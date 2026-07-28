@@ -5517,6 +5517,14 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
     subscriptionLogicAppName: loomSubscriptionLogicAppName
     subscriptionLogicAppRg: resourceGroup().name
     loomDlzRg: loomDlzRg
+    // B-N19d — digest narration on the Loom AOAI/Foundry deployment (the same
+    // endpoint + chat deployment the Console uses). Empty in a deployment
+    // without Foundry → digests deliver the deterministic summary instead.
+    aoaiEndpoint: loomAoaiEndpointValue
+    aoaiDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
+    aoaiApiVersion: loomAoaiApiVersion
+    aoaiAccountName: agentFoundryEnabled ? agentFoundry!.outputs.accountNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : '')
+    skipRoleGrants: skipRoleGrants
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }
