@@ -170,6 +170,9 @@ function tokenFor(oid: string, over: Record<string, unknown> = {}): string {
   return signJwt({
     iss: `https://sts.windows.net/${TENANT}/`,
     aud: `api://${CLIENT_ID}`,
+    // `scp` makes this an ACCESS token. An ID token for the same app carries the
+    // same iss/aud and no scp/roles — see the id-token tests below.
+    scp: 'user_impersonation',
     oid, tid: TENANT, exp: now + 3600, nbf: now - 60,
     ...over,
   });
@@ -184,7 +187,7 @@ vi.mock('@/lib/sharing/store', async (importOriginal) => {
 });
 
 const SAVED = ['LOOM_ENTRA_TENANT_ID', 'LOOM_MSAL_TENANT_ID', 'AZURE_TENANT_ID', 'LOOM_MSAL_CLIENT_ID',
-  'LOOM_SHARING_AUDIENCE', 'LOOM_SHARING_URL', 'LOOM_SHARING_ENABLED', 'AZURE_CLOUD'] as const;
+  'LOOM_SHARING_AUDIENCE', 'LOOM_SHARING_SCOPE', 'LOOM_SHARING_URL', 'LOOM_SHARING_ENABLED', 'AZURE_CLOUD'] as const;
 let saved: Record<string, string | undefined> = {};
 
 beforeEach(async () => {
@@ -263,6 +266,93 @@ describe('authenticateRecipient', () => {
     const { authenticateRecipient } = await import('../recipient-auth');
     const res = await authenticateRecipient('Bearer whatever');
     expect(res).toMatchObject({ ok: false, status: 503 });
+  });
+});
+
+// ── ATTACK: an ID token is not an authorization to export data ─────────────
+//
+// Regression for the shipped defect: the audience list defaulted to the
+// Console's OWN app registration and the verifier checked no token type, so an
+// ID token minted during an ordinary interactive Console sign-in — same iss,
+// same aud, same signature chain — satisfied the "pinned audience" and reached
+// the data-export endpoint.
+describe('token TYPE is checked, not just the audience', () => {
+  const RECIPIENT_ID_TOKEN = { scp: undefined, roles: undefined } as Record<string, unknown>;
+
+  it('401s an ID TOKEN for a REGISTERED recipient principal (no scp / no roles)', async () => {
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const now = Math.floor(Date.now() / 1000);
+    // Exactly what Entra mints for an interactive sign-in to the Console:
+    // valid signature, estate issuer, Console audience, the recipient's own oid.
+    const idToken = signJwt({
+      iss: `https://sts.windows.net/${TENANT}/`, aud: `api://${CLIENT_ID}`,
+      oid: OID_A, tid: TENANT, exp: now + 3600, nbf: now - 60,
+      ...RECIPIENT_ID_TOKEN,
+    });
+    const res = await authenticateRecipient(`Bearer ${idToken}`);
+    expect(res).toMatchObject({ ok: false, status: 401 });
+    // It must NOT resolve to the recipient — a 403 here would still mean the
+    // token authenticated.
+    expect(res.ok).toBe(false);
+  });
+
+  it('401s an interactive ID token carrying a nonce', async () => {
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient(`Bearer ${tokenFor(OID_A, { nonce: 'abc123' })}`);
+    expect(res).toMatchObject({ ok: false, status: 401 });
+  });
+
+  it('401s a token whose audience is the BARE client id (the ID-token audience shape)', async () => {
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient(`Bearer ${tokenFor(OID_A, { aud: CLIENT_ID })}`);
+    expect(res).toMatchObject({ ok: false, status: 401 });
+  });
+
+  it('accepts an app-only access token (roles, no scp) for a registered recipient', async () => {
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient(
+      `Bearer ${tokenFor(OID_A, { scp: undefined, roles: ['DeltaSharing.Read'] })}`,
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it('401s when LOOM_SHARING_SCOPE is set and the token does not carry it', async () => {
+    process.env.LOOM_SHARING_SCOPE = 'DeltaSharing.Read';
+    const { authenticateRecipient } = await import('../recipient-auth');
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`)).toMatchObject({ ok: false, status: 401 });
+    const good = await authenticateRecipient(`Bearer ${tokenFor(OID_A, { scp: 'DeltaSharing.Read' })}`);
+    expect(good.ok).toBe(true);
+    delete process.env.LOOM_SHARING_SCOPE;
+  });
+});
+
+// ── ATTACK: an unauthenticated caller learns nothing about the estate ──────
+describe('configuration state is never returned to an unauthenticated caller', () => {
+  it('401s a caller with NO credential even when the estate is unconfigured, and returns no hint', async () => {
+    delete process.env.LOOM_SHARING_URL;
+    delete process.env.LOOM_ENTRA_TENANT_ID;
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient(null);
+    // Authenticate FIRST: no credential is the caller's problem, and answering
+    // 503-with-remediation here is what leaked the wiring.
+    expect(res).toMatchObject({ ok: false, status: 401 });
+    expect((res as { hint?: string }).hint).toBeUndefined();
+    expect((res as { operatorHint?: string }).operatorHint).toBeUndefined();
+  });
+
+  it('keeps bicep paths and env var names OUT of the caller-safe fields on a 503', async () => {
+    delete process.env.LOOM_SHARING_URL;
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient('Bearer not-a-real-token') as {
+      ok: false; error: string; hint?: string; operatorHint?: string;
+    };
+    expect(res.ok).toBe(false);
+    const callerVisible = `${res.error} ${res.hint || ''}`;
+    for (const leak of ['bicep', 'LOOM_SHARING_URL', 'LOOM_ENTRA_TENANT_ID', 'Key Vault', 'docs/fiab']) {
+      expect(callerVisible).not.toContain(leak);
+    }
+    // The remediation still exists — for the OPERATOR, via the log.
+    expect(res.operatorHint || '').toContain('LOOM_SHARING_URL');
   });
 });
 

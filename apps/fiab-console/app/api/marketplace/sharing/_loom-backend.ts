@@ -60,8 +60,24 @@ function badRequest(error: string): NextResponse {
   return NextResponse.json({ ok: false, error }, { status: 400 });
 }
 
+/**
+ * Reads on this surface are `withSession`, so ANY signed-in user can call them.
+ * Three fields in the natural payload are estate infrastructure rather than
+ * catalog metadata, and are withheld unless the caller is a tenant admin:
+ *
+ *   host        the internal FQDN of the sharing server (an internal-ingress
+ *               target whose address is not otherwise discoverable)
+ *   location    the raw `abfss://` root of every published table
+ *   principals  the Entra object/application ids of every external recipient
+ *
+ * The rest of the shape is unchanged, so the UI renders identically for a
+ * non-admin; only these three are elided. Mutations were already tenant-admin —
+ * this closes the read half.
+ */
+export type SharingViewScope = { full: boolean };
+
 /** UC-shaped view of a Loom share, so the existing UI renders it unchanged. */
-function toUiShare(share: LoomShare, recipients: LoomRecipient[]) {
+function toUiShare(share: LoomShare, recipients: LoomRecipient[], scope: SharingViewScope) {
   return {
     name: share.id,
     comment: share.comment,
@@ -71,14 +87,15 @@ function toUiShare(share: LoomShare, recipients: LoomRecipient[]) {
       data_object_type: 'TABLE',
       shared_as: `${t.schema}.${t.name}`,
       // Loom-only extras — the ADLS root and protocol id the UI can surface.
-      location: t.location,
+      ...(scope.full ? { location: t.location } : {}),
       id: t.id,
+      historyShared: !!t.historyShared,
     })),
     recipients: recipients.filter((r) => r.shares?.includes(share.id)).map((r) => r.id),
   };
 }
 
-function toUiRecipient(r: LoomRecipient) {
+function toUiRecipient(r: LoomRecipient, scope: SharingViewScope) {
   return {
     name: r.id,
     // Deliberately NOT 'TOKEN': there is no activation URL and no long-lived
@@ -86,20 +103,25 @@ function toUiRecipient(r: LoomRecipient) {
     // Loom backend does not mint.
     authentication_type: 'ENTRA',
     comment: r.comment,
-    principals: r.principalIds,
+    ...(scope.full ? { principals: r.principalIds } : { principalCount: (r.principalIds || []).length }),
     shares: r.shares,
     disabled: !!r.disabled,
   };
 }
 
-export async function loomListShares(): Promise<NextResponse> {
+/** The sharing server FQDN is only disclosed to a tenant admin. */
+function hostFor(scope: SharingViewScope): string {
+  return scope.full ? (process.env.LOOM_SHARING_URL || '') : '';
+}
+
+export async function loomListShares(scope: SharingViewScope): Promise<NextResponse> {
   const tenantId = sharingOwnerTenantId();
   const [shares, recipients] = await Promise.all([listLoomShares(tenantId), listLoomRecipients(tenantId)]);
   return NextResponse.json({
     ok: true,
     backend: 'loom',
-    host: process.env.LOOM_SHARING_URL || '',
-    shares: shares.map((s) => toUiShare(s, recipients)),
+    host: hostFor(scope),
+    shares: shares.map((s) => toUiShare(s, recipients, scope)),
   });
 }
 
@@ -117,10 +139,10 @@ export async function loomCreateShare(body: any, actor: string): Promise<NextRes
     tables: [],
     createdBy: actor,
   });
-  return NextResponse.json({ ok: true, backend: 'loom', share: toUiShare(share, []) });
+  return NextResponse.json({ ok: true, backend: 'loom', share: toUiShare(share, [], { full: true }) });
 }
 
-export async function loomGetShare(name: string): Promise<NextResponse> {
+export async function loomGetShare(name: string, scope: SharingViewScope): Promise<NextResponse> {
   const tenantId = sharingOwnerTenantId();
   const share = await getLoomShare(tenantId, name);
   if (!share) return NextResponse.json({ ok: false, error: `Share "${name}" not found.` }, { status: 404 });
@@ -128,7 +150,7 @@ export async function loomGetShare(name: string): Promise<NextResponse> {
   return NextResponse.json({
     ok: true,
     backend: 'loom',
-    share: toUiShare(share, recipients),
+    share: toUiShare(share, recipients, scope),
     permissions: {
       privilege_assignments: recipients
         .filter((r) => r.shares?.includes(name))
@@ -203,7 +225,7 @@ export async function loomPatchShare(name: string, body: any): Promise<NextRespo
   return NextResponse.json({
     ok: true,
     backend: 'loom',
-    share: toUiShare(updated, recipients),
+    share: toUiShare(updated, recipients, { full: true }),
     permissions: {
       privilege_assignments: recipients
         .filter((r) => r.shares?.includes(name))
@@ -230,14 +252,14 @@ export async function loomDeleteShare(name: string): Promise<NextResponse> {
   return NextResponse.json({ ok: true, backend: 'loom' });
 }
 
-export async function loomListRecipients(): Promise<NextResponse> {
+export async function loomListRecipients(scope: SharingViewScope): Promise<NextResponse> {
   const tenantId = sharingOwnerTenantId();
   const recipients = await listLoomRecipients(tenantId);
   return NextResponse.json({
     ok: true,
     backend: 'loom',
-    host: process.env.LOOM_SHARING_URL || '',
-    recipients: recipients.map(toUiRecipient),
+    host: hostFor(scope),
+    recipients: recipients.map((r) => toUiRecipient(r, scope)),
   });
 }
 
@@ -267,12 +289,30 @@ export async function loomCreateRecipient(body: any, actor: string): Promise<Nex
     comment: body?.comment ? String(body.comment) : undefined,
     createdBy: actor,
   });
-  return NextResponse.json({ ok: true, backend: 'loom', recipient: toUiRecipient(recipient) });
+  return NextResponse.json({ ok: true, backend: 'loom', recipient: toUiRecipient(recipient, { full: true }) });
 }
 
 export async function loomDeleteRecipient(name: string): Promise<NextResponse> {
   await deleteLoomRecipient(sharingOwnerTenantId(), name);
   return NextResponse.json({ ok: true, backend: 'loom' });
+}
+
+/**
+ * Suspend or restore a recipient — the kill-switch write path.
+ *
+ * `disabled` takes effect on the NEXT protocol call: `matchRecipientByPrincipal`
+ * skips disabled recipients, so the caller stops authenticating entirely while
+ * its record, its grants, and its audit history survive. That is the difference
+ * from DELETE, which loses the grant list and makes "what did they have?"
+ * unanswerable during an incident. Tenant-admin, like every other act that
+ * changes who can read estate data.
+ */
+export async function loomSetRecipientDisabled(name: string, disabled: boolean): Promise<NextResponse> {
+  const tenantId = sharingOwnerTenantId();
+  const recipient = await getRecipient(tenantId, name);
+  if (!recipient) return NextResponse.json({ ok: false, error: `Recipient "${name}" not found.` }, { status: 404 });
+  const updated = await upsertRecipient({ ...recipient, disabled });
+  return NextResponse.json({ ok: true, backend: 'loom', recipient: toUiRecipient(updated, { full: true }) });
 }
 
 /**

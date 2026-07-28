@@ -13,6 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { listShares, createShare } from '@/lib/azure/unity-catalog-client';
 import { resolveShareHost, sharingErrorResponse } from '../_lib';
 import { isLoomSharingBackend, loomListShares, loomCreateShare, loomSharingErrorResponse } from '../_loom-backend';
@@ -20,9 +21,11 @@ import { isLoomSharingBackend, loomListShares, loomCreateShare, loomSharingError
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const GET = withSession(async (req) => {
+export const GET = withSession(async (req, { session }) => {
   try {
-    if (isLoomSharingBackend()) return await loomListShares();
+    // Non-admins get the catalog shape without the estate infrastructure fields
+    // (server FQDN, abfss roots, recipient principal ids) - see _loom-backend.
+    if (isLoomSharingBackend()) return await loomListShares({ full: isTenantAdmin(session) });
     const host = await resolveShareHost(req.nextUrl.searchParams.get('host'));
     const shares = await listShares(host);
     return NextResponse.json({ ok: true, backend: 'databricks', host, shares });

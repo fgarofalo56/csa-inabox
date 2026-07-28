@@ -88,19 +88,37 @@ function loomSharingBearer(): string {
   return t;
 }
 
-/** The Entra audiences a RECIPIENT token may carry. Recipients authenticate to
- *  the Console, so the default is the Console's own app registration; a
- *  dedicated registration is set as LOOM_SHARING_AUDIENCE. */
+/**
+ * The Entra audiences a RECIPIENT token may carry.
+ *
+ * `LOOM_SHARING_AUDIENCE` is the RIGHT answer — a dedicated app registration (or
+ * App ID URI) exposed only to sharing recipients, so that a token for the
+ * Console is not a token for the data-export endpoint.
+ *
+ * Without it we fall back to the Console's own App ID URI (`api://<clientId>`),
+ * which still requires a registered recipient principal and (see
+ * `verifyEntraBearer`) an ACCESS token carrying `scp`/`roles`. The BARE client
+ * id is deliberately NOT accepted: that is the audience shape of the Console's
+ * own ID tokens, and accepting it would let an ordinary interactive sign-in
+ * credential be replayed at the data plane.
+ */
 export function sharingRecipientAudiences(): string[] {
   const out: string[] = [];
   const explicit = (process.env.LOOM_SHARING_AUDIENCE || '').trim();
   if (explicit) out.push(explicit);
   const clientId = (process.env.LOOM_MSAL_CLIENT_ID || '').trim();
-  if (clientId) {
-    out.push(clientId);
-    out.push(`api://${clientId}`);
-  }
-  return out;
+  if (clientId) out.push(`api://${clientId}`);
+  return [...new Set(out)];
+}
+
+/** Optional scope/app-role pin for recipient tokens (`LOOM_SHARING_SCOPE`). Unset
+ *  by default — no day-one gate — but when set, a token without it is refused
+ *  even if its audience matches. */
+export function sharingRequiredScopes(): string[] {
+  return (process.env.LOOM_SHARING_SCOPE || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export class LoomSharingError extends Error {

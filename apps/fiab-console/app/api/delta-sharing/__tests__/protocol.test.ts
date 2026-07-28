@@ -10,6 +10,13 @@
  * AND `loomSharingFetch` was never invoked. A test that only checked the status
  * code would still pass if the proxy ran first and we merely discarded the
  * result — which would already have signed a file URL for B's data.
+ *
+ * The `path traversal` block is the regression suite for the defect this route
+ * shipped with: only seg[1] was authorized, while seg.join('/') was proxied, so
+ * an encoded `../` inside the SCHEMA or TABLE segment (which Next.js decodes
+ * per-segment before the handler sees it) redirected the upstream call at
+ * another recipient's share. Those cases put the hostile payload where the check
+ * was absent, not where it was present.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'node:crypto';
@@ -20,6 +27,8 @@ const TENANT = '11111111-2222-3333-4444-555555555555';
 const CLIENT_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const OID_A = '99999999-8888-7777-6666-555555555555';
 const OID_B = '12121212-3434-5656-7878-909090909090';
+/** A valid tenant token that belongs to no registered recipient. */
+const OID_STRANGER = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
 const recipientA: LoomRecipient = { id: 'agency-a', tenantId: TENANT, principalIds: [OID_A], shares: ['share-a'] };
 const recipientB: LoomRecipient = { id: 'agency-b', tenantId: TENANT, principalIds: [OID_B], shares: ['share-b'] };
@@ -48,10 +57,13 @@ vi.mock('@/lib/sharing/store', async (importOriginal) => {
   };
 });
 
-// The audit write is best-effort and Cosmos-backed; stub the container so the
-// route's audit path runs without a database.
+// The audit write is best-effort and Cosmos-backed; capture the rows so the
+// spec can assert on what the trail actually says, not merely that it ran.
+const auditRows: Array<Record<string, any>> = [];
 vi.mock('@/lib/azure/cosmos-client', () => ({
-  auditLogContainer: vi.fn(async () => ({ items: { create: vi.fn(async () => ({})) } })),
+  auditLogContainer: vi.fn(async () => ({
+    items: { create: vi.fn(async (doc: Record<string, any>) => { auditRows.push(doc); return {}; }) },
+  })),
 }));
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -59,22 +71,35 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLen
 function b64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-function tokenFor(oid: string): string {
+function tokenFor(oid: string, over: Record<string, unknown> = {}): string {
   const now = Math.floor(Date.now() / 1000);
   const h = b64url(Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'test-kid' })));
   const p = b64url(Buffer.from(JSON.stringify({
     iss: `https://sts.windows.net/${TENANT}/`, aud: `api://${CLIENT_ID}`,
+    // An ACCESS token (scp). See sharing-authz.test.ts for the ID-token refusal.
+    scp: 'user_impersonation',
     oid, tid: TENANT, exp: now + 3600, nbf: now - 60,
+    ...over,
   })));
   const sig = crypto.sign('RSA-SHA256', Buffer.from(`${h}.${p}`, 'utf-8'), privateKey);
   return `${h}.${p}.${b64url(sig)}`;
 }
 
-/** Build the request + the catch-all params the app router would pass. A real
- *  NextRequest (not a bare Request) because the route reads `nextUrl.search` to
- *  forward the protocol's query parameters. */
-function call(pathSegments: string[], oid: string | null, method: 'GET' | 'POST' = 'GET') {
-  const url = `https://console.example.gov/api/delta-sharing/${pathSegments.join('/')}`;
+/**
+ * Build the request + the catch-all params the app router would pass. A real
+ * NextRequest (not a bare Request) because the route reads `nextUrl.search` to
+ * forward the protocol's query parameters.
+ *
+ * NOTE ON ENCODING: `pathSegments` are the DECODED values Next.js hands the
+ * handler. Next.js decodes each catch-all segment individually
+ * (`route-matcher.js`: `match.split('/').map(decode)`), so a request written as
+ * `%2E%2E%2Fshares%2Fshare-b` arrives as the single segment
+ * `../shares/share-b` — which is exactly what the traversal tests pass here.
+ * The URL is built with the segments re-encoded so the request object is
+ * faithful to the wire form.
+ */
+function call(pathSegments: string[], oid: string | null, method: 'GET' | 'POST' = 'GET', search = '') {
+  const url = `https://console.example.gov/api/delta-sharing/${pathSegments.map(encodeURIComponent).join('/')}${search}`;
   const headers: Record<string, string> = {};
   if (oid) headers.authorization = `Bearer ${tokenFor(oid)}`;
   const req = new NextRequest(url, { method, headers, body: method === 'POST' ? '{}' : undefined });
@@ -82,11 +107,14 @@ function call(pathSegments: string[], oid: string | null, method: 'GET' | 'POST'
 }
 
 const SAVED = ['LOOM_ENTRA_TENANT_ID', 'LOOM_MSAL_TENANT_ID', 'AZURE_TENANT_ID', 'LOOM_MSAL_CLIENT_ID',
-  'LOOM_SHARING_AUDIENCE', 'LOOM_SHARING_URL', 'LOOM_SHARING_ENABLED', 'AZURE_CLOUD'] as const;
+  'LOOM_SHARING_AUDIENCE', 'LOOM_SHARING_SCOPE', 'LOOM_SHARING_URL', 'LOOM_SHARING_ENABLED', 'AZURE_CLOUD'] as const;
 let saved: Record<string, string | undefined> = {};
 
 beforeEach(async () => {
   loomSharingFetchMock.mockClear();
+  auditRows.length = 0;
+  const { __resetDenyThrottleForTest } = await import('../[...path]/route');
+  __resetDenyThrottleForTest();
   saved = Object.fromEntries(SAVED.map((k) => [k, process.env[k]]));
   for (const k of SAVED) delete process.env[k];
   process.env.LOOM_ENTRA_TENANT_ID = TENANT;
@@ -202,5 +230,215 @@ describe('unsupported protocol resources', () => {
     const res = await GET(req as never, ctx);
     expect(res.status).toBe(404);
     expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not serve the POST-only query resource over GET', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares', 'share-a', 'schemas', 'gold', 'tables', 't1', 'query'], OID_A);
+    const res = await GET(req as never, ctx);
+    expect(res.status).toBe(404);
+    expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── ATTACK: path traversal in the segments that were NOT authorized ────────
+//
+// The shipped defect. `authorize(req, seg[1], tail)` checked the SHARE segment
+// and then `proxyToServer('/' + seg.join('/'))` forwarded all seven segments,
+// so the hostile payload goes in seg[3] (schema) or seg[5] (table) — the ones
+// with no check — and the upstream URL parser collapses `../` to land on
+// another recipient's share. These are the cases the original suite's eight
+// cross-recipient tests could not have caught: every one of them put the
+// hostile name in seg[1], the one segment that WAS checked.
+describe('path traversal: recipient A cannot reach recipient B through an unchecked segment', () => {
+  /** The payload as Next.js delivers it — ONE segment, already percent-decoded. */
+  const TRAVERSE_TO_B = '../../../shares/share-b/schemas/gold';
+
+  it('GET metadata: traversal in the SCHEMA segment is refused and never proxied', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(
+      ['shares', 'share-a', 'schemas', TRAVERSE_TO_B, 'tables', 't2', 'metadata'], OID_A,
+    );
+    const res = await GET(req as never, ctx);
+    expect(res.status).toBe(404);
+    expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('GET metadata: traversal in the TABLE segment is refused and never proxied', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(
+      ['shares', 'share-a', 'schemas', 'gold', 'tables', '../../../../shares/share-b/schemas/gold/tables/t2', 'metadata'],
+      OID_A,
+    );
+    const res = await GET(req as never, ctx);
+    expect(res.status).toBe(404);
+    expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('GET version + changes: traversal is refused on every data-plane verb', async () => {
+    const { GET } = await import('../[...path]/route');
+    for (const tail of ['version', 'changes']) {
+      loomSharingFetchMock.mockClear();
+      const { req, ctx } = call(['shares', 'share-a', 'schemas', TRAVERSE_TO_B, 'tables', 't2', tail], OID_A);
+      expect((await GET(req as never, ctx)).status).toBe(404);
+      expect(loomSharingFetchMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it('POST query: traversal is refused and never proxied', async () => {
+    const { POST } = await import('../[...path]/route');
+    const { req, ctx } = call(
+      ['shares', 'share-a', 'schemas', TRAVERSE_TO_B, 'tables', 't2', 'query'], OID_A, 'POST',
+    );
+    const res = await POST(req as never, ctx);
+    expect(res.status).toBe(404);
+    expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('an absolute-path payload in the schema segment cannot re-root the upstream URL', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(
+      ['shares', 'share-a', 'schemas', '/shares/share-b/schemas/gold', 'tables', 't2', 'metadata'], OID_A,
+    );
+    expect((await GET(req as never, ctx)).status).toBe(404);
+    expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a table that exists in ANOTHER share is not reachable by name from this one', async () => {
+    // t2 is share-b's table. Asking for it inside share-a — no traversal at all,
+    // just the other share's table name — must not resolve.
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares', 'share-a', 'schemas', 'gold', 'tables', 't2', 'metadata'], OID_A);
+    expect((await GET(req as never, ctx)).status).toBe(404);
+    expect(loomSharingFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('the proxied path is rebuilt from the SHARE RECORD, so no caller text survives into it', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(
+      ['shares', 'share-a', 'schemas', 'gold', 'tables', 't1', 'metadata'], OID_A,
+      'GET', '?startingVersion=1&evil=%2F..%2Fshares%2Fshare-b',
+    );
+    const res = await GET(req as never, ctx);
+    expect(res.status).toBe(200);
+    const proxied = String(loomSharingFetchMock.mock.calls[0][0]);
+    const [path, query] = proxied.split('?');
+    // The PATH is rebuilt from the share record — nothing the caller typed.
+    expect(path).toBe('/shares/share-a/schemas/gold/tables/t1/metadata');
+    expect(path).not.toContain('share-b');
+    // The query is re-encoded, so a value cannot reintroduce a path separator.
+    expect(query).toContain('startingVersion=1');
+    expect(query).not.toContain('/');
+  });
+});
+
+// ── ATTACK: the audit trail must describe what was SERVED ──────────────────
+describe('audit trail', () => {
+  function rows(outcome?: 'allow' | 'deny') {
+    return auditRows.filter((r) => !outcome || r.outcome === outcome);
+  }
+
+  it('records the resolved share/schema/table and the exact upstream path on an allow', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares', 'share-a', 'schemas', 'gold', 'tables', 't1', 'metadata'], OID_A);
+    await GET(req as never, ctx);
+    const row = rows('allow').at(-1)!;
+    expect(row.target).toBe('share-a');
+    expect(row.who).toBe('recipient:agency-a');
+    expect(row.detail.upstreamPath).toBe('/shares/share-a/schemas/gold/tables/t1/metadata');
+    expect(row.detail.table).toBe('t1');
+  });
+
+  it('a traversal attempt is NOT logged as an authorized read of the caller\'s own share', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(
+      ['shares', 'share-a', 'schemas', '../../../shares/share-b/schemas/gold', 'tables', 't2', 'metadata'], OID_A,
+    );
+    await GET(req as never, ctx);
+    // The original code wrote outcome:'allow', share:'share-a' for exactly this
+    // request while serving share-b — a trail that actively misleads.
+    expect(rows('allow')).toHaveLength(0);
+    const deny = rows('deny').at(-1)!;
+    expect(deny.detail.reason).toBe('table-not-in-share');
+    expect(deny.detail.requestedSchema).toContain('share-b');
+  });
+
+  it('writes a deny row for a 401 (an unauthenticated probe leaves a trace)', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares'], null);
+    expect((await GET(req as never, ctx)).status).toBe(401);
+    const row = rows('deny').at(-1)!;
+    expect(row.outcome).toBe('deny');
+    expect(row.detail.status).toBe(401);
+    expect(row.detail.reason).toBe('no-credential');
+  });
+
+  it('writes a deny row for a valid token whose principal is not a recipient', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares', 'share-a', 'schemas'], OID_STRANGER);
+    expect((await GET(req as never, ctx)).status).toBe(403);
+    const row = rows('deny').at(-1)!;
+    expect(row.detail.reason).toBe('not-a-recipient');
+    expect(row.actorOid).toBe(OID_STRANGER);
+  });
+
+  it('audits the ALLOW path of the discovery resources too', async () => {
+    const { GET } = await import('../[...path]/route');
+    for (const segs of [
+      ['shares', 'share-a'],
+      ['shares', 'share-a', 'schemas'],
+      ['shares', 'share-a', 'all-tables'],
+      ['shares', 'share-a', 'schemas', 'gold', 'tables'],
+    ]) {
+      auditRows.length = 0;
+      const { req, ctx } = call(segs, OID_A);
+      expect((await GET(req as never, ctx)).status).toBe(200);
+      expect(rows('allow')).toHaveLength(1);
+    }
+  });
+
+  it('coalesces an anonymous 401 flood into one row rather than one write per request', async () => {
+    const { GET } = await import('../[...path]/route');
+    for (let i = 0; i < 25; i += 1) {
+      const { req, ctx } = call(['shares'], null);
+      await GET(req as never, ctx);
+    }
+    // Bounded writes, but the burst is still visible in the row.
+    expect(rows('deny').length).toBe(1);
+    expect(auditRows.at(-1)!.detail.suppressedSincePrevious).toBe(0);
+  });
+});
+
+// ── ATTACK: an anonymous caller learns nothing about the deployment ────────
+describe('no infrastructure disclosure to an unauthenticated caller', () => {
+  const LEAKS = ['bicep', 'loom-sharing-app', 'LOOM_SHARING_URL', 'LOOM_ENTRA_TENANT_ID',
+    'Key Vault', 'docs/fiab', 'LOOM_SHARING_ENABLED'];
+
+  it('a credential-free request returns 401 and no configuration text', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares'], null);
+    const res = await GET(req as never, ctx);
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    for (const leak of LEAKS) expect(body).not.toContain(leak);
+  });
+
+  it('an UNDEPLOYED estate does not describe itself to an anonymous caller', async () => {
+    delete process.env.LOOM_SHARING_URL;
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares'], null);
+    const res = await GET(req as never, ctx);
+    const body = await res.text();
+    for (const leak of LEAKS) expect(body).not.toContain(leak);
+  });
+
+  it('a DISABLED deployment does not name the env var that disabled it', async () => {
+    process.env.LOOM_SHARING_ENABLED = 'false';
+    const { GET } = await import('../[...path]/route');
+    const { req, ctx } = call(['shares'], OID_A);
+    const res = await GET(req as never, ctx);
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    for (const leak of LEAKS) expect(body).not.toContain(leak);
   });
 });

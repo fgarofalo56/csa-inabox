@@ -23,6 +23,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { listRecipients, createRecipient } from '@/lib/azure/unity-catalog-client';
 import { resolveShareHost, sharingErrorResponse } from '../_lib';
 import {
@@ -32,9 +33,10 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const GET = withSession(async (req) => {
+export const GET = withSession(async (req, { session }) => {
   try {
-    if (isLoomSharingBackend()) return await loomListRecipients();
+    // A recipient's Entra principal ids are only disclosed to a tenant admin.
+    if (isLoomSharingBackend()) return await loomListRecipients({ full: isTenantAdmin(session) });
     const host = await resolveShareHost(req.nextUrl.searchParams.get('host'));
     const recipients = await listRecipients(host);
     return NextResponse.json({ ok: true, backend: 'databricks', host, recipients });
