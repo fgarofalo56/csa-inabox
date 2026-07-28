@@ -130,8 +130,14 @@ resource subscriptionWorkflow 'Microsoft.Logic/workflows@2019-05-01' = {
                 attachmentName: { type: 'string' }
                 attachmentContentType: { type: 'string' }
                 attachmentBase64: { type: 'string' }
+                // B-N19d: scheduled insight digests deliver an HTML BODY with no
+                // attachment through this same workflow (one delivery path, one
+                // O365 connection). When bodyHtml is absent the classic
+                // report-attachment body is used, so report subscriptions are
+                // byte-compatible with the pre-N19d workflow.
+                bodyHtml: { type: 'string' }
               }
-              required: [ 'recipients', 'subject', 'attachmentName', 'attachmentBase64' ]
+              required: [ 'recipients', 'subject' ]
             }
           }
         }
@@ -139,6 +145,9 @@ resource subscriptionWorkflow 'Microsoft.Logic/workflows@2019-05-01' = {
       actions: {
         // Send the scheduled report as an email attachment. ContentBytes takes
         // the base64 string directly (the connector decodes it).
+        // B-N19d: when the caller supplies bodyHtml (an insight digest) that
+        // HTML becomes the message body and the Attachments array is empty —
+        // the same action, the same connection, no second workflow.
         Send_report_email: {
           type: 'ApiConnection'
           inputs: {
@@ -152,14 +161,9 @@ resource subscriptionWorkflow 'Microsoft.Logic/workflows@2019-05-01' = {
             body: {
               To: '@triggerBody()?[\'recipients\']'
               Subject: '@triggerBody()?[\'subject\']'
-              Body: '<p>Your scheduled Loom report <b>@{triggerBody()?[\'reportName\']}</b> is attached.</p>'
+              Body: '@{if(empty(coalesce(triggerBody()?[\'bodyHtml\'], \'\')), concat(\'<p>Your scheduled Loom report <b>\', coalesce(triggerBody()?[\'reportName\'], \'\'), \'</b> is attached.</p>\'), triggerBody()?[\'bodyHtml\'])}'
               Importance: 'Normal'
-              Attachments: [
-                {
-                  Name: '@triggerBody()?[\'attachmentName\']'
-                  ContentBytes: '@triggerBody()?[\'attachmentBase64\']'
-                }
-              ]
+              Attachments: '@if(empty(coalesce(triggerBody()?[\'attachmentBase64\'], \'\')), json(\'[]\'), createArray(addProperty(addProperty(json(\'{}\'), \'Name\', coalesce(triggerBody()?[\'attachmentName\'], \'attachment\')), \'ContentBytes\', triggerBody()?[\'attachmentBase64\'])))'
             }
           }
           runAfter: {}

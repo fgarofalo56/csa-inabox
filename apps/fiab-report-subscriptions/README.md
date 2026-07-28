@@ -44,8 +44,45 @@ The Function App identity (system-assigned by default; set `AZURE_CLIENT_ID` /
 | `LOOM_SUBSCRIPTION_ID` | Subscription id for ARM `listCallbackUrl` |
 | `LOOM_SUBSCRIPTION_LOGIC_APP_NAME` / `LOOM_SUBSCRIPTION_LOGIC_APP_RG` | Delivery Logic App (RG defaults to `LOOM_DLZ_RG`) |
 | `LOOM_POWERBI_BASE` / `LOOM_ARM_ENDPOINT` / `LOOM_STORAGE_SUFFIX` | Sovereign-cloud endpoint overrides (Gov) |
+| `LOOM_AOAI_ENDPOINT` / `LOOM_AOAI_DEPLOYMENT` / `LOOM_AOAI_API_VERSION` | B-N19d digest narration (unset -> the deterministic summary is delivered instead) |
+| `LOOM_DLZ_SUBSCRIPTION_ID` | B-N19d: additional subscription sampled for platform metrics + alerts |
+
+## B-N19d - scheduled insight digests (same tick, same delivery path)
+
+This Function ALSO processes scheduled insight digests. `functions/
+reportSubscriptions.ts` calls `runSubscriptions` and then `runInsightDigests`
+inside the SAME invocation, using the same window, the same Cosmos database,
+the same AAD credential, the same NCRONTAB matcher, and the same delivery Logic
+App. There is deliberately no second scheduler and no second workflow; a digest
+failure is caught separately so it can never fail or delay report delivery.
+
+Per tick, for every enabled digest in `insight-digests` whose cron became due -
+or which an operator queued from the console (`runNowRequestedAt`) - the engine:
+
+1. resolves the Loom resources of the digest's stored `metricPlan` resource
+   types via ARM (`/subscriptions/{sub}/resources`),
+2. reads REAL Azure Monitor platform metrics over a window twice the lookback
+   (so the previous and current halves come from one call per metric family),
+3. reads REAL fired alert instances (`Microsoft.AlertsManagement/alerts`),
+4. folds them into deltas and narrates on the Loom Azure OpenAI deployment
+   (deterministic grounded fallback when AOAI is absent or fails),
+5. delivers the HTML body through the delivery Logic App (`bodyHtml`, no
+   attachment), and
+6. appends an `insight-digest-log` row and stamps `lastRunAt` / `lastStatus`.
+
+Extra RBAC for this path: **Monitoring Reader** at subscription scope
+(`admin-plane/monitoring-reader-rbac.bicep`, `digestPrincipalId`) and
+**Cognitive Services OpenAI User** on the AOAI/Foundry account (granted in
+`report-subscriptions-function.bicep`).
+
+`src/insight-digest-model.ts` is a deliberate narrow PORT of the console's pure
+delta/prompt/HTML helpers (`apps/fiab-console/lib/insights/digest-model.ts`) -
+the two apps have no shared workspace package. Both export
+`DIGEST_MODEL_VERSION` and both test suites assert the same golden vectors, so
+an unmirrored change fails CI on the other side.
 
 ## Tests
 
 `vitest run` covers the pure NCRONTAB window-matching logic
-(`src/cron-match.test.ts`).
+(`src/cron-match.test.ts`) and the B-N19d digest model + port contract
+(`src/insight-digest-model.test.ts`).

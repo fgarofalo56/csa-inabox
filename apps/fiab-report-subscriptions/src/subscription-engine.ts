@@ -112,6 +112,9 @@ async function token(scope: string): Promise<string> {
   return t.token;
 }
 
+/** AAD token for an arbitrary scope — reused by the B-N19d insights engine. */
+export const acquireToken = token;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
@@ -248,17 +251,24 @@ async function resolveDeliveryUrl(): Promise<string> {
   return _callbackUrl;
 }
 
-/** POST the rendered report to the delivery Logic App as a base64 attachment. */
+/**
+ * POST a message to the delivery Logic App. A report subscription supplies the
+ * rendered file (base64 attachment); a B-N19d insight digest supplies `bodyHtml`
+ * with no attachment. Both go through the SAME workflow + O365 connection — the
+ * Logic App picks the body/attachment shape from what is present.
+ */
 export async function deliverEmail(args: {
   recipients: string[];
   subject: string;
   reportName: string;
-  attachmentName: string;
-  attachmentContentType: string;
-  bytes: Uint8Array;
+  attachmentName?: string;
+  attachmentContentType?: string;
+  bytes?: Uint8Array;
+  /** HTML message body (insight digests). When set, no attachment is sent. */
+  bodyHtml?: string;
 }): Promise<void> {
   const triggerUrl = await resolveDeliveryUrl();
-  const attachmentBase64 = Buffer.from(args.bytes).toString('base64');
+  const attachmentBase64 = args.bytes ? Buffer.from(args.bytes).toString('base64') : '';
   const res = await fetch(triggerUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -266,9 +276,10 @@ export async function deliverEmail(args: {
       recipients: args.recipients.join(';'),
       subject: args.subject,
       reportName: args.reportName,
-      attachmentName: args.attachmentName,
-      attachmentContentType: args.attachmentContentType,
+      attachmentName: args.attachmentName || '',
+      attachmentContentType: args.attachmentContentType || '',
       attachmentBase64,
+      bodyHtml: args.bodyHtml || '',
     }),
   });
   if (!res.ok && res.status !== 202) {
@@ -284,6 +295,12 @@ function db() {
   const dbId = process.env.LOOM_COSMOS_DATABASE || 'loom';
   return cosmos().database(dbId);
 }
+
+/** The shared Loom Cosmos database handle — reused by the insights engine. */
+export const loomDb = db;
+
+/** The delivery-infra gate, surfaced so the insights engine reports it identically. */
+export const deliveryConfigGate = deliveryGate;
 
 /**
  * Process all enabled subscriptions due in (windowStartMs, windowEndMs]. The

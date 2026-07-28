@@ -491,6 +491,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'B-N19e',
     surface: '/admin/finops + /admin/chargeback FOCUS panel + GET /api/admin/finops/focus',
   },
+  // ── B-N19d — scheduled insights / anomaly-narration digests ──
+  {
+    id: 'n19d-insight-digests',
+    label: 'Governance Insights — scheduled digests',
+    description:
+      'The B-N19d scheduled-insight digest surface on /governance/insights: metric + Monitor-alert deltas narrated by Copilot and delivered by the EXISTING C5 report-subscriptions timer Function. OFF stops the console preview run (the pane still lists definitions and run history, and the Insights KPI page is untouched) and the Function skips digest processing on its tick, leaving report-subscription delivery unaffected. Default ON, fail-open.',
+    ownerItem: 'B-N19d',
+    surface: '/governance/insights (Scheduled digests) + POST /api/insights/digests/[id]/preview',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

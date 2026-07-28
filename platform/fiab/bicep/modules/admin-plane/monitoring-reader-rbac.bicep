@@ -23,6 +23,9 @@ targetScope = 'subscription'
 @description('Console UAMI principalId — granted Monitoring Reader at subscription scope. Empty string skips the grant.')
 param consolePrincipalId string
 
+@description('B-N19d: report-subscriptions Function MI principalId — granted the SAME Monitoring Reader role so scheduled insight digests can read platform metrics + fired alert instances on the timer tick. Empty string skips the grant.')
+param digestPrincipalId string = ''
+
 @description('When true, skip the role grant (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
@@ -32,6 +35,18 @@ resource consoleMonitoringReader 'Microsoft.Authorization/roleAssignments@2022-0
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
     principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// B-N19d — the report-subscriptions timer Function reads microsoft.insights/
+// metrics + Microsoft.AlertsManagement/alerts when it processes insight digests
+// on the SAME tick it delivers report subscriptions.
+resource digestMonitoringReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(digestPrincipalId) && !skipRoleGrants) {
+  name: guid(subscription().id, digestPrincipalId, 'monitoring-reader-digests')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
+    principalId: digestPrincipalId
     principalType: 'ServicePrincipal'
   }
 }
