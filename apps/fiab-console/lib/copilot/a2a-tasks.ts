@@ -21,7 +21,11 @@
  */
 
 import type { A2aAgentSkill } from './a2a-protocol';
-import { buildAgentCard, type A2aAgentCard } from './a2a-protocol';
+import {
+  generateAgentCard,
+  registeredPlatformAgent,
+  type A2aSpecAgentCard,
+} from './a2a-agent-card';
 
 /** Stable skill ids the platform A2A endpoint routes on. */
 export const A2A_SKILL = {
@@ -107,19 +111,14 @@ export function inferSkillId(data: Record<string, unknown>): A2aSkillId | undefi
 /**
  * Build the platform-level Loom A2A agent card served at
  * `/.well-known/agent-card.json` (+ the legacy `/.well-known/agent.json`) and by
- * `GET /api/a2a`. `baseUrl` is the deployment origin; the card's JSON-RPC `url`
- * points at `/api/a2a`.
+ * `GET /api/a2a`. `baseUrl` is the deployment origin; the card's preferred
+ * interface points at `/api/a2a`.
+ *
+ * Delegates to the ONE spec-conformant generator (B-N14d,
+ * `a2a-agent-card.generateAgentCard`) so this card carries the current-spec
+ * `supportedInterfaces` / `securityRequirements` / `capabilities.extendedAgentCard`
+ * shape alongside the 0.3-line aliases — there is no second card builder.
  */
-export function buildPlatformAgentCard(baseUrl: string): A2aAgentCard {
-  const origin = (baseUrl || '').replace(/\/+$/, '');
-  return buildAgentCard({
-    name: 'CSA Loom',
-    description:
-      'CSA Loom exposes its governed data agents, agent flows, and WS-6 ontology objects/actions (OSDK) as ' +
-      'delegable A2A tasks. Delegate a task in and receive a result governed by the caller\'s Loom permissions, ' +
-      'PDP policy, and audit — Azure-native, sovereign, no Microsoft Fabric dependency.',
-    url: `${origin}/api/a2a`,
-    documentationUrl: `${origin}/learn`,
-    skills: PLATFORM_SKILLS,
-  });
+export function buildPlatformAgentCard(baseUrl: string): A2aSpecAgentCard {
+  return generateAgentCard(registeredPlatformAgent({ origin: baseUrl, skills: PLATFORM_SKILLS }));
 }

@@ -482,6 +482,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'CH1',
     surface: '/admin/health?tab=chaos + POST /api/admin/chaos/dependency',
   },
+  // ── B-N14d — formalized agent-memory service (default-ON kill switch) ──
+  {
+    id: 'n14d-agent-memory',
+    label: 'Agent memory — durable per-agent + per-workspace recall',
+    description:
+      'The N14d agent-memory service: durable memories scoped to an agent + workspace (and, privately, to one user), written through the shared redaction/injection guard with an audit row per attempt, retained under an explicit TTL + count cap, and recalled into the agent turn. OFF makes every read return empty and every write a no-op honest rejection — agents keep running with no recalled memory, and nothing already stored is deleted (retention still expires rows normally). Turning it back ON restores recall from the untouched store. Seconds-fast; no revision roll.',
+    ownerItem: 'N14d',
+    surface: 'Agent runs + /api/agents/[id]/memory (read/write/purge)',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

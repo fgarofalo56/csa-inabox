@@ -18,7 +18,8 @@
  * See .claude/rules/no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { FoundryAgentError } from '@/lib/azure/foundry-agent-client';
 import {
   runAgentInspectTiered,
@@ -32,6 +33,8 @@ import {
   saveThread,
   extractAndStoreMemory,
 } from '@/lib/azure/agent-memory-client';
+import { recallAgentMemories, writeAgentMemory } from '@/lib/azure/agent-memory-service';
+import type { AgentMemoryActor } from '@/lib/copilot/agent-memory-core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,9 +42,10 @@ export const maxDuration = 60;
 
 const memoryEnabled = () => (process.env.LOOM_AGENT_MEMORY_ENABLED || '').toLowerCase() !== 'false';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// WS-D1: adopted onto the route-toolkit — `withSession` runs the same cookie
+// `getSession()` check and returns the same 401 envelope, so the wire contract
+// is byte-compatible; the body below is unchanged work.
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const userOid = session.claims.oid;
 
   let body: any;
@@ -65,8 +69,21 @@ export async function POST(req: NextRequest) {
     // into the question turn instead — either way the agent SEES the facts.
     let effInstructions = instructions;
     let effQuestion = question;
+    // B-N14d: the formalized agent-memory service contributes the agent+workspace
+    // scoped block (shared operating knowledge + this user's private rows,
+    // retention-filtered and audited); the AIF-14 client keeps contributing its
+    // agent+user facts. Both are injected — nothing is removed.
+    const memActor: AgentMemoryActor = {
+      userOid,
+      tenantId: tenantScopeId(session),
+      workspaceId: typeof body?.workspaceId === 'string' ? body.workspaceId.trim() : '',
+    };
+    const actorUpn = session.claims.upn || session.claims.email || userOid;
     if (memoryEnabled()) {
-      const preamble = memoryPreamble(await retrieveMemories(agent, userOid));
+      const serviceRecall = await recallAgentMemories(agent, memActor, { actorUpn });
+      const preamble = [serviceRecall.block, memoryPreamble(await retrieveMemories(agent, userOid))]
+        .filter((p) => p)
+        .join('\n');
       if (preamble) {
         const tier = selectAgentTier().tier;
         if (tier === 'maf') {
@@ -98,10 +115,21 @@ export async function POST(req: NextRequest) {
         usage: inspection.usage,
       });
       if (inspection.status === 'completed' && inspection.answer) {
-        await extractAndStoreMemory({
+        const learned = await extractAndStoreMemory({
           agentId: agent, userOid, question, answer: inspection.answer,
           sourceThreadId: inspection.threadId,
         });
+        // B-N14d: mirror each distilled fact into the formalized service so it
+        // is screened, redaction-guarded, retention-stamped, and audited —
+        // and so it is recalled at agent+workspace scope on the next run.
+        for (const m of learned) {
+          await writeAgentMemory(
+            agent,
+            { content: m.fact, category: 'fact', source: 'run', sourceThreadId: inspection.threadId, scope: 'agent-user' },
+            memActor,
+            { actorUpn },
+          );
+        }
       }
     }
 
@@ -122,4 +150,4 @@ export async function POST(req: NextRequest) {
     const status = e instanceof FoundryAgentError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});

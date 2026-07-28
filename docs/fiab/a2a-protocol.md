@@ -65,8 +65,63 @@ host suffixes):
 The SSRF policy (https-only, private-IP/IMDS rejection, resolve-then-validate) is
 shared with the MCP egress guard (`lib/azure/egress-ssrf.ts`).
 
+## Agent-card generation + spec conformance (B-N14d)
+
+Every Loom agent card — the platform card, a published `data-agent` /
+`agent-flow` card, and a WS-9 mesh-agent card — is produced by **one**
+generator, `lib/copilot/a2a-agent-card.ts`, from the agent metadata already
+registered in the platform. There is no hand-authored card anywhere.
+
+Cards are emitted in the **current** A2A specification shape
+(<https://a2a-protocol.org/latest/specification/>), which restructured the
+discovery objects relative to the 0.3 line Loom previously emitted:
+
+| Current spec (generated) | Section | 0.3-line field it replaced |
+|---|---|---|
+| `supportedInterfaces[]` — `{ url, protocolBinding, tenant?, protocolVersion }` | §4.4.1 / §4.4.6 | top-level `url` + `preferredTransport` + `protocolVersion` |
+| `securityRequirements[]` — `[{ schemes: { id: { list: [] } } }]` | §4.4.1 | `security[]` |
+| `securitySchemes` one-of wrapper (`httpAuthSecurityScheme` …) | §4.5.1 / §4.5.3 | flat `{ type, scheme, bearerFormat }` |
+| `capabilities.extendedAgentCard` | §4.4.3 | `supportsAuthenticatedExtendedCard` |
+| `capabilities.extensions[]` (`AgentExtension`) | §4.4.4 | *(the mesh card's non-spec `loomEgressProfile` key)* |
+| `provider.url` **required** alongside `provider.organization` | §4.4.2 | provider without a url |
+| `signatures[]` (`AgentCardSignature`, RFC 7515 JWS) | §4.4.7 | — |
+| `iconUrl` | §4.4.1 | — |
+
+Each generated document is a **superset**: it also carries the 0.3-line aliases
+(`url`, `preferredTransport`, `protocolVersion`, `security`,
+`supportsAuthenticatedExtendedCard`, `additionalInterfaces`), because the spec's
+Appendix A keeps legacy names resolvable and conformant clients ignore unknown
+fields. One card therefore serves both current-line and already-deployed 0.3
+clients.
+
+`tenant` (§4.4.6) is how a single card addresses **one** agent behind the shared
+`/api/a2a` endpoint: a published data agent's card lists its own per-item route
+first and `/api/a2a` second with `tenant: "data-agent:<id>"`. A client that only
+knows the platform endpoint can still reach the specific agent.
+
+### Discovery surfaces
+| Endpoint | Auth | Returns |
+|---|---|---|
+| `GET /.well-known/agent-card.json` (§14.3 registered URI) | public | the platform card |
+| `GET /.well-known/agent.json` | public | the same card, legacy path |
+| `GET /api/a2a/agent-cards` | session | the catalog of every agent the caller can address (card URL, endpoint, `tenant` routing id, conformance flag) |
+| `GET /api/a2a/agent-cards/{kind}/{id}` | session + per-agent access | one generated card **plus** its §4.4.1–§4.4.7 conformance report; `?raw=1` returns the bare card |
+| `GET /api/items/{data-agent,agent-flow}/{id}/a2a` | session / PAT | that agent's card |
+| `GET /api/mesh/a2a/{id}/card` | session | that mesh agent's card |
+
+The multi-agent catalog is deliberately **not** under `/.well-known`: §14.3
+registers that URI for one card and notes it "SHOULD NOT include sensitive
+credentials or internal implementation details" — enumerating a tenant's agents
+is not public information.
+
+`validateAgentCard()` is a pure, total validator over §4.4.1–§4.4.7 + §4.5.1
+(one-of security schemes). It runs in the per-agent card route so a conformance
+regression surfaces as a report rather than silently shipping a broken card, and
+it is exercised field-by-field in `lib/copilot/__tests__/a2a-agent-card.test.ts`.
+
 ## Backend map
 - Protocol core (types, card, JSON-RPC dispatch): `lib/copilot/a2a-protocol.ts`
+- **Agent-card generator + spec validator: `lib/copilot/a2a-agent-card.ts`**
 - Skill catalog + platform card: `lib/copilot/a2a-tasks.ts`
 - Platform executor: `lib/copilot/a2a-platform-execute.ts`
 - Per-item server wiring: `lib/copilot/a2a-item-server.ts`

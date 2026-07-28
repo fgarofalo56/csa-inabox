@@ -348,6 +348,9 @@ const ALLOWLIST = new Set([
   'LOOM_SELF_BASE_URL',             // derived/ambient override for the server-side same-origin self-call base in demo-deploy (lib/apps/demo-deploy.ts); unset default = http://127.0.0.1:$PORT (the container hairpin), never a deployed literal
   'LOOM_UPDATE_IMAGE_REGISTRY',     // opt-in registry override for the in-place update-apply image resolution (app/api/admin/updates/apply/route.ts); unset default = swap the tag on the app's CURRENT image (its own private ACR), no public-ghcr dependency
   'LOOM_SKILL_LEARNER_MIN_SAMPLES', // CTS-11 opt-in tuning knob: min recurring prompts on a pane before the skill self-evolution learner proposes a SUGGESTED skill (default 5 in lib/azure/skill-learner.ts); admin-reviewed, never auto-published. (LOOM_SKILL_LEARNER_ENABLED matched by /_ENABLED$/, LOOM_SKILL_LEARNER_MAX_* by /_MAX_.../)
+  'LOOM_AGENT_MEMORY_RETENTION_DAYS', // B-N14d opt-in tuning knob: default lifetime of an agent memory (default 180 in lib/copilot/agent-memory-core.ts; 0 = keep forever). Read via an injected `env` param, never a gate — unset just uses the code default. (LOOM_AGENT_MEMORY_MAX_RETENTION_DAYS matched by /_MAX_.../; LOOM_AGENT_MEMORY_CAP / _TOPK are read dynamically by the AIF-14 client.)
+  'LOOM_AGENT_MEMORY_CAP',          // B-N14d/AIF-14 tuning knob: per-scope memory count cap (default 200); unset = code default, never a gate
+  'LOOM_AGENT_MEMORY_TOPK',         // B-N14d/AIF-14 tuning knob: memories packed into one agent turn (default 8); unset = code default, never a gate
 ]);
 
 // ── Filesystem helpers (no deps) ──
