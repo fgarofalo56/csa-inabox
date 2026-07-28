@@ -173,10 +173,30 @@ jobs:
           # execution-name column, so container + time window is the reliable
           # filter — and only ONE execution is ever in flight here).
           EVAL_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # `--env-vars` REPLACES the execution template env set; it does not
+          # merge into it. Passing only the three run knobs therefore stripped
+          # LOOM_COSMOS_ENDPOINT / LOOM_EVAL_PROBE_URL / LOOM_INTERNAL_TOKEN and
+          # the evaluator honest-gated with
+          #   {"ok":false,"reason":"missing config: ..."}
+          # i.e. a receipt with ZERO surfaces — so the gate passed having
+          # measured nothing. Rebuild the FULL env set off the job and layer the
+          # three overrides on top. secretRef entries are re-emitted as
+          # NAME=secretref:REF so the internal token keeps flowing.
+          mapfile -t BASE_ENV < <(az containerapp job show -g "$RG" -n "$JOB" \
+            --query "properties.template.containers[0].env" -o json 2>/dev/null \
+            | jq -r '(. // [])[]
+                     | select(.name | test("^COPILOT_EVAL_(MODE|TRIGGER|SURFACES)$") | not)
+                     | if .secretRef then .name + "=secretref:" + .secretRef else .name + "=" + (.value // "") end')
+          if [ ${#BASE_ENV[@]} -eq 0 ]; then
+            echo "::warning::could not read $JOB's env set - the execution would honest-gate on missing config. Skipping the eval run."
+            echo "started=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "carrying ${#BASE_ENV[@]} env var(s) from the job into the override"
           START_ERR=$(mktemp)
           EXEC=$(az containerapp job start -g "$RG" -n "$JOB" \
             --image "$IMAGE" \
-            --env-vars "COPILOT_EVAL_MODE=copilot" "COPILOT_EVAL_TRIGGER=$TRIGGER" "COPILOT_EVAL_SURFACES=$SURFACES" \
+            --env-vars "${BASE_ENV[@]}" "COPILOT_EVAL_MODE=copilot" "COPILOT_EVAL_TRIGGER=$TRIGGER" "COPILOT_EVAL_SURFACES=$SURFACES" \
             --query name -o tsv 2>"$START_ERR" | tr -d '\r' || true)
           if [ -z "$EXEC" ]; then
             echo "::warning::could not start a $JOB execution - skipping the eval run. az said: $(tr '\n' ' ' < "$START_ERR" | head -c 500)"
