@@ -42,6 +42,8 @@ jobs:
         run: node scripts/ci/check-bff-errors.mjs
       - name: no-raw-px (raw-px inline styles vs Loom tokens, ratchet)
         run: node scripts/ci/check-no-raw-px.mjs
+      - name: learn-doc-registry (Learning Hub slug sets vs authored guides/captures — loom-apex D1)
+        run: node scripts/ci/check-learn-doc-registry.mjs
       - name: no-bare-client-fetch (client /api fetch must use clientFetch)
         run: node scripts/ci/check-no-bare-client-fetch.mjs
       - name: route-toolkit (hand-rolled session-route ratchet — loom-next-level R3)

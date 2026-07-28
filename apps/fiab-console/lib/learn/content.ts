@@ -163,6 +163,10 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   'mirrored-databricks', 'mounted-adf', 'postgres-flexible-server', 'rayfin-app',
   'spark-environment', 'sql-analytics-endpoint', 'sql-database',
   'stream-analytics-job', 'synapse-notebook', 'tapestry', 'workspace-monitor',
+  // D1 (loom-apex): authored guides that existed on disk but were never
+  // registered - their Learn cards showed "Loom guide coming" while the doc
+  // was already published. Verified against docs/fiab/tutorials/editor-<slug>.md.
+  'ai-enrichment', 'batch-pool', 'databricks-pipeline', 'digital-twin', 'lakebase-postgres', 'loom-app', 'loom-app-runtime',
 ]);
 
 /**
@@ -196,6 +200,17 @@ export const EDITOR_THUMB_SLUGS: ReadonlySet<string> = new Set([
   'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
   'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
   'variable-library', 'vector-store', 'warehouse',
+  // D1 (loom-apex): screenshots ALREADY captured on disk but unregistered, so
+  // their cards fell back to the placeholder tile. Verified 1:1 against
+  // docs/fiab/tutorials/img/editor-<slug>-1.png.
+  'ai-enrichment', 'aip-logic', 'airflow-job', 'automl', 'azure-cosmos-account',
+  'batch-pool', 'data-api-builder', 'data-marketplace', 'databricks-pipeline', 'datamart',
+  'digital-twin', 'event-grid-topic', 'event-hubs-namespace', 'event-schema-set', 'health-check',
+  'integration-runtime', 'lakebase-postgres', 'lakehouse-shortcut', 'linked-service', 'logic-app',
+  'loom-app', 'loom-app-runtime', 'mirrored-databricks', 'ontology-sdk', 'postgres-flexible-server',
+  'rayfin-app', 'release-environment', 'service-bus-namespace', 'slate-app', 'spark-environment',
+  'sql-analytics-endpoint', 'sql-database', 'stream-analytics-job', 'synapse-notebook', 'tapestry',
+  'workshop-app', 'workspace-monitor',
 ]);
 
 const REGISTRY: Record<string, LearnEntry> = {
