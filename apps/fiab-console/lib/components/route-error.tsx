@@ -42,6 +42,16 @@ import {
 } from '@fluentui/react-icons';
 import { autoReport } from '@/lib/components/error-boundary';
 import { redact } from '@/lib/feedback/redaction';
+import {
+  clientBuildId,
+  isChunkLoadError,
+  markReloadOnce,
+  reloadGuardKey,
+} from '@/lib/components/shared/deploy-skew';
+
+// Re-exported so route-group wrappers/tests have ONE import site (A1's
+// deploy-skew.ts is the canonical classifier/guard — unified at integration).
+export { isChunkLoadError };
 
 export interface RouteErrorProps {
   /** Next.js App Router error boundary contract. */
@@ -53,22 +63,15 @@ export interface RouteErrorProps {
 }
 
 /**
- * Deploy-skew signatures across browsers: webpack's ChunkLoadError plus the
- * native dynamic-import failure messages (Chromium / Firefox / Safari).
+ * The one-shot reload guard key for the CURRENT pathname + client build —
+ * deploy-skew's (pathname, buildId) format, shared with the global boundary
+ * so both boundaries draw from the same per-build reload budget.
  */
-export const CHUNK_LOAD_ERROR_RE =
-  /ChunkLoadError|Loading chunk [^\s]+ failed|Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i;
-
-export function isChunkLoadError(err: { name?: string; message?: string } | null | undefined): boolean {
-  if (!err) return false;
-  return err.name === 'ChunkLoadError' || CHUNK_LOAD_ERROR_RE.test(String(err.message ?? ''));
-}
-
-/** sessionStorage key namespace for the one-shot reload guard (per-path). */
-export const CHUNK_RELOAD_GUARD_PREFIX = 'loom:chunk-reload:';
-
-function guardKey(): string {
-  return `${CHUNK_RELOAD_GUARD_PREFIX}${typeof window !== 'undefined' ? window.location.pathname : ''}`;
+export function chunkReloadGuardKey(): string {
+  return reloadGuardKey(
+    typeof window !== 'undefined' ? window.location.pathname : '',
+    clientBuildId(),
+  );
 }
 
 /**
@@ -145,7 +148,7 @@ export function RouteError({ error, reset, section }: RouteErrorProps) {
   const [guarded] = useState<boolean>(() => {
     if (!chunk || typeof window === 'undefined') return false;
     try {
-      return window.sessionStorage.getItem(guardKey()) === '1';
+      return window.sessionStorage.getItem(chunkReloadGuardKey()) !== null;
     } catch {
       return true; // storage unavailable -> never auto-reload (no loop risk)
     }
@@ -155,7 +158,9 @@ export function RouteError({ error, reset, section }: RouteErrorProps) {
   useEffect(() => {
     if (willAutoReload) {
       try {
-        window.sessionStorage.setItem(guardKey(), '1');
+        // Mark via the shared deploy-skew guard (per pathname + build id) so
+        // this boundary and the global one share ONE reload budget.
+        markReloadOnce(window.sessionStorage, window.location.pathname, clientBuildId());
       } catch {
         /* storage unavailable — fall through to the manual card next render */
       }

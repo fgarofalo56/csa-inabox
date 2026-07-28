@@ -24,7 +24,7 @@ import {
   RouteError,
   routeErrorInternals,
   isChunkLoadError,
-  CHUNK_RELOAD_GUARD_PREFIX,
+  chunkReloadGuardKey,
 } from '../route-error';
 import { autoReport } from '@/lib/components/error-boundary';
 
@@ -45,7 +45,7 @@ function chunkError(): Error {
   return e;
 }
 
-const guardKey = `${CHUNK_RELOAD_GUARD_PREFIX}${window.location.pathname}`;
+const guardKey = chunkReloadGuardKey();
 
 beforeEach(() => {
   reloadSpy = vi.fn();
@@ -89,7 +89,7 @@ describe('RouteError - chunk-load (deploy-skew) branch', () => {
     renderError(chunkError(), { section: 'Admin' });
 
     expect(reloadSpy).toHaveBeenCalledTimes(1);
-    expect(window.sessionStorage.getItem(guardKey)).toBe('1');
+    expect(window.sessionStorage.getItem(guardKey)).not.toBeNull(); // deploy-skew guard stores a timestamp
     // spinner, not the error card
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText(/reloading this page/i)).toBeInTheDocument();
