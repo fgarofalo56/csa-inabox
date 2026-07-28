@@ -163,7 +163,7 @@ bicep-sync requirement in `.claude/rules/no-vaporware.md`):
 
 | Concern | Where |
 | --- | --- |
-| Bridge image | `apps/fiab-mcp-bridge/Dockerfile` (`node:20-slim`, pins `uv` for `uvx`, non-root, `HEALTHCHECK` on `/.well-known/health`, `EXPOSE 8080`). |
+| Bridge image | `apps/fiab-mcp-bridge/Dockerfile` (`node:22-bookworm-slim` + `apt-get dist-upgrade` + npm upgraded to the CVE-2026-59873-patched 11.18.0, pins `uv` for `uvx`, non-root, `HEALTHCHECK` on `/.well-known/health`, `EXPOSE 8080`). |
 | Wrapper config (catalog) | `apps/fiab-mcp-bridge/config/loom-mcp-bridge.json`. |
 | Bridge server | `apps/fiab-mcp-bridge/src/server.mjs`, `src/stdio-client.mjs`, `entrypoint.sh`. |
 | Image tag | `appImageTags.mcpBridge` in `platform/fiab/bicep/modules/admin-plane/main.bicep` (default `v0.1`). |

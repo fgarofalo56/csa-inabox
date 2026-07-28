@@ -9,7 +9,27 @@
 # The replicator side (PySpark) deploys via Databricks Bundle (azd-style),
 # not as a Container App.
 
-FROM quay.io/debezium/connect:3.0.0.Final
+# B-SC1' (loom-apex) 2026-07-28 — base bumped 3.0.0.Final -> 3.5.2.Final to burn
+# down CVE-2024-47561 (Apache Avro deserialization RCE, fixed in avro 1.11.4).
+# Evidence, all fetched live rather than assumed:
+#   * debezium/container-images connect-base/3.0/Dockerfile pins
+#     APICURIO_VERSION=2.6.2.Final, whose
+#     apicurio-registry-distro-connect-converter tarball ships `avro-1.11.3.jar`
+#     — that is the jar Trivy flags inside quay.io/debezium/connect:3.0.0.Final.
+#   * connect-base/3.5 pins APICURIO_VERSION=2.6.13.Final, whose converter
+#     tarball ships `avro-1.12.0.jar` (>= 1.11.4 — patched).
+#   * quay.io/debezium/connect:3.5.2.Final exists and is active
+#     (manifest sha256:b9c2e73a8598dccc84ec46932e580b03b96de3db64bc4f47101ff0893da4d91c,
+#     pushed 2026-07-28).
+# 3.5.2.Final is the latest PATCH of the settled 3.5 stable line rather than
+# 3.6.0.Final, which GA'd the same day this bump was made — a security bump we
+# cannot docker-build locally takes the line with bake time. 3.5 keeps the same
+# image contract this Dockerfile depends on: `USER kafka` (uid 1001),
+# KAFKA_HOME=/kafka, the Connect REST API on 8083, and the docker-entrypoint.sh
+# plugin-path discovery — all verified in debezium/container-images kafka/3.5 +
+# connect-base/3.5. Kafka client libs move 3.8 -> 4.2 with this bump; the
+# connector JSON templates below use Debezium 3.x-stable properties only.
+FROM quay.io/debezium/connect:3.5.2.Final
 
 USER root
 

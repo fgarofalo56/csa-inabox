@@ -1,28 +1,44 @@
 # CSA Loom — Trivy CRITICAL-gate baseline (SC1)
 #
-# Every entry here is a KNOWN, REVIEWED finding that the blocking build gate
-# (build-fiab-images-acr-tasks.yml "Trivy gate") ignores, with the reason and
-# the burn-down path. Adding an entry requires the same review a guard-
-# allowlist entry gets. Remove entries as base images are bumped.
+# The blocking build gate (build-fiab-images-acr-tasks.yml "Trivy gate") reads
+# this file. Every entry is a KNOWN, REVIEWED finding that the gate ignores,
+# with the reason and the burn-down path. Adding an entry requires the same
+# review a guard-allowlist entry gets: an ignore is a LOAN, not a fix — it must
+# name the upstream that would clear it and be removed the moment that ships.
 #
-# CVE-2026-59873 — node-tar DoS (gzip bomb). The flagged tar@6.2.1 is the copy
-# VENDORED INSIDE npm in the node:20 base images (loom-console, loom-copilot-maf,
-# loom-mcp-bridge). It is NOT in any app lockfile (verified: no `tar` in
-# apps/fiab-console/pnpm-lock.yaml; copilot-maf deps = @azure/identity only)
-# and the apps never invoke npm at runtime — not app-reachable.
-# BURN-DOWN: bump the node base images when a patched node/npm ships
-# (tracked in the reconcile/apex PRP supply-chain item).
-CVE-2026-59873
+# ── BASELINE IS EMPTY (B-SC1', loom-apex, 2026-07-28) ──────────────────────
+# All three baselined CVEs were burned down by fixing the images, not by
+# widening this file. Kept below as the audit trail.
 #
-# CVE-2024-47561 — Apache Avro deserialization. Lives in avro-1.11.3.jar
-# vendored inside the upstream Debezium Connect base image (loom-mirroring).
-# Loom does not feed untrusted Avro schemas to the connector (CDC configs are
-# admin-authored via the N7b wizard). BURN-DOWN: bump the debezium/connect
-# base image tag (avro >= 1.11.4).
-CVE-2024-47561
+#   CVE-2026-59873 — node-tar gzip-bomb DoS, in the copy of node-tar VENDORED
+#     inside npm in the node base images (loom-console, loom-copilot-maf,
+#     loom-mcp-bridge). Fixed in tar >= 7.5.19, first bundled by npm 11.18.0 —
+#     and NO node base image ships a patched npm yet (node 22.23.1 -> npm
+#     10.9.8 -> tar 7.5.11; node 26.5.0 -> npm 11.17.0 -> tar 7.5.16, both read
+#     out of the published npm tarballs on registry.npmjs.org). A base bump
+#     alone would NOT have cleared it, so it was resolved per image:
+#       - loom-console / loom-copilot-maf / loom-onelake / lineage-extractor:
+#         the runtime never invokes a package manager, so npm + npx are DELETED
+#         from the final layer — the vulnerable code is gone, not muted.
+#       - loom-mcp-bridge: it SPAWNS npx at runtime, so npm is upgraded in
+#         place to the patched 11.18.0 (ARG NPM_VERSION in its Dockerfile).
 #
-# CVE-2026-33845 — libgnutls30 in the loom-mcp-bridge OS base layer. No fixed
-# package in the pinned distro release yet at baseline time (gate runs
-# ignore-unfixed=true, but the distro marks it "fixed" in a newer base).
-# BURN-DOWN: bump the mcp-bridge base image.
-CVE-2026-33845
+#   CVE-2024-47561 — Apache Avro deserialization, in avro-1.11.3.jar vendored
+#     by the upstream Debezium Connect base (loom-mirroring). Base bumped
+#     quay.io/debezium/connect 3.0.0.Final -> 3.5.2.Final, which carries
+#     avro-1.12.0.jar via apicurio-registry 2.6.13.Final (both converter
+#     tarballs listed off Maven Central before the bump).
+#
+#   CVE-2026-33845 — libgnutls30 DTLS reassembly OOB read in the loom-mcp-bridge
+#     OS layer. Debian fixed it in gnutls28 3.7.9-2+deb12u7 (bookworm) /
+#     3.8.9-3+deb13u4 (trixie) per the Debian security tracker. The bridge
+#     Dockerfile's leading `apt-get update && apt-get dist-upgrade -y` (landed
+#     in #2527) pulls deb12u7 ahead of the pinned base tag, so the CVE is moot
+#     in the built image — the entry was stale, not deferred.
+#
+# Node majors: node 20 "Iron" hit EOL 2026-04-30 and Docker Hub froze every
+# node:20* tag on 2026-04-22, so every Loom node image moved to node 22 "Jod"
+# (LTS through 2027-04-30). Next base-image review is due before that date.
+#
+# Do NOT add an entry here to make a build go green. Fix the image, or open the
+# gate's emergency valve (skip_supply_chain) with an incident note.

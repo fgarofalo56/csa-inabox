@@ -12,19 +12,35 @@
 #
 # Azure-native only — no Microsoft Fabric / OneLake / Power BI dependency.
 
-FROM node:20-slim
+# B-SC1' (loom-apex): node 20 "Iron" is END-OF-LIFE (2026-04-30) and every
+# `node:20*` tag stopped being rebuilt on 2026-04-22 — no further base security
+# patches are possible. Moved to node 22 "Jod" (LTS through 2027-04-30), pinning
+# `-bookworm-slim` explicitly because the moving `-slim` alias now resolves to
+# Debian trixie and the apt set below is validated on Debian 12.
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-# Install curl for the container HEALTHCHECK, then prune apt lists. Pinned base
-# image — bump deliberately with security review.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+# Install curl for the container HEALTHCHECK, then prune apt lists. The leading
+# dist-upgrade pulls the distro's security patches ahead of the pinned base tag
+# (the mcp-bridge pattern). Pinned base image — bump deliberately with security
+# review.
+RUN apt-get update && apt-get dist-upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependency layer first (cache-friendly). --omit=dev: only @azure/cosmos +
 # @azure/identity ship; there are no build/test-only deps (tests use node:test).
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund
+
+# B-SC1' (loom-apex): drop the bundled npm/npx once dependencies are installed.
+# The entrypoint is `node src/server.mjs`; nothing here shells out to a package
+# manager. npm vendors its own node-tar (CVE-2026-59873, gzip-bomb DoS, fixed in
+# tar >= 7.5.19 which no node base image bundles yet) — removing the unused
+# package manager eliminates the vulnerable code instead of suppressing it.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    && rm -rf /root/.npm
 
 COPY src/ ./src/
 COPY tests/ ./tests/
