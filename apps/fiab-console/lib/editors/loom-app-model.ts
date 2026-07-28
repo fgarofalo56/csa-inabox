@@ -121,3 +121,58 @@ export function resolveVisibleContent(
   }
   return { itemIds: visible, audiences: matched.map((a) => a.name) };
 }
+
+/** Consumer URL an app is served at once published. */
+export function appConsumerUrl(itemId: string): string {
+  return `/apps/view/${encodeURIComponent(itemId)}`;
+}
+
+/**
+ * Why this definition cannot be published yet, or null when it can. Single
+ * source of truth for the publish precondition — the loom-app publish route and
+ * the notebook "deploy as app" route (N19a) both call it, so a notebook can
+ * never reach consumers through a weaker check than an org app.
+ */
+export function publishBlocker(def: LoomAppDefinition): string | null {
+  if (!def.content || def.content.length === 0) return 'Add at least one content item before publishing.';
+  return null;
+}
+
+/** The definition after a publish, with its new version + timestamp stamped. */
+export interface PublishStamp {
+  def: LoomAppDefinition;
+  version: number;
+  publishedAt: string;
+}
+
+/**
+ * Stamp `published` + the next monotonic version + `publishedAt` onto a
+ * definition. Pure — the caller performs the Cosmos write. Shared by every
+ * publish path so version numbering can never diverge between them.
+ */
+export function stampPublish(def: LoomAppDefinition, now = new Date().toISOString()): PublishStamp {
+  const version = (def.version || 0) + 1;
+  return { def: { ...def, published: true, publishedAt: now, version }, version, publishedAt: now };
+}
+
+/** The definition after a retraction — content preserved, serving stopped. */
+export function stampUnpublish(def: LoomAppDefinition): LoomAppDefinition {
+  return { ...def, published: false };
+}
+
+/**
+ * Add a content entry for `itemId` if the app doesn't already carry it, and
+ * refresh its cached display name when it does. Returns the next definition
+ * (never mutates). Used by "deploy notebook as app" so re-deploying an existing
+ * app updates it in place instead of duplicating the entry.
+ */
+export function upsertContentEntry(
+  def: LoomAppDefinition,
+  entry: LoomAppContentEntry,
+): LoomAppDefinition {
+  const idx = def.content.findIndex((c) => c.itemId === entry.itemId);
+  if (idx < 0) return { ...def, content: [...def.content, entry] };
+  const content = [...def.content];
+  content[idx] = { ...content[idx], ...entry };
+  return { ...def, content };
+}
