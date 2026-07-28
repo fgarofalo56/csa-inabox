@@ -15,7 +15,10 @@ help: ## Show this help
 #     make setup EXTRAS=dev,portal               # portal work
 #     make setup EXTRAS=dev,portal,copilot       # portal + copilot
 #     make setup EXTRAS=dev,governance,functions,portal,copilot,platform   # everything
-EXTRAS ?= dev,governance,functions
+# `serving` (duckdb / pyarrow / fastapi) is in the default set because
+# tests/loom_duckdb imports them at module scope: without it `make test`
+# skips that whole suite and `make typecheck` cannot resolve the imports.
+EXTRAS ?= dev,governance,functions,serving
 
 setup: ## Set up lean development environment (override with EXTRAS=dev,portal,copilot)
 	python -m venv .venv && \
@@ -26,13 +29,13 @@ setup: ## Set up lean development environment (override with EXTRAS=dev,portal,c
 	@echo "Installed with extras: [$(EXTRAS)]"
 	@echo "Activate with: source .venv/bin/activate"
 
-setup-all: ## Full local dev install — installs every extra (dev, governance, functions, portal, platform)
+setup-all: ## Full local dev install — installs every extra (dev, governance, functions, portal, platform, serving)
 	python -m venv .venv && \
 	. .venv/bin/activate && \
 	pip install --upgrade pip && \
-	pip install -e ".[dev,governance,functions,portal,platform]"
+	pip install -e ".[dev,governance,functions,portal,platform,serving]"
 	@echo ""
-	@echo "Installed with extras: [dev,governance,functions,portal,platform]"
+	@echo "Installed with extras: [dev,governance,functions,portal,platform,serving]"
 	@echo "Activate with: source .venv/bin/activate"
 
 setup-win: ## Set up development environment (Windows; honors EXTRAS)

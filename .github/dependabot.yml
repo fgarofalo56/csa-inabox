@@ -11,6 +11,18 @@ updates:
         patterns:
           - "azure-*"
 
+  # apps/loom-duckdb/requirements.txt is the repo's ONLY direct pin of duckdb
+  # and pyarrow, and the `/` entry above does not monitor it. Without this
+  # entry the pyarrow 18 -> 23 major bump (#2504) that motivated #2543 could
+  # only ever be raised by a human edit — the Test Suite lane's new
+  # `apps/loom-duckdb/**` path filter would then have nothing to trigger on.
+  - package-ecosystem: "pip"
+    directory: "/apps/loom-duckdb"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "python"]
+    open-pull-requests-limit: 5
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

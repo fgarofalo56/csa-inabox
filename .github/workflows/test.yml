@@ -11,6 +11,10 @@ on:
       - 'domains/**'
       - 'scripts/**'
       - 'tests/**'
+      # apps/loom-duckdb is a deployed container app whose ONLY automated
+      # signal is tests/loom_duckdb (#2543). Its requirements.txt pins duckdb
+      # and pyarrow, so a dependency bump has to reach this lane.
+      - 'apps/loom-duckdb/**'
       - 'pyproject.toml'
       - '.github/workflows/test.yml'
   schedule:
@@ -64,7 +68,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if printf '%s\n' "$changed" \
-              | grep -qE '^(csa_platform/|domains/|scripts/|tests/|tools/|pyproject\.toml|\.github/workflows/test\.yml)'; then
+              | grep -qE '^(csa_platform/|domains/|scripts/|tests/|tools/|apps/loom-duckdb/|pyproject\.toml|\.github/workflows/test\.yml)'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -84,12 +88,45 @@ jobs:
           python -m pip install --upgrade pip
           # Install the project with dev + governance + functions extras so
           # ruff / pytest / pytest-cov / mypy and all Azure SDK deps come
-          # from pyproject.toml.
-          pip install -e ".[dev,governance,functions,portal,bff,postgres,tutorials,streaming]"
-          # Install any additional per-domain requirements.
-          for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*"); do
-            pip install -r "$req" || true
+          # from pyproject.toml. `serving` adds duckdb + pyarrow + fastapi for
+          # tests/loom_duckdb (#2543) — a FLOOR only; the app's own
+          # requirements.txt below re-pins them to the exact runtime versions,
+          # which is what makes a dependabot bump a real signal.
+          pip install -e ".[dev,governance,functions,portal,bff,postgres,tutorials,streaming,serving]"
+          # apps/loom-duckdb/requirements.txt holds the EXACT duckdb / pyarrow
+          # pins that tests/loom_duckdb exercises. Installed on its own, with NO
+          # `|| true`, because a swallowed failure here is the exact bug this
+          # lane exists to catch: the suite would otherwise run against whatever
+          # the `serving` floor resolved to and report GREEN having measured
+          # nothing (#2543).
+          pip install -r apps/loom-duckdb/requirements.txt
+          # Install any additional per-domain requirements. These stay tolerant
+          # (many are optional/experimental runners not under test here), but a
+          # failure is now SURFACED as a CI annotation + a job-summary line
+          # instead of vanishing into `|| true`.
+          failed_reqs=""
+          for req in $(find . -name "requirements.txt" -not -path "*/dbt-env/*" -not -path "*/.venv/*" -not -path "./apps/loom-duckdb/*"); do
+            if ! pip install -r "$req"; then
+              echo "::warning file=${req#./}::pip install -r ${req#./} FAILED - its dependencies are absent from the test environment."
+              failed_reqs="${failed_reqs} ${req#./}"
+            fi
           done
+          if [ -n "$failed_reqs" ]; then
+            echo "### :warning: requirements.txt installs that failed" >> "$GITHUB_STEP_SUMMARY"
+            for req in $failed_reqs; do echo "- \`$req\`" >> "$GITHUB_STEP_SUMMARY"; done
+          fi
+          # Re-assert the loom-duckdb ENGINE pins after the loop: it also
+          # installs apps/loom-transform-runner/requirements.txt (dbt-core,
+          # dbt-databricks, dbt-duckdb, sqlmesh) into this SAME environment, and
+          # those transitively constrain duckdb/pyarrow. Without this the
+          # versions under test would be decided by `find` order, not by the
+          # app. Only duckdb/pyarrow are re-pinned (not the whole file) so this
+          # cannot fight the other apps over shared web deps. The assignment
+          # fails the step under `set -e` if those pins ever disappear from the
+          # file, which is correct — that IS the guarantee.
+          duckdb_pins=$(grep -E '^(duckdb|pyarrow)==' apps/loom-duckdb/requirements.txt)
+          pip install $duckdb_pins
+          python -c "import duckdb, pyarrow; print(f'loom-duckdb suite runs against duckdb {duckdb.__version__} / pyarrow {pyarrow.__version__}')"
           # mypy >= 1.16 added a hard dependency on pathspec and imports
           # `pathspec.patterns.gitignore`, which only exists in pathspec >= 0.12.
           # The per-domain requirements loop above can pull an older transitive
