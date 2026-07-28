@@ -1,6 +1,16 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 pydantic==2.10.3
+#
+# SECURITY OVERRIDES LIVE NEXT DOOR. Anything that must ship at a version this
+# file's resolution CANNOT produce (because a transitive pin holds it back at a
+# CVE-bearing release) goes in `requirements-security.txt`, which is installed
+# as a second pip pass by the Dockerfile and by the `transform-runner-imports`
+# CI job. Today that is deepdiff (CVE-2025-58367, held at 7.0.1 by dbt-common
+# 1.27.1, which the protobuf fence below pins). Do NOT move those lines here —
+# they conflict with a declared range by design and would make this file
+# unresolvable all over again.
+#
 # --- dbt (the ecosystem side of the N4 dual-engine runner) --------------------
 #
 # PROTOBUF FENCE — read before touching any pin below.
