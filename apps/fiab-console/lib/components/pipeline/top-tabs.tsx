@@ -25,7 +25,12 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
   },
-  body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' },
+  // A5: the body SCROLLS when a child outgrows the visible area (the root's
+  // overflow:hidden only clips for border-radius). Previously the body was a
+  // non-scrolling flex child, so an oversized persisted canvas height could
+  // clip the resize grip out of view with no scrollbar to reach it
+  // (research/canvas-resize.md §2.3).
+  body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' },
 });
 
 export type TopTabId = 'pipeline' | 'parameters' | 'variables' | 'settings' | 'output';
