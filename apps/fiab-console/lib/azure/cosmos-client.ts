@@ -122,6 +122,7 @@ let _governanceDomains: Container | null = null;
 let _functionRegistry: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _externalShares: Container | null = null;
+let _sharing: Container | null = null;
 let _wsRoles: Container | null = null;
 let _labelAssignments: Container | null = null;
 // F16 — Access-request approval workflow (manager → privacy → approver →
@@ -1009,6 +1010,10 @@ async function ensure() {
   // scoped ADLS POSIX ACL on just the shared path) is applied by the
   // external-share-client; Cosmos is the source of truth for the share list.
   _externalShares = await mk('external-shares', '/sourceItemId');
+  // Loom Sharing (LU-9) — published shares AND the recipients granted them, in ONE tenant-
+  // partitioned container (ids `share:<name>`/`recipient:<name>`) so the recipient hot path
+  // resolves both in a single-partition read. Grants live here and NOWHERE else (lib/sharing).
+  _sharing = await mk('sharing', '/tenantId');
   // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
   // One row per principal (user / group / SP) per workspace, partitioned by the
   // workspace so the Manage Access pane hits a single physical partition. Keyed
@@ -1379,6 +1384,7 @@ export async function recommendedActionsAdminContainer(): Promise<Container> { a
 export async function onelakeSecurityRolesContainer(): Promise<Container> { await ensure(); return _onelakeSecurityRoles!; }
 export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 export async function externalSharesContainer(): Promise<Container> { await ensure(); return _externalShares!; }
+export async function sharingContainer(): Promise<Container> { await ensure(); return _sharing!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 export async function functionRegistryContainer(): Promise<Container> { await ensure(); return _functionRegistry!; }
