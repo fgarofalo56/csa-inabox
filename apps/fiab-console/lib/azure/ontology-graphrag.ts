@@ -366,6 +366,61 @@ export function parseHopRows(
   return out;
 }
 
+/**
+ * ONE breadth-first visit: the node, its depth from the seed, and the edge that
+ * discovered it. Exported so a NON-AGE graph (B-N14b's policy graph) can reuse
+ * the very same path-citation walker instead of forking a second retriever —
+ * only the frontier expansion is backend-specific.
+ */
+export interface GraphVisit {
+  node: GraphPathNode;
+  depth: number;
+  parent?: string;
+  linkType?: string;
+  dir?: 'out' | 'in';
+  seedId: string;
+}
+
+/**
+ * Walk every discovered vertex back to its seed and render the typed path
+ * citations. PURE — the shared tail of any graph retrieval (AGE ontology or the
+ * in-memory policy graph). Cycle-guarded; shallowest paths first; capped.
+ */
+export function pathCitationsFromVisits(
+  visited: ReadonlyMap<string, GraphVisit>,
+  cap: number = MAX_PATH_CITATIONS,
+): GraphPathCitation[] {
+  const limit = Math.max(1, Math.trunc(cap) || MAX_PATH_CITATIONS);
+  const paths: GraphPathCitation[] = [];
+  const discovered = [...visited.values()].filter((v) => v.depth > 0).sort((a, b) => a.depth - b.depth);
+  for (const v of discovered) {
+    if (paths.length >= limit) break;
+    const nodes: GraphPathNode[] = [];
+    const links: string[] = [];
+    const dirs: ('out' | 'in')[] = [];
+    let cur: GraphVisit | undefined = v;
+    const guard = new Set<string>();
+    while (cur && !guard.has(cur.node.id)) {
+      guard.add(cur.node.id);
+      nodes.unshift(cur.node);
+      if (cur.parent) {
+        links.unshift(cur.linkType || 'RELATED');
+        dirs.unshift(cur.dir || 'out');
+        cur = visited.get(cur.parent);
+      } else break;
+    }
+    if (nodes.length < 2) continue;
+    paths.push({
+      id: `${nodes[0].id}->${nodes[nodes.length - 1].id}`,
+      hops: nodes.length - 1,
+      nodes,
+      links,
+      text: renderPathText(nodes, links, dirs),
+    });
+  }
+  return paths;
+}
+
 /** Render a path's human text, e.g. `Acme (Customer) —[PLACED]→ SO-9 (Order)`. */
 export function renderPathText(nodes: readonly GraphPathNode[], links: readonly string[], dirs: readonly ('out' | 'in')[]): string {
   if (nodes.length === 0) return '';
@@ -457,8 +512,7 @@ export async function retrieveGraphContext(opts: RetrieveGraphContextOptions): P
   }
 
   // ── 2. MULTI-HOP TRAVERSAL — one assembled statement per hop ──────────────
-  interface Visit { node: GraphPathNode; depth: number; parent?: string; linkType?: string; dir?: 'out' | 'in'; seedId: string }
-  const visited = new Map<string, Visit>();
+  const visited = new Map<string, GraphVisit>();
   for (const s of seeds) {
     visited.set(s.id, { node: { id: s.id, objectType: s.objectType, title: s.title }, depth: 0, seedId: s.id });
   }
@@ -493,33 +547,9 @@ export async function retrieveGraphContext(opts: RetrieveGraphContextOptions): P
   }
 
   // ── 3. PATH CITATIONS — walk each discovered node back to its seed ─────────
-  const paths: GraphPathCitation[] = [];
-  const discovered = [...visited.values()].filter((v) => v.depth > 0).sort((a, b) => a.depth - b.depth);
-  for (const v of discovered) {
-    if (paths.length >= MAX_PATH_CITATIONS) break;
-    const nodes: GraphPathNode[] = [];
-    const links: string[] = [];
-    const dirs: ('out' | 'in')[] = [];
-    let cur: Visit | undefined = v;
-    const guard = new Set<string>();
-    while (cur && !guard.has(cur.node.id)) {
-      guard.add(cur.node.id);
-      nodes.unshift(cur.node);
-      if (cur.parent) {
-        links.unshift(cur.linkType || 'RELATED');
-        dirs.unshift(cur.dir || 'out');
-        cur = visited.get(cur.parent);
-      } else break;
-    }
-    if (nodes.length < 2) continue;
-    paths.push({
-      id: `${nodes[0].id}->${nodes[nodes.length - 1].id}`,
-      hops: nodes.length - 1,
-      nodes,
-      links,
-      text: renderPathText(nodes, links, dirs),
-    });
-  }
+  // The walker is the SHARED pure tail (`pathCitationsFromVisits`) reused
+  // verbatim by the B-N14b policy-graph retriever.
+  const paths = pathCitationsFromVisits(visited, MAX_PATH_CITATIONS);
 
   const vertexIds = [...visited.keys()];
 
@@ -563,20 +593,42 @@ export async function retrieveGraphContext(opts: RetrieveGraphContextOptions): P
 }
 
 /**
- * Render the grounding block layered onto the agent instructions. Pure — every
- * line is a REAL fact read off AGE; nothing is synthesized.
+ * Optional wording overrides so a NON-ontology graph (B-N14b's policy graph)
+ * can reuse this exact renderer instead of forking a second one. Every field is
+ * optional — omitting `labels` reproduces the N11 ontology wording byte-for-byte.
  */
-export function graphContextBlock(ctx: GraphRagContext): string {
+export interface GraphContextLabels {
+  /** `## …` heading line. */
+  heading?: string;
+  /** The "treat these as authoritative facts" lead sentence. */
+  lead?: string;
+  /** Label above the seed list. */
+  seedsLabel?: string;
+  /** Label above the traversal paths. */
+  pathsLabel?: string;
+  /** The closing instruction to the model. */
+  closing?: string;
+}
+
+/**
+ * Render the grounding block layered onto the agent instructions. Pure — every
+ * line is a REAL fact read off the backing graph; nothing is synthesized.
+ */
+export function graphContextBlock(ctx: GraphRagContext, labels: GraphContextLabels = {}): string {
   if (!ctx.ok || (ctx.seeds.length === 0 && ctx.paths.length === 0)) return '';
   const lines: string[] = [
-    '## GRAPH GROUNDING (authored ontology — Apache AGE on in-VNet PostgreSQL)',
-    'These are REAL entities and REAL relationships read from the ontology graph for this question. Treat them as authoritative facts.',
+    labels.heading ?? '## GRAPH GROUNDING (authored ontology — Apache AGE on in-VNet PostgreSQL)',
+    labels.lead ??
+      'These are REAL entities and REAL relationships read from the ontology graph for this question. Treat them as authoritative facts.',
     '',
-    'Seed entities matched from the question:',
+    labels.seedsLabel ?? 'Seed entities matched from the question:',
     ...ctx.seeds.map((s) => `- ${s.title} (${s.objectType}, id ${s.id})${s.matchedOn.length ? ` — matched on ${s.matchedOn.join(', ')}` : ''}`),
   ];
   if (ctx.paths.length) {
-    lines.push('', `Traversal paths (≤ ${ctx.hops} hop${ctx.hops === 1 ? '' : 's'}, real edges):`);
+    lines.push(
+      '',
+      labels.pathsLabel ?? `Traversal paths (≤ ${ctx.hops} hop${ctx.hops === 1 ? '' : 's'}, real edges):`,
+    );
     ctx.paths.forEach((p, i) => lines.push(`${i + 1}. ${p.text}`));
   }
   if (ctx.communities.length) {
@@ -587,7 +639,8 @@ export function graphContextBlock(ctx: GraphRagContext): string {
   }
   lines.push(
     '',
-    'Use these graph facts to resolve entity relationships before you write any query, and cite the path you relied on (by its numbered line) in your answer. Do NOT invent nodes, edges, or relationships that are not listed above.',
+    labels.closing ??
+      'Use these graph facts to resolve entity relationships before you write any query, and cite the path you relied on (by its numbered line) in your answer. Do NOT invent nodes, edges, or relationships that are not listed above.',
   );
   return lines.join('\n');
 }

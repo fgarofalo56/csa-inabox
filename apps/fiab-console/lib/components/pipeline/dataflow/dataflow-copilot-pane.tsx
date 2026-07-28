@@ -35,6 +35,9 @@ import {
 import {
   parseSharedQueries, appendStep, setQueryBody, type RibbonTransform,
 } from './m-script';
+import {
+  ContractCheckCallout, type ContractCheckView,
+} from '@/lib/components/copilot/contract-check-callout';
 
 const useStyles = makeStyles({
   pane: {
@@ -68,10 +71,12 @@ const useStyles = makeStyles({
 type Intent = 'generate_query' | 'reference_query' | 'explain' | 'add_step' | 'undo';
 
 interface CardBase { id: string }
+/** B-N14c — the data-contract verdict the route returns with a proposal. */
+interface WithContractCheck { contractCheck?: ContractCheckView }
 type Card =
   | (CardBase & { kind: 'user'; text: string })
-  | (CardBase & { kind: 'transform'; queryName: string; stepName: string; stepExpr: string; appliedPrevM?: string })
-  | (CardBase & { kind: 'new_query'; queryName: string; mBody: string; appliedPrevM?: string })
+  | (CardBase & WithContractCheck & { kind: 'transform'; queryName: string; stepName: string; stepExpr: string; appliedPrevM?: string })
+  | (CardBase & WithContractCheck & { kind: 'new_query'; queryName: string; mBody: string; appliedPrevM?: string })
   | (CardBase & { kind: 'undo'; queryName: string; removedStep: string; newBody: string; appliedPrevM?: string })
   | (CardBase & { kind: 'explain'; queryName: string; explanation: string })
   | (CardBase & { kind: 'gate'; error: string; hint?: string })
@@ -125,10 +130,10 @@ export function DataflowCopilotPane({ mScript, activeQuery, onApply, disabled }:
       if (!j.ok) { push({ id: newId(), kind: 'error', message: j.error || `Request failed (${res.status})` }); return; }
       switch (j.kind) {
         case 'new_query':
-          push({ id: newId(), kind: 'new_query', queryName: j.queryName, mBody: j.mBody });
+          push({ id: newId(), kind: 'new_query', queryName: j.queryName, mBody: j.mBody, contractCheck: j.contractCheck });
           break;
         case 'transform':
-          push({ id: newId(), kind: 'transform', queryName: j.queryName, stepName: j.stepName, stepExpr: j.stepExpr });
+          push({ id: newId(), kind: 'transform', queryName: j.queryName, stepName: j.stepName, stepExpr: j.stepExpr, contractCheck: j.contractCheck });
           break;
         case 'explain':
           push({ id: newId(), kind: 'explain', queryName: j.queryName, explanation: j.explanation });
@@ -267,6 +272,10 @@ export function DataflowCopilotPane({ mScript, activeQuery, onApply, disabled }:
             c.kind === 'transform' ? `${c.stepName} =\n    ${c.stepExpr}`
             : c.kind === 'new_query' ? c.mBody
             : c.newBody;
+          // B-N14c — a hard-reject contract violation withholds Apply until the
+          // user overrides it deliberately (the run would fail anyway).
+          const check = c.kind === 'undo' ? undefined : c.contractCheck;
+          const blockedByContract = !!check?.blocked;
           return (
             <div key={c.id} className={s.card}>
               <div className={s.cardHead}>
@@ -276,10 +285,28 @@ export function DataflowCopilotPane({ mScript, activeQuery, onApply, disabled }:
                   : <Badge appearance="tint" color="brand">Pending</Badge>}
               </div>
               <pre className={s.code}>{codeText}</pre>
+              <ContractCheckCallout check={check} showSkipped={false} />
               <div className={s.cardActions}>
                 {!applied ? (
                   <>
-                    <Button size="small" appearance="primary" icon={<Checkmark16Regular />} onClick={() => applyCard(c)}>Apply</Button>
+                    <Tooltip
+                      relationship="description"
+                      content={
+                        blockedByContract
+                          ? 'A hard-reject data contract rejects this proposal — the run would fail before any data moved. Fix the proposal (or change the contract) first.'
+                          : 'Write this change into the dataflow’s M script.'
+                      }
+                    >
+                      <Button
+                        size="small"
+                        appearance="primary"
+                        icon={<Checkmark16Regular />}
+                        disabled={blockedByContract}
+                        onClick={() => applyCard(c)}
+                      >
+                        Apply
+                      </Button>
+                    </Tooltip>
                     <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => dismissCard(c.id)}>Dismiss</Button>
                   </>
                 ) : (

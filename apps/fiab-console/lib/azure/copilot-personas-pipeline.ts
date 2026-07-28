@@ -48,6 +48,13 @@ export function buildPipelineRegistry(
   backend: PipelineBackend,
   pipelineName: string,
   aoaiTarget: AoaiTarget,
+  /**
+   * B-N14c — the caller's Entra oid (the data-contract registry partition).
+   * When supplied, `pipeline_generate` grades the proposed spec against the N6
+   * ODCS contracts governing its sinks before returning it. OPTIONAL so every
+   * existing caller (and the delete-flow unit test) compiles unchanged.
+   */
+  tenantId?: string,
 ): LoomToolRegistry {
   const r = new LoomToolRegistry();
   const backendLabel = backend === 'adf' ? 'Azure Data Factory' : 'Synapse';
@@ -75,8 +82,10 @@ export function buildPipelineRegistry(
     service: 'Pipeline',
     description:
       'Generate a complete pipeline JSON from a natural-language description, grounded in the real linked services ' +
-      'from pipeline_list_connections. Returns a validated pipeline spec + a human summary. Does NOT persist — call ' +
-      'pipeline_apply_canvas next to push it live.',
+      'from pipeline_list_connections. Returns a validated pipeline spec + a human summary, AND a contractCheck ' +
+      'verdict grading the spec against the data contracts governing its sinks. Does NOT persist — call ' +
+      'pipeline_apply_canvas next to push it live. If contractCheck.blocked is true, tell the user what the ' +
+      'violation is and do NOT apply the spec until they decide.',
     parameters: {
       type: 'object',
       properties: {
@@ -98,7 +107,7 @@ export function buildPipelineRegistry(
     },
     handler: async (args) =>
       tools.handlePipelineGenerate(
-        { description: args.description, name: args.name, backend, connections: args.connections },
+        { description: args.description, name: args.name, backend, connections: args.connections, tenantId },
         aoaiTarget,
       ),
   });
