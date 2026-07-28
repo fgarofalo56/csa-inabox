@@ -10,7 +10,6 @@
  * Key Vault secret identifier (buildConnectionBody rejects a raw secret).
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listConnections, FoundryError } from '@/lib/azure/foundry-client';
 import {
   createConnection,
@@ -20,25 +19,26 @@ import {
   type ConnectionCategory,
   type ConnectionAuthMode,
 } from '@/lib/azure/foundry-connections-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: Request) => {
   try {
-    const connections = await listConnections();
+    // The client memoizes this near-static ARM list for 5 min (#2557 — it sits
+    // on the AOAI target-resolution hot path). Loom's own writes invalidate it;
+    // `?refresh=1` is the escape hatch for a change made outside Loom.
+    const force = new URL(req.url).searchParams.get('refresh') === '1';
+    const connections = await listConnections({ force });
     return NextResponse.json({ ok: true, connections });
   } catch (e: any) {
     const status = e instanceof FoundryError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});
 
-export async function POST(req: Request) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: Request) => {
   let payload: any;
   try {
     payload = await req.json();
@@ -74,11 +74,9 @@ export async function POST(req: Request) {
     const status = e instanceof FoundryError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});
 
-export async function PATCH(req: Request) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: Request) => {
   let payload: any;
   try {
     payload = await req.json();
@@ -114,11 +112,9 @@ export async function PATCH(req: Request) {
     const status = e instanceof FoundryError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});
 
-export async function DELETE(req: Request) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: Request) => {
   const name = new URL(req.url).searchParams.get('name')?.trim();
   if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
   try {
@@ -128,4 +124,4 @@ export async function DELETE(req: Request) {
     const status = e instanceof FoundryError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});

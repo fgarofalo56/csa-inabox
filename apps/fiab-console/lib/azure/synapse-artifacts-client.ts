@@ -39,6 +39,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { detectLoomCloud } from './cloud-endpoints';
+import { PagingBudget } from './paging-budget';
 
 // The Synapse Studio data-plane host + token scope are sovereign-cloud aware.
 // Commercial / GCC run on `dev.azuresynapse.net`; GCC-High / IL5 / DoD run on
@@ -90,7 +91,7 @@ export function synapseConfigGate(): { missing: string } | null {
   return null;
 }
 
-async function callDev(path: string, init?: RequestInit): Promise<Response> {
+async function callDev(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const tok = await credential.getToken(DEV_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
   return fetchWithTimeout(`${devBase()}${path}`, {
@@ -100,7 +101,7 @@ async function callDev(path: string, init?: RequestInit): Promise<Response> {
       authorization: `Bearer ${tok.token}`,
       'content-type': 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
 }
 
 async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
@@ -114,13 +115,15 @@ async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
 }
 
 // Synapse artifact lists are paged with a `nextLink` continuation; walk it so
-// the count is accurate for large workspaces.
+// the count is accurate for large workspaces. The hand-rolled `guard < 50`
+// capped PAGES but not TIME (50 pages x the 30s per-request ceiling = 25 min on
+// a request path) — the shared PagingBudget adds the wall clock (#2557).
 async function listAll<T>(collection: string, label: string): Promise<T[]> {
   const out: T[] = [];
+  const budget = new PagingBudget(`synapse-artifacts ${label}`);
   let path: string | null = `/${collection}?api-version=${DEV_API}`;
-  let guard = 0;
-  while (path && guard++ < 50) {
-    const r = await callDev(path);
+  while (path && budget.claimPage()) {
+    const r = await callDev(path, undefined, budget.remainingMs());
     const body = await jsonOrThrow<{ value?: T[]; nextLink?: string }>(r, label);
     if (Array.isArray(body.value)) out.push(...body.value);
     if (body.nextLink) {
@@ -134,6 +137,7 @@ async function listAll<T>(collection: string, label: string): Promise<T[]> {
       path = null;
     }
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 

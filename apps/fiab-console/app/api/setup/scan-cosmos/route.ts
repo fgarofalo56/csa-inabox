@@ -25,9 +25,11 @@
  *   { ok: false, error, hint? }                              on auth / network failure
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { PagingBudget } from '@/lib/azure/paging-budget';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,25 +65,36 @@ function subFromId(id: string): string {
   return m ? m[1] : '';
 }
 
+/**
+ * Walk an ARM nextLink-paged list. Bounded by a {@link PagingBudget} (#2557):
+ * this ran on a bare `fetch` (no per-request timeout) inside a bare
+ * `while (next)` — two missing ceilings on a request path. Each page now
+ * inherits the walk's remaining wall clock.
+ */
 async function armGetAll(url: string, token: string): Promise<any[]> {
   const out: any[] = [];
-  let next: string | undefined = url;
-  while (next) {
-    const r: Response = await fetch(next, { headers: { authorization: `Bearer ${token}` } });
+  const budget = new PagingBudget('setup scan-cosmos armGetAll');
+  let next = url;
+  while (budget.claimPage()) {
+    const r: Response = await fetchWithTimeout(
+      next,
+      { headers: { authorization: `Bearer ${token}` } },
+      budget.remainingMs(),
+    );
     if (!r.ok) {
       // A single sub the identity can't read shouldn't fail the whole scan.
       break;
     }
     const j: any = await r.json().catch(() => ({}));
     for (const v of (j.value || []) as any[]) out.push(v);
-    next = j.nextLink || undefined;
+    if (!j.nextLink) break;
+    next = j.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async () => {
 
   let token: string;
   try {
@@ -167,4 +180,4 @@ export async function GET() {
     ],
     existing,
   });
-}
+});

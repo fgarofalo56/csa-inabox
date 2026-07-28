@@ -44,6 +44,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { PagingBudget } from './paging-budget';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -98,22 +99,26 @@ export function automlConfigGate(): { missing: string } | null {
 
 async function automlFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget } = {},
+  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget; timeoutMs?: number } = {},
 ): Promise<Response> {
   const token = await credential.getToken(armScope());
   if (!token?.token) throw new AutoMlError(401, undefined, 'Failed to acquire ARM token for Azure ML AutoML');
-  const { query, target, ...rest } = init;
+  const { query, target, timeoutMs, ...rest } = init;
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
   const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
-  return fetchWithTimeout(url, {
-    ...rest,
-    headers: {
-      ...(rest.headers || {}),
-      authorization: `Bearer ${token.token}`,
-      'content-type': 'application/json',
+  return fetchWithTimeout(
+    url,
+    {
+      ...rest,
+      headers: {
+        ...(rest.headers || {}),
+        authorization: `Bearer ${token.token}`,
+        'content-type': 'application/json',
+      },
     },
-  });
+    timeoutMs, // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  );
 }
 
 async function readJson<T>(res: Response, label: string): Promise<T | null> {
@@ -380,9 +385,23 @@ export async function submitAutoMlJob(input: SubmitAutoMlInput): Promise<AutoMlJ
 export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promise<AutoMlJob[]> {
   const cap = opts.maxResults ?? 200;
   const out: AutoMlJob[] = [];
-  let res = await automlFetch('/jobs', { query: { $filter: "jobType eq 'AutoML'" } });
-  let j = await readJson<{ value?: any[]; nextLink?: string }>(res, 'listAutoMlJobs');
-  while (j) {
+  // Row cap alone is not a bound (a chain of pages whose `value` is empty, or
+  // whose rows all fail the jobType guard, walks forever) — budget it (#2557).
+  const budget = new PagingBudget('aml-automl listAutoMlJobs');
+  let next: string | null = null;
+  while (budget.claimPage()) {
+    const res: Response = next
+      ? await fetchWithTimeout(
+          next,
+          { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
+          budget.remainingMs(),
+        )
+      : await automlFetch('/jobs', {
+          query: { $filter: "jobType eq 'AutoML'" },
+          timeoutMs: budget.remainingMs(),
+        });
+    const j = await readJson<{ value?: any[]; nextLink?: string }>(res, 'listAutoMlJobs');
+    if (!j) break;
     if (Array.isArray(j.value)) {
       for (const r of j.value) {
         // The $filter on jobType is honored by ARM, but guard client-side too.
@@ -390,10 +409,9 @@ export async function listAutoMlJobs(opts: { maxResults?: number } = {}): Promis
       }
     }
     if (!j.nextLink || out.length >= cap) break;
-    const token = await credential.getToken(armScope());
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readJson<{ value?: any[]; nextLink?: string }>(res, 'listAutoMlJobs');
+    next = j.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return out.slice(0, cap);
 }

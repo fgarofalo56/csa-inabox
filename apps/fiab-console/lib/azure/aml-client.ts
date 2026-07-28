@@ -51,6 +51,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, isGovCloud } from './cloud-endpoints';
+import { PagingBudget, walkPagedList } from './paging-budget';
 import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
@@ -160,22 +161,32 @@ export function amlConfigGate(): { missing: string } | null {
  */
 async function amlFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget; apiVersion?: string } = {},
+  init: RequestInit & {
+    query?: Record<string, string>;
+    target?: AmlTarget;
+    apiVersion?: string;
+    /** Per-request ceiling override — paged walks pass their REMAINING budget. */
+    timeoutMs?: number;
+  } = {},
 ): Promise<Response> {
   const token = await credential.getToken(armScope());
   if (!token?.token) throw new AmlError(401, undefined, 'Failed to acquire ARM token for Azure ML');
-  const { query, target, apiVersion, ...rest } = init;
+  const { query, target, apiVersion, timeoutMs, ...rest } = init;
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
   const url = `${armBase()}${wsPath}${path}?api-version=${apiVersion ?? ML_API}${extra}`;
-  return fetchWithTimeout(url, {
-    ...rest,
-    headers: {
-      ...(rest.headers || {}),
-      authorization: `Bearer ${token.token}`,
-      'content-type': 'application/json',
+  return fetchWithTimeout(
+    url,
+    {
+      ...rest,
+      headers: {
+        ...(rest.headers || {}),
+        authorization: `Bearer ${token.token}`,
+        'content-type': 'application/json',
+      },
     },
-  });
+    timeoutMs, // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  );
 }
 
 async function readAmlJson<T>(res: Response, label: string): Promise<T | null> {
@@ -196,20 +207,17 @@ async function readAmlJson<T>(res: Response, label: string): Promise<T | null> {
 
 /**
  * Paged ARM value collector — ARM returns `{ value: [], nextLink?: string }`.
- * Follows `nextLink` with the same bearer until exhausted.
+ * Follows `nextLink` with the same bearer, BOUNDED by the shared page-cap +
+ * wall-clock budget (#2557) so a slow or cyclic chain can never out-live the
+ * request path that awaits it.
  */
 async function pagedList(path: string, label: string): Promise<any[]> {
-  const out: any[] = [];
-  let res = await amlFetch(path);
-  let j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
-  while (j) {
-    if (Array.isArray(j.value)) out.push(...j.value);
-    if (!j.nextLink) break;
-    const token = await credential.getToken(armScope());
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
-  }
-  return out;
+  return walkPagedList(`aml ${label}`, async (next, timeoutMs) => {
+    const res = next
+      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } }, timeoutMs)
+      : await amlFetch(path, { timeoutMs });
+    return readAmlJson<{ value?: any[]; nextLink?: string }>(res, label);
+  });
 }
 
 // ============================================================
@@ -610,15 +618,25 @@ export async function listJobs(opts: { experimentName?: string; maxResults?: num
   if (opts.experimentName) query.$filter = `properties.experimentName eq '${opts.experimentName}'`;
   const cap = opts.maxResults ?? 200;
   const out: AmlJob[] = [];
-  let res = await amlFetch('/jobs', { query });
-  let j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
-  while (j) {
+  // Row cap alone is not a bound: a chain of pages with an empty `value` walks
+  // forever. Budget it like every other pager (#2557).
+  const budget = new PagingBudget('aml listJobs');
+  let next: string | null = null;
+  while (budget.claimPage()) {
+    const res: Response = next
+      ? await fetchWithTimeout(
+          next,
+          { headers: { authorization: `Bearer ${(await credential.getToken(armScope()))!.token}` } },
+          budget.remainingMs(),
+        )
+      : await amlFetch('/jobs', { query, timeoutMs: budget.remainingMs() });
+    const j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
+    if (!j) break;
     if (Array.isArray(j.value)) for (const r of j.value) out.push(shapeJob(r));
     if (!j.nextLink || out.length >= cap) break;
-    const token = await credential.getToken(armScope());
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readAmlJson<{ value?: any[]; nextLink?: string }>(res, 'listJobs');
+    next = j.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out.slice(0, cap);
 }
 

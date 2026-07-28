@@ -22,10 +22,12 @@
  *   { ok: false, error, hint? }                              on auth / network failure
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { PagingBudget } from '@/lib/azure/paging-budget';
 import { getArmTokenPreferUser } from '@/lib/auth/obo';
 import { swrAwait } from '@/lib/azure/cross-sub-cache';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,12 +43,23 @@ interface ArmSubscription {
   tenantId?: string;
 }
 
-/** Walk ARM's nextLink-paged subscription list under `token`. Throws on ARM error. */
+/**
+ * Walk ARM's nextLink-paged subscription list under `token`. Throws on ARM error.
+ *
+ * Bounded by a {@link PagingBudget} (#2557): this ran on a bare `fetch` with no
+ * per-request timeout INSIDE a bare `while (url)` — two missing ceilings on a
+ * request path. Each page now inherits the walk's remaining wall clock.
+ */
 async function listSubscriptions(token: string): Promise<ArmSubscription[]> {
   const subscriptions: ArmSubscription[] = [];
-  let url: string | undefined = `${arm()}/subscriptions?api-version=2022-12-01`;
-  while (url) {
-    const r: Response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+  const budget = new PagingBudget('setup listSubscriptions');
+  let url = `${arm()}/subscriptions?api-version=2022-12-01`;
+  while (budget.claimPage()) {
+    const r: Response = await fetchWithTimeout(
+      url,
+      { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' },
+      budget.remainingMs(),
+    );
     const ct = r.headers.get('content-type') || '';
     if (!r.ok) {
       const t = await r.text().catch(() => '');
@@ -65,15 +78,15 @@ async function listSubscriptions(token: string): Promise<ArmSubscription[]> {
         tenantId: s.tenantId,
       });
     }
-    url = j.nextLink || undefined;
+    if (!j.nextLink) break;
+    url = j.nextLink;
   }
+  budget.warnIfTruncated(subscriptions.length);
   subscriptions.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
   return subscriptions;
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
 
   // USER-PASSTHROUGH: list the subscriptions the SIGNED-IN USER can see (so the
   // target-subscription picker reflects what they can actually deploy into),
@@ -114,4 +127,4 @@ export async function GET() {
       { status: 502 },
     );
   }
-}
+});

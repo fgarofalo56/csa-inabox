@@ -36,6 +36,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { walkPagedList } from './paging-budget';
 import { extractPackages, buildCondaYaml, type AmlPackage, type PackageSource } from './aml-environment-conda';
 
 export { extractPackages, buildCondaYaml };
@@ -126,22 +127,26 @@ export function isAmlEnvConfigured(): boolean {
 
 async function armFetch(
   fullPath: string,
-  init: RequestInit & { query?: Record<string, string> } = {},
+  init: RequestInit & { query?: Record<string, string>; timeoutMs?: number } = {},
 ): Promise<Response> {
   const token = await credential.getToken(ARM_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire ARM token for AML environments');
   const sep = fullPath.includes('?') ? '&' : '?';
   const query = init.query ? '&' + new URLSearchParams(init.query).toString() : '';
   const url = `${armBase()}${fullPath}${sep}api-version=${ML_API}${query}`;
-  const { query: _q, ...rest } = init;
-  return fetchWithTimeout(url, {
-    ...rest,
-    headers: {
-      ...(rest.headers || {}),
-      authorization: `Bearer ${token.token}`,
-      'content-type': 'application/json',
+  const { query: _q, timeoutMs, ...rest } = init;
+  return fetchWithTimeout(
+    url,
+    {
+      ...rest,
+      headers: {
+        ...(rest.headers || {}),
+        authorization: `Bearer ${token.token}`,
+        'content-type': 'application/json',
+      },
     },
-  });
+    timeoutMs, // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
+  );
 }
 
 async function readJson<T>(res: Response): Promise<T | null> {
@@ -196,18 +201,14 @@ function shapeVersion(name: string, raw: any): AmlEnvironment {
   };
 }
 
+/** Paged ARM value collector, bounded by the shared page-cap + wall-clock budget (#2557). */
 async function pagedList(path: string): Promise<any[]> {
-  const out: any[] = [];
-  let res = await armFetch(path);
-  let j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  while (j) {
-    if (Array.isArray(j.value)) out.push(...j.value);
-    if (!j.nextLink) break;
-    const token = await credential.getToken(ARM_SCOPE);
-    res = await fetchWithTimeout(j.nextLink, { headers: { authorization: `Bearer ${token!.token}` } });
-    j = await readJson<{ value?: any[]; nextLink?: string }>(res);
-  }
-  return out;
+  return walkPagedList(`aml-environments ${path}`, async (next, timeoutMs) => {
+    const res = next
+      ? await fetchWithTimeout(next, { headers: { authorization: `Bearer ${(await credential.getToken(ARM_SCOPE))!.token}` } }, timeoutMs)
+      : await armFetch(path, { timeoutMs });
+    return readJson<{ value?: any[]; nextLink?: string }>(res);
+  });
 }
 
 // ---------------- Public API ----------------

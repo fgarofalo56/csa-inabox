@@ -18,13 +18,15 @@
  * A gate setting without a loader is simply absent — the dialog renders a
  * free-text input with the registry valueHint for those.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import { withSession } from '@/lib/api/route-toolkit';
 import { apiNotFound, apiError } from '@/lib/api/respond';
 import { getGate, type GateOptionsLoader } from '@/lib/gates/registry';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { PagingBudget } from '@/lib/azure/paging-budget';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,8 +49,8 @@ function subs(): string[] {
   return Array.from(out);
 }
 
-async function armGet(token: string, url: string): Promise<any> {
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+async function armGet(token: string, url: string, timeoutMs?: number): Promise<any> {
+  const r = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } }, timeoutMs);
   if (!r.ok) throw new Error(`ARM ${r.status}: ${(await r.text()).slice(0, 300)}`);
   return r.json();
 }
@@ -61,17 +63,22 @@ function pluck(obj: any, path: string): string {
 
 async function listResources(token: string, armType: string): Promise<any[]> {
   const all: any[] = [];
+  // One budget for the WHOLE fan-out (all subs), not per sub: this route's own
+  // maxDuration is 30 and the row cap alone never bounded time (#2557).
+  const budget = new PagingBudget(`gate-options ${armType}`);
   for (const sub of subs()) {
     const filter = encodeURIComponent(`resourceType eq '${armType}'`);
-    let url: string | undefined =
-      `${armBase()}/subscriptions/${sub}/resources?$filter=${filter}&api-version=2021-04-01`;
-    while (url) {
-      const page = await armGet(token, url);
+    let url = `${armBase()}/subscriptions/${sub}/resources?$filter=${filter}&api-version=2021-04-01`;
+    while (budget.claimPage()) {
+      const page = await armGet(token, url, budget.remainingMs());
       all.push(...(page.value || []));
-      url = page.nextLink;
+      if (!page.nextLink) break;
       if (all.length >= 100) break; // bounded — a picker, not an inventory
+      url = page.nextLink;
     }
+    if (all.length >= 100 || budget.truncatedBy) break;
   }
+  budget.warnIfTruncated(all.length);
   return all;
 }
 
@@ -127,12 +134,11 @@ async function loadOptions(token: string, loader: GateOptionsLoader): Promise<Ga
   return out;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
+export const GET = withSession<{ id: string }>(async (_req, { session, params }) => {
   const capGate = await enforceCapability(session, 'admin.env-config', 'Admin');
   if (capGate) return capGate;
 
-  const { id } = await ctx.params;
+  const { id } = params;
   const gate = getGate(id);
   if (!gate) return apiNotFound(`unknown gate id '${id}'`);
 
@@ -164,4 +170,4 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   return NextResponse.json({ ok: true, gateId: id, options, errors });
-}
+});

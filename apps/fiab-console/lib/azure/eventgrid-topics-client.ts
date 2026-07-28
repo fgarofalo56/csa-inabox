@@ -44,6 +44,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
+import { PagingBudget } from './paging-budget';
 
 /** Control-plane (ARM) api-version covering topics + eventSubscriptions. */
 const EG_ARM_API = '2024-06-01-preview';
@@ -132,7 +133,7 @@ async function armToken(): Promise<string> {
   return t.token;
 }
 
-async function arm<T = any>(url: string, init: RequestInit = {}): Promise<T> {
+async function arm<T = any>(url: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
   const token = await armToken();
   const res = await fetchWithTimeout(url, {
     ...init,
@@ -142,7 +143,7 @@ async function arm<T = any>(url: string, init: RequestInit = {}): Promise<T> {
       'content-type': 'application/json',
       accept: 'application/json',
     },
-  });
+  }, timeoutMs); // undefined => the shared DEFAULT_SERVER_FETCH_TIMEOUT_MS
   const text = await res.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
@@ -185,12 +186,16 @@ function shapeTopic(t: any): EventGridTopic {
 export async function listEventGridTopics(): Promise<EventGridTopic[]> {
   const cfg = readEventGridTopicsConfig();
   const out: EventGridTopic[] = [];
-  let next: string | undefined = `${rgUrl(cfg)}/providers/Microsoft.EventGrid/topics?api-version=${EG_ARM_API}`;
-  while (next) {
-    const body: any = await arm(next);
+  // Bounded page walk (#2557) — a bare `while (nextLink)` inherits no ceiling.
+  const budget = new PagingBudget('eventgrid listTopics');
+  let next = `${rgUrl(cfg)}/providers/Microsoft.EventGrid/topics?api-version=${EG_ARM_API}`;
+  while (budget.claimPage()) {
+    const body: any = await arm(next, {}, budget.remainingMs());
     if (Array.isArray(body?.value)) out.push(...body.value.map(shapeTopic));
-    next = body?.nextLink;
+    if (!body?.nextLink) break;
+    next = body.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 
@@ -271,9 +276,11 @@ export async function listTopicEventSubscriptions(topic: string): Promise<TopicE
   const cfg = readEventGridTopicsConfig();
   const url = `${topicUrl(cfg, topic)}/providers/Microsoft.EventGrid/eventSubscriptions?api-version=${EG_ARM_API}`;
   const out: TopicEventSubscription[] = [];
-  let next: string | undefined = url;
-  while (next) {
-    const body: any = await arm(next);
+  // Bounded page walk (#2557) — a bare `while (nextLink)` inherits no ceiling.
+  const budget = new PagingBudget('eventgrid listTopicEventSubscriptions');
+  let next = url;
+  while (budget.claimPage()) {
+    const body: any = await arm(next, {}, budget.remainingMs());
     for (const s of body?.value || []) {
       const p = s?.properties || {};
       const dest = p?.destination || {};
@@ -290,8 +297,10 @@ export async function listTopicEventSubscriptions(topic: string): Promise<TopicE
         includedEventTypes: p?.filter?.includedEventTypes,
       });
     }
-    next = body?.nextLink;
+    if (!body?.nextLink) break;
+    next = body.nextLink;
   }
+  budget.warnIfTruncated(out.length);
   return out;
 }
 
