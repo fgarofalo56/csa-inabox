@@ -207,6 +207,13 @@ jobs:
             echo "::warning::No Entra app registration for this estate yet — Loom Unity deploys SEALED (up, Entra enforced, sentinel audience, scaled to zero, every caller rejected) until csa-loom-post-deploy-bootstrap runs."
           fi
 
+      # svc-loom-unity-authz (round 3) — the ADOPTED-IMAGE PREFLIGHT for this lane
+      # lives inside scripts/csa-loom/redeploy-gov.sh, not here, and fires only on
+      # the --skip-teardown (reconcile) path. Reason: this step's default mode
+      # TEARS THE ESTATE DOWN first, so nothing is adopted and a missing tag is
+      # the normal post-teardown state; a preflight here would fail the nightly
+      # ring for a non-problem. The dlz-attach branch below targets a brand-new
+      # subscription, which is greenfield by definition.
       - name: Teardown -> redeploy -> smoke (full mode only)
         if: inputs.run_mode == 'full'
         env:

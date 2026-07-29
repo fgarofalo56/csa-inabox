@@ -163,6 +163,33 @@ jobs:
             echo "::warning::No Entra app registration for this estate yet — Loom Unity deploys SEALED (up, Entra enforced, sentinel audience, scaled to zero, every caller rejected). Run csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) to unseal it; it also records the client id in Key Vault so later deploys stay pinned."
           fi
 
+      # svc-loom-unity-authz (round 3) — ADOPTED-IMAGE PREFLIGHT.
+      # `loom-unity` is ALREADY LIVE in this estate (gov-uc-purview-wire.yml
+      # created it out-of-band), and admin-plane/main.bicep now deploys a
+      # Container App with that exact name into that exact RG — so this deploy
+      # ADOPTS the running app and rewrites its image reference to
+      # `<gov-acr>/loom-unity:v0.1` (the tag gcc-high.bicepparam pulls).
+      # gov-build-images.yml is the producer for that tag AND IT HAS NEVER RUN,
+      # so the tag's existence is an assumption, not a fact. If it is absent the
+      # ARM PUT still succeeds and the new revision then fails its image pull —
+      # i.e. the deploy takes the LIVE Gov catalog down. Refuse instead.
+      # Greenfield (no such Container App yet) passes: a missing tag is the
+      # expected state of the documented two-phase image path.
+      - name: Image preflight — never adopt a live app onto a missing tag
+        run: |
+          set -euo pipefail
+          # dlz-attach deploys only a landing zone into a DIFFERENT subscription
+          # and never touches the hub's admin-plane apps, so the hub's live
+          # loom-unity is not being adopted — checking it would be a false stop.
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; skipping the image preflight."
+            exit 0
+          fi
+          bash scripts/csa-loom/preflight-image-tags.sh \
+            --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}" \
+            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}"
+
       - name: Bicep what-if
         run: |
           az deployment sub what-if \

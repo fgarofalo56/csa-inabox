@@ -112,6 +112,18 @@ jobs:
             --image "loom-unity:$SHA" --image "loom-unity:latest" --image "loom-unity:v0.1" \
             --file apps/loom-unity/Dockerfile \
             apps/loom-unity
+          # svc-loom-unity-authz (round 3) — PROVE the :v0.1 tag landed while the
+          # data plane is still open. The deploy step below, and every future
+          # admin-plane deploy that ADOPTS this app, reference exactly that tag;
+          # a silent tagging failure here would leave the live Gov catalog
+          # pointing at an image that does not exist.
+          DIGEST=$(az acr repository show -n "$ACR" --image "loom-unity:v0.1" --query digest -o tsv | tr -d '\r')
+          if [ -z "${DIGEST:-}" ]; then
+            echo "::error::loom-unity:v0.1 is NOT resolvable in $ACR after the build. That is the exact tag gcc-high/il5.bicepparam pull, so deploying now would point this estate at a missing image. Refusing."
+            bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+            exit 1
+          fi
+          echo "::notice::loom-unity:v0.1 -> $DIGEST (the tag the Gov bicepparams pull)"
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
 
       - name: Release the ACR firewall lease (always)

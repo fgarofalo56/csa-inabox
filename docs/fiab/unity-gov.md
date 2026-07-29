@@ -549,6 +549,49 @@ switch clouds, so they cannot push to a Gov registry — that gap is exactly why
 from-scratch GCC-High / IL5 deploy used to fail the `loom-unity` image pull, and
 why `gov-build-images.yml` exists.
 
+Tag match, proved against **compiled ARM** rather than source
+(`az bicep build modules/admin-plane/main.bicep` +
+`az bicep build-params params/gcc-high.bicepparam` with no `LOOM_*_TAG` env set):
+
+```
+template pulls   [format('{0}/loom-unity:{1}', reference('registry').outputs.acrLoginServer.value,
+                         coalesce(tryGet(parameters('appImageTags'), 'unity'), 'v0.1'))]
+                 appImageTags.unity = "v0.1"   (GCC-High and IL5)   => loom-unity:v0.1
+producer pushes  gov-build-images.yml     -> loom-unity:v0.1, :<sha>, :latest
+                 gov-uc-purview-wire.yml  -> loom-unity:<sha>, :latest, :v0.1
+```
+
+> **`gov-build-images.yml` has never been executed** (as of 2026-07-29). It is
+> dispatch-only, so a green PR check says nothing about it — GitHub does not run
+> `workflow_dispatch` workflows on a pull request. Its first real run against a
+> Gov ACR is what proves the matrix. Nothing is allowed to *depend* on it having
+> run; see the preflight below.
+
+### Image preflight — never adopt a live app onto a missing tag
+
+Because the orchestrator **adopts** the running Gov `loom-unity` (next section),
+an ARM PUT that references a tag which is not in the registry would succeed at
+the ARM layer and then leave the app unable to pull — i.e. **the deploy would take
+the live Gov catalog down**. `scripts/csa-loom/preflight-image-tags.sh` makes that
+unreachable:
+
+| State | Behaviour |
+|---|---|
+| Resource group absent, or the Container App is not deployed yet | **pass** — greenfield, nothing is being adopted; a missing tag is the expected state of the two-phase image path |
+| Container App is **LIVE** and the tag resolves | **pass**, and the manifest digest goes in the run log |
+| Container App is **LIVE** and the tag is **missing** | **FAIL**, naming the tag, what tags *do* exist, and the exact `gov-build-images.yml` dispatch that fixes it |
+| Container App is **LIVE** and the registry cannot be read | **FAIL** — never deploy blind onto a running federal app (`LOOM_SKIP_IMAGE_PREFLIGHT=true` is the loud emergency valve) |
+
+The ACR is `publicNetworkAccess=Disabled`, so tag resolution is a data-plane call:
+the script takes the same owned firewall lease every push path uses
+(`scripts/csa-loom/acr-firewall-lease.sh`) and always releases it. It is wired
+into `deploy-fiab-gcch.yml` (before what-if/deploy) and
+`scripts/csa-loom/redeploy-gov.sh` **on the `--skip-teardown` reconcile path only**
+— after a teardown there is nothing live to adopt. `gov-uc-purview-wire.yml`
+additionally asserts its own `:v0.1` push resolved before it deploys.
+Behaviour is covered by `scripts/csa-loom/tests/preflight-image-tags.test.mjs`
+(8 cases, `az` stubbed — no Azure calls).
+
 ### Ownership — the `loom-unity` app-name collision in Gov
 
 `loom-unity` in `rg-csa-loom-admin-<region>` **already exists and is live** in
@@ -562,6 +605,9 @@ safe because the two paths were made convergent:
 
 * **image** — the workflow now also publishes `loom-unity:v0.1`, the tag the Gov
   bicepparams pull, so adoption cannot repoint the live app at a tag nobody built;
+  and because "the tag should be there" is not the same as "the tag is there",
+  the adopting deploy runs the image preflight above and **refuses** rather than
+  taking the live catalog down;
 * **identity** — the workflow prefers the same dedicated
   `uami-loom-unity-<region>` the orchestrator creates, falling back to the Console
   UAMI only until the first orchestrator deploy;
