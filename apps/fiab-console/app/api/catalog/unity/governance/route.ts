@@ -36,9 +36,18 @@
  *   Contributor  free-form tags, attribute values
  *   Admin        certification, governed-tag assignment, Purview sync
  *
- * EVERY outcome is audited (`lib/governance/uc-overlay/audit.ts`) — applied
- * mutations with before/after facts, Purview pushes, AND denials (403 authz,
- * 400 validation). A failed forgery attempt must leave a trace.
+ * A tag counts as GOVERNED for tiering if the tenant vocabulary defines it
+ * TODAY **or** the row being mutated already carries it with `governed: true`.
+ * The row half matters: dropping a key from the vocabulary must not silently
+ * demote every already-persisted governed assignment to the Contributor tier.
+ *
+ * Every outcome is audited on a BEST-EFFORT basis
+ * (`lib/governance/uc-overlay/audit.ts`) — applied mutations with before/after
+ * facts, Purview pushes, AND denials (403 authz, 400 validation). The audit
+ * write deliberately never blocks or fails the primary response (the same
+ * contract as `writeDomainAudit`), so a Cosmos outage degrades the trail rather
+ * than the governance write: this is an attributability aid, not a guaranteed
+ * tamper-evident ledger.
  *
  * DEFAULT-ON, both backends, no INFRA gate: the overlay is Cosmos-backed
  * Loom-native governance, so it works against the OSS Unity Catalog server in
@@ -167,10 +176,31 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
 
     // ---- AUTHORIZATION (tiered; see the module docblock) -------------------
     // Elevated when the request touches a trust signal (certification), an
-    // access-control input (a GOVERNED tag — resolved against the vocabulary so
-    // casing cannot slip one through), or the shared tenant Purview account.
-    const touchesGoverned = (mutation.setTags || []).some((t) => !!findGovernedTag(vocabulary, t.key))
-      || (mutation.removeTagKeys || []).some((k) => !!findGovernedTag(vocabulary, k));
+    // access-control input (a GOVERNED tag), or the shared tenant Purview
+    // account.
+    //
+    // GOVERNED-NESS IS RESOLVED FROM TWO SOURCES, AND THE ROW WINS.
+    // The live vocabulary alone is NOT sufficient: it is tenant-wide mutable
+    // state, and one tenant-admin `POST /api/catalog/unity/governed-tags
+    // {tags: []}` drops a key out of it while every already-persisted
+    // `governed: true` assignment stays on its row. If the tier were derived
+    // from the vocabulary only, that single save would silently demote every
+    // historical governed tag to the Contributor tier — letting a Contributor
+    // de-classify `pii=yes`, which is exactly the access-control input LU-6
+    // compiles. `model.ts` persists `governed` per assignment PRECISELY so a
+    // later vocabulary edit cannot re-characterise history; the gate has to
+    // honour that flag or it contradicts the invariant it depends on.
+    //
+    // So `current` is read BEFORE the decision, not after.
+    const current = await readOverlay(tenantId, { fullName, column, securableType });
+    const touchedKeys = [
+      ...(mutation.setTags || []).map((t) => t.key),
+      ...(mutation.removeTagKeys || []),
+    ].map((k) => String(k || '').trim().toLowerCase()).filter(Boolean);
+    const touchesGoverned = touchedKeys.some(
+      (k) => !!findGovernedTag(vocabulary, k)
+        || (current.tags || []).some((t) => !!t.governed && (t.key || '').trim().toLowerCase() === k),
+    );
     const elevated = !!mutation.certification || touchesGoverned || !!body.syncPurview;
     const requiredRole = elevated ? 'Admin' : 'Contributor';
     const denied = await enforceCapability(session, GOVERNANCE_CAPABILITY, requiredRole);
@@ -197,7 +227,6 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     }
     // ------------------------------------------------------------------------
 
-    const current = await readOverlay(tenantId, { fullName, column, securableType });
     const before = overlayFacts(current);
     let next: UcGovernanceOverlay;
     try {

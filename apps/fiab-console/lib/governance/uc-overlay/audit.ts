@@ -17,12 +17,17 @@
  * DENIALS ARE AUDITED TOO. An authorization refusal (403) and a validation
  * refusal (400 — a value outside the governed vocabulary, an unknown attribute
  * id, an oversized payload) are exactly the events a reviewer needs to see, so
- * `writeUcGovernanceDenial` records them with the attempted change. A failed
- * attack must leave a trace.
+ * `writeUcGovernanceDenial` records them with the attempted change, BOUNDED by
+ * `boundAttempted` (the 403 branch runs before any request validation, so the
+ * payload is raw and the caller holds no grant).
  *
- * Audit writes are best-effort and never block the primary response (identical
- * contract to `writeDomainAudit`) — a Cosmos hiccup must not make a governance
- * write fail after it has already been applied.
+ * BEST-EFFORT, NOT GUARANTEED. Audit writes never block and never fail the
+ * primary response (identical contract to `writeDomainAudit`) — a Cosmos hiccup
+ * must not make a governance write fail after it has already been applied. The
+ * consequence is honest and deliberate: with the audit container missing or
+ * misconfigured, governance mutations and refused forgery attempts proceed
+ * UNRECORDED. This is an attributability aid, not a tamper-evident ledger, and
+ * must not be relied on as a compliance control on its own.
  */
 import { randomUUID } from 'node:crypto';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
@@ -159,9 +164,74 @@ export async function writeVocabularyAudit(p: {
 }
 
 /**
+ * Hard bounds on a DENIAL record's `attempted` payload.
+ *
+ * A denial is written on the 403 branch — BEFORE `applyOverlayMutation` and
+ * therefore before `validateTagAssignment` / `validateAttributeValues` have
+ * bounded anything. `withSession` applies no rate limit, so without these caps
+ * any signed-in user holding NO grant at all could drive unbounded
+ * attacker-controlled JSON into the shared Cosmos audit container, one document
+ * per refused request — the same storage-amplification class the success path
+ * closed via `OVERLAY_LIMITS`, reopened on the refusal path and reachable
+ * without authorization.
+ */
+export const DENIAL_LIMITS = {
+  /** Max array entries kept from an attempted payload. */
+  maxArrayItems: 20,
+  /** Max characters kept from any string. */
+  maxStringLength: 256,
+  /** Max own keys kept from any object. */
+  maxObjectKeys: 32,
+  /** Max nesting kept; deeper values collapse to a marker. */
+  maxDepth: 4,
+} as const;
+
+/** Truncation marker so a reader can tell a record was clipped, not empty. */
+const TRUNCATED = '[truncated]';
+
+/**
+ * Recursively bound an attacker-supplied value to {@link DENIAL_LIMITS}.
+ * Exported so the bound is testable directly, but every write goes through
+ * {@link writeUcGovernanceDenial}, which applies it — the cap lives at the SINK
+ * so no current or future denial call site can forget it.
+ */
+export function boundAttempted(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    return value.length > DENIAL_LIMITS.maxStringLength
+      ? `${value.slice(0, DENIAL_LIMITS.maxStringLength)}…${TRUNCATED}`
+      : value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (depth >= DENIAL_LIMITS.maxDepth) return TRUNCATED;
+  if (Array.isArray(value)) {
+    const kept = value.slice(0, DENIAL_LIMITS.maxArrayItems).map((v) => boundAttempted(v, depth + 1));
+    if (value.length > DENIAL_LIMITS.maxArrayItems) {
+      kept.push(`${TRUNCATED} ${value.length - DENIAL_LIMITS.maxArrayItems} more`);
+    }
+    return kept;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    const entries = Object.entries(value as Record<string, unknown>);
+    for (const [k, v] of entries.slice(0, DENIAL_LIMITS.maxObjectKeys)) {
+      out[String(k).slice(0, DENIAL_LIMITS.maxStringLength)] = boundAttempted(v, depth + 1);
+    }
+    if (entries.length > DENIAL_LIMITS.maxObjectKeys) {
+      out[TRUNCATED] = entries.length - DENIAL_LIMITS.maxObjectKeys;
+    }
+    return out;
+  }
+  // functions / symbols / bigint — never persisted verbatim.
+  return TRUNCATED;
+}
+
+/**
  * Record a REFUSED governance mutation — an authorization denial (403) or a
  * validation rejection (400). `attempted` carries what the caller tried to do
- * so a repeated forgery attempt is visible in Admin → Audit Logs.
+ * so a repeated forgery attempt is visible in Admin → Audit Logs — BOUNDED by
+ * {@link boundAttempted}, because on the 403 branch it is raw request body from
+ * a caller who has no grant at all.
  */
 export async function writeUcGovernanceDenial(p: {
   tenantId: string;
@@ -175,8 +245,8 @@ export async function writeUcGovernanceDenial(p: {
   await write(p.tenantId, p.who, 'denied', `uc-governance:${p.target || p.surface}`, {
     surface: p.surface,
     status: p.status,
-    reason: p.reason,
-    ...(p.target ? { target: p.target } : {}),
-    ...(p.attempted !== undefined ? { attempted: p.attempted } : {}),
+    reason: String(p.reason || '').slice(0, DENIAL_LIMITS.maxStringLength * 4),
+    ...(p.target ? { target: String(p.target).slice(0, DENIAL_LIMITS.maxStringLength) } : {}),
+    ...(p.attempted !== undefined ? { attempted: boundAttempted(p.attempted) } : {}),
   });
 }

@@ -87,6 +87,7 @@ import {
 } from '@/lib/governance/uc-overlay/store';
 import { syncOverlayToPurview, provenanceFromSync } from '@/lib/governance/uc-overlay/purview-sync';
 import { emptyOverlay } from '@/lib/governance/uc-overlay/model';
+import { DENIAL_LIMITS } from '@/lib/governance/uc-overlay/audit';
 
 const mock = (fn: unknown) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -145,7 +146,12 @@ describe('GET /api/catalog/unity/governance', () => {
     expect(j.vocabulary).toHaveLength(1);
   });
 
-  it('reads within the CALLER tenant partition', async () => {
+  // NOT a cross-tenant isolation proof — the store is vi.mocked here, so this
+  // only shows the ROUTE forwards `tenantScopeId(session)` and never a
+  // caller-supplied tenant. The partition key itself (and the fact that another
+  // tenant's row is invisible) is pinned against the real query in
+  // lib/governance/uc-overlay/__tests__/store.test.ts.
+  it('forwards the SESSION tenant scope to the store (never a body/query-supplied one)', async () => {
     await GET(getReq('?fullName=main.sales.orders'), undefined as never);
     expect(readOverlay).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ fullName: 'main.sales.orders' }));
   });
@@ -204,8 +210,106 @@ describe('POST /api/catalog/unity/governance — AUTHORIZATION (attack cases)', 
       undefined as never,
     );
     expect(res.status).toBe(403);
+    // The TIER is the assertion, not just the refusal: this caller holds no
+    // grant at all, so a bare `403` is produced whether or not the removal is
+    // elevated. `requiredRole` is what pins the removal half of
+    // `touchesGoverned` — without it, deleting that clause changes nothing.
+    expect((await res.json()).requiredRole).toBe('Admin');
     expect(writeOverlay).not.toHaveBeenCalled();
     expect(deleteOverlay).not.toHaveBeenCalled();
+  });
+
+  it('ATTACK: a real CONTRIBUTOR is refused a governed tag ASSIGN', async () => {
+    grant('Contributor');
+    const res = await POST(
+      postReq({ fullName: 'main.sales.orders', setTags: [{ key: 'pii', value: 'no' }] }),
+      undefined as never,
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).requiredRole).toBe('Admin');
+    expect(writeOverlay).not.toHaveBeenCalled();
+  });
+
+  it('ATTACK: a real CONTRIBUTOR is refused a governed tag REMOVE', async () => {
+    grant('Contributor');
+    const res = await POST(
+      postReq({ fullName: 'main.sales.orders', removeTagKeys: ['pii'] }),
+      undefined as never,
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).requiredRole).toBe('Admin');
+    expect(writeOverlay).not.toHaveBeenCalled();
+    expect(deleteOverlay).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // The elevation decision must consult the ROW, not only the live vocabulary.
+  //
+  // A tenant admin saving `POST /api/catalog/unity/governed-tags {tags: []}`
+  // empties the vocabulary in one request while every already-persisted
+  // `governed: true` assignment stays on its row. If the tier were derived from
+  // the vocabulary alone, that single save would demote every historical
+  // governed tag to the Contributor tier — and a Contributor could then
+  // de-classify `pii=yes`, the exact access-control input LU-6 compiles.
+  // -------------------------------------------------------------------------
+  describe('ATTACK: a key dropped from the vocabulary does NOT demote the tier of an already-governed row', () => {
+    beforeEach(() => {
+      mock(readGovernedTags).mockResolvedValue([]); // the vocabulary was emptied
+      mock(readOverlay).mockImplementation(async (tenantId: string, p: { fullName: string; column?: string }) => ({
+        ...emptyOverlay({ tenantId, fullName: p.fullName, column: p.column }),
+        tags: [{ key: 'pii', value: 'yes', governed: true }],
+      }));
+      grant('Contributor');
+    });
+
+    it('REMOVING it is still Admin-tier — a Contributor cannot silently de-classify', async () => {
+      const res = await POST(
+        postReq({ fullName: 'main.sales.orders', removeTagKeys: ['pii'] }),
+        undefined as never,
+      );
+      expect(res.status).toBe(403);
+      expect((await res.json()).requiredRole).toBe('Admin');
+      expect(writeOverlay).not.toHaveBeenCalled();
+      expect(deleteOverlay).not.toHaveBeenCalled();
+    });
+
+    it('OVERWRITING it is still Admin-tier — a Contributor cannot downgrade pii=yes to an ungoverned pii=no', async () => {
+      const res = await POST(
+        postReq({ fullName: 'main.sales.orders', setTags: [{ key: 'pii', value: 'no' }] }),
+        undefined as never,
+      );
+      expect(res.status).toBe(403);
+      expect((await res.json()).requiredRole).toBe('Admin');
+      expect(writeOverlay).not.toHaveBeenCalled();
+    });
+
+    it('casing on the ROW-sourced check does not smuggle it past the tier either', async () => {
+      const res = await POST(
+        postReq({ fullName: 'main.sales.orders', removeTagKeys: ['PII'] }),
+        undefined as never,
+      );
+      expect(res.status).toBe(403);
+      expect((await res.json()).requiredRole).toBe('Admin');
+    });
+
+    it('an UNRELATED free tag on the same row stays Contributor-tier (the row check is not a blanket escalation)', async () => {
+      const res = await POST(
+        postReq({ fullName: 'main.sales.orders', setTags: [{ key: 'owner', value: 'ana' }] }),
+        undefined as never,
+      );
+      expect(res.status).toBe(200);
+      expect(writeOverlay).toHaveBeenCalledTimes(1);
+    });
+
+    it('an Admin grant still gets through (the gate is a tier, not a wall)', async () => {
+      GRANTS = [];
+      grant('Admin');
+      const res = await POST(
+        postReq({ fullName: 'main.sales.orders', removeTagKeys: ['pii'] }),
+        undefined as never,
+      );
+      expect(res.status).toBe(200);
+    });
   });
 
   it('ATTACK: a merely-authenticated user CANNOT drive a write into the shared tenant Purview account', async () => {
@@ -274,6 +378,56 @@ describe('POST /api/catalog/unity/governance — AUTHORIZATION (attack cases)', 
     expect(d[0].details.status).toBe(403);
     expect(d[0].details.attempted.certificationRung).toBe('certified');
     expect(d[0].details.target).toBe('main.sales.orders');
+  });
+
+  it('ATTACK: an UNGRANTED caller cannot amplify the shared audit container with an unbounded denial payload', async () => {
+    // The 403 branch records `attempted` BEFORE any request validation runs
+    // (validateTagAssignment lives inside applyOverlayMutation, which a denial
+    // never reaches) and `withSession` applies no rate limit — so without a cap
+    // at the audit sink, a caller with NO grant can write arbitrarily large
+    // attacker-controlled documents into the shared Cosmos audit log, one per
+    // refused request. This is the storage-amplification class the success path
+    // closed via OVERLAY_LIMITS.
+    const huge = Array.from({ length: 5_000 }, (_, i) => ({
+      key: `k${i}`.padEnd(300, 'x'),
+      value: 'v'.repeat(50_000),
+    }));
+    const res = await POST(
+      postReq({ fullName: 'main.sales.orders', setTags: huge, syncPurview: true }),
+      undefined as never,
+    );
+    expect(res.status).toBe(403);
+
+    const d = denials();
+    expect(d).toHaveLength(1);
+    const attemptedTags = d[0].details.attempted.setTags as unknown[];
+    expect(attemptedTags.length).toBeLessThanOrEqual(DENIAL_LIMITS.maxArrayItems + 1);
+    for (const t of attemptedTags) {
+      if (typeof t !== 'object' || t === null) continue;
+      for (const v of Object.values(t as Record<string, unknown>)) {
+        expect(String(v).length).toBeLessThanOrEqual(DENIAL_LIMITS.maxStringLength + 32);
+      }
+    }
+    // Whole-document bound: the raw body is ~250 MB of tag values; a bounded
+    // record is a few KB. 64 KB is a generous ceiling that still fails hard
+    // against the unbounded write.
+    expect(JSON.stringify(d[0]).length).toBeLessThan(64 * 1024);
+  });
+
+  it('ATTACK: the 400 (validation) denial branch is bounded too, not just the 403 branch', async () => {
+    asTenantAdmin(); // pass authz so the request reaches validation
+    const res = await POST(
+      postReq({
+        fullName: 'main.sales.orders',
+        setTags: [{ key: 'pii', value: 'x'.repeat(80_000) }],
+      }),
+      undefined as never,
+    );
+    expect(res.status).toBe(400);
+    const d = denials();
+    expect(d).toHaveLength(1);
+    expect(d[0].details.status).toBe(400);
+    expect(JSON.stringify(d[0]).length).toBeLessThan(64 * 1024);
   });
 
   it('ATTACK: `certification.by` is stamped from the SESSION, never from the request body', async () => {

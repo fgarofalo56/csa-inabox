@@ -17,13 +17,15 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  applyOverlayMutation, assertValidFullName, atlasSafeName, defaultSecurableType,
-  emptyOverlay, findGovernedTag, hasPurviewResidue, isEmptyOverlay, normalizeGovernedTagDefs,
-  normalizeUcIdentity, overlayIdentity, projectOverlayToPurview, tenantTypedefPrefix,
+  applyOverlayMutation, assertValidFullName, atlasClassificationName, atlasSafeName,
+  defaultSecurableType, emptyOverlay, findGovernedTag, hasPurviewResidue, isEmptyOverlay,
+  normalizeGovernedTagDefs, normalizeUcIdentity, overlayIdentity, projectOverlayToPurview,
+  tenantBusinessMetadataName, tenantTypedefPrefix,
   ucColumnIdentity, ucSecurableIdentity, UcOverlayError, validateAttributeValues,
   validateGovernedTagDefs, validateTagAssignment,
   type UcGovernedTagDef,
 } from '../model';
+import { LOOM_BUSINESS_METADATA_NAME } from '@/lib/azure/purview-client';
 import { ucIdentity, columnIdentity } from '@/lib/azure/unified-lineage';
 import type { AttributeGroup } from '@/lib/types/attribute-groups';
 
@@ -293,6 +295,70 @@ describe('projectOverlayToPurview', () => {
   it('ATTACK: a key that normalizes to nothing is refused, not written under the literal name "tag"', () => {
     const o = { ...base(), tags: [{ key: '???', value: 'x', governed: false }] };
     expect(() => projectOverlayToPurview(o)).toThrow(/normalizes to an empty name/);
+  });
+
+  // -------------------------------------------------------------------------
+  // The OTHER half of the same function. Namespacing only the classifications
+  // left free tags + the certification triplet going to the ACCOUNT-GLOBAL
+  // `LoomCustomTags` typedef, whose attribute names are tenant-authored and
+  // whose writes are isOverwrite=true.
+  // -------------------------------------------------------------------------
+  it('ATTACK: the BUSINESS-METADATA half is tenant-namespaced too, not the account-global LoomCustomTags', () => {
+    const o = applyOverlayMutation(base(), { setTags: [{ key: 'cost center', value: 'CC-42' }] }, ctx);
+    const a = projectOverlayToPurview(o);
+    const b = projectOverlayToPurview({ ...o, tenantId: 'tenant-two' });
+    expect(a.businessMetadataName).toBe(tenantBusinessMetadataName('t1'));
+    expect(a.businessMetadataName).not.toBe(b.businessMetadataName);
+    expect(a.businessMetadataName).not.toBe(LOOM_BUSINESS_METADATA_NAME);
+    expect(b.businessMetadataName).not.toBe(LOOM_BUSINESS_METADATA_NAME);
+    // and it is an Atlas-legal typedef name
+    expect(a.businessMetadataName).toMatch(/^[A-Za-z0-9_]+$/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Cross-tenant separation was already safe (the discriminator is leading).
+  // INTRA-tenant distinctness was not: a naive `.slice(0, 96)` with a 64-char
+  // key leaves ~17 value characters, so two distinct governed values collapse
+  // onto one typedef name — and `purview-sync`'s supersede then computes
+  // `stale` against a name that means both, so revoking one revokes the other.
+  // -------------------------------------------------------------------------
+  it('ATTACK: two long governed values in ONE tenant cannot collapse onto the same typedef name', () => {
+    const key = 'k'.repeat(64);
+    const shared = 'v'.repeat(60);
+    const o = (value: string) => ({ ...base(), tags: [{ key, value, governed: true }] });
+    const a = projectOverlayToPurview(o(`${shared}_alpha`)).classifications[0];
+    const b = projectOverlayToPurview(o(`${shared}_beta`)).classifications[0];
+    expect(a).not.toBe(b);
+    expect(a.length).toBeLessThanOrEqual(96);
+    expect(b.length).toBeLessThanOrEqual(96);
+    expect(a).toMatch(/^[A-Za-z0-9_]+$/);
+    expect(b).toMatch(/^[A-Za-z0-9_]+$/);
+  });
+
+  it('a name that FITS is left completely alone (no gratuitous hashing of readable names)', () => {
+    expect(atlasClassificationName(T1, 'pii', 'yes')).toBe(`Loom_${T1}_pii_yes`);
+  });
+
+  it('the truncating branch stays tenant-separated as well as value-separated', () => {
+    const key = 'k'.repeat(64);
+    const value = 'v'.repeat(64);
+    expect(atlasClassificationName(tenantTypedefPrefix('t1'), key, value))
+      .not.toBe(atlasClassificationName(tenantTypedefPrefix('t2'), key, value));
+  });
+});
+
+describe('validateGovernedTagDefs — the vocabulary is the other half of the typedef name', () => {
+  it('ATTACK: an unbounded allowed VALUE is refused (it is half of the Atlas typedef name)', () => {
+    expect(validateGovernedTagDefs([{ key: 'pii', allowedValues: ['y'.repeat(65)] }]))
+      .toMatch(/allowed value that is too long/);
+    expect(validateGovernedTagDefs([{ key: 'pii', allowedValues: ['y'.repeat(64)] }])).toBeNull();
+  });
+
+  it('ATTACK: an unbounded NUMBER of allowed values is refused', () => {
+    const many = Array.from({ length: 201 }, (_, i) => `v${i}`);
+    expect(validateGovernedTagDefs([{ key: 'pii', allowedValues: many }]))
+      .toMatch(/too many allowed values/);
+    expect(validateGovernedTagDefs([{ key: 'pii', allowedValues: many.slice(0, 200) }])).toBeNull();
   });
 });
 

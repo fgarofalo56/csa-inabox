@@ -73,7 +73,7 @@ import {
   deleteOverlay, governedTagsDocId, listColumnOverlays, listOverlays,
   readAttributeGroups, readGovernedTags, readOverlay, writeGovernedTags, writeOverlay,
 } from '../store';
-import { emptyOverlay } from '../model';
+import { emptyOverlay, ucColumnIdentity } from '../model';
 
 beforeEach(() => {
   captured.length = 0;
@@ -163,6 +163,82 @@ describe('listOverlays prefix boundary', () => {
     ]);
     const rows = await listColumnOverlays('t', 'main.sales.orders');
     expect(rows.map((r) => r.identity)).toEqual(['col:uc:main.sales.orders::email']);
+  });
+
+  // -------------------------------------------------------------------------
+  // The LISTING prefix must be built with the same helper that WROTE the id.
+  // `ucColumnIdentity` uses `normalizeUcIdentity`, which only emits the `uc:`
+  // prefix for EXACTLY three dot parts (pinned against
+  // unified-lineage.normalizeIdentity). `ucSecurableIdentity` prefixes
+  // unconditionally. Querying with the latter makes every column overlay
+  // written for a non-3-part name write-only — persisted and then invisible.
+  // -------------------------------------------------------------------------
+  it('ATTACK: a column overlay written for a NON-3-part name is still findable (write key === query prefix)', async () => {
+    const arities = ['orders', 'sales.orders', 'main.sales.orders', 'main.sales.orders.v2'];
+    for (const fullName of arities) {
+      ROWS.set('uc-governance', [
+        // The id EXACTLY as `emptyOverlay`/`ucColumnIdentity` construct it.
+        { tenantId: 't', identity: ucColumnIdentity(fullName, 'email') },
+        { tenantId: 't', identity: 'col:uc:zzz.zzz.zzz::other' },
+      ]);
+      const rows = await listColumnOverlays('t', fullName);
+      expect(rows.map((r) => r.identity), `arity of "${fullName}"`)
+        .toEqual([ucColumnIdentity(fullName, 'email')]);
+    }
+  });
+
+  it('the emitted column prefix IS the written id prefix for every arity', async () => {
+    for (const fullName of ['orders', 'sales.orders', 'main.sales.orders', 'a.b.c.d']) {
+      captured.length = 0;
+      await listColumnOverlays('t', fullName);
+      const p = captured.at(-1)!.parameters!.find((x: any) => x.name === '@p').value as string;
+      expect(ucColumnIdentity(fullName, 'email').startsWith(p), `arity of "${fullName}"`).toBe(true);
+    }
+  });
+});
+
+// ===========================================================================
+// Revocation-only rows: kept for the supersede, but NOT surfaced.
+// ===========================================================================
+describe('revocation-only rows are not listed', () => {
+  /** No tags, no certification, no attributes — only a Purview residue stamp. */
+  const hollow = (identity: string) => ({
+    tenantId: 't', identity, tags: [], certification: { rung: 'none' }, attributes: {},
+    purview: { guid: 'g', classifications: ['Loom_x_pii_yes'], businessMetadataKeys: [] },
+  });
+
+  it('ATTACK on the hollow-row claim: an emptied-but-ever-synced row is filtered out of the listing', async () => {
+    // Removing the last tag WITHOUT ticking syncPurview deliberately keeps the
+    // row (the stamp names classifications a later sync must revoke). Listing
+    // it would put back exactly the hollow entry the delete rule prevents.
+    ROWS.set('uc-governance', [
+      hollow('uc:main.sales.orders'),
+      { tenantId: 't', identity: 'uc:main.sales.customers', tags: [{ key: 'pii', value: 'yes' }], certification: { rung: 'none' }, attributes: {} },
+    ]);
+    const rows = await listOverlays('t');
+    expect(rows.map((r) => r.identity)).toEqual(['uc:main.sales.customers']);
+  });
+
+  it('the same filter applies to the PREFIX listing and to column overlays', async () => {
+    ROWS.set('uc-governance', [hollow('uc:main.sales.orders'), hollow('col:uc:main.sales.orders::email')]);
+    expect(await listOverlays('t', 'main.sales')).toEqual([]);
+    expect(await listColumnOverlays('t', 'main.sales.orders')).toEqual([]);
+  });
+
+  it('a row that still carries ANY fact is listed (the filter is not a blanket drop)', async () => {
+    ROWS.set('uc-governance', [
+      { ...hollow('uc:main.sales.a'), certification: { rung: 'certified' } },
+      { ...hollow('uc:main.sales.b'), attributes: { owner: 'ana' } },
+      { ...hollow('uc:main.sales.c'), tags: [{ key: 'x', value: 'y' }] },
+    ]);
+    expect((await listOverlays('t')).map((r) => r.identity))
+      .toEqual(['uc:main.sales.a', 'uc:main.sales.b', 'uc:main.sales.c']);
+  });
+
+  it('the filtered row is STILL reachable by point-read, so the supersede can revoke it', async () => {
+    DOCS.set('uc-governance|t|uc:main.sales.orders', hollow('uc:main.sales.orders'));
+    const o = await readOverlay('t', { fullName: 'main.sales.orders' });
+    expect(o.purview?.classifications).toEqual(['Loom_x_pii_yes']);
   });
 });
 

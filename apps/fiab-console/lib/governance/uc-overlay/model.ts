@@ -127,8 +127,12 @@ export interface UcPurviewProvenance {
   syncedAt?: string;
   /** Atlas classification names last pushed (governed tags). */
   classifications?: string[];
-  /** `LoomCustomTags` business-metadata keys last pushed. */
+  /** Business-metadata keys last pushed. */
   businessMetadataKeys?: string[];
+  /** The TENANT-NAMESPACED business-metadata typedef those keys were written
+   *  under (`LoomCustomTags_<t8>`) — recorded so an audit reader can tell which
+   *  Atlas namespace on a shared account a value came from. */
+  businessMetadataName?: string;
 }
 
 /** One overlay document — one per securable identity, per tenant. */
@@ -229,13 +233,18 @@ export function assertValidFullName(fullName: string): string {
 // Governed-tag vocabulary
 // ---------------------------------------------------------------------------
 
+/** Max characters in one governed-tag allowed VALUE. See the note in
+ *  {@link validateGovernedTagDefs} — this bounds half of the Atlas typedef name. */
+export const MAX_ALLOWED_VALUE_LENGTH = 64;
+/** Max allowed values in one governed-tag definition. */
+export const MAX_ALLOWED_VALUES = 200;
+
 /**
  * Validate a proposed vocabulary. Returns the first problem as a string, or
  * null when valid — same contract as `validateAttributes` in
  * `lib/types/attribute-groups`, so the admin UI and the route share one rule set.
  */
-export function validateGovernedTagDefs(defs: UcGovernedTagDef[]): string | null {
-  if (!Array.isArray(defs)) return 'tags must be an array';
+export function validateGovernedTagDefs(defs: UcGovernedTagDef[]): string | null {  if (!Array.isArray(defs)) return 'tags must be an array';
   const seen = new Set<string>();
   for (const d of defs) {
     const key = (d?.key || '').trim();
@@ -246,6 +255,18 @@ export function validateGovernedTagDefs(defs: UcGovernedTagDef[]): string | null
     seen.add(norm);
     const values = (d.allowedValues || []).map((v) => (v ?? '').trim()).filter(Boolean);
     if (values.length === 0) return `governed tag "${key}" requires at least one allowed value`;
+    // An allowed VALUE is half of the Atlas classification typedef name
+    // (`Loom_<t8>_<key>_<value>`), which Atlas caps — so an uncapped value is
+    // not a cosmetic omission: it pushes the distinguishing characters past the
+    // truncation point. Capped here AND made collision-proof by the hash tail
+    // in `atlasClassificationName`; both, because either alone is fragile.
+    const tooLong = values.find((v) => v.length > MAX_ALLOWED_VALUE_LENGTH);
+    if (tooLong) {
+      return `governed tag "${key}" has an allowed value that is too long (max ${MAX_ALLOWED_VALUE_LENGTH}): "${tooLong.slice(0, 32)}…"`;
+    }
+    if (values.length > MAX_ALLOWED_VALUES) {
+      return `governed tag "${key}" has too many allowed values (max ${MAX_ALLOWED_VALUES})`;
+    }
     const dupe = values.find((v, i) => values.findIndex((o) => o.toLowerCase() === v.toLowerCase()) !== i);
     if (dupe) return `governed tag "${key}" has a duplicate allowed value "${dupe}"`;
   }
@@ -672,8 +693,13 @@ export function atlasSafeName(s: string): string {
  * `node:crypto`).
  */
 export function tenantTypedefPrefix(tenantId: string): string {
+  return fnv1aHex(String(tenantId || ''));
+}
+
+/** 8-hex FNV-1a. Pure (no `node:crypto`) so this module stays client-importable;
+ *  used ONLY as a namespace/uniqueness discriminator, never as a secret. */
+function fnv1aHex(s: string): string {
   let h = 0x811c9dc5;
-  const s = String(tenantId || '');
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
@@ -681,12 +707,53 @@ export function tenantTypedefPrefix(tenantId: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
+/** Atlas caps typedef names; Loom caps its own at 96 to stay well inside it. */
+export const MAX_ATLAS_NAME_LENGTH = 96;
+
+/**
+ * The Atlas CLASSIFICATION typedef name for one governed tag.
+ *
+ * TRUNCATION MUST NOT COLLIDE. A naive `….slice(0, 96)` is safe ACROSS tenants
+ * (the discriminator is leading) but NOT WITHIN one: a 64-char key leaves as
+ * few as ~17 value characters, so two distinct governed values sharing a long
+ * prefix collapse onto ONE typedef name — and the supersede logic in
+ * `purview-sync` then computes `stale` against a name that means both, so
+ * revoking one revokes the other. When the natural name overflows, the tail is
+ * replaced by an 8-hex digest of the FULL name, which is injective for every
+ * input that differs anywhere.
+ */
+export function atlasClassificationName(prefix: string, key: string, value: string): string {
+  const full = `Loom_${prefix}_${key}_${value}`;
+  if (full.length <= MAX_ATLAS_NAME_LENGTH) return full;
+  return `${full.slice(0, MAX_ATLAS_NAME_LENGTH - 9)}_${fnv1aHex(full)}`;
+}
+
+/**
+ * The Atlas BUSINESS-METADATA typedef name Loom writes an overlay's free tags +
+ * certification under — TENANT-NAMESPACED, for the same reason classifications
+ * are.
+ *
+ * `purview-client.LOOM_BUSINESS_METADATA_NAME` ('LoomCustomTags') is a single
+ * ACCOUNT-GLOBAL typedef whose attribute names come verbatim from tenant-authored
+ * free-tag keys, grown permanently by `ensureBusinessMetadataDef` and written
+ * with `isOverwrite=true`. In a SHARED Purview account that is the identical
+ * cross-tenant collision the classification namespacing closes, one API surface
+ * over: tenant B syncing the same asset would overwrite tenant A's
+ * `cost_center`, `loom_certification`, `loom_certified_by`/`_at`. So the overlay
+ * writes `LoomCustomTags_<t8>` instead — a per-tenant bag on the same entity.
+ */
+export function tenantBusinessMetadataName(tenantId: string): string {
+  return `LoomCustomTags_${tenantTypedefPrefix(tenantId)}`;
+}
+
 export interface UcPurviewProjection {
   /** Atlas CLASSIFICATION names for the governed tags (controlled vocabulary →
    *  controlled classification set). `Loom_<tenant8>_<key>_<value>`. */
   classifications: string[];
-  /** `LoomCustomTags` business-metadata attributes: free tags + certification. */
+  /** Free tags + certification, as business-metadata attributes. */
   businessMetadata: Record<string, string>;
+  /** The TENANT-NAMESPACED business-metadata typedef to write them under. */
+  businessMetadataName: string;
 }
 
 /**
@@ -694,10 +761,16 @@ export interface UcPurviewProjection {
  *
  * Why this split: an Atlas classification is a *controlled* typedef that has to
  * exist before it can be attached — an exact structural match for a governed
- * tag. Free-form key/values have no typedef, so they go to business metadata
- * (`LoomCustomTags`), the namespace `purview-client.setBusinessMetadata` already
- * grows on demand. Certification rides along as a business-metadata attribute
- * because classic Atlas has no endorsement concept.
+ * tag. Free-form key/values have no typedef, so they go to business metadata,
+ * the namespace `purview-client.setBusinessMetadata` grows on demand.
+ * Certification rides along as a business-metadata attribute because classic
+ * Atlas has no endorsement concept.
+ *
+ * BOTH halves are TENANT-NAMESPACED, because Atlas typedefs are ACCOUNT-GLOBAL:
+ * classifications by name ({@link atlasClassificationName}) and business
+ * metadata by BAG ({@link tenantBusinessMetadataName}). Namespacing only the
+ * classifications would leave the free-tag + certification half of this very
+ * function colliding across tenants on a shared account.
  *
  * The account Loom provisions via ARM is a CLASSIC Data Map account (Atlas v2)
  * — it does NOT expose the unified-catalog `/datagovernance` surface (see the
@@ -729,7 +802,7 @@ export function projectOverlayToPurview(overlay: UcGovernanceOverlay): UcPurview
           `governed tag "${t.key}=${t.value}" cannot be expressed as an Atlas classification (Atlas typedef names allow letters, digits and underscore only). Rename it in the tenant vocabulary.`,
         );
       }
-      const name = `Loom_${prefix}_${k}_${v}`.slice(0, 96);
+      const name = atlasClassificationName(prefix, k, v);
       if (!classifications.includes(name)) classifications.push(name);
     } else {
       const norm = atlasSafeName(t.key);
@@ -757,5 +830,9 @@ export function projectOverlayToPurview(overlay: UcGovernanceOverlay): UcPurview
   businessMetadata.loom_certification = rung;
   businessMetadata.loom_certified_by = rung === 'none' ? '' : (overlay.certification?.by || '');
   businessMetadata.loom_certified_at = rung === 'none' ? '' : (overlay.certification?.at || '');
-  return { classifications, businessMetadata };
+  return {
+    classifications,
+    businessMetadata,
+    businessMetadataName: tenantBusinessMetadataName(overlay.tenantId),
+  };
 }

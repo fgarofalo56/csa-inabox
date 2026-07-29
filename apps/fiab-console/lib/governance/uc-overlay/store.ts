@@ -28,7 +28,8 @@ import {
 } from '@/lib/azure/cosmos-client';
 import type { AttributeGroup, AttributeGroupsDoc } from '@/lib/types/attribute-groups';
 import {
-  emptyOverlay, normalizeGovernedTagDefs, ucSecurableIdentity,
+  emptyOverlay, hasPurviewResidue, isEmptyOverlay, normalizeGovernedTagDefs,
+  normalizeUcIdentity, ucSecurableIdentity,
   type UcGovernanceOverlay, type UcGovernedTagDef, type UcGovernedTagsDoc,
   type UcSecurableType,
 } from './model';
@@ -142,7 +143,20 @@ export async function readOverlay(
  *
  * Column overlays carry a `col:uc:` identity and are returned by
  * {@link listColumnOverlays} instead, so a table listing is not polluted.
+ *
+ * REVOCATION-ONLY ROWS ARE NOT LISTED. Removing the last annotation from an
+ * ever-synced securable WITHOUT also requesting a Purview sync deliberately
+ * keeps the row: it still carries the `purview` stamp naming the classifications
+ * a later sync has to revoke (see the delete rule in the governance route). That
+ * row has no tags, no certification and no attributes, so surfacing it would put
+ * exactly the hollow entry the delete rule exists to prevent into the governed-
+ * securable listing. It is filtered out of both listings by
+ * {@link isRevocationOnly} and remains reachable by point-read for the sync.
  */
+export function isRevocationOnly(o: UcGovernanceOverlay): boolean {
+  return isEmptyOverlay(o) && hasPurviewResidue(o);
+}
+
 export async function listOverlays(
   tenantId: string,
   prefix?: string,
@@ -155,7 +169,7 @@ export async function listOverlays(
         parameters: [{ name: '@t', value: tenantId }, { name: '@p', value: 'uc:' }],
       })
       .fetchAll();
-    return resources || [];
+    return (resources || []).filter((o) => !isRevocationOnly(o));
   }
   const exact = ucSecurableIdentity(prefix);
   const { resources } = await c.items
@@ -168,10 +182,20 @@ export async function listOverlays(
       ],
     })
     .fetchAll();
-  return resources || [];
+  return (resources || []).filter((o) => !isRevocationOnly(o));
 }
 
-/** Column overlays for one table (identity `col:uc:<fqn>::<column>`). */
+/**
+ * Column overlays for one table (identity `col:uc:<fqn>::<column>`).
+ *
+ * The prefix MUST be built with `normalizeUcIdentity`, the same helper
+ * `model.ucColumnIdentity` uses to WRITE the id — not `ucSecurableIdentity`.
+ * The two deliberately differ: `normalizeUcIdentity` only emits the `uc:`
+ * prefix for a name with exactly three dot parts (pinned against
+ * `unified-lineage.normalizeIdentity`), while `ucSecurableIdentity` prefixes
+ * unconditionally. Querying with the wrong one makes every column overlay
+ * written for a 1-, 2- or 4-part name invisible to this listing.
+ */
 export async function listColumnOverlays(
   tenantId: string,
   fullName: string,
@@ -182,11 +206,11 @@ export async function listColumnOverlays(
       query: 'SELECT * FROM c WHERE c.tenantId = @t AND STARTSWITH(c.identity, @p) ORDER BY c.identity',
       parameters: [
         { name: '@t', value: tenantId },
-        { name: '@p', value: `col:${ucSecurableIdentity(fullName)}::` },
+        { name: '@p', value: `col:${normalizeUcIdentity(fullName)}::` },
       ],
     })
     .fetchAll();
-  return resources || [];
+  return (resources || []).filter((o) => !isRevocationOnly(o));
 }
 
 /** Upsert one overlay document. */

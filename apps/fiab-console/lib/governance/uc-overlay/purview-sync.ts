@@ -15,10 +15,13 @@
  *                     addAssetClassification) — a classification is a typedef
  *                     that must exist before it can be attached, the exact
  *                     structural analogue of a controlled vocabulary.
- *   free tags +    →  Atlas BUSINESS METADATA (`LoomCustomTags` namespace,
- *   certification     setBusinessMetadata, which grows the typedef on demand) —
- *                     classic Atlas has no endorsement concept, so the rung
- *                     rides along as an attribute.
+ *   free tags +    →  Atlas BUSINESS METADATA (a TENANT-NAMESPACED
+ *   certification     `LoomCustomTags_<t8>` bag, setBusinessMetadata, which
+ *                     grows the typedef on demand) — classic Atlas has no
+ *                     endorsement concept, so the rung rides along as an
+ *                     attribute. The bag is namespaced for the same reason the
+ *                     classification names are: Atlas typedefs are
+ *                     ACCOUNT-GLOBAL and this write is `isOverwrite=true`.
  *
  * The pure projection (which fact goes where, and the Atlas-safe naming) lives
  * in `model.projectOverlayToPurview` so it is unit-testable with no account.
@@ -49,6 +52,9 @@ export interface UcPurviewSyncResult {
   /** Stale classifications this sync REMOVED from the asset (supersede). */
   removedClassifications: string[];
   businessMetadataKeys: string[];
+  /** The tenant-namespaced Atlas business-metadata bag those keys were written
+   *  under (`LoomCustomTags_<t8>`). */
+  businessMetadataName?: string;
 }
 
 /** Best-effort UC host for the Atlas qualifiedName (both backends). */
@@ -154,7 +160,12 @@ export async function syncOverlayToPurview(
   }
   const bmKeys = Object.keys(projection.businessMetadata);
   if (bmKeys.length) {
-    await setBusinessMetadata(guid, projection.businessMetadata);
+    // TENANT-NAMESPACED bag (`LoomCustomTags_<t8>`), not the account-global
+    // `LoomCustomTags` default — see model.tenantBusinessMetadataName. Atlas
+    // business-metadata typedefs are account-global and this is written with
+    // isOverwrite=true, so the default would let one tenant clobber another's
+    // cost_center / loom_certification on a shared Purview account.
+    await setBusinessMetadata(guid, projection.businessMetadata, projection.businessMetadataName);
   }
 
   return {
@@ -165,6 +176,7 @@ export async function syncOverlayToPurview(
     // Record only the keys that still carry a value — the blanked ones are gone
     // and must not be re-blanked (nor counted as "pushed") on the next sync.
     businessMetadataKeys: bmKeys.filter((k) => projection.businessMetadata[k] !== ''),
+    businessMetadataName: projection.businessMetadataName,
   };
 }
 
@@ -176,5 +188,6 @@ export function provenanceFromSync(result: UcPurviewSyncResult): UcPurviewProven
     syncedAt: new Date().toISOString(),
     classifications: result.classifications,
     businessMetadataKeys: result.businessMetadataKeys,
+    ...(result.businessMetadataName ? { businessMetadataName: result.businessMetadataName } : {}),
   };
 }

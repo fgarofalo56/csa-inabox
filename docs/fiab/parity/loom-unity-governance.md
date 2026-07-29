@@ -34,8 +34,11 @@ Validated-against:
 - BFF: `app/api/catalog/unity/governance/route.ts` (overlay read/write + Purview
   sync) and `app/api/catalog/unity/governed-tags/route.ts` (tenant vocabulary).
 - Model / store / Purview: `lib/governance/uc-overlay/{model,store,purview-sync}.ts`.
-- Tests: `lib/governance/uc-overlay/__tests__/{model,purview-sync}.test.ts`,
-  `app/api/catalog/unity/governance/__tests__/route.test.ts` (57 assertions).
+- Tests: `lib/governance/uc-overlay/__tests__/{model,store,purview-sync,audit}.test.ts`
+  (47 + 22 + 21 + 9) and
+  `app/api/catalog/unity/governance/__tests__/route.test.ts` (47) — **146 total**,
+  every security assertion mutation-verified (see the round-3 PR comment for the
+  exact mutation applied per fix and the failure it produced).
 
 **Backend reality check.** Reads and writes hit Cosmos (`uc-governance` container,
 PK `/tenantId`; vocabulary in `tenant-settings` under `uc-governed-tags:<tenantId>`).
@@ -97,7 +100,7 @@ Legend: built ✅ · honest-gate ⚠️ · MISSING ❌
 | # | Source capability | Loom | Where / backend |
 |---|---|---|---|
 | E1 | Governed tags → controlled classifications | ✅ built | `ensureClassificationDefs` + `addAssetClassification` (Atlas v2), name `Loom_<tenant8>_<key>_<value>` — tenant-namespaced because Atlas typedefs are ACCOUNT-GLOBAL while a Loom tenant is a Cosmos partition |
-| E2 | Free tags + certification → business metadata | ✅ built | `setBusinessMetadata` into the `LoomCustomTags` namespace (`isOverwrite=true`) |
+| E2 | Free tags + certification → business metadata | ✅ built | `setBusinessMetadata` into a **tenant-namespaced** `LoomCustomTags_<tenant8>` bag (`isOverwrite=true`). Namespaced for the same reason E1 is: an Atlas business-metadata typedef is ACCOUNT-GLOBAL, its attribute names come verbatim from tenant-authored free-tag keys, and the write overwrites — so the account-global default would let one tenant clobber another's `cost_center` / `loom_certification` on a shared Purview account (`model.tenantBusinessMetadataName`) |
 | E2a | **REVOKE** a classification Loom applied | ✅ built | `removeAssetClassification` (new DELETE counterpart). The sync is a SUPERSEDE: classifications recorded in `overlay.purview.classifications` that are no longer desired are removed, so an asset can never carry `…_pii_yes` **and** `…_pii_no` |
 | E2b | **CLEAR** a stale certification / removed free tag | ✅ built | `loom_certification` is ALWAYS emitted (`none` when de-certified) and previously-pushed business-metadata keys are blanked, so a de-certified asset does not keep a `certified` label |
 | E2c | Push to a re-registered asset | ✅ built | a LIVE `resolveAssetIdentities` wins over the cached `purview.guid`; the cached guid is only the fallback |
@@ -138,8 +141,9 @@ same rows.
 - **Bulk apply.** Tagging many securables at once (Catalog Explorer multi-select)
   is not built; the prefix listing endpoint is the foundation for it.
 - **Browser E2E (`ux-baseline` G1).** Not yet run against a live estate — the
-  evidence here is tsc + 119 vitest assertions (incl. the attack suite) + the
-  guard suite. Tracked as the last item before this surface can be graded A.
+  evidence here is tsc + 146 vitest assertions (incl. the attack suite, each
+  mutation-verified) + the guard suite. Tracked as the last item before this
+  surface can be graded A.
 - **Manual FQN entry.** The securable picker drives off the live
   `catalogs`/`schemas`/`tables` routes; with neither Databricks nor
   `LOOM_UNITY_URL` configured the picker is empty and the tab has nothing to
@@ -159,8 +163,23 @@ on the delegable `admin.security` capability:
 | `syncPurview` | `Admin` | writes the SHARED tenant Purview account via the Console UAMI and creates account-global Atlas typedefs |
 
 `POST /api/catalog/unity/governed-tags` (the vocabulary) stays tenant-admin.
+A tag counts as GOVERNED for tiering if the tenant vocabulary defines it TODAY
+**or** the row being mutated already carries `governed: true`. The row half is
+load-bearing: the vocabulary is tenant-wide mutable state, and one tenant-admin
+`POST /api/catalog/unity/governed-tags {tags: []}` would otherwise demote every
+already-persisted governed assignment to the Contributor tier — letting a
+Contributor de-classify `pii=yes`.
+
 Every applied mutation, Purview push, vocabulary edit **and denial** (403 authz,
 400 validation) is written to the Cosmos audit-log container
 (`lib/governance/uc-overlay/audit.ts`) and surfaces in Admin → Audit Logs — the
 overlay's own `updatedBy` / `certification.by` are last-writer-wins fields, not
-a trail.
+a trail. Denial payloads are bounded (`audit.boundAttempted`) because the 403
+branch records raw request body from a caller who holds no grant.
+
+**The audit trail is BEST-EFFORT, not guaranteed.** `audit.write` swallows Cosmos
+failures so an audit outage cannot fail a governance write that already applied
+(the same contract as `writeDomainAudit`). With the audit container missing or
+misconfigured, governance mutations and refused forgery attempts proceed
+UNRECORDED. This is an attributability aid, not a tamper-evident ledger, and must
+not be relied on as a standalone compliance control.

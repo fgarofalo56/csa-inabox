@@ -37,12 +37,13 @@ import {
 } from '@/lib/azure/purview-client';
 import { resolveAssetIdentities } from '@/lib/azure/asset-identity';
 import { resolveWorkspaceHostnames } from '@/lib/azure/unity-catalog-client';
-import { tenantTypedefPrefix, type UcGovernanceOverlay } from '../model';
+import { tenantBusinessMetadataName, tenantTypedefPrefix, type UcGovernanceOverlay } from '../model';
 
 const mock = (fn: unknown) => fn as unknown as ReturnType<typeof vi.fn>;
 const T1 = tenantTypedefPrefix('t1');
 const PII_YES = `Loom_${T1}_pii_yes`;
 const PII_NO = `Loom_${T1}_pii_no`;
+const BM_T1 = tenantBusinessMetadataName('t1');
 
 function overlay(patch: Partial<UcGovernanceOverlay> = {}): UcGovernanceOverlay {
   return {
@@ -114,8 +115,36 @@ describe('syncOverlayToPurview', () => {
     expect(order).toEqual(['ensure', 'attach']);
     expect(ensureClassificationDefs).toHaveBeenCalledWith([PII_YES]);
     expect(addAssetClassification).toHaveBeenCalledWith('guid-1', [PII_YES]);
-    expect(setBusinessMetadata).toHaveBeenCalledWith('guid-1', expect.objectContaining({ cost_center: 'CC-42' }));
+    expect(setBusinessMetadata).toHaveBeenCalledWith(
+      'guid-1', expect.objectContaining({ cost_center: 'CC-42' }), BM_T1,
+    );
     expect(r).toMatchObject({ synced: true, guid: 'guid-1', classifications: [PII_YES] });
+  });
+
+  it('ATTACK: free tags + certification go to a TENANT-NAMESPACED business-metadata bag, never the account-global default', async () => {
+    // The classification half of projectOverlayToPurview was namespaced first;
+    // this pins the OTHER half of the same function. `LoomCustomTags` is ONE
+    // account-global Atlas typedef, grown permanently with tenant-authored
+    // free-tag keys and written with isOverwrite=true — so on a shared Purview
+    // account tenant B syncing the same asset would clobber tenant A's
+    // cost_center / loom_certification / loom_certified_by.
+    await syncOverlayToPurview(overlay({ tenantId: 't1' }));
+    await syncOverlayToPurview(overlay({ tenantId: 't2' }));
+
+    const bagA = mock(setBusinessMetadata).mock.calls[0][2];
+    const bagB = mock(setBusinessMetadata).mock.calls[1][2];
+    expect(bagA).toBe(BM_T1);
+    expect(bagB).toBe(tenantBusinessMetadataName('t2'));
+    expect(bagA).not.toBe(bagB);
+    // and neither is the account-global default the client would otherwise use
+    expect(bagA).not.toBe('LoomCustomTags');
+    expect(bagB).not.toBe('LoomCustomTags');
+  });
+
+  it('the provenance stamp records WHICH tenant bag was written (auditable on a shared account)', async () => {
+    const r = await syncOverlayToPurview(overlay());
+    expect(r.businessMetadataName).toBe(BM_T1);
+    expect(provenanceFromSync(r)?.businessMetadataName).toBe(BM_T1);
   });
 
   it('surfaces a Purview transport failure instead of swallowing it', async () => {
