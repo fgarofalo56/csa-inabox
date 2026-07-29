@@ -38,6 +38,7 @@ const ranker = await import(
 const {
   buildBm25Index, bm25Rank, diversifyByDocument, rankSubstring,
   surfaceTopicTerms, DEFAULT_SURFACE_BOOST, DEFAULT_MAX_CHUNKS_PER_DOC,
+  DEFAULT_SOURCE_WEIGHTS, corpusSourceClass,
 } = ranker;
 
 const argv = process.argv.slice(2);
@@ -49,6 +50,17 @@ const TOP = Number(flag('--top', 5)) || 5;
 const EXPLAIN = flag('--explain', null);
 /** Override the surface-boost strength to sweep its sensitivity. */
 const SFC = flag('--surface-boost', null);
+/**
+ * Source-class weight override for the sweep, as `reference:ledger:archive`
+ * (product is always 1) — e.g. `--source-weights 0.85:0.6:0.5`.
+ */
+const SW = flag('--source-weights', null);
+const sourceWeights = SW
+  ? (() => {
+    const [reference, ledger, archive] = SW.split(':').map(Number);
+    return { product: 1, reference, ledger, archive };
+  })()
+  : DEFAULT_SOURCE_WEIGHTS;
 
 /** loom-docs-index.ts MAX_CHUNK. */
 const MAX_CHUNK = 1500;
@@ -157,6 +169,7 @@ function bm25Search(corpus, index, opts = {}) {
       titleBoost: opts.titleBoost ?? 0,
       surfaceTerms,
       surfaceBoost: opts.surface === 'boost' ? (opts.surfaceBoost ?? DEFAULT_SURFACE_BOOST) : 0,
+      sourceWeights: opts.sourceWeights ?? null,
     }).map((h) => corpus[h.index]);
     if (opts.surface === 'filter' && surfaceTerms.length > 0) {
       const onTopic = wide.filter((c) => surfaceTerms.some((t) => c.path.toLowerCase().includes(t)));
@@ -197,15 +210,18 @@ if (EXPLAIN) {
     console.error(`unknown surface '${EXPLAIN}' — have: ${sets.map((s) => s.surface).join(', ')}`);
     process.exit(2);
   }
-  const before = substringSearch(corpus);
-  const after = bm25Search(corpus, index, { surface: 'boost' });
+  // "before" = the configuration shipped by #2585 P0/P1 (BM25 + diversification
+  // + surface boost). "after" = that plus the P2 corpus source weighting. The
+  // substring-vs-BM25 comparison is historical and lives in the remediation doc.
+  const before = bm25Search(corpus, index, { surface: 'boost' });
+  const after = bm25Search(corpus, index, { surface: 'boost', sourceWeights });
   for (const row of set.rows) {
-    const b = before(row.question, TOP);
+    const b = before(row.question, TOP, set.surface);
     const a = after(row.question, TOP, set.surface);
     console.log(`\n[${row.id}] before=${docHit(row.expectedChunks, b.map((g) => g.path)) ? 'HIT ' : 'MISS'}`
       + `  after=${docHit(row.expectedChunks, a.map((g) => g.path)) ? 'HIT ' : 'MISS'}  ${row.question}`);
     console.log(`   expected: ${row.expectedChunks.join(', ')}`);
-    for (const g of a) console.log(`   ->  ${g.path}  [${g.heading || ''}]`);
+    for (const g of a) console.log(`   ->  [${corpusSourceClass(g.path).padEnd(9)}] ${g.path}  [${g.heading || ''}]`);
     console.log(`   distinct docs in window: before ${new Set(b.map((g) => g.path)).size} · after ${new Set(a.map((g) => g.path)).size}`);
   }
   process.exit(0);
@@ -214,12 +230,11 @@ if (EXPLAIN) {
 /** Each measured cell: name → (question, top, surface) => chunks. */
 const cells = {
   'substring (before)': substringSearch(corpus),
-  'bm25': bm25Search(corpus, index, { diversify: false }),
   'bm25+div': bm25Search(corpus, index, {}),
   'bm25+div+title2': bm25Search(corpus, index, { titleBoost: 2.0 }),
-  'bm25+sfc (no div)': bm25Search(corpus, index, { surface: 'boost', diversify: false, surfaceBoost: SFC ? Number(SFC) : undefined }),
-  'bm25+div+sfc-boost': bm25Search(corpus, index, { surface: 'boost', surfaceBoost: SFC ? Number(SFC) : undefined }),
+  'bm25+div+sfc (shipped)': bm25Search(corpus, index, { surface: 'boost', surfaceBoost: SFC ? Number(SFC) : undefined }),
   'bm25+div+sfc-filter': bm25Search(corpus, index, { surface: 'filter' }),
+  '+src-weight (P2)': bm25Search(corpus, index, { surface: 'boost', surfaceBoost: SFC ? Number(SFC) : undefined, sourceWeights }),
 };
 const names = Object.keys(cells);
 const W = 21;
@@ -229,7 +244,11 @@ console.log('surface'.padEnd(17) + names.map((n) => n.padStart(W)).join(''));
 console.log('-'.repeat(17 + W * names.length));
 const totals = names.map(() => 0);
 const distinct = names.map(() => 0);
+/** Per-cell count of returned chunks by corpus source class (the D5 "stop
+ *  masking user-doc gaps with engineering-ledger hits" metric). */
+const bySource = names.map(() => ({ product: 0, reference: 0, ledger: 0, archive: 0 }));
 let rowsTotal = 0;
+let chunksTotal = 0;
 for (const set of sets) {
   const vals = names.map((n) => {
     let hits = 0;
@@ -237,6 +256,7 @@ for (const set of sets) {
       const got = cells[n](row.question, TOP, set.surface);
       if (docHit(row.expectedChunks, got.map((g) => g.path))) hits += 1;
       distinct[names.indexOf(n)] += new Set(got.map((g) => g.path)).size;
+      for (const g of got) bySource[names.indexOf(n)][corpusSourceClass(g.path)] += 1;
     }
     return hits;
   });
@@ -247,4 +267,15 @@ for (const set of sets) {
 console.log('-'.repeat(17 + W * names.length));
 console.log('OVERALL'.padEnd(17) + totals.map((t) => (t / rowsTotal).toFixed(3).padStart(W)).join(''));
 console.log('distinct docs'.padEnd(17) + distinct.map((d) => (d / rowsTotal).toFixed(2).padStart(W)).join(''));
-console.log(`\n(${rowsTotal} golden rows across ${sets.length} surfaces; "distinct docs" = mean unique documents inside the top-${TOP} window)`);
+chunksTotal = bySource[0].product + bySource[0].reference + bySource[0].ledger + bySource[0].archive;
+console.log();
+console.log('Returned-evidence composition — share of retrieved chunks by corpus source class\n');
+for (const cls of ['product', 'reference', 'ledger', 'archive']) {
+  console.log(`  ${cls}`.padEnd(17)
+    + bySource.map((b) => {
+      const tot = b.product + b.reference + b.ledger + b.archive;
+      return `${((b[cls] / tot) * 100).toFixed(1)}%`.padStart(W);
+    }).join(''));
+}
+console.log(`\n(${rowsTotal} golden rows across ${sets.length} surfaces; "distinct docs" = mean unique documents inside the top-${TOP} window;`);
+console.log(` ~${chunksTotal} retrieved chunks per cell. source weights: ${JSON.stringify(sourceWeights)})`);

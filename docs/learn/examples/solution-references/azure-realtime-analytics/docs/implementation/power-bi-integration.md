@@ -46,9 +46,16 @@ Power BI integration with Azure Databricks enables real-time analytics through D
 
 ## Direct Lake Configuration
 
+> **CSA Loom note.** The Power BI / Fabric requirements below apply only if you
+> choose the Power BI Direct Lake backend, which is an **opt-in alternative**.
+> CSA Loom's default path needs neither: the Azure-native warm-cache semantic
+> layer serves the same scenario with no Fabric capacity, no OneLake and no
+> Power BI licence. See the "Direct Lake Replacement" solution in the Learning
+> Hub. Read this section as the Fabric-flavoured option, not as a prerequisite.
+
 ### Prerequisites
 
-#### Power BI Requirements
+#### Power BI Requirements (opt-in Direct Lake backend only)
 - **Power BI Premium**: Per User (PPU) or Premium Capacity (P1+)
 - **OneLake Storage**: Enabled in Fabric workspace
 - **Permissions**: Workspace Admin or Member role

@@ -16,6 +16,10 @@ import {
   surfaceTopicTerms,
   surfaceBoostFactor,
   titleTokensFor,
+  corpusSourceClass,
+  sourceWeightFor,
+  DEFAULT_SOURCE_WEIGHTS,
+  NEUTRAL_SOURCE_WEIGHTS,
   BM25_K1,
   BM25_B,
   RANKER_STOPWORDS,
@@ -225,6 +229,84 @@ describe('surface scoping', () => {
   it('tokenises the filename stem and heading, dropping the extension', () => {
     expect([...titleTokensFor(chunk('docs/fiab/parity/kql-database.md', ''))].sort())
       .toEqual(['database', 'kql']);
+  });
+});
+
+describe('corpus source weighting (#2585 P2)', () => {
+  it('classifies the engineering ledger, reference material and archives apart from product docs', () => {
+    expect(corpusSourceClass('docs/fiab/parity/monitor.md')).toBe('product');
+    expect(corpusSourceClass('docs/fiab/admin/health.md')).toBe('product');
+    expect(corpusSourceClass('docs/fiab/concepts/what-is-csa-loom.md')).toBe('product');
+    expect(corpusSourceClass('PRPs/active/loom-apex/PRP.md')).toBe('ledger');
+    expect(corpusSourceClass('PRPs/completed/csa-loom-pillar/PRP-17-operations-docs.md')).toBe('ledger');
+    expect(corpusSourceClass('docs/fiab/prp/data-marketplace.md')).toBe('ledger');
+    expect(corpusSourceClass('docs/fiab/audit/anything.md')).toBe('ledger');
+    expect(corpusSourceClass('docs/fiab/parity-gap/lakehouse.md')).toBe('ledger');
+    expect(corpusSourceClass('docs/fiab/research/brownfield-attach-design.md')).toBe('ledger');
+    expect(corpusSourceClass('docs/fiab/archive/TEST_SCRIPT_2026_05_27.md')).toBe('archive');
+    expect(corpusSourceClass('docs/learn/07-troubleshooting/README.md')).toBe('reference');
+    expect(corpusSourceClass('docs/migrations/snowflake/security-migration.md')).toBe('reference');
+  });
+
+  it('is case- and separator-insensitive, and defaults unknown paths to product', () => {
+    expect(corpusSourceClass('PRPs\\active\\x.md')).toBe('ledger');
+    expect(corpusSourceClass('DOCS/LEARN/x.md')).toBe('reference');
+    expect(corpusSourceClass('docs/something-new/x.md')).toBe('product');
+    expect(corpusSourceClass(undefined)).toBe('product');
+  });
+
+  // Catches: the weights being tuned until the ledger disappears. Measured, past
+  // ~0.75 the ledger contributes ZERO chunks to any of the 146 golden windows —
+  // at which point the down-weight has silently become a delete and the extra
+  // hit-rate is the metric being fitted.
+  it('keeps the shipped weights mild enough to stay a down-weight', () => {
+    expect(DEFAULT_SOURCE_WEIGHTS.product).toBe(1);
+    for (const cls of ['reference', 'ledger', 'archive'] as const) {
+      expect(DEFAULT_SOURCE_WEIGHTS[cls]).toBeLessThan(1);
+      expect(DEFAULT_SOURCE_WEIGHTS[cls]).toBeGreaterThanOrEqual(0.7);
+    }
+    expect(sourceWeightFor('docs/fiab/parity/monitor.md')).toBe(1);
+    expect(sourceWeightFor('PRPs/active/x.md')).toBe(DEFAULT_SOURCE_WEIGHTS.ledger);
+    expect(sourceWeightFor('PRPs/active/x.md', NEUTRAL_SOURCE_WEIGHTS)).toBe(1);
+  });
+
+  // The load-bearing behaviour: a product doc that ties a ledger doc now wins.
+  it('breaks a tie in favour of the published product doc', () => {
+    const corpus = [
+      chunk('PRPs/active/loom-apex/PRP.md', 'monitor alert authoring is planned'),
+      chunk('docs/fiab/parity/monitor.md', 'monitor alert authoring is planned'),
+    ];
+    const index = buildBm25Index(corpus);
+    // Identical text, so un-weighted the tie breaks by store order -> the ledger.
+    expect(bm25Rank(index, 'monitor alert authoring', 2)[0].index).toBe(0);
+    const weighted = bm25Rank(index, 'monitor alert authoring', 2, { sourceWeights: DEFAULT_SOURCE_WEIGHTS });
+    expect(corpus[weighted[0].index].path).toBe('docs/fiab/parity/monitor.md');
+  });
+
+  // Catches: the down-weight becoming an exclusion. A ledger receipt must still
+  // be returned when it is genuinely the best match — that is why PRPs/active
+  // is in the corpus at all.
+  it('still returns a ledger document when nothing better matches', () => {
+    const corpus = [
+      chunk('docs/fiab/parity/monitor.md', 'unrelated prose about dashboards'),
+      chunk('PRPs/active/loom-apex/AUDIT.md', 'the audit receipt records the resourcegraph fastpath'),
+    ];
+    const index = buildBm25Index(corpus);
+    const ranked = bm25Rank(index, 'audit receipt resourcegraph', 5, { sourceWeights: DEFAULT_SOURCE_WEIGHTS });
+    expect(ranked.length).toBeGreaterThan(0);
+    expect(corpus[ranked[0].index].path).toBe('PRPs/active/loom-apex/AUDIT.md');
+  });
+
+  it('is exactly the un-weighted ranking when no weights are supplied', () => {
+    const corpus = [
+      chunk('PRPs/active/a.md', 'monitor alerts'),
+      chunk('docs/fiab/parity/monitor.md', 'monitor alerts'),
+    ];
+    const index = buildBm25Index(corpus);
+    const plain = bm25Rank(index, 'monitor alerts', 2);
+    const neutral = bm25Rank(index, 'monitor alerts', 2, { sourceWeights: NEUTRAL_SOURCE_WEIGHTS });
+    expect(neutral.map((r) => r.index)).toEqual(plain.map((r) => r.index));
+    expect(neutral.map((r) => r.score)).toEqual(plain.map((r) => r.score));
   });
 });
 
