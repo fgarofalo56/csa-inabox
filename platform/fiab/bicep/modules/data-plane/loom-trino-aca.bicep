@@ -24,10 +24,23 @@
 //   - IDENTITY-BASED storage auth. Trino's native Azure filesystem runs with
 //     `azure.auth-type=DEFAULT`, which resolves the user-assigned managed
 //     identity named by AZURE_CLIENT_ID. NO storage keys, NO SAS, NO connection
-//     strings in app settings. The in-module role assignment is Storage Blob
-//     Data **Reader** — read-only by construction.
-//   - Federated sources that need a password are supplied as Key Vault
-//     secretRef env vars (LOOM_TRINO_CATALOG_<NAME>), never literals.
+//     strings in app settings. The lake grant (applied by the sibling
+//     loom-trino-lake-rbac.bicep, at the LAKE's resource-group scope) is Storage
+//     Blob Data **Reader** — read-only by construction.
+//   - Federated sources that need a password are supplied through `secretEnv`
+//     as Key Vault secretRef env vars (LOOM_TRINO_CATALOG_<NAME>), never
+//     literals — and `extraEnv` is the in-template path for the rest of a
+//     federation catalog, so adding a source no longer requires an out-of-band
+//     `az containerapp update --set-env-vars`.
+//   - NO AUTHENTICATION ON TRINO ITSELF. The engine has no
+//     `http-server.authentication.type`; the VNet + internal ingress ARE the
+//     perimeter, and the Console BFF is the only intended caller. Anything that
+//     can already reach the CAE's internal network (a sibling container, a
+//     peered host, an admin on the P2S VPN) can query it directly with an
+//     arbitrary X-Trino-User and bypass the BFF's session check and data-access
+//     audit row. This matches the existing loom-duckdb / iceberg-catalog
+//     posture, and it is stated here rather than implied away — engine-level
+//     authentication is tracked as a follow-up, not claimed as done.
 //
 // AZURE-NATIVE / OSS ONLY. Trino is Apache-2.0 and self-hosted in the
 // deployment's own VNet; it reads the deployment's own ADLS Gen2 through the N1
@@ -65,10 +78,7 @@ param uamiId string
 @description('That identity\'s CLIENT id — injected as AZURE_CLIENT_ID so Trino\'s native Azure filesystem (azure.auth-type=DEFAULT) authenticates as it.')
 param uamiClientId string
 
-@description('That identity\'s PRINCIPAL (object) id — used for the lake read grant. Empty skips the grant.')
-param uamiPrincipalId string = ''
-
-@description('DLZ ADLS Gen2 account the Iceberg connector reads Delta/Iceberg/Parquet from. Empty skips the grant (the engine still serves its jmx/memory catalogs and any operator-supplied federation catalog).')
+@description('DLZ ADLS Gen2 account the Iceberg connector reads Delta/Iceberg/Parquet from. Surfaced to the container as LOOM_LAKE_ACCOUNT; the read grant is applied by the sibling loom-trino-lake-rbac.bicep at the LAKE\'s own RG scope (this module creates no role assignment — see the header).')
 param lakeStorageAccountName string = ''
 
 @description('N1 Iceberg REST Catalog base URL (LOOM_ICEBERG_CATALOG_URL). Empty => no lake catalog is rendered; the engine still starts and serves. Never fabricated.')
@@ -83,8 +93,15 @@ param icebergCatalogWarehouse string = 'loom'
 @description('App Insights connection string (OpenTelemetry resource attributes only — Trino itself emits JVM logs to the CAE Log Analytics workspace).')
 param appInsightsConnectionString string = ''
 
-@description('Skip the in-module lake read grant (set true when an estate policy grants it out-of-band, or when the deployer lacks User Access Administrator).')
-param skipRoleGrants bool = false
+// NOTE: this module intentionally declares NO `skipRoleGrants` param, because it
+// creates NO role assignment. The lake grant — and therefore the skip switch —
+// lives in loom-trino-lake-rbac.bicep, deployed at the lake RG's scope.
+
+@description('Extra plain env vars for the container, as a name→value map. THE IaC PATH FOR FEDERATION: apps/loom-trino/docker-entrypoint.sh renders one catalog per LOOM_TRINO_CATALOG_<NAME> entry, so an operator adds a Postgres / MySQL / SQL Server / Kafka source through the config bag instead of an out-of-band `az containerapp update --set-env-vars`. Never put a password here — use keyVaultEnv.')
+param extraEnv object = {}
+
+@description('Extra env vars sourced from Key Vault, as a name→Key-Vault-secret-URI map. Each becomes an ACA secretRef resolved by uamiId, so a federated source\'s password never appears as a literal in the template, the ARM deployment history, or `az containerapp show`. Values here are URIs, not secrets.')
+param keyVaultEnv object = {}
 
 @description('Container vCPU. 2.0 with 4Gi matches the baked -Xmx2G in apps/loom-trino/etc/jvm.config — keep them in step.')
 param cpu string = '2.0'
@@ -101,28 +118,28 @@ param maxReplicas int = 2
 @description('Compliance/cost tags. The loom-next-level tag is unioned in.')
 param complianceTags object = {}
 
-// Storage Blob Data Reader — the federated engine only READS lake files. The
-// built-in role id is cloud-invariant. Guarded guid() name is deterministic per
-// (scope, principal, role) so a re-deploy is idempotent and a duplicate grant
-// from another module collapses onto the same assignment.
-var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
-var grantLakeRead = !empty(lakeStorageAccountName) && !empty(uamiPrincipalId) && !skipRoleGrants
-
+// The lake READ grant is NOT created here. It lives in loom-trino-lake-rbac.bicep
+// and is deployed at the LAKE account's own resource-group scope — this module is
+// invoked in the ADMIN RG, where the lake account does not exist.
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
-resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = if (grantLakeRead) {
-  name: empty(lakeStorageAccountName) ? 'placeholderaccount' : lakeStorageAccountName
-}
-
-resource lakeReadRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantLakeRead) {
-  name: guid(lake.id, uamiPrincipalId, storageBlobDataReaderRoleId)
-  scope: lake
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReaderRoleId)
-    principalId: uamiPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// Federation wiring. `extraEnv` becomes plain env vars, `keyVaultEnv` becomes ACA
+// secrets + secretRefs (KV-resolved by uamiId) so a federated source's password
+// is never a literal anywhere in the template or the ARM deployment history.
+var keyVaultEnvItems = items(keyVaultEnv)
+var trinoSecrets = [for s in keyVaultEnvItems: {
+  name: toLower(replace(s.key, '_', '-'))
+  keyVaultUrl: s.value
+  identity: uamiId
+}]
+var trinoSecretEnv = [for s in keyVaultEnvItems: {
+  name: s.key
+  secretRef: toLower(replace(s.key, '_', '-'))
+}]
+var trinoExtraEnv = [for e in items(extraEnv): {
+  name: e.key
+  value: string(e.value)
+}]
 
 resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
   name: name
@@ -154,6 +171,7 @@ resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
           identity: uamiId
         }
       ]
+      secrets: trinoSecrets
     }
     template: {
       containers: [
@@ -175,7 +193,9 @@ resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
             ],
             empty(appInsightsConnectionString) ? [] : [
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
-            ]
+            ],
+            trinoExtraEnv,
+            trinoSecretEnv
           )
           resources: {
             cpu: json(cpu)
@@ -235,6 +255,3 @@ output trinoAppName string = trino.name
 
 @description('Internal coordinator endpoint the Console reads as LOOM_TRINO_URL.')
 output trinoInternalEndpoint string = 'https://${trino.properties.configuration.ingress.fqdn}'
-
-@description('True when the in-module lake read grant was created.')
-output lakeRoleAssigned bool = grantLakeRead

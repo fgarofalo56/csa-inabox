@@ -21,11 +21,26 @@ Everything the `svc-synthetic-monitor` gate needs is deployed, with no operator 
 
 | Piece | Deployed by |
 |---|---|
-| `LOOM_SYNTHETIC_MONITOR_ENABLED` / `LOOM_UAT_RESULTS_ACCOUNT` / `LOOM_UAT_RESULTS_CONTAINER` on the Console | `admin-plane/main.bicep` (`observabilityConfig`, default ON; account = the DLZ ADLS) |
-| The `uat-results` container + its 30-day lifecycle rule on `uat-runs/` | `landing-zone/storage.bicep` |
-| Storage Blob Data Contributor for the Console UAMI on that account | `admin-plane/azure-connections-rbac.bicep` |
+| `LOOM_SYNTHETIC_MONITOR_ENABLED` / `LOOM_UAT_RESULTS_ACCOUNT` / `LOOM_UAT_RESULTS_CONTAINER` on the Console | `admin-plane/main.bicep` (`observabilityConfig`, default ON) |
+| The results **storage account**, the `uat-results` **container**, and its 30-day lifecycle rule on `uat-runs/` | `admin-plane/uat-results-storage.bicep` — a dedicated admin-plane account, `publicNetworkAccess: Disabled` behind a blob private endpoint, `allowSharedKeyAccess: false` (managed identity only) |
+| Storage Blob Data Contributor for the Console UAMI on that account | `admin-plane/uat-results-storage.bicep` (same module, same RG — no cross-RG assignment to get wrong) |
 | The scheduled `loom-synthetic-monitor` job | `admin-plane/synthetic-monitor-job.bicep` |
-| The `loom-uat` runner image the job executes | the build matrix in `full-app-deploy-commercial.yml` (the from-scratch app phase). On demand: dispatch `build-fiab-images-acr-tasks.yml` with `apps: loom-uat`, or `gov-provision-trino.yml` with `build_uat: true` in Gov. It is deliberately out of the push-triggered `all` list — a ~2 GB Playwright image is not worth rebuilding on every console push. The console image is slimmed of `e2e/`, so this second image out of the console context is the only one carrying the journeys, and the build un-ignores `e2e/` + `tests/` for that context. |
+| The `loom-uat` runner image the job executes | **Commercial:** the build matrix in `full-app-deploy-commercial.yml` (the from-scratch app phase); on demand, dispatch `build-fiab-images-acr-tasks.yml` with `apps: loom-uat`. **Gov (GCC-High + IL5):** `gov-build-images.yml` (the fresh-deploy image producer — resolves the admin RG/ACR by convention, so it works before any app is running), or `gov-provision-trino.yml` with `build_uat: true` on a live estate. It is deliberately out of the push-triggered `all` list — a ~2 GB Playwright image is not worth rebuilding on every console push. The console image is slimmed of `e2e/`, so this second image out of the console context is the only one carrying the journeys, and the build un-ignores `e2e/` + `tests/` for that context. |
+
+> **Round-2 correction (PR #2641).** The three env vars used to be sourced from
+> the DLZ lake account, and the container from `landing-zone/storage.bicep`.
+> Neither exists on the canonical path: every shipped parameter file — including
+> `gcc-high.bicepparam` and `il5.bicepparam` — pins `topology = 'tenant'`, and
+> `main.bicep` only derives a DLZ account name when `topology = 'single-sub'`.
+> So `LOOM_UAT_RESULTS_ACCOUNT` was empty and the container did not exist on
+> **every** from-scratch install in **both** clouds. The dedicated admin-plane
+> account above removes the topology dependence entirely.
+>
+> The runner's uploader also hard-coded `blob.core.windows.net`. Because the
+> upload is best-effort (wrapped in a `try`/`catch`), a Gov run reported success
+> while writing nothing. The job now receives `LOOM_STORAGE_BLOB_SUFFIX` derived
+> from `environment().suffixes.storage`, so GCC-High / IL5 write to
+> `blob.core.usgovcloudapi.net`.
 
 **The thing no deploy can do: the Entra Conditional Access exclusion.** The
 runner signs in as a standing automation account

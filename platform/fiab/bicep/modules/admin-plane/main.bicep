@@ -738,6 +738,17 @@ var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && 
 var trinoEngineEnabled = (loomBackends.?trino ?? 'enabled') != 'disabled'
 var trinoEngineActive = trinoEngineEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
+// Federation catalogs, in-template. apps/loom-trino/docker-entrypoint.sh renders
+// one Trino catalog per LOOM_TRINO_CATALOG_<NAME> env var, so an operator adds a
+// Postgres / MySQL / SQL Server / Kafka source declaratively through the SAME
+// loomBackends bag instead of an out-of-band `az containerapp update
+// --set-env-vars` that the next deploy would silently revert.
+//   loomBackends.trinoCatalogs       — {NAME: '<connector props>'} → plain env
+//   loomBackends.trinoCatalogSecrets — {NAME: '<kv secret uri>'}   → ACA secretRef
+// Passwords therefore never land in the template or the ARM deployment history.
+var trinoExtraEnv = loomBackends.?trinoCatalogs ?? {}
+var trinoKeyVaultEnv = loomBackends.?trinoCatalogSecrets ?? {}
+
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
 // rationale as wranglerEnabled/scriptRunnerEnabled above): deploys the
@@ -3483,11 +3494,20 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // V1 synthetic-journey monitor (observabilityConfig bag). The Journeys
             // tab + /api/admin/synthetic-runs read run artifacts from this Blob
             // location (uat-runs/synthetic/<runId>/); the loom-uat + synthetic
-            // ACA jobs upload to the same account/container. Account empty when
-            // no DLZ ADLS is bound → svc-synthetic-monitor honest-gates.
+            // ACA jobs upload to the same account/container.
+            //
+            // ROUND-2 FIX (#2641): this used to read `loomStorageAccount` — the
+            // DLZ lake — which is EMPTY on every shipped parameter file (all pin
+            // topology='tenant', and main.bicep only derives a DLZ account name
+            // for topology='single-sub'). The gate was therefore RED on every
+            // from-scratch install in both clouds, and the `uat-results`
+            // container did not exist either (landing-zone/storage.bicep is not
+            // deployed in tenant topology). Both env vars now come from
+            // uat-results-storage.bicep, which deploys with the ADMIN PLANE in
+            // every topology and CREATES the container it names.
             { name: 'LOOM_SYNTHETIC_MONITOR_ENABLED', value: string(syntheticMonitorEnabled) }
-            { name: 'LOOM_UAT_RESULTS_ACCOUNT', value: loomStorageAccount }
-            { name: 'LOOM_UAT_RESULTS_CONTAINER', value: uatResultsContainer }
+            { name: 'LOOM_UAT_RESULTS_ACCOUNT', value: uatResultsStoreActive ? uatResultsStore!.outputs.accountName : '' }
+            { name: 'LOOM_UAT_RESULTS_CONTAINER', value: uatResultsStoreActive ? uatResultsStore!.outputs.resultsContainerName : '' }
             // ARM scope override for sovereign clouds (GCC-High / IL5). The ARM
             // endpoint itself is emitted once above (effectiveArmEndpoint).
             { name: 'LOOM_ARM_SCOPE', value: loomArmScope }
@@ -5143,7 +5163,6 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     imageTag: appImageTags.?trino ?? 'v0.1'
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
-    uamiPrincipalId: identity.outputs.uamiConsolePrincipalId
     lakeStorageAccountName: loomStorageAccount
     // The N1 Iceberg REST Catalog is deployed out-of-band today, so this stays
     // empty on a push-button install: the entrypoint then renders NO lake
@@ -5152,8 +5171,26 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // `iceberg` catalog appears on the next revision.
     icebergCatalogUrl: ''
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    skipRoleGrants: skipRoleGrants
+    // Federation sources ride the loomBackends bag — no new top-level params.
+    extraEnv: trinoExtraEnv
+    keyVaultEnv: trinoKeyVaultEnv
     complianceTags: complianceTags
+  }
+}
+
+// N7e (round-2 fix) — the lake READ grant, at the LAKE's resource-group scope.
+// loom-trino-aca.bicep used to declare the `existing` storage account itself and
+// was invoked with no `scope:`, so the assignment targeted the ADMIN RG while the
+// lake actually lives in loomDlzRg — a guaranteed ResourceNotFound the moment a
+// non-empty account name is supplied (exactly what gov-provision-trino.yml does).
+// Same shape as labelRbacGrants / azureConnectionsRbac / orgVisualsRbac above.
+module trinoLakeRbac '../data-plane/loom-trino-lake-rbac.bicep' = if (trinoEngineActive && !skipRoleGrants && !empty(loomStorageAccount)) {
+  name: 'loom-trino-lake-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    lakeStorageAccountName: loomStorageAccount
+    trinoPrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -5390,6 +5427,27 @@ module wrangler '../integration/wrangler.bicep' = if (wranglerActive) {
 // =====================================================================
 var syntheticMonitorActive = syntheticMonitorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
+// ROUND-2 (#2641) — the results STORE. Deployed whenever the monitor is enabled,
+// INDEPENDENT of deployAppsEnabled/containerPlatform, so the account + the
+// `uat-results` container already exist when the two-phase image path comes back
+// for phase 2 with deployAppsEnabled=true. Admin-plane-scoped, so it exists in
+// tenant / single-sub / multi-sub alike — the topology-dependence that made
+// LOOM_UAT_RESULTS_ACCOUNT blank on every shipped bicepparam is gone.
+var uatResultsStoreActive = syntheticMonitorEnabled
+
+module uatResultsStore 'uat-results-storage.bicep' = if (uatResultsStoreActive) {
+  name: 'uat-results-storage'
+  params: {
+    location: location
+    containerName: uatResultsContainer
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    privateDnsZoneBlobId: network.outputs.privateDnsZoneIds.blob
+    complianceTags: complianceTags
+  }
+}
+
 module syntheticMonitor 'synthetic-monitor-job.bicep' = if (syntheticMonitorActive) {
   name: 'synthetic-monitor-job'
   params: {
@@ -5405,8 +5463,16 @@ module syntheticMonitor 'synthetic-monitor-job.bicep' = if (syntheticMonitorActi
     // it; else the stable per-RG literal), so minted sessions always validate.
     sessionSecretKeyVaultSecretUri: sessionSecretKvBacked ? '${keyvault.outputs.keyVaultUri}secrets/session-secret' : ''
     sessionSecretValue: empty(loomSessionSecret) ? guid(loomGeneratedSecretSeed, 'loom-session-secret-v1') : loomSessionSecret
-    resultsAccount: loomStorageAccount
-    resultsContainer: uatResultsContainer
+    // ROUND-2 (#2641): the dedicated admin-plane results store, NOT the DLZ lake
+    // (which is empty on every shipped bicepparam). Reading the module outputs
+    // also makes the container a hard dependency of the job in the compiled ARM.
+    resultsAccount: uatResultsStoreActive ? uatResultsStore!.outputs.accountName : ''
+    resultsContainer: uatResultsStoreActive ? uatResultsStore!.outputs.resultsContainerName : ''
+    // Sovereign-cloud blob host suffix for the runner's uploader. Without this
+    // the runner hard-codes blob.core.windows.net and every Gov upload silently
+    // fails (the upload is best-effort/try-catch), so the Journeys tab could
+    // never populate in GCC-High / IL5 even with the CA exclusion in place.
+    resultsBlobSuffix: uatResultsStoreActive ? uatResultsStore!.outputs.blobSuffix : ''
     syntheticLoginUpn: syntheticLoginUpn
     syntheticLoginSecretKeyVaultSecretUri: syntheticLoginSecretUri
     alertActionGroupId: defaultAlerts.outputs.actionGroupId

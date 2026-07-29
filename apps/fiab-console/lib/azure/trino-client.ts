@@ -1,53 +1,73 @@
 /**
- * N7e — Trino / Starburst **Federated SQL** engine client. SERVER-ONLY
- * (imports the Cosmos audit trail + the Entra credential chain).
+ * N7e — Trino **Federated SQL** engine client. SERVER-ONLY (imports the Cosmos
+ * audit trail + the Entra credential chain).
  *
- * ## The tier (the single OPT-IN carve-out of the Openness program)
+ * ## The tier (DEFAULT-ON, opt-out)
  *
- * Trino OSS (Apache-2.0) runs as a private cluster on **AKS in the deployment's
- * own VNet** (`platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep`),
- * registered against N1's **Iceberg REST Catalog** (`LOOM_ICEBERG_CATALOG_URL`)
- * plus any external connectors (PostgreSQL, MySQL, Kafka, MongoDB, …). It is a
- * heavy-infra ADDITIVE engine: one SQL statement can JOIN a Loom Iceberg table
- * with an external Postgres table, which the light default (DuckDB N2b) does not
- * do.
+ * Trino OSS (Apache-2.0) runs as a **single-node, scale-to-zero, INTERNAL-ingress
+ * Azure Container App** in the deployment's own VNet
+ * (`platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep`), deployed by
+ * every push-button install in both clouds. It can register against N1's
+ * **Iceberg REST Catalog** (`LOOM_ICEBERG_CATALOG_URL`) plus any external
+ * connectors (PostgreSQL, MySQL, Kafka, MongoDB, …) supplied through
+ * `loomBackends.trinoCatalogs` / `trinoCatalogSecrets`. It is an ADDITIVE
+ * engine: one SQL statement can JOIN a Loom Iceberg table with an external
+ * Postgres table, which the light default (DuckDB N2b) does not do.
  *
- * ## Why this is the ONE opt-in item (loom_default_on_opt_out, round-3 decision)
+ * ## Why it is no longer the opt-in carve-out (PR #2641)
  *
- * Every other Loom capability is default-ON. Trino is the documented exception:
- * it stands up a full AKS cluster (real, disclosed cost), so it is **opt-in**,
- * selected explicitly by wiring `LOOM_TRINO_URL`. It gates NO feature — SQL Lab
- * is fully functional without it because **DuckDB N2b is the default engine**;
- * Trino only adds a "Federated SQL (Trino)" choice alongside it. The unset state
- * is therefore the intended default posture, disclosed per the G2 gate registry
- * with a Fix-it wizard that names the AKS cost at enable time. Because the light
- * DuckDB path stays fully default-ON, the opt-in posture does not breach
- * loom_default_on_opt_out (the operator's round-3 carve-out).
+ * Trino used to be the ONE documented opt-in exception to
+ * `loom_default_on_opt_out`, on the grounds that it needed an always-on private
+ * AKS node pool. That premise no longer holds. Trino's supported single-process
+ * shape (`coordinator=true` + `node-scheduler.include-coordinator=true`) runs
+ * the whole engine in one container, so it deploys with `minReplicas: 0` and
+ * bills NOTHING at idle — Container Apps activates a replica on the first BFF
+ * request. The multi-node AKS module (`loom-trino-aks.bicep`) survives as the
+ * OPT-IN scale-out upgrade for large federations. Opt out of the default with
+ * `loomBackends.trino='disabled'`; SQL Lab stays fully functional on DuckDB /
+ * Synapse Serverless and the Trino engine option honest-gates.
  *
- * ## Never public
+ * ## Honest limits on a fresh deploy
  *
- * The Trino coordinator has INTERNAL ingress only (in-VNet AKS service). The
- * only door is this Console BFF at `/api/sql/trino`, which authenticates the
- * caller (session cookie) and forwards the principal as the Trino user so the
- * cluster's access control + query log attribute every statement. A pre-shared
- * bearer (`LOOM_TRINO_TOKEN`, injected via Key Vault secretRef) is used when the
- * cluster is configured for token auth; otherwise the in-VNet perimeter is the
- * trust boundary (identical posture to the sibling loom-duckdb / iceberg-catalog
- * internal services).
+ * The orchestrator passes `icebergCatalogUrl: ''` because the N1 Iceberg REST
+ * Catalog is still an out-of-band deploy (`svc-iceberg-catalog`, a separate
+ * gate). Rather than wire a URL that does not answer, the entrypoint renders NO
+ * lake catalog at all — so on a from-scratch install `SHOW CATALOGS` returns
+ * `jmx` + `memory` and nothing else. The engine is real and reachable; the LAKE
+ * federation appears on the next revision once `LOOM_ICEBERG_CATALOG_URL` is
+ * real. That is stated plainly rather than implied away.
+ *
+ * ## Never public — and what that does NOT cover
+ *
+ * The Trino coordinator has INTERNAL ingress only. The intended door is this
+ * Console BFF at `/api/sql/trino`, which authenticates the caller (session
+ * cookie) and forwards the principal as the Trino user. A pre-shared bearer
+ * (`LOOM_TRINO_TOKEN`, injected via Key Vault secretRef) is used when the
+ * cluster is configured for token auth.
+ *
+ * WITHOUT that token the engine itself has NO authentication
+ * (`etc/config.properties` sets no `http-server.authentication.type`), so the
+ * VNet is the perimeter: anything already inside the Container Apps environment,
+ * a peered network, or the documented P2S VPN can POST `/v1/statement` with an
+ * arbitrary `X-Trino-User` and read whatever the engine's identity can read —
+ * bypassing both the session check and the audit row below. This matches the
+ * sibling loom-duckdb / iceberg-catalog services, and it is written down here
+ * instead of being papered over by the "never public" heading.
  *
  * ## Audited data plane (ATO)
  *
- * A federated query is an external data-access event, so {@link logTrinoAccess}
- * writes an `_auditLog` row (principal, statement scope, catalogs, rows,
- * outcome, ts) and fans out through `emitAuditEvent`. The audit write is awaited
- * before the response is sent — there is no unaudited path to the cluster.
+ * A federated query issued THROUGH THIS CLIENT is an external data-access event,
+ * so {@link logTrinoAccess} writes an `_auditLog` row (principal, statement
+ * scope, catalogs, rows, outcome, ts) and fans out through `emitAuditEvent`. The
+ * audit write is awaited before the response is sent. Note the scope: this
+ * covers the BFF path, not a direct in-VNet caller (see above).
  *
  * IL5 / SOVEREIGN MOAT: Trino is a self-hosted OSS container on the deployment's
- * own AKS cluster inside the VNet, reading the deployment's own ADLS Gen2 (via
- * the N1 Iceberg catalog) and in-boundary external sources. There is NO SaaS
- * query federation (no Starburst Galaxy, no Athena) in the path, so the whole
- * capability runs disconnected in an air-gapped enclave. No Microsoft Fabric /
- * OneLake / Power BI is reachable from any path here
+ * own Container Apps environment inside the VNet, reading the deployment's own
+ * ADLS Gen2 (via the N1 Iceberg catalog) and in-boundary external sources. There
+ * is NO SaaS query federation (no Starburst Galaxy, no Athena) in the path, so
+ * the whole capability runs disconnected in an air-gapped enclave. No Microsoft
+ * Fabric / OneLake / Power BI is reachable from any path here
  * (.claude/rules/no-fabric-dependency.md).
  */
 

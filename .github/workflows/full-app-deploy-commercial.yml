@@ -521,7 +521,17 @@ jobs:
           # green but Front Door serves stale code. A unique --revision-suffix
           # forces a new revision that re-pulls :v0.1 and gets the new digest.
           SUFFIX="r${{ github.run_id }}-${{ github.run_attempt }}"
-          APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
+          # loom-trino is in this list because the app EXISTS after the template
+          # pass (admin-plane/main.bicep deploys it default-ON) and, like every
+          # other app here, its :v0.1 tag is overwritten in place — without an
+          # explicit roll it would keep serving the digest it was created with.
+          # The `az containerapp show` guard below makes the entry a no-op on an
+          # estate where the app has not been templated yet, so adding it cannot
+          # fail an older deployment.
+          # loom-uat is deliberately NOT here: it is a Container App JOB image
+          # (loom-synthetic-monitor), not a Container App, so each scheduled
+          # execution pulls :latest on its own — there is no revision to roll.
+          APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim loom-trino)
           # Retry the update on the transient ContainerAppOperationInProgress
           # error (a prior provisioning op on the app is still settling). Up to
           # 6 attempts, 30s apart (~3 min), per app.

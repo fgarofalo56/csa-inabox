@@ -1,8 +1,6 @@
 name: gov-provision-trino
-# Incremental Azure Government provisioner for the two default-ON services whose
-# IMAGES the Gov estate has no build lane for. Commercial gets both from
-# full-app-deploy-commercial.yml; Gov has no equivalent, so each app is
-# provisioned out-of-band exactly like gov-provision-wrangler / gov-provision-dbt.
+# Incremental Azure Government provisioner for the two default-ON services in
+# PR #2641, for an ALREADY-DEPLOYED Gov estate.
 #
 #   loom-trino  — N7e Federated SQL engine (closes svc-loom-trino). Single-node
 #                 Trino OSS as an INTERNAL-ingress, scale-to-zero Container App
@@ -10,24 +8,48 @@ name: gov-provision-trino
 #                 default-ON costs the Gov estate nothing while nobody queries.
 #   loom-uat    — the Playwright runner image the default-ON
 #                 `loom-synthetic-monitor` scheduled job executes (closes the
-#                 image half of svc-synthetic-monitor). The console image is
-#                 slimmed of e2e/, so this second image out of the console
-#                 context is the only one carrying the journeys.
+#                 image half of svc-synthetic-monitor).
 #
-# A FRESH Gov deploy needs neither of these: main.bicep with gcc-high.bicepparam
-# sets containerPlatform='containerApps', so admin-plane/main.bicep deploys the
-# Trino app and the synthetic-monitor job and wires their env itself — provided
-# the images are already in the Gov ACR. This workflow is how they get there in
-# the ALREADY-DEPLOYED Gov estate, and it is idempotent.
+# RELATIONSHIP TO gov-build-images.yml (round 2)
+# ----------------------------------------------
+# gov-build-images.yml is the FRESH-DEPLOY image producer: it resolves the admin
+# RG + ACR by the same convention main.bicep uses and needs NO running app, so
+# it is the phase-2 lane for a brand-new Gov subscription. THIS workflow is the
+# incremental provisioner for an estate that is already up: it discovers
+# coordinates off the LIVE console (CAE, UAMI, lake account), builds the images,
+# deploys the Trino app plus its correctly-scoped lake grant, and wires
+# LOOM_TRINO_URL.
+#
+# Round-2 fixes applied here:
+#   * BOUNDARY-PARAMETERIZED. The RG and ACR are no longer hardcoded to the
+#     GCC-High estate; they resolve from boundary/location by convention with
+#     explicit overrides. IL5 is now reachable from this workflow.
+#   * SC1 PARITY. Trivy CRITICAL + keyless cosign sign/verify now run here too.
+#     Gov used to run these two images unscanned and unsigned while Commercial
+#     gated on both — a posture regression specific to the sovereign estate.
+#   * CORRECT RBAC SCOPE. The lake read grant moved out of loom-trino-aca.bicep
+#     into data-plane/loom-trino-lake-rbac.bicep, deployed into the LAKE's OWN
+#     resource group. The old shape put the role assignment in the admin RG,
+#     where the storage account does not exist — a guaranteed ResourceNotFound
+#     on exactly this workflow's path, because it is the caller that supplies a
+#     real (non-empty) account name.
 #
 # NOTE (svc-synthetic-monitor): building the image does NOT make the Journeys tab
-# populate. The runner signs in as a standing automation account whose sign-in is
-# blocked by tenant Conditional Access until a tenant admin scopes a CA exclusion
-# for it — a one-time human action nobody can automate. See
+# populate. The runner signs in as the standing automation account
+# svc-loom-synthetic@limitlessdata.ai, whose sign-in is blocked by tenant
+# Conditional Access until a TENANT ADMIN scopes a CA exclusion for it — a
+# one-time human action nobody can automate from a deploy. See
 # docs/fiab/runbooks/synthetic-journeys.md.
 on:
   workflow_dispatch:
     inputs:
+      boundary:
+        description: 'Sovereign boundary.'
+        type: choice
+        default: gcc-high
+        options:
+          - gcc-high
+          - il5
       apply:
         description: 'false = what-if only (safe); true = build + deploy + wire.'
         required: false
@@ -36,12 +58,28 @@ on:
         description: 'Also build the loom-uat runner image (synthetic monitor).'
         required: false
         default: 'true'
+      location:
+        description: 'Override the region (default usgovvirginia — what both Gov param files pin).'
+        required: false
+        default: ''
+      resource_group:
+        description: 'Override the admin RG (default rg-csa-loom-admin-<location>).'
+        required: false
+        default: ''
+      acr:
+        description: 'Override the ACR name (default: the single registry in the admin RG).'
+        required: false
+        default: ''
+      skip_supply_chain:
+        description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign sign/verify.'
+        type: boolean
+        default: false
 permissions:
   contents: read
+  # SC1: keyless cosign signing exchanges the Actions OIDC token for a
+  # short-lived Fulcio certificate.
+  id-token: write
 env:
-  RG: rg-csa-loom-admin-usgovvirginia
-  ACR: acrloomdcmt6cqoezlgs
-  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
   APP: loom-console
   TRINO_APP: loom-trino
 jobs:
@@ -69,6 +107,26 @@ jobs:
       - name: Set Azure cloud to Gov
         run: az cloud set --name AzureUSGovernment
 
+      - name: Resolve RG + ACR for the selected boundary
+        run: |
+          set -euo pipefail
+          LOC="${{ inputs.location }}"
+          [ -n "$LOC" ] || LOC=usgovvirginia
+          RG="${{ inputs.resource_group }}"
+          # main.bicep: var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${LOC}"
+          az group show -n "$RG" -o none 2>/dev/null \
+            || { echo "::error::admin resource group '$RG' not found (boundary=${{ inputs.boundary }}). Pass resource_group."; exit 1; }
+          ACR="${{ inputs.acr }}"
+          if [ -z "$ACR" ]; then
+            COUNT=$(az acr list -g "$RG" --query 'length(@)' -o tsv | tr -d '\r')
+            [ "${COUNT:-0}" = "1" ] || { echo "::error::expected exactly ONE registry in $RG, found ${COUNT:-0}. Pass acr."; exit 1; }
+            ACR=$(az acr list -g "$RG" --query '[0].name' -o tsv | tr -d '\r')
+          fi
+          ACR_LOGIN=$(az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv | tr -d '\r')
+          { echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"; } >> "$GITHUB_ENV"
+          echo "::notice::boundary=${{ inputs.boundary }} rg=$RG acr=$ACR login=$ACR_LOGIN"
+
       - name: Discover CAE + UAMI + lake account
         run: |
           set -euo pipefail
@@ -81,9 +139,18 @@ jobs:
           # OWN env so this never invents a name that does not exist.
           LAKE=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv | tr -d '\r')
+          # ...and resolve WHICH RESOURCE GROUP that account lives in. The read
+          # grant has to be deployed at the lake's own scope; assuming the admin
+          # RG is precisely the round-1 defect this workflow would have tripped.
+          LAKE_RG=""
+          if [ -n "${LAKE:-}" ]; then
+            LAKE_RG=$(az storage account show -n "$LAKE" --query resourceGroup -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            [ -n "$LAKE_RG" ] || echo "::warning::lake account '$LAKE' not resolvable by name — the read grant will be skipped."
+          fi
           { echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT=$UAMI_CLIENT";
-            echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE"; } >> "$GITHUB_ENV"
-          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION lake=${LAKE:-<unset>}"
+            echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE";
+            echo "LAKE_RG=$LAKE_RG"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION lake=${LAKE:-<unset>} lakeRg=${LAKE_RG:-<none>}"
           [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI"; exit 1; }
 
       - name: Build loom-trino (+ loom-uat) images on the Gov ACR
@@ -111,7 +178,58 @@ jobs:
               --file apps/fiab-console/Dockerfile.uat apps/fiab-console
             cp /tmp/di.bak apps/fiab-console/.dockerignore
           fi
-          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+          # The lease stays held through the supply-chain steps (they need the
+          # data plane open to pull the image + push the signature); the
+          # dedicated always() step below releases it.
+
+      # ── SC1: Gov now gets the SAME gate Commercial has ──────────────────────
+      - name: Supply-chain — Trivy gate on loom-trino (fail on CRITICAL)
+        if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ env.ACR_LOGIN }}/loom-trino:${{ env.SHA }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          scanners: vuln
+          trivyignores: .trivyignore
+          format: table
+
+      - name: Supply-chain — Trivy gate on loom-uat (fail on CRITICAL)
+        if: ${{ inputs.apply == 'true' && inputs.build_uat == 'true' && !inputs.skip_supply_chain }}
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ env.ACR_LOGIN }}/loom-uat:${{ env.SHA }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          scanners: vuln
+          trivyignores: .trivyignore
+          format: table
+
+      - name: Supply-chain — install cosign
+        if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Supply-chain — sign + verify the pushed digests
+        if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
+        run: |
+          set -euo pipefail
+          az acr login -n "$ACR" >/dev/null
+          sign_one() {
+            local img="$1" digest ref
+            digest=$(az acr repository show --name "$ACR" --image "${img}:${SHA}" --query digest -o tsv | tr -d '\r')
+            [ -n "$digest" ] || { echo "::error::no digest for ${img}:${SHA}"; return 1; }
+            ref="${ACR_LOGIN}/${img}@${digest}"
+            cosign sign --yes "$ref"
+            cosign verify \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/gov-provision-trino\.yml@" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$ref" > /dev/null
+            echo "::notice::signed + verified $ref"
+          }
+          sign_one loom-trino
+          if [ "${{ inputs.build_uat }}" = "true" ]; then sign_one loom-uat; fi
 
       - name: Release the ACR firewall lease (always)
         if: always()
@@ -124,22 +242,34 @@ jobs:
           az deployment group what-if -g "$RG" \
             -f platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep \
             -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$TAG" \
-               uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" uamiPrincipalId="$UAMI_PRINCIPAL" \
+               uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" \
                lakeStorageAccountName="$LAKE" \
-               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"trino"}' \
+               complianceTags='{"env":"gov","boundary":"${{ inputs.boundary }}","app":"trino"}' \
             --mode Incremental 2>&1 | tail -30 || true
 
-      - name: Deploy loom-trino + wire LOOM_TRINO_URL
+      - name: Deploy loom-trino + the lake grant + wire LOOM_TRINO_URL
         if: ${{ inputs.apply == 'true' }}
         run: |
           set -euo pipefail
           az deployment group create -g "$RG" -n "loom-trino-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep \
             -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$SHA" \
-               uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" uamiPrincipalId="$UAMI_PRINCIPAL" \
+               uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" \
                lakeStorageAccountName="$LAKE" \
-               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"trino"}' \
+               complianceTags='{"env":"gov","boundary":"${{ inputs.boundary }}","app":"trino"}' \
             --mode Incremental -o none
+          # The lake READ grant is a SEPARATE deployment into the LAKE's OWN RG.
+          # Deploying it into $RG (which is what the round-1 in-module grant did)
+          # targets a storage account that does not exist there.
+          if [ -n "${LAKE:-}" ] && [ -n "${LAKE_RG:-}" ]; then
+            az deployment group create -g "$LAKE_RG" -n "loom-trino-lake-rbac-$(date -u +%Y%m%d%H%M%S)" \
+              -f platform/fiab/bicep/modules/data-plane/loom-trino-lake-rbac.bicep \
+              -p lakeStorageAccountName="$LAKE" trinoPrincipalId="$UAMI_PRINCIPAL" \
+              --mode Incremental -o none
+            echo "::notice::granted Storage Blob Data Reader on $LAKE (rg=$LAKE_RG)"
+          else
+            echo "::warning::no lake account/RG resolved — skipping the read grant. Trino serves jmx + memory + any operator catalog."
+          fi
           FQDN=$(az containerapp show -n "$TRINO_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
           [ -n "$FQDN" ] || { echo "::error::loom-trino has no ingress FQDN — refusing to wire a dead URL."; exit 1; }
           echo "::notice::loom-trino FQDN: $FQDN"

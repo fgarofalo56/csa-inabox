@@ -35,14 +35,61 @@ engine is worth ~$60-90/mo/cloud.
 **Prerequisites: none on a push-button deploy.** `admin-plane/main.bicep` deploys
 `platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep` and emits
 `LOOM_TRINO_URL` whenever `loomBackends.trino != 'disabled'` on a Container Apps
-boundary — which is Commercial **and** both Gov boundaries. The `loom-trino`
-image is built by the standard image matrix, so nothing is applied out of band.
+boundary — which is Commercial **and** both Gov boundaries (`commercial-full`,
+`tenant-dmlz`, `gcc-high` and `il5` all set `containerPlatform = 'containerApps'`
+and `deployAppsEnabled = true`, and none of them override `loomBackends`, so they
+all inherit `trino: 'enabled'`).
+
+**The image must exist first.** As with every other Loom Container App, the
+from-scratch path is two-phase: provision infra with `deployAppsEnabled=false`,
+build the images, then re-deploy with apps enabled. `loom-trino` is produced by
+`build-fiab-images-acr-tasks.yml` (its `all` matrix and its
+`apps/loom-trino/**` push trigger) and `full-app-deploy-commercial.yml` in
+Commercial, and by **`gov-build-images.yml`** in GCC-High / IL5 — a lane that
+resolves the admin RG and ACR by convention, so it runs before any app exists.
+On a live Gov estate, `gov-provision-trino.yml` does the same incrementally.
+
+**Honest scope of the default deploy.** The orchestrator passes an **empty**
+Iceberg catalog URL, because the Iceberg REST Catalog is still a separate
+out-of-band deploy (`svc-iceberg-catalog`). So on a from-scratch install
+`SHOW CATALOGS` returns `jmx` and `memory` and nothing else — the engine is real
+and reachable, but it does not yet see the lake. That is deliberate: wiring a URL
+that does not answer would be vaporware. The `iceberg` catalog appears on the
+next revision once `LOOM_ICEBERG_CATALOG_URL` is real.
+
+**Adding a federation source, in the template.** Put the connector properties on
+the `loomBackends` bag rather than patching the running app:
+
+```bicep
+loomBackends: {
+  trinoCatalogs: {
+    // rendered as <name>.properties by the image entrypoint
+    LOOM_TRINO_CATALOG_SALES: 'connector.name=postgresql\nconnection-url=jdbc:postgresql://pg.internal:5432/sales\nconnection-user=loom'
+  }
+  trinoCatalogSecrets: {
+    // becomes an ACA secretRef resolved from Key Vault by the Console UAMI —
+    // the password never appears in the template or the ARM history
+    LOOM_TRINO_CATALOG_SALES_PASSWORD: '<kvUri>secrets/trino-sales-password'
+  }
+}
+```
+
+An `az containerapp update --set-env-vars` would work once and be reverted by the
+next deploy; the bag survives.
 
 Optional knobs: `LOOM_TRINO_ICEBERG_CATALOG` (the Trino catalog name fronting the
 Loom lake, default `iceberg`), `LOOM_TRINO_AUDIENCE` (Entra audience),
 `LOOM_TRINO_TOKEN` (a Key Vault secret reference bearer), and
-`LOOM_TRINO_CATALOG_<NAME>` to register an external federation source without
-rebuilding the image (see `apps/loom-trino/README.md`).
+`LOOM_TRINO_FETCH_TIMEOUT_MS` (JVM cold-start budget, default 120s — a cold
+replica takes ~20-40s to answer).
+
+**Access posture, stated plainly.** Ingress is internal-only and the intended
+door is the audited BFF at `/api/sql/trino`. Unless `LOOM_TRINO_TOKEN` is wired,
+the engine itself runs with **no authentication**, so anything already inside the
+Container Apps environment, a peered network, or the admin P2S VPN can query it
+directly and bypass both the session check and the audit row. This is the same
+posture as the sibling `loom-duckdb` / Iceberg-catalog services; it is called out
+here rather than left implied by "internal ingress".
 
 **Then, as an analyst:**
 
