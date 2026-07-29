@@ -200,6 +200,14 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
+  // deploys BY DEFAULT. Same value the module's `?? 'v0.1'` fallback already
+  // produced (so this is a no-op against the live estate), stated explicitly so
+  // the tag contract is visible on the same page as the other images:
+  //   producer .github/workflows/full-app-deploy-commercial.yml
+  //            `tag` input, default v0.1 -> build matrix stamps loom-duckdb:v0.1
+  //   template <acr>/loom-duckdb:v0.1
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
 }
 
 // MSAL — the app registration + client secret are now PROVISIONED by default

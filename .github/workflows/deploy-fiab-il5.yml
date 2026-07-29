@@ -163,6 +163,31 @@ jobs:
           path: ${{ runner.temp }}/gov-verify-receipt-il5-${{ github.run_id }}.txt
           if-no-files-found: warn
 
+      # ── IMAGE PREFLIGHT (round-3, PR #2640) ───────────────────────────────
+      # Same contract as deploy-fiab-gcch.yml. admin-plane/main.bicep now creates
+      # `loom-duckdb` by default from `<acr>/loom-duckdb:${appImageTags.duckdb}`
+      # (LOOM_DUCKDB_TAG, default v0.1) and `loom-s3-gateway` from
+      # `<acr>/s3proxy:3.3.0`. The IL5 producer
+      # (.github/workflows/gov-provision-dataplane-images.yml, boundary=il5) has
+      # NEVER been executed. Prove the tags exist before a deploy that adopts a
+      # live estate — or refuse. --skip-if-registry-absent keeps the genuine
+      # from-scratch path (no ACR yet, nothing to adopt) working.
+      - name: Image preflight — IL5 ACR must already hold every referenced tag
+        if: inputs.run_mode == 'full'
+        env:
+          LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r')
+          if [ -z "$ACR" ]; then
+            echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
+            exit 0
+          fi
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            --skip-if-registry-absent \
+            "loom-duckdb:${LOOM_DUCKDB_TAG}" "s3proxy:3.3.0"
+
       - name: Teardown -> redeploy -> smoke (full mode only)
         if: inputs.run_mode == 'full'
         env:

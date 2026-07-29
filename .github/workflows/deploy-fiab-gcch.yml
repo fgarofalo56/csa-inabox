@@ -170,6 +170,37 @@ jobs:
           path: ${{ runner.temp }}/gov-verify-receipt-gcch-${{ github.run_id }}.txt
           if-no-files-found: warn
 
+      # ── IMAGE PREFLIGHT (round-3, PR #2640) ───────────────────────────────
+      # This deploy is subscription-scoped and ADOPTS every app already running
+      # in the live GCC-High estate (loom-console, loom-unity, …). admin-plane/
+      # main.bicep now creates `loom-duckdb` by default from
+      # `<acr>/loom-duckdb:${appImageTags.duckdb}` (LOOM_DUCKDB_TAG, default
+      # v0.1) and, once a lake is bound, `loom-s3-gateway` from
+      # `<acr>/s3proxy:3.3.0`. The producer for those two images —
+      # .github/workflows/gov-provision-dataplane-images.yml — HAS NEVER BEEN
+      # RUN, so "a build lane exists" is not evidence the tags exist. Prove it,
+      # or refuse: a Container App that cannot pull fails its nested deployment
+      # and takes the live-estate-adopting deployment down with it.
+      #
+      # --skip-if-registry-absent keeps the genuine FROM-SCRATCH path working:
+      # no ACR yet means nothing live to adopt, and the two-phase image path
+      # (no-vaporware.md) builds the registry contents in the next phase.
+      - name: Image preflight — Gov ACR must already hold every referenced tag
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r')
+          if [ -z "$ACR" ]; then
+            echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
+            exit 0
+          fi
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            --skip-if-registry-absent \
+            "loom-duckdb:${LOOM_DUCKDB_TAG}" "s3proxy:3.3.0"
+
       - name: Provision (with full Gov dispatch)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |

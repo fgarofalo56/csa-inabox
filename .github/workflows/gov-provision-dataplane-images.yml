@@ -24,6 +24,27 @@ name: gov-provision-dataplane-images
 # (there is no standing IL5 estate to hard-code, and hard-coding a wrong one is
 # worse than requiring the operator to name it). A what-if preview runs first
 # and the apply NEVER touches other resources. Idempotent + safe to re-run.
+#
+# ── STATUS: THIS WORKFLOW HAS NEVER BEEN EXECUTED (round-3, honest disclosure) ─
+# It was authored in round 2 of PR #2640 and has zero runs. A green CI badge on
+# this PR says NOTHING about it: no CI job dispatches it, and `workflow_dispatch`
+# lanes are never exercised by push/PR CI. Treat every step below as UNPROVEN
+# until the first `apply=true` run posts a log. Run it with `apply=false` first —
+# that path performs only discovery + `az deployment group what-if`, touches
+# nothing, and is the cheapest way to validate the coordinate resolution.
+#
+# ── TAG CONTRACT (round-3 blocker fix) ───────────────────────────────────────
+# The GOV TEMPLATE pulls `<acr>/loom-duckdb:${appImageTags.duckdb}`, and both
+# platform/fiab/bicep/params/gcc-high.bicepparam and .../il5.bicepparam resolve
+# that key as `readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')`. Round 2 had
+# this lane stamp only the short SHA + `latest`, so the template referenced
+# `:v0.1` — a tag NOTHING produced — and a Gov app deploy could not have come up.
+# `image_tag` therefore DEFAULTS TO `v0.1`, exactly matching the template, and
+# the short SHA is pushed ALONGSIDE it as a provenance tag. If you override
+# `image_tag` here you MUST set `LOOM_DUCKDB_TAG` to the same value on the
+# deploy lane (.github/workflows/deploy-fiab-gcch.yml / deploy-fiab-il5.yml).
+# The s3proxy tag is `3.3.0` on both sides and is pinned in the bicep module, so
+# it needs no env plumbing.
 on:
   workflow_dispatch:
     inputs:
@@ -45,7 +66,7 @@ on:
         required: false
         default: ''
       image_tag:
-        description: 'Tag to stamp on loom-duckdb (default: the short SHA of this ref).'
+        description: 'Tag the GOV TEMPLATE will pull for loom-duckdb. Blank = v0.1, which is exactly what gcc-high/il5.bicepparam resolve appImageTags.duckdb to. Override ONLY together with LOOM_DUCKDB_TAG on the deploy lane. The short SHA is always pushed as an extra provenance tag.'
         required: false
         default: ''
 permissions:
@@ -104,14 +125,21 @@ jobs:
           UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
           UAMI_PRINCIPAL=$(az identity show --ids "$UAMI_ID" --query principalId -o tsv | tr -d '\r')
           LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          # TAG CONTRACT: default to the tag the GOV TEMPLATE actually pulls
+          # (appImageTags.duckdb -> LOOM_DUCKDB_TAG -> 'v0.1'). Round 2 defaulted
+          # to the short SHA, which produced an image the template never
+          # references. SHA_TAG is pushed alongside purely for provenance.
           TAG="${{ inputs.image_tag }}"
-          [ -n "$TAG" ] || TAG=$(git rev-parse --short=8 HEAD)
+          [ -n "$TAG" ] || TAG=v0.1
+          SHA_TAG=$(git rev-parse --short=8 HEAD)
           {
             echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"; echo "CAE_ID=$CAE_ID"
             echo "UAMI_ID=$UAMI_ID"; echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"
-            echo "LOCATION=$LOCATION"; echo "TAG=$TAG"
+            echo "LOCATION=$LOCATION"; echo "TAG=$TAG"; echo "SHA_TAG=$SHA_TAG"
           } >> "$GITHUB_ENV"
-          echo "::notice::RG=$RG ACR=$ACR CAE=$CAE_ID location=$LOCATION tag=$TAG"
+          echo "::notice::RG=$RG ACR=$ACR CAE=$CAE_ID location=$LOCATION tag=$TAG (+provenance $SHA_TAG)"
+          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-duckdb:$TAG  and  $ACR_LOGIN/s3proxy:3.3.0"
+          echo "::notice::THIS LANE PUSHES $ACR_LOGIN/loom-duckdb:$TAG, :$SHA_TAG  and imports s3proxy:3.3.0 — tags match."
           [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI — is loom-console deployed in $RG?"; exit 1; }
 
       - name: Build loom-duckdb on the Gov ACR
@@ -122,8 +150,11 @@ jobs:
           # step's re-lock cannot deny another run's in-flight push.
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # $TAG is the tag the TEMPLATE pulls (v0.1 by default); $SHA_TAG is the
+          # provenance tag. `latest` is stamped too, but NOTHING references it —
+          # a floating tag must never be what a Container App resolves.
           az acr build --registry "$ACR" --no-logs \
-            --image "loom-duckdb:$TAG" --image "loom-duckdb:latest" \
+            --image "loom-duckdb:$TAG" --image "loom-duckdb:$SHA_TAG" --image "loom-duckdb:latest" \
             apps/loom-duckdb
 
       - name: Mirror s3proxy (Apache-2.0) into the Gov ACR
@@ -147,6 +178,28 @@ jobs:
       - name: Release the ACR firewall lease (always)
         if: always()
         run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${ACR:-}" || true
+
+      # ── IMAGE PREFLIGHT ───────────────────────────────────────────────────
+      # Discovery mode (apply=false): report which referenced tags are missing
+      # WITHOUT failing, so an operator can run this lane read-only to find out
+      # whether the Gov ACR is ready. Never blocks; nothing is deployed here.
+      - name: Image preflight — report-only (discovery mode)
+        if: ${{ inputs.apply != 'true' }}
+        continue-on-error: true
+        run: |
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            "loom-duckdb:$TAG" "s3proxy:3.3.0"
+
+      # Apply mode: HARD GATE. The next step deploys a Container App and the one
+      # after it `az containerapp update`s the LIVE loom-console. Neither may run
+      # against a tag that does not exist — a Container App pointing at a missing
+      # image cannot activate a revision, and the surrounding deployment fails
+      # while it is also re-PUTting live apps. Fail loudly, before anything moves.
+      - name: Image preflight — assert every referenced tag exists (BLOCKING)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            "loom-duckdb:$TAG" "s3proxy:3.3.0"
 
       - name: What-if the loom-duckdb Container App (never touches other resources)
         run: |

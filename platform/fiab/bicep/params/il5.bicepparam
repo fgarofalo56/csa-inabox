@@ -156,6 +156,18 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
+  // deploys BY DEFAULT (duckdbTierActive). STATED EXPLICITLY rather than left to
+  // the module's `?? 'v0.1'` fallback because this is the tag the IL5 TEMPLATE
+  // pulls, and it has to match what the IL5 producer stamps:
+  //   producer .github/workflows/gov-provision-dataplane-images.yml
+  //            boundary=il5, image_tag default v0.1 -> az acr build --image loom-duckdb:v0.1
+  //   template <acr>/loom-duckdb:v0.1
+  // Round 2 had the producer stamp only the short SHA + `latest` while the
+  // template asked for v0.1 — a tag nothing produced. Override BOTH or neither.
+  // .github/workflows/deploy-fiab-il5.yml image-preflights this tag before it
+  // deploys over a live estate.
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
 }
 
 // MSAL — IL5 tenant client id+secret via env (don't commit)

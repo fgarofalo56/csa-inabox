@@ -765,8 +765,21 @@ var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airf
 // quota gate, NOT a Fabric one — when it trips the DuckLake editor renders in
 // full and honest-gates with a Fix-it, and every other surface is unaffected.
 // Cost: one Standard_B1ms burstable server ≈ $16/mo/cloud (see the module).
+//
+// ROUND-3 FIX — the activation gate now matches `airflowHostActive` exactly
+// (`containerApps && deployAppsEnabled && postgresQuotaAvailable`). Round 2
+// gated only on postgresQuotaAvailable, which billed the B1ms in two states
+// where NOTHING can consume it:
+//   * the documented two-phase from-scratch PHASE 1 (`deployAppsEnabled=false`,
+//     no-vaporware.md) — the store came up, wrote its DSN to Key Vault, and
+//     billed while no Console and no DuckDB tier existed;
+//   * an AKS boundary — `duckdbTierActive` requires containerApps, so the engine
+//     that runs the `ATTACH` is never deployed and the catalog has no reader.
+// Postgres Flexible Server has no scale-to-zero tier, so an unconsumed server is
+// a permanent charge, not an idle one. Default-ON must be free-at-idle; this is
+// how it becomes free BEFORE the app tier exists too.
 var ducklakeCatalogEnabled = true
-var ducklakeCatalogActive = ducklakeCatalogEnabled && postgresQuotaAvailable
+var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
 
 // DuckLake Postgres administrator password. UNPREDICTABLE — derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).

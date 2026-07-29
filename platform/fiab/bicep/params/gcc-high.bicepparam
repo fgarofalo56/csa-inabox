@@ -160,6 +160,19 @@ param appImageTags = {
   maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
   scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
   wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
+  // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
+  // deploys BY DEFAULT (duckdbTierActive). STATED EXPLICITLY rather than left to
+  // the module's `?? 'v0.1'` fallback because this is the tag the GOV TEMPLATE
+  // pulls, and it has to match what the Gov producer stamps:
+  //   producer .github/workflows/gov-provision-dataplane-images.yml
+  //            image_tag input, default v0.1  ->  az acr build --image loom-duckdb:v0.1
+  //   template <acr>/loom-duckdb:v0.1
+  // Round 2 had the producer stamp only the short SHA + `latest` while the
+  // template asked for v0.1 — a tag nothing produced, so the Gov app could never
+  // have pulled. Override BOTH sides together or neither.
+  // .github/workflows/deploy-fiab-gcch.yml image-preflights this tag against the
+  // Gov ACR before it adopts the live estate.
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
 }
 
 // Azure Database for PostgreSQL Flexible Server IS available in Azure

@@ -72,10 +72,19 @@ gateway is for clients that speak S3 exclusively.
   container as Container Apps *secrets* — never a plain env value. It is derived
   from the gateway's own dedicated identity, which means it is **stable across
   redeploys**: an external S3 client (Trino, Spark, boto3) holding the pair does
-  not start failing with `SignatureDoesNotMatch` after a routine redeploy. (The
-  module also accepts an orchestrator-supplied unpredictable seed value instead;
-  that variant rotates on every full redeploy and is documented in the module's
-  SECURITY POSTURE block.)
+  not start failing with `SignatureDoesNotMatch` after a routine redeploy.
+  **Say this out loud, because it matters for threat-modelling:** that default
+  pair is *derivable, not secret*. It is a deterministic hash of the gateway
+  identity's `principalId` with a salt that is public in the module source, so
+  anyone holding plain **Reader** on the admin resource group can recompute it.
+  The control that actually holds against such a principal is the network
+  perimeter — the gateway has **no public listener** (`external: false`) and is
+  reachable only from inside the Container Apps environment — and the blast
+  radius is bounded to READ (Storage Blob Data Reader + `read-only-blobstore`).
+  If your estate hands out broad Reader *and* has in-VNet footholds, pass the
+  module an orchestrator-supplied unpredictable pair derived from
+  `loomGeneratedSecretSeed` instead (pin that seed to keep it stable); both modes
+  and their trade-offs are spelled out in the module's SECURITY POSTURE block.
 - **Storage:** your own **ADLS Gen2** account (the same lake every other Loom
   item reads).
 - **Preferred alternative:** the **Iceberg REST Catalog** + native `abfss://`,

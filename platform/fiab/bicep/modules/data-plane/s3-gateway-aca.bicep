@@ -77,11 +77,25 @@
 //           mode and did not say so.
 //       (b) both EMPTY (the default, and what the dlz-attach pass uses): derived
 //           from this module's own dedicated storage identity's principal id.
-//           STABLE across redeploys — no silent client breakage — at the cost of
-//           being recomputable by a principal that already holds Reader on this
-//           resource group. The gateway is internal-ingress-only and the S3
-//           signature is a second factor on top of the VNet perimeter, so that
-//           is the right default; pick (a) where the RG has broad reader access.
+//           STABLE across redeploys — no silent client breakage.
+//           ROUND-3, SAID PLAINLY: this credential is DERIVABLE, NOT SECRET.
+//           `uniqueString()` is a deterministic hash and both salts are public
+//           in this file, so anyone who can read the UAMI's `principalId` —
+//           i.e. anyone with plain **Reader** on this resource group — can
+//           recompute the S3 access-key/secret pair offline. The gateway is
+//           therefore protected by TWO controls that must BOTH hold:
+//             1. the VNet perimeter (`external: false` — no public listener,
+//                reachable only from inside the Container Apps environment), and
+//             2. the S3 signature.
+//           Only #1 is load-bearing against an RG Reader. If your estate hands
+//           out broad subscription-scope Reader AND has in-VNet footholds
+//           (jump boxes, self-hosted runners, shared AKS), treat mode (b) as
+//           "authenticated to the VNet" and switch to mode (a): pass
+//           `s3AccessKey`/`s3SecretKey` derived from `loomGeneratedSecretSeed`,
+//           and pin that seed (it is a parameter, `newGuid()` only by default)
+//           so the pair is unpredictable AND stable. The blast radius either way
+//           is bounded to READ on the lake: the identity holds Storage Blob Data
+//           Reader and the proxy refuses every write verb.
 //   * Scale-to-zero. `minReplicas: 0` — an idle deployment runs no replica, so
 //     "on by default" is also free by default (see COST).
 //
@@ -138,7 +152,7 @@ Optional keys:
   cpu / memory           Container resources (default 0.5 vCPU / 1Gi).''')
 param s3GatewayConfig object
 
-@description('S3 wire access-key id ("identity"). OPTIONAL. When supplied the orchestrator derives it from loomGeneratedSecretSeed (newGuid()) — unpredictable, but it ROTATES on every full redeploy. When EMPTY the module derives a stable value from its own dedicated storage identity\'s principal id, which survives redeploys but is recomputable by a principal holding Reader on this resource group. Pick per estate; both are documented in the SECURITY POSTURE block. @secure() so it never lands in deployment output.')
+@description('S3 wire access-key id ("identity"). OPTIONAL. When supplied the orchestrator derives it from loomGeneratedSecretSeed — unpredictable (and stable if the seed is pinned; it rotates on every redeploy while the seed defaults to newGuid()). When EMPTY the module derives a STABLE value from its own dedicated storage identity\'s principal id — but that value is DERIVABLE, NOT SECRET: uniqueString() is deterministic and the salts are public, so any principal with Reader on this resource group can recompute it. The VNet perimeter (external:false) is then the only control that holds against such a principal; the blast radius stays bounded to READ (Storage Blob Data Reader + read-only proxy). Pick per estate; both modes are spelled out in the SECURITY POSTURE block. @secure() so it never lands in deployment output.')
 @secure()
 param s3AccessKey string = ''
 

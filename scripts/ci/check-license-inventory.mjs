@@ -23,10 +23,24 @@
  *   3. Verifies THIRD_PARTY_LICENSES.md exists and names every apps/ sidecar dir.
  *   4. Scans requirements + the manifest for the explicitly-forbidden libs
  *      (minio, univer) that policy says must not ship.
+ *   5. (round-3, PR #2640) Scans platform/fiab/bicep/** for UPSTREAM CONTAINER
+ *      IMAGES pinned on a deploy path — anything registry-qualified
+ *      (docker.io / ghcr.io / quay.io / registry.k8s.io / public.ecr.aws). Each
+ *      must be in REVIEWED_IMAGES with a permissive SPDX id AND named in
+ *      THIRD_PARTY_LICENSES.md.
  *
- * ESCAPE HATCH: a genuinely-new permissive embed = add it to REVIEWED_PY below
- *   with its SPDX id (that IS the review record) AND a row in
- *   THIRD_PARTY_LICENSES.md. A copyleft dep is NEVER allowlisted — replace it.
+ * WHY 5 EXISTS. Until this PR the guard read ONLY requirements.txt files, so a
+ *   third-party image deployed by default — `docker.io/andrewgaul/s3proxy:3.3.0`
+ *   in data-plane/s3-gateway-aca.bicep — was covered by a hand-written markdown
+ *   row and NOTHING enforced it. A markdown row nobody checks is exactly the
+ *   "gate that measures nothing" class this repo has already been burned by. The
+ *   copyleft risk here is real and specific: the obvious alternative for this
+ *   very feature (MinIO's S3 gateway) is AGPL-v3, and swapping the image string
+ *   would have shipped it with a green LIC0.
+ *
+ * ESCAPE HATCH: a genuinely-new permissive embed = add it to REVIEWED_PY /
+ *   REVIEWED_IMAGES below with its SPDX id (that IS the review record) AND a row
+ *   in THIRD_PARTY_LICENSES.md. A copyleft dep is NEVER allowlisted — replace it.
  *
  * Owner: loom-next-level WS-N / LIC0 — compliance/distribution.
  */
@@ -103,14 +117,6 @@ const REVIEWED_IMAGES = {
   // = "deltaio"), so it is the same Apache-2.0 codebase, not a third-party
   // redistribution under different terms.
   'deltaio/delta-sharing-server': 'Apache-2.0',
-  // github.com/gaul/s3proxy — Apache-2.0 (N8 S3-compatible ADLS gateway).
-  // Pre-reviewed rather than currently-reached: s3-gateway-aca.bicep pulls the
-  // unmodified upstream image directly, so there is no apps/*/Dockerfile FROM
-  // line for the walk below to catch. The entry exists so THIRD_PARTY_LICENSES
-  // .md's "every row whose Image column is populated resolves to REVIEWED_IMAGES"
-  // claim is true for the s3proxy row too, and so that baking it into a Loom
-  // image later needs no license re-review.
-  'andrewgaul/s3proxy': 'Apache-2.0',
 };
 
 /**
@@ -181,6 +187,140 @@ function* dockerfileInstructions(src) {
 function listAppDockerfiles() {
   const out = execSync('git ls-files "apps/*/Dockerfile" "apps/*/*/Dockerfile"', { cwd: REPO_ROOT, encoding: 'utf8' });
   return out.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * TWO image maps, deliberately. They cover DIFFERENT distribution paths and a
+ * single map cannot do both jobs:
+ *
+ *   REVIEWED_IMAGES        keyed by an `apps/<app>/Dockerfile` FROM repo. Covers
+ *                          engines Loom BAKES into its own images (LU-9
+ *                          delta-sharing, Unity Catalog, RisingWave, Debezium,
+ *                          tileserver-gl). Consumed by the Dockerfile walk.
+ *
+ *   REVIEWED_BICEP_IMAGES  keyed by a REGISTRY-QUALIFIED ref pinned in
+ *                          platform/fiab/bicep. Covers upstream images Loom
+ *                          DEPLOYS unmodified and never builds (N8 s3proxy).
+ *                          Consumed by scanUpstreamImages().
+ *
+ * s3proxy is the worked example of why merging them would be wrong: it has no
+ * Dockerfile FROM line at all, so the Dockerfile walk can never reach it — only
+ * the bicep scan can. Conversely a baked engine never appears as a pinned bicep
+ * image ref. Collapsing the two would silently drop one path, which is the
+ * "gate that measures nothing" failure this guard exists to prevent.
+ */
+
+/**
+ * REVIEWED upstream CONTAINER IMAGES pinned on a bicep deploy path → SPDX license
+ * (the human review record), keyed by the registry-qualified repo WITHOUT the tag.
+ * `notice` is the evidence the reviewer checked, and `manifestKey` is the string
+ * THIRD_PARTY_LICENSES.md must contain so the markdown record cannot silently rot.
+ *
+ * Adding a row here is a LICENSE REVIEW. Do it from the upstream LICENSE file,
+ * not from a README badge and not from the image description.
+ */
+const REVIEWED_BICEP_IMAGES = {
+  'docker.io/andrewgaul/s3proxy': {
+    license: 'Apache-2.0',
+    manifestKey: 's3proxy',
+    // Verified 2026-07-29 against raw.githubusercontent.com/gaul/s3proxy/master/LICENSE,
+    // which opens "Apache License / Version 2.0, January 2004". The published
+    // andrewgaul/s3proxy image is built from that same tree. Deployed by
+    // data-plane/s3-gateway-aca.bicep as the permissive replacement for the
+    // AGPL-v3 MinIO gateway (which LIC0 hard-blocks).
+    notice: 'github.com/gaul/s3proxy LICENSE = Apache License, Version 2.0',
+  },
+};
+
+/** Registry-qualified upstream image refs pinned anywhere under platform/fiab/bicep. */
+const UPSTREAM_IMAGE_RE =
+  /\b((?:docker\.io|index\.docker\.io|ghcr\.io|quay\.io|registry\.k8s\.io|public\.ecr\.aws|gcr\.io)\/[A-Za-z0-9._/-]+):([A-Za-z0-9._-]+)/g;
+
+/** Reviewed image refs actually found on a deploy path (reporting only). */
+const IMAGE_RESULTS = [];
+
+/**
+ * Scan the deployable bicep tree for pinned upstream images. Lines that are pure
+ * comments or `@description(...)` prose are skipped — those are documentation of
+ * a parameter's shape, not a deployed image.
+ */
+function scanUpstreamImages(errors) {
+  let files = [];
+  try {
+    files = execSync('git ls-files "platform/fiab/bicep/**/*.bicep" "platform/fiab/bicep/*.bicep"', {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+
+  const found = new Map(); // "repo:tag" -> [file:line, ...]
+  for (const rel of files) {
+    let src;
+    try {
+      src = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+    } catch {
+      continue;
+    }
+    src.split('\n').forEach((line, i) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || line.includes('@description(')) return;
+      UPSTREAM_IMAGE_RE.lastIndex = 0;
+      let m;
+      while ((m = UPSTREAM_IMAGE_RE.exec(line)) !== null) {
+        const repo = m[1];
+        const tag = m[2];
+        const key = `${repo}:${tag}`;
+        if (!found.has(key)) found.set(key, []);
+        found.get(key).push(`${rel}:${i + 1}`);
+      }
+    });
+  }
+
+  const manifestAbs = path.join(REPO_ROOT, MANIFEST);
+  const manifest = fs.existsSync(manifestAbs) ? fs.readFileSync(manifestAbs, 'utf8') : '';
+
+  for (const [ref, locations] of found) {
+    const repo = ref.slice(0, ref.lastIndexOf(':'));
+    const tag = ref.slice(ref.lastIndexOf(':') + 1);
+    const reviewed = REVIEWED_BICEP_IMAGES[repo];
+    if (!reviewed) {
+      errors.push(
+        `${locations[0]}: upstream container image "${ref}" is deployed by bicep but is NOT in REVIEWED_BICEP_IMAGES ` +
+          `(scripts/ci/check-license-inventory.mjs). Read its upstream LICENSE, add it there with its SPDX id, ` +
+          `and add a row to ${MANIFEST}. A copyleft (A?GPL/BSL/SSPL) image is never allowlisted.`,
+      );
+      continue;
+    }
+    if (FORBIDDEN_LICENSE_RE.test(reviewed.license)) {
+      errors.push(`${locations[0]}: "${ref}" is ${reviewed.license} — may NEVER ship. Replace it.`);
+      continue;
+    }
+    if (FORBIDDEN_PKG_RE.test(repo.split('/').pop())) {
+      errors.push(`${locations[0]}: "${ref}" is on the forbidden-package list (MinIO dropped / Univer review-gated).`);
+      continue;
+    }
+    if (tag === 'latest') {
+      errors.push(
+        `${locations[0]}: "${ref}" pins the FLOATING tag ":latest". A deployed upstream image must be pinned to an ` +
+          `immutable version tag so the reviewed license and the running bits are the same artifact.`,
+      );
+      continue;
+    }
+    if (reviewed.manifestKey && !manifest.includes(reviewed.manifestKey)) {
+      errors.push(
+        `${MANIFEST} does not mention "${reviewed.manifestKey}" — every reviewed upstream image needs a NOTICE row.`,
+      );
+      continue;
+    }
+    IMAGE_RESULTS.push(`${ref} → ${reviewed.license} (${locations.length} ref(s))`);
+  }
+  return IMAGE_RESULTS;
 }
 
 /** Strip a requirements.txt line to its base package name (drops extras/pins/markers). */
@@ -292,7 +432,10 @@ function main() {
     console.log(`[license-inventory] ${seenImages.size} reviewed container-baked OSS images across ${shippedImages.size} image repo(s).`);
   }
 
+  // Upstream container images pinned on a bicep deploy path (round-3, PR #2640).
+  const images = scanUpstreamImages(errors);
   if (wantList) {
+    for (const line of images) console.log(`  ${line}`);
     console.log(`[license-inventory] ${seen.size} reviewed Python embeds across ${reqFiles.length} requirements files.`);
   }
 
@@ -304,6 +447,7 @@ function main() {
     process.exit(1);
   }
   console.log(`[license-inventory] OK — ${seen.size} shipped Python embeds + ${seenImages.size} container-baked OSS image(s) reviewed (all permissive); ` +
+    `${images.length} upstream container image(s) pinned in platform/fiab/bicep reviewed (${images.join('; ') || 'none'}); ` +
     `${MANIFEST} present and covers ${sidecarDirs.size} sidecar(s); no MinIO/Univer/copyleft in the distributed set.`);
 }
 
