@@ -91,34 +91,73 @@ function loomSharingBearer(): string {
 /**
  * The Entra audiences a RECIPIENT token may carry.
  *
- * `LOOM_SHARING_AUDIENCE` is the RIGHT answer — a dedicated app registration (or
- * App ID URI) exposed only to sharing recipients, so that a token for the
- * Console is not a token for the data-export endpoint.
+ * `LOOM_SHARING_AUDIENCE` (comma or space separated) is the RIGHT answer — a
+ * dedicated app registration / App ID URI exposed only to sharing recipients, so
+ * that a token for the Console is not a token for the data-export endpoint. When
+ * it is set it REPLACES the fallback rather than adding to it: an operator who
+ * stands up a dedicated registration and still finds `api://<clientId>` accepted
+ * has gained nothing. (A migration that needs both lists both.)
  *
- * Without it we fall back to the Console's own App ID URI (`api://<clientId>`),
- * which still requires a registered recipient principal and (see
- * `verifyEntraBearer`) an ACCESS token carrying `scp`/`roles`. The BARE client
- * id is deliberately NOT accepted: that is the audience shape of the Console's
- * own ID tokens, and accepting it would let an ordinary interactive sign-in
- * credential be replayed at the data plane.
+ * With it unset, the Console's own App ID URI is the fallback — usable ONLY
+ * alongside a scope/app-role pin, see {@link sharingAudiencePinned}. The BARE
+ * client id is never accepted: that is the audience shape of the Console's own
+ * ID tokens.
  */
 export function sharingRecipientAudiences(): string[] {
-  const out: string[] = [];
-  const explicit = (process.env.LOOM_SHARING_AUDIENCE || '').trim();
-  if (explicit) out.push(explicit);
+  const explicit = splitList(process.env.LOOM_SHARING_AUDIENCE);
+  if (explicit.length) return [...new Set(explicit)];
   const clientId = (process.env.LOOM_MSAL_CLIENT_ID || '').trim();
-  if (clientId) out.push(`api://${clientId}`);
-  return [...new Set(out)];
+  return clientId ? [`api://${clientId}`] : [];
 }
 
-/** Optional scope/app-role pin for recipient tokens (`LOOM_SHARING_SCOPE`). Unset
- *  by default — no day-one gate — but when set, a token without it is refused
- *  even if its audience matches. */
+function splitList(raw: string | undefined): string[] {
+  return (raw || '').split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Scope / app-role pin for recipient tokens (`LOOM_SHARING_SCOPE`, comma or
+ * space separated). A token without one of these values in `scp`/`roles` is
+ * refused even when its audience matches.
+ */
 export function sharingRequiredScopes(): string[] {
-  return (process.env.LOOM_SHARING_SCOPE || '')
-    .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return splitList(process.env.LOOM_SHARING_SCOPE);
+}
+
+/**
+ * Is the recipient credential actually PINNED to the data-export API?
+ *
+ * Round-2 of this change closed the ID-token half of the audience problem (the
+ * bare client id is rejected, and an access token is required) but left the other
+ * half open: with only `api://<clientId>` accepted and no scope pinned, ANY
+ * access token minted for the Console's own API satisfies the audience check.
+ * The audience then isolates nothing — it is the Console's own registration —
+ * and the recipient-principal lookup is the sole authorization surface. That is
+ * one control, not two, on the path that moves data outside the boundary.
+ *
+ * The pin is adequate when EITHER holds:
+ *
+ *   - every accepted audience is DEDICATED — i.e. none of them is the Console's
+ *     own client id / App ID URI; or
+ *   - a scope or app role is pinned — `LOOM_SHARING_SCOPE`, which the operator
+ *     exposes on the Console registration and consents ONLY to recipient apps.
+ *
+ * Setting `LOOM_SHARING_AUDIENCE=api://<the Console's own clientId>` does NOT
+ * count: that is the weak configuration spelled out longhand, and a check a
+ * caller can satisfy by restating the default is not a check.
+ *
+ * When neither holds, `authenticateRecipient` fails CLOSED with 503 rather than
+ * accepting a credential it cannot distinguish from an ordinary Console API
+ * token. This is an honest infra gate, not a feature flag: it costs nothing on a
+ * default deployment, because a recipient must be registered by an admin before
+ * this endpoint can serve anyone at all.
+ */
+export function sharingAudiencePinned(): boolean {
+  if (sharingRequiredScopes().length > 0) return true;
+  const audiences = sharingRecipientAudiences().map((a) => a.toLowerCase());
+  if (!audiences.length) return false;
+  const clientId = (process.env.LOOM_MSAL_CLIENT_ID || '').trim().toLowerCase();
+  if (!clientId) return true;
+  return audiences.every((a) => a !== clientId && a !== `api://${clientId}`);
 }
 
 export class LoomSharingError extends Error {

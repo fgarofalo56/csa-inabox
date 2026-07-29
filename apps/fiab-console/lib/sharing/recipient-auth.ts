@@ -26,6 +26,7 @@ import {
   listRecipients,
   sharingRecipientAudiences,
   sharingRequiredScopes,
+  sharingAudiencePinned,
   isLoomSharingConfigured,
 } from './store';
 import { matchRecipientByPrincipal, recipientCanAccessShare, type LoomRecipient } from './model';
@@ -42,15 +43,20 @@ export type SharingAuthResult =
      * one — see {@link operatorHint}.
      */
     hint?: string;
-    /**
-     * Operator-facing remediation: env var names, bicep module paths, Key Vault
-     * wiring. LOGGED, never returned in a response body. `/api/delta-sharing/*`
-     * is reachable by anyone on the internet with zero credentials, so config
-     * state is itself information an attacker should not be handed.
-     */
+    /** Operator-facing remediation: env var names, bicep module paths, Key Vault
+     *  wiring. LOGGED, never returned in a response body. `/api/delta-sharing/*`
+     *  is reachable by anyone on the internet with zero credentials, so config
+     *  state is itself information an attacker should not be handed. */
     operatorHint?: string;
     /** Short machine reason for the audit row (never contains token material). */
     reason: string;
+    /**
+     * The VERIFIED principal, on a refusal that happened after the token
+     * verified (403 not-a-recipient). Carried as a field rather than parsed back
+     * out of {@link operatorHint} so the audit row — and the per-principal deny
+     * throttle keyed on it — cannot drift from what the verifier actually saw.
+     */
+    principal?: string;
   };
 
 /** Open Delta Sharing publishing is on by default (default-ON / opt-out); an
@@ -114,6 +120,18 @@ export async function authenticateRecipient(authorizationHeader: string | null |
   }
 
   const audiences = sharingRecipientAudiences();
+  // The audience must actually PIN this API. With only the Console's own App ID
+  // URI accepted and no scope pinned, every access token for the Console API is
+  // a valid recipient credential — see store.sharingAudiencePinned. Fail closed
+  // rather than accept a credential we cannot tell apart from a Console token.
+  if (!sharingAudiencePinned()) {
+    return {
+      ok: false, status: 503, reason: 'audience-unpinned',
+      error: 'Delta Sharing is unavailable in this deployment.',
+      operatorHint:
+        'The recipient API has no dedicated credential pin. Set LOOM_SHARING_AUDIENCE to a DEDICATED Entra app registration (App ID URI) for sharing recipients, OR set LOOM_SHARING_SCOPE to a scope/app role exposed on the Console registration and consented only to recipient apps. Falling back to api://<LOOM_MSAL_CLIENT_ID> with no scope pin would accept any access token minted for the Console API. See docs/fiab/delta-sharing-gov.md.',
+    };
+  }
   const verified = await verifyEntraBearer(authorizationHeader, {
     audiences,
     tenantId,
@@ -150,7 +168,9 @@ export async function authenticateRecipient(authorizationHeader: string | null |
       // Safe to return: the caller holds a valid token for THIS estate, and the
       // text is product guidance, not infrastructure state.
       hint: 'The share owner registers the recipient in Loom Marketplace → Data shares → Recipients, with this exact Entra object id or application id.',
-      // Carried so the deny audit row can attribute the probe.
+      // Carried so the deny audit row can attribute the probe, and so the route
+      // can throttle repeat probes per VERIFIED principal.
+      principal: principal || undefined,
       operatorHint: `principal=${principal || '(none)'}`,
     };
   }
