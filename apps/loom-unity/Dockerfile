@@ -88,6 +88,22 @@ FROM unitycatalog/unitycatalog:v0.5.0
 # `unitycatalog` service account (restored via USER below).
 USER root
 
+# ── SC1 supply-chain gate — OS layer ───────────────────────────────────────────
+# The pinned base (alpine 3.20.9) scans 2 CRITICALs: libcrypto3 and libssl3 at
+# 3.3.6-r0, both cleared by openssl 3.3.7-r0 (CVE-2026-31789, heap buffer
+# overflow parsing a large X.509 certificate on 32-bit targets). alpine v3.20's
+# package repository already carries 3.3.7-r0, so the base tag is simply behind.
+#
+# `apk upgrade` is the alpine analogue of the `apt-get dist-upgrade` this repo
+# already runs at the top of apps/fiab-mcp-bridge and apps/loom-transform-runner:
+# it pulls the distro's security patches AHEAD of the pinned base tag, which is
+# how OS-layer CRITICALs get cleared here without waiting for an upstream image
+# rebuild. Upgrading the whole package set rather than just openssl is
+# deliberate and prophylactic — this is a security-critical service and the next
+# base-tag lag should not re-block the gate.
+RUN apk upgrade --no-cache \
+    && apk info -v libcrypto3 libssl3 | sort -u
+
 # Preserve the image's seeded catalog DB so a fresh Azure Files mount (which
 # shadows etc/db) can be seeded with a valid schema on first boot. Best-effort:
 # if the image ships no seed db the entrypoint simply starts against an empty dir.
@@ -120,6 +136,30 @@ RUN set -eu; \
     chmod 0444 /home/unitycatalog/lib-loom/*.jar; \
     chown -R unitycatalog:unitycatalog /home/unitycatalog/lib-loom; \
     grep -q 'loom-unity-entra-auth.jar' "${CP_FILE}" || { echo "FATAL: classpath rewrite did not take" >&2; exit 1; }
+
+# ── SC1 supply-chain gate — Java layer ────────────────────────────────────────
+# The upstream image bakes its whole sbt/coursier build cache (864 jars, 1.3 GB)
+# into the runtime layer, but its launch scripts only ever load the 311 jars
+# named by the image's classpath files. One of the 553 leftovers,
+# bcprov-jdk18on-1.80.jar, carries CVE-2025-14813 (CRITICAL) — and appears in no
+# classpath file, so nothing can load it. scripts/sc1-prune-cache.sh removes
+# every cached jar no classpath file references, deriving the keep-set from
+# those files themselves and then asserting that every classpath entry survives.
+# Full justification and blast-radius analysis live in that script.
+#
+# It runs AFTER the classpath rewrite above so the assertion also covers the two
+# Loom-added jars in lib-loom. It touches no config, no entrypoint, no port and
+# no user — the service's auth and network posture are unchanged.
+#
+# The script lives in a FILE rather than an inline heredoc on purpose: ACR Tasks'
+# classic builder cannot parse Dockerfile heredocs (they need BuildKit). A
+# heredoc here builds fine under a local `docker build` and then dies in CI after
+# ~3s with `failed to run step ID: build: failed to scan dependencies: exit
+# status 1`, before any layer runs. Keep this Dockerfile BuildKit-feature-free.
+COPY scripts/sc1-prune-cache.sh /tmp/sc1-prune-cache.sh
+RUN chmod 0755 /tmp/sc1-prune-cache.sh \
+    && /tmp/sc1-prune-cache.sh \
+    && rm -f /tmp/sc1-prune-cache.sh
 
 # Thin config-rendering entrypoint (renders hibernate.properties + server.properties
 # from env, seeds the DB dir if empty, then execs the upstream start script).
