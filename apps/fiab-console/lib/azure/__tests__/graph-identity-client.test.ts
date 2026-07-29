@@ -70,6 +70,55 @@ describe('graph-identity-client', () => {
     expect(hits).toEqual([{ id: 'u1', type: 'user', displayName: 'Alice Smith', upn: 'alice@contoso.com', mail: 'alice@contoso.com' }]);
   });
 
+  // ── LU-4: DIRECT (one-hop) membership, the input to the cycle-safe closure ──
+
+  it('getPrincipalDirectGroups reads memberOf for a UPN and keeps only groups', async () => {
+    process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      value: [
+        { '@odata.type': '#microsoft.graph.group', id: 'g1', displayName: 'analysts' },
+        // A directory role is NOT a group — a Unity Catalog grant can never name
+        // it, so leaking it would invent access that does not exist.
+        { '@odata.type': '#microsoft.graph.directoryRole', id: 'r1', displayName: 'Global Reader' },
+        { '@odata.type': '#microsoft.graph.group', id: 'g1b', displayName: 'analysts' },
+      ],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const mod = await import('../graph-identity-client');
+    const groups = await mod.getPrincipalDirectGroups('ada@contoso.com');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // memberOf, NOT transitiveMemberOf: the closure walk needs one hop at a time
+    // so it can detect a cycle.
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/users/ada%40contoso.com/memberOf');
+    expect(groups).toEqual(['analysts']);
+  });
+
+  it('getPrincipalDirectGroups resolves a group NAME to its id before reading memberOf', async () => {
+    process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({ value: [{ id: 'g-analysts' }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        value: [{ '@odata.type': '#microsoft.graph.group', id: 'g-readers', displayName: 'data-readers' }],
+      }), { status: 200 }));
+
+    const mod = await import('../graph-identity-client');
+    const groups = await mod.getPrincipalDirectGroups('analysts');
+
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0][0]))).toContain("displayName eq 'analysts'");
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/groups/g-analysts/memberOf');
+    expect(groups).toEqual(['data-readers']);
+  });
+
+  it('getPrincipalDirectGroups returns [] for a principal that is not a directory object', async () => {
+    process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
+    // An OSS-Unity-Catalog-local account has no Entra object; a 404 here must not
+    // fail the whole effective-permissions answer.
+    fetchMock.mockResolvedValue(new Response('', { status: 404 }));
+    const mod = await import('../graph-identity-client');
+    expect(await mod.getPrincipalDirectGroups('service-account-local')).toEqual([]);
+  });
+
   it('getGroupTransitiveMembers maps @odata.type to kind and dedupes', async () => {
     process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
     fetchMock.mockResolvedValue(new Response(JSON.stringify({

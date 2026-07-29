@@ -17,6 +17,7 @@ export const ENRICHMENT_GATE_META: Record<string, GateMeta> = {
       { path: '/admin/access-governance?tab=reviews', label: 'Access reviews — group-targeted packages' },
       { path: '/admin/access-governance?tab=packages', label: 'Access packages — Entra group targets' },
       { path: '/api/access-governance/group-sync', label: 'Group-sync reconcile' },
+      { path: '/catalog/unity', label: 'Unity Catalog grants — "Effective for principal" group expansion (LU-4)' },
     ],
     fixit: { kind: 'role-grant', grantNote: 'Set LOOM_GRAPH_GROUP_SYNC_ENABLED=true and grant the Console UAMI Microsoft Graph Group.Read.All + GroupMember.Read.All (application, admin-consented). Read-only on Entra — Loom never mutates tenant groups.' },
     legacyCodes: ['graph_group_sync_not_configured'],

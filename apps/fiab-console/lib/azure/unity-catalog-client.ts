@@ -36,6 +36,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
+import type { UCEffectivePermissions } from '@/lib/azure/uc-effective-permissions';
 import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
@@ -439,6 +440,12 @@ export async function listSchemas(host: string, catalogName: string): Promise<UC
   return (j.schemas || []).map((s) => ({ ...s, workspace_hostname: host }));
 }
 
+/** GET one schema by full name — both backends. Feeds the LU-4 owner walk. */
+export async function getSchema(host: string, fullName: string): Promise<UCSchema> {
+  const j = await ucFetch<UCSchema>(host, `/api/2.1/unity-catalog/schemas/${encodeURIComponent(fullName)}`);
+  return { ...j, workspace_hostname: host };
+}
+
 export async function createSchema(
   host: string,
   body: { name: string; catalog_name: string; comment?: string; storage_root?: string },
@@ -478,6 +485,12 @@ export async function listVolumes(host: string, catalogName: string, schemaName:
     query: { catalog_name: catalogName, schema_name: schemaName },
   });
   return (j.volumes || []).map((v) => ({ ...v, workspace_hostname: host }));
+}
+
+/** GET one volume by full name — both backends. Feeds the LU-4 owner walk. */
+export async function getVolume(host: string, fullName: string): Promise<UCVolume> {
+  const j = await ucFetch<UCVolume>(host, `/api/2.1/unity-catalog/volumes/${encodeURIComponent(fullName)}`);
+  return { ...j, workspace_hostname: host };
 }
 
 export async function createVolume(
@@ -697,16 +710,29 @@ export async function listPermissions(
   return ucFetch<UCPermissions>(host, permissionPath(secType, securableName));
 }
 
-/** GET /effective-permissions/{securable}/{name} — direct + inherited grants.
- *  Databricks-only (ucFetch gates it 501 on the OSS backend; callers fall back
- *  to {@link listPermissions}, which OSS UC fully supports). */
+/**
+ * Effective (direct + inherited + ownership) permissions — **on BOTH backends**
+ * (LU-4). Databricks: its native `GET /effective-permissions/{securable}/{name}`
+ * (optionally scoped with `?principal=`). Loom Unity / OSS: the upstream server
+ * only exposes direct grants, so the BFF resolves the SAME answer itself via
+ * `computeEffectivePermissions` (`uc-effective-permissions-live.ts`) — this is
+ * what removed the "Databricks-only" gate, with no Fabric/Databricks dependency.
+ */
 export async function listEffectivePermissions(
   host: string,
   secType: UCSecurableType,
   securableName: string,
-): Promise<UCPermissions> {
+  opts?: { principal?: string },
+): Promise<UCEffectivePermissions> {
+  if (isOssUc()) {
+    // Lazy: the resolver reads back through this module — a dynamic edge keeps
+    // that from being a static import cycle, and off the Databricks path.
+    const { computeEffectivePermissions } = await import('@/lib/azure/uc-effective-permissions-live');
+    return computeEffectivePermissions(host, secType, securableName, opts);
+  }
   const path = permissionPath(secType, securableName).replace('/permissions/', '/effective-permissions/');
-  return ucFetch<UCPermissions>(host, path);
+  const principal = (opts?.principal || '').trim();
+  return ucFetch<UCEffectivePermissions>(host, path, principal ? { query: { principal } } : undefined);
 }
 
 /** REST permission patch — for simple `GRANT priv TO principal` and
@@ -1813,6 +1839,12 @@ export async function listExternalLocations(host: string): Promise<UCExternalLoc
   return (j.external_locations || []).map((e) => ({ ...e, workspace_hostname: host }));
 }
 
+/** GET one external location by name — both backends. Feeds the LU-4 owner walk. */
+export async function getExternalLocation(host: string, name: string): Promise<UCExternalLocation> {
+  const j = await ucFetch<UCExternalLocation>(host, `/api/2.1/unity-catalog/external-locations/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
+}
+
 export async function createExternalLocation(
   host: string,
   body: { name: string; url: string; credential_name: string; comment?: string; read_only?: boolean; skip_validation?: boolean },
@@ -1845,6 +1877,13 @@ export async function listStorageCredentials(host: string): Promise<UCStorageCre
   const j = await ucFetch<{ storage_credentials?: UCStorageCredential[]; credentials?: UCStorageCredential[] }>(
     host, '/api/2.1/unity-catalog/storage-credentials');
   return (j.storage_credentials || j.credentials || []).map((c) => ({ ...c, workspace_hostname: host }));
+}
+
+/** GET one storage credential (OSS: rewritten to `/credentials/{name}`) — feeds
+ *  the LU-4 owner walk. */
+export async function getStorageCredential(host: string, name: string): Promise<UCStorageCredential> {
+  const j = await ucFetch<UCStorageCredential>(host, `/api/2.1/unity-catalog/storage-credentials/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
 }
 
 export async function createStorageCredential(

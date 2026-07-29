@@ -9,7 +9,9 @@
  *   - honest gate: oss selected but LOOM_UNITY_URL unset => OssUcNotConfiguredError
  *   - grants WORK on OSS (the OSS server implements the permissions family);
  *     genuinely Databricks-only families (Delta Sharing, lineage, connections,
- *     bindings, effective-permissions, system schemas) gate 501
+ *     bindings, system schemas) gate 501
+ *   - LU-4: effective permissions are NOT gated any more — on OSS the client
+ *     resolves the inheritance walk itself from the direct grants
  *   - the storage-credentials → credentials path rewrite on OSS
  *   - the OSS metastore_summary adaptation for the federation list
  *
@@ -97,7 +99,6 @@ describe('ossUcUnsupportedPath', () => {
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/shares')).toMatch(/Delta Sharing/);
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/recipients')).toMatch(/Delta Sharing/);
     expect(ossUcUnsupportedPath('/api/2.0/lineage-tracking/table-lineage')).toMatch(/lineage/);
-    expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/effective-permissions/catalog/sales')).toMatch(/effective/);
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/connections')).toMatch(/Federation/);
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/bindings/catalog/sales')).toMatch(/bindings/);
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/metastores/m1/systemschemas')).toMatch(/system schemas/);
@@ -106,6 +107,12 @@ describe('ossUcUnsupportedPath', () => {
     expect(ossUcUnsupportedPath('/api/2.1/marketplace-consumer/listings')).toMatch(/Marketplace/);
     // Implemented by OSS UC 0.5 — must NOT gate:
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/permissions/catalog/sales')).toBeNull();
+    // LU-4 — the FEATURE is available on both backends (the BFF resolves the
+    // inheritance walk itself), but the upstream OSS server still has no such
+    // endpoint, so the gate STAYS as defence in depth. If a future caller ever
+    // builds this path on OSS it gets the honest 501, not an opaque 404.
+    expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/effective-permissions/catalog/sales'))
+      .toMatch(/effective-permissions/);
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/catalogs')).toBeNull();
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/schemas')).toBeNull();
     expect(ossUcUnsupportedPath('/api/2.1/unity-catalog/tables')).toBeNull();
@@ -218,13 +225,92 @@ describe('ucFetch backend routing', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://adb-1.7.azuredatabricks.net/api/2.1/unity-catalog/permissions/function/main.sales.churn');
   });
 
-  it('gates effective-permissions on the oss backend with a 501', async () => {
+  it('LU-4: resolves effective permissions on OSS from the containment chain, never calling /effective-permissions', async () => {
     process.env.LOOM_UC_BACKEND = 'oss';
     process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
-    await expect(
-      listEffectivePermissions('ignored-host', 'CATALOG', 'sales'),
-    ).rejects.toMatchObject({ status: 501 });
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Real OSS REST shapes, routed by URL so the parallel chain reads cannot
+    // depend on call ordering.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/permissions/table/main.sales.orders')) return okResponse({ privilege_assignments: [] });
+      if (url.includes('/permissions/schema/main.sales')) return okResponse({ privilege_assignments: [] });
+      if (url.includes('/permissions/catalog/main')) {
+        return okResponse({ privilege_assignments: [{ principal: 'analysts', privileges: ['SELECT'] }] });
+      }
+      if (url.includes('/tables/main.sales.orders')) return okResponse({ name: 'orders', full_name: 'main.sales.orders' });
+      if (url.includes('/schemas/main.sales')) return okResponse({ name: 'sales', full_name: 'main.sales' });
+      if (url.includes('/catalogs/main')) return okResponse({ name: 'main', owner: 'dana@contoso.com' });
+      throw new Error(`unexpected URL ${url}`);
+    });
+
+    const res = await listEffectivePermissions('ignored-host', 'TABLE', 'main.sales.orders');
+
+    const urls = fetchMock.mock.calls.map((c: any[]) => String(c[0]));
+    expect(urls.some((u) => u.includes('/effective-permissions/'))).toBe(false);
+    expect(urls).toContain('https://loom-unity.internal/api/2.1/unity-catalog/permissions/catalog/main');
+
+    const byPrincipal = Object.fromEntries(
+      (res.privilege_assignments || []).map((a) => [a.principal, a.privileges.map((p) => p.privilege).sort()]),
+    );
+    // Inherited from the catalog grant …
+    expect(byPrincipal['analysts']).toEqual(['SELECT']);
+    // … and the catalog OWNER gets NOTHING on this table on the OSS backend.
+    // Ownership does not inherit downward in Unity Catalog (Learn: "you do
+    // automatically get the MANAGE privilege on all new and existing child
+    // objects" — and nothing else), and the OSS Unity Catalog server does not
+    // implement MANAGE at all. This assertion is the regression guard for the
+    // original defect, where dana came back holding SELECT + MODIFY + MANAGE on
+    // every table under a catalog she owns, with no grant existing anywhere.
+    expect(byPrincipal['dana@contoso.com']).toBeUndefined();
+    // The narrowing is DISCLOSED, not silent.
+    expect(res.warnings?.join(' ')).toMatch(/MANAGE \/ BROWSE \/ APPLY TAG/);
+  });
+
+  it('LU-4: on DATABRICKS the same chain gives the catalog owner MANAGE — and only MANAGE', async () => {
+    process.env.LOOM_UC_BACKEND = 'databricks';
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.7.azuredatabricks.net';
+    // Force the local resolver on the Databricks vocabulary by driving it
+    // directly — the native endpoint is used on that backend, so this pins the
+    // model rather than the routing.
+    const { resolveEffectivePermissions } = await import('../uc-effective-permissions');
+    const out = resolveEffectivePermissions([
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [] },
+      { type: 'SCHEMA', name: 'main.sales', assignments: [] },
+      { type: 'CATALOG', name: 'main', owner: 'dana@contoso.com', assignments: [] },
+    ]);
+    expect(out.map((a) => [a.principal, a.privileges.map((p) => p.privilege)])).toEqual([
+      ['dana@contoso.com', ['MANAGE']],
+    ]);
+  });
+
+  it('LU-4: a chain read the caller cannot see becomes a warning, not a 502', async () => {
+    process.env.LOOM_UC_BACKEND = 'oss';
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/permissions/catalog/main')) {
+        return { ok: false, status: 403, statusText: 'Forbidden', text: async () => '{"message":"PERMISSION_DENIED"}' } as unknown as Response;
+      }
+      if (url.includes('/permissions/schema/main.sales')) {
+        return okResponse({ privilege_assignments: [{ principal: 'analysts', privileges: ['SELECT'] }] });
+      }
+      if (url.includes('/schemas/main.sales')) return okResponse({ name: 'sales' });
+      if (url.includes('/catalogs/main')) return okResponse({ name: 'main' });
+      throw new Error(`unexpected URL ${url}`);
+    });
+
+    const res = await listEffectivePermissions('ignored-host', 'SCHEMA', 'main.sales');
+    expect(res.privilege_assignments?.[0]).toMatchObject({ principal: 'analysts' });
+    expect(res.warnings?.join(' ')).toMatch(/CATALOG main/);
+    expect(res.warnings?.join(' ')).toMatch(/PERMISSION_DENIED/);
+  });
+
+  it('still uses the native Databricks effective-permissions endpoint on that backend', async () => {
+    process.env.LOOM_UC_BACKEND = 'databricks';
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.7.azuredatabricks.net';
+    fetchMock.mockResolvedValueOnce(okResponse({ privilege_assignments: [] }));
+    await listEffectivePermissions('adb-1.7.azuredatabricks.net', 'CATALOG', 'sales', { principal: 'ada@contoso.com' });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://adb-1.7.azuredatabricks.net/api/2.1/unity-catalog/effective-permissions/catalog/sales?principal=ada%40contoso.com',
+    );
   });
 
   it('gates Delta Sharing on the oss backend with a 501', async () => {
