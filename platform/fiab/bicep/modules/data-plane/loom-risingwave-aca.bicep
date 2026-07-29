@@ -64,7 +64,12 @@ Optional keys:
   frontendPort           Postgres-wire frontend port (default 4566).
   minReplicas            Default 1 — the streaming tier holds MV state (never scale-to-zero).
   maxReplicas            Default 1 — single-node RisingWave is not horizontally sharded here.
-  cpu / memory           Container resources (default 2.0 vCPU / 8Gi — stateful streaming).
+  cpu / memory           Container resources (default 2.0 vCPU / 4.0Gi).
+                         ACA Consumption only accepts memory == 2x cpu, so the
+                         previous 2.0/8Gi default was NOT DEPLOYABLE — preflight
+                         rejected it with ContainerAppInvalidResourceTotal. For a
+                         heavier streaming workload use 4.0 vCPU / 8Gi (the next
+                         valid step up), not 2.0/8Gi.
   stateStore             Optional RW_STATE_STORE override (e.g. hummock+... on ADLS) for a
                          durable, scaled deployment; empty => single-node local state.
   dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.
@@ -86,7 +91,13 @@ var frontendPort = int(risingwaveConfig.?frontendPort ?? 4566)
 var minReplicas = int(risingwaveConfig.?minReplicas ?? 1)
 var maxReplicas = int(risingwaveConfig.?maxReplicas ?? 1)
 var cpu = string(risingwaveConfig.?cpu ?? '2.0')
-var memory = string(risingwaveConfig.?memory ?? '8Gi')
+// ACA Consumption accepts ONLY cpu/memory pairs where memory == 2x cpu
+// (0.25/0.5Gi ... 4/8Gi). The former '8Gi' default paired with 2.0 vCPU is not a
+// legal combination, so every deploy of this module failed preflight with
+// ContainerAppInvalidResourceTotal. 4.0Gi is the valid partner for 2.0 vCPU and
+// keeps the always-on streaming tier at the cheaper end (it cannot scale to zero:
+// it holds materialized-view state).
+var memory = string(risingwaveConfig.?memory ?? '4.0Gi')
 var stateStore = string(risingwaveConfig.?stateStore ?? '')
 var dataDirectory = string(risingwaveConfig.?dataDirectory ?? '')
 var assignLakeRole = bool(risingwaveConfig.?assignLakeRole ?? true)
