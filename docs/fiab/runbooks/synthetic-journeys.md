@@ -44,7 +44,8 @@ Everything the `svc-synthetic-monitor` gate needs is deployed, with no operator 
 
 **The thing no deploy can do: the Entra Conditional Access exclusion.** The
 runner signs in as a standing automation account
-(`svc-loom-synthetic@limitlessdata.ai` in this tenant). Until a **tenant admin**
+(`svc-loom-synthetic@<your-tenant-domain>` — the UPN in
+`observabilityConfig.syntheticLoginUpn`). Until a **tenant admin**
 scopes a Conditional Access exclusion for it, that sign-in is blocked, the run
 produces no verdicts, and **the Journeys tab stays empty** — the wiring above
 makes the surface honest, it does not make results appear. This is a one-time

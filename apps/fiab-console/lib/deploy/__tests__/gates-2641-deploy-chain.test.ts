@@ -300,6 +300,10 @@ describe('honest text — the one thing a deploy cannot do', () => {
   it('keeps the same statement in the runbook', () => {
     const doc = read('docs/fiab/runbooks/synthetic-journeys.md');
     expect(doc).toMatch(/Conditional Access/);
-    expect(doc).toMatch(/svc-loom-synthetic@limitlessdata\.ai/);
+    // The account, but NOT the operator's live domain — scripts/ci/check-docs-hygiene.mjs
+    // fails the build on a real tenant domain anywhere under docs/.
+    expect(doc).toMatch(/svc-loom-synthetic@<your-tenant-domain>/);
+    expect(doc).not.toMatch(/limitlessdata\.ai/);
+    expect(doc).toMatch(/stays empty/i);
   });
 });
