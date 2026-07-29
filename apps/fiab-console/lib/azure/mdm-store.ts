@@ -8,6 +8,7 @@
  * the attribute-groups pattern. One doc per tenant per kind.
  */
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { safeRecord } from '@/lib/security/safe-object';
 import {
   SURVIVORSHIP_STRATEGIES, MATCH_TYPES,
   type MdmModel, type MatchAttribute, type SurvivorshipRule, type SurvivorshipStrategy, type MatchType,
@@ -223,13 +224,35 @@ function crosswalkId(t: string) { return `mdm-crosswalk:${t}`; }
 const MAX_CROSSWALK_PAIRS = 5000;
 const pairKey = (a: string, b: string) => [String(a), String(b)].sort().join('|');
 
+/**
+ * `byModel` is keyed by a caller-supplied `modelId` (the /api/mdm/match/approve
+ * routes pass the query/body value straight through — there is no "this model
+ * exists" check). Rehydrating it onto a NULL-PROTOTYPE record makes the key
+ * space closed: a crafted `__proto__` id can no longer replace the map's
+ * prototype (which silently dropped the steward approval from `JSON.stringify`
+ * while the route still returned `{ok:true}` — a false approval receipt), and
+ * `byModel['constructor']` can no longer read back the `Object` function and
+ * blow up the caller's `.filter` / `.map`.
+ */
+function toSafeByModel(raw: unknown): Record<string, CrosswalkPair[]> {
+  const out = safeRecord<CrosswalkPair[]>();
+  if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (Array.isArray(v)) out[k] = v as CrosswalkPair[];
+    }
+  }
+  return out;
+}
+
 async function readCrosswalkDoc(tenantId: string): Promise<CrosswalkDoc> {
   const c = await tenantSettingsContainer();
   const id = crosswalkId(tenantId);
+  const empty = (): CrosswalkDoc => ({ id, tenantId, kind: 'mdm-crosswalk', byModel: safeRecord<CrosswalkPair[]>(), updatedAt: '' });
   try {
     const { resource } = await c.item(id, tenantId).read<CrosswalkDoc>();
-    return resource || { id, tenantId, kind: 'mdm-crosswalk', byModel: {}, updatedAt: '' };
-  } catch (e: any) { if (e?.code !== 404) throw e; return { id, tenantId, kind: 'mdm-crosswalk', byModel: {}, updatedAt: '' }; }
+    if (!resource) return empty();
+    return { ...resource, byModel: toSafeByModel(resource.byModel) };
+  } catch (e: any) { if (e?.code !== 404) throw e; return empty(); }
 }
 
 /** List steward-approved crosswalk pairs for a model. */

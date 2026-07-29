@@ -42,6 +42,7 @@
 
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { resolveAasBinding, type DaxVisual } from '@/lib/azure/aas-dax';
+import { safeRecord } from '@/lib/security/safe-object';
 import {
   dedicatedTarget,
   serverlessTarget,
@@ -713,8 +714,12 @@ interface BaseTableInput {
 
 /** Validate a persisted `state.tableStorage` bag into a `TableStorageMap`. */
 function parseTableStorageState(value: unknown): TableStorageMap {
-  if (!value || typeof value !== 'object') return {};
-  const out: TableStorageMap = {};
+  if (!value || typeof value !== 'object') return safeRecord() as TableStorageMap;
+  // Read side of the same client-keyed map the data-source route writes — see
+  // lib/security/safe-object.ts. Null-prototype so a legacy document carrying a
+  // `__proto__` / `constructor` table key resolves as data, not as a prototype
+  // swap (which would make every unknown table inherit that StorageMode).
+  const out = safeRecord() as TableStorageMap;
   for (const [table, raw] of Object.entries(value as Record<string, unknown>)) {
     if (!raw || typeof raw !== 'object') continue;
     const r = raw as Record<string, unknown>;

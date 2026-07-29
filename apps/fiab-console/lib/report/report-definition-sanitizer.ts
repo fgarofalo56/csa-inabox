@@ -12,6 +12,7 @@
 
 import type { ReportContent } from '@/lib/apps/content-bundles/types';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { safeRecord } from '@/lib/security/safe-object';
 
 /**
  * Visual types the renderer + DAX/SQL synthesizer support. The first 11 are the
@@ -1313,7 +1314,9 @@ function sanitizeVisualFlags(v: VisualIn): { hidden?: boolean; locked?: boolean;
 /** Sanitize a Record<string,boolean> (Selection-pane visibility), keys/size bounded. */
 function sanitizeBoolMap(raw: unknown, cap = MAX_OBJECT_KEYS): Record<string, boolean> | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const out: Record<string, boolean> = {};
+  // safeRecord() — a null-prototype target, so a visual id of `__proto__` /
+  // `constructor` becomes a plain own key instead of hitting a prototype slot.
+  const out = safeRecord<boolean>();
   let n = 0;
   for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
     if (n >= cap) break;
@@ -1327,7 +1330,7 @@ function sanitizeBoolMap(raw: unknown, cap = MAX_OBJECT_KEYS): Record<string, bo
 /** Sanitize a Record<string,number> (z-order), values clamped + keys/size bounded. */
 function sanitizeNumMap(raw: unknown, min: number, max: number, cap = MAX_OBJECT_KEYS): Record<string, number> | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const out: Record<string, number> = {};
+  const out = safeRecord<number>();
   let n = 0;
   for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
     if (n >= cap) break;
@@ -1347,12 +1350,16 @@ function sanitizeNumMap(raw: unknown, min: number, max: number, cap = MAX_OBJECT
  */
 function sanitizeInteractions(raw: unknown): Record<string, Record<string, InteractionMode>> | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const out: Record<string, Record<string, InteractionMode>> = {};
+  // Both levels are null-prototype: a source id of `__proto__` would otherwise
+  // REPLACE this map's prototype with the attacker's target→mode bucket, so a
+  // later lookup for ANY unrelated source would inherit an attacker-chosen
+  // interaction mode — and the entry would vanish from JSON on persist.
+  const out = safeRecord<Record<string, InteractionMode>>();
   let sources = 0;
   for (const [src, targets] of Object.entries(raw as Record<string, unknown>)) {
     if (sources >= MAX_INTERACTION_KEYS) break;
     if (!src || !targets || typeof targets !== 'object') continue;
-    const bucket: Record<string, InteractionMode> = {};
+    const bucket = safeRecord<InteractionMode>();
     let n = 0;
     for (const [tgt, mode] of Object.entries(targets as Record<string, unknown>)) {
       if (n >= MAX_INTERACTION_KEYS) break;
@@ -1452,7 +1459,7 @@ function sanitizeBookmark(raw: unknown): PersistedBookmark | null {
   if (activePageId) state.activePageId = activePageId;
 
   if (stIn.pageFilters && typeof stIn.pageFilters === 'object') {
-    const buckets: Record<string, PersistedFilter[]> = {};
+    const buckets = safeRecord<PersistedFilter[]>();
     let n = 0;
     for (const [pid, fl] of Object.entries(stIn.pageFilters as Record<string, unknown>)) {
       if (n >= MAX_BOOKMARK_PAGES) break;

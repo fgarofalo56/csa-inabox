@@ -35,13 +35,23 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   runPipeline, upsertPipeline, upsertLinkedService, upsertDataset,
   type AdfPipeline, type AdfDataset, type AdfLinkedService,
 } from '@/lib/azure/adf-client';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
+import {
+  CopyJobSqlError,
+  buildBoundedSelectSql,
+  buildCdcNetChangesSql,
+  buildFullSelectSql,
+  buildMaxWatermarkSql,
+  buildTruncateSql,
+  buildWatermarkLookupSql,
+  copyJobCaptureInstance,
+} from '@/lib/azure/copy-job-sql';
 import { jerr, loadOwnedItem } from '../../../_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -167,7 +177,9 @@ function sinkProps(spec: CopySpec): Record<string, unknown> {
   const props: Record<string, unknown> = { type };
   if (isSqlSink(type)) {
     if (spec.writeMode === 'Overwrite' && sinkTable) {
-      props.preCopyScript = `TRUNCATE TABLE ${sinkTable}`;
+      // Validated + bracketed — a destination table can never carry a statement
+      // terminator into the sink's pre-copy script.
+      props.preCopyScript = buildTruncateSql(sinkTable);
     } else if (spec.writeMode === 'Merge') {
       const keys = (spec.mergeKeys || '').split(',').map((k) => k.trim()).filter(Boolean);
       props.writeBehavior = 'upsert';
@@ -186,7 +198,7 @@ function sinkProps(spec: CopySpec): Record<string, unknown> {
 
 function fullPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: string): AdfPipeline {
   const srcQuery = spec.source.query
-    || (isSqlSource(spec.source.type) && spec.source.sourceTable ? `SELECT * FROM ${spec.source.sourceTable}` : undefined);
+    || (isSqlSource(spec.source.type) && spec.source.sourceTable ? buildFullSelectSql(spec.source.sourceTable) : undefined);
   const tx = translator(spec.mappings);
   return {
     name: `loom-copy-${itemId}`,
@@ -218,8 +230,7 @@ function incrementalPipeline(itemId: string, spec: CopySpec, srcDs: string, snkD
   const tx = translator(spec.mappings);
   const oldVal = "@{activity('LookupOldWatermark').output.resultSets[0].rows[0].last_value}";
   const newVal = "@{activity('LookupNewWatermark').output.resultSets[0].rows[0].new_value}";
-  const boundedQuery =
-    `SELECT * FROM ${sourceTable} WHERE ${wm} > '${oldVal}' AND ${wm} <= '${newVal}'`;
+  const boundedQuery = buildBoundedSelectSql(sourceTable, wm, oldVal, newVal);
   return {
     name: `loom-copy-${itemId}`,
     properties: {
@@ -232,9 +243,7 @@ function incrementalPipeline(itemId: string, spec: CopySpec, srcDs: string, snkD
           typeProperties: {
             scripts: [{
               type: 'Query',
-              text:
-                `SELECT ISNULL(last_value, '1900-01-01T00:00:00Z') AS last_value ` +
-                `FROM dbo.copy_watermark WHERE source = '${sourceName}' AND table_name = '${sourceTable}'`,
+              text: buildWatermarkLookupSql(sourceName, sourceTable, 'last_value'),
             }],
           },
         },
@@ -243,7 +252,7 @@ function incrementalPipeline(itemId: string, spec: CopySpec, srcDs: string, snkD
           type: 'Script',
           linkedServiceName: { referenceName: spec.source.linkedService, type: 'LinkedServiceReference' },
           typeProperties: {
-            scripts: [{ type: 'Query', text: `SELECT MAX(${wm}) AS new_value FROM ${sourceTable}` }],
+            scripts: [{ type: 'Query', text: buildMaxWatermarkSql(wm, sourceTable) }],
           },
         },
         {
@@ -304,7 +313,7 @@ function defaultCaptureInstance(sourceTable: string): string {
 function cdcPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: string): AdfPipeline {
   const sourceTable = spec.source.sourceTable!;
   const sourceName = spec.sourceName || sourceTable;
-  const captureInstance = spec.cdcCaptureInstance || defaultCaptureInstance(sourceTable);
+  const captureInstance = copyJobCaptureInstance(spec.cdcCaptureInstance || defaultCaptureInstance(sourceTable));
   const tx = translator(spec.mappings);
   // Old LSN: stored as a hex string ('0x....'); converted back to binary(10) for the function.
   const oldLsnHex = "@{activity('LookupOldLsn').output.resultSets[0].rows[0].last_lsn_hex}";
@@ -312,12 +321,7 @@ function cdcPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: strin
   // CDC net-changes read. The "from" LSN is the next LSN after the last processed
   // one (sys.fn_cdc_increment_lsn) so we never re-read the last batch; on the
   // first run the checkpoint is NULL → fall back to the table's min LSN.
-  const netChangesQuery =
-    `DECLARE @from_lsn binary(10) = CONVERT(binary(10), '${oldLsnHex}', 1); ` +
-    `DECLARE @to_lsn binary(10) = CONVERT(binary(10), '${maxLsnHex}', 1); ` +
-    `IF @from_lsn IS NULL SET @from_lsn = sys.fn_cdc_get_min_lsn('${captureInstance}'); ` +
-    `ELSE SET @from_lsn = sys.fn_cdc_increment_lsn(@from_lsn); ` +
-    `SELECT * FROM cdc.fn_cdc_get_net_changes_${captureInstance}(@from_lsn, @to_lsn, 'all');`;
+  const netChangesQuery = buildCdcNetChangesSql(captureInstance, oldLsnHex, maxLsnHex);
   return {
     name: `loom-copy-${itemId}`,
     properties: {
@@ -330,9 +334,7 @@ function cdcPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: strin
           typeProperties: {
             scripts: [{
               type: 'Query',
-              text:
-                `SELECT last_value AS last_lsn_hex ` +
-                `FROM dbo.copy_watermark WHERE source = '${sourceName}' AND table_name = '${sourceTable}'`,
+              text: buildWatermarkLookupSql(sourceName, sourceTable, 'last_lsn_hex'),
             }],
           },
         },
@@ -384,15 +386,21 @@ function cdcPipeline(itemId: string, spec: CopySpec, srcDs: string, snkDs: strin
   };
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  const { id } = await ctx.params;
-  const override = await req.json().catch(() => ({}));
+export const POST = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
-    const spec = { ...((item.state as any) as CopySpec), ...override } as CopySpec;
+    // The pipeline is built STRICTLY from the PERSISTED spec. The route used to
+    // spread the request body over `item.state`, which let any caller who owns a
+    // copy-job replace `sourceName` / `sourceTable` / `watermarkCol` /
+    // `cdcCaptureInstance` / `sink.table` per request — values that land inside
+    // SQL that ADF runs against the SHARED control DB and the linked sources.
+    // Rebuilding from the authorised record means the shipped statement cannot
+    // diverge from the saved configuration by construction. (The only production
+    // caller — copy-job-editor.tsx `run()` — already POSTs `{}`; it saves via
+    // `saveItem` first.)
+    const spec = { ...((item.state as any) as CopySpec) } as CopySpec;
 
     if (!spec?.source?.linkedService || !spec?.sink?.linkedService) {
       return jerr('source.linkedService and sink.linkedService are required — configure the copy job in the wizard first', 400);
@@ -475,6 +483,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const run = await runPipeline(pipelineName);
     return NextResponse.json({ ok: true, pipelineName, mode, ...run });
   } catch (e: any) {
+    // A rejected identifier / literal is a 400 the wizard can act on, not a 502.
+    if (e instanceof CopyJobSqlError) return jerr(e.message, 400);
     return jerr(e?.message || String(e), 502);
   }
-}
+});

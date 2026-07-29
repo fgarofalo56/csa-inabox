@@ -27,6 +27,20 @@
  *      (keep any surrounding `'…'` / `N'…'` wrap), or use quoteLiteral().
  *   B) `.replace(/]/g, ']]')`      — inline T-SQL bracket-identifier doubling.
  *      Fix: import { bracket } (or quoteIdent) from '@/lib/sql/quoting'.
+ *   C) SQL built with `${…}` and handed to a REMOTE executor via an ADF /
+ *      Synapse pipeline payload key (`preCopyScript`, `sqlReaderQuery`, or a
+ *      Script activity's `text`).
+ *      WHY: rules A and B only see inline copies of the escaping. They are
+ *      blind to a site with NO escaping at all — and CodeQL's js/sql-injection
+ *      is blind to these too, because the sink is a JSON body POSTed to ARM,
+ *      not a local `query()` call. That blind spot was real: until this rule
+ *      landed, `app/api/items/copy-job/[id]/run/route.ts` interpolated the
+ *      caller-supplied sourceName / sourceTable / watermark column straight
+ *      into T-SQL that ADF then ran against the SHARED `loom-control` watermark
+ *      database as the factory's managed identity.
+ *      Fix: build the statement in an audited module that validates identifiers
+ *      and escapes literals (see lib/azure/copy-job-sql.ts) and assign the
+ *      result, so no `${…}` appears at the payload key.
  *
  * HOW TO ADD AN ALLOWLIST ENTRY (ratchet):
  *   Only if a call site genuinely cannot delegate (e.g. a validating quoter
@@ -72,6 +86,26 @@ const ALLOWLIST_BRACKET = new Map([
   // not a full bracket() and cannot delegate 1:1.
   ['apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/clone/route.ts', 'bare "]"-doubler; caller adds the brackets'],
   ['apps/fiab-console/app/api/items/warehouse/[id]/query-acceleration/route.ts', 'bare "]"-doubler; caller adds the brackets'],
+]);
+
+// RULE C — SQL shipped to a REMOTE executor inside an ADF/Synapse pipeline
+// payload, built by template interpolation. Matches the three payload keys that
+// carry raw SQL to the service:
+//   preCopyScript: `…${x}…`      / props.preCopyScript = `…${x}…`
+//   sqlReaderQuery: `…${x}…`
+//   text: `…${x}…`               (only inside a Script activity's scripts[])
+// The `text:` form is narrowed by requiring a `type: 'Query'` marker somewhere
+// in the same file, so unrelated `text:` template props don't trip the rule.
+const REMOTE_SQL_RE =
+  /(?:^|[\s.{(])(preCopyScript|sqlReaderQuery|text)\s*[:=]\s*(?:`[^`]*\$\{|[^;\n]*?\+\s*`[^`]*\$\{)/gm;
+const SCRIPT_ACTIVITY_MARKER = /type:\s*'Query'/;
+const ALLOWLIST_REMOTE_SQL = new Map([
+  // Client-side pipeline TEMPLATE catalogs: these emit ADF *Expression* objects
+  // (`{ value: '@…', type: 'Expression' }`) for the designer to render — the
+  // interpolations are pipeline parameter names authored in-repo, never a
+  // request value, and nothing here reaches ARM without going through the
+  // designer's own validation.
+  ['apps/fiab-console/lib/components/pipeline/templates/catalog.ts', 'designer template catalog — ADF Expression objects, no request data'],
 ]);
 
 function walk(dir, out = []) {
@@ -129,10 +163,24 @@ function main() {
         violations.push({ file: r, line: lineOf(src, m.index), rule: "B: inline ']]' bracket-ident doubling", fix: "import { bracket } from '@/lib/sql/quoting'" });
       }
     }
+    if (!ALLOWLIST_REMOTE_SQL.has(r)) {
+      REMOTE_SQL_RE.lastIndex = 0;
+      let m;
+      while ((m = REMOTE_SQL_RE.exec(src)) !== null) {
+        // `text:` only counts inside a Script-activity payload.
+        if (m[1] === 'text' && !SCRIPT_ACTIVITY_MARKER.test(src)) continue;
+        violations.push({
+          file: r,
+          line: lineOf(src, m.index),
+          rule: `C: interpolated SQL at remote-executor key "${m[1]}"`,
+          fix: 'build it in an audited builder that validates identifiers + escapes literals (e.g. lib/azure/copy-job-sql.ts) and assign the result',
+        });
+      }
+    }
   }
 
   console.log(`[sql-quoting] scanned ${scanned} server .ts files under lib/ + app/api/`);
-  console.log(`[sql-quoting] allowlisted: literal=${ALLOWLIST_LITERAL.size}, bracket=${ALLOWLIST_BRACKET.size}`);
+  console.log(`[sql-quoting] allowlisted: literal=${ALLOWLIST_LITERAL.size}, bracket=${ALLOWLIST_BRACKET.size}, remote-sql=${ALLOWLIST_REMOTE_SQL.size}`);
   if (violations.length) {
     console.error('\n[sql-quoting] FAIL — inline SQL quoting found (centralise in lib/sql/quoting.ts):');
     for (const v of violations) console.error(`  - ${v.file}:${v.line}  [${v.rule}]  → ${v.fix}`);
