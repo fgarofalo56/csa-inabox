@@ -32,15 +32,20 @@
 //     literals — and `extraEnv` is the in-template path for the rest of a
 //     federation catalog, so adding a source no longer requires an out-of-band
 //     `az containerapp update --set-env-vars`.
-//   - NO AUTHENTICATION ON TRINO ITSELF. The engine has no
-//     `http-server.authentication.type`; the VNet + internal ingress ARE the
-//     perimeter, and the Console BFF is the only intended caller. Anything that
-//     can already reach the CAE's internal network (a sibling container, a
-//     peered host, an admin on the P2S VPN) can query it directly with an
-//     arbitrary X-Trino-User and bypass the BFF's session check and data-access
-//     audit row. This matches the existing loom-duckdb / iceberg-catalog
-//     posture, and it is stated here rather than implied away — engine-level
-//     authentication is tracked as a follow-up, not claimed as done.
+//   - ENGINE-LEVEL AUTHENTICATION IS ON BY DEFAULT, AND SEALED WHEN IT CANNOT
+//     BE PINNED (round-3 of PR #2641). Internal ingress only means "reachable
+//     by everything already on the VNet"; round 1 shipped the engine with NO
+//     `http-server.authentication.type`, so a sibling container, a peered host
+//     or an admin on the P2S VPN could POST /v1/statement with an arbitrary
+//     X-Trino-User and bypass both the BFF session check and the data-access
+//     audit row. `authMode` now defaults to 'entra': the entrypoint enables
+//     Trino's JWT authenticator against the ACTIVE cloud's Entra JWKS and pins
+//     the accepted audience. With no app registration to pin (a fresh deploy —
+//     ARM cannot create a Graph object) the audience is pinned to the sentinel
+//     `api://loom-trino-sealed.invalid`, which nothing can mint: the engine is
+//     UP, costs nothing at minReplicas 0, and serves NOBODY until an audience
+//     is pinned. Same shape as loom-unity in PR #2638. `authMode='disabled'`
+//     restores the old anonymous posture as an explicit, logged opt-out.
 //
 // AZURE-NATIVE / OSS ONLY. Trino is Apache-2.0 and self-hosted in the
 // deployment's own VNet; it reads the deployment's own ADLS Gen2 through the N1
@@ -118,6 +123,27 @@ param maxReplicas int = 2
 @description('Compliance/cost tags. The loom-next-level tag is unioned in.')
 param complianceTags object = {}
 
+// ── Engine authentication (round-3, PR #2641) ───────────────────────────────
+
+@description('Engine authorization posture. "entra" (DEFAULT) enables Trino\'s JWT authenticator against the ACTIVE cloud\'s Entra JWKS with the accepted audience PINNED — the Console BFF already mints a UAMI bearer for it, and every other in-VNet caller is rejected 401. With no pinnable audience the engine deploys SEALED (sentinel `api://loom-trino-sealed.invalid`): up, minReplicas 0 so it costs nothing, serving nobody. "disabled" is an explicit, audited opt-out that restores the anonymous VNet-only posture and logs a SECURITY WARNING on every boot.')
+@allowed([
+  'entra'
+  'disabled'
+])
+param authMode string = 'entra'
+
+@description('Entra application (client) id whose tokens this engine accepts — normally the Console\'s own app registration (LOOM_MSAL_CLIENT_ID / effectiveMsalClientId). EMPTY does NOT downgrade to anonymous: authMode=entra + no client id deploys SEALED. Accepted audiences are api://<clientId> and <clientId>, matching both the v1 and v2 token shapes Entra can issue.')
+param entraClientId string = ''
+
+@description('Entra tenant whose signing keys are trusted. Defaults to the deployment tenant.')
+param entraTenantId string = tenant().tenantId
+
+@description('Explicit JWKS URL override. Empty => derived per cloud from environment().authentication.loginEndpoint (login.microsoftonline.com in Commercial, login.microsoftonline.us in Azure Government) — never hard-coded on a code path.')
+param jwksUrl string = ''
+
+@description('Trino session user every authenticated principal is mapped onto. Trino\'s default system access control denies impersonation, so the session user must equal the mapped principal; the real Loom UPN is carried in X-Trino-Client-Info / client tags and is what the Cosmos _auditLog row records.')
+param sessionUser string = 'loom-console'
+
 // The lake READ grant is NOT created here. It lives in loom-trino-lake-rbac.bicep
 // and is deployed at the LAKE account's own resource-group scope — this module is
 // invoked in the ADMIN RG, where the lake account does not exist.
@@ -140,6 +166,24 @@ var trinoExtraEnv = [for e in items(extraEnv): {
   name: e.key
   value: string(e.value)
 }]
+
+// ── Auth derivation ─────────────────────────────────────────────────────────
+// Sovereign-safe: the JWKS host comes from the ACTIVE cloud's login endpoint,
+// so a Gov deployment never trusts a Commercial issuer's keys.
+var derivedAuthorityHost = replace(replace(environment().authentication.loginEndpoint, 'https://', ''), '/', '')
+var derivedJwksUrl = 'https://${derivedAuthorityHost}/${entraTenantId}/discovery/v2.0/keys'
+var effectiveJwksUrl = empty(jwksUrl) ? derivedJwksUrl : jwksUrl
+var authEnabled = authMode == 'entra'
+var audiencePinned = authEnabled && !empty(entraClientId)
+// api://<clientId> is what Entra stamps on a v1 access token for an app with an
+// Application ID URI; the bare client id is the v2 form. Trino's
+// required-audience takes ONE value, so the module pins the api:// form and the
+// Console asks for exactly that resource (api://<clientId>/.default).
+var requiredAudience = audiencePinned ? 'api://${entraClientId}' : ''
+// 'entra' = enforced + pinned, 'sealed' = enforced + nothing can mint a token,
+// 'disabled' = the explicit anonymous opt-out. Surfaced as an output AND on the
+// Console (LOOM_TRINO_AUTH_MODE) so the honest gate does not have to guess.
+var authPostureValue = !authEnabled ? 'disabled' : (audiencePinned ? 'entra' : 'sealed')
 
 resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
   name: name
@@ -190,6 +234,13 @@ resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
               { name: 'LOOM_ICEBERG_CATALOG_WAREHOUSE', value: icebergCatalogWarehouse }
               { name: 'LOOM_LAKE_ACCOUNT', value: lakeStorageAccountName }
               { name: 'OTEL_RESOURCE_ATTRIBUTES', value: 'service.name=loom-trino,csa-loom.app=trino' }
+              // Consumed by docker-entrypoint.sh to render the JWT
+              // authenticator. An empty REQUIRED_AUDIENCE is NOT "off": the
+              // entrypoint pins the sentinel audience and the engine seals.
+              { name: 'LOOM_TRINO_AUTH_MODE', value: authMode }
+              { name: 'LOOM_TRINO_REQUIRED_AUDIENCE', value: requiredAudience }
+              { name: 'LOOM_TRINO_JWKS_URL', value: authEnabled ? effectiveJwksUrl : '' }
+              { name: 'LOOM_TRINO_SESSION_USER', value: sessionUser }
             ],
             empty(appInsightsConnectionString) ? [] : [
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
@@ -255,3 +306,12 @@ output trinoAppName string = trino.name
 
 @description('Internal coordinator endpoint the Console reads as LOOM_TRINO_URL.')
 output trinoInternalEndpoint string = 'https://${trino.properties.configuration.ingress.fqdn}'
+
+@description('Authorization posture as DEPLOYED: "entra" (enforced + audience pinned), "sealed" (enforced, sentinel audience — up and serving nobody), or "disabled" (explicit anonymous opt-out). Shows in the deployment receipt without reading container logs.')
+output authPosture string = authPostureValue
+
+@description('The audience the engine accepts — empty while SEALED. The Console requests `<audience>/.default`.')
+output acceptedAudience string = requiredAudience
+
+@description('Trino session user authenticated principals are mapped to (empty when authorization is disabled).')
+output mappedSessionUser string = authEnabled ? sessionUser : ''

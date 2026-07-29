@@ -115,12 +115,61 @@ here rather than left implied by "internal ingress".
 |---|---|
 | Engine option visibility | The `n7e-trino-federation` runtime flag (default ON) |
 | Query execution | `POST /api/sql/trino` -> the in-VNet Trino Container App (scale-to-zero) |
-| Caller identity | The session principal is forwarded as the Trino user, so the cluster's access control and query log attribute every statement |
-| Upstream auth | `LOOM_TRINO_TOKEN` (Key Vault secret reference) when the cluster uses token auth; otherwise the in-VNet perimeter is the trust boundary — the same posture as the sibling internal services |
+| Caller identity | With authorization enforced the JWT principal maps to one Trino session user (`LOOM_TRINO_SESSION_USER`, default `loom-console`); the signed-in Loom principal rides `X-Trino-Client-Info` / client tags and is what the `_auditLog` row records |
+| Upstream auth | Entra bearer for `LOOM_TRINO_AUDIENCE`, minted by the Console UAMI. `LOOM_TRINO_TOKEN` (Key Vault secret reference) still wins for a BYO cluster with its own token auth |
 | Loom lake access | The N1 Iceberg REST Catalog (`LOOM_ICEBERG_CATALOG_URL`) |
 | Audit | `_auditLog` plus SIEM fan-out per statement |
 
-The coordinator has **internal ingress only**. The Console BFF is the only door.
+The coordinator has **internal ingress only** — and internal ingress is a network
+control, not an authorization one.
+
+## Authorization: on by default, sealed when it cannot be pinned
+
+Round 1 of this work shipped the engine with **no**
+`http-server.authentication.type`, so anything already on the VNet (a sibling
+container, a peered host, an admin on the P2S VPN) could `POST /v1/statement`
+with an arbitrary `X-Trino-User` and bypass both the BFF session check and the
+audit row. That is fixed.
+
+`apps/loom-trino/docker-entrypoint.sh` renders Trino's **JWT authenticator**
+against the active cloud's Entra JWKS (`login.microsoftonline.us` in Gov —
+derived, never hard-coded) and pins the accepted audience.
+`LOOM_TRINO_AUTH_MODE` reports the deployed posture:
+
+| Posture | What it means | What SQL Lab shows |
+|---|---|---|
+| `entra` | Audience pinned to the Console's app registration. The BFF's UAMI bearer is admitted; everything else gets 401 | Federated SQL runs |
+| `sealed` | Enforced against the sentinel audience `api://loom-trino-sealed.invalid`, which no tenant can mint. The engine is up, `minReplicas: 0` so it bills nothing, and serves **nobody** | The honest gate, with the un-seal steps |
+| `disabled` | Explicit opt-out (`loomBackends.trinoAuthMode='disabled'`) — the old anonymous posture. Logs a SECURITY WARNING every boot; the env-check reports it | Federated SQL runs, unauthenticated engine |
+
+A from-scratch install lands on **`sealed`**: ARM cannot create an Entra app
+registration (it is a Microsoft Graph object), so there is nothing to pin at
+template time. Run `.github/workflows/csa-loom-post-deploy-bootstrap.yml` — the
+sign-in bootstrap every estate needs anyway — and redeploy with
+`LOOM_MSAL_CLIENT_ID` set, or pin a dedicated app with
+`loomBackends.trinoAudienceClientId`.
+
+Known limitation, stated rather than implied away: `required-issuer` is **not**
+pinned by default. Entra issues v1 (`sts.windows.net/<tid>/`) or v2
+(`login.microsoftonline.us/<tid>/v2.0`) issuers depending on the app
+registration, and Trino's `required-issuer` takes a single value — pinning the
+wrong form would seal the engine permanently. Set
+`LOOM_TRINO_REQUIRED_ISSUER` once you know which form your tenant issues.
+
+## Idle cost — the real number
+
+`minReplicas: 0` with no workload profile pinned, so the app lands on the CAE's
+Consumption profile: **no replica exists until a query arrives, and a
+scaled-to-zero Consumption app bills nothing.** Nothing polls the engine —
+`/v1/info` probes only run against a live replica. So the Trino tier is **$0/mo
+per cloud at idle**, and while it is `sealed` no replica is ever activated at
+all. Under load it is 2 vCPU / 4 GiB for the duration of the query (max 2
+replicas), and the first query after idle pays a ~20-40s JVM cold start, which
+`TRINO_FETCH_TIMEOUT_MS` (120s) budgets for.
+
+That is the Trino tier only. The synthetic-monitor results store this PR also
+adds is **not** free: its blob **private endpoint** bills roughly $7-8/month per
+cloud whether or not anything writes to it (the storage itself is cents).
 
 ## Honest gates
 

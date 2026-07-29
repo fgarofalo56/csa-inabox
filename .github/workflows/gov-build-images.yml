@@ -2,6 +2,35 @@ name: gov-build-images
 
 # CSA Loom — the Azure Government IMAGE PRODUCER.
 #
+# ⚠️ THIS WORKFLOW HAS NEVER BEEN EXECUTED. It is new in PR #2641 and, as of
+# this commit, `gh run list --workflow gov-build-images.yml` returns NOTHING.
+# A green CI run on this PR proves the YAML parses and the repo lints — it does
+# NOT prove this lane builds anything. Treat the first dispatch as the test.
+# Everything downstream of it is written to fail LOUDLY rather than assume it
+# worked: see the "Verify the pulled tag exists" step below, and the image
+# preflight in gov-provision-trino.yml that refuses to touch a LIVE Gov app
+# unless the tag its template pulls is really in the registry.
+#
+# TAGS — THE THING THAT MUST MATCH
+#   Every Gov .bicepparam resolves image tags with
+#   `readEnvironmentVariable('LOOM_<X>_TAG', 'v0.1')`, and admin-plane/main.bicep
+#   falls back to `appImageTags.?<app> ?? 'v0.1'`. So the template pulls
+#   `<acr>.azurecr.us/<app>:v0.1` unless the deployer exports an override. A
+#   build lane that pushed only `:<sha>` / `:latest` would leave ARM pointing at
+#   a tag that does not exist — the app cannot pull and, on an app that is
+#   already LIVE, the new revision fails while the old one is superseded. This
+#   lane therefore pushes `:v0.1` (default, overridable) AND `:<short-sha>` AND
+#   `:latest`, and asserts every one of them resolved before it exits.
+#
+#   The per-app matrix it is matching (verified against the param files):
+#     loom-trino    neither Gov param declares a `trino` entry, so
+#                   admin-plane/main.bicep falls back to 'v0.1'  -> :v0.1
+#     loom-uat      not in appImageTags at all; synthetic-monitor-job.bicep
+#                   defaults to `${acrLoginServer}/loom-uat:latest` -> :latest
+#     loom-console  gcc-high.bicepparam -> 'v0.1'; il5.bicepparam -> 'v3.0'
+#                   (LOOM_CONSOLE_TAG). The IL5 build therefore ALSO pushes
+#                   :v3.0, or an IL5 deploy would reference a missing image.
+#
 # WHY THIS EXISTS (round-2 fix, PR #2641)
 # ---------------------------------------
 # Commercial has a real from-scratch app phase: full-app-deploy-commercial.yml
@@ -59,9 +88,9 @@ on:
         type: string
         default: 'loom-console,loom-trino,loom-uat'
       tag:
-        description: 'Image tag to push alongside :latest. Empty = the short commit SHA.'
+        description: 'The DEPLOY-REFERENCED tag. Must match what the Gov .bicepparam pulls — v0.1 unless you export LOOM_<X>_TAG for the deployment too. Pushed alongside :<short-sha> and :latest.'
         type: string
-        default: ''
+        default: 'v0.1'
       location:
         description: 'Override the region (default usgovvirginia — what both Gov param files pin).'
         type: string
@@ -89,7 +118,7 @@ on:
         default: 'loom-console,loom-trino,loom-uat'
       tag:
         type: string
-        default: ''
+        default: 'v0.1'
       location:
         type: string
         default: ''
@@ -124,6 +153,7 @@ jobs:
       acr: ${{ steps.r.outputs.acr }}
       acr_login: ${{ steps.r.outputs.acr_login }}
       tag: ${{ steps.r.outputs.tag }}
+      sha_tag: ${{ steps.r.outputs.sha_tag }}
       matrix: ${{ steps.r.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -170,8 +200,15 @@ jobs:
           fi
           ACR_LOGIN=$(az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv | tr -d '\r')
           [ -n "$ACR_LOGIN" ] || { echo "::error::could not resolve the login server for $ACR"; exit 1; }
+          # The DEPLOY-REFERENCED tag. Defaults to v0.1 because that is what
+          # every Gov .bicepparam resolves to (readEnvironmentVariable(
+          # 'LOOM_<X>_TAG','v0.1')) and what admin-plane/main.bicep falls back to
+          # (appImageTags.?<app> ?? 'v0.1'). If this and the template disagree,
+          # ARM points at an image that does not exist.
           TAG="${{ inputs.tag }}"
-          [ -n "$TAG" ] || TAG=$(git rev-parse --short=8 HEAD)
+          [ -n "$TAG" ] || TAG=v0.1
+          SHA_TAG=$(git rev-parse --short=8 HEAD)
+          echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
           # Comma list -> JSON array for the build matrix.
           MATRIX=$(printf '%s' "${{ inputs.apps }}" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | \
             python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
@@ -205,6 +242,7 @@ jobs:
       ACR: ${{ needs.resolve.outputs.acr }}
       ACR_LOGIN: ${{ needs.resolve.outputs.acr_login }}
       TAG: ${{ needs.resolve.outputs.tag }}
+      SHA_TAG: ${{ needs.resolve.outputs.sha_tag }}
     steps:
       - uses: actions/checkout@v4
       - name: Azure login (Gov sub) — deploy SP
@@ -248,13 +286,28 @@ jobs:
             POOL_ARGS="--agent-pool loombuild"
           fi
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # ── Tag set: EVERY tag a Gov template could pull for this app ───────
+          # gcc-high.bicepparam pins LOOM_CONSOLE_TAG default 'v0.1'; IL5 pins
+          # 'v3.0'. Neither declares a `trino` entry, so loom-trino falls back to
+          # appImageTags.?trino ?? 'v0.1' in admin-plane/main.bicep, and the
+          # synthetic-monitor job's module default is `loom-uat:latest`. Pushing
+          # only one of those would leave one boundary's template pointing at a
+          # tag nobody built — the exact failure this lane exists to prevent.
+          TAG_LIST="$TAG $SHA_TAG latest"
+          if [ "$APP" = "loom-console" ] && [ "${{ inputs.boundary }}" = "il5" ]; then
+            TAG_LIST="$TAG_LIST v3.0"
+          fi
+          TAG_LIST=$(printf '%s\n' $TAG_LIST | awk 'NF && !seen[$0]++' | tr '\n' ' ')
+          IMG_ARGS=""
+          for t in $TAG_LIST; do IMG_ARGS="$IMG_ARGS --image $APP:$t"; done
+          echo "TAG_LIST=$TAG_LIST" >> "$GITHUB_ENV"
+          echo "::notice::$APP will be pushed as: $TAG_LIST"
           case "$APP" in
             loom-console)
               # shellcheck disable=SC2086
-              az acr build --registry "$ACR" --no-logs $POOL_ARGS \
-                --image "loom-console:$TAG" --image "loom-console:latest" \
+              az acr build --registry "$ACR" --no-logs $POOL_ARGS $IMG_ARGS \
                 --file apps/fiab-console/Dockerfile \
-                --build-arg "LOOM_BUILD_SHA=$TAG" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+                --build-arg "LOOM_BUILD_SHA=$SHA_TAG" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
                 apps/fiab-console
               ;;
             loom-uat)
@@ -265,15 +318,14 @@ jobs:
               # supposed to run.
               cp apps/fiab-console/.dockerignore /tmp/di.bak
               grep -vxE 'e2e|tests' /tmp/di.bak > apps/fiab-console/.dockerignore
-              az acr build --registry "$ACR" --no-logs \
-                --image "loom-uat:$TAG" --image "loom-uat:latest" \
+              # shellcheck disable=SC2086
+              az acr build --registry "$ACR" --no-logs $IMG_ARGS \
                 --file apps/fiab-console/Dockerfile.uat apps/fiab-console
               cp /tmp/di.bak apps/fiab-console/.dockerignore
               ;;
             *)
-              az acr build --registry "$ACR" --no-logs \
-                --image "$APP:$TAG" --image "$APP:latest" \
-                "apps/$APP"
+              # shellcheck disable=SC2086
+              az acr build --registry "$ACR" --no-logs $IMG_ARGS "apps/$APP"
               ;;
           esac
           if [ "$APP" = "loom-console" ]; then
@@ -282,6 +334,23 @@ jobs:
           fi
           # The lease is released by the dedicated always() step below, AFTER
           # the supply-chain steps have pulled the image + pushed the signature.
+
+      # The whole point of this lane. `az acr build` exiting 0 is not proof the
+      # tag ARM will pull actually resolves (a tag typo, an --image flag that
+      # never ran, a task that pushed to a different repository). Assert it, and
+      # fail LOUDLY here rather than at `az deployment` time on a live estate.
+      - name: Verify the DEPLOY-REFERENCED tag exists in the Gov ACR
+        run: |
+          set -euo pipefail
+          az acr login -n "$ACR" >/dev/null
+          for T in ${TAG_LIST:-$TAG $SHA_TAG latest}; do
+            D=$(az acr repository show --name "$ACR" --image "${{ matrix.app }}:$T" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [ -z "$D" ]; then
+              echo "::error::${{ matrix.app }}:$T is NOT in $ACR after the build. Gov templates pull :$TAG (readEnvironmentVariable('LOOM_<X>_TAG','v0.1') / appImageTags.?<app> ?? 'v0.1'; IL5 pins the console at v3.0; the synthetic-monitor job pulls loom-uat:latest), so a deploy would reference an image that does not exist and the Container App could not pull it."
+              exit 1
+            fi
+            echo "::notice::${{ matrix.app }}:$T -> $D"
+          done
 
       - name: Supply-chain — resolve pushed digest
         id: sc

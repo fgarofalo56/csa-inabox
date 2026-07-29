@@ -20,6 +20,28 @@ name: gov-provision-trino
 # deploys the Trino app plus its correctly-scoped lake grant, and wires
 # LOOM_TRINO_URL.
 #
+# ⚠️ NEITHER THIS WORKFLOW NOR gov-build-images.yml HAS EVER BEEN EXECUTED.
+# Both are new in PR #2641. CI green on the PR proves the YAML parses, nothing
+# more. Because this one TOUCHES A LIVE GOV ESTATE (it creates a new revision of
+# the running loom-console when it wires LOOM_TRINO_URL), round 3 adds a hard
+# IMAGE PREFLIGHT: before any deployment or `containerapp update` it asserts
+#   (a) loom-trino:<deploy tag> really exists in the Gov ACR, and
+#   (b) the image the LIVE console is currently running still resolves,
+# and refuses to continue otherwise. Creating a console revision that points at
+# a tag nobody built is how you take a live Gov catalog down.
+#
+# Round-3 additions:
+#   * IMAGE PREFLIGHT (above) before the deploy and before the live-app update.
+#   * TAG MATCH. The build now pushes `:v0.1` — the tag every Gov .bicepparam
+#     resolves to (readEnvironmentVariable('LOOM_<X>_TAG','v0.1')) and the tag
+#     admin-plane/main.bicep falls back to — alongside `:<short-sha>` and
+#     `:latest`. Pushing only a SHA tag would leave the next orchestrator deploy
+#     pointing at an image that does not exist.
+#   * SEALED-BY-DEFAULT ENGINE. loom-trino now enforces Entra bearer
+#     authorization. The workflow reads LOOM_MSAL_CLIENT_ID off the live console
+#     and pins it as the accepted audience; with no client id the engine
+#     deploys SEALED (up, minReplicas 0, serving nobody) rather than anonymous.
+#
 # Round-2 fixes applied here:
 #   * BOUNDARY-PARAMETERIZED. The RG and ACR are no longer hardcoded to the
 #     GCC-High estate; they resolve from boundary/location by convention with
@@ -70,6 +92,10 @@ on:
         description: 'Override the ACR name (default: the single registry in the admin RG).'
         required: false
         default: ''
+      tag:
+        description: 'DEPLOY-REFERENCED image tag. Must match what the Gov .bicepparam pulls (v0.1 by default); pushed alongside :<short-sha> and :latest.'
+        required: false
+        default: 'v0.1'
       skip_supply_chain:
         description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign sign/verify.'
         type: boolean
@@ -139,6 +165,20 @@ jobs:
           # OWN env so this never invents a name that does not exist.
           LAKE=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv | tr -d '\r')
+          # ROUND-3: the audience the engine will accept. Read off the LIVE
+          # console so we pin the app registration this estate actually signs in
+          # with. Empty is NOT an error — loom-trino-aca.bicep then deploys the
+          # engine SEALED (enforced, sentinel audience, minReplicas 0) instead of
+          # anonymous, and the Console renders the honest gate.
+          MSAL_CLIENT_ID=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv | tr -d '\r' || echo "")
+          # The image the LIVE console is running RIGHT NOW. Wiring
+          # LOOM_TRINO_URL creates a NEW REVISION of this app, which re-pulls
+          # this exact reference — if it no longer resolves, the new revision
+          # cannot start and we would have taken the Gov console down to add an
+          # env var. Preflighted below before anything is written.
+          CONSOLE_IMAGE=$(az containerapp show -n "$APP" -g "$RG" \
+            --query 'properties.template.containers[0].image' -o tsv | tr -d '\r')
           # ...and resolve WHICH RESOURCE GROUP that account lives in. The read
           # grant has to be deployed at the lake's own scope; assuming the admin
           # RG is precisely the round-1 defect this workflow would have tripped.
@@ -149,8 +189,9 @@ jobs:
           fi
           { echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT=$UAMI_CLIENT";
             echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE";
-            echo "LAKE_RG=$LAKE_RG"; } >> "$GITHUB_ENV"
-          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION lake=${LAKE:-<unset>} lakeRg=${LAKE_RG:-<none>}"
+            echo "LAKE_RG=$LAKE_RG"; echo "MSAL_CLIENT_ID=${MSAL_CLIENT_ID:-}";
+            echo "CONSOLE_IMAGE=$CONSOLE_IMAGE"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION lake=${LAKE:-<unset>} lakeRg=${LAKE_RG:-<none>} consoleImage=$CONSOLE_IMAGE audience=${MSAL_CLIENT_ID:-<none — engine will deploy SEALED>}"
           [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI"; exit 1; }
 
       - name: Build loom-trino (+ loom-uat) images on the Gov ACR
@@ -158,13 +199,20 @@ jobs:
         run: |
           set -euo pipefail
           SHA=$(git rev-parse --short=8 HEAD)
-          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          # The tag the TEMPLATE pulls. Gov .bicepparam files resolve image tags
+          # with readEnvironmentVariable('LOOM_<X>_TAG','v0.1') and
+          # admin-plane/main.bicep falls back to appImageTags.?trino ?? 'v0.1',
+          # so pushing only :$SHA would leave the next orchestrator deploy
+          # pointing at a tag that does not exist. Push BOTH (+ :latest).
+          DEPLOY_TAG="${{ inputs.tag }}"
+          [ -n "$DEPLOY_TAG" ] || DEPLOY_TAG=v0.1
+          { echo "SHA=$SHA"; echo "DEPLOY_TAG=$DEPLOY_TAG"; } >> "$GITHUB_ENV"
           # #2603: lease the ACR firewall instead of a bare toggle, so this
           # step's re-lock cannot deny another run's in-flight push.
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           az acr build --registry "$ACR" --no-logs \
-            --image "loom-trino:$SHA" --image "loom-trino:latest" \
+            --image "loom-trino:$DEPLOY_TAG" --image "loom-trino:$SHA" --image "loom-trino:latest" \
             apps/loom-trino
           if [ "${{ inputs.build_uat }}" = "true" ]; then
             # The console .dockerignore excludes e2e/ + tests/ to keep the CONSOLE
@@ -174,7 +222,7 @@ jobs:
             cp apps/fiab-console/.dockerignore /tmp/di.bak
             grep -vxE 'e2e|tests' /tmp/di.bak > apps/fiab-console/.dockerignore
             az acr build --registry "$ACR" --no-logs \
-              --image "loom-uat:$SHA" --image "loom-uat:latest" \
+              --image "loom-uat:$DEPLOY_TAG" --image "loom-uat:$SHA" --image "loom-uat:latest" \
               --file apps/fiab-console/Dockerfile.uat apps/fiab-console
             cp /tmp/di.bak apps/fiab-console/.dockerignore
           fi
@@ -235,15 +283,58 @@ jobs:
         if: always()
         run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
 
+      # ── LIVE-ESTATE IMAGE PREFLIGHT (round-3, BLOCKING) ────────────────────
+      # This workflow ADOPTS a live Gov estate: wiring LOOM_TRINO_URL creates a
+      # NEW REVISION of the RUNNING loom-console. Two ways that goes wrong, both
+      # checked here, both fatal, neither silent:
+      #   1. loom-trino:<deploy tag> is not in the registry — ARM would create a
+      #      Container App that can never pull. (gov-build-images.yml has never
+      #      been run anywhere, so "the lane exists" is not evidence it does.)
+      #   2. The image the LIVE console is running no longer resolves — the new
+      #      revision could not start and the Gov console would go down over an
+      #      env-var change.
+      # Read-only: `az acr repository show` + `az containerapp show`.
+      - name: PREFLIGHT — every referenced image tag must exist in the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az acr login -n "$ACR" >/dev/null
+          fail=0
+          need_tag() {
+            local repo="$1" tag="$2" d
+            d=$(az acr repository show --name "$ACR" --image "${repo}:${tag}" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [ -z "$d" ]; then
+              echo "::error::${repo}:${tag} is NOT present in $ACR. Refusing to deploy/adopt — this would point a Container App at an image that does not exist. Build it first (this workflow with apply=true, or gov-build-images.yml)."
+              fail=1
+            else
+              echo "::notice::${repo}:${tag} -> $d"
+            fi
+          }
+          need_tag loom-trino "$DEPLOY_TAG"
+          if [ "${{ inputs.build_uat }}" = "true" ]; then need_tag loom-uat "$DEPLOY_TAG"; fi
+          # The live console's CURRENT image, exactly as ARM will re-pull it.
+          CONSOLE_REPO=$(printf '%s' "$CONSOLE_IMAGE" | sed 's|^[^/]*/||' | cut -d: -f1)
+          CONSOLE_TAG=$(printf '%s' "$CONSOLE_IMAGE" | awk -F: '{print $NF}')
+          if [ -n "$CONSOLE_REPO" ] && [ -n "$CONSOLE_TAG" ] && [ "$CONSOLE_REPO" != "$CONSOLE_TAG" ]; then
+            need_tag "$CONSOLE_REPO" "$CONSOLE_TAG"
+          else
+            echo "::warning::could not parse the live console image reference ('$CONSOLE_IMAGE') — cannot preflight the revision it will re-pull."
+          fi
+          [ "$fail" = "0" ] || { echo "::error::IMAGE PREFLIGHT FAILED — nothing was deployed and the live console was NOT touched."; exit 1; }
+
       - name: What-if loom-trino deployment
         run: |
           set -euo pipefail
-          TAG="${SHA:-latest}"
+          # what-if runs even when apply=false, where no build has happened; use
+          # the deploy-referenced tag so the plan matches what apply would do.
+          TAG="${DEPLOY_TAG:-${{ inputs.tag }}}"
+          [ -n "$TAG" ] || TAG=v0.1
           az deployment group what-if -g "$RG" \
             -f platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep \
             -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$TAG" \
                uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" \
                lakeStorageAccountName="$LAKE" \
+               authMode=entra entraClientId="${MSAL_CLIENT_ID:-}" \
                complianceTags='{"env":"gov","boundary":"${{ inputs.boundary }}","app":"trino"}' \
             --mode Incremental 2>&1 | tail -30 || true
 
@@ -251,11 +342,17 @@ jobs:
         if: ${{ inputs.apply == 'true' }}
         run: |
           set -euo pipefail
+          # imageTag = the DEPLOY-REFERENCED tag (v0.1 by default), not the SHA:
+          # the next orchestrator deploy of admin-plane/main.bicep will pull
+          # `appImageTags.?trino ?? 'v0.1'`, and pinning the SHA here would make
+          # that deploy silently re-point the app at a tag this lane never
+          # pushed. Both tags exist (same digest) — the SHA is the audit trail.
           az deployment group create -g "$RG" -n "loom-trino-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep \
-            -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$SHA" \
+            -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$DEPLOY_TAG" \
                uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" \
                lakeStorageAccountName="$LAKE" \
+               authMode=entra entraClientId="${MSAL_CLIENT_ID:-}" \
                complianceTags='{"env":"gov","boundary":"${{ inputs.boundary }}","app":"trino"}' \
             --mode Incremental -o none
           # The lake READ grant is a SEPARATE deployment into the LAKE's OWN RG.
@@ -276,5 +373,23 @@ jobs:
           # minReplicas is 0, so there is intentionally NO replica to health-check
           # here — Container Apps activates one on the first BFF request. The
           # wiring is verified by the SQL Lab engine picker / gov-selfaudit.
-          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_TRINO_URL=https://$FQDN" -o none
-          echo "::notice::wired LOOM_TRINO_URL=https://$FQDN — re-run gov-selfaudit to confirm svc-loom-trino."
+          #
+          # This is the ADOPTION PUT: it creates a NEW REVISION of the LIVE
+          # console. The image preflight above already asserted the revision's
+          # image ref still resolves, so this cannot roll the console onto a
+          # missing image. Only env vars change; the image reference is untouched.
+          #
+          # Posture the console is told: `entra` (enforced + reachable) when an
+          # audience was pinned, `sealed` when none was — so SQL Lab renders the
+          # honest gate rather than firing a query that would 401.
+          if [ -n "${MSAL_CLIENT_ID:-}" ]; then
+            TRINO_MODE=entra
+            TRINO_AUD="api://${MSAL_CLIENT_ID}/.default"
+          else
+            TRINO_MODE=sealed
+            TRINO_AUD=""
+            echo "::warning::the live console has no LOOM_MSAL_CLIENT_ID, so loom-trino was deployed SEALED — authorization ENFORCED against a sentinel audience nothing can mint. The engine is up and costs nothing at minReplicas 0; it accepts no caller until an app registration is pinned."
+          fi
+          az containerapp update -n "$APP" -g "$RG" \
+            --set-env-vars "LOOM_TRINO_URL=https://$FQDN" "LOOM_TRINO_AUTH_MODE=$TRINO_MODE" "LOOM_TRINO_AUDIENCE=$TRINO_AUD" -o none
+          echo "::notice::wired LOOM_TRINO_URL=https://$FQDN (auth posture: $TRINO_MODE) — re-run gov-selfaudit to confirm svc-loom-trino."

@@ -165,6 +165,127 @@ describe('both clouds — every referenced image has a Gov producer', () => {
   });
 });
 
+describe('round-3 — the Gov image lane pushes the tag the templates PULL', () => {
+  it('gov-build-images defaults to v0.1, the tag every Gov bicepparam resolves', () => {
+    const wf = read('.github/workflows/gov-build-images.yml');
+    // Gov params: readEnvironmentVariable('LOOM_<X>_TAG','v0.1'); admin-plane:
+    // appImageTags.?trino ?? 'v0.1'. A lane that pushed only :<sha>/:latest
+    // would leave ARM pointing at a tag that does not exist.
+    expect(wf).toMatch(/\[ -n "\$TAG" \] \|\| TAG=v0\.1/);
+    // Every app is pushed under the full tag set, built once and reused for
+    // each `az acr build` branch (console / uat / generic).
+    expect(wf).toMatch(/TAG_LIST="\$TAG \$SHA_TAG latest"/);
+    expect(wf).toMatch(/IMG_ARGS="\$IMG_ARGS --image \$APP:\$t"/);
+    expect((wf.match(/\$IMG_ARGS/g) || []).length).toBeGreaterThanOrEqual(4);
+    // ...and it must PROVE the tag landed rather than trust `az acr build` rc=0.
+    expect(wf).toMatch(/Verify the DEPLOY-REFERENCED tag exists in the Gov ACR/);
+  });
+
+  it('matches the ACTUAL per-app tag matrix, including IL5 pinning the console at v3.0', () => {
+    // Neither Gov param declares a `trino` entry, so the engine takes the
+    // orchestrator fallback...
+    expect(read(ADMIN_PLANE)).toMatch(/imageTag:\s*appImageTags\.\?trino \?\? 'v0\.1'/);
+    expect(read('platform/fiab/bicep/params/gcc-high.bicepparam')).not.toMatch(/^\s*trino:/m);
+    expect(read('platform/fiab/bicep/params/il5.bicepparam')).not.toMatch(/^\s*trino:/m);
+    // ...loom-uat rides the job module's default, which is :latest...
+    expect(read('platform/fiab/bicep/modules/admin-plane/synthetic-monitor-job.bicep'))
+      .toMatch(/param image string = '\$\{acrLoginServer\}\/loom-uat:latest'/);
+    // ...and the two boundaries DISAGREE on the console tag, which is exactly
+    // the kind of mismatch a single-tag build lane would ship broken.
+    expect(read('platform/fiab/bicep/params/gcc-high.bicepparam'))
+      .toMatch(/readEnvironmentVariable\('LOOM_CONSOLE_TAG', 'v0\.1'\)/);
+    expect(read('platform/fiab/bicep/params/il5.bicepparam'))
+      .toMatch(/readEnvironmentVariable\('LOOM_CONSOLE_TAG', 'v3\.0'\)/);
+    const wf = read('.github/workflows/gov-build-images.yml');
+    expect(wf).toMatch(/if \[ "\$APP" = "loom-console" \] && \[ "\$\{\{ inputs\.boundary \}\}" = "il5" \]; then\s*\n\s*TAG_LIST="\$TAG_LIST v3\.0"/);
+  });
+
+  it('says plainly that the lane has never been executed', () => {
+    // A build lane nobody has run is not evidence of anything, and a green CI
+    // on this PR must not be read as proof that it works.
+    expect(read('.github/workflows/gov-build-images.yml')).toMatch(/HAS NEVER BEEN EXECUTED/);
+    expect(read('.github/workflows/gov-provision-trino.yml')).toMatch(/HAS EVER BEEN EXECUTED/);
+  });
+});
+
+describe('round-3 — no adoption PUT on a live Gov app without an image preflight', () => {
+  it('asserts every referenced tag exists BEFORE deploying or updating the live console', () => {
+    const wf = read('.github/workflows/gov-provision-trino.yml');
+    expect(wf).toMatch(/PREFLIGHT — every referenced image tag must exist in the Gov ACR/);
+    // It checks the tag the new app will pull...
+    expect(wf).toMatch(/need_tag loom-trino "\$DEPLOY_TAG"/);
+    // ...AND the image the LIVE console will re-pull when it gets a new revision.
+    expect(wf).toMatch(/CONSOLE_IMAGE=\$\(az containerapp show/);
+    expect(wf).toMatch(/need_tag "\$CONSOLE_REPO" "\$CONSOLE_TAG"/);
+    expect(wf).toMatch(/IMAGE PREFLIGHT FAILED — nothing was deployed and the live console was NOT touched/);
+    // The preflight step must appear BEFORE the deploy step in the file.
+    expect(wf.indexOf('PREFLIGHT — every referenced image tag'))
+      .toBeLessThan(wf.indexOf('Deploy loom-trino + the lake grant'));
+  });
+
+  it('deploys the module with the deploy-referenced tag, not a SHA the orchestrator will not use', () => {
+    const wf = read('.github/workflows/gov-provision-trino.yml');
+    expect(wf).toMatch(/imageTag="\$DEPLOY_TAG"/);
+    expect(wf).not.toMatch(/imageTag="\$SHA"/);
+  });
+});
+
+describe('round-3 — default-ON means default-SAFE, not merely running', () => {
+  it('the engine module enforces authorization by default and seals when unpinnable', () => {
+    const src = read(TRINO_APP);
+    expect(src).toMatch(/param authMode string = 'entra'/);
+    expect(src).toMatch(/param entraClientId string = ''/);
+    // Empty client id must NOT mean "off".
+    expect(src).toMatch(/var authPostureValue = !authEnabled \? 'disabled' : \(audiencePinned \? 'entra' : 'sealed'\)/);
+    // Sovereign-safe key source: derived from the ACTIVE cloud. A Commercial
+    // host may appear in a doc-comment, never in an expression.
+    expect(src).toMatch(/environment\(\)\.authentication\.loginEndpoint/);
+    expect(src).not.toMatch(/'https:\/\/login\.microsoftonline\.com/);
+    // The engine is told the posture; the entrypoint renders the authenticator.
+    expect(src).toMatch(/LOOM_TRINO_AUTH_MODE/);
+    expect(src).toMatch(/LOOM_TRINO_REQUIRED_AUDIENCE/);
+    expect(src).toMatch(/LOOM_TRINO_JWKS_URL/);
+  });
+
+  it('the image entrypoint pins a sentinel audience nothing can mint when none is supplied', () => {
+    const sh = read('apps/loom-trino/docker-entrypoint.sh');
+    expect(sh).toMatch(/SEALED_AUDIENCE='api:\/\/loom-trino-sealed\.invalid'/);
+    expect(sh).toMatch(/http-server\.authentication\.type=JWT/);
+    expect(sh).toMatch(/http-server\.authentication\.jwt\.required-audience=/);
+    expect(sh).toMatch(/internal-communication\.shared-secret=/);
+    // Default is ON: only an explicit 'disabled' turns authorization off, and
+    // that path must shout.
+    expect(sh).toMatch(/AUTH_MODE=\$\(printf '%s' "\$\{LOOM_TRINO_AUTH_MODE:-entra\}"/);
+    expect(sh).toMatch(/SECURITY WARNING: LOOM_TRINO_AUTH_MODE=disabled/);
+  });
+
+  it('the orchestrator pins the Console app registration and reports the posture', () => {
+    const src = read(ADMIN_PLANE);
+    expect(src).toMatch(/var trinoAudienceClientId = !empty\(trinoAudienceOverride\) \? trinoAudienceOverride : effectiveMsalClientId/);
+    expect(src).toMatch(/var trinoAuthPosture = trinoAuthMode == 'disabled' \? 'disabled' : \(empty\(trinoAudienceClientId\) \? 'sealed' : 'entra'\)/);
+    expect(src).toMatch(/LOOM_TRINO_AUTH_MODE', value: trinoEngineActive \? trinoAuthPosture/);
+    expect(src).toMatch(/LOOM_TRINO_AUDIENCE', value: trinoEngineActive \? trinoConsoleAudience/);
+  });
+
+  it('the BFF refuses to query a sealed engine instead of burning a cold start on a 401', () => {
+    const src = read('apps/fiab-console/lib/azure/trino-client.ts');
+    expect(src).toMatch(/export function isTrinoSealed\(\)/);
+    expect(src).toMatch(/if \(isTrinoSealed\(\)\) \{/);
+    expect(src).toMatch(/'sealed',/);
+    // With authorization enforced the session user must equal the mapped
+    // principal, or Trino's default access control denies the impersonation.
+    expect(src).toMatch(/export function trinoSessionUser\(\)/);
+    expect(src).toMatch(/enforcing \? trinoSessionUser\(\) : trinoUser\(opts\.actorUpn\)/);
+
+    // ...and the BFF returns the NORMALIZED gate envelope for it, so the
+    // surface renders the honest bar + the /admin/gates Fix-it (G2), not a
+    // bare error string.
+    const route = read('apps/fiab-console/app/api/sql/trino/route.ts');
+    expect(route).toMatch(/if \(isTrinoSealed\(\)\) \{[\s\S]{0,200}?apiHonestGateError\(TRINO_GATE_ID/);
+    expect(route).toMatch(/code: 'sealed'/);
+  });
+});
+
 describe('honest text — the one thing a deploy cannot do', () => {
   it('names the Conditional Access exclusion in the gate a human actually reads', () => {
     const reg = read('apps/fiab-console/lib/gates/registry/observability.ts');

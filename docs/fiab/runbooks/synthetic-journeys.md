@@ -52,6 +52,30 @@ human action in Entra; nothing in the repo can automate it. Scope it to the
 monitor's egress (a named location), never as a blanket MFA carve-out, and pair
 it with the unexpected-use sign-in alert in the J1 section below.
 
+**The results store is created by the deploy, not merely named.**
+`admin-plane/uat-results-storage.bicep` deploys the storage account, its
+`blobServices/default`, the **`uat-results` container itself**, the 30-day
+lifecycle rule on `uat-runs/`, the blob private endpoint and the Console UAMI's
+Storage Blob Data Contributor grant — with `publicNetworkAccess: 'Disabled'` and
+`allowSharedKeyAccess: false`, so there is no key to leak. It is gated on
+`syntheticMonitorEnabled` **only** (not `deployAppsEnabled`), so the container
+already exists when phase 2 of the two-phase image path brings the apps up, and
+`LOOM_UAT_RESULTS_ACCOUNT` / `_CONTAINER` are read from that module's outputs —
+they cannot be populated by a deployment that did not create the container.
+
+**Cost, honestly:** the blob **private endpoint** is a per-hour charge of roughly
+**$7-8/month per cloud** whether or not the runner ever writes, plus cents of
+Standard_LRS storage. It bills while the Conditional Access exclusion above is
+still missing and the Journeys tab is still empty. Set
+`privateEndpointSubnetId=''` on the module if an estate would rather not pay it.
+
+**Gov image supply:** the `loom-uat` runner image is built by
+`.github/workflows/gov-build-images.yml` (Gov) and
+`full-app-deploy-commercial.yml` (Commercial). The Gov lane is new and — as of
+this writing — **has never been executed**; the first dispatch is its test. It
+pushes `:latest`, which is the tag `synthetic-monitor-job.bicep` pulls, and it
+fails loudly if that tag is not in the registry afterwards.
+
 ## Triage a red run
 
 1. Open the **Journeys tab** — the failing journey's note names the endpoint + status.

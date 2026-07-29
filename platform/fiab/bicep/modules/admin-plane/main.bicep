@@ -749,6 +749,37 @@ var trinoEngineActive = trinoEngineEnabled && containerPlatform == 'containerApp
 var trinoExtraEnv = loomBackends.?trinoCatalogs ?? {}
 var trinoKeyVaultEnv = loomBackends.?trinoCatalogSecrets ?? {}
 
+// ── N7e engine AUTHORIZATION (round-3 of #2641) ───────────────────────────────
+// "Default-ON" is only acceptable when the thing that is on is SAFE. Round 1
+// shipped Trino with no `http-server.authentication.type`, so internal ingress
+// was the ONLY control and anything already on the CAE network could query the
+// lake as any user, bypassing the BFF session check and the audit row.
+//
+// Engine-level Entra bearer authorization is now ON by default, with the
+// accepted audience pinned to the Console's own app registration
+// (effectiveMsalClientId — an explicit loomMsalClientId, else the app reg the
+// in-bicep deploymentScript provisions). ARM cannot create a Graph object, so on
+// a from-scratch install there is nothing to pin yet: the module then deploys
+// the engine SEALED (sentinel audience nothing can mint, minReplicas 0, zero
+// cost) instead of anonymous. The sign-in bootstrap that every estate must run
+// anyway (csa-loom-post-deploy-bootstrap.yml) is what un-seals it.
+//
+// Both toggles ride the EXISTING loomBackends bag — no new top-level params:
+//   loomBackends.trinoAuthMode          'entra' (default) | 'disabled'
+//   loomBackends.trinoAudienceClientId  pin a DEDICATED app reg instead of the
+//                                       Console's own client id
+var trinoAuthMode = string(loomBackends.?trinoAuthMode ?? 'entra')
+var trinoAudienceOverride = string(loomBackends.?trinoAudienceClientId ?? '')
+var trinoAudienceClientId = !empty(trinoAudienceOverride) ? trinoAudienceOverride : effectiveMsalClientId
+// What the CONSOLE is told, so the honest gate never has to guess the posture:
+// 'entra' = enforced + reachable, 'sealed' = enforced + nobody can mint a token,
+// 'disabled' = the explicit anonymous opt-out.
+var trinoAuthPosture = trinoAuthMode == 'disabled' ? 'disabled' : (empty(trinoAudienceClientId) ? 'sealed' : 'entra')
+// The resource the Console's UAMI asks Entra for. `api://<clientId>` is the
+// audience the module pins on the engine; `/.default` is the client-credentials
+// scope form. Empty whenever the engine is not enforcing a pinnable audience.
+var trinoConsoleAudience = trinoAuthPosture == 'entra' ? 'api://${trinoAudienceClientId}/.default' : ''
+
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
 // rationale as wranglerEnabled/scriptRunnerEnabled above): deploys the
@@ -3616,6 +3647,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // then keeps serving on DuckDB / Synapse Serverless and the engine
             // picker honest-gates the Trino option with a Fix-it.
             { name: 'LOOM_TRINO_URL', value: trinoEngineActive ? trinoEngine!.outputs.trinoInternalEndpoint : '' }
+            // ROUND-3 (#2641): the engine enforces Entra bearer authorization.
+            // LOOM_TRINO_AUDIENCE is the resource the Console's UAMI mints a
+            // token for (trino-client.ts already reads it); LOOM_TRINO_AUTH_MODE
+            // tells the BFF the DEPLOYED posture so a SEALED engine renders the
+            // honest Fix-it gate instead of firing a query that will 401.
+            //   entra    = enforced + audience pinned  -> queries run
+            //   sealed   = enforced + sentinel audience -> honest gate
+            //   disabled = explicit anonymous opt-out   -> failing env-check
+            { name: 'LOOM_TRINO_AUTH_MODE', value: trinoEngineActive ? trinoAuthPosture : '' }
+            { name: 'LOOM_TRINO_AUDIENCE', value: trinoEngineActive ? trinoConsoleAudience : '' }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
@@ -5174,6 +5215,18 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // Federation sources ride the loomBackends bag — no new top-level params.
     extraEnv: trinoExtraEnv
     keyVaultEnv: trinoKeyVaultEnv
+    // ROUND-3: default-ON must mean SAFE by default. Engine-level Entra bearer
+    // authorization is ON, with the audience pinned to the Console's own app
+    // registration. On a from-scratch deploy that registration does not exist
+    // yet (ARM cannot create a Graph object — it is provisioned by
+    // csa-loom-post-deploy-bootstrap.yml / the in-bicep deploymentScript), so
+    // effectiveMsalClientId is empty and the engine deploys SEALED: enforced,
+    // sentinel audience nothing can mint, minReplicas 0 so it bills nothing.
+    // It is never anonymous-on-the-VNet. Same shape as loom-unity in #2638.
+    // Normalized to the module's union: anything other than an explicit
+    // 'disabled' opt-out means authorization is ENFORCED.
+    authMode: trinoAuthMode == 'disabled' ? 'disabled' : 'entra'
+    entraClientId: trinoAudienceClientId
     complianceTags: complianceTags
   }
 }

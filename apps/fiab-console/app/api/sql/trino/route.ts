@@ -26,12 +26,13 @@
  */
 import { apiError, apiOk } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
-import { backendGateResponse } from '@/lib/api/gate-envelope';
+import { apiHonestGateError, backendGateResponse } from '@/lib/api/gate-envelope';
 import { recordQueryRun } from '@/lib/finops/query-run';
 import {
   TRINO_GATE_ID,
   TrinoError,
   buildFederatedJoinSql,
+  isTrinoSealed,
   logTrinoAccess,
   runTrinoQuery,
   trinoIcebergCatalog,
@@ -67,6 +68,26 @@ export const POST = withSession(async (req, { session }) => {
   // SQL Lab keeps working on DuckDB either way.
   const gated = backendGateResponse(TRINO_GATE_ID);
   if (gated) return gated;
+
+  // ROUND-3 (#2641): the URL can be wired while the ENGINE is SEALED —
+  // authorization enforced against a sentinel audience nothing can mint,
+  // because no Entra app registration existed at deploy time. Firing the
+  // statement would spend a JVM cold start to earn a 401. Return the SAME
+  // normalized gate envelope (so the surface renders the honest bar + the
+  // /admin/gates Fix-it) with a code that names the actual state.
+  if (isTrinoSealed()) {
+    return apiHonestGateError(TRINO_GATE_ID, {
+      code: 'sealed',
+      missing: ['LOOM_MSAL_CLIENT_ID'],
+      message:
+        'The Federated SQL (Trino) engine is deployed SEALED: engine-level Entra authorization is ENFORCED, '
+        + 'but no app registration was available at deploy time, so the accepted audience is a sentinel value '
+        + 'nothing can mint a token for. The engine is up and costs nothing (minReplicas 0); it accepts no '
+        + 'caller. Run .github/workflows/csa-loom-post-deploy-bootstrap.yml, then redeploy with '
+        + 'LOOM_MSAL_CLIENT_ID set (or pin loomBackends.trinoAudienceClientId). SQL Lab keeps serving on '
+        + 'DuckDB / Synapse Serverless meanwhile.',
+    });
+  }
 
   const body = (await req.json().catch(() => ({}))) as Body;
   let sql = typeof body.sql === 'string' ? body.sql.trim() : '';

@@ -21,10 +21,18 @@
 // exists), so the store — and the container — exist unconditionally. Nothing
 // about the results path depends on whether a landing zone was deployed.
 //
-// COST: a Standard_LRS StorageV2 account holding NDJSON verdicts + PNG
-// screenshots, aged out at 30 days by the in-module lifecycle rule. At the
-// default */15 cadence this is single-digit GB steady-state — cents/month. It
-// is NOT a second lake.
+// COST — the honest figure, not a rounded-to-zero one:
+//   * storage itself: a Standard_LRS StorageV2 account holding NDJSON verdicts
+//     + PNG screenshots, aged out at 30 days by the in-module lifecycle rule.
+//     At the default */15 cadence that is single-digit GB steady-state —
+//     cents/month. It is NOT a second lake.
+//   * the blob PRIVATE ENDPOINT below is the real line item: an Azure Private
+//     Endpoint bills per hour whether or not anything talks to it — on the
+//     order of $7-8/month per endpoint per cloud, plus per-GB data processing.
+//     That is the price of publicNetworkAccess=Disabled, and it is charged
+//     even while the synthetic runner is blocked by Conditional Access.
+//     Pass privateEndpointSubnetId='' to skip it (and then reach the account
+//     another way) if that trade is not worth it in a given estate.
 //
 // SECURITY POSTURE
 //   - publicNetworkAccess Disabled + a blob PRIVATE ENDPOINT on the hub's
