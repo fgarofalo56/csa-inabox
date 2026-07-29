@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * GUARDRAIL: unity-audit-chokepoint  (merge-blocker — loom-apex LU-3)
  * ---------------------------------------------------------------------------
@@ -54,16 +53,73 @@
  *      genuinely NOT covered by this trail. They are now RATCHETED: the count
  *      may go DOWN (each one routed through an audited path) but never UP.
  *
+ * ## HISTORY — round 3 (2026-07-28). Three MORE demonstrated bypasses.
+ *
+ * The round-2 rewrite above still exited 0 on all three of these:
+ *
+ *   4. `.tsx` BLIND SPOT. `referencesCatalogAddress()` applied the UC-REST-path
+ *      arm to non-`.tsx` files only, justified by "a .tsx component holds no
+ *      credential". False for App Router SERVER components, which are `.tsx`.
+ *      A reviewer made app/admin/rogue/page.tsx an async server component that
+ *      PATCHed `/api/2.1/unity-catalog/permissions/table/a.b.c`; zero failures.
+ *      FIXED: the exemption now keys off the `'use client'` DIRECTIVE
+ *      ({@link isClientComponent}), not the file extension.
+ *   5. WHOLE-FILE EXEMPTIONS. `KNOWN_UNAUDITED` (and every CHOKEPOINT_FILES
+ *      entry except databricks-client.ts) had no per-file ceiling, so a declared
+ *      or allowlisted file could grow ARBITRARY new un-audited catalog calls.
+ *      A reviewer appended a fresh unaudited permissions PATCH to
+ *      shortcut-credentials.ts; zero failures. FIXED: {@link OUTBOUND_BASELINE}
+ *      pins every exempted file, and a file exempted WITHOUT a pin now fails.
+ *   6. TRANSPORT BLIND SPOT. `REQUEST_RE` matched only fetch/axios/http.request,
+ *      so `import { request } from 'undici'` passed — as did a UC path assembled
+ *      by concatenation (`'/api/2.1/' + 'unity-catalog/...'`), which defeated
+ *      `UNITY_REST_PATH_RE`. FIXED (partially — see LIMITS): the transport set
+ *      now covers the HTTP clients resolvable here and counts a bare IMPORT of
+ *      one, and the path regex has a second arm matching the bare
+ *      `unity-catalog/` segment.
+ *
+ * ## LIMITS — what this guard is NOT
+ *
+ * READ THIS BEFORE CITING THE GUARD AS COVERAGE. It is a lexical scan over the
+ * source tree. It raises the cost of an ACCIDENTAL bypass to "red build" and
+ * makes a deliberate one leave a diff a reviewer can see. It is NOT an
+ * adversary-proof control and cannot become one:
+ *
+ *   - a path assembled from enough pieces (`'unity' + '-catalog/'`), built from
+ *     a variable, or read from config defeats the address regexes;
+ *   - a transport reached through an indirection this file does not name
+ *     (a dynamic `import()`, a generic http helper, a native addon) defeats
+ *     REQUEST_RE;
+ *   - it proves the recorder is CALLED, never that the row is CORRECT or that
+ *     it reached Cosmos.
+ *
+ * The un-bypassable half of this control is the transport itself: there is one
+ * credential resolver (uc-backend.ts) and two audited transports, and code that
+ * does not go through them has to build a credential of its own. The guard is
+ * the tripwire on that, not the wall.
+ *
+ * ## STILL NOT COVERED BY THE TRAIL (declared, not fixed)
+ *
+ *   - `lib/azure/shortcut-credentials.ts` — storage-credential + external-
+ *     location CREATE/DELETE, un-audited. See KNOWN_UNAUDITED / issue #2622.
+ *   - the ~25 `executeStatement(` governance-DDL exits (SQL_EXIT_BASELINE).
+ *   - `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` namespace/table
+ *     CREATE + DROP: audited, but into a DIFFERENT trail
+ *     (`logIcebergAccess` → `_auditLog itemType:'iceberg-catalog'`), so they do
+ *     NOT appear in the system-tables pane. See docs/fiab/unity-gov.md.
+ *
  * THE CHECKS
  *   1. INTEGRITY (ucFetch)   — `recordUnityAccess(` inside a `finally` block of
  *      `ucFetch`, and the import from lib/azure/unity-audit is present.
- *   2. SINGLE EXIT           — `unity-catalog-client.ts` may contain at most ONE
- *      outbound call. A second one is a second, un-audited door out.
+ *   2. OUTBOUND RATCHET      — EVERY file this guard exempts from check 4
+ *      (allowlisted OR declared-gap) has a frozen outbound-call count
+ *      (OUTBOUND_BASELINE). A file exempted without a pin FAILS.
  *   3. INTEGRITY (dbxFetch)  — `recordDatabricksUnityAccess(` inside a `finally`
  *      block of `dbxFetch`.
  *   4. NO BYPASS             — no file outside the ALLOWLIST may combine a Loom
  *      Unity address OR a Unity Catalog REST path with outbound-request code.
  *      Reading those for a GATE/CAPABILITY check is fine; issuing a REQUEST is not.
+ *      Only a `'use client'` component is exempt from the REST-path arm.
  *   5. ALLOWLISTED CALLERS MUST AUDIT.
  *   6. SINK REACHABILITY     — `unity-audit.ts` writes both sinks and still
  *      classifies denials.
@@ -76,6 +132,14 @@
  *
  * MODE:
  *   node scripts/ci/check-unity-audit-chokepoint.mjs
+ *
+ * NO SHEBANG — DO NOT RE-ADD ONE. This module is `import`ed by
+ * `apps/fiab-console/lib/azure/__tests__/unity-audit-guard.test.ts`, and
+ * vite-node evaluates an out-of-root `.mjs` through `vm.Script`, which does NOT
+ * strip `#!`. With the shebang the whole spec died at COLLECTION with
+ * `SyntaxError: Invalid or unexpected token` — so the 14 negative tests that are
+ * this item's main deliverable had never executed even once. It is always
+ * invoked as `node scripts/ci/…`, so the shebang bought nothing.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -106,16 +170,62 @@ export const RECORDER = 'lib/azure/unity-audit.ts';
 export const SQL_EXIT_BASELINE = 25;
 
 /**
- * Outbound calls allowed in databricks-client.ts.
+ * FROZEN outbound-call count for EVERY file this guard exempts from the
+ * no-bypass scan — both the audited allowlist (CHOKEPOINT_FILES) and the
+ * declared gaps (KNOWN_UNAUDITED).
  *
- * dbxFetch (the audited transport) + writeUcVolumesFile + deleteUcVolumesFile
- * (raw-body Files-API writes to `/api/2.0/fs/files`, NOT catalog calls). Frozen
- * so that appending a raw `fetch(https://host/api/2.1/unity-catalog/permissions/...)`
- * to this file — the exact bypass demonstrated against the first version of this
- * guard — fails the build. The file IS allowlisted from the no-bypass scan
- * (it must be: it holds dbxFetch), so this counter is what protects it.
+ * ## Why this is a Map and not one `DBX_OUTBOUND_BASELINE` constant
+ *
+ * Round 2 ratcheted exactly one file. Everything else the guard exempted was a
+ * WHOLE-FILE exemption with no per-file ceiling, so the claim "a NEW un-audited
+ * path fails the build" only held at FILE granularity. A reviewer demonstrated
+ * both halves of that hole:
+ *
+ *   - appending a brand-new unaudited
+ *     `fetch(https://${h}/api/2.1/unity-catalog/permissions/table/a.b.c, {method:'PATCH'})`
+ *     to `lib/azure/shortcut-credentials.ts` (a DECLARED gap) left the guard at
+ *     zero failures — a declared file could grow arbitrary new privilege
+ *     mutations silently;
+ *   - `MUST_AUDIT` only requires the recorder symbol to appear ONCE anywhere in
+ *     the file, so `iceberg-catalog-client.ts` — allowlisted for
+ *     `listNamespaceGrants` — had its SECOND outbound call shielded too.
+ *
+ * Every exempted file now carries its own ceiling. The count may go DOWN freely
+ * (routing a call through an audited transport). Raising one is a security
+ * review: say in the commit which call was added and why it cannot use
+ * `ucFetch` / `dbxFetch`.
+ *
+ * `analyzeUnityChokepoint` FAILS if an exempted file has no entry here, so a new
+ * allowlist/declared-gap entry cannot be added without also pinning its count.
  */
-export const DBX_OUTBOUND_BASELINE = 3;
+export const OUTBOUND_BASELINE = new Map([
+  // The choke point itself: exactly ONE exit, inside ucFetch.
+  [CHOKEPOINT, 1],
+  // dbxFetch + writeUcVolumesFile + deleteUcVolumesFile (raw-body Files-API
+  // writes to /api/2.0/fs/files — not catalog calls).
+  [DBX_CHOKEPOINT, 3],
+  // The recorder and the backend resolver build no requests at all.
+  [RECORDER, 0],
+  ['lib/azure/uc-backend.ts', 0],
+  // The LU-2 anonymous probe + its two sibling probes.
+  ['lib/admin/health-probes.ts', 3],
+  // dq-monitor's own dbxFetch.
+  ['lib/azure/dq-monitor-client.ts', 1],
+  // ircFetch + the listNamespaceGrants UC read.
+  ['lib/azure/iceberg-catalog-client.ts', 2],
+  // DECLARED GAP: its own private ucFetch + one sibling. Pinned so the
+  // un-audited surface cannot GROW while it waits to be fixed (issue #2622).
+  ['lib/azure/shortcut-credentials.ts', 2],
+]);
+
+/**
+ * Back-compat alias — `DBX_CHOKEPOINT`'s entry in {@link OUTBOUND_BASELINE}.
+ * The Databricks client must be allowlisted from the no-bypass scan (it HOLDS
+ * dbxFetch), so this counter is what protects it from the exact bypass
+ * demonstrated against the first version of this guard: appending a raw
+ * `fetch(https://host/api/2.1/unity-catalog/permissions/...)` to the file.
+ */
+export const DBX_OUTBOUND_BASELINE = OUTBOUND_BASELINE.get(DBX_CHOKEPOINT);
 
 /**
  * Files permitted to reference a catalog address / UC REST path alongside
@@ -190,24 +300,88 @@ const SCAN_DIRS = [
  */
 export const UNITY_ADDRESS_RE = /\bLOOM_UNITY_URL\b|\bossUcBase\s*\(/;
 /**
+ * The Unity Catalog REST families this API exposes — the second arm of
+ * {@link UNITY_REST_PATH_RE} requires one of these directly after
+ * `unity-catalog/`, so a Microsoft Learn documentation URL
+ * (`.../unity-catalog/manage-privileges/`) is not mistaken for an API path.
+ */
+const UC_FAMILY = '(?:permissions|effective-permissions|catalogs|schemas|tables|volumes|functions'
+  + '|models|registered-models|external-locations|storage-credentials|credentials|metastores'
+  + '|shares|recipients|providers|connections|bindings|workspace-bindings|policies|securable-tags'
+  + '|temporary-(?:table|path|volume)-credentials|online-tables|clean-rooms)';
+
+/**
  * A Unity Catalog REST path literal — the Databricks side. Without this arm, a
  * hand-rolled `PATCH /api/2.1/unity-catalog/permissions/...` granting
  * ALL_PRIVILEGES on the Commercial default backend was invisible to the guard.
  *
- * Applies to SERVER modules only (`.ts` / `.mjs`). A `.tsx` component cannot
- * issue a catalog call — it holds no Databricks/Entra credential and its
- * `fetch` goes to the Loom BFF (governed by check-no-bare-client-fetch) — but
- * it legitimately PRINTS these paths as documentation (the UC dialogs tell the
- * operator which REST call each action makes, and which privilege it needs).
+ * TWO arms, because round 2 shipped only the first and a reviewer defeated it by
+ * splitting the literal (`'/api/2.1/' + 'unity-catalog/permissions/...'`):
+ *   (a) the whole versioned prefix, and
+ *   (b) `unity-catalog/<uc-family>` (or `lineage-tracking/`) on its own, which
+ *       survives that particular concatenation.
+ * See LIMITS in the header: (b) narrows the crack, it does not close it.
  */
-export const UNITY_REST_PATH_RE = /\/api\/2\.\d+\/unity-catalog\/|\/api\/2\.\d+\/lineage-tracking\//;
-/** Request-shaped code. */
-export const REQUEST_RE = /\bfetchWithTimeout\s*\(|(?<![.\w])fetch\s*\(|\baxios\b|\bhttps?\.request\s*\(/;
+export const UNITY_REST_PATH_RE = new RegExp(
+  '\\/api\\/2\\.\\d+\\/unity-catalog\\/'
+  + '|\\/api\\/2\\.\\d+\\/lineage-tracking\\/'
+  + `|\\bunity-catalog\\/${UC_FAMILY}\\b`
+  + '|\\blineage-tracking\\/(?:table|column)-lineage\\b',
+);
+
+/**
+ * Request-shaped code.
+ *
+ * Round 2 matched only `fetch(` / `fetchWithTimeout(` / `axios` / `http.request(`,
+ * so a reviewer bypassed it with `import { request } from 'undici'`. The set
+ * below covers the HTTP clients actually resolvable in this workspace plus the
+ * generic shapes; an IMPORT of any of them counts on its own, because the call
+ * site can always be renamed (`request as r`).
+ */
+export const REQUEST_RE = new RegExp([
+  /\bfetchWithTimeout\s*\(/,
+  /(?<![.\w])fetch\s*\(/,
+  /\bnew\s+Request\s*\(/,
+  /\bXMLHttpRequest\b/,
+  /\baxios\b/,
+  /\bhttps?\.request\s*\(/,
+  // Module specifiers — the import alone counts; the local binding can be anything.
+  /['"](?:undici|node-fetch|got|ky|superagent|node:https?|cross-fetch|phin|needle)['"]/,
+  // undici / node:http surface reached through a namespace or a destructure.
+  /\brequest\s*\(\s*[`'"]https?:/,
+  /\bnew\s+(?:undici\.)?(?:Client|Pool|Agent|ProxyAgent)\s*\(/,
+].map((r) => r.source).join('|'));
+
+/**
+ * TRUE for a Next.js CLIENT component (`'use client'`) — the one kind of file
+ * that can legitimately reference a UC REST path without being able to call it.
+ * It holds no Databricks/Entra credential and its `fetch` goes to the Loom BFF
+ * (governed by check-no-bare-client-fetch), but it legitimately PRINTS these
+ * paths as documentation: the UC dialogs tell the operator which REST call each
+ * action makes and which privilege it needs.
+ *
+ * Round 2 keyed this exemption off the `.tsx` EXTENSION, which was wrong: in the
+ * App Router a `.tsx` WITHOUT `'use client'` is a SERVER component running in
+ * the Node runtime with full credential access. A reviewer proved it by turning
+ * app/admin/rogue/page.tsx into an async server component that PATCHed
+ * `/api/2.1/unity-catalog/permissions/table/a.b.c` — the guard exited 0.
+ */
+export function isClientComponent(src) {
+  // The directive must be the first statement. Mask first so a license/doc
+  // comment mentioning "use client" cannot satisfy it; the mask preserves both
+  // offsets and the quote characters, so the directive is then read from the
+  // ORIGINAL bytes at the same index.
+  const masked = maskCommentsAndStrings(src);
+  const firstCode = masked.search(/\S/);
+  if (firstCode < 0) return false;
+  return /^(['"])use client\1\s*;?/.test(src.slice(firstCode));
+}
 
 /** True when the file names the catalog in a way that could address a request. */
 export function referencesCatalogAddress(rel, src) {
   if (UNITY_ADDRESS_RE.test(src)) return true;
-  return !/\.tsx$/.test(rel) && UNITY_REST_PATH_RE.test(src);
+  if (isClientComponent(src)) return false;
+  return UNITY_REST_PATH_RE.test(src);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,15 +482,26 @@ export function countCalls(src, symbol) {
   return (masked.match(new RegExp(`\\b${symbol}\\s*\\(`, 'g')) || []).length;
 }
 
+/** Outbound-request calls in real code (comments and string bodies masked). */
+export function countOutbound(src) {
+  const masked = maskCommentsAndStrings(src);
+  return (masked.match(/\bfetchWithTimeout\s*\(/g) || []).length
+    + (masked.match(/(?<![.\w])fetch\s*\(/g) || []).length;
+}
+
 /**
  * The whole rule set, as a pure function over `{ relPath -> source }`.
  * Returns an array of failure strings (empty === pass).
  */
 export function analyzeUnityChokepoint(sources, opts = {}) {
   const sqlBaseline = opts.sqlExitBaseline ?? SQL_EXIT_BASELINE;
+  const outboundBaseline = new Map(OUTBOUND_BASELINE);
+  if (opts.outboundBaseline) for (const [k, v] of opts.outboundBaseline) outboundBaseline.set(k, v);
+  // Back-compat: callers that only override the Databricks ceiling.
+  if (opts.dbxOutboundBaseline != null) outboundBaseline.set(DBX_CHOKEPOINT, opts.dbxOutboundBaseline);
   const failures = [];
 
-  // ── 1 + 2 + 7. The ucFetch choke point ────────────────────────────────────
+  // ── 1 + 7. The ucFetch choke point ────────────────────────────────────────
   const chokeSrc = sources.get(CHOKEPOINT);
   if (chokeSrc == null) {
     failures.push(`MISSING CHOKE POINT: ${CHOKEPOINT} does not exist. Every Unity Catalog call must funnel through its ucFetch.`);
@@ -329,15 +514,6 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
         `${CHOKEPOINT}: recordUnityAccess( is not called from inside a \`finally\` block of ucFetch. ` +
         `Recording only on the success path drops every DENIED call — the highest-value audit row. ` +
         `(A call elsewhere in the file does NOT satisfy this check.)`,
-      );
-    }
-    const masked = maskCommentsAndStrings(chokeSrc);
-    const outbound = (masked.match(/\bfetchWithTimeout\s*\(/g) || []).length
-      + (masked.match(/(?<![.\w])fetch\s*\(/g) || []).length;
-    if (outbound > 1) {
-      failures.push(
-        `${CHOKEPOINT}: ${outbound} outbound calls found (expected exactly 1, inside ucFetch). ` +
-        `A second exit is an un-audited door to the catalog — route it through ucFetch.`,
       );
     }
     const sqlExits = countCalls(chokeSrc, 'executeStatement');
@@ -355,23 +531,35 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
   const dbxSrc = sources.get(DBX_CHOKEPOINT);
   if (dbxSrc == null) {
     failures.push(`MISSING CHOKE POINT: ${DBX_CHOKEPOINT} does not exist.`);
-  } else {
-    if (!callsSymbolInFinallyOf(dbxSrc, 'dbxFetch', 'recordDatabricksUnityAccess')) {
+  } else if (!callsSymbolInFinallyOf(dbxSrc, 'dbxFetch', 'recordDatabricksUnityAccess')) {
+    failures.push(
+      `${DBX_CHOKEPOINT}: recordDatabricksUnityAccess( is not called from inside a \`finally\` block of dbxFetch. ` +
+      `Catalog OWNER CHANGE (patchUcCatalog), catalog DELETE (deleteUcCatalog) and GRANT MUTATION (updateUcPermissions) ` +
+      `issue from this client on the Commercial default backend — without this they reach Unity Catalog UNAUDITED.`,
+    );
+  }
+
+  // ── 2. PER-FILE OUTBOUND RATCHET on every exempted file ───────────────────
+  // Applies to the audited allowlist AND the declared gaps. Without it an
+  // exemption is a whole-FILE hole: the file can grow arbitrary new un-audited
+  // catalog exits and nothing fails. See OUTBOUND_BASELINE.
+  for (const r of [...CHOKEPOINT_FILES.keys(), ...KNOWN_UNAUDITED.keys()]) {
+    const src = sources.get(r);
+    if (src == null) continue; // absence is reported by checks 4b / 5
+    const base = outboundBaseline.get(r);
+    if (base == null) {
       failures.push(
-        `${DBX_CHOKEPOINT}: recordDatabricksUnityAccess( is not called from inside a \`finally\` block of dbxFetch. ` +
-        `Catalog OWNER CHANGE (patchUcCatalog), catalog DELETE (deleteUcCatalog) and GRANT MUTATION (updateUcPermissions) ` +
-        `issue from this client on the Commercial default backend — without this they reach Unity Catalog UNAUDITED.`,
+        `${r}: exempted from the no-bypass scan but has no OUTBOUND_BASELINE entry. Every exempted file must pin its ` +
+        `outbound-call count, otherwise the exemption lets it grow new un-audited catalog exits silently.`,
       );
+      continue;
     }
-    const dbxMasked = maskCommentsAndStrings(dbxSrc);
-    const dbxOutbound = (dbxMasked.match(/\bfetchWithTimeout\s*\(/g) || []).length
-      + (dbxMasked.match(/(?<![.\w])fetch\s*\(/g) || []).length;
-    const dbxBaseline = opts.dbxOutboundBaseline ?? DBX_OUTBOUND_BASELINE;
-    if (dbxOutbound > dbxBaseline) {
+    const outbound = countOutbound(src);
+    if (outbound > base) {
       failures.push(
-        `${DBX_CHOKEPOINT}: ${dbxOutbound} outbound calls (ratchet: ${dbxBaseline}). This file is allowlisted from the ` +
-        `no-bypass scan because it HOLDS dbxFetch, so a new raw fetch here is an un-audited door to Unity Catalog — ` +
-        `exactly the bypass this ratchet exists to catch. Route it through dbxFetch.`,
+        `${r}: ${outbound} outbound calls (ratchet: ${base}). This file is exempted from the no-bypass scan, so a new ` +
+        `raw request here is an un-audited door to Unity Catalog. Route it through ucFetch (${CHOKEPOINT}) or dbxFetch ` +
+        `(${DBX_CHOKEPOINT}), or raise this file's OUTBOUND_BASELINE with a security-review note.`,
       );
     }
   }
@@ -462,7 +650,16 @@ function walk(dir, out = []) {
   return out;
 }
 
-function readSources() {
+/**
+ * Every source file the guard analyses, read from the REAL tree.
+ *
+ * EXPORTED so the guard's own spec can run check 4 (the no-bypass scan) across
+ * `lib/` + `app/` + `scripts/` instead of a hand-listed handful. Round 2's spec
+ * loaded 8 files by name and asserted "passes on the shipped sources", which
+ * could not fail on a bypass anywhere else in the tree — a mislabelled
+ * assertion, and exactly the kind of false assurance this item exists to stop.
+ */
+export function readSources() {
   const rel = (abs) => path.relative(APP_ROOT, abs).split(path.sep).join('/');
   const sources = new Map();
   for (const dir of SCAN_DIRS) {

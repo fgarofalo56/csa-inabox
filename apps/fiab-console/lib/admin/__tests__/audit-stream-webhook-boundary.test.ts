@@ -19,6 +19,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/events/webhook-emitter', () => ({ emitLoomEvent: vi.fn() }));
+// The call-site block below drives the REAL recorder; only its Cosmos sink is
+// stubbed, so the webhook decision under test is the production one.
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  auditLogContainer: async () => ({ items: { create: vi.fn().mockResolvedValue({}) } }),
+}));
 
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 import { emitAuditEvent, type AdminAuditEvent } from '../audit-stream';
@@ -66,5 +71,46 @@ describe('emitAuditEvent — outbound webhook boundary', () => {
     emitAuditEvent({ ...READ_EVENT, action: 'unity.table.get' }, { webhook: false });
     emitAuditEvent({ ...READ_EVENT, action: 'unity.schema.list' }, { webhook: false });
     expect(emitted).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The boundary is only as good as its CALLER. Round 2's version of this file
+ * exercised `emitAuditEvent` in isolation, so deleting `{ webhook: mutation }`
+ * from `lib/azure/unity-audit.ts` left all four tests above GREEN. These run the
+ * real recorder against the real `emitAuditEvent` against the real fan-out
+ * decision, mocking only the outbound emitter and Cosmos — the whole chain the
+ * finding was about.
+ */
+describe('the LU-3 CALL SITE — recordUnityAccess → emitAuditEvent → emitLoomEvent', () => {
+  const catalogRead = {
+    operation: 'catalog.list', securableType: 'catalog', securableFqn: '*',
+    backend: 'oss' as const, method: 'GET', path: '/api/2.1/unity-catalog/catalogs',
+    outcome: 'success' as const, status: 200, durationMs: 1,
+  };
+
+  it('does not push a catalog READ across the boundary', async () => {
+    const { recordUnityAccess } = await import('@/lib/azure/unity-audit');
+    await recordUnityAccess(catalogRead);
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it('does not push the LU-2 health-probe row across the boundary', async () => {
+    const { recordUnityAccess } = await import('@/lib/azure/unity-audit');
+    // `probe.anonymous-read` — verb is neither get/list/read, which is exactly
+    // what round 2 mis-filed as a mutation and shipped to third-party URLs on
+    // every /admin/health run.
+    await recordUnityAccess({ ...catalogRead, operation: 'probe.anonymous-read', outcome: 'denied', status: 401 });
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it('DOES push a grant mutation across the boundary — the SOC still gets those', async () => {
+    const { recordUnityAccess } = await import('@/lib/azure/unity-audit');
+    await recordUnityAccess({
+      ...catalogRead,
+      operation: 'grant.update', securableType: 'table', securableFqn: 'sales.bronze.orders',
+      method: 'PATCH', path: '/api/2.1/unity-catalog/permissions/table/sales.bronze.orders',
+    });
+    expect(emitted).toHaveBeenCalledTimes(1);
   });
 });

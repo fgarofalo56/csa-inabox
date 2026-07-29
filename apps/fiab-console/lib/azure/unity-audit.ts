@@ -66,16 +66,24 @@
  *      Un-provisioned DCR = silent no-op (see lib/admin/audit-stream.ts); the
  *      Cosmos trail is unaffected, so this module has NO day-one gate.
  *
- * ## Boundary egress — READS NEVER LEAVE THE ESTATE
+ * ## Boundary egress — ONLY AN AFFIRMATIVE MUTATION LEAVES THE ESTATE
  *
  * `emitAuditEvent` additionally fans events out to any tenant-registered
  * OUTBOUND WEBHOOK (`emitLoomEvent`, lib/events/webhook-emitter.ts) — a
  * third-party URL outside the Loom boundary. A catalog READ is high-volume and
- * carries actor UPN + securable FQN, so read rows are emitted with
+ * carries actor UPN + actor OID + securable FQN, so read rows are emitted with
  * `{ webhook: false }`: they reach Cosmos and the in-boundary SIEM stream and
- * stop there. Only catalog MUTATIONS (create/update/delete/grant change,
- * credential vend) — the events an external SOC actually subscribes to — are
- * allowed past the boundary. See {@link isUnityMutation}.
+ * stop there.
+ *
+ * The rule is stated in the AFFIRMATIVE direction and defaults to "read"
+ * ({@link isUnityMutation}): a row egresses only when the method is
+ * state-changing, or a safe method carries an explicit mutation verb. An
+ * un-modelled operation on a GET does NOT egress. Round 2 of this item stated
+ * "reads never leave the estate" while deciding read-ness from a `get|list|read`
+ * suffix, which classified the LU-2 `probe.anonymous-read` GET and the
+ * `unity.request` catch-all GET as mutations and shipped them to third-party
+ * URLs on every health check. The heading above is now the code's actual rule,
+ * not an aspiration.
  *
  * Writes are fire-and-forget by contract: an audit-store hiccup must never turn
  * a working catalog read into a 500, and must never add latency to a federation
@@ -354,25 +362,65 @@ async function resolveUnityActor(): Promise<UnityActor> {
 /** In-flight audit writes, so {@link flushUnityAudit} can be awaited. */
 const inFlight = new Set<Promise<void>>();
 
+/** HTTP methods that cannot change catalog state. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * Operation verbs that AFFIRMATIVELY name a state change. Used to catch a
+ * mutation that arrives with a mislabelled safe method (e.g. an internal caller
+ * that hands `recordUnityAccess` `method: 'GET'` for a `catalog.delete`).
+ *
+ * Every verb {@link classifyUnityCall} can emit for a non-safe method is here
+ * (`create` / `update` / `delete` from METHOD_VERB, `vend`, grant `update`,
+ * system-schema `enable` / `disable`), plus the SQL-DDL vocabulary the
+ * executeStatement half would use if it is ever routed through this recorder.
+ */
+const MUTATION_VERBS = new Set([
+  'create', 'update', 'delete', 'vend', 'enable', 'disable', 'drop', 'set', 'unset',
+  'grant', 'revoke', 'assign', 'unassign', 'remove', 'rotate', 'write', 'alter', 'rename',
+]);
+
 /**
  * Is this call a MUTATION of the catalog (rather than a read)?
  *
- * Drives the boundary-egress decision: only mutations are allowed out to
- * tenant-registered outbound webhooks. A read is decided by BOTH signals —
- * a safe HTTP method AND a read-shaped operation verb — so a mutation that
- * arrives with a mislabelled method (or an un-modelled `unity.request` on a
- * POST) is treated as a mutation and audited conservatively, never leaked as a
- * read. `temporary-credential.vend` is a mutation: it hands out a live storage
- * token and is the highest-signal row an external SOC subscribes to.
+ * This is the BOUNDARY-EGRESS decision, so it FAILS CLOSED TOWARD "read": an
+ * event is allowed past the Loom boundary to a tenant-registered third-party
+ * webhook only when we can AFFIRMATIVELY say it changed catalog state —
  *
- * PURE — unit-tested.
+ *   - a state-changing HTTP method (anything outside {@link SAFE_METHODS}), OR
+ *   - a safe method carrying an explicit {@link MUTATION_VERBS} verb.
+ *
+ * ### Why the default flipped (2026-07-28, round-3 review)
+ *
+ * The first version decided a READ from the last dotted segment of `operation`
+ * (`get` / `list` / `read`) and treated everything else as a mutation, on the
+ * theory that "unknown → mutation" was the conservative direction. For an AUDIT
+ * decision it is. For an EGRESS decision it is exactly backwards, and it leaked:
+ *
+ *   - `probe.anonymous-read` — the LU-2 health probe (lib/admin/health-probes.ts)
+ *     — has verb `anonymous-read`, so a plain unauthenticated GET was classified
+ *     as a mutation and fanned out `actorUpn` + `actorOid` + `path` to every
+ *     registered third-party URL on EVERY /admin/health, /admin/readiness,
+ *     self-audit and copilot-orchestrator run;
+ *   - `unity.request` — the catch-all {@link classifyUnityCall} emits for an
+ *     un-modelled family — has verb `request`, so an ordinary GET against a new
+ *     UC family egressed too.
+ *
+ * A missed egress costs an external SOC one notification of a change it can
+ * still see in `_auditLog` and `LoomAudit_CL`. A wrong egress puts actor
+ * identity and securable names on a third-party URL and cannot be recalled. The
+ * asymmetry decides the default.
+ *
+ * NOTE this flag ONLY drives egress and the row's `mutation` column. The audit
+ * ROW is written either way — nothing here can drop a record.
+ *
+ * PURE — unit-tested (lib/azure/__tests__/unity-audit-security.test.ts).
  */
 export function isUnityMutation(ev: Pick<UnityAccessEvent, 'method' | 'operation'>): boolean {
   const method = (ev.method || 'GET').toUpperCase();
-  const safeMethod = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
-  const verb = (ev.operation || '').split('.').pop() || '';
-  const readVerb = verb === 'get' || verb === 'list' || verb === 'read';
-  return !(safeMethod && readVerb);
+  if (!SAFE_METHODS.has(method)) return true;
+  const verb = (ev.operation || '').split('.').pop()?.toLowerCase() || '';
+  return MUTATION_VERBS.has(verb);
 }
 
 /**

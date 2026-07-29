@@ -92,6 +92,55 @@ describe('BOUNDARY EGRESS — a catalog READ must not leave the estate', () => {
     expect(emitAuditEvent.mock.calls[0][1]).toEqual({ webhook: true });
   });
 
+  it('resolves an UNKNOWN operation on a safe method as a READ (no egress)', () => {
+    // ROUND-3 REGRESSION GUARD. Round 2 decided read-ness from the LAST dotted
+    // segment being get|list|read, so every OTHER verb on a GET was filed as a
+    // mutation and fanned out to tenant-registered third-party URLs. Two real
+    // shapes hit that path on every estate:
+    expect(isUnityMutation({ method: 'GET', operation: 'probe.anonymous-read' })).toBe(false);
+    expect(isUnityMutation({ method: 'GET', operation: 'unity.request' })).toBe(false);
+    // …and the general class: any un-modelled future verb on a safe method.
+    expect(isUnityMutation({ method: 'GET', operation: 'catalog.enumerate' })).toBe(false);
+    expect(isUnityMutation({ method: 'HEAD', operation: 'table.exists' })).toBe(false);
+  });
+
+  it('does NOT egress the LU-2 health-probe row, which runs on every /admin/health', async () => {
+    // This is the row the original finding named explicitly. It carries
+    // actorUpn + actorOid + path, and it is written on EVERY /admin/health,
+    // /admin/readiness, self-audit and copilot-orchestrator run — the highest
+    // -frequency row in the trail, shipped to third-party URLs.
+    await recordUnityAccess({
+      ...READ,
+      operation: 'probe.anonymous-read',
+      securableType: 'catalog',
+      path: '/api/2.1/unity-catalog/catalogs',
+      outcome: 'denied', status: 401,
+    });
+    expect(emitAuditEvent).toHaveBeenCalledTimes(1);
+    expect(emitAuditEvent.mock.calls[0][1]).toEqual({ webhook: false });
+    // The ROW is still written — fail-closed on egress must not cost a record.
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0][0]).toMatchObject({ action: 'unity.probe.anonymous-read', mutation: false });
+  });
+
+  it('does NOT egress an un-modelled catalog family read (the unity.request catch-all)', async () => {
+    await recordUnityAccess({
+      ...READ,
+      operation: 'unity.request', securableType: 'unknown',
+      path: '/api/2.1/some-future-family/thing', method: 'GET',
+    });
+    expect(emitAuditEvent.mock.calls[0][1]).toEqual({ webhook: false });
+  });
+
+  it('still egresses a mutation that arrives with a mislabelled safe method', () => {
+    // The other direction still has to hold: a state change must not be
+    // downgraded to a read just because the method says GET.
+    expect(isUnityMutation({ method: 'GET', operation: 'catalog.delete' })).toBe(true);
+    expect(isUnityMutation({ method: 'GET', operation: 'grant.update' })).toBe(true);
+    expect(isUnityMutation({ method: 'GET', operation: 'temporary-credential.vend' })).toBe(true);
+    expect(isUnityMutation({ method: 'GET', operation: 'system-schema.enable' })).toBe(true);
+  });
+
   it('resolves read-vs-mutation conservatively', () => {
     expect(isUnityMutation({ method: 'GET', operation: 'catalog.list' })).toBe(false);
     expect(isUnityMutation({ method: 'GET', operation: 'table.get' })).toBe(false);

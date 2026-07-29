@@ -12,43 +12,51 @@
  * one edit an attacker would make.
  */
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
 import {
   analyzeUnityChokepoint,
   callsSymbolInFinallyOf,
   maskCommentsAndStrings,
+  isClientComponent,
+  readSources,
   CHOKEPOINT,
   DBX_CHOKEPOINT,
   RECORDER,
   SQL_EXIT_BASELINE,
+  OUTBOUND_BASELINE,
+  CHOKEPOINT_FILES,
+  KNOWN_UNAUDITED,
 } from '../../../../../scripts/ci/check-unity-audit-chokepoint.mjs';
 
-const APP_ROOT = path.resolve(__dirname, '..', '..', '..');
-
-/** The files the analysis actually reads, loaded from the real tree. */
+/**
+ * The WHOLE tree the CLI reads — lib/ + app/ + scripts/ — not a hand-listed
+ * handful.
+ *
+ * Round 2's version loaded 8 files by name, so `it('passes on the shipped
+ * sources')` could not fail on a bypass anywhere else in the tree while
+ * reading as though it could. Using the guard's own reader means every attack
+ * below is mutated against the same bytes CI sees, and the pass assertion is
+ * the real one.
+ */
+let CACHED: Map<string, string> | null = null;
 function realSources(): Map<string, string> {
-  const files = [
-    CHOKEPOINT,
-    DBX_CHOKEPOINT,
-    RECORDER,
-    'lib/azure/uc-backend.ts',
-    'lib/admin/health-probes.ts',
-    'lib/azure/dq-monitor-client.ts',
-    'lib/azure/iceberg-catalog-client.ts',
-    'lib/azure/shortcut-credentials.ts',
-  ];
-  const m = new Map<string, string>();
-  for (const f of files) {
-    const abs = path.join(APP_ROOT, f);
-    if (fs.existsSync(abs)) m.set(f, fs.readFileSync(abs, 'utf8'));
-  }
-  return m;
+  // Read the tree ONCE (~2.5s); every attack gets its own mutable copy.
+  CACHED ??= readSources() as Map<string, string>;
+  return new Map(CACHED);
 }
 
 describe('unity-audit-chokepoint guard — the real tree', () => {
-  it('passes on the shipped sources', () => {
-    expect(analyzeUnityChokepoint(realSources())).toEqual([]);
+  it('passes on the shipped sources (lib/ + app/ + scripts/, every file)', () => {
+    const s = realSources();
+    // Guard against the assertion silently degrading to a handful of files again.
+    expect(s.size).toBeGreaterThan(500);
+    expect(s.has(CHOKEPOINT)).toBe(true);
+    expect(analyzeUnityChokepoint(s)).toEqual([]);
+  });
+
+  it('pins an outbound ceiling on EVERY file it exempts from the no-bypass scan', () => {
+    for (const r of [...CHOKEPOINT_FILES.keys(), ...KNOWN_UNAUDITED.keys()]) {
+      expect(OUTBOUND_BASELINE.has(r), `${r} has no OUTBOUND_BASELINE entry`).toBe(true);
+    }
   });
 });
 
@@ -135,6 +143,113 @@ describe('ATTACK: unaudited privilege grant on the Databricks path (reviewer byp
     s.set(DBX_CHOKEPOINT, s.get(DBX_CHOKEPOINT)!.replace(/recordDatabricksUnityAccess\(\{ path,/, 'noop({ path,'));
     const failures = analyzeUnityChokepoint(s);
     expect(failures.join('\n')).toMatch(/not called from inside a `finally` block of dbxFetch/);
+  });
+});
+
+describe('ATTACK: round-3 reviewer bypasses (all three exited 0 against round 2)', () => {
+  it('#4 — fails on a .tsx SERVER component that PATCHes UC permissions', () => {
+    const s = realSources();
+    // Round 2 exempted every `.tsx` from the UC-REST-path arm on the theory that
+    // "a .tsx component holds no credential". In the App Router a .tsx WITHOUT
+    // 'use client' is a SERVER component with full Node-runtime credential
+    // access. This is the reviewer's payload verbatim.
+    s.set('app/admin/rogue/page.tsx', [
+      'export default async function Page() {',
+      "  await fetch('https://dbx.example.net/api/2.1/unity-catalog/permissions/table/a.b.c', { method: 'PATCH' });",
+      '  return null;',
+      '}',
+    ].join('\n'));
+    expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/app\/admin\/rogue\/page\.tsx: references a Unity Catalog/);
+  });
+
+  it("#4 — but does NOT fire on a real 'use client' component that PRINTS the path", () => {
+    // The exemption still has to exist: uc-dialogs.tsx documents which REST call
+    // each action makes. Narrowing it from "extension" to "directive" must not
+    // turn that into a false positive.
+    const s = realSources();
+    s.set('lib/editors/uc-help.tsx', [
+      "'use client';",
+      "import { useState } from 'react';",
+      'export function Help() {',
+      '  const [x] = useState(0);',
+      "  void fetch('/api/databricks/unity-catalog/permissions');",
+      "  return <code>PATCH /api/2.1/unity-catalog/permissions/table/{'{full_name}'}</code>;",
+      '}',
+    ].join('\n'));
+    expect(analyzeUnityChokepoint(s)).toEqual([]);
+    expect(isClientComponent("'use client';\nexport const a = 1;")).toBe(true);
+    expect(isClientComponent("/** doc says 'use client' */\nexport const a = 1;")).toBe(false);
+    expect(isClientComponent('export default async function Page() {}')).toBe(false);
+  });
+
+  it('#5 — fails when a DECLARED-GAP file grows a new un-audited catalog call', () => {
+    const s = realSources();
+    const gap = 'lib/azure/shortcut-credentials.ts';
+    expect(KNOWN_UNAUDITED.has(gap)).toBe(true);
+    // Round 2's check 4 did `if (KNOWN_UNAUDITED.has(r)) continue;` with no
+    // per-file ceiling, so a declared file could grow ARBITRARY new privilege
+    // mutations silently. The reviewer appended exactly this.
+    s.set(gap, `${s.get(gap)!}\nexport async function rogue(h: string) {\n  return fetch(\`https://\${h}/api/2.1/unity-catalog/permissions/table/a.b.c\`, { method: 'PATCH' });\n}\n`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/shortcut-credentials\.ts: \d+ outbound calls \(ratchet: \d+\)/);
+  });
+
+  it('#5 — fails when an ALLOWLISTED file grows a second, un-recorded exit', () => {
+    // MUST_AUDIT only requires the recorder symbol to appear ONCE anywhere in
+    // the file, so iceberg-catalog-client.ts — allowlisted for
+    // listNamespaceGrants — had its other outbound calls shielded too.
+    const s = realSources();
+    const f = 'lib/azure/iceberg-catalog-client.ts';
+    s.set(f, `${s.get(f)!}\nexport async function rogue(h: string) {\n  return fetch(\`https://\${h}/api/2.1/unity-catalog/catalogs/sales\`, { method: 'DELETE' });\n}\n`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/iceberg-catalog-client\.ts: \d+ outbound calls \(ratchet: 2\)/);
+  });
+
+  it('#5 — fails when a file is exempted WITHOUT pinning its outbound count', () => {
+    const s = realSources();
+    // Simulate a future allowlist entry added with a justification but no
+    // ceiling: the exemption itself must not be grantable that way.
+    const failures = analyzeUnityChokepoint(s, {
+      outboundBaseline: new Map([[DBX_CHOKEPOINT, undefined]]),
+    });
+    expect(failures.join('\n')).toMatch(/databricks-client\.ts: exempted from the no-bypass scan but has no OUTBOUND_BASELINE entry/);
+  });
+
+  it('#6 — fails on an undici transport reaching UC', () => {
+    const s = realSources();
+    // REQUEST_RE matched only fetch/axios/http.request, so this exited 0.
+    s.set('lib/azure/rogue3.ts', [
+      "import { request } from 'undici';",
+      'export async function grant(h: string) {',
+      "  return request(`https://${h}/api/2.1/unity-catalog/permissions/table/a.b.c`, { method: 'PATCH' });",
+      '}',
+    ].join('\n'));
+    expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/rogue3\.ts: references a Unity Catalog/);
+  });
+
+  it('#6 — fails on a UC path assembled by concatenation', () => {
+    const s = realSources();
+    // `'/api/2.1/' + 'unity-catalog/permissions/...'` defeated the single-arm
+    // UNITY_REST_PATH_RE. The second arm matches `unity-catalog/<uc-family>`.
+    s.set('lib/azure/rogue4.ts', [
+      'export async function grant(h: string) {',
+      "  const p = '/api/2.1/' + 'unity-catalog/permissions/table/a.b.c';",
+      "  return fetch(`https://${h}${p}`, { method: 'PATCH' });",
+      '}',
+    ].join('\n'));
+    expect(analyzeUnityChokepoint(s).join('\n')).toMatch(/rogue4\.ts: references a Unity Catalog/);
+  });
+
+  it('#6 — does NOT fire on a Microsoft Learn documentation URL', () => {
+    // The second arm requires a real UC REST family after `unity-catalog/`, so
+    // `.../unity-catalog/manage-privileges/` in a docs link (lib/admin/self-audit.ts
+    // carries one) is not mistaken for an API path.
+    const s = realSources();
+    s.set('lib/admin/rogue-docs.ts', [
+      "export const DOCS = 'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/';",
+      "export async function ping() { return fetch('https://example.test/health'); }",
+    ].join('\n'));
+    expect(analyzeUnityChokepoint(s)).toEqual([]);
   });
 });
 

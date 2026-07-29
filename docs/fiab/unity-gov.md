@@ -174,22 +174,37 @@ happens in `finally` rather than on the success path precisely so a refused call
 authoritative trail) and, through `emitAuditEvent`, the `LoomAudit_CL` custom
 table via the Azure Monitor Logs-Ingestion DCR that Microsoft Sentinel reads.
 Both are **inside** the estate. `emitAuditEvent` also fans events out to any
-tenant-registered **outbound webhook** (a third-party URL) — so catalog **reads**
-are emitted with `{ webhook: false }` and stop at the boundary. Only catalog
-**mutations** (create / update / delete / grant change / credential vend) are
-allowed to egress. An un-provisioned DCR is a silent no-op — the Cosmos trail is
-unaffected, so there is no day-one gate here. Writes are fire-and-forget: an
+tenant-registered **outbound webhook** (a third-party URL), so the egress
+decision (`isUnityMutation`) is stated in the **affirmative** and defaults to
+"read": a row leaves the boundary only when the HTTP method is state-changing,
+or a safe method carries an explicit mutation verb (create / update / delete /
+grant change / enable / disable / credential vend). Everything else — including
+an un-modelled operation on a GET — stays in. An un-provisioned DCR is a silent
+no-op, so there is no day-one gate here. Writes are fire-and-forget: an
 audit-store hiccup never fails a catalog read.
+
+> **Corrected 2026-07-28 (round-3 review).** The first version of this decision
+> inferred "read" from the operation's last dotted segment being `get|list|read`
+> and treated everything else as a mutation. That leaked: the LU-2
+> `probe.anonymous-read` health-probe row (written on every `/admin/health`,
+> `/admin/readiness`, self-audit and copilot-orchestrator run) and the
+> `unity.request` catch-all on a GET were both classified as mutations and
+> fanned out — actor UPN, actor OID and path — to every registered third-party
+> URL, while this document said reads stopped at the boundary. A missed egress
+> costs a SOC one notification of a change still visible in `_auditLog` and
+> `LoomAudit_CL`; a wrong egress cannot be recalled. That asymmetry sets the
+> default.
 
 **The choke point is enforced, not just documented.**
 `scripts/ci/check-unity-audit-chokepoint.mjs` is a merge-blocking guardrail that
 fails the build when:
 
 1. any file outside the allowlist combines a Loom Unity address **or a Unity
-   Catalog REST path** with outbound-request code;
-2. `unity-catalog-client.ts` grows a second outbound fetch, or
-   `databricks-client.ts` grows a fourth (it is allowlisted because it *holds*
-   `dbxFetch`, so its outbound count is ratcheted instead);
+   Catalog REST path** with outbound-request code (only a `'use client'`
+   component is exempt from the REST-path arm — an App Router **server**
+   component is not, regardless of extension);
+2. **any** exempted file — allowlisted or declared-gap — exceeds its frozen
+   outbound-call count (`OUTBOUND_BASELINE`), or is exempted without one;
 3. the recorder call leaves the `finally` of **either** `ucFetch` or `dbxFetch` —
    the check brace-matches the real function body and the real `finally` block,
    with comments and string literals masked, so a decoy call elsewhere in the
@@ -199,7 +214,17 @@ fails the build when:
 
 The guard's own bypasses are covered by negative tests in
 `apps/fiab-console/lib/azure/__tests__/unity-audit-guard.test.ts`, which replay
-each demonstrated attack against the analysis and assert it now fails.
+each demonstrated attack against the analysis over the **whole** scanned tree and
+assert it now fails.
+
+**What the guard is NOT.** It is a lexical scan. It turns an *accidental* bypass
+into a red build and makes a deliberate one leave a visible diff. It does not
+survive a path assembled from enough pieces, a transport reached through an
+indirection it does not name, or a dynamic `import()`; and it proves the recorder
+is *called*, never that the row is correct or that it reached Cosmos. The
+`## LIMITS` block at the top of the guard is the normative statement. Do not cite
+the guard as proof that the Databricks path is fully covered — cite the two
+transports plus the gap list below.
 
 ### Audit (LU-3) — known gaps
 
@@ -211,13 +236,34 @@ a trail with an undisclosed hole is worse than having none.
   `executeStatement(...)` calls — the Databricks **SQL Statement Execution** API,
   a different surface from UC REST. These include `createUcPolicy` /
   `dropUcPolicy` (ABAC row filters + column masks), `mutateUcGovernedTag` and
-  `setUcTags`. On the Commercial backend they land in Databricks'
-  `system.access.audit`; they produce **no Loom row**. The count is ratcheted
-  (`SQL_EXIT_BASELINE`) so a new un-audited SQL exit fails the build (issue #2622).
+  `setUcTags`. They produce **no Loom row**; the count is ratcheted
+  (`SQL_EXIT_BASELINE`) so a new un-audited SQL exit fails the build (issue
+  #2622).
+  *Scope of the exposure:* `executeStatement` targets a Databricks **SQL
+  warehouse** (`POST /api/2.0/sql/statements`), and every caller route is gated
+  by `databricksConfigGate()` (and, for ABAC policies, `isGovCloud()`), so on the
+  Loom Unity / OSS backend these paths cannot execute at all — they are gated,
+  not silently unaudited. The exposure is Commercial-only, and there they are
+  covered by Databricks' own `system.access.audit`. What is missing is the
+  **Loom-side** row, i.e. single-pane completeness, not an unlogged mutation.
 - **`lib/azure/shortcut-credentials.ts` is un-audited.** Its own private
-  `ucFetch` issues storage-credential and external-location CREATE/DELETE. It is
-  listed in the guard's `KNOWN_UNAUDITED` map, which prints the gap on every
-  passing run and fails the build if any *other* file joins it (issue #2622).
+  `ucFetch` issues storage-credential and external-location CREATE/DELETE. A
+  storage credential is a live cloud identity, which makes this the single most
+  privilege-relevant un-audited surface in the list. It is listed in the guard's
+  `KNOWN_UNAUDITED` map, which prints the gap on every passing run, fails the
+  build if any *other* file joins it, **and** — since round 3 — pins the file's
+  outbound-call count so the un-audited surface cannot GROW while it waits
+  (issue #2622).
+- **Iceberg REST catalog writes land in a DIFFERENT trail.**
+  `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` issues namespace CREATE
+  (`POST /v1/namespaces`), table register (`POST`) and table-registration DROP
+  (`DELETE`) against the **same** OSS Unity Catalog server, from live routes
+  under `app/api/catalog/iceberg/*`. Those calls **are** audited — but via
+  `logIcebergAccess` into `_auditLog` with `itemType: 'iceberg-catalog'`, so they
+  do **not** appear in the System tables pane an auditor is told to read here.
+  Query them with the KQL/Cosmos filter `itemType == 'iceberg-catalog'` until the
+  two trails are unified (issue #2622). (`listNamespaceGrants` in the same file
+  is the one call that DOES record into this trail.)
 - **`unity-catalog-account-client.ts`** (Databricks account-plane metastore
   assignment) never talks to Loom Unity and is not routed through the choke
   point; its account-admin mutations are unaudited (issue #2622).
