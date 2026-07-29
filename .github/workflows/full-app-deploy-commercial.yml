@@ -227,6 +227,13 @@ jobs:
           - app: loom-uat
             ctx: ./apps/fiab-console
             file: ./apps/fiab-console/Dockerfile.uat
+          # Loom Unity — the Unity-Catalog-compatible OSS metastore. Deployed by
+          # the orchestrator on EVERY boundary since svc-loom-unity-authz wired
+          # compute/loom-unity-app.bicep (authMode=entra, IP-pinned ingress) +
+          # data-plane/loom-unity-postgres.bicep into admin-plane/main.bicep, so
+          # the image MUST be in ACR before the admin-plane deploy runs.
+          - app: loom-unity
+            ctx: ./apps/loom-unity
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
@@ -410,7 +417,7 @@ jobs:
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           # Keep in sync with the build matrix above. Verify the :TAG refs —
           # that is exactly what the redeploy-with-apps job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat)
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity)
           FAILED=()
           for APP in "${APPS[@]}"; do
             DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")

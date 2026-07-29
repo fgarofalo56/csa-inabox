@@ -236,6 +236,61 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------
+# svc-loom-unity-authz — Loom Unity (the Unity-Catalog-compatible OSS metastore)
+# authorization, BOTH halves.
+#
+# admin-plane/main.bicep deploys the loom-unity Container App with
+# authMode=entra + entraClientId=<effectiveMsalClientId>. On the DEFAULT
+# push-button path that client id is EMPTY at template time, because the app
+# registration is created right here in deploy phase 3 — so this script owns
+# stamping it onto both sides:
+#
+#   SERVER (loom-unity):   LOOM_UNITY_ENTRA_CLIENT_ID (+ tenant) so the catalog
+#                          pins the audience and stops failing closed.
+#   CONSOLE (loom-console): LOOM_UNITY_CLIENT_ID / _AUDIENCE / _AUTH_MODE so the
+#                          BFF mints a matching Entra bearer on every call.
+#
+# The app registration must expose api://<APP_ID> as an Application ID URI or the
+# Console's managed identity cannot request api://<APP_ID>/.default at all, so we
+# ensure that first. All steps are idempotent and warn-and-continue: this is a
+# hardening pass, and a partial failure must not abort the sign-in bootstrap.
+# ---------------------------------------------------------------------
+if [ -n "${CONSOLE_RG:-}" ]; then
+  echo "==> Wiring Loom Unity authorization (svc-loom-unity-authz)"
+  UNITY_APP_NAME="${UNITY_APP_NAME:-loom-unity}"
+  # Application ID URI — required for the api://<app-id>/.default token request.
+  CURRENT_URIS="$(az ad app show --id "${APP_ID}" --query "identifierUris" -o tsv 2>/dev/null || true)"
+  if ! printf '%s' "${CURRENT_URIS}" | grep -qx "api://${APP_ID}"; then
+    az ad app update --id "${APP_ID}" --identifier-uris "api://${APP_ID}" -o none \
+      && echo "    set Application ID URI api://${APP_ID}" \
+      || echo "    WARN: could not set the Application ID URI (app owned elsewhere?) — the Console will not be able to mint api://${APP_ID}/.default"
+  else
+    echo "    Application ID URI api://${APP_ID} already present"
+  fi
+
+  if az containerapp show -n "${UNITY_APP_NAME}" -g "${CONSOLE_RG}" -o none 2>/dev/null; then
+    TENANT_ID="$(az account show --query tenantId -o tsv 2>/dev/null | tr -d '\r')"
+    az containerapp update -n "${UNITY_APP_NAME}" -g "${CONSOLE_RG}" --set-env-vars \
+      "LOOM_UNITY_AUTH=enable" \
+      "LOOM_UNITY_ENTRA_TENANT_ID=${TENANT_ID}" \
+      "LOOM_UNITY_ENTRA_CLIENT_ID=${APP_ID}" -o none \
+      && echo "    wired ${UNITY_APP_NAME}: LOOM_UNITY_AUTH=enable + audience api://${APP_ID}" \
+      || echo "    WARN: could not wire ${UNITY_APP_NAME} — it will keep failing closed until LOOM_UNITY_ENTRA_CLIENT_ID is set"
+
+    if [ -n "${CONSOLE_APP_NAME:-}" ]; then
+      az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" --set-env-vars \
+        "LOOM_UNITY_CLIENT_ID=${APP_ID}" \
+        "LOOM_UNITY_AUDIENCE=api://${APP_ID}/.default" \
+        "LOOM_UNITY_AUTH_MODE=entra" -o none \
+        && echo "    wired ${CONSOLE_APP_NAME}: LOOM_UNITY_CLIENT_ID + LOOM_UNITY_AUDIENCE + LOOM_UNITY_AUTH_MODE=entra" \
+        || echo "    WARN: could not wire the Console half — /catalog/unity will report the svc-loom-unity-authz gate"
+    fi
+  else
+    echo "    ${UNITY_APP_NAME} is not deployed in ${CONSOLE_RG} — nothing to wire (the Console's Loom Unity surfaces honest-gate on LOOM_UNITY_URL)."
+  fi
+fi
+
+# ---------------------------------------------------------------------
 # OPT-IN: grant admin consent for the Power BI delegated permissions and print
 # the env vars to wire. Admin consent here covers the whole app (Graph User.Read
 # + the 3 Power BI scopes). Requires the caller to be a Privileged Role /

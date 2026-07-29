@@ -78,9 +78,12 @@ does the PostgreSQL-side principal registration and grants.
 
 ## Auth (LU-2 — hardened; Entra by default)
 
-**Microsoft Entra bearer authorization is ON by default.** The entrypoint renders
-`server.authorization=enable` whenever an Entra tenant is wired, with the token
-**issuer and audience both pinned**. The keys (`server.allowed-issuers` /
+**Microsoft Entra bearer authorization is ON by default, and there is no anonymous
+fallback.** The entrypoint renders `server.authorization=enable` unless the operator
+explicitly sets `LOOM_UNITY_AUTH=disable`, with the token **issuer and audience both
+pinned**. (Until the `svc-loom-unity-authz` fix it inferred `disable` whenever no
+tenant happened to be wired — so any caller that omitted one variable got a catalog
+that anything on the VNet could read AND mutate. That inference is gone.) The keys (`server.allowed-issuers` /
 `server.audiences`) are verified verbatim against upstream
 `etc/conf/server.properties` at both `v0.5.0` — the tag the Dockerfile pins — and
 `v0.5.1`:
@@ -98,10 +101,11 @@ active cloud. Any of the four can be overridden explicitly.
 
 **It fails closed.** `LOOM_UNITY_AUTH=enable` with no pinned issuer *or* no pinned
 audience exits 1 with a FATAL naming the exact variable: an authorization server that
-validates nothing is worse than an honest open door, so it never boots. With nothing
-wired at all the server stays open **and says so on every boot** with a SECURITY
-WARNING naming the remediation — the Console then reports it through the
-`svc-loom-unity-authz` gate and the live `probe-loom-unity-authz` health probe.
+validates nothing is worse than an honest open door, so it never boots. **With
+nothing wired at all it does the same** — a bare `docker run` / a bicep deploy that
+omitted `entraClientId` aborts with that FATAL rather than coming up anonymous. The
+Console reports the state through the `svc-loom-unity-authz` gate and the live
+`probe-loom-unity-authz` health probe.
 
 The Console presents `LOOM_UNITY_TOKEN` (a pre-shared, server-minted token delivered
 as a Key Vault secretref) or an Entra bearer minted by its managed identity for the
@@ -131,7 +135,7 @@ paths. See the honest capability matrix in `docs/fiab/unity-gov.md`.
 | `LOOM_UNITY_DB_DDL` | `update` | `hibernate.hbm2ddl.auto`. Set `none` to manage the schema with your own migrations. |
 | `LOOM_UNITY_DB_DIR` | `etc/db` | Directory for the H2 fallback file DB (Azure Files mount point). |
 | `LOOM_UNITY_DB_LOCAL` | *(unset)* | `1` forces the H2 fallback onto a local ephemeral dir (no SMB mount). |
-| `LOOM_UNITY_AUTH` | *(derived: `enable` when a tenant is wired)* | `enable` / `disable`. `disable` is an audited opt-out that warns on every boot. |
+| `LOOM_UNITY_AUTH` | `enable` | `enable` / `disable`. `disable` is the ONLY route to an anonymous catalog and is an audited opt-out that warns on every boot. Unset means `enable`, so an unpinnable issuer/audience fails the boot. |
 | `LOOM_UNITY_ENTRA_TENANT_ID` | *(unset)* | Entra tenant whose tokens are accepted; drives the derived issuer + endpoints. |
 | `LOOM_UNITY_ENTRA_CLIENT_ID` | *(unset)* | App registration fronting Loom Unity; drives the derived audiences. |
 | `LOOM_UNITY_ENTRA_CLIENT_SECRET` | *(unset)* | Client secret — **Key Vault secretref only**. |
@@ -145,7 +149,7 @@ paths. See the honest capability matrix in `docs/fiab/unity-gov.md`.
 
 ```bash
 docker build -t loom-unity apps/loom-unity
-docker run -p 8080:8080 loom-unity                    # H2 fallback, authorization off + warned
+docker run -p 8080:8080 loom-unity                    # FAILS CLOSED: no issuer/audience pinned
 docker run -p 8080:8080 \
   -e LOOM_UNITY_ENTRA_TENANT_ID=<tenant> \
   -e LOOM_UNITY_ENTRA_CLIENT_ID=<app-client-id> loom-unity   # Entra bearer enforced

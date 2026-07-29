@@ -28,6 +28,31 @@ Container Apps VNet was the **only** control. Consequences, all real:
 | F-4 | The vending service-principal secret was documented as an inline `az containerapp update --set-env-vars …CLIENT_SECRET=<value>` — landing a live secret in ARM deployment history and shell history. | MEDIUM |
 | F-5 | Nothing distinguished "the catalog is secured" from "the catalog answers anyone": no gate, no probe, no signal. | MEDIUM |
 
+### 1.1 The residual finding `svc-loom-unity-authz` closes
+
+LU-2 made `authMode='entra'` the module default, but it was only *honored* when an
+audience could be pinned:
+
+```bicep
+var authEnabled = authMode == 'entra' && audiencePinned   // pre-fix
+```
+
+and `loom-entrypoint.sh` mirrored the same inference (`auth=disable` whenever no
+`LOOM_UNITY_ENTRA_TENANT_ID` happened to be set). So the "secure default" only
+applied to callers who already passed `entraClientId` — and **no caller did**: the
+catalog was deployable only out-of-band, and both real invocations
+(`.github/workflows/gov-uc-purview-wire.yml`, the `az deployment group create`
+line in `docs/fiab/unity-gov.md`) omitted it. The shipped default therefore still
+produced F-1/F-2/F-3, with the only signal being a stderr line.
+
+| # | Consequence | Severity | Closed by |
+|---|---|---|---|
+| F-6 | A deployment that omitted one parameter got the full anonymous posture while the module documented itself as "Entra ON by default". | HIGH | `authEnabled = authMode == 'entra'` — no silent downgrade; `authorizationMisconfigured` output. |
+| F-7 | The container inferred `authorization=disable` from an unset env var, so the image itself had an anonymous default. | HIGH | `auth="${LOOM_UNITY_AUTH:-enable}"` — the server **fails closed** and refuses to boot when nothing can be pinned. |
+| F-8 | The catalog was not in the push-button deploy at all, so the secured posture depended on an operator running a documented command correctly. | HIGH | `admin-plane/main.bicep` deploys `loom-unity` + its Postgres by default with `authMode=entra`, `entraClientId`, and a CAE-subnet ingress pin, and emits the Console half. |
+| F-9 | `data-plane/iceberg-catalog-aca.bicep` runs the SAME image for the Iceberg REST Catalog surface and set no auth env at all. | HIGH | The same `authMode`/`entraClientId` config-bag keys, defaulting to `entra`. |
+| F-10 | The Gov wiring workflow's own probe treated an **unauthenticated HTTP 200** as success. | MEDIUM | `gov-uc-purview-wire.yml` now FAILS on a 200 and expects 401/403. |
+
 ## 2. Surface inventory (post-LU-2)
 
 | # | Surface | Ingress | Identity model | Primary controls |

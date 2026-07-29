@@ -716,6 +716,11 @@ output hubVnetName string = hubVnet.name
 output firewallPrivateIp string = firewallEnabled ? firewall!.properties.ipConfigurations[0].properties.privateIPAddress : ''
 output bastionId string = bastion.id
 output containerPlatformSubnetId string = '${hubVnet.id}/subnets/snet-container-platform'
+// svc-loom-unity-authz: the CIDR (not just the id) of the subnet the Container
+// Apps environment is integrated with. Internal-ingress apps that must ONLY be
+// reachable from other apps in this environment (loom-unity) pass it as an ACA
+// ingress Allow rule, so "on the VNet" stops being sufficient to reach them.
+output containerPlatformSubnetPrefix string = '${prefix}.2.0/24'
 output functionsSubnetId string = '${hubVnet.id}/subnets/snet-functions'
 output apimSubnetId string = '${hubVnet.id}/subnets/snet-apim'
 output privateEndpointsSubnetId string = '${hubVnet.id}/subnets/snet-private-endpoints'

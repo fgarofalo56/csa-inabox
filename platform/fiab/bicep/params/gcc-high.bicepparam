@@ -148,6 +148,12 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.1')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.1')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.1')
+  // loom-unity - Loom Unity, the Unity-Catalog-compatible OSS metastore. Now
+  // deployed by the orchestrator on EVERY boundary (svc-loom-unity-authz wired
+  // authMode=entra + the LU-1 Postgres store into admin-plane/main.bicep), so
+  // the image must be in ACR. Built by build-fiab-images-acr-tasks.yml /
+  // full-app-deploy-commercial.yml.
+  unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
   // These keys MUST be present: admin-plane/main.bicep builds image strings from
   // appImageTags.{setupOrchestrator,maf,scriptRunner,wrangler} even when the
   // corresponding app is gated off. A missing key fails template evaluation

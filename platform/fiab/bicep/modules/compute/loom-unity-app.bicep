@@ -24,11 +24,16 @@
 // single-writer it pins the app to exactly ONE replica. With Postgres the app
 // scales past one replica (maxReplicas below).
 //
-// STANDALONE ENTRYPOINT: admin-plane/main.bicep is at the ARM 256-parameter
-// ceiling, so this deploys out-of-band (like the Hyperscale-band modules), then
-// LOOM_UNITY_URL + LOOM_UC_BACKEND=oss are set on the Console app. Until wired,
-// the UC client honest-gates (OssUcNotConfiguredError) and Commercial keeps
-// using Databricks UC. Orphan-allowlisted in scripts/ci/check-bicep-sync.mjs.
+// DEPLOYED BY DEFAULT (svc-loom-unity-authz): admin-plane/main.bicep invokes this
+// module on every boundary (`loomUnityActive` — Container Apps + deployAppsEnabled)
+// and emits LOOM_UNITY_URL / LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE /
+// LOOM_UNITY_AUTH_MODE on the Console, so a FRESH deploy gets an Entra-secured,
+// IP-pinned catalog with no manual step. It previously deployed only out-of-band,
+// and every caller omitted entraClientId — which silently produced an anonymous,
+// VNet-readable-AND-writable catalog. It is still deployable standalone (below)
+// for a targeted redeploy; entraClientId is effectively REQUIRED, because
+// authMode=entra with nothing pinnable now fails CLOSED at boot instead of
+// downgrading.
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
@@ -148,7 +153,7 @@ param authMode string = 'entra'
 @description('Entra tenant id whose tokens Loom Unity accepts. Defaults to the deployment tenant. The allowed issuer is derived as https://<authorityHost>/<tenantId>/v2.0 (the form upstream documents for Microsoft Entra ID).')
 param entraTenantId string = tenant().tenantId
 
-@description('Entra application (client) id that fronts Loom Unity — the audience the Console requests its bearer for. Pass the SAME app registration the Console signs in with (LOOM_MSAL_CLIENT_ID) unless you registered a dedicated one. Accepted audiences are derived as "api://<clientId>,<clientId>". Leaving this EMPTY leaves authorization OFF (no audience can be pinned, and an authorization server with no pinned audience is worse than an honest open door) — the container then logs a SECURITY WARNING on every boot and the Console reports the `svc-loom-unity-authz` gate + a failing `probe-loom-unity-authz` health check with this exact remediation.')
+@description('Entra application (client) id that fronts Loom Unity — the audience the Console requests its bearer for. Pass the SAME app registration the Console signs in with (LOOM_MSAL_CLIENT_ID) unless you registered a dedicated one. Accepted audiences are derived as "api://<clientId>,<clientId>". Leaving this EMPTY no longer downgrades to an anonymous catalog (that silent downgrade WAS the svc-loom-unity-authz finding): with authMode=entra the container is deployed with LOOM_UNITY_AUTH=enable and FAILS CLOSED at boot naming this exact var, so an unconfigured deployment serves nothing rather than serving everything. Deploy with authMode=disabled if — and only if — you are knowingly accepting the anonymous posture.')
 param entraClientId string = ''
 
 @description('Key Vault secret URI (https://<vault>.vault.azure.net/secrets/<name>) holding the Entra client secret for the OSS authorization server. Wired as a Container Apps SECRET REFERENCE resolved by unityUamiId — NEVER an inline literal. Empty => no client secret is rendered (pure bearer-validation mode, which is all the Console path needs).')
@@ -186,12 +191,18 @@ var dbMountPath = '/home/unitycatalog/etc/db'
 // https://login.microsoftonline.us/) so Gov never sees a Commercial issuer.
 var derivedAuthorityHost = replace(replace(environment().authentication.loginEndpoint, 'https://', ''), '/', '')
 var effectiveAuthorityHost = empty(authorityHost) ? derivedAuthorityHost : authorityHost
-// Authorization can only be ENFORCED when an audience can be pinned. authMode=entra
-// with no entraClientId (and no explicit entraAudiences) would render an
-// authorization server that validates the issuer but accepts ANY audience — a
-// worse posture than an honest open door — so we keep it off and surface the gate.
+// Authorization can only be ENFORCED when an audience can be pinned. Before the
+// svc-loom-unity-authz fix, authMode=entra with no entraClientId SILENTLY
+// rendered `server.authorization=disable` — i.e. the module's documented default
+// ("Entra ON") produced an anonymous, VNet-readable-AND-writable catalog on any
+// deployment that forgot one parameter. That silent downgrade is gone: authMode
+// is now the ONLY thing that decides, and an unpinnable audience makes the
+// container FAIL CLOSED at boot (the entrypoint dies naming the exact var)
+// instead of quietly opening the door. `authorizationMisconfigured` surfaces the
+// state as a deployment output so the receipt shows it without reading logs.
 var audiencePinned = !empty(entraClientId) || !empty(entraAudiences)
-var authEnabled = authMode == 'entra' && audiencePinned
+var authEnabled = authMode == 'entra'
+var authMisconfigured = authEnabled && !audiencePinned
 
 // ── LU-1 — persistence resolution ───────────────────────────────────────────
 // Postgres wins whenever it is wired (explicit URL override, or the FQDN from
@@ -483,11 +494,14 @@ output dbEntraTokenAuth bool = dbEntraAuth
 @description('LU-1 — the replica ceiling actually applied. Forced to 1 on the single-writer H2 fallback, whatever maxReplicas asked for.')
 output effectiveMaxReplicas int = effectiveMaxReplicas
 
-@description('LU-2 — TRUE only when Loom Unity actually enforces Entra bearer authorization (authMode=entra AND an audience is pinned). FALSE means the catalog is reachable anonymously by anything that can reach it on the network; wire entraClientId and redeploy. Cross-check live with the Console health probe probe-loom-unity-authz.')
+@description('LU-2 — TRUE only when Loom Unity actually enforces Entra bearer authorization (authMode=entra). FALSE means authMode=disabled was explicitly chosen and the catalog is reachable anonymously by anything that can reach it on the network. Cross-check live with the Console health probe probe-loom-unity-authz.')
 output authorizationEnforced bool = authEnabled
+
+@description('svc-loom-unity-authz — TRUE when authorization was REQUESTED (authMode=entra) but no audience could be pinned (both entraClientId and entraAudiences empty). The container then FAILS CLOSED at boot rather than serving anonymously: set entraClientId to the Entra app registration fronting Loom Unity (normally LOOM_MSAL_CLIENT_ID) and redeploy.')
+output authorizationMisconfigured bool = authMisconfigured
 
 @description('LU-2 — TRUE when ingress is pinned to an IP allow-list on top of internal-ingress isolation.')
 output ingressIpRestricted bool = !empty(consoleAllowedCidrs)
 
-@description('LU-2 — the Entra audiences Loom Unity accepts (empty when authorization is not enforced). Set the Console app LOOM_UNITY_CLIENT_ID to the same app registration so it mints a matching bearer.')
-output acceptedAudiences string = authEnabled ? (empty(entraAudiences) ? 'api://${entraClientId},${entraClientId}' : entraAudiences) : ''
+@description('LU-2 — the Entra audiences Loom Unity accepts (empty only when authMode=disabled or nothing could be pinned). Set the Console app LOOM_UNITY_CLIENT_ID to the same app registration so it mints a matching bearer.')
+output acceptedAudiences string = (authEnabled && audiencePinned) ? (empty(entraAudiences) ? 'api://${entraClientId},${entraClientId}' : entraAudiences) : ''

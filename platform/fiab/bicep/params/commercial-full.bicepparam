@@ -208,6 +208,12 @@ param appImageTags = {
   //            `tag` input, default v0.1 -> build matrix stamps loom-duckdb:v0.1
   //   template <acr>/loom-duckdb:v0.1
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
+  // loom-unity - Loom Unity, the Unity-Catalog-compatible OSS metastore. Now
+  // deployed by the orchestrator on EVERY boundary (svc-loom-unity-authz wired
+  // authMode=entra + the LU-1 Postgres store into admin-plane/main.bicep), so
+  // the image must be in ACR. Built by build-fiab-images-acr-tasks.yml /
+  // full-app-deploy-commercial.yml.
+  unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
 }
 
 // MSAL — the app registration + client secret are now PROVISIONED by default

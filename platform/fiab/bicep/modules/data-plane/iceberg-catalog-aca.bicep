@@ -72,7 +72,23 @@ Optional keys:
   maxReplicas            Default 1 (single-writer local metadata store; raise with Postgres).
   cpu / memory           Container resources (default 1.0 vCPU / 2Gi).
   assignLakeRole         Set false to skip the in-module role assignment when the
-                         identity is granted out-of-band by an estate policy.''')
+                         identity is granted out-of-band by an estate policy.
+  authMode               'entra' (DEFAULT) | 'disabled'. This app runs the SAME Unity
+                         Catalog OSS image as compute/loom-unity-app.bicep, so it
+                         inherits the same svc-loom-unity-authz finding: with no Entra
+                         issuer/audience pinned the catalog was readable AND writable
+                         anonymously by anything on the CAE VNet. Entra bearer
+                         authorization is now ON by default and the container FAILS
+                         CLOSED at boot when nothing can be pinned. 'disabled' is an
+                         explicit, audited opt-out that logs a SECURITY WARNING on
+                         every boot.
+  entraTenantId          Tenant whose tokens are accepted (default: deployment tenant).
+  entraClientId          Entra app registration fronting the catalog — normally the
+                         SAME one the Console signs in with (LOOM_MSAL_CLIENT_ID).
+                         Audiences derive as api://<clientId>,<clientId>.
+  entraAudiences         Explicit comma-separated audience override.
+  authorityHost          Entra authority host override; empty => derived per cloud
+                         from environment().authentication.loginEndpoint.''')
 param catalogConfig object
 
 @description('Compliance/cost tags. The loom-next-level tag is unioned in.')
@@ -93,6 +109,22 @@ var maxReplicas = int(catalogConfig.?maxReplicas ?? 1)
 var cpu = string(catalogConfig.?cpu ?? '1.0')
 var memory = string(catalogConfig.?memory ?? '2Gi')
 var assignLakeRole = bool(catalogConfig.?assignLakeRole ?? true)
+
+// ── svc-loom-unity-authz — Entra bearer authorization (DEFAULT ON) ───────────
+// This app IS the Unity Catalog OSS container, so the anonymous-catalog finding
+// applies here identically. Authorization defaults to entra; the sovereign
+// authority host is derived per cloud (login.microsoftonline.com in Commercial,
+// login.microsoftonline.us in Azure Government) so Gov never sees a Commercial
+// issuer. With authMode=entra and nothing pinnable the entrypoint aborts the
+// boot naming the exact var — it never falls back to serving anonymously.
+var authMode = string(catalogConfig.?authMode ?? 'entra')
+var entraTenantId = string(catalogConfig.?entraTenantId ?? tenant().tenantId)
+var entraClientId = string(catalogConfig.?entraClientId ?? '')
+var entraAudiences = string(catalogConfig.?entraAudiences ?? '')
+var derivedAuthorityHost = replace(replace(environment().authentication.loginEndpoint, 'https://', ''), '/', '')
+var authorityHost = empty(string(catalogConfig.?authorityHost ?? '')) ? derivedAuthorityHost : string(catalogConfig.?authorityHost ?? '')
+var authEnabled = authMode == 'entra'
+var authAudiencePinned = !empty(entraClientId) || !empty(entraAudiences)
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
@@ -127,6 +159,18 @@ var envVars = concat(
     // IMDS. No account key, no SAS, no connection string anywhere in this app.
     { name: 'LOOM_LAKE_ACCOUNT', value: lakeStorageAccountName }
     { name: 'LOOM_LAKE_AUTH_MODE', value: 'managed-identity' }
+    // svc-loom-unity-authz — emitted UNCONDITIONALLY so the running container
+    // never depends on the entrypoint inferring its posture from what happens
+    // to be set.
+    { name: 'LOOM_UNITY_AUTHORITY_HOST', value: authorityHost }
+  ],
+  authEnabled ? [
+    { name: 'LOOM_UNITY_AUTH', value: 'enable' }
+    { name: 'LOOM_UNITY_ENTRA_TENANT_ID', value: entraTenantId }
+    { name: 'LOOM_UNITY_ENTRA_CLIENT_ID', value: entraClientId }
+    { name: 'LOOM_UNITY_AUDIENCES', value: entraAudiences }
+  ] : [
+    { name: 'LOOM_UNITY_AUTH', value: 'disable' }
   ],
   empty(catalogDbUrl) ? [
     // No Postgres wired: the container uses its LOCAL metadata store. Catalog
@@ -221,3 +265,9 @@ output warehouse string = warehouse
 
 @description('True when catalog metadata is durable (Postgres wired). False => the local store resets on restart; wire catalogConfig.catalogDbUrl for production.')
 output metadataDurable bool = !empty(catalogDbUrl)
+
+@description('svc-loom-unity-authz — TRUE when the catalog enforces Entra bearer authorization (authMode=entra). FALSE means catalogConfig.authMode=disabled was explicitly chosen and anything on the CAE VNet can read AND mutate catalog metadata.')
+output authorizationEnforced bool = authEnabled
+
+@description('svc-loom-unity-authz — TRUE when authorization was requested but no audience could be pinned (catalogConfig.entraClientId / entraAudiences both empty). The container then FAILS CLOSED at boot rather than serving anonymously; set entraClientId to the Entra app registration fronting the catalog (normally LOOM_MSAL_CLIENT_ID) and redeploy.')
+output authorizationMisconfigured bool = authEnabled && !authAudiencePinned

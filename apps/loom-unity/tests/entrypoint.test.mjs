@@ -26,8 +26,17 @@ function render(env) {
 
 const shAvailable = spawnSync('sh', ['-c', 'exit 0']).status === 0;
 
+// Authorization is DEFAULT-ON and FAIL-CLOSED, so every test that is about a
+// NON-auth branch must pin an issuer + audience or the render exits 1 before it
+// reaches the branch under test. This is the minimum "authorization is wired"
+// env — the shape loom-unity-app.bicep emits with authMode=entra.
+const AUTHZ_WIRED = {
+  LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
+  LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
+};
+
 test('no Postgres wired => the H2 fallback still renders (local dev / not-yet-provisioned)', { skip: !shAvailable }, () => {
-  const r = render({});
+  const r = render({ ...AUTHZ_WIRED });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /org\.h2\.Driver/);
   assert.match(r.stdout, /jdbc:h2:file:.*\/h2db;DB_CLOSE_DELAY=-1/);
@@ -37,6 +46,7 @@ test('no Postgres wired => the H2 fallback still renders (local dev / not-yet-pr
 
 test('LU-1: the DEFAULT Postgres path is PASSWORDLESS — plugin + sslmode, no password line', { skip: !shAvailable }, () => {
   const r = render({
+    ...AUTHZ_WIRED,
     LOOM_UNITY_DB_URL: 'jdbc:postgresql://psql-loom-unity.postgres.database.usgovcloudapi.net:5432/unitycatalog',
     LOOM_UNITY_DB_USER: 'uami-loom-unity',
     AZURE_CLIENT_ID: 'uami-client-guid',
@@ -64,6 +74,7 @@ test('LU-1: Postgres with no DB user FAILS CLOSED (Entra role name is mandatory)
 
 test('LU-1: a missing AZURE_CLIENT_ID still boots but WARNS with the exact remediation', { skip: !shAvailable }, () => {
   const r = render({
+    ...AUTHZ_WIRED,
     LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog',
     LOOM_UNITY_DB_USER: 'uami-loom-unity',
   });
@@ -74,6 +85,7 @@ test('LU-1: a missing AZURE_CLIENT_ID still boots but WARNS with the exact remed
 
 test('LU-1: an operator query string on the JDBC URL is preserved, not clobbered', { skip: !shAvailable }, () => {
   const r = render({
+    ...AUTHZ_WIRED,
     LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog?ApplicationName=loom-unity&sslmode=verify-full',
     LOOM_UNITY_DB_USER: 'uami-loom-unity',
     AZURE_CLIENT_ID: 'uami-client-guid',
@@ -87,6 +99,7 @@ test('LU-1: an operator query string on the JDBC URL is preserved, not clobbered
 
 test('LU-1: LOOM_UNITY_DB_AUTH=password is an explicit, warned BYO opt-out', { skip: !shAvailable }, () => {
   const r = render({
+    ...AUTHZ_WIRED,
     LOOM_UNITY_DB_URL: 'jdbc:postgresql://pg.example:5432/unitycatalog',
     LOOM_UNITY_DB_USER: 'uc',
     LOOM_UNITY_DB_AUTH: 'password',
@@ -108,13 +121,22 @@ test('LU-1: password mode with no password FAILS CLOSED', { skip: !shAvailable }
   assert.match(r.stderr, /FATAL: LOOM_UNITY_DB_AUTH=password but LOOM_UNITY_DB_PASSWORD is empty/);
 });
 
-test('no Entra tenant wired => authorization stays off but the boot WARNS loudly (LU-2)', { skip: !shAvailable }, () => {
+test('svc-loom-unity-authz: NOTHING wired => the server REFUSES to boot (never anonymous by default)', { skip: !shAvailable }, () => {
   const r = render({});
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /server\.authorization=disable/);
-  // The open door is never silent: the operator sees the exact remediation.
-  assert.match(r.stderr, /SECURITY WARNING: authorization is DISABLED/);
+  // Before the svc-loom-unity-authz fix this rendered server.authorization=disable
+  // and exited 0 — a bare `az deployment` that omitted one parameter produced a
+  // catalog anything on the VNet could read AND mutate. The default is now
+  // enable, so an unpinnable issuer aborts the boot with the exact remediation.
+  assert.equal(r.status, 1);
+  assert.doesNotMatch(r.stdout, /server\.authorization=disable/);
+  assert.match(r.stderr, /FATAL: LOOM_UNITY_AUTH=enable but no token issuer is pinned/);
   assert.match(r.stderr, /LOOM_UNITY_ENTRA_TENANT_ID/);
+});
+
+test('svc-loom-unity-authz: a tenant with NO client id also fails closed (issuer alone is not authorization)', { skip: !shAvailable }, () => {
+  const r = render({ LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /FATAL: LOOM_UNITY_AUTH=enable but no token audience is pinned/);
 });
 
 test('LU-2: an Entra tenant + client id turn authorization ON and derive issuer/audience', { skip: !shAvailable }, () => {
@@ -201,6 +223,7 @@ test('explicit IdP endpoints still win over the derived Entra ones', { skip: !sh
 
 test('ADLS credential-vending block renders only when an account is configured', { skip: !shAvailable }, () => {
   const r = render({
+    ...AUTHZ_WIRED,
     LOOM_UNITY_ADLS_ACCOUNT: 'dlzlake01',
     LOOM_UNITY_ADLS_TENANT: 'tenant-guid',
     LOOM_UNITY_ADLS_CLIENT_ID: 'client-guid',

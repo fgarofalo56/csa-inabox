@@ -97,6 +97,13 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
   // both halves so an operator cannot set the Console var and believe the catalog
   // is secured when the server still answers anonymous callers — the live
   // probe-loom-unity-authz check is the proof either way.
+  //
+  // As of svc-loom-unity-authz a FRESH deploy no longer reaches this gate: the
+  // push-button path deploys loom-unity from admin-plane/main.bicep with
+  // authMode=entra + entraClientId + the CAE-subnet ingress pin, and phase 3
+  // (bootstrap-msal-app-reg.sh) stamps both halves once the app registration
+  // exists. The gate now fires only on an estate that predates that wiring, or
+  // where the app registration is missing — so the remediation stays.
   'svc-loom-unity-authz': {
     surfaces: [
       { path: '/catalog/unity', label: 'Loom Unity — Explore / Grants / Storage' },
@@ -106,7 +113,7 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: {
       kind: 'wizard',
-      grantNote: 'Two halves, both required. (1) SERVER: redeploy modules/compute/loom-unity-app.bicep with authMode=entra (default) + entraClientId=<Entra app registration fronting Loom Unity, normally the same as LOOM_MSAL_CLIENT_ID>, optionally consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR> to pin ingress, and entraClientSecretUri/adlsClientSecretUri as Key Vault secret URIs (never inline). The loom-unity UAMI needs "Key Vault Secrets User" on that vault. (2) CONSOLE: set LOOM_UNITY_CLIENT_ID (or LOOM_UNITY_AUDIENCE) here so the BFF mints an Entra bearer on every catalog call. Verify with the live probe-loom-unity-authz health check: it must report that an unauthenticated read is rejected.',
+      grantNote: 'A fresh push-button deploy wires this automatically (admin-plane/main.bicep deploys loom-unity with authMode=entra + entraClientId + a CAE-subnet ingress pin; the post-deploy bootstrap stamps both halves once the Entra app registration exists). To repair an estate that predates it, both halves are required. (1) SERVER: redeploy modules/compute/loom-unity-app.bicep with authMode=entra (default) + entraClientId=<Entra app registration fronting Loom Unity, normally the same as LOOM_MSAL_CLIENT_ID>, consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR> to pin ingress, and entraClientSecretUri/adlsClientSecretUri as Key Vault secret URIs (never inline). The loom-unity UAMI needs "Key Vault Secrets User" on that vault. (2) CONSOLE: set LOOM_UNITY_CLIENT_ID (or LOOM_UNITY_AUDIENCE) here so the BFF mints an Entra bearer on every catalog call. Verify with the live probe-loom-unity-authz health check: it must report that an unauthenticated read is rejected.',
     },
     legacyCodes: ['unity_authz_not_configured'],
   },

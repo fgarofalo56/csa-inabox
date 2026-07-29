@@ -27,10 +27,15 @@
 //     App resolves the server name to a private address.
 //   * Diagnostics to the Loom Log Analytics workspace.
 //
-// STANDALONE ENTRYPOINT: admin-plane/main.bicep is at the ARM 256-parameter
-// ceiling, so this deploys out-of-band (like every other data-plane band
-// module) and its outputs are passed to compute/loom-unity-app.bicep.
-// Orphan-allowlisted in scripts/ci/check-bicep-sync.mjs.
+// DEPLOYED BY DEFAULT: admin-plane/main.bicep invokes this module alongside
+// compute/loom-unity-app.bicep (`loomUnityPostgresActive`) and passes its
+// fqdn / databaseName / aadUser outputs straight into the catalog app, so a
+// FRESH deploy gets a durable, Entra-only, private-endpoint-only metastore with
+// no manual step. Where the subscription is quota-blocked from provisioning
+// Microsoft.DBforPostgreSQL/flexibleServers (postgresQuotaAvailable=false — the
+// GCC-High default) the catalog still deploys, on the EPHEMERAL H2 store, and
+// reports it via the app module's persistenceBackend output. Still deployable
+// standalone for a targeted redeploy:
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep \
@@ -40,8 +45,7 @@
 //        unityPrincipalName=<loom-unity-UAMI-name> \
 //        workspaceId=<law-id> complianceTags='{ "env": "gov" }'
 //   # then run scripts/csa-loom/loom-unity-postgres-bootstrap.sh to create the
-//   # Entra DB principal + (optionally) migrate an existing H2 catalog, and pass
-//   # unityPostgresFqdn/unityDbAadUser into compute/loom-unity-app.bicep.
+//   # Entra DB principal + (optionally) migrate an existing H2 catalog.
 //
 // Azure-native only — no Microsoft Fabric / Power BI / OneLake dependency.
 

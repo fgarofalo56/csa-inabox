@@ -113,7 +113,10 @@ secret in ARM deployment history.
 `environment().authentication.loginEndpoint`, so Azure Government pins the issuer to
 `https://login.microsoftonline.us/<tenant>/v2.0`. Nothing is hard-coded on a code path.
 
-**Wiring it (both halves are required).**
+**Wiring it — a fresh deploy already does this.** `admin-plane/main.bicep` passes
+`authMode=entra` + `entraClientId` + `consoleAllowedCidrs` and emits the Console
+half; the phase-3 bootstrap fills in the app-registration id on the default path.
+The commands below are for repairing an estate that predates that wiring.
 
 ```bash
 # 1. SERVER — redeploy with the audience pinned (normally the Console app registration)
@@ -128,9 +131,26 @@ az containerapp update -n <console-app> -g <admin-rg> \
 ```
 
 Then confirm on `/admin/health`: **`probe-loom-unity-authz` must report that an
-unauthenticated read was rejected.** Leaving `entraClientId` empty is an honest,
-loudly-reported gate — the container logs a SECURITY WARNING on every boot and the
-gate + probe both go red with this exact remediation — not a silent open door.
+unauthenticated read was rejected.**
+
+**`svc-loom-unity-authz` — closing the last anonymous default.** LU-2 made
+`authMode='entra'` the module default, but `authEnabled` was
+`authMode == 'entra' && audiencePinned`: leaving `entraClientId` empty silently
+rendered `server.authorization=disable`, and the entrypoint likewise inferred
+`disable` whenever no tenant happened to be set. Every real caller — the
+`gov-uc-purview-wire` workflow, the docs' own `az deployment group create` line —
+hit exactly that path, so the "secure default" produced an anonymous catalog.
+Both inferences are gone:
+
+* the bicep no longer downgrades — `authMode` alone decides, and an unpinnable
+  audience surfaces as the `authorizationMisconfigured` deployment output;
+* the entrypoint defaults to `LOOM_UNITY_AUTH=enable` and **aborts the boot** when
+  no issuer/audience can be pinned. `LOOM_UNITY_AUTH=disable` (bicep
+  `authMode='disabled'`) is the only way to an anonymous catalog, and it is an
+  explicit, audited choice that logs a SECURITY WARNING on every boot.
+
+The same treatment is applied to `data-plane/iceberg-catalog-aca.bicep`, which
+runs the same image for the Iceberg REST Catalog surface.
 
 ## Audit (LU-3) — the BFF choke point
 
@@ -496,9 +516,33 @@ schema yourself).
 
 ## Deploy
 
-`admin-plane/main.bicep` is at the ARM 256-parameter ceiling, so both Loom Unity
-modules are **standalone out-of-band entrypoints** (orphan-allowlisted in
-`scripts/ci/check-bicep-sync.mjs`), the same pattern the Hyperscale-band apps use.
+**Both Loom Unity modules are deployed by the push-button orchestrator**
+(`admin-plane/main.bicep`, gate `svc-loom-unity-authz`). A fresh
+`az deployment sub create` on any boundary provisions:
+
+* `data-plane/loom-unity-postgres.bicep` — the Entra-only, private-endpoint-only
+  metastore (skipped when `postgresQuotaAvailable=false`, e.g. the GCC-High
+  default, in which case the catalog runs on the **ephemeral** H2 store and the
+  app module's `persistenceBackend` output says so);
+* `compute/loom-unity-app.bicep` — the catalog itself, with `authMode=entra`,
+  `entraClientId` = the Console's own Entra app registration, and
+  `consoleAllowedCidrs` pinned to the Container Apps infrastructure subnet;
+* a dedicated least-privilege `uami-loom-unity-<region>` (AcrPull on the Loom ACR
+  + Entra administrator on its OWN Postgres — never the Console UAMI, because an
+  ACA app exposes its identity to in-container code over IMDS);
+* the Console vars `LOOM_UNITY_URL` / `LOOM_UNITY_CLIENT_ID` /
+  `LOOM_UNITY_AUDIENCE` / `LOOM_UNITY_AUTH_MODE`.
+
+The `loom-unity` image must be in ACR first — it is in the default matrix of
+`build-fiab-images-acr-tasks.yml` and `full-app-deploy-commercial.yml` (deploy
+phase 2). On the default path the Entra app registration is created in **phase 3**
+(`csa-loom-post-deploy-bootstrap.yml` → `scripts/csa-loom/bootstrap-msal-app-reg.sh`),
+which stamps `LOOM_UNITY_ENTRA_CLIENT_ID` onto the catalog and the three
+`LOOM_UNITY_*` vars onto the Console. **Between phase 2 and phase 3 the catalog
+fails closed** — it refuses to boot without a pinned audience rather than coming
+up anonymous. That is the intended posture.
+
+The steps below remain valid for a **targeted redeploy** of either module.
 
 1. **Provision the catalog store** — Entra-only, private-endpoint-only Postgres:
 

@@ -106,6 +106,26 @@ jobs:
         if: ${{ inputs.skip_unity != 'true' }}
         run: |
           set -euo pipefail
+          # svc-loom-unity-authz — this workflow used to deploy the catalog with
+          # NO entraClientId, and the module silently downgraded to
+          # server.authorization=disable: anything on the Gov CAE VNet could read
+          # AND mutate catalog metadata anonymously. Pin the audience to the app
+          # registration the Console already signs in with, and pin ingress to the
+          # Container Apps infrastructure subnet so "on the VNet" is no longer
+          # sufficient to open a connection.
+          UNITY_CLIENT_ID=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv | tr -d '\r')
+          if [ -z "${UNITY_CLIENT_ID:-}" ]; then
+            echo "::error::LOOM_MSAL_CLIENT_ID is not set on $APP, so no Entra audience can be pinned for Loom Unity. Run csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) first. Refusing to deploy an anonymously-readable catalog (svc-loom-unity-authz)."
+            exit 1
+          fi
+          CAE_SUBNET_ID=$(az containerapp env show --ids "$CAE_ID" --query properties.vnetConfiguration.infrastructureSubnetId -o tsv | tr -d '\r')
+          CAE_CIDR=$(az network vnet subnet show --ids "$CAE_SUBNET_ID" --query addressPrefix -o tsv | tr -d '\r')
+          if [ -z "${CAE_CIDR:-}" ]; then
+            echo "::error::Could not resolve the CAE infrastructure subnet CIDR from $CAE_SUBNET_ID — refusing to deploy without the ingress IP pin."
+            exit 1
+          fi
+          echo "::notice::pinning Loom Unity audience to api://$UNITY_CLIENT_ID and ingress to $CAE_CIDR"
           az deployment group create -g "$RG" \
             -n "loom-unity-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
@@ -115,8 +135,12 @@ jobs:
                acrLoginServer="$ACR_LOGIN" \
                image="$ACR_LOGIN/loom-unity:$SHA" \
                dbEphemeral=true \
+               authMode=entra \
+               entraClientId="$UNITY_CLIENT_ID" \
+               consoleAllowedCidrs="[\"$CAE_CIDR\"]" \
                complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
             -o none
+          echo "UNITY_CLIENT_ID=$UNITY_CLIENT_ID" >> "$GITHUB_ENV"
           # Gov posture: H2 on an Azure Files SMB mount fails to ATTACH on this
           # boundary — the mount blocks container start (CrashLoopBackOff, restarts:0,
           # never logs) before the app runs, so an app-level LOOM_UNITY_DB_LOCAL
@@ -151,7 +175,15 @@ jobs:
           set -euo pipefail
           VARS=""
           if [ "${{ inputs.skip_unity }}" != "true" ] && [ -n "${UNITY_FQDN:-}" ]; then
+            # svc-loom-unity-authz — the CONSOLE half. The catalog now enforces
+            # Entra bearer authorization, so the BFF must mint a matching token on
+            # every /api/databricks/unity-catalog/* call or it will 401. All three
+            # vars are set explicitly; uc-backend.ts then fails CLOSED instead of
+            # silently retrying anonymously.
             VARS="$VARS LOOM_UC_BACKEND=oss LOOM_UNITY_URL=https://$UNITY_FQDN"
+            VARS="$VARS LOOM_UNITY_CLIENT_ID=$UNITY_CLIENT_ID"
+            VARS="$VARS LOOM_UNITY_AUDIENCE=api://$UNITY_CLIENT_ID/.default"
+            VARS="$VARS LOOM_UNITY_AUTH_MODE=entra"
           fi
           if [ "${{ inputs.skip_purview }}" != "true" ] && [ -n "${PVW:-}" ]; then
             VARS="$VARS LOOM_PURVIEW_ACCOUNT=$PVW"
@@ -191,6 +223,18 @@ jobs:
             OUT=$(az containerapp exec -n "$APP" -g "$RG" --replica "$REP" --container "$APP" \
               --command "node -e \"fetch('https://$UNITY_FQDN/api/2.1/unity-catalog/catalogs').then(r=>r.text().then(t=>console.log('UC',r.status,t.slice(0,200)))).catch(e=>console.log('UC ERR',e.message))\"" 2>/dev/null || true)
             echo "$OUT"
-            echo "$OUT" | grep -q "UC 200" || echo "::warning::OSS UC probe did not return 200 — check loom-unity logs (first boot can take ~1 min)."
+            # svc-loom-unity-authz — this is an UNAUTHENTICATED read. With
+            # authorization enforced it MUST be rejected. A 200 here is the exact
+            # finding this workflow change closes, so treat it as a failure, not
+            # a success: it means the catalog is answering anonymous callers.
+            if echo "$OUT" | grep -q "UC 200"; then
+              echo "::error::Loom Unity answered an UNAUTHENTICATED read with 200 — authorization is NOT being enforced (svc-loom-unity-authz). Check the loom-unity container logs for the LOOM_UNITY_AUTH value it booted with."
+              exit 1
+            fi
+            if echo "$OUT" | grep -qE "UC (401|403)"; then
+              echo "::notice::Loom Unity rejected the unauthenticated read — Entra bearer authorization is enforced."
+            else
+              echo "::warning::Unexpected Loom Unity probe result (first boot can take ~1 min, and a fail-closed boot returns a connection error). Check the loom-unity container logs."
+            fi
           fi
           echo "::notice::Purview + UC wiring applied. Operator: open the Gov console → Governance; the Purview gates should be gone. If Atlas calls 403, grant the console UAMI Data Reader + Data Curator on the Purview ROOT collection (Purview portal → Data Map → Collections → Role assignments)."
