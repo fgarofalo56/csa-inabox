@@ -15,9 +15,9 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1657 |
 | Public (no session) | 116 |
-| Session-only | 571 |
+| Session-only | 570 |
 | Owner-scoped | 696 |
-| Admin | 274 |
+| Admin | 275 |
 | Gated (backend config) | 530 |
 | Areas | 119 |
 
@@ -662,7 +662,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `databricks/unity-catalog/external-locations/route.ts` | GET POST PATCH DELETE | session-only | ● | Databricks |
 | `databricks/unity-catalog/functions/route.ts` | GET DELETE | session-only | ● | Databricks |
 | `databricks/unity-catalog/governed-tags/route.ts` | GET POST | session-only | ● | Databricks |
-| `databricks/unity-catalog/grants/route.ts` | GET PATCH | session-only | ● | Databricks |
+| `databricks/unity-catalog/grants/route.ts` | GET PATCH | admin | ● | Databricks |
 | `databricks/unity-catalog/lineage/route.ts` | GET | session-only | ● | Databricks |
 | `databricks/unity-catalog/marketplace/route.ts` | GET | session-only | ● | Databricks |
 | `databricks/unity-catalog/metric-views/route.ts` | GET POST | session-only | ● | Databricks |
