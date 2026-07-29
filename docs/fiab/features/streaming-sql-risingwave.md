@@ -62,15 +62,38 @@ disconnected in an air-gapped enclave.
 The container has **internal ingress**. The Console BFF is the sole door, and
 every statement flows through the audited routes.
 
-## Honest gates
+## Deployment (default ON) and honest gates
 
-**`LOOM_RISINGWAVE_URL` unset renders the full editor with a Fix-it gate.** The
-stateful tier is an opt-in accelerator (roughly $150-300 per month per cloud),
-never a blocker: Azure Stream Analytics remains the light default for simple
-jobs, and the `stream-analytics-job` item type is a separate surface that this
-gate does not touch.
+**`LOOM_RISINGWAVE_URL` is set by the deployment itself.** Since 2026-07-28
+`admin-plane/main.bicep` deploys
+`platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep` on every
+apps-enabled deploy, in **every Container Apps boundary — Commercial, GCC,
+GCC-High and IL5** — and wires `<fqdn>:4566` onto the Console. A fresh
+push-button deploy closes the `svc-loom-risingwave` gate with no operator step.
 
-To wire it: deploy
+**Cost, stated plainly.** This is the one runtime in the band that cannot honour
+"scale to zero so default-ON stays cheap": a single-node RisingWave keeps its
+materialized-view and meta state **in process**, so a scaled-to-zero replica
+loses every MV definition and its progress. It therefore runs `minReplicas: 1`
+at the smallest ACA-Consumption-legal footprint — **2.0 vCPU / 4.0 GiB** (the
+profile requires memory == 2 x vCPU GiB) — which is roughly **$45-55 per month
+per cloud at idle rates** and about **$155 per month when continuously
+processing streams**. Raise it to the 4.0 vCPU / 8.0 GiB ceiling through the
+module's config bag for heavier topologies.
+
+**Admin opt-out (a disable toggle, never an enablement wizard).** Set
+`observabilityConfig.backendOverrides.risingwave = 'disabled'` at the root
+orchestrator (or `loomBackends.risingwave = 'disabled'` on the admin-plane
+module) to skip the app entirely; `LOOM_RISINGWAVE_URL` is then emitted empty.
+The var can also be blanked live from `/admin/env-config`.
+
+**With the var unset the full editor still renders with a Fix-it gate**, never a
+blocker: Azure Stream Analytics remains the light default for simple jobs, and
+the `stream-analytics-job` item type is a separate surface that this gate does
+not touch.
+
+To wire it by hand (an already-running estate, or the incremental Gov path in
+`.github/workflows/gov-provision-streaming-migrate.yml`): deploy
 `platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep`, then set
 `LOOM_RISINGWAVE_URL` on the Console app to the internal-ingress FQDN
 (optionally `host:port`). Optional: `LOOM_RISINGWAVE_DATABASE` (default `dev`),

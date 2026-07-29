@@ -122,6 +122,19 @@ jobs:
           - app: loom-copilot-maf
             context: ./apps/copilot-maf
             dockerfile: Dockerfile
+          # DEFAULT-ON data-plane Container Apps (loom_default_on_opt_out.md).
+          # admin-plane/main.bicep deploys BOTH on every apps-enabled deploy in
+          # EVERY boundary — Commercial, GCC, GCC-High and IL5 all run
+          # containerPlatform=='containerApps' — and wires LOOM_MIGRATE_URL /
+          # LOOM_RISINGWAVE_URL onto the Console. A missing manifest fails the
+          # Container App PUT, so these belong in the per-boundary release matrix
+          # alongside the console. They live at ./apps/<name>, not ./apps/fiab-*.
+          - app: loom-migrate
+            context: ./apps/loom-migrate
+            dockerfile: Dockerfile
+          - app: loom-risingwave
+            context: ./apps/loom-risingwave
+            dockerfile: Dockerfile
     steps:
       - uses: actions/checkout@v4
 

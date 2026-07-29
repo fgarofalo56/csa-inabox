@@ -234,6 +234,18 @@ jobs:
           # the image MUST be in ACR before the admin-plane deploy runs.
           - app: loom-unity
             ctx: ./apps/loom-unity
+          # M1 — estate-assessment reader (inbound-migration on-ramp). DEFAULT-ON:
+          # admin-plane/main.bicep deploys data-plane/loom-migrate-aca.bicep on
+          # every apps-enabled deploy and wires LOOM_MIGRATE_URL, so this image is
+          # a hard prerequisite of phase 2 (a missing manifest fails the Container
+          # App PUT with MANIFEST_UNKNOWN, not just the feature).
+          - app: loom-migrate
+            ctx: ./apps/loom-migrate
+          # N7a — stateful streaming-SQL tier (single-node RisingWave, Apache-2.0).
+          # Also DEFAULT-ON (LOOM_RISINGWAVE_URL), same hard prerequisite. The
+          # image is a thin pin over the upstream engine binary.
+          - app: loom-risingwave
+            ctx: ./apps/loom-risingwave
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
@@ -417,7 +429,7 @@ jobs:
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           # Keep in sync with the build matrix above. Verify the :TAG refs —
           # that is exactly what the redeploy-with-apps job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity)
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave)
           FAILED=()
           for APP in "${APPS[@]}"; do
             DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")

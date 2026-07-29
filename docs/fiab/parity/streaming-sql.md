@@ -32,8 +32,14 @@ is the stateful-tier build-out, not a 1:1 portal twin.
 | DROP MV / SOURCE / SINK | ✅ built | authored DDL accepted by `assertStreamingDdl` on `/api/streaming-sql/mv` |
 | Tier not deployed | ⚠️ honest-gate | Fluent MessageBar naming `LOOM_RISINGWAVE_URL` + inline Fix-it (gate `svc-loom-risingwave`); full surface still renders |
 
-Zero ❌. The only non-functional state is the documented honest infra-gate
-(opt-in stateful-streaming tier, ~$150–300/mo/cloud).
+Zero ❌. The tier is deployed **by default** with the estate
+(`admin-plane/main.bicep` → `data-plane/loom-risingwave-aca.bicep`, every
+Container Apps boundary), so the honest infra-gate is only reachable on a
+pre-2026-07-28 estate, before the apps tier deploys, or after an explicit admin
+opt-out (`loomBackends.risingwave='disabled'`). Disclosed cost of that default:
+1 replica at 2.0 vCPU / 4.0 GiB — a streaming engine cannot scale to zero
+without losing its materialized-view state — roughly $45-55/mo/cloud idle and
+~$155/mo when continuously processing.
 
 ## Backend per control
 

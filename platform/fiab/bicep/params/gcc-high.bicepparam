@@ -173,6 +173,17 @@ param appImageTags = {
   // .github/workflows/deploy-fiab-gcch.yml image-preflights this tag against the
   // Gov ACR before it adopts the live estate.
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
+  // loom-migrate (M1 estate-assessment reader) + loom-risingwave (N7a stateful
+  // streaming-SQL tier) are DEFAULT-ON in EVERY Container Apps boundary as of
+  // 2026-07-28, GCC-High included — admin-plane/main.bicep deploys both and wires
+  // LOOM_MIGRATE_URL / LOOM_RISINGWAVE_URL. Unlike script-runner and wrangler,
+  // these tags ARE pulled here, so both images MUST be in the sovereign ACR
+  // before an apps-enabled deploy (same precondition as loom-console): build them
+  // with .github/workflows/build-fiab-images.yml (boundary=GCC-High) or, for an
+  // estate that is already up, .github/workflows/gov-provision-streaming-migrate.yml
+  // (server-side `az acr build` — the Gov ACR is publicNetworkAccess=Disabled).
+  loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
+  risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
 }
 
 // Azure Database for PostgreSQL Flexible Server IS available in Azure

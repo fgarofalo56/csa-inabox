@@ -125,7 +125,11 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_UNITY_AUDIENCE: 'api://<loom-unity-app-client-id>/.default  (explicit scope override; unset = derived from LOOM_UNITY_CLIENT_ID)',
   LOOM_UNITY_AUTH_MODE: 'entra (default once an audience is declared) | token | anonymous  (anonymous = the catalog is reachable unauthenticated — a security finding, not a setting)',
   // M1 — estate assessment reader (inbound-migration on-ramp, internal ingress).
-  LOOM_MIGRATE_URL: 'https://loom-migrate.internal.<cae-default-domain>  (unset = /admin/migrate renders but assess honest-gates)',
+  // DEFAULT-ON: wired by admin-plane/main.bicep from the loom-migrate module.
+  LOOM_MIGRATE_URL: 'https://loom-migrate.internal.<cae-default-domain>  (set by the deploy; unset = /admin/migrate renders but assess honest-gates)',
+  // N7a — stateful streaming-SQL tier. POSTGRES WIRE, not https: host:port.
+  // DEFAULT-ON: wired by admin-plane/main.bicep from the loom-risingwave module.
+  LOOM_RISINGWAVE_URL: 'loom-risingwave.internal.<cae-default-domain>:4566  (set by the deploy; Postgres wire, not https. unset = the streaming-sql editor renders but /api/streaming-sql/* honest-gates)',
   // N8 lab 1 — DuckLake catalog (Postgres-backed lakehouse metadata store).
   // DEFAULT-ON: bicep provisions the store and binds this as a Key Vault secretRef.
   LOOM_DUCKLAKE_CATALOG_URL: 'postgresql://loomducklake:<pw>@<pg-host>:5432/ducklake?sslmode=require  (bicep-wired via Key Vault; unset only under the sovereign Postgres quota gate — the DuckLake editor then honest-gates and the N1 Iceberg REST Catalog is unaffected)',

@@ -584,6 +584,13 @@ param appImageTags object = {
   // gov-provision-dataplane-images.yml (GCC-High / IL5). Read with
   // `?? 'v0.1'` so an operator bag that predates this key keeps deploying.
   duckdb: 'v0.1'
+  // loom-migrate — M1 estate-assessment reader (data-plane/loom-migrate-aca.bicep),
+  // DEFAULT-ON. Read with `?? 'v0.1'` at the use site so an operator-supplied bag
+  // that predates this key (every params/*.bicepparam today) keeps deploying.
+  loomMigrate: 'v0.1'
+  // loom-risingwave — N7a stateful streaming-SQL tier
+  // (data-plane/loom-risingwave-aca.bicep), DEFAULT-ON. Same `?? 'v0.1'` read.
+  risingwave: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -714,6 +721,39 @@ var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerA
 // honest-gates on LOOM_WRANGLER_ENDPOINT — the panel still renders.
 var wranglerEnabled = true
 var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && boundary != 'GCC-High' && boundary != 'IL5'
+
+// ── M1 loom-migrate estate-assessment reader — DEFAULT-ON deploy toggle ───────
+// Backs LOOM_MIGRATE_URL (/admin/migrate + the audited /api/migrate/assess).
+// Until 2026-07-28 data-plane/loom-migrate-aca.bicep was an out-of-band
+// standalone entrypoint, so every fresh push-button deploy shipped with the
+// `svc-loom-migrate` gate ON — a direct violation of loom_default_on_opt_out.md
+// ("every feature ships ENABLED; admins get disable toggles, not enablement
+// wizards"). It is now deployed BY THIS ORCHESTRATOR and env-wired below, in
+// EVERY Container Apps boundary — Commercial AND Gov (GCC / GCC-High / IL5 all
+// run containerPlatform=='containerApps'; see params/gcc-high.bicepparam). The
+// reader is a stock python:3.11-slim FastAPI app with no sovereign-unavailable
+// dependency, so there is no reason to boundary-gate it.
+// Implemented as a `var` + a loomBackends bag key rather than a new top-level
+// param for the SAME reason as wranglerEnabled/scriptRunnerEnabled: main.bicep
+// is at/near the hard ARM 256-parameter cap.
+// ADMIN OPT-OUT: loomBackends.loomMigrate = 'disabled'.
+var loomMigrateEnabled = (loomBackends.?loomMigrate ?? 'enabled') != 'disabled'
+var loomMigrateActive = loomMigrateEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── N7a loom-risingwave streaming-SQL tier — DEFAULT-ON deploy toggle ─────────
+// Backs LOOM_RISINGWAVE_URL (the streaming-sql item + /api/streaming-sql/*).
+// Same story as loom-migrate: it was an out-of-band standalone entrypoint, so a
+// fresh deploy shipped the `svc-loom-risingwave` gate ON. Now default-ON in
+// EVERY Container Apps boundary, Commercial and Gov — RisingWave is a
+// self-contained Apache-2.0 Rust binary with no external control plane, so it is
+// as deployable in an IL5 enclave as in Commercial.
+// COST: this tier CANNOT scale to zero (single-node RisingWave keeps MV + meta
+// state in process). It runs minReplicas 1 at the smallest ACA-legal footprint
+// (2.0 vCPU / 4.0Gi) — ~$45-55/mo/cloud idle, ~$155/mo processing. That is the
+// disclosed price of honouring default-ON here.
+// ADMIN OPT-OUT: loomBackends.risingwave = 'disabled'.
+var risingwaveEnabled = (loomBackends.?risingwave ?? 'enabled') != 'disabled'
+var risingwaveActive = risingwaveEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
@@ -3670,6 +3710,25 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // loom-wrangler-host Container App; the /api/notebook/wrangler BFF
             // honest-gates on this when unset (the panel still renders).
             { name: 'LOOM_WRANGLER_ENDPOINT', value: wranglerActive ? 'https://${wrangler!.outputs.fqdn}' : '' }
+            // M1 estate-assessment reader (inbound-migration on-ramp). Internal
+            // FQDN of the loom-migrate Container App, deployed DEFAULT-ON by this
+            // template (data-plane/loom-migrate-aca.bicep) — a fresh push-button
+            // deploy closes the `svc-loom-migrate` gate with no operator step.
+            // Empty only when an admin opts out (loomBackends.loomMigrate =
+            // 'disabled') or before the apps tier deploys, in which case
+            // /admin/migrate renders fully with its honest Fix-it gate.
+            { name: 'LOOM_MIGRATE_URL', value: loomMigrateActive ? 'https://${loomMigrate!.outputs.fqdn}' : '' }
+            // N7a stateful streaming-SQL tier. `host:port` on the Postgres wire
+            // (the client parses a bare host, host:port, or a postgres:// URL) —
+            // NOT https, the ingress is TCP. Deployed DEFAULT-ON by this template
+            // (data-plane/loom-risingwave-aca.bicep). This is the one tier that
+            // cannot scale to zero (single-node MV state lives in process), so it
+            // runs 1 replica at the smallest ACA-legal size; disclosed cost
+            // ~$45-55/mo idle. Empty only on admin opt-out
+            // (loomBackends.risingwave = 'disabled') — the streaming-sql editor
+            // then renders fully with its Fix-it gate and Azure Stream Analytics
+            // still covers simple jobs.
+            { name: 'LOOM_RISINGWAVE_URL', value: risingwaveActive ? risingwave!.outputs.pgWireEndpoint : '' }
             // ── Hyperscale band (HYP-16 cross-cutting platform) ──
             // The three H-band substrate services (Loom OneLake / Loom Direct Lake
             // / Loom Capacity Broker) are STANDALONE ACA apps deployed out-of-band
@@ -5507,6 +5566,149 @@ module wrangler '../integration/wrangler.bicep' = if (wranglerActive) {
     acrLoginServer: registry.outputs.acrLoginServer
     image: '${registry.outputs.acrLoginServer}/loom-wrangler-host:${appImageTags.wrangler}'
     targetPort: 8080
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// M1 — loom-migrate estate-assessment reader (inbound-migration on-ramp).
+// Backs LOOM_MIGRATE_URL for /admin/migrate + /api/migrate/assess. DEFAULT-ON
+// in EVERY boundary (loom_default_on_opt_out.md): the module was previously an
+// out-of-band standalone entrypoint, which meant a fresh push-button deploy
+// shipped the `svc-loom-migrate` gate ON. It is now deployed by this
+// orchestrator and the URL is wired onto the Console app below, so the gate is
+// closed by the deploy itself. Idle cost is ~$0 — minReplicas 0 (the reader is
+// only hit during a manual, non-interactive assessment).
+//
+// LEAST-PRIVILEGE identity (mirrors script-runner / wrangler): a dedicated
+// uami-loom-migrate holding AcrPull ONLY, zero data-plane roles. The reader
+// never touches the lake and holds no standing source credentials — every
+// source token arrives per-request, resolved from Key Vault by the BFF — so an
+// IMDS-minted token can do nothing but pull an image.
+// =====================================================================
+resource loomMigrateUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (loomMigrateActive) {
+  name: 'uami-loom-migrate-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR — the
+// reader identity's ONE and ONLY role. Same existing-ref convention as
+// scriptRunnerAcrPull (the registry name must be calculable at deployment START,
+// so it is recomputed rather than read from a module output → BCP120).
+resource loomMigrateAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (loomMigrateActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, loomMigrateUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: loomMigrateUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+module loomMigrate '../data-plane/loom-migrate-aca.bicep' = if (loomMigrateActive) {
+  name: 'loom-migrate'
+  params: {
+    name: 'loom-migrate'
+    location: location
+    migrateConfig: {
+      environmentId: containerPlatformModule.outputs.caeId
+      uamiId: loomMigrateUami.id
+      acrLoginServer: registry.outputs.acrLoginServer
+      image: '${registry.outputs.acrLoginServer}/loom-migrate:${appImageTags.?loomMigrate ?? 'v0.1'}'
+      targetPort: 8080
+      // Scale-to-zero — the reader is called only during an assessment.
+      minReplicas: 0
+      maxReplicas: 2
+    }
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// N7a — loom-risingwave stateful streaming-SQL tier.
+// Backs LOOM_RISINGWAVE_URL for the streaming-sql item + /api/streaming-sql/*.
+// DEFAULT-ON in EVERY boundary (loom_default_on_opt_out.md); previously an
+// out-of-band standalone entrypoint, so a fresh deploy shipped the
+// `svc-loom-risingwave` gate ON. Now deployed here and env-wired below.
+//
+// COST DISCLOSURE — this is the ONE runtime in this band that cannot honour the
+// "scale-to-zero so default-ON stays cheap" clause: single-node RisingWave holds
+// the materialized-view + meta state IN PROCESS, so a scaled-to-zero replica
+// loses every MV definition and its progress. It therefore runs minReplicas 1 at
+// the SMALLEST ACA-legal footprint (2.0 vCPU / 4.0Gi — the Consumption profile
+// requires memory == 2 x vCPU GiB): roughly $45-55/mo/cloud at idle rates and
+// ~$155/mo when continuously processing streams. The rule's required admin
+// DISABLE toggle is loomBackends.risingwave='disabled' (opt-OUT, not opt-in) —
+// when set, the app is skipped, LOOM_RISINGWAVE_URL is emitted empty, and the
+// streaming-sql editor renders fully with its honest Fix-it gate.
+//
+// LEAST-PRIVILEGE identity: a dedicated uami-loom-risingwave with AcrPull on the
+// ACR plus Storage Blob Data Contributor on the DLZ lake (the streaming SINK
+// writes Delta/Iceberg). The lake lives in the DLZ resource group, so the grant
+// is made by a DLZ-RG-scoped module below rather than inside the app module
+// (assignLakeRole:false) — a roleAssignment cannot cross RGs from here.
+// =====================================================================
+resource risingwaveUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (risingwaveActive) {
+  name: 'uami-loom-risingwave-${location}'
+  location: location
+  tags: complianceTags
+}
+
+resource risingwaveAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (risingwaveActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, risingwaveUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: risingwaveUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+// Storage Blob Data Contributor for the streaming sink, scoped to the DLZ RG
+// where the lake account lives (reuses the same account-scoped grant module the
+// F16 Azure-connections wiring uses — its `consolePrincipalId` param is just
+// "the principal to grant"). Skipped when no lake account is bound, in which
+// case RisingWave still runs on single-node local state and serves the Postgres
+// wire; only a CREATE SINK to the lake would gate.
+module risingwaveLakeRbac 'azure-connections-rbac.bicep' = if (risingwaveActive && !skipRoleGrants && !empty(loomStorageAccount)) {
+  name: 'risingwave-lake-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    consolePrincipalId: risingwaveUami!.properties.principalId
+    storageAccountName: loomStorageAccount
+    logAnalyticsWorkspaceName: ''
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActive) {
+  name: 'loom-risingwave'
+  params: {
+    name: 'loom-risingwave'
+    location: location
+    risingwaveConfig: {
+      environmentId: containerPlatformModule.outputs.caeId
+      uamiId: risingwaveUami.id
+      uamiClientId: risingwaveUami!.properties.clientId
+      acrLoginServer: registry.outputs.acrLoginServer
+      image: '${registry.outputs.acrLoginServer}/loom-risingwave:${appImageTags.?risingwave ?? 'v0.1'}'
+      lakeStorageAccountName: loomStorageAccount
+      frontendPort: 4566
+      // Smallest ACA-Consumption-legal always-on footprint (memory == 2 x vCPU GiB).
+      cpu: '2.0'
+      memory: '4.0Gi'
+      minReplicas: 1
+      maxReplicas: 1
+      // The lake is in the DLZ RG — granted by risingwaveLakeRbac above.
+      assignLakeRole: false
+    }
     complianceTags: complianceTags
   }
 }

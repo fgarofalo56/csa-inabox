@@ -166,7 +166,7 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'Opt-in on-ramp: /admin/migrate renders fully (guided empty state) with LOOM_MIGRATE_URL unset. Set it to the internal-ingress loom-migrate reader to enumerate a Snowflake / Databricks-UC / Fabric / Power BI estate. Each source still needs its own connection (URL + a Key-Vault-stored token) supplied per assessment; an unwired connector honest-gates rather than fabricating counts.',
+      'DEFAULT-ON since 2026-07-28: admin-plane/main.bicep deploys the loom-migrate reader (data-plane/loom-migrate-aca.bicep) on every apps-enabled deploy in every boundary and sets LOOM_MIGRATE_URL from its FQDN, so a fresh push-button deploy closes this gate with no operator step. The reader scales to zero (~$0 idle) — it only runs during an assessment. This gate can only be open on a pre-2026-07-28 estate that has not been redeployed, before the apps tier deploys, or when an admin opted out with loomBackends.loomMigrate=\'disabled\'; /admin/migrate still renders fully (guided empty state) in that case. Each SOURCE estate still needs its own connection (URL + a Key-Vault-stored token) supplied per assessment — that is a per-source credential, not a deployment gate; an unwired connector honest-gates rather than fabricating counts.',
     legacyCodes: ['migrate_not_configured'],
   },
   // ── N7a — RisingWave stateful streaming-SQL tier (Openness Tier-2 T2-A) ──
@@ -178,7 +178,7 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'Opt-in stateful-streaming tier: the streaming-sql editor renders fully (guided empty state) with LOOM_RISINGWAVE_URL unset. Set it to the internal-ingress loom-risingwave Container App to author streaming materialized views over Event Hubs sinking to Delta/Iceberg. Azure Stream Analytics (the stream-analytics-job item) still covers simple streaming jobs; RisingWave adds the stateful class (windowed joins, incremental aggregations). ~$150-300/mo/cloud when deployed.',
+      'DEFAULT-ON since 2026-07-28: admin-plane/main.bicep deploys the single-node RisingWave Container App (data-plane/loom-risingwave-aca.bicep) on every apps-enabled deploy in every boundary and sets LOOM_RISINGWAVE_URL to <fqdn>:4566, so a fresh push-button deploy closes this gate with no operator step. COST DISCLOSURE: this is the one tier that cannot scale to zero — a single-node engine keeps materialized-view and meta state in process — so it runs 1 replica at the smallest ACA-legal footprint (2.0 vCPU / 4.0Gi): ~$45-55/mo/cloud idle, ~$155/mo when continuously processing streams. Admins opt OUT with loomBackends.risingwave=\'disabled\' (or by blanking the var in /admin/env-config); the streaming-sql editor then renders fully with this Fix-it and Azure Stream Analytics (the stream-analytics-job item) still covers simple streaming jobs.',
     legacyCodes: ['risingwave_not_configured'],
   },
 };

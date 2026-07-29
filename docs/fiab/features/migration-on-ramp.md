@@ -88,9 +88,22 @@ translation works in a disconnected enclave.
 | Translate | `POST /api/migrate/translate` -> the in-boundary transpilers |
 | Audit | Every enumeration is an audited BFF call; the reader is never public |
 
-## Honest gates
+## Deployment (default ON) and honest gates
 
-- **`LOOM_MIGRATE_URL` unset.** `/admin/migrate` still renders; Assess
+**`LOOM_MIGRATE_URL` is set by the deployment itself.** Since 2026-07-28
+`admin-plane/main.bicep` deploys
+`platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep` on every
+apps-enabled deploy, in **every Container Apps boundary — Commercial, GCC,
+GCC-High and IL5** — and wires `https://<fqdn>` onto the Console, so a fresh
+push-button deploy closes the `svc-loom-migrate` gate with no operator step. The
+reader runs `minReplicas: 0`, so default-ON costs approximately **$0 at idle**:
+it only spins up during an assessment, where a cold start is seconds against an
+action that already takes minutes. Admins opt OUT with
+`observabilityConfig.backendOverrides.loomMigrate = 'disabled'`.
+
+- **`LOOM_MIGRATE_URL` unset.** Only possible on a pre-2026-07-28 estate that
+  has not been redeployed, before the apps tier deploys, or after an explicit
+  opt-out. `/admin/migrate` still renders; Assess
   honest-gates with a Fix-it naming the variable and the bicep module
   (`platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep`). No
   fabricated counts, ever.

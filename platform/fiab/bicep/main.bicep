@@ -398,7 +398,7 @@ param aasEnabled bool = true
 @description('Deploy the report-subscription delivery Logic App (integration/report-subscription-logicapp.bicep) so report subscriptions deliver day one. Day-one default ON; set false to opt out. Passed through to admin-plane/main.bicep reportSubscriptionsEnabled.')
 param reportSubscriptionsEnabled bool = true
 
-@description('Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below). Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
+@description('Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below). Also carries `backendOverrides` — an object unioned over the loomBackends selector bag so an operator can opt OUT of a default-ON backend that has no dedicated root param, e.g. { backendOverrides: { risingwave: \'disabled\' } } to skip the always-on RisingWave streaming tier, or { loomMigrate: \'disabled\' } for the estate-assessment reader. Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
 param observabilityConfig object = {}
 
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
@@ -942,6 +942,13 @@ param appImageTags object = {
   // forwarded object never fails template evaluation.
   scriptRunner: 'v0.1'
   wrangler: 'v0.1'
+  // loom-migrate (M1 estate-assessment reader) + loom-risingwave (N7a stateful
+  // streaming-SQL tier) — both DEFAULT-ON data-plane Container Apps deployed by
+  // admin-plane/main.bicep. Read there with `?? 'v0.1'`, so an operator bag that
+  // omits these keys still deploys; present here so a release pipeline can pin
+  // them the same way as every other app image.
+  loomMigrate: 'v0.1'
+  risingwave: 'v0.1'
 }
 
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov.')
@@ -1340,7 +1347,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // orgVisuals key is driven by the operator-facing loomOrgVisualsEnabled flag
     // (default true → 'enabled'; false → the Embed codes / Org visuals panes
     // honest-gate while the medallion lake stays wired).
-    loomBackends: {
+    //
+    // OPERATOR OVERRIDE — every key below (and any admin-plane loomBackends key
+    // that has no dedicated root param, e.g. the DEFAULT-ON data-plane toggles
+    // `loomMigrate` and `risingwave`) can be overridden from a .bicepparam via
+    // observabilityConfig.backendOverrides, e.g.
+    //     param observabilityConfig = { backendOverrides: { risingwave: 'disabled' } }
+    // THIS orchestrator is at 251/256 ARM params, so the R0 rule forbids a new
+    // top-level param; riding the existing settable bag is the sanctioned lever.
+    // Per loom_default_on_opt_out.md this is an opt-OUT: unset ⇒ enabled.
+    loomBackends: union({
       event: 'eventhubs'
       activator: 'azure-monitor'
       activatorTable: 'AppEvents_CL'
@@ -1352,7 +1368,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       dataflow: 'adf'
       dataproducts: ''
       orgVisuals: loomOrgVisualsEnabled ? 'enabled' : 'disabled'
-    }
+    }, observabilityConfig.?backendOverrides ?? {})
   }
 }
 

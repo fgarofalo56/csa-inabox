@@ -1,0 +1,204 @@
+name: gov-provision-streaming-migrate
+
+# CSA Loom — Gov provisioner for the two DEFAULT-ON data-plane Container Apps
+# that close the `svc-loom-migrate` and `svc-loom-risingwave` gates:
+#
+#   apps/loom-migrate     → data-plane/loom-migrate-aca.bicep     → LOOM_MIGRATE_URL
+#   apps/loom-risingwave  → data-plane/loom-risingwave-aca.bicep  → LOOM_RISINGWAVE_URL
+#
+# WHY THIS EXISTS (and what it is NOT). As of 2026-07-28 both modules are wired
+# into admin-plane/main.bicep and deploy BY DEFAULT in every Container Apps
+# boundary — Commercial, GCC, GCC-High and IL5 (params/gcc-high.bicepparam sets
+# containerPlatform='containerApps' + deployAppsEnabled=true). A from-scratch Gov
+# deploy therefore stands both apps up and sets both env vars with NO manual step,
+# PROVIDED the images are already in the Gov ACR — exactly the same precondition
+# the Console image has (the canonical path is: provision infra with
+# deployAppsEnabled=false → build images → redeploy with apps enabled).
+#
+# This workflow is the INCREMENTAL Gov path for an estate that is ALREADY up: it
+# builds both images server-side on the private Gov ACR (`az acr build` — the Gov
+# registry is publicNetworkAccess=Disabled, so the docker-push matrix in
+# build-fiab-images.yml cannot reach it), provisions the same least-privilege
+# UAMIs + role assignments the orchestrator declares, deploys both modules into
+# the existing Gov CAE (--mode Incremental, what-if first), and wires the two env
+# vars onto the Console. Idempotent — safe to re-run, and a later full deploy
+# reconciles onto the same resource names.
+#
+# Mirrors gov-provision-wrangler.yml / gov-provision-dbt.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = what-if only (safe); true = build + deploy + wire.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  ACR: acrloomdcmt6cqoezlgs
+  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
+  APP: loom-console
+  MIGRATE_APP: loom-migrate
+  RISINGWAVE_APP: loom-risingwave
+  # AcrPull — cloud-invariant built-in role id.
+  ACRPULL_ROLE: 7f951dda-4ed3-4680-a7ca-43fe172d538d
+  # Storage Blob Data Contributor — cloud-invariant built-in role id.
+  BLOB_CONTRIB_ROLE: ba92f5b4-2d11-453d-a403-e96b0029c9fe
+jobs:
+  provision:
+    name: Provision loom-migrate + loom-risingwave into the Gov CAE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover CAE + location + lake account
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          # The streaming SINK writes Delta/Iceberg to the DLZ lake. Read the
+          # account the Console is already bound to rather than guessing a name.
+          LAKE=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv | tr -d '\r')
+          { echo "CAE_ID=$CAE_ID"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID location=$LOCATION lake=${LAKE:-<none>}"
+          [ -n "$CAE_ID" ] || { echo "::error::missing CAE"; exit 1; }
+
+      - name: Provision the least-privilege UAMIs (same names the orchestrator declares)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          ACR_ID=$(az acr show -n "$ACR" -g "$RG" --query id -o tsv | tr -d '\r')
+          for NAME in "uami-loom-migrate-$LOCATION" "uami-loom-risingwave-$LOCATION"; do
+            az identity show -n "$NAME" -g "$RG" -o none 2>/dev/null \
+              || az identity create -n "$NAME" -g "$RG" -l "$LOCATION" -o none
+          done
+          MIG_ID=$(az identity show -n "uami-loom-migrate-$LOCATION" -g "$RG" --query id -o tsv | tr -d '\r')
+          MIG_PID=$(az identity show -n "uami-loom-migrate-$LOCATION" -g "$RG" --query principalId -o tsv | tr -d '\r')
+          RW_ID=$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query id -o tsv | tr -d '\r')
+          RW_PID=$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query principalId -o tsv | tr -d '\r')
+          RW_CID=$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query clientId -o tsv | tr -d '\r')
+          {
+            echo "MIG_ID=$MIG_ID"; echo "RW_ID=$RW_ID"; echo "RW_CID=$RW_CID"
+          } >> "$GITHUB_ENV"
+          # AcrPull on the Loom ACR — the migrate identity's ONLY role, and one of
+          # the risingwave identity's two. `az role assignment create` is
+          # idempotent (RoleAssignmentExists is tolerated).
+          for PID in "$MIG_PID" "$RW_PID"; do
+            az role assignment create --assignee-object-id "$PID" --assignee-principal-type ServicePrincipal \
+              --role "$ACRPULL_ROLE" --scope "$ACR_ID" -o none 2>/dev/null || true
+          done
+          # Storage Blob Data Contributor for the streaming sink (risingwave only).
+          if [ -n "${LAKE:-}" ]; then
+            LAKE_ID=$(az storage account list --subscription "$SUB" \
+              --query "[?name=='$LAKE'].id | [0]" -o tsv | tr -d '\r')
+            if [ -n "$LAKE_ID" ]; then
+              az role assignment create --assignee-object-id "$RW_PID" --assignee-principal-type ServicePrincipal \
+                --role "$BLOB_CONTRIB_ROLE" --scope "$LAKE_ID" -o none 2>/dev/null || true
+              echo "::notice::granted Storage Blob Data Contributor on $LAKE to uami-loom-risingwave-$LOCATION"
+            else
+              echo "::warning::lake account '$LAKE' not found in this subscription — skipping the sink grant. RisingWave still runs on single-node local state and serves the Postgres wire; only CREATE SINK to the lake would gate."
+            fi
+          fi
+
+      - name: Build both images on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          # #2603: lease the ACR firewall rather than a bare toggle so this run's
+          # re-lock cannot deny another run's in-flight push.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-migrate:$SHA" --image "loom-migrate:latest" \
+            apps/loom-migrate
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-risingwave:$SHA" --image "loom-risingwave:latest" \
+            apps/loom-risingwave
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+      - name: What-if both deployments
+        run: |
+          set -euo pipefail
+          TAG="${SHA:-latest}"
+          MIG_ID="${MIG_ID:-$(az identity show -n "uami-loom-migrate-$LOCATION" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r')}"
+          RW_ID="${RW_ID:-$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r')}"
+          RW_CID="${RW_CID:-$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query clientId -o tsv 2>/dev/null | tr -d '\r')}"
+          if [ -z "$MIG_ID" ] || [ -z "$RW_ID" ]; then
+            echo "::notice::UAMIs do not exist yet (apply=false). Skipping what-if — re-dispatch with apply=true to provision them first."
+            exit 0
+          fi
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep \
+            -p location="$LOCATION" \
+               migrateConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$MIG_ID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-migrate:$TAG\",\"minReplicas\":0,\"maxReplicas\":2}" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"loom-migrate"}' \
+            --mode Incremental 2>&1 | tail -30 || true
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
+            -p location="$LOCATION" \
+               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1}" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"loom-risingwave"}' \
+            --mode Incremental 2>&1 | tail -30 || true
+
+      - name: Deploy loom-migrate + wire LOOM_MIGRATE_URL
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" -n "loom-migrate-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep \
+            -p location="$LOCATION" \
+               migrateConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$MIG_ID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-migrate:$SHA\",\"minReplicas\":0,\"maxReplicas\":2}" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"loom-migrate"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n "$MIGRATE_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "::notice::loom-migrate FQDN: $FQDN"
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_MIGRATE_URL=https://$FQDN" -o none
+
+      - name: Deploy loom-risingwave + wire LOOM_RISINGWAVE_URL
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" -n "loom-risingwave-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
+            -p location="$LOCATION" \
+               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$SHA\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1}" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"loom-risingwave"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n "$RISINGWAVE_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "::notice::loom-risingwave FQDN: $FQDN"
+          for i in $(seq 1 20); do
+            REV=$(az containerapp show -n "$RISINGWAVE_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+            RS=$(az containerapp revision show -n "$RISINGWAVE_APP" -g "$RG" --revision "$REV" --query properties.runningState -o tsv 2>/dev/null | tr -d '\r')
+            H=$(az containerapp revision show -n "$RISINGWAVE_APP" -g "$RG" --revision "$REV" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            echo "loom-risingwave running=$RS health=$H"; { [ "$H" = "Healthy" ] || [ "$RS" = "Running" ]; } && break; sleep 15
+          done
+          # Postgres wire, not HTTP — the client parses host / host:port / postgres://.
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_RISINGWAVE_URL=$FQDN:4566" -o none
+          echo "::notice::wired LOOM_MIGRATE_URL + LOOM_RISINGWAVE_URL — re-run gov-selfaudit to confirm svc-loom-migrate + svc-loom-risingwave."
