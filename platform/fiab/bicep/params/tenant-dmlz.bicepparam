@@ -140,6 +140,16 @@ param appImageTags = {
   // tag the template pulls is visible next to the producer that stamps it
   // (.github/workflows/full-app-deploy-commercial.yml, `tag` input default v0.1).
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
+  // DEFAULT-ON data-plane tier (2026-07-28). This topology runs
+  // containerPlatform='containerApps' + deployAppsEnabled=true, so
+  // admin-plane/main.bicep deploys loom-migrate + loom-risingwave here too and
+  // pulls these tags. A .bicepparam assignment REPLACES the object, so the keys
+  // have to be listed explicitly to give operators the env lever (the template
+  // otherwise falls back to `?? 'v0.1'`). Both images must be in the estate's
+  // ACR before an apps-enabled deploy — build with
+  // build-fiab-images-acr-tasks.yml (boundary matches the estate's cloud).
+  loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
+  risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
 }
 
 // MSAL — passed from env (don't commit secrets to disk)

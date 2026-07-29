@@ -749,8 +749,11 @@ var loomMigrateActive = loomMigrateEnabled && containerPlatform == 'containerApp
 // as deployable in an IL5 enclave as in Commercial.
 // COST: this tier CANNOT scale to zero (single-node RisingWave keeps MV + meta
 // state in process). It runs minReplicas 1 at the smallest ACA-legal footprint
-// (2.0 vCPU / 4.0Gi) — ~$45-55/mo/cloud idle, ~$155/mo processing. That is the
-// disclosed price of honouring default-ON here.
+// (2.0 vCPU / 4.0Gi). BUDGET THE ACTIVE RATE — about $150/mo/cloud. ACA bills
+// idle rates only while a replica stays under 0.01 vCPU AND under 1 KB/s
+// (learn.microsoft.com/azure/container-apps/billing), and an engine running meta
+// heartbeats, barriers and compaction does not. That is the disclosed price of
+// honouring default-ON here.
 // ADMIN OPT-OUT: loomBackends.risingwave = 'disabled'.
 var risingwaveEnabled = (loomBackends.?risingwave ?? 'enabled') != 'disabled'
 var risingwaveActive = risingwaveEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
@@ -3717,18 +3720,39 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Empty only when an admin opts out (loomBackends.loomMigrate =
             // 'disabled') or before the apps tier deploys, in which case
             // /admin/migrate renders fully with its honest Fix-it gate.
-            { name: 'LOOM_MIGRATE_URL', value: loomMigrateActive ? 'https://${loomMigrate!.outputs.fqdn}' : '' }
+            //
+            // BLAST-RADIUS: the value is CONSTRUCTED from the Container Apps
+            // environment's defaultDomain rather than read from the module's
+            // `fqdn` output ON PURPOSE. Reading the output makes ARM emit
+            // `appDeployments dependsOn [... loomMigrate ...]`, which means a
+            // loom-migrate image that is missing from a boundary's ACR stops
+            // loom-console from deploying at all — a degraded feature would
+            // become a Console outage (the exact failure the reviewer of #2639
+            // called out for Gov). ACA's documented internal-ingress FQDN is
+            // `<app>.internal.<env-default-domain>`
+            // (learn.microsoft.com/azure/container-apps/connect-apps#container-app-location-fqdn),
+            // verified byte-for-byte against the live centralus estate:
+            // loom-migrate.internal.calmglacier-81a7635c.centralus.azurecontainerapps.io.
+            // Same string, no dependency.
+            { name: 'LOOM_MIGRATE_URL', value: loomMigrateActive ? 'https://loom-migrate.internal.${containerPlatformModule.outputs.caeDefaultDomain}' : '' }
             // N7a stateful streaming-SQL tier. `host:port` on the Postgres wire
             // (the client parses a bare host, host:port, or a postgres:// URL) —
             // NOT https, the ingress is TCP. Deployed DEFAULT-ON by this template
             // (data-plane/loom-risingwave-aca.bicep). This is the one tier that
             // cannot scale to zero (single-node MV state lives in process), so it
-            // runs 1 replica at the smallest ACA-legal size; disclosed cost
-            // ~$45-55/mo idle. Empty only on admin opt-out
+            // runs 1 replica at the smallest ACA-legal size; disclosed cost is in
+            // the module header (plan against the ACTIVE rate, ~$150/mo/cloud —
+            // a single-node engine running barriers/compaction does not stay under
+            // the <0.01 vCPU idle-billing threshold). Empty only on admin opt-out
             // (loomBackends.risingwave = 'disabled') — the streaming-sql editor
             // then renders fully with its Fix-it gate and Azure Stream Analytics
             // still covers simple jobs.
-            { name: 'LOOM_RISINGWAVE_URL', value: risingwaveActive ? risingwave!.outputs.pgWireEndpoint : '' }
+            // Constructed, not read from `risingwave.outputs.pgWireEndpoint`, for
+            // the same blast-radius reason as LOOM_MIGRATE_URL above. TCP ingress
+            // is reached in-environment by name + exposed port, and the wildcard
+            // `*.<env-id>` record in the CAE private DNS zone resolves the
+            // `.internal.` form to the same environment IP.
+            { name: 'LOOM_RISINGWAVE_URL', value: risingwaveActive ? 'loom-risingwave.internal.${containerPlatformModule.outputs.caeDefaultDomain}:4566' : '' }
             // ── Hyperscale band (HYP-16 cross-cutting platform) ──
             // The three H-band substrate services (Loom OneLake / Loom Direct Lake
             // / Loom Capacity Broker) are STANDALONE ACA apps deployed out-of-band
@@ -5626,6 +5650,14 @@ module loomMigrate '../data-plane/loom-migrate-aca.bicep' = if (loomMigrateActiv
     }
     complianceTags: complianceTags
   }
+  // The app pulls from ACR as loomMigrateUami, so the AcrPull grant must have
+  // landed before the first revision is created — otherwise a from-scratch
+  // deploy can race role propagation and the revision fails to pull. (A
+  // dependsOn on a false-condition resource is a no-op in ARM, so this is safe
+  // when skipRoleGrants is set.)
+  dependsOn: [
+    loomMigrateAcrPull
+  ]
 }
 
 // =====================================================================
@@ -5640,8 +5672,14 @@ module loomMigrate '../data-plane/loom-migrate-aca.bicep' = if (loomMigrateActiv
 // the materialized-view + meta state IN PROCESS, so a scaled-to-zero replica
 // loses every MV definition and its progress. It therefore runs minReplicas 1 at
 // the SMALLEST ACA-legal footprint (2.0 vCPU / 4.0Gi — the Consumption profile
-// requires memory == 2 x vCPU GiB): roughly $45-55/mo/cloud at idle rates and
-// ~$155/mo when continuously processing streams. The rule's required admin
+// requires memory == 2 x vCPU GiB). BUDGET THE ACTIVE RATE, about $150/mo/cloud:
+// ACA charges idle rates only while a replica stays under 0.01 vCPU and 1 KB/s,
+// which a single-node engine running meta heartbeats + compaction does not.
+// KNOWN LIMITATION: the replica filesystem is EPHEMERAL (no volume mount, and
+// RW_STATE_STORE is unset by default), so a revision roll or a platform replica
+// replacement drops the MVs anyway — minReplicas 1 buys continuity WITHIN a
+// revision, not durability. Point RW_STATE_STORE at the ADLS hummock store via
+// the config bag for a durable deployment. The rule's required admin
 // DISABLE toggle is loomBackends.risingwave='disabled' (opt-OUT, not opt-in) —
 // when set, the app is skipped, LOOM_RISINGWAVE_URL is emitted empty, and the
 // streaming-sql editor renders fully with its honest Fix-it gate.
@@ -5711,6 +5749,10 @@ module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActi
     }
     complianceTags: complianceTags
   }
+  // Same AcrPull-before-first-revision ordering as loomMigrate above.
+  dependsOn: [
+    risingwaveAcrPull
+  ]
 }
 
 // =====================================================================
@@ -6468,6 +6510,16 @@ output secretExpiryJobId string = secretExpiryActive ? secretExpiry.outputs.jobI
 // as LOOM_MAF_ENDPOINT; empty when the tier isn't active.
 output copilotMafEndpoint string = copilotMafActive ? copilotMaf!.outputs.mafInternalEndpoint : ''
 output copilotMafPrincipalId string = (copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) ? identity.outputs.uamiMafPrincipalId : ''
+
+// N7a streaming-SQL tier identity. In single-sub the lake grant is made here by
+// `risingwaveLakeRbac`; in tenant / dlz-attach topologies NO local DLZ exists at
+// admin-plane deploy time (loomStorageAccount is deliberately empty there), so
+// the Storage Blob Data Contributor grant for the streaming SINK has to be made
+// when a landing zone attaches. Exposing the principal id is what makes that
+// possible without guessing the UAMI name — the DLZ attach path and
+// scripts/csa-loom/patch-navigator-env.sh consume it the same way they consume
+// uamiConsolePrincipalId. Empty when the tier is disabled/inactive.
+output risingwavePrincipalId string = risingwaveActive ? risingwaveUami!.properties.principalId : ''
 
 // The ONE shared default action group (rev-2 alert standard; same id the apps
 // consume as LOOM_ALERT_ACTION_GROUP_ID). Exposed so subscription-scoped

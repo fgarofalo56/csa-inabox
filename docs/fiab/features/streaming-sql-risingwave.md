@@ -76,10 +76,21 @@ push-button deploy closes the `svc-loom-risingwave` gate with no operator step.
 materialized-view and meta state **in process**, so a scaled-to-zero replica
 loses every MV definition and its progress. It therefore runs `minReplicas: 1`
 at the smallest ACA-Consumption-legal footprint — **2.0 vCPU / 4.0 GiB** (the
-profile requires memory == 2 x vCPU GiB) — which is roughly **$45-55 per month
-per cloud at idle rates** and about **$155 per month when continuously
-processing streams**. Raise it to the 4.0 vCPU / 8.0 GiB ceiling through the
-module's config bag for heavier topologies.
+profile requires memory == 2 x vCPU GiB). **Budget the ACTIVE rate: about $150
+per month per cloud, 24/7.** Azure Container Apps applies its idle rate only
+while a replica stays under 0.01 vCPU *and* under 1 KB/s
+([billing](https://learn.microsoft.com/azure/container-apps/billing)), and an
+engine running meta heartbeats, barriers and periodic compaction does not
+qualify — planning against an "idle" figure understates the bill. Raise it to
+the 4.0 vCPU / 8.0 GiB ceiling through the module's config bag for heavier
+topologies.
+
+**Durability caveat.** `minReplicas: 1` buys continuity *within a revision*, not
+durability. The Container App has no volume mount and `RW_STATE_STORE` is unset
+by default, so the replica filesystem is ephemeral: an ACA revision roll or a
+platform replica replacement drops the materialized views regardless. Set
+`stateStore` (→ `RW_STATE_STORE`) to the ADLS hummock store through the config
+bag for a genuinely durable deployment.
 
 **Admin opt-out (a disable toggle, never an enablement wizard).** Set
 `observabilityConfig.backendOverrides.risingwave = 'disabled'` at the root
@@ -99,6 +110,27 @@ To wire it by hand (an already-running estate, or the incremental Gov path in
 (optionally `host:port`). Optional: `LOOM_RISINGWAVE_DATABASE` (default `dev`),
 `LOOM_RISINGWAVE_USER` (default `root`), `LOOM_RISINGWAVE_PASSWORD` (a Key Vault
 secret; the single-node default is in-VNet trust).
+
+## Getting the image into a sovereign ACR (GCC-High / IL5)
+
+The Container App is deployed by the same template in Gov, so the only Gov
+prerequisite is the same one `loom-console` has: **the image must already be in
+that boundary's registry**, at the tag `appImageTags.risingwave` resolves to
+(`v0.1` by default in `params/gcc-high.bicepparam` and `params/il5.bicepparam`).
+A Container App whose manifest is absent fails its PUT with `MANIFEST_UNKNOWN`.
+
+Both Gov producers build **server-side** with `az acr build`, which is the only
+mechanism that reaches a registry provisioned `publicNetworkAccess=Disabled`:
+
+| Workflow | Use it for |
+|---|---|
+| `.github/workflows/build-fiab-images-acr-tasks.yml` (`boundary=GCC-High` or `IL5`) | The full image set, including `loom-risingwave` and `loom-migrate`. |
+| `.github/workflows/gov-provision-streaming-migrate.yml` (`mode=build-only`) | Just these two, as phase 2 of a from-scratch install. `mode=build-and-deploy` also stands the Container Apps up and wires the vars on an estate that is already running. |
+
+**Not** `build-fiab-images.yml` — it authenticates with the *Commercial* service
+principal, never runs `az cloud set --name AzureUSGovernment`, and pushes
+client-side, so it cannot produce a Gov image. It now hard-fails when dispatched
+with a Gov boundary rather than silently producing nothing.
 
 ## Kill-switch
 

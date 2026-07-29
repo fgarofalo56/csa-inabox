@@ -38,8 +38,9 @@ Container Apps boundary), so the honest infra-gate is only reachable on a
 pre-2026-07-28 estate, before the apps tier deploys, or after an explicit admin
 opt-out (`loomBackends.risingwave='disabled'`). Disclosed cost of that default:
 1 replica at 2.0 vCPU / 4.0 GiB — a streaming engine cannot scale to zero
-without losing its materialized-view state — roughly $45-55/mo/cloud idle and
-~$155/mo when continuously processing.
+without losing its materialized-view state — budgeted at the ACA **active**
+rate, about $150/mo per cloud (the idle rate needs <0.01 vCPU and <1 KB/s, which
+the engine does not hold).
 
 ## Backend per control
 

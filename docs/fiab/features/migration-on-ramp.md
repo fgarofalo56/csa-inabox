@@ -114,6 +114,25 @@ action that already takes minutes. Admins opt OUT with
   disconnected; individual SaaS-source connectors stay honestly gated until their
   connection prerequisite is provided.
 
+### Getting the image into a sovereign ACR (GCC-High / IL5)
+
+The template deploys the reader in Gov exactly as it does in Commercial, so the
+only Gov prerequisite is the one `loom-console` already has: the `loom-migrate`
+image must be in that boundary's registry at the tag `appImageTags.loomMigrate`
+resolves to (`v0.1` by default in `params/gcc-high.bicepparam` and
+`params/il5.bicepparam`). A missing manifest fails the Container App PUT with
+`MANIFEST_UNKNOWN`.
+
+Build it **server-side** — the only mechanism that reaches a
+`publicNetworkAccess=Disabled` registry — with either
+`.github/workflows/build-fiab-images-acr-tasks.yml` (`boundary=GCC-High` /
+`IL5`, full image set) or `.github/workflows/gov-provision-streaming-migrate.yml`
+(`mode=build-only` for just `loom-migrate` + `loom-risingwave`;
+`mode=build-and-deploy` also stands both Container Apps up and wires the vars on
+an estate that is already running). **Not** `build-fiab-images.yml`: it uses the
+Commercial service principal and pushes client-side, so it cannot produce a Gov
+image, and it now hard-fails when dispatched with a Gov boundary.
+
 ## Kill-switches
 
 | Flag | OFF behaviour |

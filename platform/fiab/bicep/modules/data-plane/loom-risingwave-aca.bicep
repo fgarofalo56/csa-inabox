@@ -46,9 +46,17 @@
 // is therefore 1 and the DEFAULT footprint is the smallest that runs the engine
 // honestly: 2.0 vCPU / 4.0 GiB (an ACA Consumption-legal pair — the profile
 // requires memory == 2 x vCPU GiB; the previous 2.0/8Gi default was NOT a legal
-// combination and would have been rejected at deploy time). At ACA Consumption
-// idle rates (no streams defined) that is roughly $45-55/mo/cloud; a replica
-// continuously processing streams bills at active rates, roughly $155/mo/cloud.
+// combination and would have been rejected at deploy time). BUDGET THE ACTIVE
+// RATE — about $150/mo/cloud, 24/7. ACA's idle rate applies only while a replica
+// is under 0.01 vCPU AND under 1 KB/s
+// (learn.microsoft.com/azure/container-apps/billing); a single-node engine
+// running meta heartbeats, barriers and periodic compaction does not qualify, so
+// planning against an "idle" number would understate the bill.
+// DURABILITY CAVEAT: minReplicas 1 buys continuity WITHIN a revision, not
+// durability. There is no volume mount and stateStore is empty by default, so the
+// replica filesystem is ephemeral — an ACA revision roll or a platform replica
+// replacement drops the MVs regardless. Set stateStore (RW_STATE_STORE) to the
+// ADLS hummock store for a genuinely durable deployment.
 // Raise to 4.0 vCPU / 8.0 GiB (the Consumption ceiling) via the config bag for
 // heavier topologies.
 //
@@ -251,9 +259,10 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
       // CANNOT scale to zero and NOT sharded: single-node RisingWave holds the
       // materialized-view + meta state in ONE process, so a stopped replica
       // loses every MV definition and its progress. minReplicas 1 with the
-      // smallest legal footprint (2.0 vCPU / 4.0Gi) is the honest floor:
-      // ~$45-55/mo/cloud at ACA idle rates, ~$155/mo when continuously
-      // processing streams. Disable with loomBackends.risingwave='disabled'.
+      // smallest legal footprint (2.0 vCPU / 4.0Gi) is the honest floor. Budget
+      // the ACTIVE rate (~$150/mo/cloud): the ACA idle rate needs <0.01 vCPU and
+      // <1 KB/s, which this engine does not hold. Disable with
+      // loomBackends.risingwave='disabled'.
       scale: {
         minReplicas: minReplicas
         maxReplicas: maxReplicas

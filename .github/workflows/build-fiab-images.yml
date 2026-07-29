@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       boundary:
-        description: 'Which boundary ACR to push to'
+        description: 'Which boundary ACR to push to. COMMERCIAL ONLY — see the precheck below; GCC-High / IL5 images come from build-fiab-images-acr-tasks.yml.'
         type: choice
         default: Commercial
         options:
@@ -50,7 +50,21 @@ jobs:
           S: ${{ secrets.AZURE_CLIENT_SECRET }}
           T: ${{ secrets.AZURE_TENANT_ID }}
           U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          BOUNDARY: ${{ inputs.boundary || 'Commercial' }}
         run: |
+          # HONEST GUARD (#2639 review). This workflow logs in with the
+          # COMMERCIAL AZURE_* secret set, never runs `az cloud set --name
+          # AzureUSGovernment`, and pushes CLIENT-SIDE via
+          # docker/build-push-action. It therefore cannot authenticate to a Gov
+          # subscription and cannot reach a Gov ACR (publicNetworkAccess=Disabled,
+          # private endpoint only). The `boundary` choice above only ever changed
+          # which Commercial-sub RG name it looked in — dispatching GCC-High here
+          # produced nothing and silently left the sovereign estate imageless.
+          # Fail loudly and name the workflow that actually works.
+          if [[ "$BOUNDARY" == "GCC-High" || "$BOUNDARY" == "IL5" ]]; then
+            echo "::error::boundary=$BOUNDARY is NOT supported by this workflow (Commercial SP + client-side docker push cannot reach a Gov ACR). Use build-fiab-images-acr-tasks.yml with boundary=$BOUNDARY (server-side az acr build), or gov-provision-streaming-migrate.yml for just loom-migrate + loom-risingwave."
+            exit 1
+          fi
           if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::warning::AZURE_* secrets not configured — skipping."
@@ -127,8 +141,12 @@ jobs:
           # EVERY boundary — Commercial, GCC, GCC-High and IL5 all run
           # containerPlatform=='containerApps' — and wires LOOM_MIGRATE_URL /
           # LOOM_RISINGWAVE_URL onto the Console. A missing manifest fails the
-          # Container App PUT, so these belong in the per-boundary release matrix
-          # alongside the console. They live at ./apps/<name>, not ./apps/fiab-*.
+          # Container App PUT, so they belong in every image matrix.
+          # NOTE: this workflow is the COMMERCIAL matrix only (see the precheck
+          # guard). The GCC-High / IL5 images for these two come from
+          # build-fiab-images-acr-tasks.yml (boundary=GCC-High) or
+          # gov-provision-streaming-migrate.yml. They live at ./apps/<name>, not
+          # ./apps/fiab-*.
           - app: loom-migrate
             context: ./apps/loom-migrate
             dockerfile: Dockerfile

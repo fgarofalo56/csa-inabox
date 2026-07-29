@@ -66,10 +66,31 @@ jobs:
             echo "configured=true" >> $GITHUB_OUTPUT
           fi
 
+  # IMAGE PHASE (no-vaporware.md two-phase contract). admin-plane/main.bicep
+  # deploys loom-migrate + loom-risingwave DEFAULT-ON in every Container Apps
+  # boundary, IL5 included, and params/il5.bicepparam sets containerPlatform=
+  # 'containerApps' + deployAppsEnabled=true — so those two manifests must be in
+  # the sovereign ACR before the deploy below, or their Container App PUTs fail
+  # MANIFEST_UNKNOWN. `az acr build` runs server-side, the only mechanism that
+  # reaches a publicNetworkAccess=Disabled Gov registry. On a from-scratch
+  # subscription there is no ACR yet; the reusable workflow warns and exits 0 in
+  # build-only mode and the images get built in the documented phase 2 instead —
+  # which is why deploy-validate runs with `always()` rather than on success.
+  build-gov-images:
+    name: Build the DEFAULT-ON data-plane images (IL5 ACR)
+    needs: precheck
+    if: needs.precheck.outputs.configured == 'true' && inputs.run_mode == 'full'
+    uses: ./.github/workflows/gov-provision-streaming-migrate.yml
+    secrets: inherit
+    with:
+      mode: build-only
+      boundary: IL5
+      image_tag: v0.1
+
   deploy-validate:
     name: Deploy + validate CSA Loom in IL5
-    needs: precheck
-    if: needs.precheck.outputs.configured == 'true'
+    needs: [precheck, build-gov-images]
+    if: always() && needs.precheck.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: il5-deploy   # requires manual approval

@@ -2,12 +2,25 @@ name: build-fiab-images-acr-tasks
 
 # CSA Loom — image build via Azure Container Registry Tasks.
 #
+# THE image producer for BOTH clouds. `boundary` selects the estate:
+#   Commercial (default) → AZURE_* secrets, rg-csa-loom-admin-eastus2
+#   GCC-High / IL5       → AZURE_GOV_* secrets + `az cloud set --name
+#                          AzureUSGovernment`, rg-csa-loom-admin-usgovvirginia
+# Everything else is identical, because the mechanism is identical: `az acr
+# build` runs SERVER-SIDE inside Azure.
+#
 # Why this exists alongside build-fiab-images.yml: the customer's
 # Loom ACR is provisioned with publicNetworkAccess=Disabled (private
 # endpoint only), so external GitHub runners can't reach it for
 # `docker push`. ACR Tasks run *inside* Azure and reach ACR via
 # its internal network — this avoids the chicken-and-egg of needing
-# a self-hosted runner inside the VNet just to push images.
+# a self-hosted runner inside the VNet just to push images. That is doubly true
+# in Gov, where the registry has never been publicly reachable:
+# build-fiab-images.yml's docker/build-push-action matrix CANNOT produce Gov
+# images (it authenticates with the Commercial SP and pushes client-side), so
+# THIS workflow is the only Gov image path. Run it with boundary=GCC-High before
+# any apps-enabled Gov deploy — a Container App whose image is absent from the
+# boundary's ACR fails its PUT with MANIFEST_UNKNOWN.
 #
 # Each app is built via `az acr build`. The source is uploaded as a
 # tar archive to the Task and Docker builds inside ACR.
@@ -27,6 +40,14 @@ name: build-fiab-images-acr-tasks
 on:
   workflow_dispatch:
     inputs:
+      boundary:
+        description: 'Which cloud/boundary ACR to build into. Commercial uses the AZURE_* secret set; GCC-High / IL5 use AZURE_GOV_* + `az cloud set --name AzureUSGovernment`.'
+        type: choice
+        default: Commercial
+        options:
+          - Commercial
+          - GCC-High
+          - IL5
       tag_override:
         description: 'Image tag (default: v0.1)'
         type: string
@@ -37,6 +58,23 @@ on:
         default: all
       skip_supply_chain:
         description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign signing (e.g. Trivy DB / Sigstore outage). The unsigned image will be REJECTED by the roll gates unless their skip valves are also set.'
+        type: boolean
+        default: false
+  # Callable so a boundary deploy workflow can produce its OWN images as a job
+  # (deploy-fiab-gcch.yml / deploy-fiab-il5.yml call this between the infra phase
+  # and the apps-enabled phase). Call sites must pass `secrets: inherit`.
+  workflow_call:
+    inputs:
+      boundary:
+        type: string
+        default: Commercial
+      tag_override:
+        type: string
+        default: v0.1
+      apps:
+        type: string
+        default: all
+      skip_supply_chain:
         type: boolean
         default: false
   push:
@@ -81,10 +119,21 @@ permissions:
 # re-locks if this run is still the recorded holder. See
 # docs/fiab/acr-firewall-lease.md.
 concurrency:
-  group: build-fiab-images-acr-tasks
+  # Per-BOUNDARY: Commercial and Gov toggle DIFFERENT registries, so serialising
+  # them against each other would only add latency. Two runs against the SAME
+  # registry still queue.
+  group: build-fiab-images-acr-tasks-${{ inputs.boundary || 'Commercial' }}
   cancel-in-progress: false
 env:
-  AZURE_LOCATION: eastus2
+  # Boundary-aware. `push`/default = Commercial; GCC-High + IL5 resolve the
+  # sovereign region and log in with the AZURE_GOV_* secret set. This is what
+  # makes the workflow a REAL Gov image producer: `az acr build` runs SERVER-SIDE
+  # inside Azure, which is the only mechanism that reaches a Gov ACR provisioned
+  # with publicNetworkAccess=Disabled (a client-side `docker push` from a
+  # GitHub-hosted runner cannot). Same mechanism gov-console-roll.yml and
+  # gov-provision-wrangler.yml have used in production.
+  BOUNDARY: ${{ inputs.boundary || 'Commercial' }}
+  AZURE_LOCATION: ${{ (inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'usgovvirginia' || 'eastus2' }}
   # This workflow is the longest-lived holder (console compile + matrix builds +
   # Trivy scan + cosign sign). Size the lease so a legitimate run never expires
   # mid-push and gets its registry swept out from under it.
@@ -96,13 +145,34 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
+      acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
       app_matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       # The matrix resolver probes ./apps/<name> to decide each build context, so this
       # job needs the tree. It had no checkout before — the probe silently evaluated
       # false for every app and everything fell through to the ./apps/fiab-* convention.
       - uses: actions/checkout@v4
-      - name: Azure login
+      # Fail LOUDLY rather than silently building into the wrong cloud: a Gov
+      # dispatch with no AZURE_GOV_* secret set would otherwise fall through to
+      # an unauthenticated `az` and report a confusing "ACR not found".
+      - name: Verify the boundary's credential set is configured
+        env:
+          GC: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          GS: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          GT: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          GU: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          CC: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          if [[ "$BOUNDARY" == "Commercial" ]]; then
+            [[ -n "$CC" ]] || { echo "::error::AZURE_CLIENT_ID is not configured."; exit 1; }
+          else
+            if [[ -z "$GC" || -z "$GS" || -z "$GT" || -z "$GU" ]]; then
+              echo "::error::boundary=$BOUNDARY needs the AZURE_GOV_* secret set (see docs/fiab/runbooks/secrets-bootstrap.md)."
+              exit 1
+            fi
+          fi
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -112,6 +182,30 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
+      # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
+      # `az` call later in the job (acr build, acr repository show, acr login)
+      # targets the Government cloud too.
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
       - id: acr
         run: |
           # Resolve the admin RG by PREFIX — it may or may not carry a region
@@ -127,6 +221,14 @@ jobs:
           ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv)
           if [[ -z "$ACR" ]]; then echo "::error::ACR not found"; exit 1; fi
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
+          # Read the login server from ARM instead of appending '.azurecr.io':
+          # the Government suffix is '.azurecr.us', and the Trivy/cosign steps
+          # below address the image by login server. Hardcoding the Commercial
+          # suffix is what makes a "Gov build" silently scan/sign nothing.
+          ACR_LOGIN=$(az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv | tr -d '\r')
+          if [[ -z "$ACR_LOGIN" ]]; then echo "::error::could not read the login server for $ACR"; exit 1; fi
+          echo "acr_login_server=$ACR_LOGIN" >> "$GITHUB_OUTPUT"
+          echo "::notice::boundary=$BOUNDARY acr=$ACR login=$ACR_LOGIN"
       - id: matrix
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
@@ -199,7 +301,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -209,6 +312,30 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
+      # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
+      # `az` call later in the job (acr build, acr repository show, acr login)
+      # targets the Government cloud too.
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
 
       - name: Build + push via ACR Tasks
         run: |
@@ -255,7 +382,7 @@ jobs:
           # Export coordinates for the SC1 scan/sign steps below.
           echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "ACR_NAME=$ACR" >> "$GITHUB_ENV"
-          echo "ACR_LOGIN_SERVER=${ACR}.azurecr.io" >> "$GITHUB_ENV"
+          echo "ACR_LOGIN_SERVER=${{ needs.resolve.outputs.acr_login_server }}" >> "$GITHUB_ENV"
           if [ -n "$POOL_ARGS" ]; then
             # Scale the pool back to 0 when nothing else is queued (pool
             # allocation is what bills; idle pools cost nothing at count 0).
@@ -337,7 +464,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Azure login
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -347,6 +475,30 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
+      # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
+      # `az` call later in the job (acr build, acr repository show, acr login)
+      # targets the Government cloud too.
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
       - name: Acquire the ACR firewall lease (opens the registry)
         run: |
           bash scripts/csa-loom/acr-firewall-lease.sh acquire \
@@ -359,7 +511,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Azure login
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
         uses: azure/login@v2.3.0
         with:
           creds: |
@@ -369,6 +522,30 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
+      # GCC-High / IL5. Same SP set every other gov-* workflow uses, with the
+      # sovereign ARM/AAD endpoints; `az cloud set` afterwards so every plain
+      # `az` call later in the job (acr build, acr repository show, acr login)
+      # targets the Government cloud too.
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
       # #2603: THE fix. This job also runs when the workflow is CANCELLED, and
       # by then GitHub may already have started the next run — which is why the
       # old unconditional `az acr update --default-action Deny` killed a healthy

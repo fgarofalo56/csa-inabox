@@ -289,7 +289,10 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    every apps-enabled deploy (all boundaries) and wires LOOM_RISINGWAVE_URL.
   //    It is the ONE runtime here that cannot scale to zero (single-node MV +
   //    meta state lives in process), so it runs 1 replica at the smallest
-  //    ACA-legal size — ~$45-55/mo idle, ~$155/mo processing. Admin opt-OUT is
+  //    ACA-legal size. PLAN AGAINST THE ACTIVE RATE, ~$150/mo/cloud: ACA only
+  //    bills idle rates while a replica stays under 0.01 vCPU and 1 KB/s, and a
+  //    single-node engine running meta heartbeats, barriers and compaction does
+  //    not. Admin opt-OUT is
   //    loomBackends.risingwave='disabled'. Unset → the streaming-sql editor
   //    renders fully (guided empty state + Fix-it) and Azure Stream Analytics
   //    (the stream-analytics-job item) still covers simple jobs.
@@ -305,8 +308,11 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       + 'authors streaming materialized views in SQL over Azure Event Hubs via its Kafka endpoint, sinking to '
       + 'Delta/Iceberg on the DLZ lake or the Postgres wire). The tier is NEVER public — every statement goes '
       + 'through the audited BFF at /api/streaming-sql/*. COST: a streaming engine cannot scale to zero without '
-      + 'losing its materialized-view state, so this runs 1 replica at 2.0 vCPU / 4.0Gi — roughly $45-55/mo/cloud '
-      + 'idle and ~$155/mo when continuously processing. Optional: LOOM_RISINGWAVE_DATABASE '
+      + 'losing its materialized-view state, so this runs 1 replica at 2.0 vCPU / 4.0Gi. Budget the ACTIVE rate, '
+      + 'about $150/mo per cloud: ACA charges idle rates only while a replica stays below 0.01 vCPU and 1 KB/s, '
+      + 'and a single-node engine running meta heartbeats, barriers and compaction does not. Note the replica '
+      + 'filesystem is EPHEMERAL unless RW_STATE_STORE is pointed at durable object storage — a revision roll or '
+      + 'a platform replica replacement drops the materialized views either way. Optional: LOOM_RISINGWAVE_DATABASE '
       + '(default dev), LOOM_RISINGWAVE_USER (default root), LOOM_RISINGWAVE_PASSWORD (KV secret; single-node '
       + 'default is in-VNet trust).',
     docs: 'https://docs.risingwave.com/docs/current/intro/',
