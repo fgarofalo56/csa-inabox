@@ -533,14 +533,100 @@ schema yourself).
 * the Console vars `LOOM_UNITY_URL` / `LOOM_UNITY_CLIENT_ID` /
   `LOOM_UNITY_AUDIENCE` / `LOOM_UNITY_AUTH_MODE`.
 
-The `loom-unity` image must be in ACR first — it is in the default matrix of
-`build-fiab-images-acr-tasks.yml` and `full-app-deploy-commercial.yml` (deploy
-phase 2). On the default path the Entra app registration is created in **phase 3**
-(`csa-loom-post-deploy-bootstrap.yml` → `scripts/csa-loom/bootstrap-msal-app-reg.sh`),
-which stamps `LOOM_UNITY_ENTRA_CLIENT_ID` onto the catalog and the three
-`LOOM_UNITY_*` vars onto the Console. **Between phase 2 and phase 3 the catalog
-fails closed** — it refuses to boot without a pinned audience rather than coming
-up anonymous. That is the intended posture.
+### Image producers — BOTH clouds
+
+The `loom-unity` image must be in the target ACR before the app can start, at the
+tag the boundary's `.bicepparam` pulls (`appImageTags.unity`, default `v0.1`):
+
+| Cloud | Producer | Tags published |
+|---|---|---|
+| Commercial | `build-fiab-images-acr-tasks.yml` (default matrix) and `full-app-deploy-commercial.yml` (deploy phase 2) | `v0.1` (or the dispatch tag) |
+| **Azure Government (GCC-High / IL5)** | **`gov-build-images.yml`** — the Gov twin: `az cloud set --name AzureUSGovernment` + the `AZURE_GOV_*` deploy SP, ACR discovered from the admin RG, ACR-firewall lease, `az acr build`, Trivy CRITICAL gate | `v0.1` (or the dispatch tag), `<sha>`, `latest` |
+| Azure Government (targeted re-wire of a live estate) | `gov-uc-purview-wire.yml` | `<sha>`, `latest`, **and `v0.1`** |
+
+The Commercial producers log in with the **Commercial** credentials and never
+switch clouds, so they cannot push to a Gov registry — that gap is exactly why a
+from-scratch GCC-High / IL5 deploy used to fail the `loom-unity` image pull, and
+why `gov-build-images.yml` exists.
+
+### Ownership — the `loom-unity` app-name collision in Gov
+
+`loom-unity` in `rg-csa-loom-admin-<region>` **already exists and is live** in
+Azure Government: `gov-uc-purview-wire.yml` created it with a standalone
+`az deployment group create` against `compute/loom-unity-app.bicep`.
+`admin-plane/main.bicep` now deploys a Container App with the **same name in the
+same resource group**, so the next Gov infra deploy **adopts** that resource (an
+ARM PUT on the same name/RG is an idempotent update) instead of creating a second
+catalog. That is deliberate — one catalog, one owner, the orchestrator — and it is
+safe because the two paths were made convergent:
+
+* **image** — the workflow now also publishes `loom-unity:v0.1`, the tag the Gov
+  bicepparams pull, so adoption cannot repoint the live app at a tag nobody built;
+* **identity** — the workflow prefers the same dedicated
+  `uami-loom-unity-<region>` the orchestrator creates, falling back to the Console
+  UAMI only until the first orchestrator deploy;
+* **audience** — the workflow reads `LOOM_MSAL_CLIENT_ID` off the live Console and
+  refuses to deploy without it; the orchestrator passes the same value, and the
+  Gov deploy workflows resolve the estate's existing client id (Key Vault → live
+  Console app → repo secret) *before* running the template;
+* **persistence** — GCC-High/IL5 set `postgresQuotaAvailable=false`, so the
+  orchestrator's `dbEphemeral=true` matches exactly what the live app runs.
+
+Either entrypoint can be re-run in any order. `gov-uc-purview-wire.yml` remains
+the targeted path for re-wiring an existing Gov estate without a full infra deploy.
+
+### The SEALED state (and why it exists)
+
+An Entra **app registration is a Microsoft Graph object that ARM/bicep cannot
+create**, and Microsoft's guidance for "a managed identity calls MY service" is to
+register a service principal to represent the target and use its Application ID /
+Application ID URI as the audience — a managed identity cannot *be* the audience
+([Learn](https://learn.microsoft.com/azure/azure-web-pubsub/howto-use-managed-identity#use-a-managed-identity-in-client-events-scenarios):
+"You should always create a service principal to represent your upstream target").
+So on a bare `az deployment sub create` with no `LOOM_MSAL_CLIENT_ID`, there is
+genuinely no audience to pin.
+
+The catalog then deploys **SEALED**:
+
+* `LOOM_UNITY_AUTH=enable`, issuer pinned to the deployment tenant;
+* `LOOM_UNITY_AUDIENCES` pinned to a per-deployment sentinel in the RFC 2606
+  reserved `.invalid` TLD (`api://loom-unity-sealed-<uniqueString>.invalid`) — no
+  Entra tenant can ever issue a token with that `aud`;
+* `minReplicas: 0` — a catalog that can serve nobody must not bill for a hot JVM;
+* outputs `authorizationSealed` / `authorizationMisconfigured` = `true`.
+
+It is **up**, it answers its probes, and it rejects **100%** of callers — including
+the Console, whose Unity surfaces show the structured `LOOM_UNITY_CLIENT_ID` gate.
+It is never anonymous, and (unlike the first cut of this fix) it never
+CrashLoopBackOffs.
+
+**Unsealing** is deploy phase 3 (`csa-loom-post-deploy-bootstrap.yml` →
+`scripts/csa-loom/bootstrap-msal-app-reg.sh`): it creates the app registration,
+sets its `api://<appId>` identifier URI, stamps `LOOM_UNITY_ENTRA_CLIENT_ID` onto
+the catalog and the `LOOM_UNITY_*` vars onto the Console, **and records the client
+id in Key Vault as `loom-msal-client-id`**.
+
+### Durability — do not let a redeploy re-seal a working catalog
+
+An ACA template rewrite removes every env var it does not declare, so a later
+`az deployment sub create` with `LOOM_MSAL_CLIENT_ID` unset would blank the
+Console's sign-in var *and* re-seal the catalog. Two mechanisms prevent that:
+
+1. `bootstrap-msal-app-reg.sh` writes the client id to Key Vault
+   (`loom-msal-client-id`).
+2. `scripts/csa-loom/resolve-msal-client-id.sh` (read-only) resolves it back —
+   environment → Key Vault → live Console app → empty — and the Gov deploy
+   workflows (`deploy-fiab-gcch.yml`, `deploy-fiab-il5.yml`) call it and export
+   `LOOM_MSAL_CLIENT_ID` before the template runs.
+
+**Running `az deployment sub create` by hand? Do this first:**
+
+```bash
+export LOOM_MSAL_CLIENT_ID="$(bash scripts/csa-loom/resolve-msal-client-id.sh)"
+```
+
+Empty output is correct on a genuinely fresh subscription (the catalog then
+deploys sealed).
 
 The steps below remain valid for a **targeted redeploy** of either module.
 

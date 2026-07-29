@@ -27,6 +27,11 @@
 #   EXISTING_CLIENT_ID  use-existing override (skip create; reconcile if owned)
 #   KEYVAULT_NAME       Key Vault to write secrets into (required)
 #   MSAL_SECRET_NAME    default loom-msal-client-secret
+#   MSAL_CLIENT_ID_SECRET_NAME  default loom-msal-client-id — the app registration's
+#                       (non-secret) CLIENT ID, persisted so a later
+#                       `az deployment sub create` can resolve it back into
+#                       LOOM_MSAL_CLIENT_ID instead of re-rendering an empty one
+#                       (which would blank sign-in and re-seal Loom Unity)
 #   SESSION_SECRET_NAME default session-secret
 #   CONSOLE_APP_NAME    Container App name to wire (optional; e.g. loom-console)
 #   CONSOLE_RG          resource group of the Container App (optional)
@@ -188,6 +193,20 @@ echo "==> Resetting client secret + persisting to Key Vault ${KEYVAULT_NAME}"
 SECRET="$(az ad app credential reset --id "${APP_ID}" --years 2 --query password -o tsv)"
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${MSAL_SECRET_NAME}" --value "${SECRET}" -o none
 echo "    wrote ${MSAL_SECRET_NAME}"
+
+# svc-loom-unity-authz (round 2) — persist the app registration's CLIENT ID too.
+# It is not a secret; it is the DURABLE record of which app registration this
+# estate uses. Without it, every later `az deployment sub create` re-renders
+# effectiveMsalClientId from an unset LOOM_MSAL_CLIENT_ID, blanks the Console's
+# LOOM_MSAL_CLIENT_ID / LOOM_UNITY_* vars and re-SEALS the Loom Unity catalog
+# that this script just unsealed. The deploy workflows now read this secret back
+# into LOOM_MSAL_CLIENT_ID before running the template (see the "Resolve the
+# existing MSAL client id" steps in deploy-fiab-gcch / deploy-fiab-il5 /
+# csa-loom-post-deploy-bootstrap), which makes the reconcile idempotent.
+MSAL_CLIENT_ID_SECRET_NAME="${MSAL_CLIENT_ID_SECRET_NAME:-loom-msal-client-id}"
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${MSAL_CLIENT_ID_SECRET_NAME}" --value "${APP_ID}" -o none \
+  && echo "    wrote ${MSAL_CLIENT_ID_SECRET_NAME}=${APP_ID} (redeploys resolve it from here)" \
+  || echo "    WARN: could not persist ${MSAL_CLIENT_ID_SECRET_NAME} — a later redeploy may re-seal Loom Unity until LOOM_MSAL_CLIENT_ID is supplied"
 
 EXISTING_SS="$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${SESSION_SECRET_NAME}" --query value -o tsv 2>/dev/null || true)"
 if [ -z "${EXISTING_SS:-}" ]; then

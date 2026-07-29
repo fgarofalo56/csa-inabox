@@ -102,10 +102,20 @@ active cloud. Any of the four can be overridden explicitly.
 **It fails closed.** `LOOM_UNITY_AUTH=enable` with no pinned issuer *or* no pinned
 audience exits 1 with a FATAL naming the exact variable: an authorization server that
 validates nothing is worse than an honest open door, so it never boots. **With
-nothing wired at all it does the same** — a bare `docker run` / a bicep deploy that
-omitted `entraClientId` aborts with that FATAL rather than coming up anonymous. The
-Console reports the state through the `svc-loom-unity-authz` gate and the live
-`probe-loom-unity-authz` health probe.
+nothing wired at all it does the same** — a bare `docker run` aborts with that FATAL
+rather than coming up anonymous. The Console reports the state through the
+`svc-loom-unity-authz` gate and the live `probe-loom-unity-authz` health probe.
+
+**The bicep modules never hand it that state.** An Entra app registration is a
+Microsoft Graph object ARM cannot create, so when none exists yet
+(`compute/loom-unity-app.bicep`, `data-plane/iceberg-catalog-aca.bicep`) the deploy
+pins a per-deployment **sentinel** audience in the RFC 2606 reserved `.invalid` TLD
+— `api://loom-unity-sealed-<uniqueString>.invalid` — that no Entra tenant can ever
+issue a token for, and sets `minReplicas: 0`. The container comes **up** with
+authorization enforced and rejects 100% of callers (the *SEALED* state) instead of
+CrashLoopBackOff-ing. Deploy phase 3 (`scripts/csa-loom/bootstrap-msal-app-reg.sh`)
+stamps the real client id and unseals it. See
+`docs/fiab/unity-gov.md` § "The SEALED state".
 
 The Console presents `LOOM_UNITY_TOKEN` (a pre-shared, server-minted token delivered
 as a Key Vault secretref) or an Entra bearer minted by its managed identity for the

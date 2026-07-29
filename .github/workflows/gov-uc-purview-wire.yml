@@ -5,11 +5,20 @@ name: gov-uc-purview-wire
 #
 #   1. OSS Unity Catalog — Databricks Unity Catalog has NO Azure Government
 #      endpoint, so Gov runs the self-hosted OSS Unity Catalog server
-#      (apps/loom-unity + platform/fiab/bicep/modules/compute/loom-unity-app.bicep,
-#      out-of-band because admin-plane/main.bicep is at the 256-param ceiling).
+#      (apps/loom-unity + platform/fiab/bicep/modules/compute/loom-unity-app.bicep).
 #      This job builds the loom-unity image on the Gov ACR, deploys the Container
 #      App into the Gov CAE, then sets LOOM_UC_BACKEND=oss + LOOM_UNITY_URL on
 #      the Gov console so uc-backend.ts routes to it.
+#
+#      OWNERSHIP (svc-loom-unity-authz round 2): admin-plane/main.bicep now
+#      deploys this SAME app (`loom-unity` in the same admin RG) as part of the
+#      push-button deploy, so the orchestrator is the long-term owner and the next
+#      Gov infra deploy ADOPTS the app this workflow created. That adoption is
+#      deliberate and convergent — this workflow now publishes the :v0.1 tag the
+#      Gov bicepparams pull and prefers the same dedicated UAMI the orchestrator
+#      creates — so re-running either one is idempotent. This workflow remains the
+#      targeted path for re-wiring an existing Gov estate without a full infra
+#      deploy. See docs/fiab/unity-gov.md § "Ownership".
 #
 #   2. Purview — a Purview account is ALREADY deployed in the Gov sub but the
 #      console never had LOOM_PURVIEW_ACCOUNT set, so every governance surface
@@ -92,8 +101,15 @@ jobs:
           # step's re-lock cannot deny another run's in-flight push.
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # svc-loom-unity-authz (round 2) — ALSO tag :v0.1. admin-plane/main.bicep
+          # now deploys this same app on every boundary and pulls
+          # `loom-unity:${appImageTags.unity}` (v0.1 in gcc-high/il5.bicepparam).
+          # If this workflow only published :<sha> + :latest, the first orchestrator
+          # deploy over this estate would repoint the LIVE app at a tag that does
+          # not exist and the revision would fail its image pull.
+          # gov-build-images.yml is the from-scratch producer for the same tag.
           az acr build --registry "$ACR" --no-logs \
-            --image "loom-unity:$SHA" --image "loom-unity:latest" \
+            --image "loom-unity:$SHA" --image "loom-unity:latest" --image "loom-unity:v0.1" \
             --file apps/loom-unity/Dockerfile \
             apps/loom-unity
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
@@ -126,14 +142,33 @@ jobs:
             exit 1
           fi
           echo "::notice::pinning Loom Unity audience to api://$UNITY_CLIENT_ID and ingress to $CAE_CIDR"
+          # svc-loom-unity-authz (round 2) — CONVERGE WITH THE ORCHESTRATOR.
+          # admin-plane/main.bicep now deploys a Container App with this exact
+          # name into this exact RG, so the next Gov infra deploy ADOPTS whatever
+          # this step leaves behind. Adoption is only safe if the two agree, so:
+          #   * identity — prefer the dedicated least-privilege UAMI the
+          #     orchestrator creates (uami-loom-unity-<location>); fall back to the
+          #     Console UAMI only on estates the orchestrator has not reached yet
+          #     (its ONLY grants there are AcrPull + its own Postgres, so the
+          #     broadly-permissioned Console identity is not the right long-term
+          #     home for an app that exposes IMDS to in-container code);
+          #   * image — :v0.1, the tag the Gov bicepparams pull.
+          # See docs/fiab/unity-gov.md § "Ownership".
+          UNITY_UAMI_ID=$(az identity show -n "uami-loom-unity-${LOCATION}" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "${UNITY_UAMI_ID:-}" ]; then
+            UNITY_UAMI_ID="$UAMI_ID"
+            echo "::notice::dedicated uami-loom-unity-${LOCATION} not present yet — using the Console UAMI; the next admin-plane deploy switches it to the dedicated identity."
+          fi
+          UNITY_UAMI_CLIENT_ID=$(az identity show --ids "$UNITY_UAMI_ID" --query clientId -o tsv 2>/dev/null | tr -d '\r' || true)
           az deployment group create -g "$RG" \
             -n "loom-unity-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
             -p location="$LOCATION" \
                environmentId="$CAE_ID" \
-               unityUamiId="$UAMI_ID" \
+               unityUamiId="$UNITY_UAMI_ID" \
+               unityUamiClientId="$UNITY_UAMI_CLIENT_ID" \
                acrLoginServer="$ACR_LOGIN" \
-               image="$ACR_LOGIN/loom-unity:$SHA" \
+               image="$ACR_LOGIN/loom-unity:v0.1" \
                dbEphemeral=true \
                authMode=entra \
                entraClientId="$UNITY_CLIENT_ID" \

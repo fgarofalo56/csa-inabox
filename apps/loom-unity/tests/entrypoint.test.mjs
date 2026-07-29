@@ -199,6 +199,30 @@ test('LU-2: authorization=enable with an issuer but no audience FAILS CLOSED', {
   assert.match(r.stderr, /FATAL: LOOM_UNITY_AUTH=enable but no token audience is pinned/);
 });
 
+// svc-loom-unity-authz round 2 — the SEALED contract. compute/loom-unity-app.bicep
+// and data-plane/iceberg-catalog-aca.bicep pin a sentinel `.invalid` audience when
+// no Entra app registration exists yet, so the container comes UP with
+// authorization enforced and rejects every caller instead of CrashLoopBackOff-ing
+// (round 1) or serving anonymously (the original finding). This asserts the image
+// honours that contract: enable + sentinel audience + NO client id must boot.
+test('LU-2 (round 2): a pinned SENTINEL audience with no client id BOOTS, authorization enforced', { skip: !shAvailable }, () => {
+  const sealed = 'api://loom-unity-sealed-abc123.invalid';
+  const r = render({
+    LOOM_UNITY_AUTH: 'enable',
+    LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid',
+    LOOM_UNITY_AUDIENCES: sealed,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /server\.authorization=enable/);
+  assert.match(r.stdout, new RegExp(`server\\.audiences=${sealed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(r.stdout, /server\.allowed-issuers=https:\/\/login\.microsoftonline\.com\/tenant-guid\/v2\.0/);
+  // No client id was supplied, so nothing derives a real audience.
+  assert.match(r.stdout, /server\.client-id=\s*$/m);
+  // And it is NOT the anonymous opt-out.
+  assert.doesNotMatch(r.stdout, /server\.authorization=disable/);
+  assert.doesNotMatch(r.stderr, /SECURITY WARNING: authorization is DISABLED/);
+});
+
 test('LU-2: LOOM_UNITY_AUTH=disable is an explicit, warned opt-out even with a tenant wired', { skip: !shAvailable }, () => {
   const r = render({ LOOM_UNITY_AUTH: 'disable', LOOM_UNITY_ENTRA_TENANT_ID: 'tenant-guid' });
   assert.equal(r.status, 0, r.stderr);

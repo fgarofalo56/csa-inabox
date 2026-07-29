@@ -84,7 +84,7 @@ on:
       apps:
         description: 'Comma-separated app images to build. Default = the console plus the two images the default-ON gates need.'
         type: string
-        default: 'loom-console,loom-uat'
+        default: 'loom-console,loom-uat,loom-unity'
       tag:
         description: 'The DEPLOY-REFERENCED tag. Must match what the Gov .bicepparam pulls — v0.1 unless you export LOOM_<X>_TAG for the deployment too. Pushed alongside :<short-sha> and :latest.'
         type: string
@@ -113,7 +113,7 @@ on:
         default: gcc-high
       apps:
         type: string
-        default: 'loom-console,loom-uat'
+        default: 'loom-console,loom-uat,loom-unity'
       tag:
         type: string
         default: 'v0.1'

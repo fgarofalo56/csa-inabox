@@ -9,8 +9,9 @@
  * Selection (see {@link resolveUcBackend}):
  *   - `LOOM_UC_BACKEND=oss`         → OSS Unity Catalog (explicit opt-in).
  *   - `LOOM_UC_BACKEND=databricks`  → Databricks Unity Catalog (explicit).
- *   - unset → **auto**: OSS when running in Azure Government AND no Databricks
- *     workspace is bound AND `LOOM_UNITY_URL` is set; otherwise Databricks.
+ *   - unset → **auto**: Loom Unity when NO Databricks workspace is bound AND
+ *     `LOOM_UNITY_URL` is set; otherwise Databricks. (admin-plane/main.bicep
+ *     pins `oss` explicitly on GCC-High / IL5.)
  *
  * The OSS server and Databricks UC share the catalog / schema / table / volume /
  * function / model / permission REST shapes, so those operations route
@@ -34,7 +35,6 @@
  * honestly — when nothing is configured and the catalog is therefore reachable
  * anonymously by anything on the VNet.
  */
-import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 
 export type UcBackend = 'databricks' | 'oss';
 
@@ -45,15 +45,24 @@ function hasDatabricksWorkspace(): boolean {
 
 /**
  * Resolve the active Unity Catalog backend. Explicit `LOOM_UC_BACKEND` always
- * wins; otherwise auto-select OSS in Azure Government when there is no Databricks
- * workspace to talk to and a `loom-unity` URL is configured. Defaults to
- * Databricks (the Commercial behaviour) so existing deployments are unchanged.
+ * wins (admin-plane/main.bicep pins `oss` on GCC-High / IL5, where Databricks
+ * Unity Catalog has no endpoint at all); otherwise auto-select Loom Unity
+ * whenever there is NO Databricks workspace bound and a `loom-unity` URL is
+ * configured. Defaults to Databricks, so any estate with a bound workspace is
+ * byte-identical to before.
+ *
+ * The auto-select used to additionally require `isGovCloud()`. That made the
+ * catalog unreachable on every Commercial estate — including estates with no
+ * Databricks at all, where `LOOM_DATABRICKS_HOSTNAME` is empty and every Unity
+ * surface honest-gated on Databricks while a fully-deployed, fully-paid-for Loom
+ * Unity sat unused next to it. The cloud is not the deciding factor; whether a
+ * Databricks workspace exists is.
  */
 export function resolveUcBackend(): UcBackend {
   const explicit = (process.env.LOOM_UC_BACKEND || '').trim().toLowerCase();
   if (explicit === 'oss') return 'oss';
   if (explicit === 'databricks') return 'databricks';
-  if (isGovCloud() && !hasDatabricksWorkspace() && !!process.env.LOOM_UNITY_URL) {
+  if (!hasDatabricksWorkspace() && !!process.env.LOOM_UNITY_URL) {
     return 'oss';
   }
   return 'databricks';

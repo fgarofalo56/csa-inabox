@@ -78,10 +78,11 @@ Optional keys:
                          inherits the same svc-loom-unity-authz finding: with no Entra
                          issuer/audience pinned the catalog was readable AND writable
                          anonymously by anything on the CAE VNet. Entra bearer
-                         authorization is now ON by default and the container FAILS
-                         CLOSED at boot when nothing can be pinned. 'disabled' is an
-                         explicit, audited opt-out that logs a SECURITY WARNING on
-                         every boot.
+                         authorization is now ON by default; when no audience can
+                         be pinned the catalog deploys SEALED (up, sentinel
+                         `.invalid` audience, every caller rejected) rather than
+                         open or crash-looping. 'disabled' is an explicit, audited
+                         opt-out that logs a SECURITY WARNING on every boot.
   entraTenantId          Tenant whose tokens are accepted (default: deployment tenant).
   entraClientId          Entra app registration fronting the catalog — normally the
                          SAME one the Console signs in with (LOOM_MSAL_CLIENT_ID).
@@ -115,8 +116,17 @@ var assignLakeRole = bool(catalogConfig.?assignLakeRole ?? true)
 // applies here identically. Authorization defaults to entra; the sovereign
 // authority host is derived per cloud (login.microsoftonline.com in Commercial,
 // login.microsoftonline.us in Azure Government) so Gov never sees a Commercial
-// issuer. With authMode=entra and nothing pinnable the entrypoint aborts the
-// boot naming the exact var — it never falls back to serving anonymously.
+// issuer.
+//
+// Round 2: with authMode=entra and nothing pinnable this module used to hand the
+// entrypoint LOOM_UNITY_AUTH=enable + an empty audience, and the entrypoint
+// `die`s — so the documented standalone `az deployment group create` at the top
+// of this file produced a container that CrashLoopBackOffs. It now deploys
+// SEALED instead, exactly like compute/loom-unity-app.bicep: authorization ON,
+// issuer pinned, audience pinned to a per-deployment sentinel in the RFC 2606
+// reserved `.invalid` TLD that no Entra tenant can ever issue a token for. The
+// catalog comes UP, answers its probes, and rejects 100% of callers until
+// catalogConfig.entraClientId is supplied — never anonymous, never crash-looping.
 var authMode = string(catalogConfig.?authMode ?? 'entra')
 var entraTenantId = string(catalogConfig.?entraTenantId ?? tenant().tenantId)
 var entraClientId = string(catalogConfig.?entraClientId ?? '')
@@ -125,6 +135,9 @@ var derivedAuthorityHost = replace(replace(environment().authentication.loginEnd
 var authorityHost = empty(string(catalogConfig.?authorityHost ?? '')) ? derivedAuthorityHost : string(catalogConfig.?authorityHost ?? '')
 var authEnabled = authMode == 'entra'
 var authAudiencePinned = !empty(entraClientId) || !empty(entraAudiences)
+var authSealed = authEnabled && !authAudiencePinned
+var sealedAudience = 'api://loom-iceberg-sealed-${uniqueString(resourceGroup().id, name)}.invalid'
+var effectiveAudiences = !empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : '')
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
@@ -168,7 +181,7 @@ var envVars = concat(
     { name: 'LOOM_UNITY_AUTH', value: 'enable' }
     { name: 'LOOM_UNITY_ENTRA_TENANT_ID', value: entraTenantId }
     { name: 'LOOM_UNITY_ENTRA_CLIENT_ID', value: entraClientId }
-    { name: 'LOOM_UNITY_AUDIENCES', value: entraAudiences }
+    { name: 'LOOM_UNITY_AUDIENCES', value: effectiveAudiences }
   ] : [
     { name: 'LOOM_UNITY_AUTH', value: 'disable' }
   ],
@@ -269,5 +282,8 @@ output metadataDurable bool = !empty(catalogDbUrl)
 @description('svc-loom-unity-authz — TRUE when the catalog enforces Entra bearer authorization (authMode=entra). FALSE means catalogConfig.authMode=disabled was explicitly chosen and anything on the CAE VNet can read AND mutate catalog metadata.')
 output authorizationEnforced bool = authEnabled
 
-@description('svc-loom-unity-authz — TRUE when authorization was requested but no audience could be pinned (catalogConfig.entraClientId / entraAudiences both empty). The container then FAILS CLOSED at boot rather than serving anonymously; set entraClientId to the Entra app registration fronting the catalog (normally LOOM_MSAL_CLIENT_ID) and redeploy.')
-output authorizationMisconfigured bool = authEnabled && !authAudiencePinned
+@description('svc-loom-unity-authz — TRUE when authorization was requested but no audience could be pinned (catalogConfig.entraClientId / entraAudiences both empty). The catalog is then SEALED: up, Entra authorization enforced, a sentinel `.invalid` audience no tenant can mint, every caller rejected — never anonymous, never crash-looping. Set catalogConfig.entraClientId to the Entra app registration fronting the catalog (normally LOOM_MSAL_CLIENT_ID) and redeploy to unseal it.')
+output authorizationMisconfigured bool = authSealed
+
+@description('svc-loom-unity-authz — the Entra audiences this catalog accepts. On the SEALED path this is the sentinel `.invalid` audience nothing can mint.')
+output acceptedAudiences string = authEnabled ? (!empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : 'api://${entraClientId},${entraClientId}')) : ''

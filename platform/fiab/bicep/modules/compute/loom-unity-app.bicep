@@ -120,8 +120,8 @@ param dbEphemeral bool = false
 @maxValue(10)
 param maxReplicas int = 3
 
-@description('Minimum replica count. NOT scale-to-zero — the catalog is on the metadata hot path.')
-@minValue(1)
+@description('Minimum replica count. NOT scale-to-zero on the normal path — the catalog is on the metadata hot path. FORCED to 0 while the catalog is SEALED (authMode=entra with no pinnable audience): a catalog that can serve nobody must not bill for a hot JVM.')
+@minValue(0)
 @maxValue(10)
 param minReplicas int = 1
 
@@ -143,7 +143,7 @@ param complianceTags object = {}
 // every credential to a Key Vault secretref, and lets the operator pin ingress to
 // the Console's subnet. Threat model: docs/fiab/security/loom-unity-threat-model.md.
 
-@description('Loom Unity authorization posture. "entra" (DEFAULT) enables the upstream OSS authorization server with Microsoft Entra as the identity provider — issuer and audience are pinned, and the server refuses to boot half-configured. "disabled" is an explicit, audited opt-out that leaves the catalog readable/writable by anything on the VNet (the pre-LU-2 posture); the container logs a SECURITY WARNING on every boot and the Console health probe reports it as a failing check.')
+@description('Loom Unity authorization posture. "entra" (DEFAULT) enables the upstream OSS authorization server with Microsoft Entra as the identity provider — issuer and audience are always pinned; when no real audience is available the app deploys SEALED (sentinel `.invalid` audience, scaled to zero, every caller rejected) rather than open. "disabled" is an explicit, audited opt-out that leaves the catalog readable/writable by anything on the VNet (the pre-LU-2 posture); the container logs a SECURITY WARNING on every boot and the Console health probe reports it as a failing check.')
 @allowed([
   'entra'
   'disabled'
@@ -153,7 +153,7 @@ param authMode string = 'entra'
 @description('Entra tenant id whose tokens Loom Unity accepts. Defaults to the deployment tenant. The allowed issuer is derived as https://<authorityHost>/<tenantId>/v2.0 (the form upstream documents for Microsoft Entra ID).')
 param entraTenantId string = tenant().tenantId
 
-@description('Entra application (client) id that fronts Loom Unity — the audience the Console requests its bearer for. Pass the SAME app registration the Console signs in with (LOOM_MSAL_CLIENT_ID) unless you registered a dedicated one. Accepted audiences are derived as "api://<clientId>,<clientId>". Leaving this EMPTY no longer downgrades to an anonymous catalog (that silent downgrade WAS the svc-loom-unity-authz finding): with authMode=entra the container is deployed with LOOM_UNITY_AUTH=enable and FAILS CLOSED at boot naming this exact var, so an unconfigured deployment serves nothing rather than serving everything. Deploy with authMode=disabled if — and only if — you are knowingly accepting the anonymous posture.')
+@description('Entra application (client) id that fronts Loom Unity — the audience the Console requests its bearer for. Pass the SAME app registration the Console signs in with (LOOM_MSAL_CLIENT_ID) unless you registered a dedicated one. Accepted audiences are derived as "api://<clientId>,<clientId>". Leaving this EMPTY no longer downgrades to an anonymous catalog (that silent downgrade WAS the svc-loom-unity-authz finding): with authMode=entra the app deploys SEALED — authorization ON, issuer pinned, audience pinned to a sentinel `.invalid` value no tenant can mint, scaled to zero — so it is up and serves NOBODY until a real audience is pinned. Deploy with authMode=disabled if — and only if — you are knowingly accepting the anonymous posture.')
 param entraClientId string = ''
 
 @description('Key Vault secret URI (https://<vault>.vault.azure.net/secrets/<name>) holding the Entra client secret for the OSS authorization server. Wired as a Container Apps SECRET REFERENCE resolved by unityUamiId — NEVER an inline literal. Empty => no client secret is rendered (pure bearer-validation mode, which is all the Console path needs).')
@@ -204,6 +204,43 @@ var audiencePinned = !empty(entraClientId) || !empty(entraAudiences)
 var authEnabled = authMode == 'entra'
 var authMisconfigured = authEnabled && !audiencePinned
 
+// ── SEALED posture (round-2 fix) ────────────────────────────────────────────
+// Round 1 of svc-loom-unity-authz replaced the silent downgrade with a hard
+// `die` in the entrypoint: authMode=entra + no pinnable audience => the JVM
+// exits 1 and the Container App CrashLoopBackOffs from first boot. That is
+// fail-closed, but it is NOT "the deploy brings this up" — and on the default
+// push-button path there IS no audience at template time, because an Entra app
+// registration is a Microsoft Graph object that ARM/bicep cannot create (it is
+// provisioned in deploy phase 3 by scripts/csa-loom/bootstrap-msal-app-reg.sh).
+// Microsoft's own guidance for "a managed identity calls MY service" is to
+// register a service principal to represent the target and use its Application
+// ID / Application ID URI as the audience — a managed identity cannot BE the
+// audience (learn.microsoft.com/azure/azure-web-pubsub/howto-use-managed-identity,
+// "Specify the issued token audience": "You should always create a service
+// principal to represent your upstream target"). So the audience genuinely
+// cannot be derived from anything ARM owns.
+//
+// The resolution is a SEALED state instead of a crash: authorization stays
+// ENABLED and the issuer stays pinned, but the accepted audience is pinned to a
+// per-deployment sentinel in the RFC 2606 reserved `.invalid` TLD. No Entra
+// tenant can issue a token with that `aud` (an `api://` identifier URI with a
+// dot is treated as a host and requires domain verification, and `.invalid` can
+// never be verified), so the catalog rejects 100% of callers — including the
+// Console — while the container BOOTS, answers its TCP probes, and reports the
+// state through `authorizationMisconfigured` / `authorizationSealed`.
+// Sealed replicas also scale to ZERO (see effectiveMinReplicas): a catalog that
+// can serve nobody must not bill for a hot JVM.
+//
+// Phase 3 (bootstrap-msal-app-reg.sh) stamps the real client id and the catalog
+// leaves the sealed state; the deploy workflows now also resolve an EXISTING
+// client id back out of Key Vault before re-running the template, so a
+// reconcile deploy cannot re-seal a working catalog.
+var authSealed = authEnabled && !audiencePinned
+var sealedAudience = 'api://loom-unity-sealed-${uniqueString(resourceGroup().id, name)}.invalid'
+// Explicit audiences win; sealed pins the sentinel; otherwise stay empty so the
+// entrypoint derives `api://<client-id>,<client-id>` from entraClientId.
+var effectiveAudiences = !empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : '')
+
 // ── LU-1 — persistence resolution ───────────────────────────────────────────
 // Postgres wins whenever it is wired (explicit URL override, or the FQDN from
 // data-plane/loom-unity-postgres.bicep). Only then is the Azure Files H2 share
@@ -220,7 +257,10 @@ var effectiveDbAadResource = empty(unityDbAadResource) ? derivedDbAadResource : 
 // H2 is single-writer: a second replica would silently corrupt or lock the file
 // DB, so the cap is FORCED to 1 on that path regardless of what was asked for.
 var effectiveMaxReplicas = usePostgres ? max(maxReplicas, minReplicas) : 1
-var effectiveMinReplicas = usePostgres ? minReplicas : 1
+// A SEALED catalog can serve nobody (see authSealed above), so it must not bill
+// for a hot JVM: scale it to zero. ACA still activates a replica on an inbound
+// request, so the caller gets an honest 401 rather than a connection error.
+var effectiveMinReplicas = authSealed ? 0 : (usePostgres ? minReplicas : 1)
 
 // ── Persistent catalog DB (FALLBACK path only) ──────────────────────────────
 //    Dedicated Azure Files share (shared-key for the ACA mount, exactly like the
@@ -332,7 +372,7 @@ var envVars = concat(
     { name: 'LOOM_UNITY_AUTH', value: 'enable' }
     { name: 'LOOM_UNITY_ENTRA_TENANT_ID', value: entraTenantId }
     { name: 'LOOM_UNITY_ENTRA_CLIENT_ID', value: entraClientId }
-    { name: 'LOOM_UNITY_AUDIENCES', value: entraAudiences }
+    { name: 'LOOM_UNITY_AUDIENCES', value: effectiveAudiences }
   ] : [
     { name: 'LOOM_UNITY_AUTH', value: 'disable' }
   ],
@@ -466,7 +506,7 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
           }
         ]
       } : {
-        minReplicas: 1
+        minReplicas: effectiveMinReplicas
         maxReplicas: 1
       }
     }
@@ -497,11 +537,14 @@ output effectiveMaxReplicas int = effectiveMaxReplicas
 @description('LU-2 — TRUE only when Loom Unity actually enforces Entra bearer authorization (authMode=entra). FALSE means authMode=disabled was explicitly chosen and the catalog is reachable anonymously by anything that can reach it on the network. Cross-check live with the Console health probe probe-loom-unity-authz.')
 output authorizationEnforced bool = authEnabled
 
-@description('svc-loom-unity-authz — TRUE when authorization was REQUESTED (authMode=entra) but no audience could be pinned (both entraClientId and entraAudiences empty). The container then FAILS CLOSED at boot rather than serving anonymously: set entraClientId to the Entra app registration fronting Loom Unity (normally LOOM_MSAL_CLIENT_ID) and redeploy.')
+@description('svc-loom-unity-authz — TRUE when authorization was REQUESTED (authMode=entra) but no audience could be pinned (both entraClientId and entraAudiences empty). The catalog is then SEALED: it boots with authorization ON and a sentinel `.invalid` audience no Entra tenant can ever issue a token for, scales to zero, and rejects every caller — it never serves anonymously. Clear it by setting entraClientId to the Entra app registration fronting Loom Unity (normally LOOM_MSAL_CLIENT_ID) — deploy phase 3, scripts/csa-loom/bootstrap-msal-app-reg.sh, does this automatically.')
 output authorizationMisconfigured bool = authMisconfigured
+
+@description('svc-loom-unity-authz — TRUE when the catalog is running in the SEALED state (see authorizationMisconfigured). Same condition, named for what the running app actually does: up, authorization enforced, zero callers accepted, scaled to zero.')
+output authorizationSealed bool = authSealed
 
 @description('LU-2 — TRUE when ingress is pinned to an IP allow-list on top of internal-ingress isolation.')
 output ingressIpRestricted bool = !empty(consoleAllowedCidrs)
 
-@description('LU-2 — the Entra audiences Loom Unity accepts (empty only when authMode=disabled or nothing could be pinned). Set the Console app LOOM_UNITY_CLIENT_ID to the same app registration so it mints a matching bearer.')
-output acceptedAudiences string = (authEnabled && audiencePinned) ? (empty(entraAudiences) ? 'api://${entraClientId},${entraClientId}' : entraAudiences) : ''
+@description('LU-2 — the Entra audiences Loom Unity accepts. On the SEALED path this is the sentinel `.invalid` audience nothing can mint (the catalog is up but accepts nobody); empty only when authMode=disabled. Set the Console app LOOM_UNITY_CLIENT_ID to the same app registration so it mints a matching bearer.')
+output acceptedAudiences string = authEnabled ? (!empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : 'api://${entraClientId},${entraClientId}')) : ''

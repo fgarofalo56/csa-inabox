@@ -175,6 +175,7 @@ jobs:
         if: inputs.run_mode == 'full'
         env:
           LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+          LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
         run: |
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -185,13 +186,32 @@ jobs:
           fi
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
-            "loom-duckdb:${LOOM_DUCKDB_TAG}"
+            "loom-duckdb:${LOOM_DUCKDB_TAG}" \
+            "loom-unity:${LOOM_UNITY_TAG}"
+
+      # svc-loom-unity-authz (round 2) — DURABILITY. IL5 already passes
+      # LOOM_GOV_MSAL_CLIENT_ID, but that secret can be unset/stale while the
+      # estate has a real registration; an empty render blanks sign-in AND
+      # re-SEALS the Loom Unity catalog on every reconcile. Prefer the estate's
+      # own record (Key Vault → live Console app), fall back to the secret.
+      - name: Resolve the existing MSAL client id (Loom Unity audience durability)
+        if: inputs.run_mode == 'full'
+        env:
+          LOOM_GOV_MSAL_CLIENT_ID: ${{ secrets.LOOM_GOV_MSAL_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "rg-csa-loom-admin-${AZURE_LOCATION}" || true)"
+          if [ -z "${CID:-}" ]; then CID="${LOOM_GOV_MSAL_CLIENT_ID:-}"; fi
+          echo "LOOM_RESOLVED_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
+          if [ -z "${CID:-}" ]; then
+            echo "::warning::No Entra app registration for this estate yet — Loom Unity deploys SEALED (up, Entra enforced, sentinel audience, scaled to zero, every caller rejected) until csa-loom-post-deploy-bootstrap runs."
+          fi
 
       - name: Teardown -> redeploy -> smoke (full mode only)
         if: inputs.run_mode == 'full'
         env:
           FIAB_GOV_ADMIN_GROUP_ID: ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
-          LOOM_MSAL_CLIENT_ID: ${{ secrets.LOOM_GOV_MSAL_CLIENT_ID }}
+          LOOM_MSAL_CLIENT_ID: ${{ env.LOOM_RESOLVED_MSAL_CLIENT_ID }}
           LOOM_MSAL_CLIENT_SECRET: ${{ secrets.LOOM_GOV_MSAL_CLIENT_SECRET }}
         run: |
           set -e

@@ -720,7 +720,10 @@ output containerPlatformSubnetId string = '${hubVnet.id}/subnets/snet-container-
 // Apps environment is integrated with. Internal-ingress apps that must ONLY be
 // reachable from other apps in this environment (loom-unity) pass it as an ACA
 // ingress Allow rule, so "on the VNet" stops being sufficient to reach them.
-output containerPlatformSubnetPrefix string = '${prefix}.2.0/24'
+// READ from the `subnets` array the hub VNet is actually built from — never
+// re-derived as '${prefix}.2.0/24', which would silently drift from the real
+// subnet if the plan changes and leave ACA returning 403 to a healthy Console.
+output containerPlatformSubnetPrefix string = filter(subnets, s => s.name == 'snet-container-platform')[0].addressPrefix
 output functionsSubnetId string = '${hubVnet.id}/subnets/snet-functions'
 output apimSubnetId string = '${hubVnet.id}/subnets/snet-apim'
 output privateEndpointsSubnetId string = '${hubVnet.id}/subnets/snet-private-endpoints'
