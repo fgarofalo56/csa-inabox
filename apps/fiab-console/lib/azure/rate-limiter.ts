@@ -31,6 +31,7 @@
 
 import { NextResponse } from 'next/server';
 import type { SessionPayload } from '../auth/session';
+import { trustedClientIp } from './client-ip';
 
 /** Refill/burst config for a bucket. */
 export interface RateLimits {
@@ -250,18 +251,17 @@ export function enforceRateLimitForKey(
 }
 
 /**
- * Best-effort client IP from proxy headers (Front Door → Container Apps set
- * `x-forwarded-for`). Takes the first (client-most) hop. Falls back to
- * `x-real-ip`, then a constant so anonymous limiting still shares one bucket
- * rather than throwing.
+ * Client IP for anonymous rate limiting.
+ *
+ * Delegates to {@link trustedClientIp}, which reads only values a hop WE control
+ * wrote. This used to take `x-forwarded-for.split(',')[0]` — the client-most hop,
+ * i.e. a string the caller types — so every anonymous limiter on this codebase
+ * (sign-in, the auth callback, anonymous feedback, public access requests) could
+ * be bypassed outright by rotating `X-Forwarded-For` per request. Keying a
+ * limiter on attacker-supplied input is not a limiter.
  */
 export function clientIp(headers: Headers): string {
-  const xff = headers.get('x-forwarded-for');
-  if (xff) {
-    const first = xff.split(',')[0]?.trim();
-    if (first) return first;
-  }
-  return headers.get('x-real-ip')?.trim() || 'unknown-ip';
+  return trustedClientIp(headers);
 }
 
 /** Test-only: clear the in-proc bucket store. */

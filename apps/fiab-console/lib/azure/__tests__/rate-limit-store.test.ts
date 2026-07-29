@@ -67,8 +67,18 @@ describe('two-tier enforce — tier-1 only (durable off)', () => {
 });
 
 describe('clientIp', () => {
-  it('takes the first hop of x-forwarded-for', () => {
-    expect(clientIp(new Headers({ 'x-forwarded-for': '9.9.9.9, 10.0.0.1' }))).toBe('9.9.9.9');
+  // This used to assert `'9.9.9.9'` — the CLIENT-most hop, i.e. the value the
+  // caller types. Keyed on that, every anonymous limiter here (sign-in, the auth
+  // callback, anonymous feedback, public access requests) was bypassable by
+  // rotating one header, and the old assertion is what made that look correct.
+  it('takes the LAST hop of x-forwarded-for — the one our own ingress appended', () => {
+    expect(clientIp(new Headers({ 'x-forwarded-for': '9.9.9.9, 10.0.0.1' }))).toBe('10.0.0.1');
+  });
+  it('gives a rotating X-Forwarded-For exactly ONE bucket', () => {
+    const keys = new Set(
+      Array.from({ length: 25 }, (_, i) => clientIp(new Headers({ 'x-forwarded-for': `203.0.113.${i}, 10.0.0.7` }))),
+    );
+    expect(keys.size).toBe(1);
   });
   it('falls back to x-real-ip then a constant', () => {
     expect(clientIp(new Headers({ 'x-real-ip': '8.8.8.8' }))).toBe('8.8.8.8');
