@@ -49,6 +49,13 @@
  * caller asked for — a row that says "share-a" for a read that returned
  * share-b's bytes is worse than no row.
  *
+ * Deny rows are THROTTLED (see shouldWriteDeny), because a refusal that costs
+ * the caller nothing and costs us a Cosmos write is an amplifier. The throttle
+ * has a per-key window AND a per-window global ceiling: the first alone was not
+ * enough, because the key was derived from a header the CALLER supplies.
+ * Source attribution comes from a hop we control (lib/azure/client-ip); the
+ * caller's own claim is recorded separately, never keyed on.
+ *
  * ── Response shape ────────────────────────────────────────────────────────
  * Deliberately NOT the Loom `{ok,...}` envelope: this route implements a public
  * wire protocol whose clients (delta-sharing-python, the Spark connector,
@@ -62,6 +69,8 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import { trustedClientIp, claimedClientIp } from '@/lib/azure/client-ip';
+import { checkRate } from '@/lib/azure/rate-limiter';
 import { authenticateRecipient, assertShareAccess, sharingOwnerTenantId } from '@/lib/sharing/recipient-auth';
 import { listShares, getShare, loomSharingFetch, LoomSharingNotConfiguredError } from '@/lib/sharing/store';
 import {
@@ -94,43 +103,95 @@ function protocolError(status: number, errorCode: string, message: string, hint?
   return NextResponse.json({ errorCode, message: hint ? `${message} ${hint}` : message }, { status });
 }
 
-/** Best-effort source attribution for the audit row. */
+/** Best-effort source attribution for the audit row.
+ *
+ *  Uses only values a hop WE control wrote (see lib/azure/client-ip). This used
+ *  to be `x-forwarded-for.split(',')[0]` — the CLIENT-most hop, i.e. a string the
+ *  caller types — on a route with no middleware and no rate limiter. That made
+ *  the burst guard below a no-op (rotate the header, get a fresh key every
+ *  request) and stamped attacker-chosen addresses into the audit trail. */
 function callerIp(req: NextRequest): string {
-  const xff = req.headers.get('x-forwarded-for') || '';
-  return (xff.split(',')[0] || req.headers.get('x-azure-clientip') || '').trim().slice(0, 64);
+  return trustedClientIp(req.headers);
+}
+
+/** What the caller CLAIMED (`x-azure-clientip` / leftmost XFF). Recorded next to
+ *  the trusted value under a name that says it is not attribution. */
+function claimedIp(req: NextRequest): string {
+  return claimedClientIp(req.headers);
+}
+
+/** Source fields for an audit row: the trusted address, plus the caller's own
+ *  claim when it disagrees (a mismatch is itself worth seeing in the trail). */
+function sourceDetail(req: NextRequest): Record<string, string> {
+  const sourceIp = callerIp(req);
+  const claimed = claimedIp(req);
+  return claimed && claimed !== sourceIp
+    ? { sourceIp, claimedClientIpUntrusted: claimed }
+    : { sourceIp };
 }
 
 /**
- * Burst guard for UNAUTHENTICATED denials only.
+ * Burst guard for DENIALS.
  *
- * Auditing 401s is the point (credential stuffing and stolen-token replay look
- * like nothing else in the trail), but an anonymous caller must not be able to
- * turn a credential-free request into an unbounded Cosmos write amplifier.
- * Identical anonymous refusals from one source coalesce into one row per window,
- * and that row carries the suppressed count so the burst is still visible.
+ * Auditing refusals is the point (credential stuffing and stolen-token replay
+ * look like nothing else in the trail), but a caller must not be able to turn a
+ * cheap refusal into an unbounded Cosmos write amplifier. Two independent
+ * brakes, because the first one alone was not enough:
+ *
+ *   1. per-KEY window — identical refusals from one source coalesce into one row
+ *      per window, carrying the suppressed count so the burst stays visible;
+ *   2. per-BUCKET global budget — a hard cap on rows written per window
+ *      REGARDLESS of key. This is the backstop that survives a key the caller can
+ *      influence (a spoofed source header) or genuinely cannot control (a
+ *      distributed flood from real addresses). Without it, "throttled per source"
+ *      is only as strong as our ability to identify the source.
+ *
+ * Buckets are separate so an anonymous flood cannot starve the higher-signal
+ * authenticated-but-not-a-recipient rows out of the trail.
  */
 const DENY_WINDOW_MS = 10_000;
 const DENY_KEYS_MAX = 500;
-const denyWindows = new Map<string, { until: number; suppressed: number }>();
+/** Rows per 10 s window, per bucket. Anonymous refusals are cheap to generate
+ *  and low-signal; a refusal that required a VERIFIED estate token is neither, so
+ *  it gets a larger budget. Both are hard ceilings. */
+const DENY_GLOBAL_MAX: Record<DenyBucket, number> = { anonymous: 20, principal: 40 };
+type DenyBucket = 'anonymous' | 'principal';
 
-function shouldWriteAnonymousDeny(key: string): { write: boolean; suppressed: number } {
+const denyWindows = new Map<string, { until: number; suppressed: number }>();
+const denyGlobal = new Map<DenyBucket, { until: number; written: number; suppressed: number }>();
+
+function shouldWriteDeny(bucket: DenyBucket, key: string): { write: boolean; suppressed: number } {
   const now = Date.now();
+  let global = denyGlobal.get(bucket);
+  if (!global || global.until <= now) {
+    global = { until: now + DENY_WINDOW_MS, written: 0, suppressed: 0 };
+    denyGlobal.set(bucket, global);
+  }
   for (const [k, v] of denyWindows) {
     if (v.until <= now) denyWindows.delete(k);
   }
-  const open = denyWindows.get(key);
+  const scoped = `${bucket}|${key}`;
+  const open = denyWindows.get(scoped);
   if (open && open.until > now) {
     open.suppressed += 1;
+    global.suppressed += 1;
     return { write: false, suppressed: open.suppressed };
   }
-  // Bounded: a source-rotating flood evicts the oldest window rather than
-  // growing the map without limit.
+  // THE backstop. Independent of the key, so a source-rotating flood cannot
+  // buy itself more writes by looking like more callers.
+  if (global.written >= DENY_GLOBAL_MAX[bucket]) {
+    global.suppressed += 1;
+    return { write: false, suppressed: global.suppressed };
+  }
+  // Bounded: a key-rotating flood evicts the oldest window rather than growing
+  // the map without limit.
   if (denyWindows.size >= DENY_KEYS_MAX) {
     const oldest = denyWindows.keys().next().value;
     if (oldest !== undefined) denyWindows.delete(oldest);
   }
   const suppressed = open?.suppressed || 0;
-  denyWindows.set(key, { until: now + DENY_WINDOW_MS, suppressed: 0 });
+  denyWindows.set(scoped, { until: now + DENY_WINDOW_MS, suppressed: 0 });
+  global.written += 1;
   return { write: true, suppressed };
 }
 
@@ -138,6 +199,30 @@ function shouldWriteAnonymousDeny(key: string): { write: boolean; suppressed: nu
  *  audit rows of successive refusals must be able to start from a clean window. */
 export function __resetDenyThrottleForTest(): void {
   denyWindows.clear();
+  denyGlobal.clear();
+}
+
+/**
+ * Request-rate ceiling for the whole endpoint.
+ *
+ * This was the ONLY internet-reachable, credential-free route in the tree with
+ * no rate limiter at all (no middleware, no route toolkit, no `withSession`), and
+ * that is what made every other finding on this surface amplifiable: each
+ * refusal still costs a Cosmos read on the authenticated path and a JWKS lookup
+ * on the anonymous one. The tier-1 (in-process, zero-I/O) bucket is used
+ * deliberately — the durable tier writes a Cosmos counter per request, which on
+ * an anonymous flood is the very cost we are trying to bound.
+ *
+ * Keyed on the trusted source (never a caller-supplied header) and answered in
+ * the PROTOCOL's error shape, not the Loom envelope, so a conforming client
+ * (delta-sharing-python, the Spark connector) can still parse the refusal.
+ */
+function rateLimit(req: NextRequest): NextResponse | null {
+  const gate = checkRate(trustedClientIp(req.headers), 'delta-sharing', { ratePerSec: 20, burst: 200 });
+  if (gate.ok) return null;
+  const res = protocolError(429, 'RESOURCE_EXHAUSTED', 'Too many requests. Retry after a short delay.');
+  res.headers.set('retry-after', String(Math.max(1, gate.retryAfter)));
+  return res;
 }
 
 /**
@@ -221,17 +306,17 @@ async function authorize(
 ): Promise<{ error: NextResponse } | { recipient: LoomRecipient; principal: string }> {
   const auth = await authenticateRecipient(req.headers.get('authorization'));
   if (!auth.ok) {
-    const ip = callerIp(req);
+    const source = sourceDetail(req);
     if (auth.status === 401 || auth.status === 503) {
       // No verified principal exists, so attribution is by source + reason and
-      // bursts coalesce (see shouldWriteAnonymousDeny).
-      const gate = shouldWriteAnonymousDeny(`${ip}|${auth.reason}|${auth.status}`);
+      // bursts coalesce (see shouldWriteDeny).
+      const gate = shouldWriteDeny('anonymous', `${source.sourceIp}|${auth.reason}|${auth.status}`);
       if (gate.write) {
         await auditRecipientAccess({
           recipient: '(unauthenticated)', principal: '',
           action, share: '', outcome: 'deny',
           detail: {
-            status: auth.status, reason: auth.reason, sourceIp: ip,
+            status: auth.status, reason: auth.reason, ...source,
             requestedShare: String(shareName || '').slice(0, 256),
             suppressedSincePrevious: gate.suppressed,
           },
@@ -244,16 +329,25 @@ async function authorize(
       }
     } else {
       // 403: authenticated, but not a registered recipient — the single most
-      // interesting probe event on this surface. Always written, never throttled.
-      await auditRecipientAccess({
-        recipient: '(not-a-recipient)',
-        principal: (auth.operatorHint || '').replace(/^principal=/, ''),
-        action, share: '', outcome: 'deny',
-        detail: {
-          status: 403, reason: auth.reason, sourceIp: ip,
-          requestedShare: String(shareName || '').slice(0, 256),
-        },
-      });
+      // interesting probe event on this surface. Throttled too, but keyed on the
+      // VERIFIED principal (cryptographically attested, unlike a source header)
+      // and in its own budget, so an anonymous flood cannot starve these rows.
+      // "Written on every request" was itself an amplifier: any holder of a
+      // valid estate token could drive unbounded Cosmos writes.
+      const principal = auth.principal || '';
+      const gate = shouldWriteDeny('principal', `${principal}|${auth.reason}`);
+      if (gate.write) {
+        await auditRecipientAccess({
+          recipient: '(not-a-recipient)',
+          principal,
+          action, share: '', outcome: 'deny',
+          detail: {
+            status: 403, reason: auth.reason, ...source,
+            requestedShare: String(shareName || '').slice(0, 256),
+            suppressedSincePrevious: gate.suppressed,
+          },
+        });
+      }
     }
     return {
       error: protocolError(
@@ -274,7 +368,7 @@ async function authorize(
         action,
         share: shareName,
         outcome: 'deny',
-        detail: { status: 403, reason: denied.reason, sourceIp: callerIp(req) },
+        detail: { status: 403, reason: denied.reason, ...sourceDetail(req) },
       });
       return { error: protocolError(403, 'PERMISSION_DENIED', denied.error, denied.hint) };
     }
@@ -308,7 +402,7 @@ async function serveDataPlane(
       recipient: authed.recipient.id, principal: authed.principal,
       action: resource, share: share.id, outcome: 'deny',
       detail: {
-        status: 404, reason: 'table-not-in-share', sourceIp: callerIp(req),
+        status: 404, reason: 'table-not-in-share', ...sourceDetail(req),
         requestedSchema: String(seg[3] || '').slice(0, 256),
         requestedTable: String(seg[5] || '').slice(0, 256),
       },
@@ -323,7 +417,7 @@ async function serveDataPlane(
     // What was SERVED, taken from the authorized record — not what was typed.
     detail: {
       schema: table.schema, table: table.name, tableId: table.id,
-      upstreamPath: upstream, sourceIp: callerIp(req),
+      upstreamPath: upstream, ...sourceDetail(req),
       ...(body !== undefined ? { bytes: body.length } : {}),
     },
   });
@@ -333,6 +427,8 @@ async function serveDataPlane(
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: string[] }> }) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
   const seg = await segments(ctx);
   try {
     // /shares
@@ -344,7 +440,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
       await auditRecipientAccess({
         recipient: authed.recipient.id, principal: authed.principal,
         action: 'list-shares', share: '', outcome: 'allow',
-        detail: { count: mine.length, sourceIp: callerIp(req) },
+        detail: { count: mine.length, ...sourceDetail(req) },
       });
       return NextResponse.json({ items: mine.map(toProtocolShare) }, { headers: { 'cache-control': 'no-store' } });
     }
@@ -360,7 +456,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
       await auditRecipientAccess({
         recipient: authed.recipient.id, principal: authed.principal,
         action: 'get-share', share: share.id, outcome: 'allow',
-        detail: { sourceIp: callerIp(req) },
+        detail: { ...sourceDetail(req) },
       });
       return NextResponse.json({ share: toProtocolShare(share) }, { headers: { 'cache-control': 'no-store' } });
     }
@@ -375,7 +471,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
       await auditRecipientAccess({
         recipient: authed.recipient.id, principal: authed.principal,
         action: 'list-schemas', share: share.id, outcome: 'allow',
-        detail: { count: items.length, sourceIp: callerIp(req) },
+        detail: { count: items.length, ...sourceDetail(req) },
       });
       return NextResponse.json({ items }, { headers: { 'cache-control': 'no-store' } });
     }
@@ -390,7 +486,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
       await auditRecipientAccess({
         recipient: authed.recipient.id, principal: authed.principal,
         action: 'list-all-tables', share: share.id, outcome: 'allow',
-        detail: { count: items.length, sourceIp: callerIp(req) },
+        detail: { count: items.length, ...sourceDetail(req) },
       });
       return NextResponse.json({ items }, { headers: { 'cache-control': 'no-store' } });
     }
@@ -405,7 +501,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
       await auditRecipientAccess({
         recipient: authed.recipient.id, principal: authed.principal,
         action: 'list-tables', share: share.id, outcome: 'allow',
-        detail: { schema: String(seg[3] || '').slice(0, 256), count: items.length, sourceIp: callerIp(req) },
+        detail: { schema: String(seg[3] || '').slice(0, 256), count: items.length, ...sourceDetail(req) },
       });
       return NextResponse.json({ items }, { headers: { 'cache-control': 'no-store' } });
     }
@@ -434,6 +530,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
 
 /** POST is the protocol's table QUERY (predicate hints + limit + version). */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ path?: string[] }> }) {
+  const limited = rateLimit(req);
+  if (limited) return limited;
   const seg = await segments(ctx);
   try {
     if (seg.length === 7 && seg[0] === 'shares' && seg[2] === 'schemas' && seg[4] === 'tables' && seg[6] === 'query') {

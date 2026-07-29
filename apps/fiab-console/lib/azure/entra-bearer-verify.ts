@@ -32,6 +32,22 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const JWKS_TTL_MS = 60 * 60 * 1000;
 const CLOCK_SKEW_SEC = 300;
+/**
+ * Minimum interval between FORCED JWKS refetches (unknown-`kid` rollover path).
+ *
+ * Without this, `kid` is an unauthenticated remote-fetch trigger: the kid lookup
+ * necessarily happens BEFORE signature verification, so a token that is merely
+ * three base64 segments with `alg:RS256` and a random `kid` costs us one
+ * outbound request to login.microsoftonline.com. On a public, credential-free
+ * route (`/api/delta-sharing/*`) that is a free amplifier — 20 forged tokens
+ * produced 21 outbound fetches before this guard existed.
+ *
+ * Entra publishes rollover keys well ahead of first use, so bounding the forced
+ * refresh to once a minute costs nothing operationally.
+ */
+const JWKS_FORCED_REFRESH_MIN_INTERVAL_MS = 60_000;
+/** Bound on the remembered-unknown-`kid` set (a flood must not grow memory). */
+const UNKNOWN_KID_MAX = 200;
 
 export interface EntraJwk {
   kid?: string;
@@ -68,11 +84,24 @@ export type EntraBearerResult =
 
 let jwksCache: { tenant: string; keys: EntraJwk[]; fetchedAt: number } | null = null;
 let jwksOverrideForTest: EntraJwk[] | null = null;
+/** `kid`s a forced refresh has already failed to find — never refetched for. */
+const unknownKids = new Set<string>();
+let lastForcedRefreshAt = 0;
+/** Observability + test hook: how many FORCED (unknown-kid) refetches ran. */
+let forcedRefreshCount = 0;
 
 /** Test hook: inject a JWKS document (bypasses the network fetch). */
 export function __setEntraJwksForTest(keys: EntraJwk[] | null): void {
   jwksOverrideForTest = keys;
   jwksCache = null;
+  unknownKids.clear();
+  lastForcedRefreshAt = 0;
+  forcedRefreshCount = 0;
+}
+
+/** Test hook: forced-refetch counter, so a spec can assert the amplifier is shut. */
+export function __entraForcedJwksRefreshCountForTest(): number {
+  return forcedRefreshCount;
 }
 
 /** The active cloud's Entra authority host. Mirrors lib/auth/msal.ts without
@@ -120,6 +149,50 @@ async function loadJwks(tenant: string, forceRefresh = false): Promise<EntraJwk[
   const keys = Array.isArray(doc.keys) ? doc.keys : [];
   jwksCache = { tenant, keys, fetchedAt: now };
   return keys;
+}
+
+/**
+ * Resolve the signing key for `kid`, refetching the JWKS at most once per
+ * {@link JWKS_FORCED_REFRESH_MIN_INTERVAL_MS} — and only for a token that has
+ * already passed the cheap, non-cryptographic claim checks.
+ *
+ * The ordering matters and is the whole point: `kid` is attacker-chosen and is
+ * consulted before any signature can be verified, so an unthrottled "unknown kid
+ * ⇒ refetch" rule turns every forged token into an outbound request we make on
+ * the attacker's behalf. Two independent brakes:
+ *
+ *   1. `eligibleForRefresh` — the caller only sets it when issuer, audience and
+ *      expiry already line up, so garbage never reaches the network path.
+ *   2. the interval + `unknownKids` memo — even a caller who guesses those
+ *      (they are not secrets) gets one refetch per minute, not one per request.
+ *
+ * A real key rollover still resolves: Entra publishes the new key ahead of first
+ * use, and the worst case here is that the first request in a minute window
+ * fails 401 and the next one succeeds.
+ */
+async function resolveSigningKey(
+  tenant: string,
+  kid: string | undefined,
+  eligibleForRefresh: boolean,
+): Promise<EntraJwk | null> {
+  let keys = await loadJwks(tenant);
+  const hit = () => keys.find((k) => k.kid === kid) || null;
+  if (!kid) return null;
+  const found = hit();
+  if (found) return found;
+  if (!eligibleForRefresh) return null;
+  if (unknownKids.has(kid)) return null;
+  const now = Date.now();
+  if (now - lastForcedRefreshAt < JWKS_FORCED_REFRESH_MIN_INTERVAL_MS) return null;
+  lastForcedRefreshAt = now;
+  forcedRefreshCount += 1;
+  keys = await loadJwks(tenant, true);
+  const afterRefresh = hit();
+  if (!afterRefresh) {
+    if (unknownKids.size >= UNKNOWN_KID_MAX) unknownKids.clear();
+    unknownKids.add(kid);
+  }
+  return afterRefresh;
 }
 
 function verifyRs256(signingInput: string, signature: Buffer, jwk: EntraJwk): boolean {
@@ -201,30 +274,43 @@ export async function verifyEntraBearer(
   // asymmetric verifier must pin the algorithm, not read it from the token.
   if (header.alg !== 'RS256') return { ok: false, status: 401, error: 'unsupported token algorithm' };
 
-  let keys: EntraJwk[];
+  const nowSec = Math.floor(Date.now() / 1000);
+  const exp = Number(payload.exp || 0);
+  const nbf = Number(payload.nbf || 0);
+  const iss = String(payload.iss || '');
+  const aud = String(payload.aud || '');
+  /**
+   * Cheap, non-cryptographic pre-flight over the UNVERIFIED claims, used for one
+   * decision only: may this token trigger an outbound JWKS refetch?
+   *
+   * It deliberately does NOT short-circuit the result — the checks below still
+   * run in their original order and return their original messages, so this
+   * introduces no new "which field did I get right?" oracle. It only denies the
+   * network path to a token that could not possibly verify anyway.
+   */
+  const claimsPlausible =
+    !!exp && nowSec <= exp + CLOCK_SKEW_SEC
+    && (!nbf || nowSec >= nbf - CLOCK_SKEW_SEC)
+    && allowedIssuers(tenant).includes(iss)
+    && audiences.includes(aud);
+
+  let jwk: EntraJwk | null;
   try {
-    keys = await loadJwks(tenant);
-    if (header.kid && !keys.some((k) => k.kid === header.kid)) keys = await loadJwks(tenant, true);
+    jwk = await resolveSigningKey(tenant, header.kid, claimsPlausible);
   } catch (e) {
     return { ok: false, status: 503, error: `could not load the Entra signing keys: ${(e as Error)?.message || e}` };
   }
-  const jwk = keys.find((k) => k.kid === header.kid) || null;
   if (!jwk) return { ok: false, status: 401, error: 'unknown token signing key' };
   if (!verifyRs256(`${parts[0]}.${parts[1]}`, b64url(parts[2]), jwk)) {
     return { ok: false, status: 401, error: 'invalid token signature' };
   }
 
-  const nowSec = Math.floor(Date.now() / 1000);
-  const exp = Number(payload.exp || 0);
-  const nbf = Number(payload.nbf || 0);
   if (!exp || nowSec > exp + CLOCK_SKEW_SEC) return { ok: false, status: 401, error: 'token expired' };
   if (nbf && nowSec < nbf - CLOCK_SKEW_SEC) return { ok: false, status: 401, error: 'token not yet valid' };
 
-  const iss = String(payload.iss || '');
   if (!allowedIssuers(tenant).includes(iss)) {
     return { ok: false, status: 401, error: 'token issuer is not the estate tenant' };
   }
-  const aud = String(payload.aud || '');
   if (!audiences.includes(aud)) return { ok: false, status: 401, error: 'token audience mismatch' };
 
   // ── Token TYPE ──────────────────────────────────────────────────────────

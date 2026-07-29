@@ -170,9 +170,10 @@ function tokenFor(oid: string, over: Record<string, unknown> = {}): string {
   return signJwt({
     iss: `https://sts.windows.net/${TENANT}/`,
     aud: `api://${CLIENT_ID}`,
-    // `scp` makes this an ACCESS token. An ID token for the same app carries the
-    // same iss/aud and no scp/roles — see the id-token tests below.
-    scp: 'user_impersonation',
+    // `scp` makes this an ACCESS token AND carries the pinned scope. An ID token
+    // for the same app carries the same iss/aud and no scp/roles — see the
+    // id-token tests below.
+    scp: 'DeltaSharing.Read',
     oid, tid: TENANT, exp: now + 3600, nbf: now - 60,
     ...over,
   });
@@ -196,6 +197,9 @@ beforeEach(async () => {
   process.env.LOOM_ENTRA_TENANT_ID = TENANT;
   process.env.LOOM_MSAL_CLIENT_ID = CLIENT_ID;
   process.env.LOOM_SHARING_URL = 'https://loom-sharing.internal';
+  // Credential pin: the Console's own App ID URI is only an acceptable audience
+  // when a scope/app role is ALSO pinned — see the 'credential pin' block below.
+  process.env.LOOM_SHARING_SCOPE = 'DeltaSharing.Read';
   const { __setEntraJwksForTest } = await import('@/lib/azure/entra-bearer-verify');
   const jwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
   __setEntraJwksForTest([{ ...jwk, kid: 'test-kid' } as never]);
@@ -317,12 +321,101 @@ describe('token TYPE is checked, not just the audience', () => {
   });
 
   it('401s when LOOM_SHARING_SCOPE is set and the token does not carry it', async () => {
+    process.env.LOOM_SHARING_SCOPE = 'Sharing.Export';
+    const { authenticateRecipient } = await import('../recipient-auth');
+    // The token carries DeltaSharing.Read, not the pinned Sharing.Export.
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`)).toMatchObject({ ok: false, status: 401 });
+    const good = await authenticateRecipient(`Bearer ${tokenFor(OID_A, { scp: 'Sharing.Export' })}`);
+    expect(good.ok).toBe(true);
+  });
+});
+
+// ── ATTACK: the audience pin must actually pin THIS api ───────────────────
+//
+// Round 2 closed the ID-token half of the audience problem (bare client id
+// rejected, access token required) and left this half open: with only
+// api://<clientId> accepted and no scope pinned, EVERY access token minted for
+// the Console's own API is a valid recipient credential. The audience then
+// isolates nothing, and the recipient-principal lookup is the sole control on
+// the path that moves data outside the boundary.
+describe('the recipient credential must be pinned to this API', () => {
+  it('503s (never serves) when neither a dedicated audience nor a scope is pinned', async () => {
+    delete process.env.LOOM_SHARING_SCOPE;
+    delete process.env.LOOM_SHARING_AUDIENCE;
+    const { authenticateRecipient } = await import('../recipient-auth');
+    // A token that is valid in every other respect — right tenant, right
+    // signature, right recipient oid, an access token for api://<clientId>.
+    const res = await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`);
+    expect(res).toMatchObject({ ok: false, status: 503, reason: 'audience-unpinned' });
+    expect(res.ok).toBe(false);
+  });
+
+  it('the 503 names the remediation to the OPERATOR only, never to the caller', async () => {
+    delete process.env.LOOM_SHARING_SCOPE;
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`) as {
+      ok: false; error: string; hint?: string; operatorHint?: string;
+    };
+    expect(`${res.error} ${res.hint || ''}`).not.toContain('LOOM_SHARING');
+    expect(res.operatorHint || '').toContain('LOOM_SHARING_AUDIENCE');
+    expect(res.operatorHint || '').toContain('LOOM_SHARING_SCOPE');
+  });
+
+  it('restating the DEFAULT as an explicit audience does not satisfy the pin', async () => {
+    // api://<the Console's own clientId> is the weak configuration spelled
+    // longhand. A check a caller can satisfy by restating the default is not a
+    // check, so this must still be 503 — not a way to opt out of the pin.
+    delete process.env.LOOM_SHARING_SCOPE;
+    process.env.LOOM_SHARING_AUDIENCE = `api://${CLIENT_ID}`;
+    const { authenticateRecipient } = await import('../recipient-auth');
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`))
+      .toMatchObject({ ok: false, status: 503, reason: 'audience-unpinned' });
+    // The bare client id likewise.
+    process.env.LOOM_SHARING_AUDIENCE = CLIENT_ID;
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`))
+      .toMatchObject({ ok: false, status: 503, reason: 'audience-unpinned' });
+  });
+
+  it('a DEDICATED audience satisfies the pin with no scope set, and REPLACES the fallback', async () => {
+    delete process.env.LOOM_SHARING_SCOPE;
+    process.env.LOOM_SHARING_AUDIENCE = 'api://loom-sharing-recipients';
+    const { authenticateRecipient } = await import('../recipient-auth');
+    const res = await authenticateRecipient(
+      `Bearer ${tokenFor(OID_A, { aud: 'api://loom-sharing-recipients' })}`,
+    );
+    expect(res.ok).toBe(true);
+    // THE point of standing up a dedicated registration: the Console's own API
+    // audience must stop being a data-plane credential. If it were merely ADDED
+    // to the list, the operator would have done the right thing and gained
+    // nothing.
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`))
+      .toMatchObject({ ok: false, status: 401 });
+  });
+
+  it('a migration can list BOTH audiences explicitly — but then needs a scope pin', async () => {
+    delete process.env.LOOM_SHARING_SCOPE;
+    process.env.LOOM_SHARING_AUDIENCE = `api://loom-sharing-recipients,api://${CLIENT_ID}`;
+    const { authenticateRecipient } = await import('../recipient-auth');
+    // Listing the Console's own registration re-opens the hole, so the pin is
+    // not satisfied by the dedicated entry sitting next to it.
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`))
+      .toMatchObject({ ok: false, status: 503, reason: 'audience-unpinned' });
+    process.env.LOOM_SHARING_SCOPE = 'DeltaSharing.Read';
+    expect((await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`)).ok).toBe(true);
+    expect((await authenticateRecipient(
+      `Bearer ${tokenFor(OID_A, { aud: 'api://loom-sharing-recipients' })}`,
+    )).ok).toBe(true);
+  });
+
+  it('a pinned SCOPE satisfies the pin on the Console audience', async () => {
+    delete process.env.LOOM_SHARING_AUDIENCE;
     process.env.LOOM_SHARING_SCOPE = 'DeltaSharing.Read';
     const { authenticateRecipient } = await import('../recipient-auth');
-    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`)).toMatchObject({ ok: false, status: 401 });
-    const good = await authenticateRecipient(`Bearer ${tokenFor(OID_A, { scp: 'DeltaSharing.Read' })}`);
-    expect(good.ok).toBe(true);
-    delete process.env.LOOM_SHARING_SCOPE;
+    expect((await authenticateRecipient(`Bearer ${tokenFor(OID_A)}`)).ok).toBe(true);
+    // A Console API token WITHOUT that scope — an ordinary signed-in user's
+    // access token — is refused, which is the whole point of the pin.
+    expect(await authenticateRecipient(`Bearer ${tokenFor(OID_A, { scp: 'user_impersonation' })}`))
+      .toMatchObject({ ok: false, status: 401 });
   });
 });
 
