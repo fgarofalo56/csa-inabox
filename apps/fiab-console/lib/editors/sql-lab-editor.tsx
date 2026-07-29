@@ -61,11 +61,11 @@ export const SQL_LAB_FLAG_ID = 'n2b-sql-lab-duckdb';
 export const MODERN_QUERY_FLAG_ID = 'n8-modern-query-prql';
 
 /**
- * N7e FLAG0 id for the OPT-IN "Federated SQL (Trino)" engine choice. Declared as
- * a plain string here (NOT imported from lib/azure/trino-client, which is
- * server-only) so this client editor never pulls the server bundle. DEFAULT OFF
- * — the documented exception to loom_default_on_opt_out (heavy AKS carve-out);
- * DuckDB stays the default engine either way.
+ * N7e FLAG0 id for the "Federated SQL (Trino)" engine choice. Declared as a
+ * plain string here (NOT imported from lib/azure/trino-client, which is
+ * server-only) so this client editor never pulls the server bundle. DEFAULT-ON
+ * (opt-out) — the engine now ships with the deploy as a scale-to-zero Container
+ * App; DuckDB remains the default engine the picker starts on either way.
  */
 export const TRINO_FLAG_ID = 'n7e-trino-federation';
 /** The Trino gate id (mirrors svc-loom-trino in the gate registry). */
@@ -166,8 +166,11 @@ async function fetchCapabilities(): Promise<CapabilitiesResponse> {
 export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const enabled = useRuntimeFlag(SQL_LAB_FLAG_ID);
-  // N7e — the opt-in Federated SQL (Trino) engine choice. DEFAULT OFF.
-  const trinoEnabled = useRuntimeFlag(TRINO_FLAG_ID, false);
+  // N7e — the Federated SQL (Trino) engine choice. DEFAULT-ON (opt-out): the
+  // push-button deploy now stands the engine up as a scale-to-zero Container
+  // App and wires LOOM_TRINO_URL, so hiding the option would hide a capability
+  // the deployment actually has. Admins turn it off in Admin → Runtime flags.
+  const trinoEnabled = useRuntimeFlag(TRINO_FLAG_ID);
   // N8 lab 2 — the PRQL "modern query" toggle (default-ON, opt-out via FLAG0).
   const modernQueryEnabled = useRuntimeFlag(MODERN_QUERY_FLAG_ID);
 

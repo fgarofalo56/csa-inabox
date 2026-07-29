@@ -1,0 +1,150 @@
+name: gov-provision-trino
+# Incremental Azure Government provisioner for the two default-ON services whose
+# IMAGES the Gov estate has no build lane for. Commercial gets both from
+# full-app-deploy-commercial.yml; Gov has no equivalent, so each app is
+# provisioned out-of-band exactly like gov-provision-wrangler / gov-provision-dbt.
+#
+#   loom-trino  — N7e Federated SQL engine (closes svc-loom-trino). Single-node
+#                 Trino OSS as an INTERNAL-ingress, scale-to-zero Container App
+#                 (data-plane/loom-trino-aca.bicep). Idle cost is nothing, so
+#                 default-ON costs the Gov estate nothing while nobody queries.
+#   loom-uat    — the Playwright runner image the default-ON
+#                 `loom-synthetic-monitor` scheduled job executes (closes the
+#                 image half of svc-synthetic-monitor). The console image is
+#                 slimmed of e2e/, so this second image out of the console
+#                 context is the only one carrying the journeys.
+#
+# A FRESH Gov deploy needs neither of these: main.bicep with gcc-high.bicepparam
+# sets containerPlatform='containerApps', so admin-plane/main.bicep deploys the
+# Trino app and the synthetic-monitor job and wires their env itself — provided
+# the images are already in the Gov ACR. This workflow is how they get there in
+# the ALREADY-DEPLOYED Gov estate, and it is idempotent.
+#
+# NOTE (svc-synthetic-monitor): building the image does NOT make the Journeys tab
+# populate. The runner signs in as a standing automation account whose sign-in is
+# blocked by tenant Conditional Access until a tenant admin scopes a CA exclusion
+# for it — a one-time human action nobody can automate. See
+# docs/fiab/runbooks/synthetic-journeys.md.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = what-if only (safe); true = build + deploy + wire.'
+        required: false
+        default: 'false'
+      build_uat:
+        description: 'Also build the loom-uat runner image (synthetic monitor).'
+        required: false
+        default: 'true'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  ACR: acrloomdcmt6cqoezlgs
+  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
+  APP: loom-console
+  TRINO_APP: loom-trino
+jobs:
+  provision:
+    name: Provision loom-trino (+ loom-uat image) into the Gov estate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover CAE + UAMI + lake account
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          UAMI_CLIENT=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities.*.clientId | [0]' -o tsv | tr -d '\r')
+          UAMI_PRINCIPAL=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities.*.principalId | [0]' -o tsv | tr -d '\r')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          # The lake account the Iceberg connector reads. Read it off the console's
+          # OWN env so this never invents a name that does not exist.
+          LAKE=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv | tr -d '\r')
+          { echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT=$UAMI_CLIENT";
+            echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION lake=${LAKE:-<unset>}"
+          [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI"; exit 1; }
+
+      - name: Build loom-trino (+ loom-uat) images on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          # #2603: lease the ACR firewall instead of a bare toggle, so this
+          # step's re-lock cannot deny another run's in-flight push.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-trino:$SHA" --image "loom-trino:latest" \
+            apps/loom-trino
+          if [ "${{ inputs.build_uat }}" = "true" ]; then
+            # The console .dockerignore excludes e2e/ + tests/ to keep the CONSOLE
+            # image lean, and ACR Tasks does not honour a per-Dockerfile
+            # <Dockerfile>.dockerignore — so un-ignore them for this build or the
+            # runner image ships without the journeys it is supposed to run.
+            cp apps/fiab-console/.dockerignore /tmp/di.bak
+            grep -vxE 'e2e|tests' /tmp/di.bak > apps/fiab-console/.dockerignore
+            az acr build --registry "$ACR" --no-logs \
+              --image "loom-uat:$SHA" --image "loom-uat:latest" \
+              --file apps/fiab-console/Dockerfile.uat apps/fiab-console
+            cp /tmp/di.bak apps/fiab-console/.dockerignore
+          fi
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+      - name: What-if loom-trino deployment
+        run: |
+          set -euo pipefail
+          TAG="${SHA:-latest}"
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep \
+            -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$TAG" \
+               uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" uamiPrincipalId="$UAMI_PRINCIPAL" \
+               lakeStorageAccountName="$LAKE" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"trino"}' \
+            --mode Incremental 2>&1 | tail -30 || true
+
+      - name: Deploy loom-trino + wire LOOM_TRINO_URL
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" -n "loom-trino-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep \
+            -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" imageTag="$SHA" \
+               uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT" uamiPrincipalId="$UAMI_PRINCIPAL" \
+               lakeStorageAccountName="$LAKE" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"trino"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n "$TRINO_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          [ -n "$FQDN" ] || { echo "::error::loom-trino has no ingress FQDN — refusing to wire a dead URL."; exit 1; }
+          echo "::notice::loom-trino FQDN: $FQDN"
+          # minReplicas is 0, so there is intentionally NO replica to health-check
+          # here — Container Apps activates one on the first BFF request. The
+          # wiring is verified by the SQL Lab engine picker / gov-selfaudit.
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_TRINO_URL=https://$FQDN" -o none
+          echo "::notice::wired LOOM_TRINO_URL=https://$FQDN — re-run gov-selfaudit to confirm svc-loom-trino."

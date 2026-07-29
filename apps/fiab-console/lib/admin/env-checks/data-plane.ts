@@ -91,25 +91,26 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'Self-hosted OSS container on the deployment\'s own Container Apps environment reading the deployment\'s own ADLS Gen2 — no SaaS catalog (no Tabular, no Snowflake Open Catalog, no Databricks-hosted Unity Catalog) is in the path, so the full capability runs disconnected in an IL5 / air-gapped enclave.',
     },
   },
-  // ── N7e — Trino / Starburst Federated SQL (THE single opt-in carve-out) ──
-  //    OPT-IN by design (heavy AKS infra): unset → SQL Lab's "Federated SQL
-  //    (Trino)" engine option honest-gates with a Fix-it that discloses the AKS
-  //    cost, while the DEFAULT engine (DuckDB N2b) keeps SQL Lab fully
-  //    functional — so this opt-in posture gates NO feature and does not breach
-  //    loom_default_on_opt_out (round-3 operator decision). NOT optionalDefault:
-  //    the /api/sql/trino route is honestly gated when the cluster is absent, so
-  //    it must not count as configured.
+  // ── N7e — Trino / Starburst Federated SQL — DEFAULT-ON ──
+  //    Was the one opt-in carve-out on the grounds that it needed a private AKS
+  //    cluster. That premise is gone: Trino's supported single-process mode runs
+  //    the whole engine in ONE container, so the push-button deploy stands it up
+  //    as a scale-to-zero Container App (data-plane/loom-trino-aca.bicep) and
+  //    wires LOOM_TRINO_URL. Unset now means an operator explicitly opted out
+  //    (loomBackends.trino='disabled') or is on a non-Container-Apps boundary —
+  //    SQL Lab still runs on the DuckDB / Synapse Serverless tiers, so the route
+  //    honest-gates rather than breaking.
   {
-    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine — Trino on AKS (opt-in)', severity: 'optional',
+    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine — Trino (default-on)', severity: 'optional',
     required: ['LOOM_TRINO_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_TRINO_URL to the INTERNAL-ingress coordinator URL of the opt-in loom-trino AKS cluster (Trino OSS, Apache-2.0, registered against the N1 Iceberg REST Catalog + external connectors). Deploy platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep, then set the var on the Console app. This is the ONE opt-in engine in the program: it stands up a full private AKS cluster (real, disclosed cost ~AKS node pool/mo) so it is NOT default-ON — SQL Lab keeps working on DuckDB / Synapse Serverless meanwhile, and Trino only ADDS the "Federated SQL (Trino)" engine choice that can join a Loom Iceberg table with an external Postgres table in one statement. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), LOOM_TRINO_AUDIENCE (Entra audience), LOOM_TRINO_TOKEN (Key-Vault secretRef bearer). The cluster is NEVER public — every query goes through the audited BFF at /api/sql/trino.',
+      'LOOM_TRINO_URL should be wired by the deploy: admin-plane/main.bicep deploys data-plane/loom-trino-aca.bicep (single-node Trino OSS, Apache-2.0, INTERNAL ingress, minReplicas 0) whenever loomBackends.trino != \'disabled\' on a Container Apps boundary, and emits the internal coordinator URL. If it is empty, either the backend was opted out, the boundary is not containerApps, or the loom-trino image is not in this ACR yet (build it: apps/loom-trino, matrix entry in .github/workflows/build-fiab-images-acr-tasks.yml). Meanwhile SQL Lab keeps executing on the DEFAULT DuckDB / Synapse Serverless tiers — only the additive "Federated SQL (Trino)" engine choice, which joins a Loom Iceberg table with an external Postgres table in one statement, is unavailable. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), LOOM_TRINO_AUDIENCE (Entra audience), LOOM_TRINO_TOKEN (Key-Vault secretRef bearer), LOOM_TRINO_FETCH_TIMEOUT_MS (cold-start budget, default 120s). The engine is NEVER public — every query goes through the audited BFF at /api/sql/trino. For heavy federated joins that outgrow one container, deploy the opt-in scale-out cluster (data-plane/loom-trino-aks.bicep) and repoint this var.',
     docs: 'https://trino.io/docs/current/connector/iceberg.html',
-    provisionedBy: 'modules/data-plane/loom-trino-aks.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_TRINO_URL on the Console app',
-    role: 'Storage Blob Data Reader (uami-loom-trino) on the DLZ lake — declared in the module; the Trino workload identity reads Iceberg/Delta data files in place. The Console UAMI needs no new role (the BFF proxies).',
+    provisionedBy: 'modules/data-plane/loom-trino-aca.bicep (default-ON, invoked by admin-plane/main.bicep via loomBackends.trino) → apps[] env LOOM_TRINO_URL. Opt-in scale-out alternative: modules/data-plane/loom-trino-aks.bicep',
+    role: 'Storage Blob Data Reader (Console UAMI) on the DLZ lake — declared in the module; the Iceberg connector reads data files in place with the managed identity (no keys, no SAS).',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
-      fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own AKS cluster inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. SaaS-only external connectors stay honestly gated in IL5. As the opt-in carve-out, its absence removes NO capability — the default DuckDB engine (svc-loom-duckdb) serves SQL Lab in every cloud.',
+      fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own Container Apps environment inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. Both Gov params set containerPlatform=containerApps, so the engine deploys in GCC-High and IL5 exactly as in Commercial. SaaS-only external connectors stay honestly gated in IL5.',
     },
   },
   {

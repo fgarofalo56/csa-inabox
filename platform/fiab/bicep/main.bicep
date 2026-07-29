@@ -1352,6 +1352,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       dataflow: 'adf'
       dataproducts: ''
       orgVisuals: loomOrgVisualsEnabled ? 'enabled' : 'disabled'
+      // N7e Federated SQL (Trino) — DEFAULT-ON. Deploys the scale-to-zero
+      // single-node Trino Container App (data-plane/loom-trino-aca.bicep) and
+      // wires LOOM_TRINO_URL, so SQL Lab's "Federated SQL (Trino)" engine works
+      // on a fresh push-button install in BOTH clouds with no operator step.
+      // Idle cost is nothing (minReplicas 0). Runtime kill switch for admins:
+      // the `n7e-trino-federation` FLAG0 flag (no redeploy). Set 'disabled' here
+      // to skip the Container App entirely.
+      trino: 'enabled'
     }
   }
 }

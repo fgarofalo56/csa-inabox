@@ -131,7 +131,11 @@ const ALLOWLIST = new Set([
   'LOOM_ICEBERG_CATALOG_PREFIX',     // N1 opt-in IRC path prefix override (code default /api/2.1/unity-catalog/iceberg) — runtime-only knob, never a deploy dependency
   'LOOM_ICEBERG_CATALOG_WAREHOUSE',  // N1 opt-in IRC warehouse override (code default 'loom') — runtime-only knob, never a deploy dependency
   'LOOM_ICEBERG_CATALOG_AUDIENCE',   // N1 opt-in Entra audience for the upstream catalog hop (defaults to api://<LOOM_MSAL_CLIENT_ID>) — runtime-only knob
-  'LOOM_TRINO_URL',                  // N7e THE single opt-in carve-out: internal-ingress Trino/Starburst Federated-SQL coordinator on a PRIVATE AKS cluster (Apache-2.0), registered against the N1 Iceberg REST Catalog + external connectors. Deployed out-of-band via data-plane/loom-trino-aks.bicep (admin-plane/main.bicep at the 256-param ceiling) + a separate Helm-install phase, then set on the console app. Unset (the DEFAULT) => the "Federated SQL (Trino)" engine option honest-gates with a Fix-it that discloses the AKS cost and SQL Lab keeps working on the DEFAULT DuckDB tier — gates NO feature (loom_default_on_opt_out carve-out). (LOOM_TRINO_TOKEN auto-allowed by /_TOKEN$/.)
+  // LOOM_TRINO_URL is NO LONGER allowlisted: N7e is DEFAULT-ON. The push-button
+  // deploy stands up the scale-to-zero single-node Trino Container App
+  // (data-plane/loom-trino-aca.bicep) and admin-plane/main.bicep emits the var,
+  // so this guard now enforces that wiring instead of excusing its absence.
+  // (LOOM_TRINO_TOKEN auto-allowed by /_TOKEN$/; LOOM_TRINO_FETCH_TIMEOUT_MS by /_MS$/.)
   'LOOM_TRINO_AUDIENCE',             // N7e opt-in Entra audience for the Trino coordinator hop (defaults to api://<LOOM_MSAL_CLIENT_ID>); unset => the BFF reaches the internal-ingress cluster on in-VNet trust — runtime-only knob
   'LOOM_TRINO_ICEBERG_CATALOG',      // N7e opt-in Trino catalog name that fronts the Loom Iceberg REST Catalog (code default 'iceberg') — runtime-only knob, never a deploy dependency
   'LOOM_UNITY_URL',                 // opt-in self-hosted OSS Unity Catalog server URL (GOV-PARITY); the Azure-Government default UC backend (LOOM_UC_BACKEND=oss) since Databricks UC has no Gov endpoint. Deploy compute/loom-unity-app.bicep out-of-band (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the UC client honest-gates (OssUcNotConfiguredError) and Commercial keeps using Databricks UC. (LOOM_UC_BACKEND auto-allowed by /_BACKEND$/; LOOM_UNITY_TOKEN by /_TOKEN$/.)

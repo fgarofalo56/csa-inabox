@@ -43,6 +43,7 @@ on:
     branches: [main]
     paths:
       - 'apps/fiab-*/**'
+      - 'apps/loom-trino/**'
       - '.github/workflows/build-fiab-images-acr-tasks.yml'
 
 permissions:
@@ -120,7 +121,19 @@ jobs:
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
           if [[ "$INPUT" == "all" ]]; then
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
+            # "all" also runs on every main push touching apps/**, so it carries
+            # the images that must track the repo — including loom-trino, the
+            # N7e Federated SQL engine that is now DEFAULT-ON
+            # (data-plane/loom-trino-aca.bicep). Without its image in ACR the app
+            # cannot come up and LOOM_TRINO_URL would point at nothing.
+            #
+            # loom-uat is deliberately NOT in "all": it is a ~2 GB Playwright
+            # image whose only consumers are the loom-uat job and the default-ON
+            # loom-synthetic-monitor job, so rebuilding it on every console push
+            # would add ~10 min to each one for no benefit. It IS in the
+            # from-scratch app phase (full-app-deploy-commercial.yml), and it can
+            # be built on demand here with `apps: loom-uat`.
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-trino","ctx":"./apps/loom-trino"}]'
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
@@ -138,7 +151,15 @@ jobs:
             for APP in "${REQ[@]}"; do
               APP="$(echo "$APP" | tr -d '[:space:]')"
               [ -z "$APP" ] && continue
-              if [ -d "./apps/$APP" ]; then
+              FILE=""
+              if [ "$APP" = "loom-uat" ]; then
+                # The Playwright UAT / synthetic-journey runner is a SECOND image
+                # out of the console context (Dockerfile.uat) — there is no
+                # ./apps/loom-uat directory. It is what the default-ON
+                # loom-synthetic-monitor job runs.
+                CTX="./apps/fiab-console"
+                FILE="./apps/fiab-console/Dockerfile.uat"
+              elif [ -d "./apps/$APP" ]; then
                 CTX="./apps/$APP"
               else
                 # Legacy ./apps/fiab-* convention, with the handful of names whose
@@ -153,12 +174,13 @@ jobs:
                 esac
                 CTX="./apps/fiab-$STEM"
               fi
-              if [ ! -f "$CTX/Dockerfile" ]; then
-                echo "::error::no Dockerfile for '$APP' at $CTX — check the app name."
+              if [ ! -f "${FILE:-$CTX/Dockerfile}" ]; then
+                echo "::error::no Dockerfile for '$APP' at ${FILE:-$CTX/Dockerfile} — check the app name."
                 exit 1
               fi
-              APPS=$(jq -c --arg n "$APP" --arg c "$CTX" '. + [{name:$n, ctx:$c}]' <<< "$APPS")
-              echo "::notice::$APP -> $CTX"
+              APPS=$(jq -c --arg n "$APP" --arg c "$CTX" --arg f "$FILE" \
+                '. + [(if $f == "" then {name:$n, ctx:$c} else {name:$n, ctx:$c, file:$f} end)]' <<< "$APPS")
+              echo "::notice::$APP -> $CTX (${FILE:-$CTX/Dockerfile})"
             done
           fi
           echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
@@ -207,12 +229,21 @@ jobs:
             [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
             POOL_ARGS="--agent-pool loombuild"
           fi
+          # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
+          # excludes e2e/ + tests/ to keep the CONSOLE image lean — and ACR Tasks
+          # does not honour a per-Dockerfile <Dockerfile>.dockerignore. Drop those
+          # two exclusions for this build only. Each matrix job has its own
+          # disposable checkout, so this cannot leak into the console image.
+          if [ "${{ matrix.name }}" = "loom-uat" ]; then
+            grep -vxE 'e2e|tests' apps/fiab-console/.dockerignore > /tmp/di && mv /tmp/di apps/fiab-console/.dockerignore
+            echo "::notice::loom-uat build — e2e/ + tests/ un-ignored for this context"
+          fi
           az acr build \
             --registry "$ACR" $POOL_ARGS \
             --image "${{ matrix.name }}:${TAG}" \
             --image "${{ matrix.name }}:${{ github.sha }}" \
             --image "${{ matrix.name }}:latest" \
-            --file "${{ matrix.ctx }}/Dockerfile" \
+            --file "${{ matrix.file || format('{0}/Dockerfile', matrix.ctx) }}" \
             --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
             --build-arg "LOOM_BUILD_TIMESTAMP=${STAMP}" \
             "${{ matrix.ctx }}"

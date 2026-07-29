@@ -15,6 +15,28 @@ Six real end-to-end journeys run against the LIVE deployment every 15 minutes, i
 
 Exit-code semantics: **realFails only** (honest infra gates exit 0). A `Failed` execution ⇒ a code or sign-in regression.
 
+## What a push-button deploy wires — and the one thing it cannot
+
+Everything the `svc-synthetic-monitor` gate needs is deployed, with no operator step:
+
+| Piece | Deployed by |
+|---|---|
+| `LOOM_SYNTHETIC_MONITOR_ENABLED` / `LOOM_UAT_RESULTS_ACCOUNT` / `LOOM_UAT_RESULTS_CONTAINER` on the Console | `admin-plane/main.bicep` (`observabilityConfig`, default ON; account = the DLZ ADLS) |
+| The `uat-results` container + its 30-day lifecycle rule on `uat-runs/` | `landing-zone/storage.bicep` |
+| Storage Blob Data Contributor for the Console UAMI on that account | `admin-plane/azure-connections-rbac.bicep` |
+| The scheduled `loom-synthetic-monitor` job | `admin-plane/synthetic-monitor-job.bicep` |
+| The `loom-uat` runner image the job executes | the build matrix in `full-app-deploy-commercial.yml` (the from-scratch app phase). On demand: dispatch `build-fiab-images-acr-tasks.yml` with `apps: loom-uat`, or `gov-provision-trino.yml` with `build_uat: true` in Gov. It is deliberately out of the push-triggered `all` list — a ~2 GB Playwright image is not worth rebuilding on every console push. The console image is slimmed of `e2e/`, so this second image out of the console context is the only one carrying the journeys, and the build un-ignores `e2e/` + `tests/` for that context. |
+
+**The thing no deploy can do: the Entra Conditional Access exclusion.** The
+runner signs in as a standing automation account
+(`svc-loom-synthetic@limitlessdata.ai` in this tenant). Until a **tenant admin**
+scopes a Conditional Access exclusion for it, that sign-in is blocked, the run
+produces no verdicts, and **the Journeys tab stays empty** — the wiring above
+makes the surface honest, it does not make results appear. This is a one-time
+human action in Entra; nothing in the repo can automate it. Scope it to the
+monitor's egress (a named location), never as a blanket MFA carve-out, and pair
+it with the unexpected-use sign-in alert in the J1 section below.
+
 ## Triage a red run
 
 1. Open the **Journeys tab** — the failing journey's note names the endpoint + status.

@@ -1,4 +1,15 @@
-// CSA Loom — N7e loom-trino: the OPT-IN Trino / Starburst Federated SQL cluster.
+// CSA Loom — N7e loom-trino AKS: the OPT-IN SCALE-OUT Trino cluster.
+//
+// NOT the default path any more. The DEFAULT-ON Federated SQL engine is the
+// sibling data-plane/loom-trino-aca.bicep — a single-node Trino as a
+// scale-to-zero, internal-ingress Container App, wired straight from
+// admin-plane/main.bicep (loomBackends.trino, default 'enabled') so
+// LOOM_TRINO_URL ships on a fresh push-button install in both clouds at ZERO
+// idle cost. THIS module is what an operator deploys when one container is no
+// longer enough: real multi-node worker parallelism for large federated joins.
+// It costs an always-on system node pool (an AKS system pool cannot scale below
+// one node) and needs a separate Helm-install phase, which is exactly why it is
+// no longer the default.
 //
 // Backs LOOM_TRINO_URL. Trino OSS (Apache-2.0) runs as a PRIVATE cluster on AKS
 // inside the deployment's own VNet, registered against N1's Iceberg REST Catalog
@@ -7,13 +18,14 @@
 // Iceberg table with an external Postgres table — which the light default engine
 // (DuckDB, N2b) does not do.
 //
-// THE ONE OPT-IN CARVE-OUT (loom_default_on_opt_out, round-3 operator decision):
-//   Every other Loom capability is default-ON. Trino is the documented exception
-//   because it stands up a full AKS cluster (real, disclosed cost). It is
-//   therefore OPT-IN — deployed out-of-band, then LOOM_TRINO_URL set on the
-//   Console app. It gates NO feature: SQL Lab stays fully functional on the
-//   default DuckDB tier; Trino only ADDS the "Federated SQL (Trino)" engine
-//   choice. The G2 gate (svc-loom-trino) discloses the AKS cost at enable time.
+// WHY THIS IS NOW THE OPT-IN TIER (loom_default_on_opt_out):
+//   Trino used to be the single documented carve-out from the default-on rule,
+//   because THIS shape — a full AKS cluster — is real, recurring, unavoidable
+//   cost. That reasoning applied to the SHAPE, not to Trino: the single-process
+//   deployment (coordinator + include-coordinator) runs the whole engine in one
+//   container, so the capability is now default-ON via loom-trino-aca.bicep at
+//   zero idle cost. This module stays for the scale-out case and is opt-in
+//   because of its bill, not because the feature is optional.
 //
 // Azure-native / OSS only. Trino, its Iceberg connector and the external
 // connectors are all in-boundary — no SaaS query federation (no Starburst

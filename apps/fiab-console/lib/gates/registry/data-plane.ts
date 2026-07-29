@@ -111,7 +111,7 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'OPT-IN by design — this is the single non-default engine in the program. Unset → SQL Lab runs on the DEFAULT DuckDB tier (svc-loom-duckdb) with the identical result surface; only the additive "Federated SQL (Trino)" choice is gated. Deploying loom-trino-aks.bicep stands up a private AKS cluster (real, disclosed cost) that can join a Loom Iceberg table with an external Postgres table in one statement. Its absence removes no capability, so it never breaches loom_default_on_opt_out.',
+      'DEFAULT-ON since the engine moved off AKS: every push-button deploy stands up a single-node Trino OSS Container App with INTERNAL ingress and minReplicas 0 (data-plane/loom-trino-aca.bicep) and wires LOOM_TRINO_URL, in Commercial and in Gov. Idle cost is nothing — the replica only exists while a query is running. Empty means an explicit opt-out (loomBackends.trino=\'disabled\'), a non-Container-Apps boundary, or the loom-trino image not yet in this ACR; SQL Lab then keeps executing on the DEFAULT DuckDB tier (svc-loom-duckdb) with the identical result surface. Runtime kill switch without a redeploy: the n7e-trino-federation flag. Heavy federated joins can be moved to the opt-in multi-node AKS cluster (data-plane/loom-trino-aks.bicep) by repointing the same var.',
     legacyCodes: ['trino_not_configured'],
   },
   'svc-cosmos-control': {

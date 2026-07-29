@@ -2,10 +2,10 @@
  * N7e — BFF contract tests for the Federated SQL (Trino) execution edge.
  *
  *   1. AUTH — an anonymous caller 401s before anything else.
- *   2. OPT-IN GATE — with LOOM_TRINO_URL unset the route returns the honest 503
- *      gate envelope (gated:true, gate.id=svc-loom-trino) so the surface renders
- *      the Fix-it that discloses the AKS cost. This is the DEFAULT state; SQL Lab
- *      still works on DuckDB.
+ *   2. HONEST GATE — with LOOM_TRINO_URL unset the route returns the 503 gate
+ *      envelope (gated:true, gate.id=svc-loom-trino) so the surface renders the
+ *      Fix-it. The engine is default-ON, so this is the opted-out / image-missing
+ *      state, not the normal one; SQL Lab still works on DuckDB.
  *   3. REAL federated query — when wired, the client REST protocol runs and the
  *      response names the trino engine; the execution is audited.
  */
@@ -72,7 +72,7 @@ describe('POST /api/sql/trino — auth', () => {
   });
 });
 
-describe('POST /api/sql/trino — opt-in gate (DEFAULT state)', () => {
+describe('POST /api/sql/trino — honest gate (LOOM_TRINO_URL unset)', () => {
   it('returns the honest 503 gate envelope with a Fix-it when LOOM_TRINO_URL is unset', async () => {
     const { POST } = await import('../route');
     const res = await POST(req('https://loom.test/api/sql/trino', {

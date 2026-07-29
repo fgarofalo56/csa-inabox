@@ -26,3 +26,9 @@ sdk/** text eol=lf
 # found"), so pin them to LF regardless of core.autocrlf.
 scripts/csa-loom/acr-firewall-lease.sh text eol=lf
 scripts/ci/test-acr-firewall-lease.sh text eol=lf
+
+# The loom-trino container entrypoint + its baked Trino config are consumed by
+# a Linux container. A CRLF checkout would make the shebang unparseable (exec
+# format error) and silently break the default-ON Federated SQL engine, so pin
+# the whole app to LF.
+apps/loom-trino/** text eol=lf

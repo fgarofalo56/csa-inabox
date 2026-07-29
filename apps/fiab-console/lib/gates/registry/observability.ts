@@ -17,6 +17,8 @@ export const OBSERVABILITY_GATE_META: Record<string, GateMeta> = {
     // deployed by synthetic-monitor-job.bicep (default-ON via observabilityConfig).
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_UAT_RESULTS_ACCOUNT: L.storage },
+    autoResolveNote:
+      'Wired by a push-button deploy: admin-plane/main.bicep emits LOOM_SYNTHETIC_MONITOR_ENABLED / LOOM_UAT_RESULTS_ACCOUNT (the DLZ ADLS account) / LOOM_UAT_RESULTS_CONTAINER, landing-zone/storage.bicep creates the uat-results container (with a 30-day lifecycle rule on uat-runs/), the Console UAMI already holds Storage Blob Data Contributor on that account, and the loom-uat runner image is built by the app-deploy image matrix. HONEST LIMIT: results only appear once the runner can actually sign in. The J1 MSAL login probe uses a standing automation account whose sign-in is blocked by tenant Conditional Access until a tenant admin scopes a CA exclusion for it — that is a one-time human action nobody can automate from a deploy. Until it exists the Journeys tab lists the minted-session journeys only, and stays empty in a tenant where CA also blocks the minted path. Account empty on non-single-sub topologies (no local DLZ lake to write to).',
   },
   'svc-synthetic-login': {
     surfaces: [

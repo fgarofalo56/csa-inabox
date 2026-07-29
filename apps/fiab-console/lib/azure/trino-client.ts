@@ -166,6 +166,24 @@ function trinoUser(upn: string | undefined): string {
   return u || 'loom-console';
 }
 
+/**
+ * Per-hop budget for the Trino statement protocol.
+ *
+ * The default-ON deployment (data-plane/loom-trino-aca.bicep) runs the engine
+ * with `minReplicas: 0` — that scale-to-zero posture is exactly what makes
+ * default-ON affordable, and it means the FIRST request after an idle period
+ * waits on a JVM cold start (~20-40s) while Container Apps activates the
+ * replica. The shared 30s server default would abort that activation and
+ * report an unreachable coordinator, so this hop gets its own, larger ceiling.
+ * Subsequent pages of the same statement return in milliseconds.
+ *
+ * Override per-deployment with LOOM_TRINO_FETCH_TIMEOUT_MS.
+ */
+export const TRINO_FETCH_TIMEOUT_MS: number = (() => {
+  const n = Number(process.env.LOOM_TRINO_FETCH_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 120_000;
+})();
+
 /** GET/POST one page of the statement protocol, mapping failure to TrinoError. */
 async function trinoFetch(
   url: string,
@@ -177,7 +195,7 @@ async function trinoFetch(
       method: init.method,
       headers: init.headers,
       ...(init.body === undefined ? {} : { body: init.body }),
-    });
+    }, TRINO_FETCH_TIMEOUT_MS);
   } catch (e) {
     throw new TrinoError(
       `The Trino coordinator at ${trinoBase()} was unreachable: ${(e as Error)?.message || String(e)}`,
