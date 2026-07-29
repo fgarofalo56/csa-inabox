@@ -312,12 +312,19 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       + 'about $150/mo per cloud: ACA charges idle rates only while a replica stays below 0.01 vCPU and 1 KB/s, '
       + 'and a single-node engine running meta heartbeats, barriers and compaction does not. Note the replica '
       + 'filesystem is EPHEMERAL unless RW_STATE_STORE is pointed at durable object storage — a revision roll or '
-      + 'a platform replica replacement drops the materialized views either way. Optional: LOOM_RISINGWAVE_DATABASE '
-      + '(default dev), LOOM_RISINGWAVE_USER (default root), LOOM_RISINGWAVE_PASSWORD (KV secret; single-node '
-      + 'default is in-VNet trust).',
+      + 'a platform replica replacement drops the materialized views either way. AUTHENTICATION IS MANDATORY and '
+      + 'the deployment sets it up: RisingWave ships its `root` superuser with NO password, and every app in a '
+      + 'Container Apps environment draws its pod IP from the SAME infrastructure subnet — so an unauthenticated '
+      + 'engine is reachable as root by loom-script-runner and loom-udf-runtime, two services that execute '
+      + 'user-supplied code (found live on 2026-07-29 and removed from the estate). No ACA ingress IP rule can '
+      + 'separate environment siblings, so the fix is a credential: admin-plane/main.bicep generates an '
+      + 'unpredictable password, stores it in the Loom Key Vault, and binds it on BOTH the engine and the Console '
+      + 'as a Key-Vault-backed Container Apps secretRef (LOOM_RISINGWAVE_PASSWORD) — never a plain env literal. '
+      + 'The image refuses to start without it. Optional overrides: LOOM_RISINGWAVE_DATABASE (default dev), '
+      + 'LOOM_RISINGWAVE_USER (default root).',
     docs: 'https://docs.risingwave.com/docs/current/intro/',
     provisionedBy: 'modules/data-plane/loom-risingwave-aca.bicep — deployed DEFAULT-ON by admin-plane/main.bicep (every Container Apps boundary, Commercial + Gov) → LOOM_RISINGWAVE_URL wired onto the Console app by the same template. Also directly deployable out of band for an incremental provision (.github/workflows/gov-provision-streaming-migrate.yml does this for the live Gov estate).',
-    role: 'Storage Blob Data Contributor on the DLZ lake for the dedicated uami-loom-risingwave-<region> (the streaming sink WRITES Delta/Iceberg) — granted by admin-plane/main.bicep at the DLZ resource-group scope, plus AcrPull on the Loom ACR. The Console UAMI needs no new role (the BFF proxies over the Postgres wire).',
+    role: 'Storage Blob Data Contributor on the DLZ lake for the dedicated uami-loom-risingwave-<region> (the streaming sink WRITES Delta/Iceberg) — granted by admin-plane/main.bicep at the DLZ resource-group scope, plus AcrPull on the Loom ACR and Key Vault Secrets User on the Loom vault (it resolves its own mandatory root credential at revision start). The Console UAMI needs no new Azure role — it already holds Key Vault Secrets Officer, which covers reading the same secret. Nothing else in the Container Apps environment is granted read on that secret; that grant IS the boundary between the streaming database and the code-execution apps it shares an environment with.',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'RisingWave is a self-contained Rust binary with no external control plane; the Event Hubs Kafka endpoint and ADLS Gen2 are both in-boundary and reachable in Azure Government through IL5, so the whole streaming tier runs disconnected in an air-gapped enclave. No SaaS streaming service, no Microsoft Fabric / OneLake is in the path.',

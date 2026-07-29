@@ -14,9 +14,34 @@
 // is in the path (.claude/rules/no-fabric-dependency.md).
 //
 // SECURITY POSTURE
+//   - AUTHENTICATED WIRE, MANDATORY (2026-07-29). RisingWave ships a `root`
+//     SUPERUSER with NO password: with `AuthInfo` unset the frontend's
+//     `UserAuthenticator` is `None`, so anything that can open a TCP connection
+//     IS root. Deployed to the live Commercial estate this module produced a
+//     container with env `[LOOM_LAKE_ACCOUNT]` and ZERO secrets, sharing
+//     `cae-csa-loom-centralus` with `loom-script-runner` and `loom-udf-runtime`
+//     — two services whose purpose is executing user-supplied code. It was
+//     removed from the estate. This module now REQUIRES a root credential:
+//     `rootPasswordSecretUri` (a Key Vault secret URI resolved at revision start
+//     by the app's own managed identity) or the @secure() `rootPassword` param.
+//     Either renders a Container Apps SECRET and binds it as
+//     `LOOM_RW_ROOT_PASSWORD` via `secretRef` — NEVER a plain env literal. With
+//     neither, `apps/loom-risingwave/scripts/entrypoint.sh` refuses to start
+//     (fail-closed), so an unauthenticated loom-risingwave cannot exist.
+//     WHY A CREDENTIAL AND NOT A NETWORK RULE: every app in a Container Apps
+//     environment draws its pod IP from the SAME infrastructure subnet, so an
+//     ACA `ipSecurityRestrictions` allow-list that admits the Console also
+//     admits loom-script-runner and loom-udf-runtime; a dedicated environment
+//     has the identical problem one level up (its peer subnets are routable and
+//     the code-execution apps share the Console's). Only a secret the
+//     code-execution apps do not hold separates them — and they do not: the
+//     Key Vault secret is readable only by the two identities granted "Key Vault
+//     Secrets User" on it (this app's UAMI and the Console's).
 //   - INTERNAL ingress only, transport 'tcp' on the Postgres-wire frontend port
-//     (4566). The Console BFF is the sole door; every statement goes through the
-//     audited /api/streaming-sql/* routes. There is no anonymous / public path.
+//     (4566), with an OPTIONAL `allowedCidrs` IP allow-list on top as
+//     defence-in-depth against the wider VNet. The Console BFF is the sole door;
+//     every statement goes through the audited /api/streaming-sql/* routes.
+//     There is no anonymous / public path.
 //   - IDENTITY-BASED lake auth: a user-assigned managed identity with **Storage
 //     Blob Data Contributor** on the DLZ lake (the streaming sink WRITES Delta /
 //     Iceberg). Granted here via a guarded guid() role assignment when the lake
@@ -74,9 +99,19 @@
 //                            "uamiClientId": "<uami-client-id>", \
 //                            "acrLoginServer": "<acr>.azurecr.io", \
 //                            "image": "<acr>.azurecr.io/loom-risingwave:<tag>", \
-//                            "lakeStorageAccountName": "<dlz-adls-account>" }'
-//   # then: az containerapp update -n <console> -g <admin-rg> --set-env-vars \
-//   #         LOOM_RISINGWAVE_URL=<this-app-fqdn>:4566
+//                            "lakeStorageAccountName": "<dlz-adls-account>", \
+//                            "rootPasswordSecretUri": "https://<vault>.vault.azure.net/secrets/loom-risingwave-root-password" }'
+//   # The UAMI must hold "Key Vault Secrets User" on that vault, or the revision
+//   # cannot resolve the secret. Omitting BOTH rootPasswordSecretUri and the
+//   # @secure() rootPassword param is not a shortcut — the container refuses to
+//   # start rather than serve an unauthenticated database.
+//   # then, on the Console (the password is a secretRef there too, never a
+//   # plain env literal):
+//   #   az containerapp secret set -n <console> -g <admin-rg> --secrets \
+//   #     loom-risingwave-password=keyvaultref:<same-secret-uri>,identityref:<console-uami-id>
+//   #   az containerapp update -n <console> -g <admin-rg> --set-env-vars \
+//   #     LOOM_RISINGWAVE_URL=<this-app-fqdn>:4566 \
+//   #     LOOM_RISINGWAVE_PASSWORD=secretref:loom-risingwave-password
 
 targetScope = 'resourceGroup'
 
@@ -122,8 +157,28 @@ Optional keys:
                          durable, scaled deployment; empty => single-node local state.
   dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.
   assignLakeRole         Default true. Set false to skip the in-module role assignment when
-                         the lake is in another resource group / granted out-of-band.''')
+                         the lake is in another resource group / granted out-of-band.
+  rootPasswordSecretUri  REQUIRED (or the @secure() rootPassword param). Key Vault secret URI
+                         https://<vault>.vault.azure.net/secrets/<name> holding the Postgres-wire
+                         root password. Rendered as a Key-Vault-backed Container Apps SECRET
+                         resolved by uamiId at revision start — the value never enters the
+                         template, the deployment history, or `az containerapp show`. The UAMI
+                         needs "Key Vault Secrets User" on that vault.
+  allowedCidrs           Optional ACA ingress IP allow-list (defence-in-depth against the wider
+                         VNet). NOT a substitute for the credential: every app in a Container
+                         Apps environment draws its pod IP from the SAME infrastructure subnet,
+                         so any CIDR that admits the Console also admits the code-execution
+                         apps. Empty (default) => internal ingress is the only network control.
+  livenessInitialDelay   Seconds before the first liveness probe (default 150). The engine boots
+                         TWICE — once sealed on loopback to install the credential, once serving
+                         — so the routable port does not exist for the first ~30-60s. A short
+                         delay would kill the container mid-bootstrap.
+  readinessInitialDelay  Seconds before the first readiness probe (default 30).''')
 param risingwaveConfig object
+
+@description('''Postgres-wire root password, INLINE alternative to risingwaveConfig.rootPasswordSecretUri. @secure() so ARM redacts it from deployment history and outputs; rendered as a Container Apps SECRET (never an env literal). Prefer the Key Vault URI — this exists for out-of-band / incremental provisioning where the vault reference is not available. Exactly one of the two must be supplied: with neither, the container fails closed at boot rather than serving an unauthenticated database.''')
+@secure()
+param rootPassword string = ''
 
 @description('Compliance/cost tags. The loom-next-level tag is unioned in.')
 param complianceTags object = {}
@@ -154,6 +209,28 @@ var dataDirectory = string(risingwaveConfig.?dataDirectory ?? '')
 // The lake role can only be assigned from THIS module when the account lives in
 // THIS resource group and we know the principal id.
 var assignLakeRole = bool(risingwaveConfig.?assignLakeRole ?? true) && !empty(lakeStorageAccountName) && !empty(uamiPrincipalId)
+
+// ── Mandatory root credential ────────────────────────────────────────────────
+// KV-backed is the default and preferred shape; the @secure() inline param is
+// the out-of-band alternative. With NEITHER the container fails closed at boot
+// (apps/loom-risingwave/scripts/entrypoint.sh exits 1 before binding a routable
+// port), so the deployment surfaces as an unhealthy revision instead of an
+// unauthenticated database.
+var rootPasswordSecretUri = string(risingwaveConfig.?rootPasswordSecretUri ?? '')
+var rootPasswordFromKeyVault = !empty(rootPasswordSecretUri)
+var rootPasswordInline = empty(rootPasswordSecretUri) && !empty(rootPassword)
+var rootAuthConfigured = rootPasswordFromKeyVault || rootPasswordInline
+
+// ACA ingress IP allow-list — defence-in-depth only. It CANNOT separate this app
+// from its Container Apps environment siblings (they share the infrastructure
+// subnet), which is exactly why the credential above is mandatory rather than
+// optional. Empty by default.
+var allowedCidrs = risingwaveConfig.?allowedCidrs ?? []
+
+// The engine boots twice (sealed → serving), so the routable port is absent for
+// the first ~30-60s. Probe delays are generous by default for that reason.
+var livenessInitialDelay = int(risingwaveConfig.?livenessInitialDelay ?? 150)
+var readinessInitialDelay = int(risingwaveConfig.?readinessInitialDelay ?? 30)
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
@@ -194,7 +271,44 @@ var stateEnv = empty(stateStore) ? [] : [
   { name: 'RW_DATA_DIRECTORY', value: empty(dataDirectory) ? 'loom-risingwave' : dataDirectory }
 ]
 
-var envVars = concat(lakeEnv, identityEnv, stateEnv)
+// The root credential — ALWAYS a secretRef, never `value:`. The entrypoint reads
+// it, applies `ALTER USER root PASSWORD` against a loopback-only frontend, and
+// only then binds the routable port.
+var authEnv = rootAuthConfigured ? [
+  { name: 'LOOM_RW_ROOT_PASSWORD', secretRef: 'risingwave-root-password' }
+] : []
+
+// Key-Vault-backed when a secret URI is supplied (`keyVaultUrl` + `identity`
+// means the platform resolves it with the UAMI at revision start and the value
+// never enters the template or the deployment history); the @secure() inline
+// param otherwise.
+var appSecrets = rootPasswordFromKeyVault ? [
+  { name: 'risingwave-root-password', keyVaultUrl: rootPasswordSecretUri, identity: uamiId }
+] : (rootPasswordInline ? [
+  { name: 'risingwave-root-password', value: rootPassword }
+] : [])
+
+var envVars = concat(lakeEnv, identityEnv, stateEnv, authEnv)
+
+// INTERNAL ingress + an optional Allow-only IP rule set. ACA supports Allow-only
+// or Deny-only; anything outside the listed CIDRs is denied.
+var ingressIpRules = [for (cidr, i) in allowedCidrs: {
+  name: 'allow-loom-console-${i}'
+  description: 'Defence-in-depth: narrow the VNet reach of the streaming wire port.'
+  ipAddressRange: cidr
+  action: 'Allow'
+}]
+var ingressBase = {
+  // INTERNAL only — the Console BFF is the sole door. TCP transport so the raw
+  // Postgres-wire frontend is reachable in-VNet on the frontend port.
+  external: false
+  targetPort: frontendPort
+  exposedPort: frontendPort
+  transport: 'tcp'
+}
+var ingressConfig = empty(allowedCidrs) ? ingressBase : union(ingressBase, {
+  ipSecurityRestrictions: ingressIpRules
+})
 
 // Pinned to the same Container Apps api-version the sibling ACA modules use.
 resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
@@ -211,14 +325,8 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
     environmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      ingress: {
-        // INTERNAL only — the Console BFF is the sole door. TCP transport so the
-        // raw Postgres-wire frontend is reachable in-VNet on the frontend port.
-        external: false
-        targetPort: frontendPort
-        exposedPort: frontendPort
-        transport: 'tcp'
-      }
+      ingress: ingressConfig
+      secrets: appSecrets
       registries: [
         {
           server: acrLoginServer
@@ -240,18 +348,22 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
             {
               // The frontend has no HTTP health on the SQL port; a TCP connect to
               // the Postgres-wire port is the honest liveness/readiness signal.
+              // The delay must clear the SEALED bootstrap: during phase 1 the
+              // frontend is bound to 127.0.0.1 only, so a probe from the pod IP
+              // correctly fails. A 20s delay would have killed the container
+              // mid-credential-install and crash-looped forever.
               type: 'Liveness'
               tcpSocket: { port: frontendPort }
-              initialDelaySeconds: 20
+              initialDelaySeconds: livenessInitialDelay
               periodSeconds: 30
               failureThreshold: 3
             }
             {
               type: 'Readiness'
               tcpSocket: { port: frontendPort }
-              initialDelaySeconds: 10
+              initialDelaySeconds: readinessInitialDelay
               periodSeconds: 10
-              failureThreshold: 6
+              failureThreshold: 30
             }
           ]
         }
@@ -280,3 +392,9 @@ output pgWireEndpoint string = '${app.properties.configuration.ingress.fqdn}:${f
 
 @description('Container App resource id.')
 output appId string = app.id
+
+@description('How the mandatory root credential was supplied: keyVault | inline | NONE. "NONE" means the container will FAIL CLOSED at boot (the entrypoint refuses to bind a routable port without a password) — it is surfaced as an output so a deploy log shows the posture without reading the secret.')
+output rootAuthMode string = rootPasswordFromKeyVault ? 'keyVault' : (rootPasswordInline ? 'inline' : 'NONE')
+
+@description('True when an ACA ingress IP allow-list is applied on top of internal ingress. Defence-in-depth only — it cannot separate this app from its Container Apps environment siblings, which share the infrastructure subnet.')
+output ingressIpRestricted bool = !empty(allowedCidrs)

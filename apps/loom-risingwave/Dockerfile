@@ -79,9 +79,17 @@ FROM risingwavelabs/risingwave:v2.1.3
 # expat on it to save 1.5 GB is the wrong trade. If Container Apps pull time ever
 # becomes the binding constraint, swapping the dist-upgrade line for the
 # --only-upgrade line is the documented lever.
+#
+# `postgresql-client` is installed in the SAME layer, AFTER the dist-upgrade, so
+# it resolves to the current noble-security build rather than an 18-month-old
+# pin. It is not a convenience: the fail-closed authentication bootstrap
+# (scripts/entrypoint.sh) needs a Postgres-wire client to run `ALTER USER root
+# PASSWORD` against the sealed, loopback-only frontend before the port is ever
+# bound to a routable address. The entrypoint refuses to start without it.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get purge -y 'linux-tools-*' \
     && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql-client \
     && DEBIAN_FRONTEND=noninteractive apt-get autoremove -y --purge \
     && rm -rf /var/lib/apt/lists/*
 
@@ -103,13 +111,45 @@ RUN apt-get update \
 COPY scripts/ /opt/loom-sc1/
 RUN chmod 0755 /opt/loom-sc1/sc1-harden.sh \
     && /opt/loom-sc1/sc1-harden.sh \
+    && install -m 0755 /opt/loom-sc1/entrypoint.sh /usr/local/bin/loom-risingwave-entrypoint.sh \
     && rm -rf /opt/loom-sc1
 
 # The Loom BFF speaks to the frontend over the Postgres wire (4566). The other
 # ports stay internal to the single-node process / the VNet.
 EXPOSE 4566 5690 5691 1250
 
-# `single_node` runs the all-in-one node: meta + compute + frontend + compactor
-# in one process with local state (override the state store to ADLS with
-# RW_STATE_STORE / RW_DATA_DIRECTORY when a durable, scaled deployment is wanted).
-CMD ["single_node"]
+# ── AUTHENTICATION IS NOT OPTIONAL ────────────────────────────────────────────
+# The previous CMD was a bare `single_node`, which is upstream's default: a
+# `root` SUPERUSER with NO password on the Postgres wire. Deployed to the live
+# Commercial estate on 2026-07-29 that put an unauthenticated database on the
+# same Container Apps environment as loom-script-runner and loom-udf-runtime —
+# two services that execute user-supplied code. It was removed from the estate.
+#
+# The entrypoint now:
+#   1. REFUSES TO START unless LOOM_RW_ROOT_PASSWORD is present (delivered as a
+#      Key-Vault-backed Container Apps secretRef, never a plain env literal);
+#   2. boots the engine SEALED with the frontend on 127.0.0.1 only, applies
+#      `ALTER USER root PASSWORD`, and proves an anonymous connection is now
+#      rejected — all before any routable port exists;
+#   3. only then re-execs the engine bound to 0.0.0.0.
+# There is no unauthenticated code path left in this image.
+ENTRYPOINT ["/usr/local/bin/loom-risingwave-entrypoint.sh"]
+
+# BUILD-TIME ASSERTION — the same philosophy as scripts/sc1-harden.sh: a
+# regression that would ship an open database fails the BUILD, not production.
+# LOOM_RW_ROOT_PASSWORD is deliberately unset here, and LOOM_RW_BIN is pointed at
+# /bin/true so nothing can actually start. If the entrypoint ever returns 0 in
+# that state, someone has reintroduced an unauthenticated path and this layer
+# stops the image from being produced at all.
+RUN set -eu; \
+    command -v psql >/dev/null 2>&1 || { echo "FATAL: psql is missing; the auth bootstrap cannot run" >&2; exit 1; }; \
+    if LOOM_RW_BIN=/bin/true /usr/local/bin/loom-risingwave-entrypoint.sh >/dev/null 2>&1; then \
+      echo "FATAL: the entrypoint started with NO LOOM_RW_ROOT_PASSWORD. An unauthenticated RisingWave must never be buildable." >&2; \
+      exit 1; \
+    fi; \
+    echo "auth assertion passed: refuses to start without a credential, psql present"
+
+# Extra `single_node` arguments only (the entrypoint supplies the binary, the
+# listen address and the store directory). Override the state store to ADLS with
+# RW_STATE_STORE / RW_DATA_DIRECTORY for a durable, scaled deployment.
+CMD []

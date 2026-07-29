@@ -122,7 +122,14 @@ const ALLOWLIST = new Set([
   'LOOM_DUCKDB_URL',                 // N2b opt-in DuckDB serving-tier URL (internal-ingress loom-duckdb Container App: embedded DuckDB reading Delta/Iceberg/Parquet in place on the DLZ lake). Deployed out-of-band via data-plane/duckdb-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => SQL Lab executes the IDENTICAL statement on Synapse Serverless and names the engine in its status bar, so nothing is blocked — only latency changes. (LOOM_DUCKDB_MAX_ROWS auto-allowed by /_MAX_[A-Z0-9_]+$/.)
   'LOOM_RISINGWAVE_DATABASE',        // N7a opt-in RisingWave database override (code default 'dev') — runtime-only knob, never a deploy dependency
   'LOOM_RISINGWAVE_USER',            // N7a opt-in RisingWave user override (code default 'root') — runtime-only knob, never a deploy dependency
-  'LOOM_RISINGWAVE_PASSWORD',        // N7a opt-in RisingWave password (KV secret); single-node default is in-VNet trust (no password). Secret — never a plain bicep env literal.
+  // LOOM_RISINGWAVE_PASSWORD was allowlisted here as "opt-in; single-node default
+  // is in-VNet trust (no password)". That default WAS the vulnerability: RisingWave
+  // ships `root` with no password, and every app in a Container Apps environment
+  // draws its pod IP from the same infrastructure subnet, so "in-VNet trust" meant
+  // loom-script-runner and loom-udf-runtime — two services that execute
+  // user-supplied code — could open a root session. The credential is now
+  // MANDATORY and admin-plane/main.bicep emits it as a Key-Vault-backed
+  // secretRef, so the entry is REMOVED and the guard enforces the emission.
   'LOOM_MIGRATE_AUDIENCE',           // M1 opt-in AAD audience (app id URI) for the loom-migrate reader's bearer token; unset => the BFF reaches the internal-ingress reader on in-VNet trust (no anonymous public path exists).
   // (LOOM_DUCKDB_URL and LOOM_FLIGHTSQL_URL used to be allowlisted here as
   //  "deployed out-of-band". REMOVED in PR #2640 round 2: admin-plane/main.bicep now

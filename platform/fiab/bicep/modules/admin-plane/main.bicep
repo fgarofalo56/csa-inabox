@@ -866,6 +866,21 @@ var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 // default-ON is ~$0 at idle (see the block there).
 var duckdbTierEnabled = true
 var duckdbTierActive = duckdbTierEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+// loom-risingwave Postgres-wire root password. Same construction and the same
+// reasoning as airflowAdminPassword above: UNPREDICTABLE, derived from
+// loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
+// WHY IT IS MANDATORY: RisingWave ships `root` with NO password, and a
+// Container Apps environment gives every app a pod IP in the SAME
+// infrastructure subnet — so loom-script-runner and loom-udf-runtime (which
+// execute user-supplied code) sat one TCP connect away from a root shell on the
+// streaming database when this app was briefly live on 2026-07-29. No ACA
+// ipSecurityRestrictions rule can separate CAE siblings, and neither can a
+// dedicated environment; only a credential they do not hold can. It is written
+// to Key Vault (below) and bound on BOTH the engine and the Console as a
+// KEY-VAULT-BACKED Container Apps secretRef — never a plain env literal.
+var risingwaveRootPasswordSecretName = 'loom-risingwave-root-password'
+var risingwaveRootPassword = 'Rw7${uniqueString(loomGeneratedSecretSeed, 'loom-risingwave-root-v1')}!Qz'
+var risingwaveRootPasswordSecretUri = '${keyvault.outputs.keyVaultUri}secrets/${risingwaveRootPasswordSecretName}'
 
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
 param postgresQuotaAvailable bool = true
@@ -2099,6 +2114,14 @@ module keyvault 'keyvault.bicep' = {
     // endpoint reachable) can load it for one-click registration. Default-on.
     builtinMcpApiKeySecretName: loomBuiltinMcpActive ? loomBuiltinMcpApiKeySecretName : ''
     builtinMcpApiKey: loomBuiltinMcpActive ? loomBuiltinMcpApiKey : ''
+    // loom-risingwave's MANDATORY root credential. Written only when the
+    // streaming tier is actually deployed, so an opted-out estate gains no
+    // secret and no role assignment. The engine's UAMI is the ONLY workload
+    // identity granted read on it — the code-execution apps that share its
+    // Container Apps environment hold nothing.
+    risingwavePrincipalId: risingwaveActive ? risingwaveUami!.properties.principalId : ''
+    risingwaveRootPasswordSecretName: risingwaveActive ? risingwaveRootPasswordSecretName : ''
+    risingwaveRootPassword: risingwaveActive ? risingwaveRootPassword : ''
   }
 }
 
@@ -4963,6 +4986,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           duckdbTierActive ? [
             { name: 'LOOM_DUCKDB_URL', value: 'https://${duckdbTier!.outputs.fqdn}' }
             { name: 'LOOM_FLIGHTSQL_URL', value: duckdbTier!.outputs.flightEndpoint }
+          // N7a streaming tier — the Postgres-wire credential the BFF presents to
+          // loom-risingwave. A secretRef, NEVER `value:`: this is the only thing
+          // that distinguishes the Console from loom-script-runner and
+          // loom-udf-runtime, which share the same Container Apps environment and
+          // draw pod IPs from the same infrastructure subnet (so no ACA IP rule
+          // could have separated them). Present ONLY when the tier is deployed —
+          // the KV secret does not exist otherwise, and a dangling keyVaultUrl
+          // secretRef would fail the CONSOLE revision, not just the feature.
+          risingwaveActive ? [
+            { name: 'LOOM_RISINGWAVE_PASSWORD', secretRef: 'loom-risingwave-password' }
           ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
           // the other Loom apps; the External-MCP panel reads this to offer the
@@ -4992,6 +5025,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // host is off (LOOM_AIRFLOW_ENDPOINT is '' → the editor honest-gates).
             { name: 'loom-airflow-admin-password', value: airflowAdminPassword }
           ],
+          // N7a streaming tier root credential — the SAME Key Vault secret the
+          // engine resolves, so the two never drift. Present only when the tier
+          // is deployed (see the matching env entry above).
+          risingwaveActive ? [
+            { name: 'loom-risingwave-password', keyVaultUrl: risingwaveRootPasswordSecretUri, identity: identity.outputs.uamiConsoleId }
+          ] : [],
           !empty(effectiveMsalClientId) ? [
             // MSAL client secret — KV-backed when the entra-app-registration
             // script provisioned + stored it (the PRP "secret in Key Vault"
@@ -5746,12 +5785,19 @@ module risingwave '../data-plane/loom-risingwave-aca.bicep' = if (risingwaveActi
       maxReplicas: 1
       // The lake is in the DLZ RG — granted by risingwaveLakeRbac above.
       assignLakeRole: false
+      // MANDATORY root credential, Key-Vault-backed. The engine resolves this
+      // with its own UAMI at revision start; the value is never in the template,
+      // the deployment history, or `az containerapp show`.
+      rootPasswordSecretUri: risingwaveRootPasswordSecretUri
     }
     complianceTags: complianceTags
   }
-  // Same AcrPull-before-first-revision ordering as loomMigrate above.
+  // AcrPull before the first revision (as loomMigrate above) AND the Key Vault
+  // secret + the Secrets User grant before it, or the revision cannot resolve
+  // LOOM_RW_ROOT_PASSWORD and the container fails closed by design.
   dependsOn: [
     risingwaveAcrPull
+    keyvault
   ]
 }
 

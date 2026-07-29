@@ -165,7 +165,7 @@ jobs:
           echo "estate=present" >> "$GITHUB_OUTPUT"
           echo "::notice::boundary=$BOUNDARY rg=$RG location=$LOCATION acr=$ACR login=$ACR_LOGIN tag=$IMAGE_TAG mode=$MODE"
 
-      - name: Discover CAE + lake account
+      - name: Discover CAE + lake account + Key Vault + Console identity
         if: ${{ env.MODE != 'build-only' }}
         run: |
           set -euo pipefail
@@ -177,9 +177,22 @@ jobs:
           # account the Console is already bound to rather than guessing a name.
           LAKE=$(az containerapp show -n "$CONSOLE_APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv 2>/dev/null | tr -d '\r' || echo "")
-          { echo "CAE_ID=$CAE_ID"; echo "LAKE=$LAKE"; } >> "$GITHUB_ENV"
-          echo "::notice::CAE=$CAE_ID lake=${LAKE:-<none>}"
+          # The Loom vault holds the MANDATORY RisingWave root credential. Named
+          # kv-loom-<hash> by admin-plane/keyvault.bicep; discovered by prefix so
+          # this works on any estate, not just the one that exists today.
+          KV=$(az keyvault list -g "$RG" --query "[?starts_with(name,'kv-loom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          # The Console's user-assigned identity — needed as the `identityref` of
+          # its Key-Vault-backed secret (it already holds Key Vault Secrets
+          # Officer from the main deploy, which includes read).
+          CONSOLE_UAMI=$(az containerapp show -n "$CONSOLE_APP" -g "$RG" \
+            --query "keys(identity.userAssignedIdentities)|[0]" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          { echo "CAE_ID=$CAE_ID"; echo "LAKE=$LAKE"; echo "KV=$KV"; echo "CONSOLE_UAMI=$CONSOLE_UAMI"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID lake=${LAKE:-<none>} keyvault=${KV:-<none>} consoleUami=${CONSOLE_UAMI:-<none>}"
           [ -n "$CAE_ID" ] || { echo "::error::No Container Apps environment in $RG — run the infra phase first."; exit 1; }
+          if [[ "$MODE" == "build-and-deploy" && -z "$KV" ]]; then
+            echo "::error::No kv-loom* Key Vault in $RG. loom-risingwave REQUIRES a Postgres-wire root credential (its entrypoint refuses to start without one, because RisingWave's built-in root user has no password and the code-execution apps share this Container Apps environment). Run the infra phase first."
+            exit 1
+          fi
 
       - name: Report create-vs-adopt for both Container Apps
         if: ${{ env.MODE != 'build-only' }}
@@ -285,6 +298,39 @@ jobs:
             fi
           fi
 
+      # ── The MANDATORY RisingWave root credential ────────────────────────────
+      # Written as an ARM resource, not `az keyvault secret set`: the Loom vault
+      # is publicNetworkAccess=Disabled + defaultAction=Deny, so a GitHub-hosted
+      # runner has no route to its DATA plane. The control plane works regardless
+      # of the firewall (same mechanism keyvault.bicep already uses for the
+      # built-in MCP key). The value is generated here, passed as a @secure()
+      # parameter (ARM redacts it from deployment history), and never printed.
+      - name: Provision the RisingWave root credential in Key Vault
+        if: ${{ env.MODE == 'build-and-deploy' }}
+        run: |
+          set -euo pipefail
+          RW_PID=$(az identity show -n "uami-loom-risingwave-$LOCATION" -g "$RG" --query principalId -o tsv | tr -d '\r')
+          READERS="[\"$RW_PID\"]"
+          if [ -n "${CONSOLE_UAMI:-}" ]; then
+            CONSOLE_PID=$(az identity show --ids "$CONSOLE_UAMI" --query principalId -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            [ -n "$CONSOLE_PID" ] && READERS="[\"$RW_PID\",\"$CONSOLE_PID\"]"
+          fi
+          # 32 URL/SQL-safe characters. `openssl rand` is a CSPRNG; the value is
+          # never echoed and never reaches a log or an env literal.
+          RW_PASSWORD=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 32)
+          [ ${#RW_PASSWORD} -ge 24 ] || { echo "::error::password generation failed"; exit 1; }
+          echo "::add-mask::$RW_PASSWORD"
+          az deployment group create -g "$RG" -n "loom-risingwave-secret-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/admin-plane/risingwave-root-secret.bicep \
+            -p vaultName="$KV" \
+               secretName=loom-risingwave-root-password \
+               rootPassword="$RW_PASSWORD" \
+               readerPrincipalIds="$READERS" \
+            --mode Incremental -o none
+          KV_URI=$(az keyvault show -n "$KV" -g "$RG" --query properties.vaultUri -o tsv | tr -d '\r')
+          echo "RW_SECRET_URI=${KV_URI}secrets/loom-risingwave-root-password" >> "$GITHUB_ENV"
+          echo "::notice::root credential written to $KV (readers: loom-risingwave UAMI + Console UAMI only — loom-script-runner / loom-udf-runtime hold no role on this vault)"
+
       - name: What-if both deployments
         if: ${{ env.MODE != 'build-only' }}
         run: |
@@ -302,12 +348,37 @@ jobs:
                migrateConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$MIG_ID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-migrate:$IMAGE_TAG\",\"minReplicas\":0,\"maxReplicas\":2}" \
                complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-migrate\"}" \
             --mode Incremental 2>&1 | tail -30 || true
+          RW_SECRET_URI="${RW_SECRET_URI:-$(az keyvault show -n "${KV:-}" -g "$RG" --query properties.vaultUri -o tsv 2>/dev/null | tr -d '\r')secrets/loom-risingwave-root-password}"
           az deployment group what-if -g "$RG" \
             -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
             -p location="$LOCATION" \
-               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1}" \
+               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
                complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-risingwave\"}" \
             --mode Incremental 2>&1 | tail -30 || true
+
+      # ── IMAGE PREFLIGHT (blocking) ─────────────────────────────────────────
+      # Re-asserted immediately before the deploy steps, not only after the
+      # build. A Container App PUT that names a tag with no manifest fails with
+      # MANIFEST_UNKNOWN — and where the app already exists this deployment
+      # ADOPTS it, so pointing a live Gov app at a non-existent image would take
+      # a running service down. Fail loudly here instead.
+      - name: Image preflight — both deploy tags must resolve before any PUT
+        if: ${{ env.MODE == 'build-and-deploy' }}
+        run: |
+          set -euo pipefail
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          RC=0
+          for IMG in loom-migrate loom-risingwave; do
+            D=$(az acr repository show -n "$ACR" --image "$IMG:$IMAGE_TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [ -z "$D" ]; then
+              echo "::error::PREFLIGHT FAILED — $ACR_LOGIN/$IMG:$IMAGE_TAG has no manifest. Refusing to deploy: the Container App PUT would fail with MANIFEST_UNKNOWN, and where the app already exists this run ADOPTS it, so it would point a live Gov service at an image that does not exist. Run this workflow with mode=build-only first."
+              RC=1
+            else
+              echo "::notice::preflight ok — $ACR_LOGIN/$IMG:$IMAGE_TAG -> $D"
+            fi
+          done
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+          exit $RC
 
       - name: Deploy loom-migrate + wire LOOM_MIGRATE_URL
         if: ${{ env.MODE == 'build-and-deploy' }}
@@ -329,20 +400,29 @@ jobs:
         if: ${{ env.MODE == 'build-and-deploy' }}
         run: |
           set -euo pipefail
+          [ -n "${RW_SECRET_URI:-}" ] || { echo "::error::RW_SECRET_URI is empty — the credential step did not run. loom-risingwave will not start without it (by design)."; exit 1; }
           az deployment group create -g "$RG" -n "loom-risingwave-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep \
             -p location="$LOCATION" \
-               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1}" \
+               risingwaveConfig="{\"environmentId\":\"$CAE_ID\",\"uamiId\":\"$RW_ID\",\"uamiClientId\":\"$RW_CID\",\"acrLoginServer\":\"$ACR_LOGIN\",\"image\":\"$ACR_LOGIN/loom-risingwave:$IMAGE_TAG\",\"lakeStorageAccountName\":\"${LAKE:-}\",\"assignLakeRole\":false,\"cpu\":\"2.0\",\"memory\":\"4.0Gi\",\"minReplicas\":1,\"maxReplicas\":1,\"rootPasswordSecretUri\":\"$RW_SECRET_URI\"}" \
                complianceTags="{\"env\":\"gov\",\"boundary\":\"$LOCATION\",\"app\":\"loom-risingwave\"}" \
             --mode Incremental -o none
           FQDN=$(az containerapp show -n "$RISINGWAVE_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
           echo "::notice::loom-risingwave FQDN: $FQDN"
-          for i in $(seq 1 20); do
+          # The engine boots TWICE (sealed on loopback to install the credential,
+          # then serving), so allow ~5 min rather than the previous ~5 x 15s.
+          for i in $(seq 1 30); do
             REV=$(az containerapp show -n "$RISINGWAVE_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
             RS=$(az containerapp revision show -n "$RISINGWAVE_APP" -g "$RG" --revision "$REV" --query properties.runningState -o tsv 2>/dev/null | tr -d '\r')
             H=$(az containerapp revision show -n "$RISINGWAVE_APP" -g "$RG" --revision "$REV" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
             echo "loom-risingwave running=$RS health=$H"; { [ "$H" = "Healthy" ] || [ "$RS" = "Running" ]; } && break; sleep 15
           done
+          # The Console presents the SAME credential. A Key-Vault-backed SECRET,
+          # then a secretRef env — never a plain env literal, and never a value on
+          # an `az containerapp update` command line (that lands in ARM history).
+          az containerapp secret set -n "$CONSOLE_APP" -g "$RG" \
+            --secrets "loom-risingwave-password=keyvaultref:$RW_SECRET_URI,identityref:$CONSOLE_UAMI" -o none
           # Postgres wire, not HTTP — the client parses host / host:port / postgres://.
-          az containerapp update -n "$CONSOLE_APP" -g "$RG" --set-env-vars "LOOM_RISINGWAVE_URL=$FQDN:4566" -o none
-          echo "::notice::wired LOOM_MIGRATE_URL + LOOM_RISINGWAVE_URL — re-run gov-selfaudit to confirm svc-loom-migrate + svc-loom-risingwave."
+          az containerapp update -n "$CONSOLE_APP" -g "$RG" \
+            --set-env-vars "LOOM_RISINGWAVE_URL=$FQDN:4566" "LOOM_RISINGWAVE_PASSWORD=secretref:loom-risingwave-password" -o none
+          echo "::notice::wired LOOM_MIGRATE_URL + LOOM_RISINGWAVE_URL + the LOOM_RISINGWAVE_PASSWORD secretRef — re-run gov-selfaudit to confirm svc-loom-migrate + svc-loom-risingwave."

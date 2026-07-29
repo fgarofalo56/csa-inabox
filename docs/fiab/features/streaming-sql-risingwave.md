@@ -105,11 +105,63 @@ not touch.
 
 To wire it by hand (an already-running estate, or the incremental Gov path in
 `.github/workflows/gov-provision-streaming-migrate.yml`): deploy
-`platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep`, then set
+`platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep` **with
+`risingwaveConfig.rootPasswordSecretUri`** (see Authentication below), then set
 `LOOM_RISINGWAVE_URL` on the Console app to the internal-ingress FQDN
-(optionally `host:port`). Optional: `LOOM_RISINGWAVE_DATABASE` (default `dev`),
-`LOOM_RISINGWAVE_USER` (default `root`), `LOOM_RISINGWAVE_PASSWORD` (a Key Vault
-secret; the single-node default is in-VNet trust).
+(optionally `host:port`) and `LOOM_RISINGWAVE_PASSWORD` as a Key-Vault-backed
+`secretref`. Optional: `LOOM_RISINGWAVE_DATABASE` (default `dev`),
+`LOOM_RISINGWAVE_USER` (default `root`).
+
+## Authentication — mandatory, and why a network rule was not enough
+
+RisingWave ships its `root` **superuser with no password**: with `AuthInfo`
+unset the frontend's `UserAuthenticator` is `None`, so anything that can open a
+TCP connection to port 4566 *is* root.
+
+On 2026-07-29 this module was deployed to the live Commercial estate and
+inspected. The container had env `[LOOM_LAKE_ACCOUNT]` and **zero secrets**, on
+`cae-csa-loom-centralus` — the same Container Apps environment as
+`loom-script-runner` and `loom-udf-runtime`, two services whose purpose is
+executing user-supplied code. It was removed from the estate the same day, and
+the `svc-loom-risingwave` gate went back to blocked, because "not shippable yet"
+was the honest status.
+
+Neither network-shaped fix closes it:
+
+| Candidate | Why it fails |
+|---|---|
+| ACA ingress IP rules (`ipSecurityRestrictions`, the `consoleAllowedCidrs` shape) | Every app in a Container Apps environment draws its pod IP from the **same infrastructure subnet**. Any CIDR that admits the Console also admits `loom-script-runner` and `loom-udf-runtime`. |
+| A dedicated Container Apps environment | Same problem one level up. Its infrastructure subnet is routable from the peer subnets in the VNet, and an NSG keyed on the Console's subnet again admits the code-execution apps, because they share it. |
+
+So the fix is a **credential the code-execution apps do not hold**:
+
+1. `admin-plane/main.bicep` derives an unpredictable password from
+   `loomGeneratedSecretSeed` (`newGuid()`) — the same construction the Airflow
+   admin password uses, never `guid(rg.id, <public-const>)`.
+2. `admin-plane/keyvault.bicep` writes it as the KV secret
+   `loom-risingwave-root-password` and grants **Key Vault Secrets User** to the
+   `loom-risingwave` UAMI. The Console already holds Key Vault Secrets Officer.
+   Nothing else in the environment is granted anything on that secret.
+3. Both apps bind it as a **Key-Vault-backed Container Apps secret** resolved by
+   their own managed identity at revision start — `LOOM_RW_ROOT_PASSWORD` on the
+   engine, `LOOM_RISINGWAVE_PASSWORD` on the Console. Neither is ever a plain
+   env literal, and the value never enters the template, the deployment history
+   or `az containerapp show`.
+4. `apps/loom-risingwave/scripts/entrypoint.sh` **fails closed**. With no
+   password it exits 1 before anything listens. With one it boots the engine
+   *sealed* — `single_node --listen-addr 127.0.0.1:4566`, so the wire port
+   exists only inside the container's own network namespace — applies
+   `ALTER USER root PASSWORD`, **verifies that an anonymous connection is now
+   rejected**, and only then re-execs bound to `0.0.0.0`. There is no window in
+   which a routable port answers without a password, not even to a pod IP.
+
+Re-applying the `ALTER USER` on every boot makes rotation free: change the Key
+Vault secret and roll both revisions.
+
+**Still open, disclosed:** ACA TCP ingress does not terminate TLS, so the
+connection itself is plaintext. The credential is not exposed by that — the
+handshake is a salted md5 challenge, not a cleartext password — but query text
+and results are. Frontend TLS plus `ssl` on the `pg` client is the follow-up.
 
 ## Getting the image into a sovereign ACR (GCC-High / IL5)
 

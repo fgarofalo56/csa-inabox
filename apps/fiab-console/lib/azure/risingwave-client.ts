@@ -81,15 +81,30 @@ export interface RisingWaveTarget {
   port: number;
   database: string;
   user: string;
-  /** Optional password (KV secret). RisingWave single-node default has none. */
+  /**
+   * Root credential, delivered as a Key-Vault-backed Container Apps secretRef.
+   * Upstream RisingWave leaves `root` password-less; a Loom-deployed engine
+   * never does (its entrypoint fails closed), so this is populated in practice.
+   * Typed optional for BYO endpoints only.
+   */
   password?: string;
 }
 
 /**
  * Resolve the RisingWave connection from env. `LOOM_RISINGWAVE_URL` accepts a
  * bare host, `host:port`, or a `postgres://user@host:port/db` URL. Database /
- * user default to RisingWave's single-node defaults (`dev` / `root`); a password
- * is used only when `LOOM_RISINGWAVE_PASSWORD` is set (in-VNet trust otherwise).
+ * user default to RisingWave's single-node defaults (`dev` / `root`).
+ *
+ * `LOOM_RISINGWAVE_PASSWORD` is the ROOT CREDENTIAL and is set by the deployment
+ * as a Key-Vault-backed Container Apps secretRef — never a plain env literal.
+ * The engine's entrypoint refuses to start without the matching secret, so on a
+ * Loom-deployed tier this is always present. It stays optional in this signature
+ * only so a BYO/legacy endpoint still connects; against a Loom-deployed engine an
+ * absent password now yields an authentication failure rather than a silent
+ * anonymous root session. "In-VNet trust" is explicitly NOT the posture: every
+ * app in a Container Apps environment draws its pod IP from the same
+ * infrastructure subnet, which put loom-script-runner and loom-udf-runtime — two
+ * services that execute user-supplied code — one TCP connect from root.
  * Throws the honest 503 when the URL is unset.
  */
 export function resolveRisingWaveTarget(): RisingWaveTarget {

@@ -22,6 +22,43 @@ statement is proxied through the audited `/api/streaming-sql/*` routes
 (`withSession`, gate-enveloped, `_auditLog` on every mutation). The container has
 **internal ingress** (`transport: tcp`); it is never public.
 
+## Authentication — mandatory, fail-closed
+
+Upstream RisingWave ships `root` as a **superuser with no password** (with
+`AuthInfo` unset the frontend's `UserAuthenticator` is `None`). Deployed that way
+to the live Commercial estate on 2026-07-29, this app had env
+`[LOOM_LAKE_ACCOUNT]` and **zero secrets**, on the same Container Apps
+environment as `loom-script-runner` and `loom-udf-runtime` — two services that
+execute user-supplied code. It was removed from the estate.
+
+A network rule cannot fix that: **every app in a Container Apps environment
+draws its pod IP from the same infrastructure subnet**, so an ACA
+`ipSecurityRestrictions` allow-list that admits the Console necessarily admits
+the code-execution apps, and a dedicated environment only moves the problem to
+the peer subnets. A credential can, because they do not hold it.
+
+`scripts/entrypoint.sh` is therefore the image ENTRYPOINT and:
+
+1. **exits 1** if `LOOM_RW_ROOT_PASSWORD` is empty — there is no unauthenticated
+   branch left in this image;
+2. boots the engine **sealed**, `single_node --listen-addr 127.0.0.1:4566`, so
+   during bootstrap the wire port exists only inside the container's network
+   namespace (upstream forwards `--listen-addr` straight to
+   `FrontendOpts.listen_addr`, `src/cmd_all/src/single_node.rs`);
+3. applies `ALTER USER root PASSWORD` and then **asserts the negative** — a
+   password-less connection must be rejected, or it kills the engine and exits;
+4. re-execs bound to `0.0.0.0` against the same `--store-directory`, whose
+   SQLite meta store now carries the credential.
+
+The password arrives as a **Key-Vault-backed Container Apps secretRef** resolved
+by the app's own managed identity (`risingwaveConfig.rootPasswordSecretUri`),
+never as a plain env literal. `postgresql-client` is installed for step 3 and
+the entrypoint refuses to start without it.
+
+Residual, disclosed: ACA TCP ingress does not terminate TLS. The credential is
+not exposed (md5 salted-challenge handshake), but statements and results are
+plaintext in-VNet.
+
 ## Identity & sovereignty
 
 The app carries a user-assigned managed identity (bicep grants it *Storage Blob
