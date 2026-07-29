@@ -23,24 +23,65 @@
 //   * INTERNAL ingress only (external:false). There is no public listener; the
 //     gateway is reachable only from inside the Container Apps environment's
 //     VNet (the Console BFF, the DuckDB tier, an in-VNet Trino/Spark).
+//   * DEDICATED LEAST-PRIVILEGE IDENTITY (round-2 fix). The container runs with
+//     TWO user-assigned identities: the caller-supplied `uamiId` is used ONLY as
+//     the ACR pull credential, and a UAMI **created by this module**
+//     (`uami-loom-s3gw-<location>`) is the one `AZURE_CLIENT_ID` selects for the
+//     storage data plane. The lake grant for that identity is **Storage Blob
+//     Data READER**, applied at the lake's own scope by the sibling
+//     `s3-gateway-lake-rbac.bicep` (which this module's `storageUamiPrincipalId`
+//     output feeds). Round 1 ran the proxy as the Console UAMI — an identity
+//     that also holds Storage Blob Data CONTRIBUTOR, Key Vault Secrets User,
+//     Network Contributor and AKS Cluster Admin — so compromising a Java proxy
+//     that parses attacker-influenced S3 signatures and XML yielded the whole
+//     Console token. `read-only-blobstore` is a proxy-layer control; it does not
+//     survive a container compromise. The IAM boundary does.
 //   * IDENTITY-BASED storage auth. `jclouds.provider=azureblob-sdk` with BOTH
 //     `jclouds.identity` and `jclouds.credential` EMPTY makes the backend build
-//     an Azure `DefaultAzureCredential`, which picks up the container's
-//     user-assigned managed identity via IMDS (`AZURE_CLIENT_ID`). **No storage
-//     account key, no SAS, no connection string anywhere.** `AZURE_AUTHORITY_HOST`
-//     is derived per cloud so the same template authenticates in Azure
-//     Government.
+//     an Azure `DefaultAzureCredential`. On Container Apps that resolves through
+//     the **IDENTITY_ENDPOINT / IDENTITY_HEADER** pair the platform injects (ACA
+//     does NOT expose the IMDS 169.254.169.254 endpoint — see the
+//     AcaManagedIdentityCredential incident note in docs/fiab/), selecting the
+//     identity named by `AZURE_CLIENT_ID`. **No storage account key, no SAS, no
+//     connection string anywhere.** `AZURE_AUTHORITY_HOST` is derived per cloud
+//     so the same template authenticates in Azure Government.
+//     UNVERIFIED-IN-PRODUCT: whether the Java azure-identity bundled in s3proxy
+//     3.3.0 resolves the ACA endpoint has NOT been proven by a live run. If it
+//     does not, /healthz stays green (it needs no storage) while every S3
+//     request 403s — so the deploy receipt MUST include a real GET, not a probe.
 //   * READ-ONLY BY DEFAULT (`s3proxy.read-only-blobstore=true`). The gateway
 //     exists so external engines can READ the governed lake; write verbs are
 //     refused by the proxy itself, which makes the posture structural rather
 //     than advisory. Flip `readOnly:false` in the config bag for an
-//     Iceberg-writer client.
+//     Iceberg-writer client — and note the IAM grant is READER, so a writer
+//     client also needs an explicit Contributor grant.
+//   * NO ANONYMOUS MODE (round-2 fix). S3 signature checking is ALWAYS on.
+//     Round 1 exposed an `authorization` key that accepted `'none'`, which was
+//     one config-bag typo away from an unauthenticated S3 face over the
+//     governed lake. The key now accepts only signed modes and anything else
+//     (including 'none') is COERCED to `aws-v2-or-v4`.
 //   * The S3 wire credential is NEVER the shipped default. The upstream image
 //     ships `S3PROXY_IDENTITY=local-identity` / `S3PROXY_CREDENTIAL=
 //     local-credential` — a publicly-known pair. This module ALWAYS overrides
-//     both with unpredictable, seed-derived values delivered as Container Apps
-//     **secrets** (never plain env), and mirrors them into the Loom Key Vault so
-//     an operator can hand them to a client without reading the container spec.
+//     both, delivered as Container Apps **secrets** (never plain env), and
+//     mirrors them into the Loom Key Vault (when `keyVaultId` is supplied) so an
+//     operator can hand them to a client without reading the container spec.
+//   * CREDENTIAL SOURCE — TWO MODES, BOTH DISCLOSED (round-2 fix).
+//       (a) `s3AccessKey`/`s3SecretKey` supplied: the orchestrator derives them
+//           from `loomGeneratedSecretSeed`, which is `newGuid()` in
+//           platform/fiab/bicep/main.bicep. UNPREDICTABLE — but it CHANGES ON
+//           EVERY FULL REDEPLOY, so any external S3 client (Trino, Spark, boto3)
+//           holding the old pair starts failing with SignatureDoesNotMatch until
+//           it re-reads `loom-s3-gateway-access-key` /
+//           `loom-s3-gateway-secret-key` from Key Vault. Round 1 shipped this
+//           mode and did not say so.
+//       (b) both EMPTY (the default, and what the dlz-attach pass uses): derived
+//           from this module's own dedicated storage identity's principal id.
+//           STABLE across redeploys — no silent client breakage — at the cost of
+//           being recomputable by a principal that already holds Reader on this
+//           resource group. The gateway is internal-ingress-only and the S3
+//           signature is a second factor on top of the VNet perimeter, so that
+//           is the right default; pick (a) where the RG has broad reader access.
 //   * Scale-to-zero. `minReplicas: 0` — an idle deployment runs no replica, so
 //     "on by default" is also free by default (see COST).
 //
@@ -72,9 +113,10 @@ param location string = resourceGroup().location
 
 Required keys:
   environmentId          Container Apps managed-environment resource id (in-VNet).
-  uamiId                 User-assigned managed identity RESOURCE id (ADLS data-plane access + Key Vault secretRef).
-  uamiClientId           That identity's CLIENT id — exported as AZURE_CLIENT_ID so
-                         DefaultAzureCredential targets it over IMDS.
+  uamiId                 User-assigned managed identity RESOURCE id used ONLY as the
+                         ACR pull credential (and Key Vault secretRef reader). The
+                         STORAGE data plane runs as this module's own dedicated
+                         least-privilege identity, NOT this one.
   lakeStorageAccountName ADLS Gen2 account the gateway fronts. S3 "buckets" map 1:1 to
                          its blob containers.
 
@@ -87,21 +129,22 @@ Optional keys:
                          public upstream image is pulled anonymously.
   targetPort             Internal HTTP ingress port (default 80 — the image's own).
   readOnly               Default TRUE — s3proxy refuses every write verb.
-  authorization          S3 signature mode (default 'aws-v2-or-v4'). 'none' disables
-                         S3 credential checking entirely (in-VNet trust); only pick it
-                         for a client that cannot sign.
+  authorization          S3 signature mode. Only signed modes are honoured
+                         ('aws-v2', 'aws-v4', 'aws-v2-or-v4'); ANY other value —
+                         including 'none' — is coerced to 'aws-v2-or-v4'. There is
+                         deliberately no way to reach an unauthenticated S3 face.
   minReplicas            Default 0 (scale-to-zero — see the COST block).
   maxReplicas            Default 3.
   cpu / memory           Container resources (default 0.5 vCPU / 1Gi).''')
 param s3GatewayConfig object
 
-@description('S3 wire access-key id ("identity"). UNPREDICTABLE — derived by the orchestrator from loomGeneratedSecretSeed (newGuid()). @secure() so it never lands in deployment output.')
+@description('S3 wire access-key id ("identity"). OPTIONAL. When supplied the orchestrator derives it from loomGeneratedSecretSeed (newGuid()) — unpredictable, but it ROTATES on every full redeploy. When EMPTY the module derives a stable value from its own dedicated storage identity\'s principal id, which survives redeploys but is recomputable by a principal holding Reader on this resource group. Pick per estate; both are documented in the SECURITY POSTURE block. @secure() so it never lands in deployment output.')
 @secure()
-param s3AccessKey string
+param s3AccessKey string = ''
 
-@description('S3 wire secret access key ("credential"). UNPREDICTABLE — derived by the orchestrator from loomGeneratedSecretSeed (newGuid()). @secure() so it never lands in deployment output.')
+@description('S3 wire secret access key ("credential"). Same optional/stable-vs-unpredictable trade as s3AccessKey. @secure() so it never lands in deployment output.')
 @secure()
-param s3SecretKey string
+param s3SecretKey string = ''
 
 @description('Loom Key Vault resource id. The S3 wire credential pair is mirrored there so an operator can hand it to a client without reading the container spec. Empty => no secrets are written.')
 param keyVaultId string = ''
@@ -118,14 +161,18 @@ param complianceTags object = {}
 // ── Config-bag unpacking (typed locals; every optional key has a real default) ─
 var environmentId = s3GatewayConfig.environmentId
 var uamiId = s3GatewayConfig.uamiId
-var uamiClientId = s3GatewayConfig.uamiClientId
 var lakeStorageAccountName = s3GatewayConfig.lakeStorageAccountName
 // Pinned upstream Apache-2.0 release tag — never :latest (supply-chain drift).
 var image = string(s3GatewayConfig.?image ?? 'docker.io/andrewgaul/s3proxy:3.3.0')
 var acrLoginServer = string(s3GatewayConfig.?acrLoginServer ?? '')
 var targetPort = int(s3GatewayConfig.?targetPort ?? 80)
 var readOnly = bool(s3GatewayConfig.?readOnly ?? true)
-var authorization = string(s3GatewayConfig.?authorization ?? 'aws-v2-or-v4')
+// SIGNED MODES ONLY. Anything else — notably 'none', which would disable S3
+// credential checking entirely and expose an unauthenticated face over the
+// governed lake — is coerced to the default. There is no config-bag path to an
+// anonymous gateway.
+var requestedAuthorization = string(s3GatewayConfig.?authorization ?? 'aws-v2-or-v4')
+var authorization = contains(['aws-v2', 'aws-v4', 'aws-v2-or-v4'], requestedAuthorization) ? requestedAuthorization : 'aws-v2-or-v4'
 var minReplicas = int(s3GatewayConfig.?minReplicas ?? 0)
 var maxReplicas = int(s3GatewayConfig.?maxReplicas ?? 3)
 var cpu = string(s3GatewayConfig.?cpu ?? '0.5')
@@ -139,6 +186,29 @@ var tags = union(complianceTags, { 'loom-band': 'data-plane', 'loom-item': 's3-g
 var blobEndpoint = 'https://${lakeStorageAccountName}.blob.${environment().suffixes.storage}'
 var authorityHost = environment().authentication.loginEndpoint
 
+// ── Dedicated least-privilege storage identity ───────────────────────────────
+// The proxy parses attacker-influenced S3 signatures and XML. It must NOT hold
+// the Console UAMI's token. This identity is granted ONLY Storage Blob Data
+// Reader on the lake, by s3-gateway-lake-rbac.bicep at the lake's own scope
+// (which may be a different RG — and, on a dlz-attach estate, a different
+// SUBSCRIPTION — from this module's).
+resource storageIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: 'uami-loom-s3gw-${location}'
+  location: location
+  tags: tags
+}
+
+// Effective S3 wire credential. Orchestrator-supplied (unpredictable, rotates)
+// wins; otherwise a value derived from the dedicated identity's principal id,
+// which is STABLE across redeploys — so an external S3 client (Trino, Spark,
+// boto3) does not start failing with SignatureDoesNotMatch after a routine
+// redeploy. Either way it is never the image's shipped local-identity /
+// local-credential pair, and it is delivered as a Container Apps SECRET.
+var derivedAccessKey = 'loom${uniqueString(storageIdentity.properties.principalId, 'loom-s3-gw-id-v1')}'
+var derivedSecretKey = 'S3g${uniqueString(storageIdentity.properties.principalId, 'loom-s3-gw-key-v1')}${uniqueString(storageIdentity.properties.principalId, 'loom-s3-gw-key-v2')}'
+var effAccessKey = empty(s3AccessKey) ? derivedAccessKey : s3AccessKey
+var effSecretKey = empty(s3SecretKey) ? derivedSecretKey : s3SecretKey
+
 resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
   name: name
   location: location
@@ -146,7 +216,11 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
+      // ACR pull credential (and Key Vault secretRef reader) only.
       '${uamiId}': {}
+      // The STORAGE data-plane identity AZURE_CLIENT_ID selects below. Reader
+      // on the lake, nothing else.
+      '${storageIdentity.id}': {}
     }
   }
   properties: {
@@ -166,8 +240,8 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
       }
       // The S3 wire credential never appears as a plain env value.
       secrets: [
-        { name: 's3-access-key', value: s3AccessKey }
-        { name: 's3-secret-key', value: s3SecretKey }
+        { name: 's3-access-key', value: effAccessKey }
+        { name: 's3-secret-key', value: effSecretKey }
       ]
       // Only when the image was mirrored into the Loom ACR — the public
       // upstream image needs no registry credential (and admin-enabled
@@ -199,8 +273,11 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
             { name: 'JCLOUDS_IDENTITY', value: '' }
             { name: 'JCLOUDS_CREDENTIAL', value: '' }
             { name: 'JCLOUDS_ENDPOINT', value: blobEndpoint }
-            // Target the user-assigned identity + the correct sovereign authority.
-            { name: 'AZURE_CLIENT_ID', value: uamiClientId }
+            // Target the DEDICATED least-privilege identity (Storage Blob Data
+            // Reader on the lake, nothing else) + the correct sovereign
+            // authority. On Container Apps DefaultAzureCredential resolves this
+            // through IDENTITY_ENDPOINT/IDENTITY_HEADER, not IMDS.
+            { name: 'AZURE_CLIENT_ID', value: storageIdentity.properties.clientId }
             { name: 'AZURE_AUTHORITY_HOST', value: authorityHost }
           ]
           resources: {
@@ -252,7 +329,7 @@ resource accessKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' 
   parent: keyVault
   name: accessKeySecretName
   properties: {
-    value: s3AccessKey
+    value: effAccessKey
     contentType: 's3-gateway-access-key-id'
     attributes: { enabled: true }
   }
@@ -262,7 +339,7 @@ resource secretKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' 
   parent: keyVault
   name: secretKeySecretName
   properties: {
-    value: s3SecretKey
+    value: effSecretKey
     contentType: 's3-gateway-secret-access-key'
     attributes: { enabled: true }
   }
@@ -277,7 +354,19 @@ output internalEndpoint string = 'https://${app.properties.configuration.ingress
 @description('Container App resource id.')
 output appId string = app.id
 
-@description('TRUE — identity-based ADLS access only (DefaultAzureCredential over IMDS); no storage key/SAS/connection string is present anywhere in this deployment. Emitted so the deploy receipt can assert the posture.')
+@description('PRINCIPAL (object) id of the dedicated storage identity. Feed this to s3-gateway-lake-rbac.bicep AT THE LAKE\'S OWN SCOPE (its RG, and on a dlz-attach estate its SUBSCRIPTION) to grant Storage Blob Data Reader. The gateway serves 403s until that grant exists — which is the correct fail-closed order.')
+output storageUamiPrincipalId string = storageIdentity.properties.principalId
+
+@description('CLIENT id of the dedicated storage identity (what AZURE_CLIENT_ID selects).')
+output storageUamiClientId string = storageIdentity.properties.clientId
+
+@description('Resource id of the dedicated storage identity.')
+output storageUamiId string = storageIdentity.id
+
+@description('S3 signature mode actually applied. Always a SIGNED mode — an anonymous gateway is unreachable through the config bag.')
+output authorizationMode string = authorization
+
+@description('TRUE — identity-based ADLS access only (DefaultAzureCredential over the Container Apps identity endpoint, as a DEDICATED Storage-Blob-Data-Reader UAMI); no storage key/SAS/connection string is present anywhere in this deployment. Emitted so the deploy receipt can assert the posture.')
 output identityBasedStorageAuth bool = true
 
 @description('TRUE when the proxy refuses every write verb (s3proxy.read-only-blobstore).')

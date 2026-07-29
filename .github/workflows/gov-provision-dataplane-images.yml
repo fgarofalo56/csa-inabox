@@ -1,0 +1,204 @@
+name: gov-provision-dataplane-images
+# CSA Loom — GOV IMAGE PRODUCER for the N2/N8 data-plane services.
+#
+# WHY THIS EXISTS (round-2 fix, PR #2640). `admin-plane/main.bicep` now deploys
+# two data-plane workloads BY DEFAULT in every cloud:
+#   * loom-duckdb  — the DuckDB serving tier + Arrow Flight SQL wire, and the
+#                    engine that runs DuckLake's `ATTACH 'ducklake:postgres:…'`.
+#                    Backs LOOM_DUCKDB_URL / LOOM_FLIGHTSQL_URL.
+#   * loom-s3-gateway — Apache-2.0 s3proxy in front of the deployment's ADLS.
+#                    Backs LOOM_S3_GATEWAY_URL; the image is the pinned upstream
+#                    `docker.io/andrewgaul/s3proxy:3.3.0`, MIRRORED into the Gov
+#                    ACR so a locked-egress sovereign CAE needs no docker.io.
+#
+# Commercial gets both from full-app-deploy-commercial.yml (build matrix +
+# `mirror-upstream` job). GOV HAD NEITHER — deploy-gov.yml contains no
+# `az acr build` at all, gov-console-roll.yml builds only loom-console, and the
+# per-service gov-provision-*.yml jobs each cover one app. Without this workflow
+# a Gov deploy creates Container Apps pointing at images nobody produces, which
+# is the exact failure `.claude/rules/no-vaporware.md` documents and which has
+# already bitten this repo twice.
+#
+# Covers BOTH Gov boundaries. `boundary` picks the RG/ACR pair; the GCC-High
+# defaults match the live estate, and IL5 coordinates are supplied as inputs
+# (there is no standing IL5 estate to hard-code, and hard-coding a wrong one is
+# worse than requiring the operator to name it). A what-if preview runs first
+# and the apply NEVER touches other resources. Idempotent + safe to re-run.
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Sovereign boundary to target.'
+        type: choice
+        options: [gcc-high, il5]
+        default: gcc-high
+      apply:
+        description: 'false = discovery + what-if preview only (safe); true = build/import + deploy + wire.'
+        required: false
+        default: 'false'
+      resource_group:
+        description: 'Admin-plane RG. Blank = the gcc-high default (rg-csa-loom-admin-usgovvirginia). REQUIRED for il5.'
+        required: false
+        default: ''
+      acr:
+        description: 'ACR NAME (not login server). Blank = discovered from the admin RG.'
+        required: false
+        default: ''
+      image_tag:
+        description: 'Tag to stamp on loom-duckdb (default: the short SHA of this ref).'
+        required: false
+        default: ''
+permissions:
+  contents: read
+env:
+  APP: loom-console
+  # Pinned upstream Apache-2.0 tag — never :latest. Registered in
+  # THIRD_PARTY_LICENSES.md under "Container-baked engines".
+  S3PROXY_SRC: docker.io/andrewgaul/s3proxy:3.3.0
+jobs:
+  provision:
+    name: Produce loom-duckdb + s3proxy images in the ${{ inputs.boundary }} ACR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve boundary coordinates (RG / ACR / CAE / UAMI / location)
+        run: |
+          set -euo pipefail
+          RG="${{ inputs.resource_group }}"
+          if [ -z "$RG" ]; then
+            if [ "${{ inputs.boundary }}" = "gcc-high" ]; then
+              RG="rg-csa-loom-admin-usgovvirginia"
+            else
+              echo "::error::boundary=il5 requires an explicit resource_group input — there is no safe default."
+              exit 1
+            fi
+          fi
+          ACR="${{ inputs.acr }}"
+          if [ -z "$ACR" ]; then
+            ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv | tr -d '\r')
+          fi
+          [ -n "$ACR" ] || { echo "::error::no ACR found in $RG — pass the acr input."; exit 1; }
+          ACR_LOGIN=$(az acr show -n "$ACR" --query loginServer -o tsv | tr -d '\r')
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          UAMI_PRINCIPAL=$(az identity show --ids "$UAMI_ID" --query principalId -o tsv | tr -d '\r')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          TAG="${{ inputs.image_tag }}"
+          [ -n "$TAG" ] || TAG=$(git rev-parse --short=8 HEAD)
+          {
+            echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"; echo "CAE_ID=$CAE_ID"
+            echo "UAMI_ID=$UAMI_ID"; echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"
+            echo "LOCATION=$LOCATION"; echo "TAG=$TAG"
+          } >> "$GITHUB_ENV"
+          echo "::notice::RG=$RG ACR=$ACR CAE=$CAE_ID location=$LOCATION tag=$TAG"
+          [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI — is loom-console deployed in $RG?"; exit 1; }
+
+      - name: Build loom-duckdb on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          # #2603: lease the ACR firewall instead of a bare toggle, so this
+          # step's re-lock cannot deny another run's in-flight push.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-duckdb:$TAG" --image "loom-duckdb:latest" \
+            apps/loom-duckdb
+
+      - name: Mirror s3proxy (Apache-2.0) into the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          # `az acr import` is a server-side registry copy, so the sovereign CAE
+          # never needs docker.io egress at pull time. NOT cosign-signed: this is
+          # an unmodified third-party artifact, not a Loom-built image — the
+          # digest below is the provenance record.
+          for attempt in 1 2 3; do
+            if az acr import --name "$ACR" --source "$S3PROXY_SRC" --image "s3proxy:3.3.0" --force -o none; then
+              echo "✓ imported $S3PROXY_SRC -> $ACR/s3proxy:3.3.0"
+              az acr repository show --name "$ACR" --image "s3proxy:3.3.0" --query '{digest:digest,created:createdTime}' -o json || true
+              break
+            fi
+            echo "::warning::s3proxy import attempt $attempt failed — retrying"; sleep 20
+            [ "$attempt" = "3" ] && { echo "::error::s3proxy import failed — svc-s3-gateway cannot come up without it"; exit 1; }
+          done
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${ACR:-}" || true
+
+      - name: What-if the loom-duckdb Container App (never touches other resources)
+        run: |
+          set -euo pipefail
+          CFG=$(cat <<JSON
+          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID","uamiPrincipalId":"$UAMI_PRINCIPAL",
+           "acrLoginServer":"$ACR_LOGIN","image":"$ACR_LOGIN/loom-duckdb:$TAG",
+           "lakeStorageAccountName":"","assignLakeRole":false,
+           "minReplicas":0,"cpu":"1.0","memory":"2Gi"}
+          JSON
+          )
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep \
+            -p location="$LOCATION" duckdbConfig="$CFG" \
+               complianceTags='{"env":"gov","boundary":"'"${{ inputs.boundary }}"'","app":"loom-duckdb"}' \
+            --mode Incremental 2>&1 | tee whatif.txt || true
+          echo "::notice::what-if above — apply only creates/updates loom-duckdb."
+
+      - name: Deploy loom-duckdb Container App (Incremental)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          CFG=$(cat <<JSON
+          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID","uamiPrincipalId":"$UAMI_PRINCIPAL",
+           "acrLoginServer":"$ACR_LOGIN","image":"$ACR_LOGIN/loom-duckdb:$TAG",
+           "lakeStorageAccountName":"","assignLakeRole":false,
+           "minReplicas":0,"cpu":"1.0","memory":"2Gi"}
+          JSON
+          )
+          az deployment group create -g "$RG" \
+            -n "loom-duckdb-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep \
+            -p location="$LOCATION" duckdbConfig="$CFG" \
+               complianceTags='{"env":"gov","boundary":"'"${{ inputs.boundary }}"'","app":"loom-duckdb"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n loom-duckdb -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "DUCKDB_URL=https://$FQDN" >> "$GITHUB_ENV"
+          echo "::notice::loom-duckdb endpoint: https://$FQDN"
+
+      - name: Wire LOOM_DUCKDB_URL + LOOM_FLIGHTSQL_URL on the console
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          [ -n "${DUCKDB_URL:-}" ] || { echo "::error::no DuckDB URL"; exit 1; }
+          HOST="${DUCKDB_URL#https://}"
+          az containerapp update -n "$APP" -g "$RG" \
+            --set-env-vars "LOOM_DUCKDB_URL=$DUCKDB_URL" "LOOM_FLIGHTSQL_URL=grpc://$HOST:8815" -o none
+          echo "::notice::svc-loom-duckdb wired — svc-ducklake-catalog can now run its ATTACH. Re-run gov-selfaudit to confirm."
+
+      - name: Report what still needs the subscription-scoped deploy
+        run: |
+          echo "::notice::s3proxy is now in the Gov ACR as $ACR_LOGIN/s3proxy:3.3.0."
+          echo "::notice::svc-s3-gateway itself is deployed by the TEMPLATE, not this workflow —"
+          echo "::notice::admin-plane/main.bicep (single-sub) or main.bicep's dlzAttachS3Gateway (tenant + dlz-attach)."
+          echo "::notice::This job only guarantees the image exists so that deploy can actually pull it."

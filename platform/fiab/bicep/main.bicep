@@ -1866,6 +1866,84 @@ module dlzAttachHubPeering 'modules/landing-zone/hub-side-peering.bicep' = if (t
   }
 }
 
+// =====================================================================
+// N8 lab 3 — S3-compatible ADLS gateway on the dlz-attach pass.
+//
+// ROUND-2 BLOCKER FIX. `admin-plane/main.bicep` only deploys the gateway when
+// `loomStorageAccount` is non-empty, and main.bicep leaves that EMPTY on every
+// shipped bicepparam (all five set topology='tenant', so deployLandingZones is
+// false and no DLZ exists at admin-plane time). The result was that
+// `svc-s3-gateway` never fired on ANY documented push-button path — the module
+// was reachable only from the single-sub dev topology.
+//
+// A lake first exists on the dlz-attach pass, which is exactly where the hub
+// console's LOOM_ADLS_ACCOUNT is patched (dlzAttachHubConsoleEnv below). The
+// gateway therefore belongs here too: it is deployed INTO THE HUB (the CAE and
+// the console live there) fronting the freshly-attached DLZ lake, and its URL
+// rides the same additive console env update. That is IaC, not out-of-band
+// drift — the Container App is a template resource, not an `az containerapp
+// create`.
+//
+// IDENTITY: the module creates its own least-privilege `uami-loom-s3gw-<loc>`
+// in the hub RG; `dlzAttachS3GatewayRbac` below grants THAT identity Storage
+// Blob Data Reader on the attached lake, at the lake's own RG scope in the DLZ
+// subscription (verified on the live estate: the console runs in the DMLZ sub
+// while `saloomdefault…` lives in the DLZ sub — a same-sub grant would fail).
+// The hub Console UAMI is passed in ONLY as the ACR pull credential.
+//
+// IMAGE: `<hub-acr>/s3proxy:3.3.0` when the hub ACR coordinate is available
+// (mirrored there by `az acr import` in each cloud's image producer), else the
+// pinned public upstream tag. A locked-egress sovereign estate MUST supply
+// `hubCoordinates.acrLoginServer` (the tenant deploy's topologyManifest now
+// emits it) so no docker.io egress is required.
+// =====================================================================
+var dlzAttachHubAcrLoginServer = string(hubCoordinates.?acrLoginServer ?? '')
+var dlzAttachHubCaeId = !empty(string(hubCoordinates.?caeId ?? ''))
+  ? string(hubCoordinates.caeId)
+  : resourceId(effHubSubscriptionId, adminPlaneRgName, 'Microsoft.App/managedEnvironments', 'cae-csa-loom-${location}')
+
+// S3 wire credential: NOT passed. The module derives a STABLE value from its
+// own dedicated storage identity's principal id, so a redeploy does not silently
+// break every external S3 client with SignatureDoesNotMatch. The seed-derived
+// (unpredictable but rotating) alternative and its trade-off are documented in
+// the module's SECURITY POSTURE block; `loomGeneratedSecretSeed` is not in scope
+// here in any case (it is an admin-plane param, and dlz-attach skips that
+// module entirely).
+
+module dlzAttachS3Gateway 'modules/data-plane/s3-gateway-aca.bicep' = if (topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami) {
+  name: 'dlz-attach-s3-gateway-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    location: location
+    s3GatewayConfig: {
+      environmentId: dlzAttachHubCaeId
+      // ACR pull credential ONLY — storage runs as the module's own identity.
+      uamiId: effHubConsoleUamiId
+      lakeStorageAccountName: dlzAttach!.outputs.storageAccountName
+      image: empty(dlzAttachHubAcrLoginServer) ? 'docker.io/andrewgaul/s3proxy:3.3.0' : '${dlzAttachHubAcrLoginServer}/s3proxy:3.3.0'
+      acrLoginServer: dlzAttachHubAcrLoginServer
+    }
+    // The hub Key Vault is not addressable from here (its name is uniqueString-
+    // derived over the hub RG). The wire credential is still delivered as ACA
+    // secrets; an operator reads it from the container spec's secret refs or
+    // re-runs the tenant deploy to mirror it into Key Vault. Disclosed rather
+    // than faked with a guessed vault name.
+    keyVaultId: ''
+    complianceTags: complianceTags
+  }
+}
+
+// Least-privilege lake grant, at the ATTACHED lake's own RG scope (this
+// deployment's subscription IS the DLZ subscription in dlz-attach).
+module dlzAttachS3GatewayRbac 'modules/data-plane/s3-gateway-lake-rbac.bicep' = if (topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami) {
+  name: 'dlz-attach-s3-gateway-rbac-${attachDomainName}'
+  scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
+  params: {
+    storageAccountName: dlzAttach!.outputs.storageAccountName
+    principalId: dlzAttachS3Gateway!.outputs.storageUamiPrincipalId
+  }
+}
+
 // BUG 2 FIX — dlz-attach: wire the hub console's DLZ data-plane env vars
 // (LOOM_ADLS_ACCOUNT / LOOM_LANDING_URL / LOOM_BRONZE_URL / LOOM_SILVER_URL /
 // LOOM_GOLD_URL / LOOM_SYNAPSE_WORKSPACE) onto the ALREADY-DEPLOYED hub console.
@@ -1917,6 +1995,11 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     // (service disabled) => the var is skipped and the editor honest-gates.
     dlzServiceBusNamespace: dlzAttach!.outputs.serviceBusNamespaceName
     dlzEventGridTopic: dlzAttach!.outputs.eventGridTopicName
+    // N8 lab 3 — the S3 gateway deployed just above fronts THIS DLZ's lake, so
+    // its internal endpoint rides the same additive console env update that
+    // carries LOOM_ADLS_ACCOUNT. Without this the app would run and the Console
+    // would still honest-gate on LOOM_S3_GATEWAY_URL.
+    dlzS3GatewayUrl: dlzAttachS3Gateway!.outputs.internalEndpoint
     complianceTags: complianceTags
   }
 }
@@ -2485,6 +2568,12 @@ output topologyManifest object = {
     activatorPrincipalId: hub.activatorPrincipalId
     catalogEndpoint: hub.catalogEndpoint
     aiServicesAccountName: hub.aiServicesAccountName
+    // N8 lab 3 — coordinates the dlz-attach pass needs to stand the S3 gateway
+    // up in the hub CAE with an ACR-mirrored (no-docker.io-egress) image. Empty
+    // on a dlz-attach echo; the gateway then falls back to the pinned public
+    // upstream tag and the deterministic `cae-csa-loom-<location>` name.
+    acrLoginServer: deployAdminPlane ? adminPlane!.outputs.acrLoginServer : string(hubCoordinates.?acrLoginServer ?? '')
+    caeId: deployAdminPlane ? adminPlane!.outputs.caeId : string(hubCoordinates.?caeId ?? '')
   }
   consoleUrl: deployAdminPlane ? adminPlane!.outputs.consoleUrl : string(hubCoordinates.?consoleUrl ?? '')
   // Domain landing zones this deployment provisioned.

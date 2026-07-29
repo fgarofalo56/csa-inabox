@@ -162,13 +162,27 @@ param appImageTags = {
   wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
 }
 
-// Azure Database for PostgreSQL Flexible Server is quota-restricted in
-// usgovvirginia ("Subscriptions are restricted from provisioning in location
-// 'usgovvirginia'"), which blocks the OSS Airflow metadata DB. Skip the
-// Postgres-backed Airflow host so the core app-tier deploys; the airflow-job
-// editor honest-gates until the operator requests a quota increase
-// (https://aka.ms/postgres-request-quota-increase) and flips this true.
-param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
+// Azure Database for PostgreSQL Flexible Server IS available in Azure
+// Government — Microsoft Learn lists US Gov Virginia, US Gov Arizona and US Gov
+// Texas as supported regions (Intel v3/v4 compute; US Gov Virginia additionally
+// carries zone-redundant HA and geo-redundant backup):
+//   https://learn.microsoft.com/azure/postgresql/overview#azure-regions
+//   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure#databases
+// So this is NOT a sovereign service gap. It defaults TRUE (round-2 fix):
+// `loom_default_on_opt_out` is a BLOCKING repo rule, and a `false` default made
+// the Postgres-backed services (OSS Airflow metadata DB, and now the N8 DuckLake
+// catalog store) opt-IN in the one boundary Loom actually runs in — nothing in
+// .github/, scripts/ or platform/ ever set LOOM_POSTGRES_QUOTA_AVAILABLE=true,
+// so they were dead in GCC-High by default.
+//
+// It stays a PARAMETER because the restriction that does bite is a SUBSCRIPTION
+// quota state ("Subscriptions are restricted from provisioning in location
+// 'usgovvirginia'"), not a regional one. An estate that hits it sets
+// LOOM_POSTGRES_QUOTA_AVAILABLE=false to skip the Postgres-backed hosts while
+// the rest of the app tier deploys, requests the increase
+// (https://aka.ms/postgres-request-quota-increase), and unsets it. That is a
+// DISABLE toggle, not an enablement gate.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'true'))
 
 // MSAL — Gov tenant client id+secret via env (don't commit)
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')

@@ -16,7 +16,9 @@
  * Crucially, most deployments need NO gateway: N1's Iceberg REST Catalog
  * (`LOOM_ICEBERG_CATALOG_URL`) plus the native abfss:// path already give
  * external engines governed, audited access to the same data. This client is a
- * thin, HONEST config surface: unset (apps tier off) → {@link s3GatewayInfo}
+ * thin, HONEST config surface: unset (apps tier off, an AKS boundary, or — the
+ * case that actually fires on a first tenant-topology install — no lake account
+ * bound yet, which the dlz-attach pass resolves) → {@link s3GatewayInfo}
  * reports the gate and points at the IRC/ADLS path; set → it returns the real
  * endpoint + connect snippets built from the configured value. It never
  * fabricates a live gateway.

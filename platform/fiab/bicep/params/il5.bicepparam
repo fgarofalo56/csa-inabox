@@ -178,6 +178,20 @@ param aiFoundryEnabled = false
 // (prompts pass unfiltered, never a silent claim of filtering).
 param contentSafetyEnabled = false
 param apimEnabled = true
+
+// Postgres-backed day-one services (OSS Airflow metadata DB + the N8 DuckLake
+// catalog store). Azure Database for PostgreSQL Flexible Server IS an Azure
+// Government service — Microsoft Learn lists US Gov Virginia / Arizona / Texas
+// as supported regions (https://learn.microsoft.com/azure/postgresql/overview#azure-regions),
+// and the Gov comparison page records NO Flexible Server feature gaps beyond
+// Cosmos DB for PostgreSQL and Single Server extras
+// (https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure#databases).
+// Stated EXPLICITLY here (round-2 fix) so the IL5 posture is a deliberate,
+// reviewable decision rather than an inherited default: ON, opt-out only.
+// An estate whose subscription is quota-restricted from provisioning
+// Microsoft.DBforPostgreSQL/flexibleServers sets LOOM_POSTGRES_QUOTA_AVAILABLE=false
+// to skip those two hosts while the rest of the app tier deploys.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'true'))
 param hubFirewallEnabled = true
 param aiSearchEnabled = false
 // Azure Analysis Services is NOT available in the DoD regions — pin OFF (main.bicep
