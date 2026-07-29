@@ -72,7 +72,10 @@ export function decidePrincipalProbe(
       'securable.',
     remediation:
       'Query your own account (your UPN or object id), or ask a tenant admin to run the review. ' +
-      'Tenant admins are LOOM_TENANT_ADMIN_OID / members of LOOM_TENANT_ADMIN_GROUP_ID; access can ' +
-      'also be granted at /admin/permissions.',
+      'Tenant-admin standing is read from your Entra token ONLY: membership of a group in ' +
+      'LOOM_TENANT_ADMIN_GROUP_ID, or an object id matching LOOM_TENANT_ADMIN_OID ' +
+      '(lib/auth/feature-gate.ts isTenantAdmin). A feature grant at /admin/permissions does NOT ' +
+      'confer it — that table is not consulted by this check — so ask an administrator to add you ' +
+      'to the tenant-admin group instead.',
   };
 }

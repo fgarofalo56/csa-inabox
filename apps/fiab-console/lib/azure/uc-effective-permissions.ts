@@ -64,10 +64,22 @@
  *     (a ∈ b, b ∈ c, c ∈ a — which Entra forbids but a Loom-native or SCIM-fed
  *     group source can still produce) terminates instead of hanging the BFF.
  *
- *  6. **The privilege vocabulary is backend-narrowed.** The OSS Unity Catalog
- *     0.5 server implements neither `MANAGE` nor `BROWSE` nor `APPLY TAG`, so on
- *     that backend the answer must not claim them — pass `{ oss: true }` and the
- *     resolver uses {@link ucPrivilegesFor}`(type, { oss: true })` throughout.
+ *  6. **The privilege vocabulary is backend-narrowed, unconditionally.** The OSS
+ *     Unity Catalog 0.5 server implements neither `MANAGE` nor `BROWSE` nor
+ *     `APPLY TAG`, so on that backend the answer must not claim them — pass
+ *     `{ oss: true }` and the resolver uses {@link ucPrivilegesFor}`(type,
+ *     { oss: true })` throughout. The filter applies to a grant recorded
+ *     DIRECTLY on the target exactly as it does to an inherited one: the
+ *     invariant "every privilege this module can ever report is offerable on
+ *     that backend" only holds if there is no distance-0 exemption.
+ *
+ *  7. **A negative is only stated when it was verified.** A usage prerequisite
+ *     is reported `missing` only when the principal's transitive group closure
+ *     was actually resolved, OR when nobody at all holds that prerequisite (so
+ *     no membership could supply it). In the unfiltered enumeration — where no
+ *     closure exists for anybody — a prerequisite some OTHER principal holds is
+ *     reported `unknown`, never `missing`. Same rule when Microsoft Graph is
+ *     unavailable and the "closure" collapses to `[principal]`.
  *
  * Privilege spellings are normalized to the underscore form the Loom UI uses
  * (`USE_CATALOG`); the OSS server spells the same privilege `USE CATALOG`.
@@ -392,11 +404,35 @@ export interface ResolveEffectiveOptions {
   /** Narrow the privilege vocabulary to what the OSS Unity Catalog server
    *  implements, so a Gov answer never claims BROWSE / MANAGE / APPLY_TAG. */
   oss?: boolean;
-  /** Called for each ancestor privilege the target type cannot express, so the
-   *  caller can decide whether that is expected (CREATE_SCHEMA on a table) or
-   *  worth a warning (an unmodeled privilege spelling). */
-  onNotApplicable?: (privilege: string, from: UcSecurableRef) => void;
+  /**
+   * Whether the queried principal's transitive group closure was ACTUALLY
+   * resolved from the directory. Only then does this module know every name the
+   * principal answers to, and only then may it state categorically that a usage
+   * prerequisite is `missing` rather than `unknown` (see {@link evaluateUsage}).
+   *
+   * Defaults to "a closure was supplied" when filtering, and to `false` in the
+   * UNFILTERED enumeration — where no closure is resolved for anybody, so a
+   * prerequisite another principal (possibly a group the row's principal is in)
+   * holds can only be reported as `unknown`.
+   */
+  closureResolved?: boolean;
+  /**
+   * Called for each granted privilege that is dropped from the answer, with the
+   * reason:
+   *   `not-applicable`      — the target type cannot express it (CREATE_SCHEMA
+   *                           on a table). Expected narrowing, unless the
+   *                           spelling is one Loom does not model at all.
+   *   `backend-unsupported` — Loom models it, and the target type accepts it,
+   *                           but the CURRENT backend's vocabulary does not
+   *                           implement it (MANAGE/BROWSE/APPLY_TAG on OSS).
+   *                           The backend handed us a grant it cannot enforce;
+   *                           always worth telling the operator.
+   */
+  onNotApplicable?: (privilege: string, from: UcSecurableRef, reason: UcDropReason) => void;
 }
+
+/** Why {@link resolveEffectivePermissions} dropped a granted privilege. */
+export type UcDropReason = 'not-applicable' | 'backend-unsupported';
 
 /**
  * How "close" a privilege's provenance is. Lower wins when the same principal
@@ -441,6 +477,7 @@ function usagePrerequisiteRefs(chain: UcSecurableNode[]): Array<{ privilege: 'US
  *  asks about the ANCESTOR's own vocabulary rather than the target's. */
 function privilegesAt(node: UcSecurableNode, principals: Set<string> | null, oss: boolean): Map<string, { via?: string }> {
   const held = new Map<string, { via?: string }>();
+  const offerable = new Set(ucPrivilegesFor(node.type, { oss }));
   for (const a of node.assignments || []) {
     const grantee = (a.principal || '').trim();
     if (!grantee) continue;
@@ -449,17 +486,62 @@ function privilegesAt(node: UcSecurableNode, principals: Set<string> | null, oss
       const p = normalizeUcPrivilege(typeof raw === 'string' ? raw : String((raw as { privilege?: unknown })?.privilege ?? ''));
       if (!p) continue;
       const names = p === UC_ALL_PRIVILEGES ? expandAllPrivileges(node.type, { oss }) : [p];
-      for (const n of names) if (!held.has(n)) held.set(n, { via: grantee });
+      // Same unconditional backend/type narrowing the main walk applies, so a
+      // recorded grant this backend cannot enforce can never count as held.
+      // DEFENCE IN DEPTH ONLY: today this probe is asked exclusively about
+      // USE_CATALOG at a CATALOG node and USE_SCHEMA at a SCHEMA/CATALOG node,
+      // and both are in every backend's vocabulary at those types — so removing
+      // this filter changes no current behaviour and NO test can be made to fail
+      // on it. It is here so the invariant survives a new usage prerequisite or
+      // a vocabulary change, not because a live path needs it.
+      for (const n of names) if (offerable.has(n) && !held.has(n)) held.set(n, { via: grantee });
     }
   }
   return held;
 }
 
 /**
+ * Could ANY principal — one we have not enumerated — confer `ref.privilege` on
+ * this principal? True when the anchoring node or one of its ancestors carries
+ * an owner, or a grant of that privilege, held by *somebody*.
+ *
+ * This is the soundness test for a NEGATIVE verdict when the queried
+ * principal's group closure is unknown. If nobody at all holds the prerequisite
+ * here, then no group membership could supply it either and `missing` is a fact.
+ * If somebody does hold it, that somebody might BE a group the principal
+ * belongs to, and the only honest answer is `unknown`.
+ */
+function someoneElseCouldConfer(chain: UcSecurableNode[], ref: { privilege: 'USE_CATALOG' | 'USE_SCHEMA'; nodeIndex: number }, oss: boolean): boolean {
+  for (let i = ref.nodeIndex; i < chain.length; i++) {
+    const node = chain[i];
+    if (!node.ownerUnreadable && (node.owner || '').trim()) return true;
+    if (node.unreadable) continue;
+    if (i > ref.nodeIndex && !ucPrivilegesFor(node.type, { oss }).includes(ref.privilege)) continue;
+    if (privilegesAt(node, null, oss).has(ref.privilege)) return true;
+  }
+  return false;
+}
+
+/**
  * Evaluate the usage prerequisites for one principal (identified by the set of
  * names it answers to — itself plus its group closure).
+ *
+ * @param membershipKnown whether `principals` is the COMPLETE set of names this
+ *   principal answers to (i.e. its transitive group closure was actually
+ *   resolved). When it is not — the unfiltered Grants view, or a filtered view
+ *   with Microsoft Graph unavailable — this function may not state that a
+ *   prerequisite is `missing` unless that negative is sound regardless of
+ *   membership (nobody holds it at all). Asserting `missing` off an
+ *   unenumerated closure is how the pane came to render a red
+ *   "SELECT (BLOCKED — needs USE_CATALOG …)" for a principal that could in fact
+ *   read the table because a GROUP held the usage grant.
  */
-function evaluateUsage(chain: UcSecurableNode[], principals: Set<string> | null, oss: boolean): UcUsagePrerequisite[] {
+function evaluateUsage(
+  chain: UcSecurableNode[],
+  principals: Set<string> | null,
+  oss: boolean,
+  membershipKnown: boolean,
+): UcUsagePrerequisite[] {
   return usagePrerequisiteRefs(chain).map((ref) => {
     const base: UcUsagePrerequisite = {
       privilege: ref.privilege, securable_type: ref.type, securable_name: ref.name, status: 'unknown',
@@ -486,7 +568,12 @@ function evaluateUsage(chain: UcSecurableNode[], principals: Set<string> | null,
       const hit = held.get(ref.privilege);
       if (hit) return { ...base, status: 'held', source: 'GRANT', ...(hit.via ? { via_principal: hit.via } : {}) };
     }
-    return { ...base, status: sawUnreadable ? 'unknown' : 'missing' };
+    if (sawUnreadable) return { ...base, status: 'unknown' };
+    // No route we can SEE. Calling that `missing` claims we enumerated every
+    // name this principal answers to — only true when its group closure was
+    // resolved. Otherwise the negative stands only if nobody holds it at all.
+    if (!membershipKnown && someoneElseCouldConfer(chain, ref, oss)) return base;   // status: 'unknown'
+    return { ...base, status: 'missing' };
   });
 }
 
@@ -506,12 +593,22 @@ export function resolveEffectivePermissions(
   const oss = !!opts.oss;
   const applicableList = ucPrivilegesFor(target.type, { oss });
   const applicable = new Set(applicableList);
+  /** The SAME type's vocabulary without the backend narrowing — used only to
+   *  tell "a table cannot hold CREATE_SCHEMA" apart from "this backend does not
+   *  implement MANAGE", which are very different things to tell an operator. */
+  const applicableAtTypeAnyBackend = new Set(ucPrivilegesFor(target.type));
 
   const filterPrincipal = (opts.principal || '').trim();
   const closure = filterPrincipal
     ? new Set([...(opts.principalClosure || [filterPrincipal])].map((p) => String(p).toLowerCase()))
     : null;
   if (closure) closure.add(filterPrincipal.toLowerCase());
+  // Do we know every name the queried principal answers to? Only a resolved
+  // group closure makes that true. Unfiltered enumeration never does — see
+  // `evaluateUsage`, which may not assert a negative it cannot verify.
+  const membershipKnown = filterPrincipal
+    ? (opts.closureResolved ?? opts.principalClosure !== undefined)
+    : false;
 
   // principal (lowercased) → privilege → { best provenance, its rank }
   const byPrincipal = new Map<string, { label: string; privs: Map<string, { p: UcEffectivePrivilege; rank: number }> }>();
@@ -550,12 +647,27 @@ export function resolveEffectivePermissions(
         // then narrowed by the target's applicability filter below.
         const names = isAll ? expandAllPrivileges(node.type, { oss }) : [granted];
         for (const privilege of names) {
-          // Ancestor grants flow down only for privileges the child type accepts;
-          // grants ON the target itself are kept verbatim.
-          if (distance > 0 && !applicable.has(privilege)) {
+          // Applicability is checked at EVERY distance, including 0. A grant
+          // recorded directly on the target used to be emitted verbatim, which
+          // meant the OSS answer could still report MANAGE / BROWSE / APPLY_TAG
+          // (and an unmodelled spelling like DROP_DATABASE) whenever the row came
+          // back from the backend itself — exactly the vocabulary leak the
+          // ancestor path was fixed for. The invariant this module claims —
+          // "every privilege it can ever report is offerable on that backend" —
+          // is only true if the filter is unconditional.
+          if (!applicable.has(privilege)) {
             // An ALL PRIVILEGES expansion narrowing to the child type is
             // expected, not a modelling gap — don't report it as one.
-            if (!isAll) opts.onNotApplicable?.(privilege, { type: node.type, name: node.name });
+            if (!isAll) {
+              opts.onNotApplicable?.(
+                privilege,
+                { type: node.type, name: node.name },
+                // Modelled + accepted at this type, but absent from THIS
+                // backend's vocabulary ⇒ the backend recorded a grant it cannot
+                // enforce. Distinct from "a table cannot hold CREATE_SCHEMA".
+                applicableAtTypeAnyBackend.has(privilege) ? 'backend-unsupported' : 'not-applicable',
+              );
+            }
             continue;
           }
           record(grantee, distance, {
@@ -591,7 +703,7 @@ export function resolveEffectivePermissions(
       // The names this bucket answers to: the queried principal's whole closure
       // when filtering, otherwise just this grantee.
       const identities = closure ?? new Set([b.label.toLowerCase()]);
-      const usage = evaluateUsage(chain, identities, oss);
+      const usage = evaluateUsage(chain, identities, oss, membershipKnown);
       const unmet = usage.filter((u) => u.status === 'missing');
       const blockedBy = unmet.map((u) => `${u.privilege} on ${u.securable_type} ${u.securable_name}`);
       return {

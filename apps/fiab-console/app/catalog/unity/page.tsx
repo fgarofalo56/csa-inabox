@@ -66,6 +66,8 @@ interface ModelRow { name: string; full_name?: string; comment?: string; owner?:
  *  The pane reads THESE fields — it never re-parses the display string. */
 interface GrantPrivilegeDetail {
   privilege: string;
+  /** The annotated display text for this privilege — always `privileges[i]`. */
+  display: string;
   inherited_from_type?: string;
   inherited_from_name?: string;
   via_principal?: string;
@@ -672,14 +674,21 @@ function privilegeBadgeColor(d: GrantPrivilegeDetail | undefined): 'brand' | 'in
   return 'brand';
 }
 
+/** The privilege cells for a row. `detail[]` is the single source of truth
+ *  (display text + provenance in ONE object, 1:1 with `privileges[]`); the
+ *  fallback only covers a stale/older BFF response that omits it. */
+function privilegeCells(g: GrantRow): GrantPrivilegeDetail[] {
+  if (g.detail?.length) return g.detail;
+  return g.privileges.map((p) => ({ privilege: p, display: p, revocableHere: true, blocked: false }));
+}
+
 /** The privileges on this row that can actually be revoked HERE. Anything
  *  inherited from a parent, implied by ownership, or held through a group lives
  *  somewhere else and must be revoked there — issuing the REVOKE against the
  *  queried principal would silently do nothing (or hit the wrong grantee).
  *  Structured — no string parsing. */
 function revocableHere(g: GrantRow): string[] {
-  if (!g.detail) return g.privileges;   // direct-grants mode: plain names
-  return g.detail.filter((d) => d.revocableHere).map((d) => d.privilege);
+  return privilegeCells(g).filter((d) => d.revocableHere).map((d) => d.privilege);
 }
 
 function GrantsPane({ oss }: { oss: boolean }) {
@@ -768,8 +777,14 @@ function GrantsPane({ oss }: { oss: boolean }) {
     { key: 'principal', label: 'Principal', width: 280, filterType: 'text', getValue: (g) => g.principal, render: (g) => <strong>{g.principal}</strong> },
     { key: 'privileges', label: 'Privileges', filterType: 'text', getValue: (g) => g.privileges.join(' '), render: (g) => (
       <span className={s.actionsRow}>
-        {g.privileges.map((p, i) => (
-          <Badge key={p} appearance="tint" color={privilegeBadgeColor(g.detail?.[i])}>{p}</Badge>
+        {/* Render from `detail[]` — ONE array carrying both the display text and
+            the provenance that tints it. The two used to be separate arrays the
+            BFF built with different filters, so a string entry shifted every
+            later index and a BLOCKED privilege could render "granted here".
+            `key` is index-qualified because two privileges can format to the
+            same display string. */}
+        {privilegeCells(g).map((d, i) => (
+          <Badge key={`${d.privilege}-${i}`} appearance="tint" color={privilegeBadgeColor(d)}>{d.display}</Badge>
         ))}
         {g.usage?.filter((u) => u.status !== 'held').map((u) => (
           <Badge key={`usage-${u.privilege}-${u.securable_name}`} appearance="outline" color={u.status === 'missing' ? 'danger' : 'warning'}>

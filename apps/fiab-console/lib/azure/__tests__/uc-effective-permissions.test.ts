@@ -38,6 +38,7 @@ import {
   isUcPrivilegeBlocked,
   isUcPrivilegeRevocableHere,
   UC_OWNER_IMPLIED_ON_DESCENDANT,
+  UC_PRIVILEGES_BY_SECURABLE,
   type UcSecurableNode,
   type UcEffectiveAssignment,
 } from '../uc-effective-permissions';
@@ -293,18 +294,76 @@ describe('resolveEffectivePermissions — backend vocabulary', () => {
     expect(privsOf(resolveEffectivePermissions(chain), 'ops')).toEqual(['APPLY_TAG', 'MANAGE', 'SELECT']);
   });
 
-  it('every privilege it can ever report is offerable on that backend', () => {
+  it('every privilege it can ever report is offerable on that backend — INCLUDING one granted ON the target', () => {
     // Structural guard: the effective answer and the grant checkbox grid read
     // the SAME narrowed vocabulary, so they cannot disagree.
+    //
+    // ROUND-3 STRENGTHENING. The previous version of this spec only put grants
+    // on the CATALOG ancestor plus two owners, so it could not see the leak it
+    // was supposed to guard: `resolveEffectivePermissions` narrowed by backend
+    // everywhere EXCEPT the distance-0 branch (`if (distance > 0 && !applicable
+    // .has(privilege))`), and a grant recorded DIRECTLY on the target was
+    // emitted verbatim. On OSS that meant the pane could report MANAGE / BROWSE
+    // / APPLY_TAG — the very privileges it refuses to GRANT there and the server
+    // cannot enforce. Every privilege Loom models anywhere, plus an unmodelled
+    // spelling, is now granted at EVERY distance including 0.
+    const everything = [
+      ...new Set(Object.values(UC_PRIVILEGES_BY_SECURABLE).flat()),
+      'ALL PRIVILEGES', 'DROP DATABASE',
+    ];
     for (const oss of [true, false]) {
       const offerable = new Set(ucPrivilegesFor('TABLE', { oss }));
       const out = resolveEffectivePermissions([
-        { type: 'TABLE', name: 'main.sales.orders', owner: 'dana', assignments: [] },
-        { type: 'SCHEMA', name: 'main.sales', assignments: [] },
-        { type: 'CATALOG', name: 'main', owner: 'platform', assignments: [{ principal: 'ops', privileges: ['ALL PRIVILEGES'] }] },
+        { type: 'TABLE', name: 'main.sales.orders', owner: 'dana', assignments: [{ principal: 'ops', privileges: everything }] },
+        { type: 'SCHEMA', name: 'main.sales', assignments: [{ principal: 'ops', privileges: everything }] },
+        { type: 'CATALOG', name: 'main', owner: 'platform', assignments: [{ principal: 'ops', privileges: everything }] },
       ], { oss });
-      for (const row of out) for (const p of row.privileges) expect(offerable.has(p.privilege)).toBe(true);
+      expect(out.length).toBeGreaterThan(0);
+      for (const row of out) {
+        expect(row.privileges.length).toBeGreaterThan(0);
+        for (const p of row.privileges) expect(offerable.has(p.privilege)).toBe(true);
+      }
     }
+  });
+
+  it('NARROWS a grant recorded DIRECTLY on the target — no distance-0 exemption', () => {
+    // The failure mode in prose: the OSS server itself hands back a row saying
+    // `ops` holds MANAGE on this table. Loom must not repeat it — that backend
+    // has no MANAGE to enforce, and the pane will not offer to grant it either.
+    const out = resolveEffectivePermissions([
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ops', privileges: ['MANAGE', 'BROWSE', 'APPLY_TAG', 'SELECT'] }] },
+      { type: 'SCHEMA', name: 'main.sales', assignments: [] },
+      { type: 'CATALOG', name: 'main', assignments: [usageGrant('ops')] },
+    ], { oss: true });
+    expect(privsOf(out, 'ops')).toEqual(['SELECT']);
+    for (const forbidden of ['MANAGE', 'BROWSE', 'APPLY_TAG']) {
+      expect(privsOf(out, 'ops')).not.toContain(forbidden);
+    }
+  });
+
+  it('drops an UNMODELLED spelling granted directly on the target instead of passing it through', () => {
+    // `DROP DATABASE` is not a Unity Catalog privilege Loom models at any type.
+    // It used to be reported as an effective `DROP_DATABASE` with no warning.
+    const seen: Array<[string, string]> = [];
+    const out = resolveEffectivePermissions([
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ops', privileges: ['DROP DATABASE', 'SELECT'] }] },
+    ], { onNotApplicable: (p, _from, reason) => seen.push([p, reason]) });
+    expect(privsOf(out, 'ops')).toEqual(['SELECT']);
+    expect(privsOf(out, 'ops')).not.toContain('DROP_DATABASE');
+    expect(seen).toEqual([['DROP_DATABASE', 'not-applicable']]);
+  });
+
+  it('tells "this backend cannot enforce it" apart from "this type cannot hold it"', () => {
+    // Two very different operator messages: one is expected narrowing, the other
+    // means the catalog holds a grant nothing will honour.
+    const seen: Array<[string, string]> = [];
+    resolveEffectivePermissions([
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ops', privileges: ['MANAGE', 'BROWSE'] }] },
+    ], { oss: true, onNotApplicable: (p, _f, reason) => seen.push([p, reason]) });
+    expect(seen).toEqual([
+      ['MANAGE', 'backend-unsupported'],   // modelled at TABLE, absent from OSS
+      ['BROWSE', 'not-applicable'],        // never applicable at TABLE at all
+    ]);
   });
 });
 
@@ -402,6 +461,117 @@ describe('resolveEffectivePermissions — USE CATALOG / USE SCHEMA prerequisites
     expect(row.usage).toEqual([{ privilege: 'USE_CATALOG', securable_type: 'CATALOG', securable_name: 'main', status: 'missing' }]);
     expect(row.privileges.find((p) => p.privilege === 'SELECT')!.blocked_by).toEqual(['USE_CATALOG on CATALOG main']);
     expect(row.privileges.find((p) => p.privilege === 'USE_SCHEMA')!.blocked_by).toBeUndefined();
+  });
+});
+
+// ============================================================
+// ROUND-3: the usage checker must not assert a negative it never verified.
+//
+// `evaluateUsage` is called with `identities = closure ?? new Set([row label])`.
+// In the two states the pane is in MOST often — the unfiltered Grants view (no
+// closure exists for anybody) and the filtered view with Microsoft Graph
+// unavailable (the "closure" collapses to `[principal]`) — that set is NOT the
+// set of names the principal answers to. Reporting `missing` off it produced a
+// red "SELECT (BLOCKED — needs USE_CATALOG on CATALOG main)" for a principal who
+// could in fact read the table, because a GROUP held the usage grant.
+// ============================================================
+
+describe('resolveEffectivePermissions — usage prerequisites when membership is UNKNOWN', () => {
+  /** SELECT granted to ada on the table; the usage grants held by a GROUP. */
+  const groupHoldsUsage: UcSecurableNode[] = [
+    { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ada@contoso.com', privileges: ['SELECT'] }] },
+    { type: 'SCHEMA', name: 'main.sales', assignments: [] },
+    { type: 'CATALOG', name: 'main', assignments: [{ principal: 'analysts', privileges: ['USE_CATALOG', 'USE_SCHEMA'] }] },
+  ];
+
+  it('UNFILTERED: says UNKNOWN, not missing, when a group could hold the prerequisite', () => {
+    const ada = rowOf(resolveEffectivePermissions(groupHoldsUsage), 'ada@contoso.com')!;
+    expect(ada.usage!.map((u) => `${u.privilege}:${u.status}`))
+      .toEqual(['USE_CATALOG:unknown', 'USE_SCHEMA:unknown']);
+    // …and therefore SELECT must NOT be reported blocked.
+    const select = ada.privileges.find((p) => p.privilege === 'SELECT')!;
+    expect(select.blocked_by).toBeUndefined();
+    expect(isUcPrivilegeBlocked(select)).toBe(false);
+  });
+
+  it('UNFILTERED: still says MISSING when NOBODY holds it — that negative IS verified', () => {
+    // No membership can supply a grant that does not exist anywhere on the
+    // chain, so the block is a fact and must still be reported. (Downgrading
+    // everything to `unknown` would make the whole check useless.)
+    const nobodyHoldsUsage: UcSecurableNode[] = [
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ada@contoso.com', privileges: ['SELECT'] }] },
+      { type: 'SCHEMA', name: 'main.sales', assignments: [{ principal: 'ada@contoso.com', privileges: ['USE_SCHEMA'] }] },
+      // A grant exists here, but not of the privilege under test.
+      { type: 'CATALOG', name: 'main', assignments: [{ principal: 'auditors', privileges: ['BROWSE'] }] },
+    ];
+    const ada = rowOf(resolveEffectivePermissions(nobodyHoldsUsage), 'ada@contoso.com')!;
+    expect(ada.usage!.find((u) => u.privilege === 'USE_CATALOG')!.status).toBe('missing');
+    expect(ada.privileges.find((p) => p.privilege === 'SELECT')!.blocked_by)
+      .toEqual(['USE_CATALOG on CATALOG main']);
+  });
+
+  it('UNFILTERED: an OWNER that is not this principal also makes the answer UNKNOWN', () => {
+    // The owner may itself be a group ada belongs to; owners are usage-exempt,
+    // so ownership is a live route to the prerequisite.
+    const ownedElsewhere: UcSecurableNode[] = [
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ada@contoso.com', privileges: ['SELECT'] }] },
+      { type: 'SCHEMA', name: 'main.sales', assignments: [] },
+      { type: 'CATALOG', name: 'main', owner: 'platform-admins', assignments: [] },
+    ];
+    const ada = rowOf(resolveEffectivePermissions(ownedElsewhere), 'ada@contoso.com')!;
+    expect(ada.usage!.every((u) => u.status === 'unknown')).toBe(true);
+    expect(isUcPrivilegeBlocked(ada.privileges[0])).toBe(false);
+  });
+
+  it('FILTERED with Graph DOWN (closureResolved:false): UNKNOWN, not a fabricated block', () => {
+    // The live adapter reports `closure_resolved:false` and the empty state was
+    // already taught to soften its claim; the usage checker must agree with it
+    // instead of simultaneously stating the privilege is categorically missing.
+    const ada = rowOf(resolveEffectivePermissions(groupHoldsUsage, {
+      principal: 'ada@contoso.com',
+      principalClosure: ['ada@contoso.com'],   // Graph never answered
+      closureResolved: false,
+    }), 'ada@contoso.com')!;
+    expect(ada.usage!.every((u) => u.status === 'unknown')).toBe(true);
+    expect(ada.privileges.find((p) => p.privilege === 'SELECT')!.blocked_by).toBeUndefined();
+  });
+
+  it('FILTERED with the closure RESOLVED and the holder OUTSIDE it: MISSING is stated', () => {
+    // Now the negative is verified — every name ada answers to is enumerated and
+    // none of them is `analysts`. This is the assertion that proves the fix is
+    // not just "always answer unknown".
+    const ada = rowOf(resolveEffectivePermissions(groupHoldsUsage, {
+      principal: 'ada@contoso.com',
+      principalClosure: ['ada@contoso.com', 'archivists'],
+      closureResolved: true,
+    }), 'ada@contoso.com')!;
+    expect(ada.usage!.find((u) => u.privilege === 'USE_CATALOG')!.status).toBe('missing');
+    expect(ada.privileges.find((p) => p.privilege === 'SELECT')!.blocked_by)
+      .toEqual(['USE_CATALOG on CATALOG main', 'USE_SCHEMA on SCHEMA main.sales']);
+  });
+
+  it('FILTERED with the closure RESOLVED and the holder INSIDE it: HELD via that group', () => {
+    const ada = rowOf(resolveEffectivePermissions(groupHoldsUsage, {
+      principal: 'ada@contoso.com',
+      principalClosure: ['ada@contoso.com', 'analysts'],
+      closureResolved: true,
+    }), 'ada@contoso.com')!;
+    expect(ada.usage!.every((u) => u.status === 'held')).toBe(true);
+    expect(ada.usage!.find((u) => u.privilege === 'USE_CATALOG')!.via_principal).toBe('analysts');
+    expect(ada.privileges.find((p) => p.privilege === 'SELECT')!.blocked_by).toBeUndefined();
+  });
+
+  it('a MANAGE usage grant the OSS backend cannot enforce never counts as held', () => {
+    // Same unconditional-narrowing rule inside the prerequisite probe: a grant
+    // this backend does not implement is not a route to anything.
+    const out = resolveEffectivePermissions([
+      { type: 'TABLE', name: 'main.sales.orders', assignments: [{ principal: 'ada@contoso.com', privileges: ['SELECT'] }] },
+      { type: 'SCHEMA', name: 'main.sales', assignments: [] },
+      { type: 'CATALOG', name: 'main', assignments: [{ principal: 'ada@contoso.com', privileges: ['MANAGE'] }] },
+    ], { oss: true, principal: 'ada@contoso.com', principalClosure: ['ada@contoso.com'], closureResolved: true });
+    const ada = rowOf(out, 'ada@contoso.com')!;
+    expect(privsOf(out, 'ada@contoso.com')).not.toContain('MANAGE');
+    expect(ada.usage!.find((u) => u.privilege === 'USE_CATALOG')!.status).toBe('missing');
   });
 });
 

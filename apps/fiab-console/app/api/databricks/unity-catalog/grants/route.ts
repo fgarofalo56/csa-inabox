@@ -76,15 +76,30 @@ function gate() {
   return null;
 }
 
+/** One privilege as the pane consumes it: the structured provenance AND the
+ *  display string it belongs to, in ONE object. `privileges[i]` and `detail[i]`
+ *  used to be built from two DIFFERENT filters over the same raw array (`.map()
+ *  .filter(Boolean)` vs `.filter(typeof === 'object')`), so a single string
+ *  entry or an entry that formatted to `''` shifted every later index and a
+ *  BLOCKED privilege could render brand-tinted "granted here". They are now the
+ *  same list, built once. */
+interface GrantPrivilegeOut extends UcEffectivePrivilege {
+  /** The annotated display text — identical to the matching `privileges[i]`. */
+  display: string;
+  revocableHere: boolean;
+  blocked: boolean;
+}
+
 /** One row as the pane consumes it: the display strings (unchanged wire
  *  contract) PLUS the structured provenance. The pane tints badges and decides
  *  revocability from `detail[]`, never by re-parsing the display text — a
  *  securable literally named `owner` used to mis-tint, and a `via <group>` row
- *  used to look locally revocable. */
+ *  used to look locally revocable. `detail.length === privileges.length` and
+ *  `detail[i].display === privileges[i]` always. */
 interface GrantRowOut {
   principal: string;
   privileges: string[];
-  detail?: Array<UcEffectivePrivilege & { revocableHere: boolean; blocked: boolean }>;
+  detail: GrantPrivilegeOut[];
   usage?: UcUsagePrerequisite[];
 }
 
@@ -99,21 +114,26 @@ function grantsOf(p: { privilege_assignments?: RawAssignment[] }): GrantRowOut[]
     // One formatter for every shape: OSS spells privileges "USE CATALOG" and
     // Databricks "USE_CATALOG" (both normalized to the UI's underscore form),
     // while effective rows arrive as { privilege, inherited_from_type, … }
-    // objects from either the Databricks endpoint or the Loom resolver.
-    const raw = a.privileges || [];
-    const structured = raw.filter((v): v is UcEffectivePrivilege => !!v && typeof v === 'object');
+    // objects from either the Databricks endpoint or the Loom resolver. A plain
+    // string (the direct-grants shape) becomes a minimal structured entry, so
+    // the two arrays are ALWAYS the same length and the same order.
+    const detail: GrantPrivilegeOut[] = (a.privileges || []).flatMap((v) => {
+      const display = formatUcPrivilege(v);
+      if (!display) return [];
+      const structured: UcEffectivePrivilege = (v && typeof v === 'object')
+        ? (v as UcEffectivePrivilege)
+        : { privilege: display };
+      return [{
+        ...structured,
+        display,
+        revocableHere: isUcPrivilegeRevocableHere(structured),
+        blocked: isUcPrivilegeBlocked(structured),
+      }];
+    });
     return {
       principal: a.principal,
-      privileges: raw.map(formatUcPrivilege).filter(Boolean),
-      ...(structured.length
-        ? {
-          detail: structured.map((v) => ({
-            ...v,
-            revocableHere: isUcPrivilegeRevocableHere(v),
-            blocked: isUcPrivilegeBlocked(v),
-          })),
-        }
-        : {}),
+      privileges: detail.map((d) => d.display),
+      detail,
       ...(a.usage?.length ? { usage: a.usage } : {}),
     };
   });

@@ -70,8 +70,15 @@ describe('GET /grants', () => {
     const res = await GET(getReq('?securable_type=CATALOG&full_name=sales'));
     const j = await res.json();
     expect(j.ok).toBe(true);
-    // OSS space-spelled privileges are normalized to the UI's underscore form.
-    expect(j.grants).toEqual([{ principal: 'g', privileges: ['USE_CATALOG'] }]);
+    // OSS space-spelled privileges are normalized to the UI's underscore form,
+    // and every row carries an index-aligned `detail[]` — a plain string grant
+    // becomes a minimal structured entry so `detail[i]` always describes
+    // `privileges[i]` (see the index-alignment specs below).
+    expect(j.grants).toEqual([{
+      principal: 'g',
+      privileges: ['USE_CATALOG'],
+      detail: [{ privilege: 'USE_CATALOG', display: 'USE_CATALOG', revocableHere: true, blocked: false }],
+    }]);
   });
 
   it('400 on an unknown securable', async () => {
@@ -312,5 +319,59 @@ describe('GET /grants — structured provenance reaches the client', () => {
     // The pane keys its "…nor any group it belongs to" empty state off this. It
     // must not assert a negative it never verified.
     expect(j.closureResolved).toBe(false);
+  });
+
+  // ── ROUND-3: the two arrays the pane pairs by INDEX ────────────────────────
+  // `page.tsx` rendered `g.privileges.map((p, i) => <Badge color={
+  // privilegeBadgeColor(g.detail?.[i])}>)`. The BFF built those two arrays with
+  // DIFFERENT filters over the same raw list — `raw.map(format).filter(Boolean)`
+  // vs `raw.filter(v => typeof v === 'object')` — so any string entry, or any
+  // object whose privilege formats to '', shifted every later index and a
+  // BLOCKED privilege could render brand-tinted "granted here". They are one
+  // list now, and these specs pin the invariant.
+
+  it('keeps detail[] index-aligned with privileges[] when the row MIXES strings and objects', async () => {
+    (listEffectivePermissions as any).mockResolvedValue({
+      privilege_assignments: [{
+        principal: 'ada@contoso.com',
+        privileges: [
+          'SELECT',                                                               // a plain string — the shifter
+          { privilege: '' },                                                      // formats to '' — dropped from privileges[]
+          { privilege: 'MODIFY', inherited_from_type: 'CATALOG', inherited_from_name: 'main' },
+          { privilege: 'APPLY_TAG', blocked_by: ['USE_CATALOG on CATALOG main'] },
+        ],
+      }],
+    });
+    const res = await GET(getReq('?securable_type=TABLE&full_name=main.sales.orders&effective=true'));
+    const row = (await res.json()).grants[0];
+
+    expect(row.detail).toHaveLength(row.privileges.length);
+    row.detail.forEach((d: any, i: number) => expect(d.display).toBe(row.privileges[i]));
+
+    // The three that survive, in order, each carrying ITS OWN provenance.
+    expect(row.privileges).toEqual([
+      'SELECT',
+      'MODIFY (inherited from CATALOG main)',
+      'APPLY_TAG (BLOCKED — needs USE_CATALOG on CATALOG main)',
+    ]);
+    // The direct grant is revocable here and NOT blocked…
+    expect(row.detail[0]).toMatchObject({ privilege: 'SELECT', revocableHere: true, blocked: false });
+    // …the inherited one is NOT revocable here (revoking it here does nothing)…
+    expect(row.detail[1]).toMatchObject({ privilege: 'MODIFY', revocableHere: false, blocked: false });
+    // …and the BLOCKED one is flagged blocked. Under the old index pairing this
+    // landed on detail[1] and rendered as an ordinary inherited badge.
+    expect(row.detail[2]).toMatchObject({ privilege: 'APPLY_TAG', blocked: true });
+  });
+
+  it('gives a plain direct-grant row a detail[] too, so the pane never falls back to positional guessing', async () => {
+    (listPermissions as any).mockResolvedValue({
+      privilege_assignments: [{ principal: 'ada@contoso.com', privileges: ['SELECT', 'MODIFY'] }],
+    });
+    const res = await GET(getReq('?securable_type=TABLE&full_name=main.sales.orders'));
+    const row = (await res.json()).grants[0];
+    expect(row.detail).toHaveLength(2);
+    expect(row.detail.map((d: any) => d.display)).toEqual(row.privileges);
+    // A grant recorded here IS revocable here.
+    expect(row.detail.every((d: any) => d.revocableHere && !d.blocked)).toBe(true);
   });
 });

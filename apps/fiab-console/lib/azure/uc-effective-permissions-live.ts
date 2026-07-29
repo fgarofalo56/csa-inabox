@@ -171,11 +171,21 @@ export async function computeEffectivePermissions(
   }
 
   const unmodeled = new Set<string>();
+  const backendUnsupported = new Set<string>();
   const assignments = resolveEffectivePermissions(nodes, {
     principal: principal || undefined,
     principalClosure: closure,
+    // Only a directory-resolved closure licenses a categorical "missing" on a
+    // usage prerequisite; otherwise the resolver reports `unknown`.
+    closureResolved,
     oss,
-    onNotApplicable: (privilege, from) => {
+    onNotApplicable: (privilege, from, reason) => {
+      if (reason === 'backend-unsupported') {
+        // The backend handed back a grant its own vocabulary cannot enforce.
+        // Never silently dropped — that is the whole point of the narrowing.
+        backendUnsupported.add(`${privilege} (granted on ${from.type} ${from.name})`);
+        return;
+      }
       // A privilege Loom does not model at all (rather than one the child type
       // legitimately rejects) would otherwise vanish without trace.
       if (!ucKnownPrivilege(privilege)) unmodeled.add(`${privilege} (granted on ${from.type} ${from.name})`);
@@ -185,6 +195,14 @@ export async function computeEffectivePermissions(
     warnings.push(
       `Loom does not model ${[...unmodeled].sort().join(', ')}, so ${unmodeled.size === 1 ? 'it was' : 'they were'} ` +
       'omitted from the inherited answer. Read the securable\'s direct grants (untick "Effective") to see it verbatim.',
+    );
+  }
+  if (backendUnsupported.size) {
+    warnings.push(
+      `${[...backendUnsupported].sort().join(', ')} ${backendUnsupported.size === 1 ? 'is' : 'are'} recorded in the ` +
+      'catalog but not implemented by this Unity Catalog backend, so ' +
+      `${backendUnsupported.size === 1 ? 'it is' : 'they are'} not reported as effective — the server cannot enforce ` +
+      `${backendUnsupported.size === 1 ? 'it' : 'them'}. Untick "Effective" to see the recorded grants verbatim.`,
     );
   }
   if (oss) {

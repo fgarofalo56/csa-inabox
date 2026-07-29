@@ -8,11 +8,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const create = vi.fn(async () => ({}));
+const emitAuditEvent = vi.fn();
 vi.mock('@/lib/azure/cosmos-client', () => ({
   auditLogContainer: vi.fn(async () => ({ items: { create } })),
 }));
+vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: (...a: unknown[]) => emitAuditEvent(...a) }));
 
 import { isSelfPrincipal, decidePrincipalProbe } from '@/lib/auth/uc-principal-probe';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { recordUcAccessReview, auditUcAccessReview, UC_ACCESS_REVIEW_KIND } from '../uc-access-review-audit';
 import type { SessionPayload } from '@/lib/auth/session';
 
@@ -21,7 +24,7 @@ const SESSION = {
   exp: 9_999_999_999,
 } as unknown as SessionPayload;
 
-beforeEach(() => { create.mockClear(); });
+beforeEach(() => { create.mockClear(); emitAuditEvent.mockClear(); });
 
 describe('isSelfPrincipal', () => {
   it('accepts the caller\'s own oid, upn and mail — case-insensitively', () => {
@@ -62,6 +65,31 @@ describe('decidePrincipalProbe', () => {
   it('allows self and tenant admin, and records WHICH basis applied', () => {
     expect(decidePrincipalProbe(SESSION, 'ada@contoso.com', false)).toMatchObject({ allowed: true, basis: 'self' });
     expect(decidePrincipalProbe(SESSION, 'ceo@contoso.com', true)).toMatchObject({ allowed: true, basis: 'tenant-admin' });
+  });
+
+  // ── ROUND-3: the remediation must actually remediate (ux-baseline G2) ──────
+  it('does NOT send the denied caller to /admin/permissions, which cannot unblock them', () => {
+    const d = decidePrincipalProbe(SESSION, 'ceo@contoso.com', false);
+    // The gate is `isTenantAdmin(session)` (lib/auth/feature-gate.ts), which
+    // reads ONLY LOOM_TENANT_ADMIN_GROUP_ID group claims and
+    // LOOM_TENANT_ADMIN_OID. It never consults the Cosmos feature-grant table
+    // that /admin/permissions writes, so the old text — "access can also be
+    // granted at /admin/permissions" — was a dead end.
+    expect(d.remediation).not.toMatch(/can\s+also\s+be\s+granted\s+at\s+\/admin\/permissions/i);
+    expect(d.remediation).toMatch(/LOOM_TENANT_ADMIN_GROUP_ID/);
+    expect(d.remediation).toMatch(/LOOM_TENANT_ADMIN_OID/);
+    // If it mentions /admin/permissions at all, it must say it does NOT work.
+    if (/\/admin\/permissions/.test(d.remediation!)) {
+      expect(d.remediation).toMatch(/does NOT confer it/);
+    }
+  });
+
+  it('isTenantAdmin is a SYNCHRONOUS token-claims check — it cannot be querying Cosmos', () => {
+    // Structural proof of the claim the remediation text now makes. An async
+    // Cosmos lookup could not return a plain boolean here.
+    const notAdmin = isTenantAdmin({ claims: { oid: 'nobody', upn: 'n@x', groups: [] } } as any);
+    expect(typeof notAdmin).toBe('boolean');
+    expect(notAdmin).toBe(false);
   });
 });
 
@@ -116,5 +144,58 @@ describe('recordUcAccessReview', () => {
     })).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  // ── ROUND-3 ───────────────────────────────────────────────────────────────
+  // The module claimed the rows "surface in the existing Admin → Audit Logs
+  // reader" and that "an enumeration sweep cannot run untraced". Neither was
+  // true: the reader queried `c.tenantId = <viewer oid>` while this writer
+  // records the Entra `tid`, and nothing fanned the row out to the SIEM.
+
+  it('scopes the row on the Entra TENANT id, which is what the reader now selects on', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'TABLE', securableName: 'main.sales.pii', effective: true,
+      decision: 'allowed', nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    const rec = create.mock.calls[0][0] as any;
+    expect(rec.tenantId).toBe('tid-1');
+    // The join is asserted end-to-end against the reader's own predicate in
+    // app/api/admin/audit-logs/__tests__/route.test.ts — a row with this
+    // `tenantId` must come back for a tenant admin whose `tid` is `tid-1`. That
+    // is the assertion nobody was making, and it was false.
+    expect(rec.tenantId).not.toBe(rec.actorOid);
+  });
+
+  it('fans the SAME record out to the SIEM stream — Cosmos is not the only sink', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'TABLE', securableName: 'main.sales.pii', effective: true,
+      probedPrincipal: 'ceo@contoso.com', decision: 'denied-principal-probe',
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    expect(emitAuditEvent).toHaveBeenCalledTimes(1);
+    expect(emitAuditEvent.mock.calls[0][0]).toMatchObject({
+      actorOid: 'oid-1',
+      action: 'unity-catalog.access-review.denied',
+      targetType: 'unity-catalog-securable',
+      targetId: 'unity-catalog:TABLE:main.sales.pii',
+      outcome: 'denied',
+      tenantId: 'tid-1',
+    });
+    expect((emitAuditEvent.mock.calls[0][0] as any).detail).toMatchObject({
+      probedPrincipal: 'ceo@contoso.com', decision: 'denied-principal-probe',
+    });
+  });
+
+  it('marks an ALLOWED sweep as a success read, with its blast-radius counters', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'CATALOG', securableName: 'main', effective: true,
+      decision: 'allowed', resultPrincipals: 42, closureSize: 7,
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    expect(emitAuditEvent.mock.calls[0][0]).toMatchObject({
+      action: 'unity-catalog.access-review.read', outcome: 'success',
+    });
+    expect((emitAuditEvent.mock.calls[0][0] as any).detail)
+      .toMatchObject({ resultPrincipals: 42, closureSize: 7 });
   });
 });

@@ -9,14 +9,21 @@
  * DENIED alike — leaves a record. A denial with no trace is how an enumeration
  * sweep goes unnoticed.
  *
- * Writes to the shared Cosmos `audit-log` container (partition `/itemId`) as
- * `kind:'uc-access-review'`, so the rows surface in the existing Admin → Audit
- * Logs reader next to the object-security and PDP-shadow rows. Best-effort: a
- * write miss NEVER fails the guarded request.
+ * Writes to the shared Cosmos `audit-log` container as `kind:'uc-access-review'`
+ * with `tenantId` = the caller's Entra TENANT id, which is what the Admin →
+ * Audit Logs reader scopes on (`app/api/admin/audit-logs/route.ts` matches the
+ * viewer's `oid` OR `tid`, so tenant-scoped rows from this writer and from
+ * `object-security-audit.ts` are actually retrievable — they were not before).
+ * The row is ALSO fanned out through `emitAuditEvent`, so it reaches
+ * LoomAudit_CL / the outbound webhook stream and a sweep is visible to the SIEM,
+ * not only to an operator running a raw Cosmos query. Best-effort on both
+ * sinks: a write miss NEVER fails the guarded request.
  *
- * Azure-native (Cosmos), Gov-safe — no Fabric, no Databricks dependency.
+ * Azure-native (Cosmos + Azure Monitor DCR), Gov-safe — no Fabric, no Databricks
+ * dependency.
  */
 import { auditLogContainer } from './cosmos-client';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { randomUUID } from 'node:crypto';
 import type { SessionPayload } from '@/lib/auth/session';
 
@@ -106,6 +113,30 @@ export async function recordUcAccessReview(
   };
   const container = await auditLogContainer();
   await container.items.create(rec);
+  // Fan the SAME record out to the SIEM stream (LoomAudit_CL) + outbound
+  // webhooks. Without this, "an enumeration sweep cannot run untraced" was true
+  // only for an operator running a raw Cosmos query. `emitAuditEvent` never
+  // throws and never blocks.
+  emitAuditEvent({
+    actorOid: rec.actorOid,
+    actorUpn: rec.actorUpn || '',
+    action: `unity-catalog.access-review.${input.decision === 'allowed' ? 'read' : 'denied'}`,
+    targetType: 'unity-catalog-securable',
+    targetId: rec.itemId,
+    outcome: input.decision === 'allowed' ? 'success' : 'denied',
+    detail: {
+      securableType: rec.securableType,
+      securableName: rec.securableName,
+      effective: rec.effective,
+      decision: rec.decision,
+      ...(rec.probedPrincipal ? { probedPrincipal: rec.probedPrincipal } : {}),
+      ...(typeof rec.resultPrincipals === 'number' ? { resultPrincipals: rec.resultPrincipals } : {}),
+      ...(typeof rec.closureSize === 'number' ? { closureSize: rec.closureSize } : {}),
+      ...(rec.actorTokenId ? { actorTokenId: rec.actorTokenId } : {}),
+    },
+    tenantId: rec.tenantId || rec.actorOid,
+    timestamp: at,
+  });
 }
 
 /**
