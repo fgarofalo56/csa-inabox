@@ -2,8 +2,9 @@
 
 > CSA Loom `s3-gateway` editor — **Preview lab**. Put an S3 face in front of your
 > ADLS Gen2 so `s3://`-only OSS clients can address it, via an
-> **operator-deployed Apache-2.0 s3proxy** (the AGPL MinIO gateway path is
-> deliberately not used). Azure-native — **no Microsoft Fabric**.
+> **Apache-2.0 s3proxy Container App that Loom deploys by DEFAULT** (the AGPL
+> MinIO gateway path is deliberately not used). Azure-native — **no Microsoft
+> Fabric**.
 
 ## What it is
 
@@ -47,8 +48,12 @@ gateway is for clients that speak S3 exclusively.
 
 ## The Azure backend it rides on
 
-- **Gateway:** an operator-deployed **Apache-2.0 s3proxy**, addressed by
-  `LOOM_S3_GATEWAY_URL`.
+- **Gateway:** an **Apache-2.0 s3proxy** Container App deployed by default with
+  the platform (`platform/fiab/bicep/modules/data-plane/s3-gateway-aca.bicep`) and
+  addressed by `LOOM_S3_GATEWAY_URL`. Internal ingress only, managed-identity
+  ADLS auth (no account key / SAS), `read-only-blobstore`, `minReplicas 0` so it
+  costs nothing at idle. Its S3 wire credential lives in the Loom Key Vault as
+  `loom-s3-gateway-access-key` / `loom-s3-gateway-secret-key`.
 - **Storage:** your own **ADLS Gen2** account (the same lake every other Loom
   item reads).
 - **Preferred alternative:** the **Iceberg REST Catalog** + native `abfss://`,

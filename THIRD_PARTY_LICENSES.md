@@ -115,7 +115,9 @@ the base-image CVE gate instead.
 | Debezium Connect (CDC runtime) | `quay.io/debezium/connect` | Apache-2.0 | `apps/fiab-mirroring-engine` | source-database change capture into the bronze layer |
 | tileserver-gl (sovereign OSS maps tier) | `maptiler/tileserver-gl` | BSD-2-Clause | `loom-maps-app.bicep` | self-hosted vector tiles; replaces Azure Maps where unavailable |
 | DuckDB embedded binary (N2b) | — | MIT | `duckdb-aca.bicep` | single embedded engine |
-| DuckDB `azure` / `httpfs` / `delta` / `iceberg` extensions | — | MIT | baked into `apps/loom-duckdb` image | in-boundary/air-gap-safe (no extension repo at runtime) |
+| **s3proxy (S3-compatible ADLS gateway, N8)** | `andrewgaul/s3proxy` | Apache-2.0 | `s3-gateway-aca.bicep` | Upstream image `docker.io/andrewgaul/s3proxy:3.3.0`, built from github.com/gaul/s3proxy whose LICENSE reads "Licensed under the Apache License, Version 2.0". Deployed by DEFAULT (internal ingress, identity-based ADLS auth via DefaultAzureCredential, read-only, scale-to-zero). Nothing from it is bundled into a Loom-built image — it is pulled as an unmodified upstream artifact, so this is a NOTICE row, not a redistribution. It is the permissive replacement for the AGPL MinIO gateway below. |
+| DuckDB embedded binary (N2b) | — | MIT | `duckdb-aca.bicep` | single embedded engine |
+| DuckDB `azure` / `httpfs` / `delta` / `iceberg` / `postgres` / `ducklake` extensions | — | MIT | baked into `apps/loom-duckdb` image | in-boundary/air-gap-safe (no extension repo at runtime). `postgres` + `ducklake` back the N8 DuckLake catalog `ATTACH`. |
 | Apache XTable / delta-rs (dual-metadata emit path, N1) | — | Apache-2.0 | Synapse Spark job (N1) | Delta↔Iceberg metadata |
 | PostgreSQL JDBC driver (`org.postgresql:postgresql`, LU-1) | — | BSD-2-Clause | baked into `apps/loom-unity` image | Entra-only Postgres persistence for Loom Unity; pinned + SHA256-verified at build |
 
@@ -165,7 +167,7 @@ No Terraform CLI is required to build, vet or unit-test the provider.
 
 | Component | License | Disposition |
 |---|---|---|
-| MinIO S3 gateway | AGPL-v3 | **DROPPED** — the N8 S3-compat lab proceeds only via a permissively-licensed path (e.g. `s3proxy` Apache-2.0) or is cut. Not present in any requirements. |
+| MinIO S3 gateway | AGPL-v3 | **DROPPED** — the N8 S3-compat lab ships on the permissive path instead: `s3proxy` (Apache-2.0), deployed by default via `s3-gateway-aca.bicep` (see the container-baked table above). Not present in any requirements. |
 | Univer spreadsheet | (module review) | **GATED** on a module-level license review before it may ship. Not present in any requirements. |
 | Trino / Starburst (N7e) | Apache-2.0 | opt-in carve-out (heavy AKS tier); permissive, allowed. |
 | HashiCorp `terraform` CLI (≥ 1.6) | BUSL-1.1 | **NOT bundled and NOT required.** Acceptance tests document OpenTofu (MPL-2.0) instead. |

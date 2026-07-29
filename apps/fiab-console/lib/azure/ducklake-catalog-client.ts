@@ -14,10 +14,16 @@
  *
  * The catalog needs TWO things to list tables: the DuckLake Postgres store
  * (`LOOM_DUCKLAKE_CATALOG_URL`) AND the N2 DuckDB tier (`LOOM_DUCKDB_URL`, the
- * engine that runs the ATTACH). When either is unset {@link listDucklakeTables}
- * throws a typed 503 naming the exact missing var — the editor renders a guided
- * empty state with a Fix-it, never a fabricated table list. N1's Iceberg REST
- * Catalog and every other surface are unaffected either way.
+ * engine that runs the ATTACH). `LOOM_DUCKLAKE_CATALOG_URL` is wired by the
+ * deploy itself — `data-plane/ducklake-catalog-postgres.bicep` provisions a
+ * private-endpoint-only Azure Database for PostgreSQL flexible server and the
+ * Console binds the DSN as a **Key Vault secretRef** (never a plain env value) —
+ * so it is unset only in a sovereign subscription that is quota-restricted from
+ * provisioning flexible servers. When either var is missing
+ * {@link listDucklakeTables} throws a typed 503 naming the exact missing var —
+ * the editor renders a guided empty state with a Fix-it, never a fabricated
+ * table list. N1's Iceberg REST Catalog and every other surface are unaffected
+ * either way.
  *
  * IL5 / SOVEREIGN MOAT: the metadata store is an in-boundary Azure Database for
  * PostgreSQL and the engine is the in-boundary DuckDB tier — no SaaS catalog is
@@ -64,9 +70,11 @@ function ducklakeConnectionString(): string {
   const raw = (process.env.LOOM_DUCKLAKE_CATALOG_URL || '').trim();
   if (!raw) {
     throw new DucklakeError(
-      'The DuckLake catalog is not configured. Set LOOM_DUCKLAKE_CATALOG_URL to the Postgres connection string that '
-      + 'backs the DuckLake metadata (postgresql://…/ducklake) on the Console app. This is a Preview lab alongside the '
-      + 'N1 Iceberg REST Catalog; N1 is unaffected. No Microsoft Fabric required.',
+      'The DuckLake catalog is not configured. LOOM_DUCKLAKE_CATALOG_URL is normally set by the deployment itself '
+      + '(platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep provisions the private-endpoint-only '
+      + 'Postgres store and the Console binds the DSN as a Key Vault secretRef); it is unset only when the Azure '
+      + 'Postgres quota gate trips in a restricted sovereign subscription, or when you point it at your own server. '
+      + 'This is a lab alongside the N1 Iceberg REST Catalog; N1 is unaffected. No Microsoft Fabric required.',
       503,
       'ducklake_not_configured',
     );

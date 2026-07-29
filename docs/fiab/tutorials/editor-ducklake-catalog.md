@@ -49,7 +49,11 @@ Microsoft Fabric.
 ## The Azure backend it rides on
 
 - **Catalog store:** a **Postgres** database addressed by
-  `LOOM_DUCKLAKE_CATALOG_URL`.
+  `LOOM_DUCKLAKE_CATALOG_URL`. Deployed by default with the platform
+  (`platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep` — a
+  private-endpoint-only Azure Database for PostgreSQL flexible server,
+  `Standard_B1ms`); the connection string is written to the Loom Key Vault and
+  bound to the Console as a secretRef, never as a plain env var.
 - **Query engine:** the **DuckDB serving tier** (`LOOM_DUCKDB_URL`) — the same
   Container App SQL Lab uses — which performs the `ATTACH` and the
   `information_schema` read.
@@ -60,7 +64,7 @@ Microsoft Fabric.
 
 | Condition | What you see | Exact remediation |
 |---|---|---|
-| `LOOM_DUCKLAKE_CATALOG_URL` unset | Guided empty state + Fix-it card (warning, never red on first open) | Set `LOOM_DUCKLAKE_CATALOG_URL` to a Postgres store. The Iceberg REST Catalog and every other surface are unaffected |
+| `LOOM_DUCKLAKE_CATALOG_URL` unset | Guided empty state + Fix-it card (warning, never red on first open) | Normally impossible — bicep wires it. Happens only when the Azure Postgres **quota** gate trips (`postgresQuotaAvailable=false`, some sovereign subscriptions); request an increase at <https://aka.ms/postgres-request-quota-increase> and redeploy, or point the var at your own server. The Iceberg REST Catalog and every other surface are unaffected |
 | DuckDB tier missing (upstream 503) | Fix-it card naming the missing variable | Deploy the DuckDB serving tier and set `LOOM_DUCKDB_URL` |
 | Catalog wired but unreachable | *"The DuckLake catalog did not answer"* empty state carrying the upstream reason | Check Postgres reachability / firewall from the DuckDB tier |
 | Wired and reachable, no tables | *"No tables in the DuckLake catalog yet"* | Register a Delta/Parquet table into the DuckLake store |

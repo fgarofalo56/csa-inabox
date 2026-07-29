@@ -144,7 +144,7 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'Opt-in Preview lab ALONGSIDE the N1 Iceberg REST Catalog. Unset → the DuckLake editor renders a guided empty state and honest-gates; N1\'s IRC (LOOM_ICEBERG_CATALOG_URL) and every other surface are unaffected. Point LOOM_DUCKLAKE_CATALOG_URL at an in-VNet Postgres store to try it.',
+      'DEFAULT-ON: data-plane/ducklake-catalog-postgres.bicep provisions the private-endpoint-only Postgres store and admin-plane/main.bicep binds LOOM_DUCKLAKE_CATALOG_URL as a Key Vault secretRef, so a from-scratch deploy arrives wired. It is unset only when the Azure Postgres QUOTA gate trips (postgresQuotaAvailable=false in a restricted sovereign subscription) or when you point it at your own server. Unset → the DuckLake editor renders a guided empty state and honest-gates; N1\'s Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) and every other surface are unaffected.',
     legacyCodes: ['ducklake_not_configured'],
   },
   // ── N8 lab 3 — S3-compatible ADLS gateway (Preview) ──
@@ -155,7 +155,7 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'Opt-in Preview lab. Unset → the surface documents that the N1 Iceberg REST Catalog + native ADLS/abfss path already give external engines governed access, so most deployments need no gateway. Set LOOM_S3_GATEWAY_URL only when you deploy an Apache-2.0 s3proxy for s3://-exclusive clients (the AGPL MinIO path is not used).',
+      'DEFAULT-ON: data-plane/s3-gateway-aca.bicep deploys the Apache-2.0 s3proxy Container App (internal ingress, identity-based ADLS auth, read-only, scale-to-zero) and admin-plane/main.bicep binds LOOM_S3_GATEWAY_URL, so a from-scratch deploy arrives wired. It is unset only when the apps tier is off or on an AKS boundary. Unset → the surface documents that the N1 Iceberg REST Catalog + native ADLS/abfss path already give external engines governed access, so most deployments lose nothing. The AGPL MinIO path is never used.',
     legacyCodes: ['s3_gateway_not_configured'],
   },
   // ── M1 — estate assessment reader (inbound-migration on-ramp) ──

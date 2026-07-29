@@ -6,16 +6,20 @@
  * The goal: let s3://-native OSS clients (Trino, Spark, DuckDB's s3 extension)
  * address the deployment's ADLS Gen2 through an S3 API. The obvious MinIO
  * gateway path is **dropped** — MinIO's gateway is deprecated AND AGPL (banned
- * by LIC0). The permissive path is an operator-deployed **Apache-2.0 s3proxy**
- * placed in front of ADLS; Loom does not bundle it (nothing new in
- * package.json — no AGPL, no s3proxy dependency in the console image).
+ * by LIC0). The permissive path is **s3proxy (Apache-2.0)**, which
+ * `platform/fiab/bicep/modules/data-plane/s3-gateway-aca.bicep` deploys BY
+ * DEFAULT as an internal-ingress Container App in front of ADLS (managed-identity
+ * storage auth, read-only, scale-to-zero). Loom bundles nothing into its own
+ * images (no AGPL, no s3proxy dependency in package.json) — the upstream image is
+ * pulled unmodified, so this stays a NOTICE obligation, not a redistribution.
  *
  * Crucially, most deployments need NO gateway: N1's Iceberg REST Catalog
  * (`LOOM_ICEBERG_CATALOG_URL`) plus the native abfss:// path already give
  * external engines governed, audited access to the same data. This client is a
- * thin, HONEST config surface: unset → {@link s3GatewayInfo} reports the gate
- * and points at the IRC/ADLS path; set → it returns the real endpoint + connect
- * snippets built from the configured value. It never fabricates a live gateway.
+ * thin, HONEST config surface: unset (apps tier off) → {@link s3GatewayInfo}
+ * reports the gate and points at the IRC/ADLS path; set → it returns the real
+ * endpoint + connect snippets built from the configured value. It never
+ * fabricates a live gateway.
  *
  * IL5 / SOVEREIGN MOAT: s3proxy is Apache-2.0 and runs in-boundary on the
  * deployment's own Container Apps environment over its own ADLS Gen2 — no AGPL
@@ -95,7 +99,7 @@ export function s3GatewayInfo(): S3GatewayInfo {
           "INSTALL httpfs; LOAD httpfs;",
           `SET s3_endpoint='${endpoint.replace(/^https?:\/\//, '')}';`,
           "SET s3_use_ssl=true; SET s3_url_style='path';",
-          "-- credentials: use the scoped key your s3proxy is configured with",
+          "-- credentials: the Key Vault secrets loom-s3-gateway-access-key / loom-s3-gateway-secret-key",
           "SELECT * FROM read_parquet('s3://<bucket>/<path>/*.parquet') LIMIT 100;",
         ].join('\n'),
       },

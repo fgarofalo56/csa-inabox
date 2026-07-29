@@ -741,6 +741,52 @@ var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApp
 var airflowAdminPassword = 'Af7${uniqueString(loomGeneratedSecretSeed, 'loom-airflow-admin-v1')}!Qz'
 var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airflow-wsk-v1')
 
+// ── N8 lab 1 — DuckLake catalog metadata store (default-ON) ───────────────────
+// ducklakeCatalogEnabled (var, default true — same 256-param-cap rationale as
+// airflowHostEnabled / scriptRunnerEnabled above): deploys the DuckLake catalog
+// Postgres Flexible Server (data-plane/ducklake-catalog-postgres.bicep) and
+// binds LOOM_DUCKLAKE_CATALOG_URL on the Console via a Key Vault secretRef.
+//
+// Until 2026-07 `svc-ducklake-catalog` was documented as "operator-provided …
+// not bicep-emitted" — a day-one gate the operator had to close by hand, which
+// is precisely the opt-IN posture loom_default_on_opt_out forbids. It is now
+// deployed by default so a FRESH push-button deploy lights the gate.
+//
+// Gated on postgresQuotaAvailable for the SAME honest Azure reason as the
+// Airflow metadata DB: some sovereign subscriptions are quota-restricted from
+// provisioning Microsoft.DBforPostgreSQL/flexibleServers. That is a regional
+// quota gate, NOT a Fabric one — when it trips the DuckLake editor renders in
+// full and honest-gates with a Fix-it, and every other surface is unaffected.
+// Cost: one Standard_B1ms burstable server ≈ $16/mo/cloud (see the module).
+var ducklakeCatalogEnabled = true
+var ducklakeCatalogActive = ducklakeCatalogEnabled && postgresQuotaAvailable
+
+// DuckLake Postgres administrator password. UNPREDICTABLE — derived from
+// loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
+// Character set [A-Za-z0-9!] keeps it URL-safe inside the libpq DSN. It is
+// passed @secure() to the module, which assembles the DSN and writes it to Key
+// Vault; the Console binds it as a secretRef and NEVER as a plain env value.
+var ducklakePgPassword = 'Dl7${uniqueString(loomGeneratedSecretSeed, 'loom-ducklake-pg-v1')}!Qz'
+var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
+
+// ── N8 lab 3 — S3-compatible ADLS gateway (default-ON) ────────────────────────
+// s3GatewayEnabled (var, default true — same 256-param-cap rationale): deploys
+// the Apache-2.0 s3proxy Container App (data-plane/s3-gateway-aca.bicep) in
+// front of the deployment's own ADLS Gen2 and binds LOOM_S3_GATEWAY_URL. It was
+// likewise documented as "operator-deployed … out-of-band"; same rule fix.
+// Container Apps only (an AKS boundary deploys this workload via the cluster
+// GitOps path) and only once the apps tier is on. Internal ingress, identity-
+// based storage auth, read-only by default, minReplicas 0 => $0 idle.
+var s3GatewayEnabled = true
+var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && !empty(loomStorageAccount)
+
+// S3 wire credential for the gateway. UNPREDICTABLE + seed-derived, and it
+// ALWAYS replaces the upstream image's publicly-known local-identity /
+// local-credential default. Delivered to the container as ACA secrets and
+// mirrored into Key Vault for operator retrieval — never a plain env value.
+var s3GatewayAccessKey = 'loom${uniqueString(loomGeneratedSecretSeed, 'loom-s3-gw-id-v1')}'
+var s3GatewaySecretKey = 'S3g${uniqueString(loomGeneratedSecretSeed, 'loom-s3-gw-key-v1')}${uniqueString(loomGeneratedSecretSeed, 'loom-s3-gw-key-v2')}'
+
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
 param postgresQuotaAvailable bool = true
 
@@ -4770,6 +4816,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomPipelineCiEnabled ? [
             { name: 'LOOM_CI_TOKEN', secretRef: 'loom-ci-token' }
           ] : [],
+          // N8 lab 1 — DuckLake catalog metadata store (gate svc-ducklake-catalog).
+          // The DSN carries a password, so it is bound as a Key Vault secretRef
+          // and NEVER as a plain env value. Present whenever the Postgres store
+          // deployed; when the sovereign Postgres quota gate trips
+          // (postgresQuotaAvailable=false) the var is simply absent and the
+          // DuckLake editor renders in full with its honest Fix-it.
+          ducklakeCatalogActive ? [
+            { name: 'LOOM_DUCKLAKE_CATALOG_URL', secretRef: 'loom-ducklake-catalog-url' }
+          ] : [],
+          // N8 lab 3 — S3-compatible ADLS gateway (gate svc-s3-gateway). The
+          // internal-ingress s3proxy endpoint; the Console only ever reads the
+          // URL to render connect info (the S3 wire credential lives in Key
+          // Vault, never in the Console's environment).
+          s3GatewayActive ? [
+            { name: 'LOOM_S3_GATEWAY_URL', value: s3Gateway!.outputs.internalEndpoint }
+          ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
           // the other Loom apps; the External-MCP panel reads this to offer the
           // bridged npx/uvx servers for one-click registration. Empty when the
@@ -4855,6 +4917,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // reuse the loom-msal-client-secret confidential client above.
           !empty(loomGithubMcpPatKvSecret) ? [
             { name: 'loom-github-mcp-pat', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomGithubMcpPatKvSecret}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // N8 lab 1 — the DuckLake catalog DSN. KV-backed, NEVER a literal:
+          // data-plane/ducklake-catalog-postgres.bicep assembles the
+          // postgresql:// string (with its @secure() seed-derived password) and
+          // writes it to the Loom Key Vault; this reads it back at deploy time
+          // through the Console UAMI's Key Vault Secrets User grant. Referencing
+          // the module's own output name (not the local var) makes the ACA app
+          // wait for the secret to exist before it binds it.
+          ducklakeCatalogActive ? [
+            { name: 'loom-ducklake-catalog-url', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${ducklakeCatalog!.outputs.catalogUrlSecretName}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }
@@ -5128,6 +5200,74 @@ module airflow 'airflow.bicep' = if (airflowHostActive) {
     // (Entra is off on this control-plane metadata DB; the seed-derived password +
     // TLS gate it). Compliance carve-out per docs/best-practices/security-compliance.md.
     privateEndpointsEnabled: false
+  }
+}
+
+// =====================================================================
+// N8 lab 1 — DuckLake catalog metadata store (DEFAULT-ON, gate svc-ducklake-catalog).
+//
+// DuckLake keeps lakehouse table metadata in a SQL database instead of a
+// metadata-file tree; the N2 DuckDB serving tier ATTACHes it and reads the
+// Delta/Parquet data in place on the deployment's own ADLS Gen2. This is that
+// SQL database: a private-endpoint-only Azure Database for PostgreSQL Flexible
+// Server (Standard_B1ms — the smallest SKU Azure sells) whose connection string
+// is written to the Loom Key Vault and bound to the Console as a secretRef.
+//
+// A DEDICATED server, not a second database on the Airflow metadata server:
+// that one is single-admin password auth (bicep cannot create a scoped Postgres
+// role), so sharing it would hand the DuckLake DSN full rights over Airflow's
+// control plane — and both are burstable, so a catalog scan storm could burn
+// the credit balance the scheduler heartbeat depends on. Full rationale + cost
+// in the module header.
+// =====================================================================
+module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (ducklakeCatalogActive) {
+  name: 'ducklake-catalog-postgres'
+  params: {
+    location: location
+    administratorPassword: ducklakePgPassword
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    // The hub has no privatelink.postgres zone, so the module creates it and
+    // links the hub VNet (which owns both the PE subnet and the Container Apps
+    // subnet) — a from-scratch deploy resolves the server privately with no
+    // hub prerequisite.
+    entraAdminPrincipalId: identity.outputs.uamiConsolePrincipalId
+    entraAdminPrincipalName: identity.outputs.uamiConsoleName
+    keyVaultId: keyvault.outputs.keyVaultId
+    catalogUrlSecretName: ducklakeCatalogUrlSecretName
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// N8 lab 3 — S3-compatible ADLS gateway (DEFAULT-ON, gate svc-s3-gateway).
+//
+// Apache-2.0 s3proxy in front of the deployment's own ADLS Gen2 so s3://-native
+// OSS clients (Trino, Spark, DuckDB's httpfs/s3 extension) can address the lake
+// with an S3 API. Internal ingress only; identity-based storage auth via
+// DefaultAzureCredential over the Console UAMI's IMDS endpoint (no account key,
+// no SAS, no connection string); read-only by default; minReplicas 0 so
+// default-ON is also $0-at-idle. The AGPL MinIO gateway path is NOT used.
+//
+// The Console UAMI already holds Storage Blob Data Contributor on the lake
+// (console-azure-connections-rbac above), so no additional cross-RG role
+// assignment is needed — and s3proxy.read-only-blobstore keeps the write half
+// of that grant unexercised.
+// =====================================================================
+module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
+  name: 'loom-s3-gateway'
+  params: {
+    location: location
+    s3GatewayConfig: {
+      environmentId: containerPlatformModule.outputs.caeId
+      uamiId: identity.outputs.uamiConsoleId
+      uamiClientId: identity.outputs.uamiConsoleClientId
+      lakeStorageAccountName: loomStorageAccount
+    }
+    s3AccessKey: s3GatewayAccessKey
+    s3SecretKey: s3GatewaySecretKey
+    keyVaultId: keyvault.outputs.keyVaultId
+    complianceTags: complianceTags
   }
 }
 

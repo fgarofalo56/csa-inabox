@@ -223,16 +223,22 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     },
   },
   // ── N8 lab 1 — DuckLake catalog option (Postgres-backed lakehouse metadata) ──
-  //    Preview / opt-in: a forward bet on the DuckDB ecosystem ALONGSIDE N1's
-  //    Iceberg REST Catalog. Unset → the DuckLake editor honest-gates (Fix-it);
-  //    N1's IRC and every other surface are unaffected. Not a Fabric dependency.
+  //    DEFAULT-ON since 2026-07 (loom_default_on_opt_out): the Postgres store is
+  //    deployed by data-plane/ducklake-catalog-postgres.bicep and the DSN is
+  //    bound as a Key Vault secretRef, so a fresh deploy arrives wired. A
+  //    forward bet on the DuckDB ecosystem ALONGSIDE N1's Iceberg REST Catalog.
+  //    Unset only when the Azure Postgres quota gate trips → the DuckLake editor
+  //    honest-gates (Fix-it); N1's IRC and every other surface are unaffected.
+  //    Not a Fabric dependency.
+
   {
     id: 'svc-ducklake-catalog', category: 'data-plane', title: 'DuckLake catalog (Postgres-backed lakehouse metadata) — Preview', severity: 'optional',
     required: ['LOOM_DUCKLAKE_CATALOG_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_DUCKLAKE_CATALOG_URL to the connection string of the Postgres database that backs the DuckLake catalog metadata (postgresql://…/ducklake). DuckLake stores lakehouse table metadata in a SQL database instead of a metadata-file tree; the N2 DuckDB serving tier ATTACHes it (ducklake extension) and reads the Delta/Parquet data in place on your own ADLS Gen2. This is a Preview lab ALONGSIDE the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL), not a replacement — pick the catalog that matches your engine mix. Point it at an existing Azure Database for PostgreSQL flexible server (in-VNet, private endpoint). Unset → the DuckLake catalog editor renders a guided empty state and honest-gates; nothing else changes. No Microsoft Fabric.',
+      'LOOM_DUCKLAKE_CATALOG_URL is the connection string of the Postgres database that backs the DuckLake catalog metadata (postgresql://…/ducklake). DuckLake stores lakehouse table metadata in a SQL database instead of a metadata-file tree; the N2 DuckDB serving tier ATTACHes it (ducklake extension) and reads the Delta/Parquet data in place on your own ADLS Gen2. This is a lab ALONGSIDE the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL), not a replacement — pick the catalog that matches your engine mix. NOTHING TO DO on a normal deployment: platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep provisions the store by DEFAULT (private-endpoint-only Standard_B1ms flexible server) and admin-plane/main.bicep binds this var as a Key Vault secretRef, so a from-scratch deploy arrives wired. It is only unset when the Azure Postgres QUOTA gate trips (postgresQuotaAvailable=false — some sovereign subscriptions are restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers; request an increase at https://aka.ms/postgres-request-quota-increase and redeploy) or when you point it at your own server instead. Unset → the DuckLake catalog editor renders a guided empty state and honest-gates; nothing else changes. No Microsoft Fabric.',
     docs: 'https://ducklake.select/docs/stable/',
-    provisionedBy: 'operator-provided Azure Database for PostgreSQL flexible server (in-VNet); no new Loom app — the N2 DuckDB tier is the query engine. LOOM_DUCKLAKE_CATALOG_URL set on the Console app.',
+    provisionedBy: 'platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep — DEFAULT-ON, invoked by admin-plane/main.bicep (ducklakeCatalogActive). Private-endpoint-only Azure Database for PostgreSQL flexible server (Standard_B1ms, ~$16/mo/cloud); the assembled DSN is written to the Loom Key Vault and bound to the Console as the `loom-ducklake-catalog-url` secretRef — never a plain env value. No new Loom app: the N2 DuckDB tier is the query engine.',
+
     role: 'The N2 DuckDB tier UAMI reads the lake (Storage Blob Data Reader, already granted); the Postgres connection authenticates per the connection string (AAD token or a Key-Vault-stored credential).',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
@@ -240,18 +246,21 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     },
   },
   // ── N8 lab 3 — S3-compatible ADLS gateway (Preview) ──
-  //    Opt-in: expose an S3-compatible endpoint over ADLS for s3://-native OSS
-  //    clients. The MinIO gateway path is DROPPED (AGPL + deprecated); the
-  //    permissive path is an operator-deployed Apache-2.0 s3proxy in front of
-  //    ADLS. Unset → the surface documents that N1's IRC + ADLS SDK path already
-  //    covers most external-engine access without a gateway.
+  //    DEFAULT-ON since 2026-07 (loom_default_on_opt_out): an Apache-2.0
+  //    s3proxy Container App in front of ADLS, deployed by
+  //    data-plane/s3-gateway-aca.bicep — internal ingress, identity-based
+  //    storage auth, read-only, minReplicas 0 ($0 idle). The MinIO gateway path
+  //    stays DROPPED (AGPL + deprecated). Unset only when the apps tier is off →
+  //    the surface documents that N1's IRC + ADLS SDK path already covers most
+  //    external-engine access without a gateway.
+
   {
     id: 'svc-s3-gateway', category: 'data-plane', title: 'S3-compatible ADLS gateway (Apache-2.0 s3proxy) — Preview', severity: 'optional',
     required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_S3_GATEWAY_URL to the internal-ingress endpoint of an S3-compatible gateway placed in front of your ADLS Gen2 (an operator-deployed Apache-2.0 s3proxy — the AGPL-licensed MinIO gateway path is NOT used). This lets s3://-native OSS clients (Trino, Spark, DuckDB with the s3 extension) address the lake with an S3 API. In most cases you do NOT need a gateway: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data — deploy the gateway only for clients that speak S3 exclusively. Unset → the S3 gateway editor renders a guided empty state documenting the IRC/ADLS path and honest-gates the connection panel; nothing else changes. No Microsoft Fabric.',
+      'LOOM_S3_GATEWAY_URL is the internal-ingress endpoint of the S3-compatible gateway in front of your ADLS Gen2 — an Apache-2.0 s3proxy Container App (the AGPL-licensed MinIO gateway path is NOT used). It lets s3://-native OSS clients (Trino, Spark, DuckDB with the s3 extension) address the lake with an S3 API. NOTHING TO DO on a normal deployment: platform/fiab/bicep/modules/data-plane/s3-gateway-aca.bicep deploys the gateway by DEFAULT and admin-plane/main.bicep binds this var, so a from-scratch deploy arrives wired. It is only unset when the apps tier is off (deployAppsEnabled=false), on an AKS boundary where the workload deploys via the cluster GitOps path, or when no lake account is bound. Note you often do not NEED the gateway: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data. Unset → the S3 gateway editor renders a guided empty state documenting the IRC/ADLS path and honest-gates the connection panel; nothing else changes. No Microsoft Fabric.',
     docs: 'https://github.com/gaul/s3proxy',
-    provisionedBy: 'operator-deployed Apache-2.0 s3proxy Container App in front of ADLS Gen2 (out-of-band; the N1 IRC + ADLS SDK path is the default and needs no gateway). LOOM_S3_GATEWAY_URL set on the Console app.',
+    provisionedBy: 'platform/fiab/bicep/modules/data-plane/s3-gateway-aca.bicep — DEFAULT-ON, invoked by admin-plane/main.bicep (s3GatewayActive). Apache-2.0 s3proxy Container App: internal ingress only, identity-based ADLS auth (DefaultAzureCredential over the Console UAMI\'s IMDS endpoint — no account key, no SAS), s3proxy.read-only-blobstore=true, minReplicas 0 so it costs nothing at idle. The S3 wire credential is seed-derived (never the image\'s shipped local-identity/local-credential default), delivered as Container Apps secrets and mirrored to the Loom Key Vault as loom-s3-gateway-access-key / loom-s3-gateway-secret-key.',
     role: 'The s3proxy instance carries its own UAMI (Storage Blob Data Reader/Contributor on the lake as needed); the Console only reads the endpoint URL to render connect info.',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',

@@ -103,6 +103,14 @@ const REVIEWED_IMAGES = {
   // = "deltaio"), so it is the same Apache-2.0 codebase, not a third-party
   // redistribution under different terms.
   'deltaio/delta-sharing-server': 'Apache-2.0',
+  // github.com/gaul/s3proxy — Apache-2.0 (N8 S3-compatible ADLS gateway).
+  // Pre-reviewed rather than currently-reached: s3-gateway-aca.bicep pulls the
+  // unmodified upstream image directly, so there is no apps/*/Dockerfile FROM
+  // line for the walk below to catch. The entry exists so THIRD_PARTY_LICENSES
+  // .md's "every row whose Image column is populated resolves to REVIEWED_IMAGES"
+  // claim is true for the s3proxy row too, and so that baking it into a Loom
+  // image later needs no license re-review.
+  'andrewgaul/s3proxy': 'Apache-2.0',
 };
 
 /**
