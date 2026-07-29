@@ -22,6 +22,7 @@
 import crypto from 'node:crypto';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import { canonicalDatasetIdentity } from '@/lib/lineage/dataset-naming';
 
 export const LINEAGE_DENIED_KIND = 'lineage.cross-workspace-denied';
 export const LINEAGE_WRITE_KIND = 'lineage.harvested';
@@ -43,6 +44,16 @@ export interface CrossWorkspaceDenial {
 
 /** Authoritative audit row + SIEM emit for a cross-workspace write attempt. */
 export async function auditCrossWorkspaceDenial(opts: CrossWorkspaceDenial): Promise<void> {
+  // STRIP AT THE SINK, not only at the callers (round-3 class fix).
+  //
+  // The denial row persists `uri` into the Cosmos audit document's `target`
+  // and onto the SIEM stream. That is a durable credential store exactly like
+  // the thread edge, so the same rule applies. Round 2 stripped the harvest
+  // producer's uri and left the ingest producer passing `edge.toUri` RAW —
+  // the same defect, one door down. Canonicalizing HERE means no producer,
+  // present or future, can reopen it: there is one door left and it is inside
+  // this function.
+  const uri = canonicalDatasetIdentity(opts.uri);
   try {
     const audit = await auditLogContainer();
     await audit.items
@@ -54,7 +65,7 @@ export async function auditCrossWorkspaceDenial(opts: CrossWorkspaceDenial): Pro
         actorOid: opts.principal,
         at: new Date().toISOString(),
         kind: LINEAGE_DENIED_KIND,
-        target: opts.uri,
+        target: uri,
         detail: {
           producer: opts.producer,
           authorizedWorkspaceId: opts.authorizedWorkspaceId,
@@ -76,7 +87,7 @@ export async function auditCrossWorkspaceDenial(opts: CrossWorkspaceDenial): Pro
     tenantId: opts.authorizedWorkspaceId,
     detail: {
       producer: opts.producer,
-      uri: opts.uri,
+      uri,
       authorizedWorkspaceId: opts.authorizedWorkspaceId,
       targetWorkspaceId: opts.targetWorkspaceId,
     },

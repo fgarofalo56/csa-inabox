@@ -63,16 +63,34 @@ export function pathOwns(itemPath: string, uri: string): boolean {
 }
 
 /**
- * Longest-prefix owner of `uri` among the candidates, or null. `uri` is
- * canonicalized here so callers may pass any spelling.
+ * Longest-prefix owner of `uri` among the candidates, or null.
+ *
+ * `uri` is canonicalized here so callers may pass any spelling — and it is
+ * canonicalized BOTH ways, deliberately:
+ *
+ *   - FOLDED (`…/sales/_delta_log` → `…/sales`) is what makes a Spark
+ *     `COMPLETE` event over the Delta log join the pipeline's `…/sales` sink.
+ *   - UNFOLDED is what lets an item whose stored root legitimately ENDS in a
+ *     folded segment resolve ITSELF. Claims are canonicalized `{ fold: false }`
+ *     (see {@link statePaths} — folding a claim widens it), so an item rooted at
+ *     `…/sales/part-a` or `…/tbl/_delta_log` was compared against a folded
+ *     observation of exactly that folder, `pathOwns` failed, and the item
+ *     silently lost its own root: its dataset was written as an `external` node
+ *     or probed as foreign instead. Fail-closed, but real lost lineage.
+ *
+ * This does NOT re-widen anything. The claim is still taken literally; the
+ * unfolded target can only match paths genuinely at or under that literal
+ * claim, so the S5 attack (a `part-`-prefixed root swallowing its parent's
+ * siblings, thereby suppressing the cross-workspace forgery probe) stays shut.
  */
 export function resolveOwner(uri: string, candidates: PathItem[]): PathItem | null {
-  const target = canonicalStorageUri(uri);
+  const folded = canonicalStorageUri(uri);
+  const literal = canonicalStorageUri(uri, { fold: false });
   let best: PathItem | null = null;
   let bestLen = -1;
   for (const c of candidates) {
     for (const p of c.paths) {
-      if (pathOwns(p, target) && p.length > bestLen) {
+      if ((pathOwns(p, folded) || pathOwns(p, literal)) && p.length > bestLen) {
         best = c;
         bestLen = p.length;
       }

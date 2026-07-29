@@ -171,11 +171,24 @@ identity, per the [OpenLineage naming spec](https://openlineage.io/docs/spec/nam
 A dataset identity is **persisted** (thread edge, Cosmos document id, graph node
 id) and **rendered** (canvas node label), so it is treated as untrusted input:
 
-- `stripUriCredentials()` removes the query string (SAS `?sv=…&sig=…`) and URI
-  userinfo before parsing, and the account/container slots are charset-validated
-  so a `user:pass@host` pair cannot be captured as an account name. Nothing
-  reaches the store with a signature in it — asserted end-to-end in
-  `lib/lineage/__tests__/lineage-security.test.ts`.
+- `stripUriCredentials()` removes, before parsing: the query string (SAS
+  `?sv=…&sig=…`) and fragment; URI userinfo (`https://user:pass@acct…`);
+  abfss/wasbs authority userinfo that is **not a legal container name**; and a
+  malformed `host:<non-numeric>` tail.
+  The last two matter more than they look. A SAS does not have to arrive after a
+  `?`: `abfss://sv=…&sig=SECRET@acct.dfs…` and `abfss://c@acct:SECRET.dfs…` both
+  put credential material where the charset checks (`CONTAINER_RE` /
+  `ACCOUNT_RE`) only *rejected the parse* — and `canonicalStorageUri` then fell
+  through to its non-Azure passthrough, which returns the whole string, signature
+  included, as the persisted identity. The charset checks moved those leaks
+  rather than stopping them. Stripping in `stripUriCredentials` stops them, and
+  the passthrough is safe by construction.
+  Stated honestly: `CONTAINER_RE` **is** load-bearing (it is the abfss userinfo
+  oracle — mutating it to `/^.*$/` turns three specs red); `ACCOUNT_RE` is **not**
+  a credential defense and never was — it is a well-formedness check that keeps a
+  malformed authority out of the canonical `abfss://{container}@{account}` shape.
+  Asserted end-to-end in `lib/lineage/__tests__/lineage-security.test.ts` and
+  `lineage-security-r3.test.ts`.
 - An item's stored state path is canonicalized **without** the table-folder fold
   (`{ fold: false }`): folding an ownership CLAIM widens it to the parent folder,
   and a resolved local owner suppresses the cross-workspace forgery probe.
@@ -183,10 +196,29 @@ id) and **rendered** (canvas node label), so it is treated as untrusted input:
   item in another workspace is refused (never written, never labelled) and the
   denial is audited (`lineage.cross-workspace-denied`); harvest writes are
   audited too (`lineage.harvested`).
-- Caller-supplied run identifiers are validated before they drive a write: an
-  ADF `?runId=` must belong to the item's own `adfPipelineName`
-  (`getPipelineRun`), and a Livy `batchId` — which is POOL-scoped, not
-  item-scoped — must carry this item's submit-name prefix.
+- The denial audit strips too. `auditCrossWorkspaceDenial` canonicalizes the URI
+  it writes to the Cosmos audit `target` and the SIEM stream, **inside the
+  function**, not only at its callers — the audit log is a durable store exactly
+  like the thread edge, and one producer forgetting to strip is how the first
+  remediation left the ingest route leaking after the harvests were fixed.
+- Caller-supplied run identifiers gate **disclosure**, not only the write:
+  - **ADF / Synapse `?runId=`** must belong to the item's own bound pipeline
+    (`getPipelineRun` / `getPipelineRunOrNull`) before ANY activity `input`/
+    `output` is read, on all three routes that accept it —
+    `data-pipeline/[id]/output`, `synapse-pipeline/[id]/runs`, and
+    `adf-pipeline/[id]/runs`. On the ADF route the oracle runs inside the same
+    factory override as the activity read. The ownership answer is fail-closed
+    but not fail-stupid: a real 404 (a run past ADF's 45-day retention) falls
+    through to the Log Analytics `ADFPipelineRun` oracle, which is
+    PipelineName-filtered and returns the same last-50 set the runs list renders;
+    a transient 429/5xx propagates as a 502 instead of telling the owner their
+    run does not exist.
+  - **Livy `batchId`** is POOL-scoped, not item-scoped, and this estate runs one
+    shared pool. A batch without this item's submit-name prefix contributes no
+    lineage **and** comes back as a status-only projection: `livyInfo`
+    (jobCreationRequest = another team's argv, conf and storage paths), `log[]`,
+    `errorInfo`, `tags`, `submitterName` are dropped, with an honest
+    `redacted`/`redactedReason` the Runs tab renders instead of an empty log.
 
 Three joins were repaired by adopting it:
 

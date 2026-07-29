@@ -82,6 +82,21 @@ export interface StorageUriParts {
 // ---------------------------------------------------------------------------
 
 /**
+ * Storage account / container charsets (Azure: lowercase alphanumerics, plus
+ * inner dashes for containers). Enforced so nothing that is not genuinely an
+ * account/container name can occupy those slots — in particular a `user:pass@`
+ * userinfo pair, which `[^./]+` would otherwise happily capture as the account
+ * and carry a credential into the persisted identity. Length is deliberately
+ * NOT enforced (Azure's 3-char minimum is not a security property, and test /
+ * fixture names are shorter).
+ *
+ * Declared ABOVE {@link stripUriCredentials} because that function now uses
+ * CONTAINER_RE as its abfss/wasbs userinfo oracle — see its doc.
+ */
+const ACCOUNT_RE = /^[a-z0-9]{1,24}$/;
+const CONTAINER_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
  * Strip anything credential-bearing off a storage location BEFORE it is parsed,
  * canonicalized, persisted as a thread-edge endpoint, or rendered as a node
  * label.
@@ -96,11 +111,31 @@ export interface StorageUriParts {
  *
  * Removed:
  *   - the query string (`?sv=…&sig=…` — SAS) and the fragment;
- *   - URI userinfo (`https://user:password@acct.dfs…`).
+ *   - URI userinfo (`https://user:password@acct.dfs…`);
+ *   - abfss/wasbs authority userinfo that is NOT a legal container name;
+ *   - a malformed `host:<non-numeric>` tail in the authority.
  *
- * `container@account` is NOT userinfo and is preserved — the abfss/wasbs
- * authority legitimately uses `@`. Only a segment carrying a `:` (i.e. a
- * `user:password` pair) is dropped there.
+ * The last two are the round-3 fixes, and both are load-bearing. `container@
+ * account` is legitimate abfss/wasbs syntax, so the first cut preserved ANY
+ * colon-free userinfo there. But a query-string-free SAS smuggles in exactly
+ * that shape:
+ *
+ *     abfss://sv=2024-01-01&sig=SUPERSECRET@stloom.dfs.core.windows.net/silver
+ *
+ * `parseStorageUri` then rejected it (CONTAINER_RE fails on `=`/`&`) and
+ * `canonicalStorageUri` fell through to its non-Azure passthrough — which
+ * returns the whole string, signature included, as the PERSISTED identity. The
+ * charset check moved the leak, it did not stop it. Applying CONTAINER_RE here
+ * stops it: userinfo that cannot be a container is credential material and is
+ * dropped, so the fallback can never carry one either.
+ *
+ * The HOST slot had the identical defect one field over —
+ * `abfss://data@st:secret.dfs.core.windows.net/x` kept `secret` verbatim,
+ * because ACCOUNT_RE likewise only *rejected the parse* and handed the raw
+ * string to the same passthrough. An authority is `host[:port]` and a port is
+ * numeric, so a non-numeric `:tail` is not a host and is dropped. (Bracketed
+ * IPv6 literals are left alone; a real numeric port — `sqlserver://host:1433`,
+ * `https://acct…:443` — survives.)
  */
 export function stripUriCredentials(raw: string | null | undefined): string {
   let v = String(raw ?? '').trim();
@@ -112,31 +147,25 @@ export function stripUriCredentials(raw: string | null | undefined): string {
   const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/]*)(\/.*)?$/i.exec(v);
   if (m) {
     const [, scheme, authority, rest] = m;
+    let host = authority;
     const at = authority.lastIndexOf('@');
     if (at >= 0) {
       const userinfo = authority.slice(0, at);
-      // `container@account` (abfss/wasbs) has no colon; `user:pass@host` does.
       // https/http storage URLs never carry a container in the authority, so
-      // ANY userinfo there is a credential.
-      if (userinfo.includes(':') || /^https?:$/i.test(scheme.replace(/\/\/$/, ''))) {
-        v = `${scheme}${authority.slice(at + 1)}${rest || ''}`;
-      }
+      // ANY userinfo there is a credential. On abfss/wasbs the slot is the
+      // CONTAINER — keep it only when it can actually be one.
+      const isHttp = /^https?:$/i.test(scheme.replace(/\/\/$/, ''));
+      host = isHttp || !CONTAINER_RE.test(userinfo.toLowerCase())
+        ? authority.slice(at + 1)
+        : authority;
     }
+    // 3. malformed `host:<non-numeric>` — not a port, therefore not a host.
+    if (!host.startsWith('[')) host = host.replace(/:(?!\d+$)[^:]*$/, '');
+    v = `${scheme}${host}${rest || ''}`;
   }
   return v;
 }
 
-/**
- * Storage account / container charsets (Azure: lowercase alphanumerics, plus
- * inner dashes for containers). Enforced so nothing that is not genuinely an
- * account/container name can occupy those slots — in particular a `user:pass@`
- * userinfo pair, which `[^./]+` would otherwise happily capture as the account
- * and carry a credential into the persisted identity. Length is deliberately
- * NOT enforced (Azure's 3-char minimum is not a security property, and test /
- * fixture names are shorter).
- */
-const ACCOUNT_RE = /^[a-z0-9]{1,24}$/;
-const CONTAINER_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 /**
  * OneLake is Fabric's endpoint and is spelled `…/{workspace}/{lakehouse}/…`,
@@ -423,9 +452,16 @@ export function sqlDataset(parts: SqlDatasetParts): OpenLineageDatasetRef {
  *                      pipeline's SQL sink collapse onto the dbt / Unity
  *                      Catalog node for the same relation)
  *
- * Keeping this in ONE function is what guarantees the Spark emitter, the
- * pipeline emitter, and the dbt parser agree on the node id — so it is what the
- * harvest's endpoint resolver calls (see {@link canonicalDatasetIdentity}).
+ * SCOPE, honestly: the production write path calls
+ * {@link canonicalDatasetIdentity} on an ALREADY-JOINED uri (that is what
+ * `mapRunEventToEdges` hands the harvest), so this split-ref overload has no
+ * production caller today — only the naming specs, which use it to pin that a
+ * `{namespace, name}` pair and the joined uri reduce to the SAME id. Two
+ * earlier revisions of this comment claimed it was "what the harvest's endpoint
+ * resolver calls"; that was never true and is corrected here rather than
+ * quietly deleted. It is kept (not removed) because it is the natural entry
+ * point for a producer that has the split ref in hand, and the specs make its
+ * agreement with the joined path a standing invariant.
  */
 export function datasetEdgeId(ds: OpenLineageDatasetRef): string {
   const ns = stripUriCredentials(ds.namespace).replace(/\/+$/, '');

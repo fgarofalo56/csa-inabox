@@ -56,6 +56,7 @@ import { resolveOwner, loadWorkspacePathItems, findForeignOwner } from '@/lib/li
 // LU-8: the cross-workspace denial audit is SHARED with the Synapse harvests —
 // two producers writing one lineage store must audit denials identically.
 import { auditCrossWorkspaceDenial } from '@/lib/lineage/lineage-audit';
+import { canonicalDatasetIdentity } from '@/lib/lineage/dataset-naming';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import type { SessionPayload } from '@/lib/auth/session';
 
@@ -159,7 +160,13 @@ export async function POST(req: NextRequest) {
             producer: 'openlineage-ingest',
             authorizedWorkspaceId: auth.workspaceId,
             targetWorkspaceId: foreign.workspaceId,
-            uri: edge.toUri,
+            // Strip at the door, same as the Synapse harvests: `edge.toUri` is
+            // attacker-supplied and `datasetUri()` only lowercases it, so a
+            // SAS-bearing output dataset name would otherwise persist
+            // `sig=…` into the audit row and onto the SIEM stream.
+            // `auditCrossWorkspaceDenial` canonicalizes again — belt AND
+            // braces, deliberately.
+            uri: canonicalDatasetIdentity(edge.toUri),
             itemId: foreign.id,
           });
           return apiError(

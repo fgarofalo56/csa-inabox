@@ -77,6 +77,20 @@ const HARVESTED_MAX = 500;
 const harvested = new Set<string>();
 /** Keys currently being harvested — stops concurrent polls doubling the work. */
 const inFlight = new Set<string>();
+/**
+ * Where a budget-truncated pass stopped, per run key: the index into the
+ * pipeline's activity definitions that the NEXT poll should start from.
+ *
+ * Without this the budget was a treadmill. A truncated pass does not earn the
+ * dedupe key (correct — the tail is unharvested), but it still re-entered at
+ * activity 0 on the next poll, so on a slow/throttled factory every poll spent
+ * the full 8s re-resolving and REWRITING the same leading activities and never
+ * reached the tail. The per-principal 5/s limit does not bound that: it permits
+ * five 8-second fan-outs per second per user. A resume cursor makes each poll
+ * strictly advance instead — the writes are idempotent upserts, so replaying a
+ * boundary activity is harmless, but replaying the whole head forever is not.
+ */
+const resumeCursor = new Map<string, number>();
 
 /**
  * True when this run was ALREADY harvested successfully, or is being harvested
@@ -101,12 +115,14 @@ function markHarvested(key: string): void {
     harvested.delete(oldest);
   }
   harvested.add(key);
+  resumeCursor.delete(key);
 }
 
 /** Test hook — clears the dedupe set between cases. */
 export function __resetHarvestDedupe(): void {
   harvested.clear();
   inFlight.clear();
+  resumeCursor.clear();
 }
 
 /**
@@ -377,8 +393,15 @@ export async function harvestPipelineRunLineage(
     const cache = new Map<string, ResolvedAdfDataset | null>();
     const activities: CopyActivityLineage[] = [];
     let truncated = false;
-    for (const a of defs) {
+    // Resume where the last budget-truncated pass stopped, so each poll makes
+    // forward progress instead of re-walking the head of the pipeline forever.
+    const start = Math.min(resumeCursor.get(key) ?? 0, defs.length);
+    let cursor = start;
+    for (let i = start; i < defs.length; i += 1) {
+      const a = defs[i];
+      cursor = i;
       if (Date.now() > deadline) { truncated = true; break; } // wall clock, not just a page cap
+      cursor = i + 1;
       const type = String(a?.type || '');
       if (type.toLowerCase() !== 'copy') continue; // only Copy declares a dataset pair
       const name = String(a?.name || '');
@@ -404,7 +427,11 @@ export async function harvestPipelineRunLineage(
       });
     }
     if (!activities.length) {
-      if (!truncated) markHarvested(key);
+      if (truncated) {
+        resumeCursor.set(key, cursor);
+      } else {
+        markHarvested(key);
+      }
       return { ...EMPTY, reason: truncated ? 'harvest budget exhausted — will resume on the next poll' : 'no Copy activity with a resolvable source and sink' };
     }
 
@@ -442,9 +469,11 @@ export async function harvestPipelineRunLineage(
       denied,
     });
     // Only a COMPLETE pass earns the dedupe key — a partial/failed one must be
-    // retried by the next poll.
-    if (!truncated) markHarvested(key);
-    return { ok: true, events: events.length, written, skipped, denied };
+    // retried by the next poll, which resumes from the cursor rather than
+    // rewriting the activities this pass already wrote.
+    if (truncated) resumeCursor.set(key, cursor);
+    else markHarvested(key);
+    return { ok: true, events: events.length, written, skipped, denied, ...(truncated ? { reason: `harvest budget exhausted after ${cursor}/${defs.length} activities — resumes on the next poll` } : {}) };
   } catch (e) {
     return { ...EMPTY, ok: false, error: (e as Error)?.message || String(e) };
   } finally {

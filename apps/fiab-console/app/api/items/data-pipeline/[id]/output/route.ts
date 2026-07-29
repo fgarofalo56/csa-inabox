@@ -71,11 +71,34 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
       // ids are factory-scoped, so without this an authenticated owner of any
       // Loom pipeline could read another pipeline's activity input/output
       // payloads and stamp its datasets into their own lineage graph.
-      const run = await getPipelineRun(runId).catch(() => null);
+      //
+      // The oracle has TWO sources, deliberately, because the first cut of this
+      // gate (`getPipelineRun(runId).catch(() => null)` → 404) broke the very
+      // fallback this file exists for:
+      //   1. ARM `Pipeline Runs - Get` — authoritative inside ADF's 45-day
+      //      retention window. Returns null ONLY on a real 404; a transient
+      //      429/5xx THROWS (no `.catch`) and surfaces as a 502, so throttling
+      //      can never tell an owner their run does not exist.
+      //   2. Log Analytics — past 45 days ARM 404s every run, even ones the
+      //      runs LIST below still shows via `laFallback: true`. The LA query
+      //      is `PipelineName == adfName`-filtered and returns exactly the same
+      //      last-50 set that list renders, so every historical run the UI
+      //      invites the user to click is decidable here, and a run belonging
+      //      to another pipeline is absent from it by construction.
+      let run: Awaited<ReturnType<typeof getPipelineRun>> = await getPipelineRun(runId);
+      let runSource: 'adf' | 'log-analytics' = 'adf';
+      if (!run) {
+        const laWsForOwnership = adfLogAnalyticsWorkspace();
+        if (laWsForOwnership) {
+          const laRuns = await listPipelineRunsFromLA(laWsForOwnership, adfName).catch(() => []);
+          const hit = laRuns.find((r) => r.runId === runId);
+          if (hit) { run = hit; runSource = 'log-analytics'; }
+        }
+      }
       if (!run || run.pipelineName !== adfName) return apiError('run not found', 404);
 
       let activities = await listActivityRuns(runId);
-      let source: 'adf' | 'log-analytics' = 'adf';
+      let source: 'adf' | 'log-analytics' = runSource;
       const laWs = adfLogAnalyticsWorkspace();
       if (activities.length === 0 && laWs) {
         try {
