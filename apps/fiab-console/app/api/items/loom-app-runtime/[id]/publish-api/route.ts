@@ -11,6 +11,7 @@
  *   - other apps get a passthrough `GET /` (edit operations in the APIM editor).
  * Azure-native (APIM + Container Apps) — no Fabric/Power BI.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
@@ -23,7 +24,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function slug(s: string): string {
-  return (s || 'app').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 55) || 'app';
+  return slugify(s || 'app', { allow: /[^a-z0-9]+/g, max: 55, fallback: 'app' });
 }
 
 export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {

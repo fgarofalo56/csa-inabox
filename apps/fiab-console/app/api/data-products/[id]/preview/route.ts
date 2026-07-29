@@ -30,6 +30,7 @@
  * Success: { ok:true, database, table, kql, columns, columnTypes, rows (<=25) }
  */
 
+import { kqlIdent } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -116,7 +117,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   // hyphens and special characters; `take` is a read-only operator with no
   // side effects. We do NOT interpolate any user-supplied input — only the
   // server-resolved tableName from Cosmos state is used.
-  const kql = `["${tableName.replace(/"/g, '\\"')}"] | take ${PREVIEW_ROWS}`;
+  const kql = `${kqlIdent(tableName)} | take ${PREVIEW_ROWS}`;
 
   try {
     const result = await executeQuery(database, kql);

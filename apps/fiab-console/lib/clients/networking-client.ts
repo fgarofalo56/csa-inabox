@@ -31,6 +31,7 @@
  *   https://learn.microsoft.com/rest/api/virtualnetwork/private-dns-zone-groups/create-or-update
  */
 
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -977,7 +978,7 @@ export interface StorageTrustedAccessState {
 
 /** Validate + normalize a full storage-account ARM id; honest 400 otherwise. */
 export function assertStorageAccountArmId(id: string): string {
-  const trimmed = (id || '').trim().replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes((id || '').trim());
   if (!STORAGE_ACCOUNT_ID_RE.test(trimmed)) {
     throw new NetworkingArmError(
       'storageAccountId must be a full ARM id: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{name}',
@@ -1072,7 +1073,7 @@ export async function removeStorageResourceInstance(
   tenantId?: string,
 ): Promise<StorageTrustedAccessState> {
   const id = assertStorageAccountArmId(storageAccountId);
-  const target = (resourceId || '').trim().replace(/\/+$/, '').toLowerCase();
+  const target = trimTrailingSlashes((resourceId || '').trim()).toLowerCase();
   if (!target.startsWith('/subscriptions/')) {
     throw new NetworkingArmError('resourceId must be a full ARM id (/subscriptions/…)', 400);
   }

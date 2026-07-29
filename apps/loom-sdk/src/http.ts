@@ -37,9 +37,13 @@ export interface LoomClientOptions {
   fetch?: typeof fetch;
 }
 
-/** Strip a trailing slash so URL joins are stable. */
+/** Strip trailing slashes so URL joins are stable. Linear scan — the old
+ *  `/\/+$/` regex backtracks quadratically on long slash runs
+ *  (CodeQL js/polynomial-redos). */
 export function normalizeBaseUrl(url: string): string {
-  return url.replace(/\/+$/, '');
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return end === url.length ? url : url.slice(0, end);
 }
 
 export class HttpTransport {

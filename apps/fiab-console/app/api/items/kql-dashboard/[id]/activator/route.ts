@@ -27,6 +27,7 @@
  * evaluation); otherwise the record carries the honest on-demand note.
  * No Fabric workspace, Reflex, or Power BI anywhere on this path.
  */
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -87,7 +88,7 @@ function composeTileAlertQuery(
 ): string {
   const base = tileKql.trim();
   if (fireOn !== 'condition') return base;
-  const prop = (cond.property || 'value').trim().replace(/"/g, '\\"');
+  const prop = kqlEscapeDouble((cond.property || 'value').trim());
   const op = mapOp(cond.operator);
   const raw = String(cond.threshold ?? '0').trim();
   const numeric = /^-?\d+(\.\d+)?$/.test(raw) && op !== 'contains';

@@ -15,6 +15,7 @@
  * Body: { from:{id,type,name}, values:{ table:'name|adlsPath', targetLayer, transform, targetLakehouseId } }
  * Returns: { ok, message, code, link, linkLabel } | { ok:false, error }
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, createOwnedItem } from '../../items/_lib/item-crud';
@@ -33,7 +34,7 @@ function bad(error: string, status = 400) {
 
 /** Sanitize a Delta table name for use as a target folder / Python literal. */
 function safeTableName(s: string): string {
-  return String(s).replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'table';
+  return trimEdges(String(s).replace(/[^A-Za-z0-9_]/g, '_'), '_') || 'table';
 }
 
 /**

@@ -376,7 +376,7 @@ export function dfsUrl(account: string): string {
  * is unit-testable without the SQL/identity native dependency chain.
  */
 export function httpsToAbfss(httpsUrl: string): string {
-  const suffix = dfsSuffix().replace(/\./g, '\\.');
+  const suffix = dfsSuffix().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const m = (httpsUrl || '').match(
     new RegExp(`^https://([^.]+)\\.${suffix}/([^/]+)/(.*)$`, 'i'),
   );

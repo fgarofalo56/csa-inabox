@@ -6,9 +6,11 @@
  * `kusto-client.ts` imports `buildCreateMaterializedViewCommand` from here.
  */
 
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
+
 /** Bracket-quote a Kusto entity name: `Raw Events` → `["Raw Events"]`. */
 export function bracketName(name: string): string {
-  return `["${name.replace(/"/g, '\\"')}"]`;
+  return `["${kqlEscapeDouble(name)}"]`;
 }
 
 /**

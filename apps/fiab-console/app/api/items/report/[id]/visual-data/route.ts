@@ -48,6 +48,7 @@
  *   502  → a backend execution error (surfaced verbatim)
  */
 
+import { slugify as sharedSlugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeQuery } from '@/lib/azure/synapse-sql-client';
@@ -298,14 +299,7 @@ async function buildRecordset(
 
 /** Spreadsheet-safe slug for the download filename. */
 function slugify(s: string): string {
-  return (
-    (s || 'visual')
-      .toString()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'visual'
-  );
+  return sharedSlugify(s || 'visual', { allow: /[^a-z0-9]+/g, max: 60, fallback: 'visual' });
 }
 
 /** RFC-4180 CSV with a leading UTF-8 BOM (U+FEFF) so Excel opens unicode

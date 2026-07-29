@@ -25,6 +25,7 @@
  *
  * No mocks. Every call hits real Graph REST.
  */
+import { trimChar } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
@@ -109,11 +110,10 @@ async function graphFetch(path: string, init?: RequestInit): Promise<any> {
 
 /** Slugify a workspace name into a valid Graph mailNickname (letters/digits/dashes). */
 export function mailNicknameFor(name: string): string {
-  const base = (name || 'loom-workspace')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 56);
+  const base = trimChar(
+    (name || 'loom-workspace').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    '-',
+  ).slice(0, 56);
   return base || `loom-ws-${Math.random().toString(36).slice(2, 8)}`;
 }
 

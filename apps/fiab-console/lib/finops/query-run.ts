@@ -23,6 +23,7 @@
  * a query. Server-only (Node crypto + the Cosmos ledger).
  */
 import { createHash } from 'node:crypto';
+import { stripSqlCommentsAndLiterals } from '@/lib/util/sql-strip';
 import {
   ATTRIBUTION_RATES,
   recordCostAttribution,
@@ -45,17 +46,17 @@ export type QueryRunEngine = Extract<
 export function statementFingerprint(statement: string | undefined | null): string | null {
   const raw = (statement || '').toString();
   if (!raw.trim()) return null;
-  const normalized = raw
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')      // block comments
-    .replace(/--[^\n\r]*/g, ' ')            // SQL line comments
-    .replace(/\/\/[^\n\r]*/g, ' ')          // KQL/Trino line comments
-    // ReDoS-safe: the negated classes EXCLUDE the backslash so `\\.` and the
-    // class cannot both match it. The original `[^']` / `[^"]` overlapped with
-    // `\\.`, making the alternation ambiguous and exponential on an unterminated
-    // literal (CodeQL js/redos, HIGH) — reachable because these run on
-    // user-authored SQL/KQL/DAX from the query editors.
-    .replace(/'(?:''|\\.|[^'\\])*'/g, "'?'")  // single-quoted literals
-    .replace(/"(?:\\.|[^"\\])*"/g, '"?"')     // double-quoted literals
+  // Comments + quoted literals come out in ONE linear scan. The regex
+  // spellings were the ReDoS surface here: the original `'(?:''|\\.|[^'])*'`
+  // alternation was exponential (CodeQL js/redos, HIGH — fixed by excluding
+  // the backslash from the negated class), and the block-comment matcher is
+  // polynomial in EVERY regex spelling on an unterminated `/*` + `a/*`*n pump
+  // (measured 14.7s). A scanner has no backtracking to exploit.
+  const normalized = stripSqlCommentsAndLiterals(raw, {
+    doubleSlashLineComments: true,
+    stringPlaceholder: "'?'",
+    doubleQuotePlaceholder: '"?"',
+  })
     .replace(/\b\d+(?:\.\d+)?\b/g, '?')     // numeric literals
     .replace(/\s+/g, ' ')
     .trim()

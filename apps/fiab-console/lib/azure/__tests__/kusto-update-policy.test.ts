@@ -74,7 +74,41 @@ describe('setTableUpdatePolicy', () => {
       IsEnabled: true, Source: 'src', Query: "src | where name == 'x'",
       IsTransactional: false, PropagateIngestionProperties: false,
     }]);
-    expect((lastBody.csl as string)).toContain("\\'x\\'");
+    // `@'…'` is a VERBATIM literal: backslash is a plain character there, so
+    // the previous `\'` escape left the quote LIVE. This assertion used to
+    // require `\'x\'` — i.e. it LOCKED IN the breakout. Verbatim literals
+    // escape by DOUBLING the quote.
+    expect((lastBody.csl as string)).toContain("''x''");
+    expect((lastBody.csl as string)).not.toContain("\\'");
+  });
+
+  it('a quote in the caller-supplied Query cannot terminate the @\'…\' literal', async () => {
+    // /api/adx/policies passes body.query straight through. Before the fix,
+    // `'` + arbitrary text escaped the literal into raw management-command text.
+    await setTableUpdatePolicy('db1', 'tgt', [{
+      IsEnabled: true, Source: 'src', Query: "x' | .drop table Victim //",
+      IsTransactional: false, PropagateIngestionProperties: false,
+    }]);
+    const csl = lastBody.csl as string;
+    const open = csl.indexOf("@'") + 2;
+    // Scan the verbatim literal the way ADX lexes it: '' is an escaped quote,
+    // a lone ' terminates. The literal must run to the LAST character.
+    let i = open;
+    for (; i < csl.length; i++) {
+      if (csl[i] === "'") {
+        if (csl[i + 1] === "'") { i++; continue; }
+        break;
+      }
+    }
+    expect(i).toBe(csl.length - 1);     // terminator is the FINAL char
+    expect(csl.slice(i + 1)).toBe('');  // nothing is left outside the literal
+    // The injected text is present but INERT — it lives inside the literal, so
+    // ADX parses it as policy JSON, never as command text. (Asserting its
+    // absence would be wrong: the payload is legitimately part of the Query.)
+    expect(csl.slice(open, i)).toContain('.drop table Victim');
+    // Round-trips as JSON with the payload intact (undoing the '' doubling).
+    const parsed = JSON.parse(csl.slice(open, i).replace(/''/g, "'"));
+    expect(parsed[0].Query).toBe("x' | .drop table Victim //");
   });
 });
 

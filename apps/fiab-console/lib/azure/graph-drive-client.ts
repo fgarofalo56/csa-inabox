@@ -31,6 +31,7 @@
  * non-functional state is an honest gate (GraphDriveNotConfiguredError → 503).
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   ChainedTokenCredential,
@@ -328,7 +329,7 @@ export async function listDriveChildren(args: {
   assertEnabled();
   const { driveId } = args;
   if (!driveId) throw new GraphDriveError(400, 'driveId is required', 'bad_request');
-  const prefix = (args.prefix || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes(args.prefix || '');
   const top = Math.min(Math.max(args.top ?? 200, 1), 999);
   const select = 'id,name,size,folder,file,lastModifiedDateTime,webUrl,parentReference';
 
@@ -368,7 +369,7 @@ export async function resolveSharingUrl(url: string): Promise<{ driveId: string;
   const u = (url || '').trim();
   if (!/^https?:\/\//i.test(u)) throw new GraphDriveError(400, 'A SharePoint/OneDrive https URL is required', 'bad_request');
   // Per Graph: base64url-encode the URL, prefix "u!", strip padding.
-  const b64 = Buffer.from(u, 'utf8').toString('base64').replace(/=+$/, '').replace(/\//g, '_').replace(/\+/g, '-');
+  const b64 = Buffer.from(u, 'utf8').toString('base64url'); // unpadded url-safe alphabet — no `=+$` trimming
   const shareId = `u!${b64}`;
   const select = 'id,name,size,folder,file,lastModifiedDateTime,webUrl,parentReference';
   const it = await graphFetch<any>(`/shares/${encodeURIComponent(shareId)}/driveItem?$select=${select}&$expand=`);

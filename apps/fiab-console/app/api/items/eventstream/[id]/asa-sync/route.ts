@@ -21,6 +21,7 @@
  * module + LOOM_ASA_RG. No mock writes.
  */
 
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
@@ -59,7 +60,7 @@ interface SinkLike {
 
 /** ASA output aliases must be alphanumeric + dashes/underscores. */
 function aliasFor(name: string, idx: number): string {
-  const cleaned = (name || '').trim().replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  const cleaned = trimEdges((name || '').trim().replace(/[^A-Za-z0-9_-]/g, '-'), '-');
   return cleaned || `output-${idx + 1}`;
 }
 

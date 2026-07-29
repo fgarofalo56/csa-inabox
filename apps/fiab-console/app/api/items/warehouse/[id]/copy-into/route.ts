@@ -15,6 +15,7 @@
  *   https://learn.microsoft.com/sql/t-sql/statements/copy-into-transact-sql?view=azure-sqldw-latest
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { apiOk, apiError, apiServerError, apiUnauthorized } from '@/lib/api/respond';
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest) {
     return apiOk({ containers: [...KNOWN_CONTAINERS] });
   }
   if (!isKnownContainer(container)) return apiError(`unknown container: ${container}`, 404);
-  const prefix = (req.nextUrl.searchParams.get('prefix') || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes(req.nextUrl.searchParams.get('prefix') || '');
   if (prefix.includes('..')) return apiError('invalid prefix', 400);
   try {
     const entries = await listPaths(container, prefix, 200);

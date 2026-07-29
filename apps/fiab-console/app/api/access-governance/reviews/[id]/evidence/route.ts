@@ -19,6 +19,7 @@
  * Tenant-admin only, via the shared route-toolkit (`withTenantAdmin`). Azure-native
  * (Cosmos `access-review-evidence`) — no Fabric dependency.
  */
+import { slugify as sharedSlugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { accessReviewsContainer } from '@/lib/azure/cosmos-client';
@@ -30,7 +31,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function slugify(s: string): string {
-  return (s || 'campaign').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase().slice(0, 60) || 'campaign';
+  return sharedSlugify(s || 'campaign', { allow: /[^a-z0-9]+/g, max: 60, fallback: 'campaign' });
 }
 
 export const GET = withTenantAdmin<{ id: string }>(async (req: NextRequest, { params }) => {

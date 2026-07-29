@@ -174,9 +174,10 @@ const NODE_H = 86;
 // best-effort) projection.
 // =============================================================================
 
-/** Quote a DFS string literal. */
+/** Quote a DFS string literal. Backslash FIRST — quote-only escaping lets a
+ *  value ending in `\` re-arm the generated literal's closing quote. */
 function q(v: unknown): string {
-  return `'${String(v ?? '').replace(/'/g, "\\'")}'`;
+  return `'${String(v ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
 /** Inputs feeding a transform, ordered by slot, as upstream stream names. */

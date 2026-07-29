@@ -25,6 +25,7 @@
  * run main.bicep (or grant separately) to wire the Loom Console to them. That
  * is disclosed in the generated header (no vaporware).
  */
+import { bicepStringLiteral } from '@/lib/util/bicep-literal';
 import {
   SERVICE_CATALOG, serviceByKey, resolveConfigValue, type ConfigField, type ConfigValue,
 } from './service-catalog';
@@ -106,7 +107,7 @@ function moduleSymbol(key: string): string {
 function formatValue(field: ConfigField, value: ConfigValue): string {
   const asInt = field.emit === 'int' || (field.emit === undefined && field.type === 'number');
   if (asInt) return String(Math.round(Number(value)));
-  return `'${String(value).replace(/'/g, "\\'")}'`;
+  return bicepStringLiteral(value);
 }
 
 /** A safe `resourceGroupName` default slug from the subscription name. */

@@ -21,6 +21,7 @@
  * On success the deployment receipt (monitor rule ids + optional foundryAgentId +
  * lastDeployedAt) is persisted back to the Cosmos item.
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -49,8 +50,8 @@ const ITEM_TYPE = 'operations-agent';
 /** Build a Foundry-Agent-Service-compatible name from a Loom item id. */
 function foundryAgentName(itemId: string): string {
   const base = `loom-ops-${itemId}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  const trimmed = base.replace(/^-+|-+$/g, '').slice(0, 63);
-  return trimmed.replace(/^-+|-+$/g, '') || `loom-ops-${itemId.slice(0, 8)}`;
+  const trimmed = trimEdges(base, '-').slice(0, 63);
+  return trimEdges(trimmed, '-') || `loom-ops-${itemId.slice(0, 8)}`;
 }
 
 function stateToolsToFoundry(raw: unknown): Array<Record<string, unknown>> {

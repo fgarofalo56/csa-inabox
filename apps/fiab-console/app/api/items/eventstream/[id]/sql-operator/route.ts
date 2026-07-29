@@ -33,6 +33,7 @@
  * LOOM_ASA_RG; AsaTestNotAvailableError → 501 naming LOOM_ASA_TEST_WRITE_URI.
  */
 
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
@@ -126,7 +127,7 @@ function cleanSink(raw: any): SqlSink {
 
 /** ASA output aliases must be alphanumeric + dashes/underscores. */
 function aliasFor(name: string, idx: number): string {
-  const cleaned = (name || '').trim().replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  const cleaned = trimEdges((name || '').trim().replace(/[^A-Za-z0-9_-]/g, '-'), '-');
   return cleaned || `output-${idx + 1}`;
 }
 

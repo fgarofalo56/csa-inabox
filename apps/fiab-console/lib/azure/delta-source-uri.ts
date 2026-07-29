@@ -8,6 +8,7 @@
  * hard-coded domain.
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { dfsSuffix, getBlobSuffix } from './cloud-endpoints';
 
 export interface DeltaSourceRef {
@@ -27,11 +28,11 @@ export interface DeltaSourceRef {
 export function parseDeltaSource(uri: string): DeltaSourceRef | null {
   const u = (uri || '').trim();
   // abfss://container@account.dfs.suffix/path
-  let m = u.match(/^abfss:\/\/([^@]+)@([^.]+)\.dfs\.[^/]+\/?(.*)$/i);
-  if (m) return { container: m[1], account: m[2], path: (m[3] || '').replace(/^\/+|\/+$/g, '') };
+  let m = u.match(/^abfss:\/\/([^@]+)@([^.]+)\.dfs\.[^/]+(?:\/(.*))?$/i);
+  if (m) return { container: m[1], account: m[2], path: trimSlashes(m[3] || '') };
   // https://account.(dfs|blob).suffix/container/path
-  m = u.match(/^https:\/\/([^.]+)\.(?:dfs|blob)\.[^/]+\/([^/]+)\/?(.*)$/i);
-  if (m) return { account: m[1], container: m[2], path: (m[3] || '').replace(/^\/+|\/+$/g, '') };
+  m = u.match(/^https:\/\/([^.]+)\.(?:dfs|blob)\.[^/]+\/([^/]+)(?:\/(.*))?$/i);
+  if (m) return { account: m[1], container: m[2], path: trimSlashes(m[3] || '') };
   return null;
 }
 

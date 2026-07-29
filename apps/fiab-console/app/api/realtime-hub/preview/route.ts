@@ -23,6 +23,7 @@
  * surface verbatim with a 502.
  */
 
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeQuery, defaultDatabase, normalizeClusterUri, KustoError } from '@/lib/azure/kusto-client';
@@ -35,7 +36,7 @@ const DEFAULT_LIMIT = 50;
 
 /** Quote a Kusto identifier as ["name"] and escape embedded quotes. */
 function kqlIdent(name: string): string {
-  return `["${String(name).replace(/"/g, '\\"')}"]`;
+  return `["${kqlEscapeDouble(String(name))}"]`;
 }
 
 export async function POST(req: NextRequest) {

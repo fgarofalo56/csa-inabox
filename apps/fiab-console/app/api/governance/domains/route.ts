@@ -8,6 +8,7 @@
  * Audit:    every mutation → Cosmos audit-log (kind: governance-domain.*),
  *           surfaced in the existing Admin → Audit Logs reader.
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getDomainsStore, DomainsBackendGateError } from '@/lib/azure/domains-client';
@@ -96,12 +97,13 @@ export async function POST(req: NextRequest) {
   const tenantId = s.claims.oid;
   const who = s.claims.upn || tenantId;
   const body = await req.json().catch(() => ({}));
-  const id = (body?.id || '')
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/^-+|-+$/g, '');
+  // `[^a-z0-9-]` PERMITS the dash, so a dash run from the body survives the
+  // collapse and `-+$` then retried it from every offset (quadratic —
+  // CodeQL js/polynomial-redos). trimEdges is a linear index scan.
+  const id = trimEdges(
+    (body?.id || '').toString().trim().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+    '-',
+  );
   const name = (body?.name || '').toString().trim();
   if (!id || !name)
     return NextResponse.json({ ok: false, error: 'id and name are required' }, { status: 400 });

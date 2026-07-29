@@ -17,6 +17,7 @@
  *   UpdatedEntityState, ChangeCommand, Principal
  */
 
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeMgmtCommand, KustoError } from '@/lib/azure/kusto-client';
@@ -26,7 +27,7 @@ export const dynamic = 'force-dynamic';
 
 /** KQL bracketed-string quote for a (possibly hyphenated) db name. */
 function qName(name: string): string {
-  return `["${name.replace(/"/g, '\\"')}"]`;
+  return `["${kqlEscapeDouble(name)}"]`;
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {

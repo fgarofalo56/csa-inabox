@@ -28,6 +28,7 @@
  *   - EH/SB/Key Vault (non-scannable) → 400 + actionable reason.
  *   - 401/403 from the data plane → surfaced with the upstream status.
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
@@ -47,11 +48,9 @@ export const dynamic = 'force-dynamic';
 
 /** Purview source names allow letters/digits/-/_; squash everything else. */
 function sanitizeSourceName(raw: string): string {
-  return (raw || '')
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 63) || 'source';
+  // The allow-class permits `-`, so a caller dash run is not collapsed and the
+  // old `-+$` branch was quadratic over it. Linear edge trim instead.
+  return trimEdges((raw || '').trim().replace(/[^A-Za-z0-9_-]+/g, '-'), '-').slice(0, 63) || 'source';
 }
 
 const CONN_TYPES: ConnectionType[] = [

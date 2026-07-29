@@ -3,6 +3,7 @@
  * POST /api/items/apim-api      — create an API. Body: { id?, displayName, path, protocols?, subscriptionRequired?, serviceUrl?, format?, value? }
  */
 
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listApis, upsertApi, apimConfigGate, ApimError } from '@/lib/azure/apim-client';
@@ -11,7 +12,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `api-${Date.now()}`;
+  return slugify(s, { max: 80 }) || `api-${Date.now()}`;
 }
 
 /**

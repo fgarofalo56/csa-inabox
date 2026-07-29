@@ -11,6 +11,7 @@
  * — single source of truth, no extra env var.
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { type TokenCredential } from '@azure/identity';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
@@ -357,7 +358,7 @@ export async function listPaths(
   account?: string,
 ): Promise<PathEntry[]> {
   const fs = getFileSystem(container, account);
-  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const cleanPrefix = trimSlashes(prefix);
   const iter = fs.listPaths({
     path: cleanPrefix || undefined,
     recursive: false,
@@ -391,7 +392,7 @@ export async function countParquetFiles(
   cap = 100_000,
 ): Promise<{ count: number; bytes: number; capped: boolean }> {
   const fs = getFileSystem(container, account);
-  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const cleanPrefix = trimSlashes(prefix);
   const iter = fs.listPaths({ path: cleanPrefix || undefined, recursive: true });
   let count = 0;
   let bytes = 0;
@@ -465,7 +466,7 @@ export async function aggregatePrefixUsage(
   account?: string,
   cap = 250_000,
 ): Promise<PrefixUsage> {
-  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const cleanPrefix = trimSlashes(prefix);
   const out: PrefixUsage = {
     liveBytes: 0,
     liveFiles: 0,
@@ -686,7 +687,7 @@ export function resolveAbfssRoot(container: KnownContainer, rootPath: string): s
   const m = url.match(/^https:\/\/([^/]+)/i);
   const dfsHost = m?.[1];
   if (!dfsHost) return null;
-  const clean = rootPath.replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes(rootPath);
   return `abfss://${container}@${dfsHost}/${clean}`;
 }
 

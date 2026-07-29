@@ -3,6 +3,7 @@
  * POST /api/items/apim-product           — upsert product. Body: { id?, displayName, description?, state?, subscriptionRequired?, approvalRequired? }
  *   POST is idempotent: if `id` is supplied (or derived from displayName) and the product exists, it is updated.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listProducts, upsertProduct, apimConfigGate, ApimError } from '@/lib/azure/apim-client';
@@ -11,7 +12,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `product-${Date.now()}`;
+  return slugify(s, { max: 80 }) || `product-${Date.now()}`;
 }
 
 /**

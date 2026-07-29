@@ -13,6 +13,7 @@
  *
  * Foundry Agent Service not configured → 501 + hint (honest infra gate).
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -37,8 +38,8 @@ const ITEM_TYPE = 'data-agent';
 
 function foundryAgentName(itemId: string): string {
   const base = `loom-data-${itemId}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  const trimmed = base.replace(/^-+|-+$/g, '').slice(0, 63);
-  return trimmed.replace(/^-+|-+$/g, '') || `loom-data-${itemId.slice(0, 8)}`;
+  const trimmed = trimEdges(base, '-').slice(0, 63);
+  return trimEdges(trimmed, '-') || `loom-data-${itemId.slice(0, 8)}`;
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

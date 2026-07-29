@@ -34,6 +34,8 @@
  *     https://learn.microsoft.com/fabric/data-engineering/materialized-lake-views/data-quality
  */
 
+import { trimChar } from '@/lib/util/trim';
+import { stripSqlCommentsAndLiterals } from '@/lib/util/sql-strip';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** Authoring language for the MLV definition. */
@@ -89,7 +91,7 @@ export function isValidIdentifier(s: string): boolean {
 
 /** Sanitize a fragment for use as an ADLS path segment. */
 export function safeSegment(s: string): string {
-  return String(s).replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'mlv';
+  return trimChar(String(s).replace(/[^A-Za-z0-9_]/g, '_'), '_') || 'mlv';
 }
 
 /** The fully-qualified view name `schema.view` used in lineage + SQL. */
@@ -143,23 +145,38 @@ export function buildCreateMlvSql(spec: MlvSpec): string {
  * (skips subqueries, CTE aliases, and table-valued functions). Used to derive
  * lineage edges — best-effort, never throws.
  */
+/** indexOf for a whole word — linear, no regex backtracking. */
+function wordIndexOf(haystackLower: string, word: string, from: number): number {
+  const isWordChar = (ch: string | undefined) => !!ch && /[A-Za-z0-9_]/.test(ch);
+  let i = from;
+  for (;;) {
+    i = haystackLower.indexOf(word, i);
+    if (i < 0) return -1;
+    if (!isWordChar(haystackLower[i - 1]) && !isWordChar(haystackLower[i + word.length])) return i;
+    i += 1;
+  }
+}
+
 export function extractSqlSources(sql: string): string[] {
   if (!sql) return [];
   // Strip block + line comments and string literals so keywords inside them
-  // don't produce phantom sources.
-  const cleaned = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/'(?:[^']|'')*'/g, " '' ");
+  // don't produce phantom sources. ONE linear scan — every regex spelling of
+  // a block comment backtracks polynomially on an unterminated `/*` (CodeQL
+  // js/polynomial-redos; the MLV SQL is authored by the user in the editor).
+  const cleaned = stripSqlCommentsAndLiterals(sql);
 
   // Collect CTE names (WITH <name> AS ( … )) so we exclude self-references.
+  // Bounded by indexOf, not `/\bwith\b([\s\S]*?)\bselect\b/i` — that lazy span
+  // re-scans from every `with` when no `select` follows (quadratic).
   const cteNames = new Set<string>();
-  const cteRe = /\bwith\b([\s\S]*?)\bselect\b/i;
-  const cteMatch = cteRe.exec(cleaned);
-  if (cteMatch) {
+  const lower = cleaned.toLowerCase();
+  const withIdx = wordIndexOf(lower, 'with', 0);
+  const selectIdx = withIdx >= 0 ? wordIndexOf(lower, 'select', withIdx + 4) : -1;
+  if (withIdx >= 0 && selectIdx > withIdx) {
+    const head = cleaned.slice(withIdx + 4, selectIdx);
     const re = /([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(/gi;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(cteMatch[1])) !== null) cteNames.add(m[1].toLowerCase());
+    while ((m = re.exec(head)) !== null) cteNames.add(m[1].toLowerCase());
   }
 
   const sources = new Set<string>();
@@ -168,8 +185,11 @@ export function extractSqlSources(sql: string): string[] {
   while ((m = re.exec(cleaned)) !== null) {
     const ref = m[1].replace(/[`"\[\]]/g, '');
     // Skip table-valued functions (followed by `(`) and CTE references.
-    const after = cleaned.slice(re.lastIndex).trimStart();
-    if (after.startsWith('(')) continue;
+    // Index scan, NOT `cleaned.slice(...).trimStart()` — that copied the whole
+    // remaining statement on every match (quadratic on a from/join flood).
+    let k = re.lastIndex;
+    while (k < cleaned.length && /\s/.test(cleaned[k])) k++;
+    if (cleaned[k] === '(') continue;
     if (cteNames.has(ref.toLowerCase())) continue;
     sources.add(ref);
   }

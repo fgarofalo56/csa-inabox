@@ -32,6 +32,7 @@
  *   the response rather than failing the whole call (the Cosmos persist already
  *   succeeded). No mocks, no placeholders — real Azure REST or honest gate.
  */
+import { trimChar } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { normalizePurviewAccountName, purviewBaseSync } from '@/lib/azure/purview-endpoints';
@@ -383,7 +384,7 @@ export async function POST(req: NextRequest) {
         error: 'A UC metastore id is required to register the Azure Databricks Unity Catalog source in Purview. Attach a metastore first (or select one above).',
       };
     } else {
-      const sourceName = `adbuc-${host.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 50)}`;
+      const sourceName = `adbuc-${trimChar(host.replace(/[^a-z0-9]+/gi, '-'), '-').slice(0, 50)}`;
       try {
         const ds = await registerDatabricksUnityCatalogSource({
           name: sourceName,

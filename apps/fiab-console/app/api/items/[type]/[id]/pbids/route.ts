@@ -23,6 +23,7 @@
  * Entra sign-in on open and the Navigator picks tables/model.
  */
 
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
@@ -93,7 +94,7 @@ function pick(state: any, keys: string[]): string {
 }
 
 function safeFilename(name: string): string {
-  const base = (name || 'data-source').replace(/[^A-Za-z0-9 ._-]+/g, '_').replace(/\s+/g, '-').replace(/^[._-]+|[._-]+$/g, '').slice(0, 80);
+  const base = trimEdges((name || 'data-source').replace(/[^A-Za-z0-9 ._-]+/g, '_').replace(/\s+/g, '-'), '._-').slice(0, 80);
   return `${base || 'data-source'}.pbids`;
 }
 

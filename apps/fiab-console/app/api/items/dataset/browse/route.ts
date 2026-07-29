@@ -12,6 +12,7 @@
  * lakehouse explorer uses; honest gate when the DLZ lake isn't wired.
  */
 
+import { trimSlashes, trimTrailingSlashes } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest) {
       uri: `abfss://${container}@${dfsHost}/${(p.name || '').replace(/^\/+/, '')}`,
       dataType: p.isDirectory ? 'uri_folder' : 'uri_file',
     }));
-    const folderUri = `abfss://${container}@${dfsHost}/${prefix.replace(/^\/+|\/+$/g, '')}`.replace(/\/+$/, '');
+    const folderUri = trimTrailingSlashes(`abfss://${container}@${dfsHost}/${trimSlashes(prefix)}`);
     return NextResponse.json({ ok: true, container, prefix, account, dfsHost, folderUri, paths });
   } catch (e: any) {
     const status = e?.statusCode === 404 ? 404 : 502;

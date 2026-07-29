@@ -24,6 +24,7 @@
  * 503  { ok: false, code: 'not_configured', missing, hint } — honest infra gate
  */
 
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
@@ -160,7 +161,7 @@ function deriveProvisionFromSaved(
 
 /** Lowercase, hyphenated, hub-name-safe slug (Event Hub entity names: a-z0-9-._). */
 function safeName(raw: string, fallback: string): string {
-  const s = (raw || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const s = slugify(raw || '', { allow: /[^a-z0-9._-]+/g });
   return s || fallback;
 }
 

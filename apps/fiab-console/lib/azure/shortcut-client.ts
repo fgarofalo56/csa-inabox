@@ -21,6 +21,7 @@
  * (Cosmos reads/writes + a live ADLS HEAD / listPaths). No mock arrays.
  */
 
+import { trimLeadingSlashes, trimSlashes, trimTrailingSlashes } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   parseAbfss as parseEngineAbfss,
@@ -625,7 +626,7 @@ export async function browseAdls(args: AdlsBrowseArgs): Promise<BrowseResult> {
   const container = (args.container || '').trim();
   if (!account) throw new ShortcutSourceError('ADLS storage account is required', 'adls_bad_target', 400);
   if (!container) throw new ShortcutSourceError('ADLS container/filesystem is required', 'adls_bad_target', 400);
-  const prefix = (args.prefix || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes(args.prefix || '');
   const maxResults = Math.min(Math.max(args.maxResults ?? 200, 1), 1000);
   let rows: PathEntry[];
   try {
@@ -670,8 +671,8 @@ export function parseAbfss(uri: string): { account: string; container: string; p
 
 export async function listDataverseEntities(args: DataverseBrowseArgs): Promise<BrowseResult> {
   const { account, container, path } = parseAbfss(args.exportAbfssUri);
-  const base = path.replace(/\/+$/, '');
-  const prefix = args.prefix ? `${base}/${args.prefix.replace(/^\/+/, '')}`.replace(/\/+$/, '') : base;
+  const base = trimTrailingSlashes(path);
+  const prefix = args.prefix ? trimTrailingSlashes(`${base}/${trimLeadingSlashes(args.prefix)}`) : base;
   const result = await browseAdls({ account, container, prefix, maxResults: args.maxResults });
   // Re-base entry names relative to the export root so the tree reads as tables.
   return result;

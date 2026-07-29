@@ -26,6 +26,7 @@
  * missing.
  */
 
+import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
@@ -258,7 +259,7 @@ async function handleOneLake(_id: string, body: any): Promise<NextResponse> {
   // .ingest into table T (h'<url>') ; storage authn is via the cluster's
   // managed identity. If the cluster's MI doesn't have RBAC on the path,
   // ADX will return a clear error which we surface.
-  const command = `.ingest into table ["${table}"] (h'${path.replace(/'/g, "\\'")}')${formatClause}`;
+  const command = `.ingest into table ["${table}"] (h'${kqlEscapeSingle(path)}')${formatClause}`;
   try {
     const result = await executeMgmtCommand(database, command);
     return NextResponse.json({

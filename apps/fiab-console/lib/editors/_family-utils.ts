@@ -9,8 +9,11 @@
  *   - exported through named exports only
  *
  * Anything that needs to render UI lives in the editor .tsx file; this is
- * the "math" half.
+ * the "math" half. (kql-escape is a pure zero-import module — the
+ * dependency-free contract holds.)
  */
+
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 
 // ============================================================
 // ADLS path helpers (geo-editors.tsx)
@@ -300,7 +303,7 @@ export function buildEntityChangeQuery(
   defaultTable?: string,
 ): string {
   const table = (defaultTable || process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents').trim() || 'AppEvents';
-  const et = String(entityType || '').replace(/"/g, '\\"');
+  const et = kqlEscapeDouble(String(entityType || ''));
   const src = String(sourceItemId || '').replace(/[\r\n]/g, ' ');
   return [
     `// Loom ontology entity-change trigger — ${sourceKind} ${src}`,

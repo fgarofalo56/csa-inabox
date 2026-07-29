@@ -38,6 +38,7 @@
  * Gov-specific audience, so the scope is cloud-invariant (unlike the host).
  */
 
+import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { armBase, armScope, isGovCloud } from './cloud-endpoints';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
 import { fetchWithTimeout } from './fetch-with-timeout';
@@ -239,7 +240,7 @@ async function lookupViaArm(account: string): Promise<ResolvedPurviewEndpoints |
   const base = armBase().replace(/\/+$/, '');
   const auth = { authorization: `Bearer ${token.token}`, 'content-type': 'application/json' };
 
-  const nameLit = account.replace(/'/g, "\\'");
+  const nameLit = kqlEscapeSingle(account);
   const query = [
     'Resources',
     `| where type =~ 'microsoft.purview/accounts' and name =~ '${nameLit}'`,

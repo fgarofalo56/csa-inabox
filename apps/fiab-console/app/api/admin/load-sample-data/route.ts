@@ -21,6 +21,7 @@
  * Requires Kusto Database Admin or Ingestor role on the Loom ADX cluster.
  */
 
+import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
@@ -187,7 +188,7 @@ function parseTable(create: string, ingest: string): { name: string; schema: str
     .split(',')
     .map((c) => {
       const [col, type] = c.split(':').map((x) => x.trim());
-      return `['${col.replace(/'/g, "\\'")}']:${(type || 'string').toLowerCase()}`;
+      return `['${kqlEscapeSingle(col)}']:${(type || 'string').toLowerCase()}`;
     })
     .join(', ');
   const lines = ingest.split('\n');

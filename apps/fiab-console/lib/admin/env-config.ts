@@ -22,6 +22,7 @@
  * Pure data + helpers — no Azure SDK import — so it is unit-testable and safe to
  * import from both the BFF route and (the type only) the client pane.
  */
+import { bicepStringLiteral } from '@/lib/util/bicep-literal';
 import { ENV_CHECKS, VALUE_HINT, CTX, type AuditCategory, type AuditSeverity, type EnvSpec } from './self-audit';
 
 export interface EditableEnvVar {
@@ -196,7 +197,7 @@ export function buildSyncArtifacts(
     cli.push(`az containerapp update --name "${app}" --resource-group "${adminRg}" \``);
     cli.push(`  --set-env-vars ${[plainArgs, secretArgs].filter(Boolean).join(' ')}`);
   }
-  const bicepLines = Object.entries(changes).map(([k, v]) => `            { name: '${k}', value: '${v.replace(/'/g, "\\'")}' }`);
+  const bicepLines = Object.entries(changes).map(([k, v]) => `            { name: '${k}', value: ${bicepStringLiteral(v)} }`);
   for (const k of secretKeys) {
     bicepLines.push(`            { name: '${k}', secretRef: '${k.toLowerCase().replace(/[^a-z0-9-]/g, '-')}' }  // value via Key Vault / secret`);
   }

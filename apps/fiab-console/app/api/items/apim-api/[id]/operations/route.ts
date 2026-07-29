@@ -9,6 +9,7 @@
  * Real ARM REST (PUT/DELETE …/apis/{id}/operations/{opId}). Session-guarded,
  * honest 503 infra-gate, ApimError passthrough — mirrors /api/apim/apis.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
@@ -42,7 +43,7 @@ function fail(e: any) {
 
 /** APIM operation ids must match ^[\w]+$-ish; slug a display name when none given. */
 function slugOp(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `op-${Date.now()}`;
+  return slugify(s, { max: 80 }) || `op-${Date.now()}`;
 }
 
 function toBody(b: any): ApimOperationBody {

@@ -10,6 +10,7 @@
  * vaporware). main.bicep forwards each param to its deploy-planner module, so
  * the exported file applies the chosen SKU/tier — not just the module default.
  */
+import { bicepStringLiteral } from '@/lib/util/bicep-literal';
 import {
   flagsForServices, SERVICE_CATALOG, serviceByKey, resolveConfigValue, type ConfigField,
 } from './service-catalog';
@@ -30,7 +31,7 @@ export const BOUNDARY_DEFAULT_REGION: Record<string, string> = {
 function formatBicepValue(field: ConfigField, value: ConfigValue): string {
   const asInt = field.emit === 'int' || (field.emit === undefined && field.type === 'number');
   if (asInt) return String(Math.round(Number(value)));
-  return `'${String(value).replace(/'/g, "\\'")}'`;
+  return bicepStringLiteral(value);
 }
 
 export function planToBicepparam(sub: PlanSubscription): string {

@@ -12,6 +12,7 @@
  * we use a fixed value to keep partition cardinality reasonable).
  */
 
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import type { Container } from '@azure/cosmos';
 import { CosmosClient } from '@azure/cosmos';
@@ -229,7 +230,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const container = await getContainer();
-    const id = String(body.id || body.name).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || `tmpl-${Date.now()}`;
+    const id = slugify(String(body.id || body.name), { max: 64 }) || `tmpl-${Date.now()}`;
     const doc: TemplateDoc = {
       id,
       tenantId: TENANT_PK,

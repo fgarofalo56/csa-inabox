@@ -19,6 +19,7 @@
  *        configured / has no warehouse.
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   KNOWN_CONTAINERS,
@@ -57,7 +58,7 @@ function isKnownContainer(c: string): boolean {
 
 /** Reject path traversal + leading/trailing slashes. */
 function cleanTablePath(p: string): string | null {
-  const t = (p || '').trim().replace(/^\/+|\/+$/g, '');
+  const t = trimSlashes((p || '').trim());
   if (!t) return null;
   if (t.includes('..')) return null;
   return t;
