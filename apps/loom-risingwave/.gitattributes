@@ -1,0 +1,5 @@
+# The hardening script + smoke test run inside a Linux container -- CRLF would
+# break the `#!/bin/sh` shebang and `set -eu`. Force LF regardless of platform.
+*.sh text eol=lf
+*.py text eol=lf
+*.java text eol=lf
