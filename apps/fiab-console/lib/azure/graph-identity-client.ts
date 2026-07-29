@@ -59,6 +59,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
@@ -173,7 +174,7 @@ function assertEnabled(): void {
 async function graphFetch(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<Response> {
   const token = await credential.getToken(GRAPH_SCOPE);
   if (!token?.token) throw new GraphIdentityError(500, null, 'Failed to acquire Microsoft Graph token');
-  const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
+  const url = resolveSameOriginUrl(GRAPH_V1, path, 'graph-identity Graph');
   return fetchWithTimeout(url, {
     ...init,
     cache: 'no-store',

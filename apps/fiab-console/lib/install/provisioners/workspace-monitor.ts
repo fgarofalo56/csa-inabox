@@ -64,6 +64,7 @@ import {
   MonitorNotConfiguredError,
 } from '@/lib/azure/monitor-client';
 import { armBase } from '@/lib/azure/cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 
@@ -288,7 +289,7 @@ const ARM = armBase();
 
 async function armPut(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: any }> {
   const t = await armCredential.getToken(`${ARM}/.default`);
-  const res = await fetchWithTimeout(path.startsWith('http') ? path : `${ARM}${path}`, {
+  const res = await fetchWithTimeout(resolveSameOriginUrl(ARM, path, 'workspace-monitor ARM'), {
     method: 'PUT',
     headers: { authorization: `Bearer ${t?.token}`, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),

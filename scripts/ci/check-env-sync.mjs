@@ -75,6 +75,9 @@ const ALLOWLIST_PATTERNS = [
 // ── Explicit allowlist: named vars that are runtime-derived, ambient, or opt-in.
 // Seeded from the CURRENT tree (2026-07). Each MUST carry a reason.
 const ALLOWLIST = new Set([
+  // ---- Operator-approved egress allow-lists (opt-in, unset by default) ----
+  'LOOM_UDF_ALLOWED_FUNCTION_BASES', // opt-in EXTRA function-host bases an operator approves for a per-item baseUrl override (lib/azure/function-endpoint-policy.ts); the day-one base is LOOM_UDF_FUNCTION_BASE, which bicep emits
+  'LOOM_FABRIC_UDF_ALLOWED_HOSTS',   // opt-in EXTRA Fabric UDF hosts, only meaningful when the opt-in Fabric backend is selected (LOOM_UDF_BACKEND=fabric + LOOM_FABRIC_UDF_HOST)
   // ---- Build / ambient (injected by the container runtime or platform, not app bicep) ----
   'LOOM_CONSOLE_URL',               // read only inside GENERATED hosted-app source (workshop eject-to-code server.js template in _palantir-codegen.ts) — the eject route seeds it as an app binding; never a console-runtime var
   'LOOM_READ_WARMER_DISABLED',      // runtime-only opt-out for the dashboard read-warmer (lib/perf/read-warmer.ts) — warming is on by default, never a deploy dependency

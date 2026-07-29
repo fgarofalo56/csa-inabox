@@ -22,6 +22,7 @@ import {
   DLZ_TEMPLATE_ENV,
 } from '@/lib/setup/user-arm-deploy';
 import { fetchWithTimeout, withDeadline } from '@/lib/azure/fetch-with-timeout';
+import { deployWorkflowFor } from '@/lib/setup/deploy-workflows';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -810,13 +811,9 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
     IL5: 'platform/fiab/bicep/params/il5.bicepparam',
   };
   if (shouldDispatchWorkflow()) {
-    const workflowByBoundary: Record<string, string> = {
-      Commercial: 'deploy-fiab-commercial.yml',
-      GCC: 'deploy-fiab-gcc.yml',
-      'GCC-High': 'deploy-fiab-gcch.yml',
-      IL5: 'deploy-fiab-gcch.yml',
-    };
-    const workflowFile = workflowByBoundary[body.boundary!] || 'deploy-fiab-commercial.yml';
+    // Single source of truth shared with GET /api/setup/workflow-run-status, so
+    // the poll side can validate against exactly what the dispatch side may send.
+    const workflowFile = deployWorkflowFor(body.boundary);
     const dispatchInputs: Record<string, string> = {
       run_mode: 'full',
       topology,

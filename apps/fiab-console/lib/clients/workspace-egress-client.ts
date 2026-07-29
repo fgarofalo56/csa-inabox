@@ -59,6 +59,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { isValidCidr, nextPriority } from '@/lib/clients/networking-client';
 import { listNetworkSecurityGroups, type NsgInfo } from '@/lib/azure/network-discovery';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 const ARM_SCOPE = armScope();
 const NSG_API = '2024-05-01';
@@ -341,7 +342,7 @@ async function armToken(): Promise<string> {
 
 async function armReq<T>(method: string, path: string, body?: unknown): Promise<T> {
   const tk = await armToken();
-  const url = path.startsWith('http') ? path : `${armBase()}${path}`;
+  const url = resolveSameOriginUrl(armBase(), path, 'workspace-egress ARM');
   const res = await fetchWithTimeout(url, {
     method,
     headers: {

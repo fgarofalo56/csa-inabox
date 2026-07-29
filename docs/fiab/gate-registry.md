@@ -124,6 +124,7 @@ grant), `wizard` (multi-setting flow).
 | `svc-plan-writeback` | plan SQL server + db | Plan mirror | resource-picker | **yes** (Cosmos-native regardless) |
 | `svc-dab-runtime` | `LOOM_DAB_PREVIEW_URL` | DAB testers, ontology Try-it | env-picker | **yes** (bicep-derived, default on) |
 | `svc-udf-function` | `LOOM_UDF_FUNCTION_BASE` | UDF Invoke | env-picker | deploy (default on) |
+| `svc-udf-endpoint-approval` | `LOOM_UDF_ALLOWED_FUNCTION_BASES` / `LOOM_FABRIC_UDF_ALLOWED_HOSTS` | UDF Invoke + ontology function invoke, ONLY when an item/registry row overrides the base URL | **deliberately none — operator-only** (see note 6) | **yes** (never fires on the configured base) |
 | `svc-dbt` | `LOOM_DBT_RUNNER_URL` | dbt runs | env-picker | — |
 | `svc-approval-logicapp` | `LOOM_APPROVAL_LOGIC_APP_NAME` | pipeline approvals | env-picker | — |
 | `svc-copyjob-control` | copy-job control SQL | copy-job watermarks | resource-picker | — |
@@ -188,3 +189,13 @@ described above (one `*ConfigGate()` producer per backend client).
    `LOOM_LAKEBASE_BACKEND`, `LOOM_USAGE_REPORT_KIND`, `LOOM_REPORT_KIND` could
    move to the platform-settings store (per-tenant, effective immediately) like
    `LOOM_BI_BACKEND` already did.
+6. **`svc-udf-endpoint-approval` has NO Fix-it button, on purpose** (issue
+   #2652). Every other gate's Fix-it wizard writes the missing setting from the
+   UI; here the "missing setting" is an EGRESS ALLOW-LIST, and the caller asking
+   for the fix is exactly the untrusted party. A Fix-it wizard would let any
+   authenticated user add an attacker-controlled host to the list and then
+   receive a Key Vault secret in the `x-functions-key` header — the defect the
+   gate exists to stop. It is therefore an operator-only env change, documented
+   verbatim in the gate text. This is the one sanctioned exception to the G2
+   "every gate ships a Fix-it" rule; it never fires on the bicep-configured
+   base, only on a per-item / per-registry-row override.

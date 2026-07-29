@@ -52,6 +52,7 @@ import { listStorageAccounts, type StorageAccountSummary } from '@/lib/azure/sto
 import { azureConnectionsContainer } from '@/lib/azure/cosmos-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { walkPagedList, type PagedEnvelope } from '@/lib/azure/paging-budget';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 // ---------------------------------------------------------------------------
 // Built-in role GUIDs (global across every Azure cloud).
@@ -182,7 +183,7 @@ async function armToken(): Promise<string> {
 
 async function armGet<T = any>(pathOrUrl: string, timeoutMs?: number): Promise<T> {
   const token = await armToken();
-  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${armBase()}${pathOrUrl}`;
+  const url = resolveSameOriginUrl(armBase(), pathOrUrl, 'azure-connections ARM');
   // fetchWithTimeout, not bare fetch: this runs on a BFF request path, and an
   // ARM round-trip with NO deadline is the unbounded await #2557 exists to kill.
   const res = await fetchWithTimeout(url, {

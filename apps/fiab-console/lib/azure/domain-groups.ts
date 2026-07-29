@@ -35,6 +35,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -83,7 +84,7 @@ async function graphToken(): Promise<string> {
 
 async function graphFetch(path: string, init?: RequestInit): Promise<any> {
   const token = await graphToken();
-  const url = path.startsWith('http') ? path : `${graphBase()}${path}`;
+  const url = resolveSameOriginUrl(graphBase(), path, 'domain-groups Graph');
   const res = await fetchWithTimeout(url, {
     ...init,
     headers: {

@@ -30,11 +30,29 @@ Two source resolution modes (both REAL — no fake results):
      bundled sample — executes. This lets the BFF forward the editor's live
      source without a per-function redeploy.
 
+SECURITY — who may push source (CodeQL py/code-injection, issue #2653):
+    Executing the pushed body IS the product: this is a function host, and the
+    Loom BFF is its only legitimate caller. The defect was that the pushed-source
+    path was UNAUTHENTICATED — every workload sharing the Container Apps
+    environment could POST Python here and have it executed. Two changes close it:
+
+      * The host now requires a shared key (LOOM_UDF_HOST_KEY, delivered by
+        udf-runtime.bicep to this app AND to the Console) on any request that
+        carries X-Udf-Source-B64. It is compared in constant time and the request
+        is REFUSED (401) when the key is absent or wrong. FAIL-CLOSED: when
+        LOOM_UDF_HOST_KEY is unset the host refuses pushed source altogether and
+        serves only its bundled functions — an un-keyed deployment cannot be
+        talked into running attacker code.
+      * The container app no longer carries the Console user-assigned managed
+        identity (udf-runtime.bicep), so code executed here has no ambient Azure
+        credential to lift from IMDS.
+
 Pure Python standard library only (http.server) so the container needs no pip
 install at start — the stock python image runs it directly, mirroring how the
 DAB runtime runs a stock engine image.
 """
 import base64
+import hmac
 import json
 import os
 import sys
@@ -47,6 +65,20 @@ if APP_DIR not in sys.path:
 
 DEFAULT_SOURCE_PATH = os.path.join(APP_DIR, "udf", "function_app.py")
 PORT = int(os.environ.get("PORT") or os.environ.get("FUNCTIONS_HTTPWORKER_PORT") or 8080)
+#: Shared key the Loom BFF presents to push per-request source. Empty => pushed
+#: source is refused outright (bundled functions still execute normally).
+HOST_KEY = (os.environ.get("LOOM_UDF_HOST_KEY") or "").strip()
+
+
+def source_push_allowed(presented):
+    """Constant-time check of the caller's key against LOOM_UDF_HOST_KEY.
+
+    Returns False when no key is configured — pushed source is only ever
+    executed for a caller that proved it holds the deployment's key.
+    """
+    if not HOST_KEY:
+        return False
+    return hmac.compare_digest(str(presented or ""), HOST_KEY)
 
 
 def load_functions(source_code):
@@ -81,7 +113,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
         self.send_header("access-control-allow-origin", os.environ.get("LOOM_UDF_CORS_ORIGIN", "*"))
-        self.send_header("access-control-allow-headers", "content-type,x-udf-source-b64,x-functions-key")
+        self.send_header(
+            "access-control-allow-headers",
+            "content-type,x-udf-source-b64,x-functions-key,x-loom-udf-key",
+        )
         self.send_header("access-control-allow-methods", "POST,GET,OPTIONS")
         self.end_headers()
         self.wfile.write(body)
@@ -114,6 +149,16 @@ class Handler(BaseHTTPRequestHandler):
         funcs = FUNCS
         override = self.headers.get("x-udf-source-b64")
         if override:
+            # Executing pushed source requires the deployment's shared key. No
+            # key configured => refuse (fail closed); wrong key => refuse.
+            if not source_push_allowed(self.headers.get("x-loom-udf-key")):
+                return self._send(401, {
+                    "error": (
+                        "pushed source rejected: this host only executes X-Udf-Source-B64 for a "
+                        "caller presenting X-Loom-Udf-Key. Set LOOM_UDF_HOST_KEY on the udf-runtime "
+                        "Container App and on the Console (udf-runtime.bicep wires both)."
+                    ),
+                })
             try:
                 funcs = load_functions(base64.b64decode(override).decode("utf-8"))
             except Exception as exc:  # noqa: BLE001

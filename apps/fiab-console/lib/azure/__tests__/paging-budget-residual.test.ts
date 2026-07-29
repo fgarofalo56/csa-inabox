@@ -79,8 +79,17 @@ function stubHangAfterFirstPage(firstBody: (call: number) => unknown, answerFirs
   return calls;
 }
 
-/** `{ value, nextLink }` — the ARM / Key Vault / Graph list envelope. */
-const pagedArm = (value: unknown[]) => ({ value, nextLink: 'https://arm.example.com/next?p=2' });
+/** `{ value, nextLink }` — the ARM / Key Vault / Graph list envelope.
+ *
+ * The nextLink is on the REAL ARM host on purpose: a service's continuation link
+ * is always same-origin with the service, and `resolveSameOriginUrl`
+ * (lib/azure/trusted-egress.ts, issue #2652) refuses a cross-origin one so a
+ * request-influenced "nextLink" can never carry the Console's ARM token
+ * off-tenant. A fake host here would exercise a shape ARM never emits. */
+const pagedArm = (value: unknown[]) => ({
+  value,
+  nextLink: 'https://management.azure.com/next?p=2',
+});
 
 beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -276,7 +285,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
   it('graph-identity-client getGroupTransitiveMembers truncates instead of rejecting', async () => {
     stubHangAfterFirstPage(() => ({
       value: [{ id: 'u1', displayName: 'User One', '@odata.type': '#microsoft.graph.user' }],
-      '@odata.nextLink': 'https://graph.example.com/next?p=2',
+      '@odata.nextLink': 'https://graph.microsoft.com/v1.0/next?p=2',
     }));
     const { getGroupTransitiveMembers } = await import('@/lib/azure/graph-identity-client');
 
@@ -326,7 +335,7 @@ describe('residual ARM pagers get a wall clock, and a breach TRUNCATES (#2582)',
         if (calls.length === 2) {
           return Promise.resolve(
             new Response(
-              JSON.stringify({ value: [{ id: 'someone-else' }], '@odata.nextLink': 'https://graph.example.com/next?p=2' }),
+              JSON.stringify({ value: [{ id: 'someone-else' }], '@odata.nextLink': 'https://graph.microsoft.com/v1.0/next?p=2' }),
               { status: 200, headers: { 'content-type': 'application/json' } },
             ),
           );

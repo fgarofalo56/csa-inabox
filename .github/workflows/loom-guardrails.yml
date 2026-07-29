@@ -34,6 +34,8 @@ jobs:
         run: node scripts/ci/check-env-sync.mjs
       - name: route-guards (cross-tenant BFF authorization)
         run: node scripts/ci/check-route-guards.mjs
+      - name: trusted-egress (absolute-URL passthrough in credential-bearing server code — #2652)
+        run: node scripts/ci/check-trusted-egress.mjs
       - name: no-freeform (raw-JSON config surfaces)
         run: node scripts/ci/check-no-freeform.mjs
       - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)

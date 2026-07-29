@@ -42,6 +42,7 @@ import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
 import { normalizePrivateLinkTargetId, privateDnsZoneNameForGroupId } from '@/lib/azure/pe-subresource-groups';
 import { listPrivateDnsZones } from '@/lib/azure/network-discovery';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -136,7 +137,7 @@ async function token(): Promise<string> {
 
 async function armReq<T>(method: string, path: string, body?: unknown): Promise<T> {
   const tk = await token();
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(ARM, path, 'networking ARM');
   const res = await fetch(url, {
     method,
     headers: {

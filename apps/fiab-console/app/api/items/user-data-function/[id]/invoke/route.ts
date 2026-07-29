@@ -23,20 +23,19 @@
  *      requirement, NOT a Fabric one. The full Test panel still renders.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getKeyVaultSecretValue, vaultUrl } from '@/lib/azure/kv-secrets-client';
+import { resolveFunctionBase, isAllowedFabricEndpoint } from '@/lib/azure/function-endpoint-policy';
 import { loadOwnedItem } from '../../../_lib/item-crud';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
   const b = await req.json().catch(() => ({}));
   const functionName = String(b?.functionName || '').trim();
   if (!functionName) return NextResponse.json({ ok: false, error: 'functionName is required' }, { status: 400 });
@@ -53,8 +52,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch { /* fall through to gate */ }
 
   // ── 1) Azure-native default: Azure Functions HTTP endpoint ────────────────
-  const fnBase: string | undefined = st.azureFunctionUrl
-    || (process.env.LOOM_UDF_FUNCTION_BASE ? process.env.LOOM_UDF_FUNCTION_BASE : undefined);
+  //
+  // SECURITY: `state.azureFunctionUrl` is arbitrary JSON any authenticated user
+  // can write via PATCH /api/items/user-data-function/<id>. It may therefore
+  // only SELECT one of the operator-configured bases — the string that is
+  // fetched below is the CONFIG value, never the item's. Without this an item
+  // could name an attacker's host and receive `x-functions-key`, i.e. any
+  // secret in the Loom Key Vault (see lib/azure/function-endpoint-policy.ts).
+  const resolvedBase = resolveFunctionBase(st.azureFunctionUrl);
+  if ('gate' in resolvedBase) {
+    if (st.azureFunctionUrl) {
+      return NextResponse.json(
+        { ok: false, gated: true, error: resolvedBase.gate.detail, hint: resolvedBase.gate.detail },
+        { status: 409 },
+      );
+    }
+  }
+  const fnBase: string | undefined = 'base' in resolvedBase ? resolvedBase.base : undefined;
   if (fnBase) {
     try {
       const url = `${fnBase.replace(/\/+$/, '')}/api/${encodeURIComponent(functionName)}`;
@@ -86,6 +100,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         // UDF; beyond it we let the deployed/bundled code run rather than push source.
         if (b64.length <= 256 * 1024) {
           headers['x-udf-source-b64'] = b64;
+          // The Loom UDF runtime executes pushed source ONLY for a caller that
+          // presents the deployment's shared key (issue #2653 — that path was
+          // unauthenticated, so anything in the Container Apps environment could
+          // run Python there). A real Azure Functions host ignores both headers.
+          const hostKey = (process.env.LOOM_UDF_HOST_KEY || '').trim();
+          if (hostKey) headers['x-loom-udf-key'] = hostKey;
           ranAuthoredSource = true;
         }
       }
@@ -108,10 +128,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   // ── 2) Fabric backend: OPT-IN ONLY (never on the default path) ────────────
   if (process.env.LOOM_UDF_BACKEND === 'fabric') {
-    const base: string | undefined = st.fabricEndpoint
+    // Same rule as the Azure-native path: `state.fabricEndpoint` is user-written,
+    // and this branch attaches a UAMI Fabric-scoped bearer token, so the endpoint
+    // must sit under a configured Fabric UDF host.
+    const requestedFabric: string | undefined = st.fabricEndpoint
       || (st.fabricWorkspaceId && st.fabricItemId && process.env.LOOM_FABRIC_UDF_HOST
         ? `${process.env.LOOM_FABRIC_UDF_HOST}/${st.fabricWorkspaceId}/${st.fabricItemId}`
         : undefined);
+    if (requestedFabric && !isAllowedFabricEndpoint(requestedFabric)) {
+      return NextResponse.json({
+        ok: false,
+        gated: true,
+        error: 'This item names a Fabric endpoint that is not approved for this deployment.',
+        hint: 'Set LOOM_FABRIC_UDF_HOST (or add the host to LOOM_FABRIC_UDF_ALLOWED_HOSTS) on the Console Container App. Loom will not send a managed-identity token to an endpoint that is not configured.',
+      }, { status: 409 });
+    }
+    const base: string | undefined = requestedFabric;
     if (base) {
       try {
         const t = await uamiArmCredential().getToken(FABRIC_SCOPE);
@@ -137,4 +169,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     error: 'This User Data Function has no execution backend configured yet.',
     hint: 'Azure-native default: deploy the function to an Azure Function App and set LOOM_UDF_FUNCTION_BASE on the Console Container App (e.g. https://my-udf.azurewebsites.net), or set state.azureFunctionUrl on this item. If the function requires a key, set state.functionKeySecret to the Key Vault secret name. (A Fabric backend is opt-in only via LOOM_UDF_BACKEND=fabric.)',
   }, { status: 409 });
-}
+});

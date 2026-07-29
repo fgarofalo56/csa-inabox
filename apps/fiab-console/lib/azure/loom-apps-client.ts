@@ -46,6 +46,7 @@ import {
   type LoomAppEnvVar,
   type LoomAppTemplate,
 } from './loom-apps-runtime-templates';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -183,7 +184,7 @@ async function armFetch(
   body?: unknown,
 ): Promise<{ status: number; json: any }> {
   const tk = await token();
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveSameOriginUrl(ARM, path, 'loom-apps ARM');
   const res = await fetchWithTimeout(url, {
     method,
     headers: {

@@ -26,10 +26,12 @@
 // function's actual return value, so the editor Test panel shows a real result
 // (no stub, per no-vaporware.md).
 //
-// Auth: the Console UAMI is assigned to the app (as DAB assigns it) so UDF code
-// can reach Azure data as that managed identity once RBAC is granted. The host
-// ingress is reachable by the console BFF; no extra role is needed to INVOKE it
-// (the BFF proxies), mirroring DAB which creates no in-module roleAssignment.
+// Auth: this app deliberately carries NO managed identity. It executes function
+// source authored by tenant users, so a platform credential inside that sandbox
+// would be liftable from IMDS by any authored function (issue #2653). The host
+// ingress is internal and reachable by the console BFF; no role is needed to
+// INVOKE it (the BFF proxies), mirroring DAB which creates no in-module
+// roleAssignment. Pushed source additionally requires the shared LOOM_UDF_HOST_KEY.
 //
 // INTEGRATION: wire udf-runtime into admin-plane/main.bicep — module invocation
 // gated by udfRuntimeEnabled, emit { name:'LOOM_UDF_FUNCTION_BASE', value:
@@ -42,9 +44,6 @@ param managedEnvironmentId string
 
 @description('Azure region.')
 param location string = resourceGroup().location
-
-@description('Console UAMI resource id (UDF code runs as this identity for Azure data access).')
-param uamiResourceId string
 
 @description('Deploy the UDF runtime host. When false the module deploys nothing and hostUrl is empty (invoke path stays honestly 409-gated).')
 param udfRuntimeEnabled bool = true
@@ -61,19 +60,33 @@ param hostPort int = 8080
 @description('CORS origin allowed to call the host directly (the Loom console origin). The BFF proxy path does not require this.')
 param corsOrigin string = '*'
 
+@description('Shared key the Console presents (X-Loom-Udf-Key) to push per-request UDF source. Leave empty to derive a stable per-deployment value; the host REFUSES pushed source when it resolves to empty.')
+@secure()
+param udfHostKey string = ''
+
 // Host code delivered as base64 secrets and materialised by the init container.
 // Source of truth is udf-runtime/*.py — reviewable, testable, real (see README).
 var appPyB64 = base64(loadTextContent('udf-runtime/app.py'))
 var fabricFuncsB64 = base64(loadTextContent('udf-runtime/fabric_functions.py'))
 var defaultSrcB64 = base64(loadTextContent('udf-runtime/default_function_app.py'))
 
+// Deterministic (stable across redeploys) but not guessable without the
+// subscription + resource-group ids. The host executes caller-pushed Python only
+// for a caller holding this key; the Console gets the same value via the
+// hostKey output (admin-plane/main.bicep → LOOM_UDF_HOST_KEY).
+var effectiveHostKey = empty(udfHostKey)
+  ? uniqueString(subscription().subscriptionId, resourceGroup().id, 'loom-udf-host-key')
+  : udfHostKey
+
 resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
   name: 'loom-udf-runtime'
   location: location
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: { '${uamiResourceId}': {} }
-  }
+  // NO managed identity, by design (CodeQL py/code-injection, issue #2653).
+  // This container executes function source authored by tenant users. Attaching
+  // the Console UAMI would put a platform-wide Azure credential inside that
+  // sandbox — any authored function could read it from IMDS and act as the
+  // Console across the estate. A future data binding must use its OWN
+  // least-privileged identity, never the Console's.
   properties: {
     managedEnvironmentId: managedEnvironmentId
     configuration: {
@@ -93,6 +106,7 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
         { name: 'app-py-b64', value: appPyB64 }
         { name: 'fabric-funcs-b64', value: fabricFuncsB64 }
         { name: 'default-src-b64', value: defaultSrcB64 }
+        { name: 'udf-host-key', value: effectiveHostKey }
       ]
     }
     template: {
@@ -126,6 +140,7 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
           env: [
             { name: 'PORT', value: string(hostPort) }
             { name: 'LOOM_UDF_CORS_ORIGIN', value: corsOrigin }
+            { name: 'LOOM_UDF_HOST_KEY', secretRef: 'udf-host-key' }
           ]
           resources: { cpu: json('0.5'), memory: '1Gi' }
           volumeMounts: [ { volumeName: 'udf-app', mountPath: '/app' } ]
@@ -142,4 +157,9 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
 
 @description('Wire this into LOOM_UDF_FUNCTION_BASE on the loom-console app. Empty when udfRuntimeEnabled is false.')
 output hostUrl string = udfRuntimeEnabled ? 'https://${udf.properties.configuration.ingress.fqdn}' : ''
+
+// NOTE: the key is NOT emitted as an output. admin-plane/main.bicep owns the
+// value (`loomUdfHostKey`) and passes it to BOTH this module and the Console's
+// `loom-udf-host-key` secret, so a secure value never has to travel back out
+// through a module output.
 output udfFqdn string = udfRuntimeEnabled ? udf.properties.configuration.ingress.fqdn : ''

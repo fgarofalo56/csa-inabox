@@ -39,6 +39,7 @@ import {
   type TokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
@@ -162,7 +163,7 @@ function assertEnabled(): void {
 async function graphFetch<T>(path: string): Promise<T> {
   const token = await credential.getToken(GRAPH_SCOPE);
   if (!token?.token) throw new GraphDriveError(500, 'Failed to acquire Microsoft Graph token', 'token_failure');
-  const url = path.startsWith('http') ? path : `${GRAPH_V1}${path}`;
+  const url = resolveSameOriginUrl(GRAPH_V1, path, 'graph-drive Graph');
   let res: Response;
   try {
     res = await fetchWithTimeout(url, {

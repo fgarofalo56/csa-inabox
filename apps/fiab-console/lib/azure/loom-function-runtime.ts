@@ -19,6 +19,7 @@
  */
 import { getKeyVaultSecretValue, vaultUrl } from '@/lib/azure/kv-secrets-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { resolveFunctionBase } from '@/lib/azure/function-endpoint-policy';
 import type { RegisteredFunction } from '@/lib/foundry/function-registry-model';
 
 /** Base URL of the Loom UDF runtime / an Azure Function App host. */
@@ -38,8 +39,20 @@ export interface FunctionRuntimeGate {
  * else a structured gate the route surfaces verbatim.
  */
 export function functionRuntimeGate(fn?: Pick<RegisteredFunction, 'baseUrlOverride'>): FunctionRuntimeGate | null {
-  if (fn?.baseUrlOverride) return null;
-  if (functionRuntimeBase()) return null;
+  // A `baseUrlOverride` only clears the gate when it names an APPROVED endpoint
+  // — it is a tenant-writable registry field, not configuration.
+  const resolved = resolveFunctionBase(fn?.baseUrlOverride);
+  if ('base' in resolved) return null;
+  if (fn?.baseUrlOverride) {
+    return {
+      missing: resolved.gate.missing,
+      detail: resolved.gate.detail,
+      remediation:
+        'Add the Function App base URL to LOOM_UDF_ALLOWED_FUNCTION_BASES (comma-separated) on the ' +
+        'Console Container App, or clear baseUrlOverride to use the shared Loom UDF runtime. Loom ' +
+        'will not send a Key Vault-backed function key to an endpoint that is not configured.',
+    };
+  }
   return {
     missing: 'LOOM_UDF_FUNCTION_BASE',
     detail:
@@ -73,10 +86,15 @@ export async function invokeFunction(
   fn: RegisteredFunction,
   payload: unknown,
 ): Promise<FunctionInvokeResult> {
-  const base = (fn.baseUrlOverride || functionRuntimeBase()).replace(/\/+$/, '');
-  if (!base) {
-    return { ok: false, status: 503, value: null, body: '', error: 'function runtime not configured' };
+  // SECURITY: `fn.baseUrlOverride` comes from the tenant-writable function
+  // registry and this call attaches a Key Vault secret as `x-functions-key`.
+  // The override may only SELECT an operator-configured base; the value fetched
+  // is the config string (lib/azure/function-endpoint-policy.ts).
+  const resolved = resolveFunctionBase(fn.baseUrlOverride);
+  if (!('base' in resolved)) {
+    return { ok: false, status: 503, value: null, body: '', error: resolved.gate.detail };
   }
+  const base = resolved.base.replace(/\/+$/, '');
   const path = fn.functionPath || fn.name;
   const url = `${base}/api/${encodeURIComponent(path)}`;
   const headers: Record<string, string> = { 'content-type': 'application/json' };

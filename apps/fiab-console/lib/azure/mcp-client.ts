@@ -79,7 +79,30 @@ export async function resolveAuthHeader(
     let vaultUrl = process.env.LOOM_KEY_VAULT_URL || process.env.LOOM_KEY_VAULT_URI || '';
     if (parts.length) {
       const head = parts.join('/');
-      vaultUrl = head.startsWith('http') ? head : `https://${head}.${kvSuffix()}`;
+      // SECURITY (issue #2652): `authValue` is server-config text, and the fetch
+      // below carries a Key Vault-scoped managed-identity token. A vault ref may
+      // therefore only name a vault in THIS cloud's Key Vault DNS zone — the
+      // host is rebuilt from kvSuffix() for a bare name, and an explicit https
+      // ref is accepted only when it already lives under that suffix. Anything
+      // else would hand a KV token to an arbitrary host.
+      const suffix = kvSuffix();
+      if (/^https?:\/\//i.test(head)) {
+        let host = '';
+        try { host = new URL(head).hostname.toLowerCase(); } catch { host = ''; }
+        if (!host || !host.endsWith(`.${suffix.toLowerCase()}`)) {
+          throw new Error(
+            `MCP Key Vault ref "${head}" is not an Azure Key Vault host for this cloud ` +
+              `(expected *.${suffix}). Use the bare vault name, e.g. "myvault/my-secret".`,
+          );
+        }
+        vaultUrl = `https://${host}`;
+      } else {
+        const name = head.trim().toLowerCase();
+        if (!/^[a-z0-9-]{3,24}$/.test(name)) {
+          throw new Error(`MCP Key Vault ref "${head}" is not a valid Key Vault name.`);
+        }
+        vaultUrl = `https://${name}.${suffix}`;
+      }
     }
     if (!vaultUrl) throw new Error('LOOM_KEY_VAULT_URL not set for MCP Key Vault auth');
     try {

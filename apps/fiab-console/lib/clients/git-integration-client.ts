@@ -26,6 +26,7 @@
  */
 
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+import { originOf } from '@/lib/azure/trusted-egress';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 const ADO_BASE = 'https://dev.azure.com';
@@ -433,13 +434,19 @@ export interface GhBranch { name: string; sha: string; }
 async function ghFetchAllPages(firstUrl: string, pat: string, what: string, maxPages = 20): Promise<any[]> {
   const out: any[] = [];
   let url: string | null = firstUrl;
+  // The `next` link is a RESPONSE header, i.e. it is chosen by whatever host
+  // answered. The PAT rides on every hop, so a page may only continue on the
+  // SAME origin the first page was requested from — a `Link:` pointing anywhere
+  // else would hand the token to that host.
+  const firstOrigin = originOf(firstUrl);
   for (let i = 0; i < maxPages && url; i += 1) {
     const res = await ghFetch(url, pat);
     const link = res.headers.get('link') || '';
     const page = await ghJson<any[]>(res, what);
     if (Array.isArray(page)) out.push(...page);
     const m = link.match(/<([^>]+)>;\s*rel="next"/);
-    url = m ? m[1] : null;
+    const next = m ? m[1] : null;
+    url = next && originOf(next) === firstOrigin ? next : null;
   }
   return out;
 }

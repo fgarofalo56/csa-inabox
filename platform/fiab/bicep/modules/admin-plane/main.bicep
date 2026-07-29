@@ -629,6 +629,14 @@ var loomConsoleTelemetryEnabled = true
 // round-trip. NEVER handed to a third party — internal-network use only.
 var loomInternalToken = guid(loomGeneratedSecretSeed, 'loom-maf-internal-token-v1')
 
+// Shared key that lets the Console push a UDF item's authored source to the
+// loom-udf-runtime host. Deterministic on the same seed so the runtime and the
+// Console agree without a round-trip. The runtime REFUSES pushed source without
+// it — that path used to be unauthenticated, so any workload on the Container
+// Apps environment could execute Python there (issue #2653). Internal-network
+// use only; never handed to a third party.
+var loomUdfHostKey = guid(loomGeneratedSecretSeed, 'loom-udf-host-key-v1')
+
 // Per-service Bearer secrets for the EXTERNALLY-handed token paths (rel-T10/B3
 // isolation). Each is a DISTINCT deterministic value derived from the same
 // unpredictable per-deploy seed, so a leak of one does NOT open the others or
@@ -2545,8 +2553,10 @@ module udfRuntime 'udf-runtime.bicep' = if (udfRuntimeEnabled) {
   params: {
     location: location
     managedEnvironmentId: containerPlatformModule.outputs.caeId
-    uamiResourceId: identity.outputs.uamiConsoleId
     udfRuntimeEnabled: true
+    // Same value the Console gets as loom-udf-host-key — the runtime only
+    // executes the Console's pushed source when the two agree (issue #2653).
+    udfHostKey: loomUdfHostKey
   }
 }
 
@@ -3950,6 +3960,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(effectiveUdfFunctionBase) ? [
             { name: 'LOOM_UDF_FUNCTION_BASE', value: effectiveUdfFunctionBase }
           ] : [],
+          // Shared key the invoke route presents (X-Loom-Udf-Key) so the Loom UDF
+          // runtime will execute the item's authored source. The runtime REFUSES
+          // pushed source without it (issue #2653 — the pushed-source path was
+          // unauthenticated), so this must ship whenever the managed runtime does.
+          udfRuntimeEnabled ? [
+            { name: 'LOOM_UDF_HOST_KEY', secretRef: 'loom-udf-host-key' }
+          ] : [],
           // Report query acceleration runs on the Databricks SQL warehouse
           // (Photon) via LOOM_DATABRICKS_HOSTNAME + LOOM_DATABRICKS_SQL_WAREHOUSE_ID
           // (emitted with the other Databricks bindings above); no dedicated
@@ -4821,6 +4838,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // azure-functions/paginated-report-renderer/DEPLOYMENT.md).
           !empty(loomPaginatedRenderUrl) ? [
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // Shared key for the Loom UDF runtime's pushed-source path. Same value
+          // udf-runtime.bicep gives the runtime container; without it the runtime
+          // refuses the Console's authored source (issue #2653).
+          udfRuntimeEnabled ? [
+            { name: 'loom-udf-host-key', value: loomUdfHostKey }
           ] : [],
           // Shared internal trust token for the VNet-internal callbacks: the
           // MAF → Console tool-dispatch (GCC-High / IL5), the setup-orchestrator,

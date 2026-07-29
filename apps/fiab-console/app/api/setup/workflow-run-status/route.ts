@@ -12,21 +12,23 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { assertDispatchableWorkflow } from '@/lib/setup/deploy-workflows';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const GET = withSession(async (req: NextRequest) => {
 
-  const workflowFile = req.nextUrl.searchParams.get('workflow');
+  // SECURITY: this value lands in the PATH of a GitHub REST URL that carries
+  // LOOM_GITHUB_ACTIONS_TOKEN. Un-validated, `?workflow=../../..` normalised
+  // into a different GitHub endpoint, letting any authenticated user aim the
+  // deployment PAT wherever they liked. `assertDispatchableWorkflow` returns the
+  // module's own constant (or null) — the request selects, it never supplies.
+  const workflowFile = assertDispatchableWorkflow(req.nextUrl.searchParams.get('workflow'));
   if (!workflowFile) {
     return NextResponse.json(
-      { ok: false, error: 'workflow query param required' },
+      { ok: false, error: 'workflow query param must name a Loom deployment workflow' },
       { status: 400 },
     );
   }
@@ -100,4 +102,4 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-}
+});

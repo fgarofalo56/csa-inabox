@@ -28,6 +28,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { resolveSameOriginUrl } from '@/lib/azure/trusted-egress';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = uamiClientId
@@ -99,7 +100,7 @@ export class GraphSearchError extends Error {
 async function graphGet<T>(path: string, scopeKind: GraphGroundingScopeKind): Promise<T> {
   const token = await credential.getToken(graphScope());
   if (!token?.token) throw new GraphSearchError(500, 'Failed to acquire a Microsoft Graph token');
-  const url = path.startsWith('http') ? path : `${graphBase()}${path}`;
+  const url = resolveSameOriginUrl(graphBase(), path, 'graph-search Graph');
   let res: Response;
   try {
     res = await fetchWithTimeout(url, {

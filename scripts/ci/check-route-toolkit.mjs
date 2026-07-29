@@ -64,6 +64,12 @@ const TOUCH_EXEMPT = new Map([
   // streaming — a legitimate codemod-resistant prologue. Migrate when the streaming
   // routes get a dedicated stream-safe toolkit wrapper.
   ['apps/fiab-console/app/api/items/data-agent/[id]/chat/route.ts', 'N9: streaming SSE agent route, custom envelopes — not withSession-migratable yet'],
+  // The exported POST is a 504-backstop `Promise.race` wrapper; the session +
+  // capability prologue lives in the inner `handleDeploy` helper, so there is no
+  // hand-rolled prologue on the handler for the codemod to match (it reports
+  // "SKIPPED (POST: no hand-rolled getSession() prologue)"). Migrate when the
+  // toolkit grows a race/backstop-aware wrapper.
+  ['apps/fiab-console/app/api/setup/deploy/route.ts', '#2652: session prologue is inside handleDeploy behind the 504 backstop race — codemod-resistant'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
