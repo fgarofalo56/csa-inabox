@@ -199,6 +199,41 @@ describe('searchDocs — kill-switches', () => {
     expect(hits[0].path).toBe('docs/fiab/topology-migration.md');
   });
 
+  // #2585 P2 — the engineering ledger must stop outranking published product
+  // docs on ties. Catches the weighting silently not reaching searchDocs.
+  it('ranks a published product doc above an equally-matching ledger doc', async () => {
+    corpus = [
+      row('PRPs/active/loom-apex/PRP.md', 'monitor alert authoring rules'),
+      row('docs/fiab/parity/monitor.md', 'monitor alert authoring rules'),
+      ...filler(60),
+    ];
+    const { hits } = await searchDocs('monitor alert authoring rules', 2);
+    expect(hits[0].path).toBe('docs/fiab/parity/monitor.md');
+  });
+
+  it('OFF for the source-weighting flag restores peer ranking of the ledger', async () => {
+    corpus = [
+      row('PRPs/active/loom-apex/PRP.md', 'monitor alert authoring rules'),
+      row('docs/fiab/parity/monitor.md', 'monitor alert authoring rules'),
+      ...filler(60),
+    ];
+    flagMock.mockImplementation(async (id: string) => id !== 'copilot-corpus-source-weighting');
+    const { hits } = await searchDocs('monitor alert authoring rules', 2);
+    expect(hits[0].path).toBe('PRPs/active/loom-apex/PRP.md');
+  });
+
+  // Catches the down-weight hardening into an exclusion: a ledger receipt must
+  // still come back when it is genuinely the best match.
+  it('still returns a ledger doc when it is the only real match', async () => {
+    corpus = [
+      row('docs/fiab/parity/monitor.md', 'unrelated prose about dashboards'),
+      row('PRPs/active/loom-apex/AUDIT.md', 'the audit receipt records the resourcegraph fastpath'),
+      ...filler(60),
+    ];
+    const { hits } = await searchDocs('audit receipt resourcegraph', 3);
+    expect(hits[0].path).toBe('PRPs/active/loom-apex/AUDIT.md');
+  });
+
   it('returns nothing for a blank query without touching the backend', async () => {
     const { hits, backend } = await searchDocs('   ', 5);
     expect(hits).toEqual([]);

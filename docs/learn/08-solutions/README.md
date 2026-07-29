@@ -135,8 +135,16 @@ All solutions require:
 
 - ✅ Azure subscription (Owner/Contributor access)
 - ✅ Azure DevOps or GitHub account
-- ✅ Power BI Pro or Premium license
 - ✅ Basic knowledge of Azure services
+
+**No Microsoft Fabric capacity, Fabric workspace, or Power BI licence is
+required.** Every solution here runs on Azure-native backends — for example the
+Real-Time Dashboards accelerator provisions against an ADX/Kusto cluster, and
+reporting is served by the Loom-native semantic layer and report renderer. A
+Fabric or Power BI backend is an explicit opt-in alternative, never a
+prerequisite; where a solution needs Azure infrastructure that is not deployed
+yet, the console surfaces a warning naming the exact environment variable, role
+grant, or resource to provision.
 
 ### Deployment Process
 

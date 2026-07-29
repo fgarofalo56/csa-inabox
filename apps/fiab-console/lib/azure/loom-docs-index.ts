@@ -43,8 +43,10 @@ import {
   rankSubstring,
   surfaceBoostFactor,
   surfaceTopicTerms,
+  sourceWeightFor,
   DEFAULT_MAX_CHUNKS_PER_DOC,
   DEFAULT_SURFACE_BOOST,
+  DEFAULT_SOURCE_WEIGHTS,
   type Bm25Index,
 } from './docs-ranker';
 
@@ -404,7 +406,7 @@ async function searchCosmos(
   query: string,
   top: number,
   kind?: DocChunk['kind'],
-  opts?: { bm25?: boolean; surfaceTerms?: readonly string[] },
+  opts?: { bm25?: boolean; surfaceTerms?: readonly string[]; sourceWeights?: boolean },
 ): Promise<DocHit[]> {
   try {
     const c = await helpCorpusContainer();
@@ -427,6 +429,8 @@ async function searchCosmos(
     const ranked = bm25Rank(index, query, top, {
       surfaceTerms: opts?.surfaceTerms,
       surfaceBoost: opts?.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
+      // #2585 P2 — rank published product docs above the engineering ledger.
+      sourceWeights: opts?.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
     });
     // Normalise to the 0..1 `DocHit.score` contract the AI Search path also
     // honours (BM25 is unbounded above and only comparable within one result
@@ -491,14 +495,16 @@ export async function searchDocs(
 
   // Kill-switches (default-ON per loom_default_on_opt_out; a flag-store outage
   // fails open to the new path, which is the measured-better one).
-  const [bm25Enabled, surfaceEnabled, wideWindow] = await Promise.all([
+  const [bm25Enabled, surfaceEnabled, wideWindow, sourceWeighted] = await Promise.all([
     runtimeFlag('copilot-bm25-retrieval'),
     runtimeFlag('copilot-surface-scoped-retrieval'),
     runtimeFlag('copilot-retrieval-window-8'),
+    runtimeFlag('copilot-corpus-source-weighting'),
   ]);
   const want = wideWindow ? top : Math.min(top, LEGACY_DOC_RETRIEVAL_TOP);
   const surfaceTerms = surfaceEnabled && bm25Enabled ? surfaceTopicTerms(opts?.surface) : [];
   const overfetch = bm25Enabled ? Math.max(want * RETRIEVAL_OVERFETCH, want) : want;
+  const weightSources = sourceWeighted && bm25Enabled;
 
   const finish = (hits: DocHit[]): DocHit[] => {
     if (!bm25Enabled) return hits.slice(0, want);
@@ -509,11 +515,18 @@ export async function searchDocs(
     try {
       const raw = await searchSearch(query, overfetch, kind);
       if (raw.length > 0) {
-        // AI Search ranks server-side, so the surface prior can only re-sort the
-        // window we were given (see the note above).
-        const boosted = surfaceTerms.length
+        // AI Search ranks server-side, so the surface prior and the source
+        // weighting can only re-sort the window we were given (see the note
+        // above). Both multipliers are applied together so one pass settles the
+        // order.
+        const boosted = surfaceTerms.length || weightSources
           ? [...raw]
-              .map((h) => ({ h, s: h.score * surfaceBoostFactor(surfaceTerms, h) }))
+              .map((h) => ({
+                h,
+                s: h.score
+                  * (surfaceTerms.length ? surfaceBoostFactor(surfaceTerms, h) : 1)
+                  * (weightSources ? sourceWeightFor(h.path) : 1),
+              }))
               .sort((a, b) => b.s - a.s)
               .map(({ h, s }) => ({ ...h, score: s }))
           : raw;
@@ -529,7 +542,9 @@ export async function searchDocs(
       fellBack = true;
     }
   }
-  const raw = await searchCosmos(query, overfetch, kind, { bm25: bm25Enabled, surfaceTerms });
+  const raw = await searchCosmos(query, overfetch, kind, {
+    bm25: bm25Enabled, surfaceTerms, sourceWeights: weightSources,
+  });
   const hits = finish(raw);
   const backend = hits.length > 0 || !isSearchConfigured() ? 'cosmos' : 'ai-search';
   recordRetrieval({ backend, latencyMs: Date.now() - started, resultCount: hits.length, fallback: fellBack });

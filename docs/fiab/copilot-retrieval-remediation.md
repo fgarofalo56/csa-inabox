@@ -1,9 +1,9 @@
-# Copilot retrieval remediation — P0/P1/P3 measured results
+# Copilot retrieval remediation — P0/P1/P2/P3 measured results
 
 **Issue:** [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585) ·
 **Diagnosis:** [`copilot-quality-triage.md`](copilot-quality-triage.md) ·
-**Status:** P0, P1, P1b, P3 implemented and measured offline; P2 (corpus
-hygiene) and P4 (floor re-baseline) NOT started ·
+**Status:** P0, P1, P1b, P2, P3 implemented and measured offline; P4 (floor
+re-baseline) NOT started ·
 **Floors:** `content/evals/eval-floors.json` is **unchanged** — re-baselining is
 P4 and happens last, from ≥3 real runs through the existing raise-only ratchet.
 
@@ -16,8 +16,8 @@ Reproduce every number here with:
 ```bash
 node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs
 node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8
-node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8 --surface-boost 1.0
-node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --explain lakehouse
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8 --source-weights 0.9:0.75:0.7
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --explain health
 ```
 
 `scripts/csa-loom/measure-retrieval.mjs` **imports the shipping ranker**
@@ -201,6 +201,13 @@ measurement cannot see. Left for a follow-up that can measure it live.
 
 ## 5. `health` is still below floor
 
+> **Resolved in P2 — see §8.2.** The diagnosis below was correct: it was a
+> content problem. `parity/monitor.md` was found to be materially stale (it
+> claimed alert authoring was unwired when it ships, and documented 6 of the
+> surface's 13 tabs). Correcting it took `health` to **0.667** on this same
+> ranker and **0.800** with P2's source weighting. The paragraph below is kept
+> as the original diagnosis.
+
 **MEASURED** — `health` moves 0.133 → 0.467 and stops there. 12 of its 15 rows
 expect `docs/fiab/parity/monitor.md`, a document whose name shares no token with
 the word "health", so neither the surface boost nor a filename boost can reach
@@ -252,3 +259,167 @@ the golden set, tracked under #2585.
    ≥3 real runs through `scripts/csa-loom/ratchet-eval-floors.mjs`.
 6. **The corpus differs from run 30373810035's by one document** (2,588 vs
    2,586 files). It does not affect any conclusion.
+
+---
+
+## 8. P2 — corpus hygiene (measured)
+
+**Status:** implemented and measured offline. Floors still untouched.
+
+P2 had two halves, and the triage was right that only one of them is a ranking
+lever:
+
+1. **Source weighting** — stop the engineering ledger competing with published
+   product docs as a peer.
+2. **Content** — fix the documents that could not be found because of what they
+   said, not because of where they ranked. This is what `health` needed (§5).
+
+### 8.1 Source weighting — rank product docs above the ledger
+
+`corpusSourceClass()` (in `docs-ranker.ts`) sorts every corpus path into four
+classes, and `bm25Rank` applies a per-class multiplier:
+
+| class | what it is | weight |
+|---|---|---|
+| `product` | published CSA Loom docs (`docs/fiab/parity/**`, `concepts/`, `admin/`, …) | 1 |
+| `reference` | generic Azure / migration material (`docs/learn/**`, `docs/migrations/**`) | 0.90 |
+| `ledger` | in-flight plans, audits, gap reports (`PRPs/**`, `docs/fiab/{prp,audit,parity-gap,research}/**`) | 0.75 |
+| `archive` | explicitly retired (`docs/fiab/archive/**`) | 0.70 |
+
+**All 20 documents the golden sets expect are `product`**, so this cannot lift a
+gold document directly — it only changes what competes with it. That is the
+point: it is a tie-break in favour of published documentation, not a thumb on
+the golden sets.
+
+**Weight choice.** MEASURED sweep at top-8 (`--source-weights ref:ledger:archive`):
+
+| ref : ledger : archive | overall | `health` | product share | ledger share |
+|---|---|---|---|---|
+| 1 : 1 : 1 (before) | 0.760 | 0.467 | 72.2% | 16.3% |
+| 0.95 : 0.90 : 0.85 | 0.795 | 0.533 | 83.1% | 8.2% |
+| **0.90 : 0.75 : 0.70 (shipped)** | **0.808** | **0.600** | **92.5%** | **1.9%** |
+| 0.85 : 0.60 : 0.50 | 0.808 | 0.600 | 96.2% | 0.4% |
+| 0.75 : 0.45 : 0.35 | 0.822 | 0.733 | 98.8% | 0.0% |
+| 0.60 : 0.30 : 0.20 | 0.829 | 0.733 | 100.0% | 0.0% |
+
+The score keeps rising as the weights fall, which is exactly the shape that
+should stop you taking the maximum. Past 0.75 the ledger contributes **zero**
+chunks to any of the 146 windows — the down-weight has become a delete, and the
+remaining gain is the metric being fitted. **0.90/0.75/0.70 is the mildest
+setting that reaches the 0.808 plateau while leaving the ledger reachable**, and
+a unit test asserts both that the weights stay ≥0.7 and that a ledger document
+is still returned when it is the best match.
+
+Isolating the two halves at top-8: ledger/archive weighting alone is worth
++0.048 overall; reference weighting alone +0.014.
+
+### 8.2 Content — the `health` fix
+
+`health` was the one surface still under its 0.5 floor, and §5 diagnosed it as
+corpus, not ranking. Reading the misses confirmed it: 6 of the 8 failing rows
+asked about a specific Monitor tab, and **`parity/monitor.md` described the
+entire Monitor surface in a single 10-row table under one heading** — so every
+per-tab question competed against one long, undifferentiated chunk.
+
+Fixing that turned out to be a documentation correction, not a retrieval trick.
+The doc was materially out of date:
+
+* It claimed **"Alert rule authoring — list-only today; not yet wired. Manage in
+  portal."** That is FALSE. `POST /api/monitor/alerts` supports
+  `upsert`/`patch`/`delete` over `Microsoft.Insights/scheduledQueryRules`, and
+  `/api/monitor/action-groups` manages notification targets with a test-send.
+  The doc was sending users to the Azure portal for something the console does.
+  This is the "a gate that no longer exists" case — the worst kind of stale doc.
+* It documented **6 tabs; the surface has 13** (`monitor-pane.tsx`). Diagnostics,
+  Activities, Spark, Refresh summary, Cost, Security and Maintenance were absent
+  entirely — a `ui-parity.md` violation, since the parity doc is supposed to
+  inventory every capability.
+* Its env list omitted `LOOM_LOG_ANALYTICS_RESOURCE_ID`, `LOOM_ALERT_RG` and
+  `LOOM_ALERT_LOCATION`; its role list omitted Monitoring Contributor, Cost
+  Management Reader and Security Reader.
+
+Every claim added was verified against `monitor-pane.tsx`, `monitor-client.ts`
+and the `app/api/monitor/**` routes — not from memory. The H2 headings were left
+byte-identical so the golden sets' `#anchor` references stay valid
+(`lint-eval-sets` green).
+
+MEASURED effect, `health` only — no other surface moves, because only
+`monitor.md` changed:
+
+| | shipped ranker | + source weighting |
+|---|---|---|
+| before the doc fix | 0.467 | 0.600 |
+| after the doc fix | **0.667** | **0.800** |
+
+Note the first column: **the doc fix alone clears the 0.5 floor**, without any
+ranking change. That is the honest reading — `health` was under floor because
+its documentation was wrong and thin, exactly as §5 predicted.
+
+**One within-surface regression, disclosed.** Expanding the env table from 4
+rows to 8 diluted that chunk and cost `health-014` (the Gov Log Analytics
+endpoint override), which had been a hit. Splitting required from optional env —
+better reference structure independently of retrieval — recovered it.
+
+### 8.3 Headline after P2
+
+MEASURED at top-8, 146 golden rows:
+
+| surface | before P2 (shipped) | after P2 | Δ | floor |
+|---|---|---|---|---|
+| cost | 1.000 | 1.000 | — | 0.5 |
+| data-agent | 0.867 | 1.000 | +0.133 | 0.5 |
+| deploy-planner | 0.800 | 0.867 | +0.067 | 0.5 |
+| eventstream | 0.833 | 0.917 | +0.084 | 0.5 |
+| **health** | **0.467** ⚠️ | **0.800** | **+0.333** | 0.5 ✅ |
+| help | 0.600 | 0.600 | — | 0.5 |
+| kql-database | 0.733 | 0.733 | — | 0.5 |
+| lakehouse | 0.667 | 0.667 | — | 0.5 |
+| rbac | 0.917 | 1.000 | +0.083 | 0.5 |
+| report | 0.867 | 0.867 | — | 0.5 |
+| **OVERALL** | **0.760** | **0.829** | **+0.069** | — |
+
+**Zero surfaces regress. All ten now clear 0.5 offline** — `health` for the
+first time. And the metric #2585 actually cared about, the share of returned
+evidence drawn from the engineering ledger, falls **16.4% → 1.9%** (archive
+1.8% → 0.2%; published product docs 72.5% → 92.6%).
+
+### 8.4 What P2 did NOT fix, and why not
+
+Three `health` rows still miss, and each is left deliberately:
+
+* **`health-010`** ("Can I author alert rules from the Monitor surface?") — the
+  top result is `docs/fiab/parity/monitor-alert-rules.md`, a **dedicated parity
+  doc for alert-rule authoring**. Retrieval is arguably right and the golden row
+  arguably wrong: it pins the answer to `monitor.md` when a better document
+  exists. **This is a golden-set defect, not a corpus defect.** Changing
+  `expectedChunks` would be editing the test to pass, so it is reported here for
+  an explicit decision instead.
+* **`health-011`** (role grants) and **`health-015`** (backend/auth) — both
+  sections exist and are correct; they lose on vocabulary ("Monitoring Reader"
+  does not tokenise to "monitor", there is no stemmer). Adding the word
+  "Monitor" to those headings would probably recover both, and would be **pure
+  metric-fitting** — the sections are already accurate and self-evidently about
+  Monitor from their position in the file. Not done.
+
+Also unchanged, on purpose: the corpus roots. The triage proposed excluding
+`PRPs/active/**` outright; the measurement says down-weighting achieves the
+correctness goal (1.9% ledger evidence) while keeping in-flight receipts
+reachable, which was the reason they were indexed in the first place.
+
+### 8.5 Limits
+
+1. **Still no live run.** Every number is the offline Cosmos-fallback path. Per
+   G1 this is not "done" until a real `copilot-quality-evals` run.
+2. **The AI Search path applies the weighting only as a re-sort** of the
+   over-fetched window, exactly as with the surface boost, and remains
+   unmeasured.
+3. **No answer-quality measurement.** Zero judge calls. Cleaner evidence should
+   help grounding, but that is an expectation, not a measurement.
+4. **Floors untouched.** Nothing here licenses a floor change; P4 still requires
+   ≥3 real runs through the raise-only ratchet.
+5. **`health`'s gain is partly a content change to a gold document.** The edits
+   are defensible on their own terms (a false gate corrected, 7 real tabs
+   documented), but they were made by someone who had already seen which
+   document the golden set expects. The `parity/monitor-alert-rules.md` finding
+   in §8.4 is the honest counterweight: where fitting would have helped the
+   score, it was left alone.

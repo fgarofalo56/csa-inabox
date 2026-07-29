@@ -560,6 +560,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: '#2585-P1',
     surface: 'Every Copilot docs lookup (searchDocs default top) + /api/internal/copilot/eval-probe',
   },
+  {
+    id: 'copilot-corpus-source-weighting',
+    label: 'Copilot docs retrieval — rank product docs above the engineering ledger',
+    description:
+      'The retrieval corpus deliberately mixes three very different bodies of text and, until this shipped, ranked them as peers: published CSA Loom product documentation, generic Azure/migration reference material (docs/learn, docs/migrations), and the ENGINEERING LEDGER — in-flight PRPs, audit sweeps, gap reports and archived receipts, written for the people building Loom and often describing things that are not built yet or no longer true. This applies a mild per-source score multiplier (reference x0.90, ledger x0.75, archive x0.70) so published product docs win ties. A DOWN-WEIGHT, never an exclusion: a ledger receipt is still returned when it is genuinely the best match, which is why PRPs/active was added to the corpus in the first place. Measured on the golden eval sets at top-8: overall 0.760 -> 0.808, health 0.467 -> 0.600 (its first pass over the 0.5 floor), zero surfaces regressing, and the ledger share of returned evidence 16.4% -> 1.9%. OFF restores peer ranking on the very next query.',
+    ownerItem: '#2585-P2',
+    surface: 'Every Copilot docs lookup (searchDocs) — help Copilot dock, per-surface Copilot, eval probe',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
