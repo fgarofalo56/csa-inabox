@@ -70,12 +70,25 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="origin/${{ github.base_ref }}"
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            # depth=1 gives the base TIP but not the MERGE BASE, so the
+            # three-dot range below cannot be resolved and `git diff` errors.
+            # That error used to be swallowed (2>/dev/null), the grep found
+            # nothing, and the else-branch reported this REQUIRED check green
+            # without building or testing anything.
+            git fetch --no-tags --depth=50 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            if ! git merge-base "$base" HEAD >/dev/null 2>&1; then
+              git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            fi
             range="$base...HEAD"
           else
             range="HEAD~1...HEAD"
           fi
-          if git diff --name-only "$range" 2>/dev/null | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+          # FAIL OPEN. If the range cannot be resolved we must BUILD, never skip:
+          # skipping reports a required check green on an unexamined tree.
+          if ! changed=$(git diff --name-only "$range" 2>&1); then
+            echo "::warning::could not resolve '$range' ($changed) — building anyway rather than reporting this required check green on an unexamined tree."
+            echo "console=true" >> "$GITHUB_OUTPUT"
+          elif echo "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
             echo "console=true" >> "$GITHUB_OUTPUT"
             echo "Console changed — running full next build."
           else
@@ -173,12 +186,25 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="origin/${{ github.base_ref }}"
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            # depth=1 gives the base TIP but not the MERGE BASE, so the
+            # three-dot range below cannot be resolved and `git diff` errors.
+            # That error used to be swallowed (2>/dev/null), the grep found
+            # nothing, and the else-branch reported this REQUIRED check green
+            # without building or testing anything.
+            git fetch --no-tags --depth=50 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            if ! git merge-base "$base" HEAD >/dev/null 2>&1; then
+              git fetch --no-tags --deepen=200 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            fi
             range="$base...HEAD"
           else
             range="HEAD~1...HEAD"
           fi
-          if git diff --name-only "$range" 2>/dev/null | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+          # FAIL OPEN. If the range cannot be resolved we must BUILD, never skip:
+          # skipping reports a required check green on an unexamined tree.
+          if ! changed=$(git diff --name-only "$range" 2>&1); then
+            echo "::warning::could not resolve '$range' ($changed) — building anyway rather than reporting this required check green on an unexamined tree."
+            echo "console=true" >> "$GITHUB_OUTPUT"
+          elif echo "$changed" | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
             echo "console=true" >> "$GITHUB_OUTPUT"
             echo "Console changed — running vitest."
           else
