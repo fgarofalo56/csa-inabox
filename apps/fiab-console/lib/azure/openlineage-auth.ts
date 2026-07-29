@@ -40,6 +40,13 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const JWKS_TTL_MS = 60 * 60 * 1000;
 const CLOCK_SKEW_SEC = 300;
+/** See the identical guard in `entra-bearer-verify.ts` — `kid` is attacker-chosen
+ *  and is read before any signature can be checked, so an unthrottled
+ *  "unknown kid ⇒ refetch" rule makes every forged token an outbound request we
+ *  issue on the attacker's behalf. Bounded to one forced refetch per minute, and
+ *  only for a token whose issuer/audience/expiry already line up. */
+const JWKS_FORCED_REFRESH_MIN_INTERVAL_MS = 60_000;
+const UNKNOWN_KID_MAX = 200;
 
 export type OpenLineageAuthResult =
   | { ok: true; workspaceId: string; principal: string; mode: 'entra' | 'workspace-token' }
@@ -55,11 +62,22 @@ interface JwksKey {
 
 let jwksCache: { tenant: string; keys: JwksKey[]; fetchedAt: number } | null = null;
 let jwksOverrideForTest: JwksKey[] | null = null;
+const unknownKids = new Set<string>();
+let lastForcedRefreshAt = 0;
+let forcedRefreshCount = 0;
 
 /** Test hook: inject a JWKS document (bypasses the network fetch). */
 export function __setOpenLineageJwksForTest(keys: JwksKey[] | null): void {
   jwksOverrideForTest = keys;
   jwksCache = null;
+  unknownKids.clear();
+  lastForcedRefreshAt = 0;
+  forcedRefreshCount = 0;
+}
+
+/** Test hook: how many FORCED (unknown-kid) JWKS refetches ran. */
+export function __openLineageForcedJwksRefreshCountForTest(): number {
+  return forcedRefreshCount;
 }
 
 function authorityHost(): string {
@@ -141,6 +159,38 @@ async function loadJwks(tenant: string, forceRefresh = false): Promise<JwksKey[]
   return keys;
 }
 
+/**
+ * Resolve the signing key for `kid`, with the forced-refetch amplifier shut —
+ * see {@link JWKS_FORCED_REFRESH_MIN_INTERVAL_MS}. `eligibleForRefresh` is set by
+ * the caller only once issuer / audience / expiry already line up, so a garbage
+ * token never reaches the network path; the interval + `unknownKids` memo bound
+ * the rest.
+ */
+async function resolveSigningKey(
+  tenant: string,
+  kid: string | undefined,
+  eligibleForRefresh: boolean,
+): Promise<JwksKey | null> {
+  let keys = await loadJwks(tenant);
+  const hit = () => keys.find((k) => k.kid === kid) || null;
+  if (!kid) return null;
+  const found = hit();
+  if (found) return found;
+  if (!eligibleForRefresh) return null;
+  if (unknownKids.has(kid)) return null;
+  const now = Date.now();
+  if (now - lastForcedRefreshAt < JWKS_FORCED_REFRESH_MIN_INTERVAL_MS) return null;
+  lastForcedRefreshAt = now;
+  forcedRefreshCount += 1;
+  keys = await loadJwks(tenant, true);
+  const afterRefresh = hit();
+  if (!afterRefresh) {
+    if (unknownKids.size >= UNKNOWN_KID_MAX) unknownKids.clear();
+    unknownKids.add(kid);
+  }
+  return afterRefresh;
+}
+
 function verifyRs256(signingInput: string, signature: Buffer, jwk: JwksKey): boolean {
   try {
     const pub = crypto.createPublicKey({ key: jwk as crypto.JsonWebKey, format: 'jwk' });
@@ -177,33 +227,41 @@ async function verifyEntraBearer(token: string): Promise<OpenLineageAuthResult> 
   }
   if (header.alg !== 'RS256') return { ok: false, status: 401, error: 'unsupported token algorithm' };
 
-  // Signature — JWKS by kid, one forced refresh on an unknown kid (rollover).
-  let keys: JwksKey[];
+  const nowSec = Math.floor(Date.now() / 1000);
+  const exp = Number(payload.exp || 0);
+  const nbf = Number(payload.nbf || 0);
+  const iss = String(payload.iss || '');
+  const aud = String(payload.aud || '');
+  // Cheap pre-flight over UNVERIFIED claims, used ONLY to decide whether this
+  // token may trigger an outbound JWKS refetch. It does not short-circuit the
+  // result: every check below still runs in its original order and returns its
+  // original message, so no new "which field did I get right?" oracle appears.
+  const claimsPlausible =
+    !!exp && nowSec <= exp + CLOCK_SKEW_SEC
+    && (!nbf || nowSec >= nbf - CLOCK_SKEW_SEC)
+    && allowedIssuers(tenant).includes(iss)
+    && audiences.includes(aud);
+
+  // Signature — JWKS by kid, with the unknown-kid refetch throttled.
+  let jwk: JwksKey | null;
   try {
-    keys = await loadJwks(tenant);
-    if (header.kid && !keys.some((k) => k.kid === header.kid)) keys = await loadJwks(tenant, true);
+    jwk = await resolveSigningKey(tenant, header.kid, claimsPlausible);
   } catch (e) {
     return { ok: false, status: 503, error: `could not load the AAD signing keys: ${(e as Error)?.message || e}` };
   }
-  const jwk = keys.find((k) => k.kid === header.kid) || null;
   if (!jwk) return { ok: false, status: 401, error: 'unknown token signing key' };
   const sigOk = verifyRs256(`${parts[0]}.${parts[1]}`, b64url(parts[2]), jwk);
   if (!sigOk) return { ok: false, status: 401, error: 'invalid token signature' };
 
   // Temporal validity (±5 min skew).
-  const nowSec = Math.floor(Date.now() / 1000);
-  const exp = Number(payload.exp || 0);
-  const nbf = Number(payload.nbf || 0);
   if (!exp || nowSec > exp + CLOCK_SKEW_SEC) return { ok: false, status: 401, error: 'token expired' };
   if (nbf && nowSec < nbf - CLOCK_SKEW_SEC) return { ok: false, status: 401, error: 'token not yet valid' };
 
   // Issuer pinned to the estate tenant (rejects foreign-tenant tokens).
-  const iss = String(payload.iss || '');
   if (!allowedIssuers(tenant).includes(iss)) {
     return { ok: false, status: 401, error: 'token issuer is not the estate tenant' };
   }
   // Audience pinned to the console app registration.
-  const aud = String(payload.aud || '');
   if (!audiences.includes(aud)) return { ok: false, status: 401, error: 'token audience mismatch' };
 
   // Principal → workspace registration (per-pool credential binding).

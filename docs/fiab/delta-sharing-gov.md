@@ -68,9 +68,24 @@ A Loom recipient is a set of **Entra principal ids** — the `oid` of a guest/B2
 
 The bearer must be an **access token** for the sharing audience — an ID token minted for the
 Console during an ordinary interactive sign-in is refused (`lib/azure/entra-bearer-verify.ts`
-checks `scp`/`roles` and rejects the bare-client-id audience). Set `LOOM_SHARING_AUDIENCE` to a
-dedicated app registration so a Console token is not a sharing token at all; optionally set
-`LOOM_SHARING_SCOPE` to require a specific scope or app role.
+checks `scp`/`roles` and rejects the bare-client-id audience).
+
+**The recipient credential must be pinned to this API, and there is no safe default.** Set
+**one** of:
+
+- `LOOM_SHARING_AUDIENCE` — a **dedicated** Entra app registration (App ID URI) exposed only to
+  sharing recipients. When set it *replaces* the fallback, so a Console token stops being a
+  sharing token at all. This is the recommended shape.
+- `LOOM_SHARING_SCOPE` — a scope or app role (comma/space separated) exposed on the **Console**
+  registration and consented **only** to recipient apps. Use this to avoid a second app
+  registration; a Console API token without that scope is then refused.
+
+Until one is set, `/api/delta-sharing/*` fails **closed** with `503 UNAVAILABLE`. The reason is
+that the fallback audience is `api://<LOOM_MSAL_CLIENT_ID>` — the Console's *own* API — so an
+unpinned endpoint would accept **any** access token minted for the Console as a valid
+data-export credential, leaving the recipient-principal lookup as the only control on the path
+that moves data outside the boundary. Restating `api://<clientId>` in `LOOM_SHARING_AUDIENCE`
+does **not** satisfy the pin: that is the same weak configuration spelled longhand.
 
 Tokens expire on their own, are revocable in Entra, and every call is audit-logged with the
 presenting principal — allow **and** deny, including the 401 for a bad credential and the 403
@@ -132,9 +147,11 @@ az containerapp update -n <console> -g <admin-rg> \
 # then bind LOOM_SHARING_BEARER to that secret ref
 ```
 
-`LOOM_SHARING_AUDIENCE` is optional — set it only when a dedicated Entra app registration
-fronts the recipient API. It otherwise defaults to the Console's own registration
-(`LOOM_MSAL_CLIENT_ID`).
+**Then pin the recipient credential** — `LOOM_SHARING_AUDIENCE` (a dedicated app registration)
+**or** `LOOM_SHARING_SCOPE` (a scope/app role on the Console registration). This is not
+optional: the recipient endpoint returns `503` until one is set, and the `svc-loom-sharing`
+row on `/admin/gates` reports it with a Fix-it. See "Recipient authentication" above for why
+the `api://<LOOM_MSAL_CLIENT_ID>` fallback is not a pin.
 
 ---
 

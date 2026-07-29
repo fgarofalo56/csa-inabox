@@ -76,8 +76,9 @@ function tokenFor(oid: string, over: Record<string, unknown> = {}): string {
   const h = b64url(Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'test-kid' })));
   const p = b64url(Buffer.from(JSON.stringify({
     iss: `https://sts.windows.net/${TENANT}/`, aud: `api://${CLIENT_ID}`,
-    // An ACCESS token (scp). See sharing-authz.test.ts for the ID-token refusal.
-    scp: 'user_impersonation',
+    // An ACCESS token carrying the PINNED scope. See sharing-authz.test.ts for
+    // the ID-token refusal and for the unpinned-audience 503.
+    scp: 'DeltaSharing.Read',
     oid, tid: TENANT, exp: now + 3600, nbf: now - 60,
     ...over,
   })));
@@ -98,9 +99,15 @@ function tokenFor(oid: string, over: Record<string, unknown> = {}): string {
  * The URL is built with the segments re-encoded so the request object is
  * faithful to the wire form.
  */
-function call(pathSegments: string[], oid: string | null, method: 'GET' | 'POST' = 'GET', search = '') {
+function call(
+  pathSegments: string[],
+  oid: string | null,
+  method: 'GET' | 'POST' = 'GET',
+  search = '',
+  extraHeaders: Record<string, string> = {},
+) {
   const url = `https://console.example.gov/api/delta-sharing/${pathSegments.map(encodeURIComponent).join('/')}${search}`;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...extraHeaders };
   if (oid) headers.authorization = `Bearer ${tokenFor(oid)}`;
   const req = new NextRequest(url, { method, headers, body: method === 'POST' ? '{}' : undefined });
   return { req, ctx: { params: Promise.resolve({ path: pathSegments }) } };
@@ -120,6 +127,11 @@ beforeEach(async () => {
   process.env.LOOM_ENTRA_TENANT_ID = TENANT;
   process.env.LOOM_MSAL_CLIENT_ID = CLIENT_ID;
   process.env.LOOM_SHARING_URL = 'https://loom-sharing.internal';
+  // The recipient credential must be PINNED to this API — either a dedicated
+  // audience or a scope/app role. Without one of the two the endpoint fails
+  // closed with 503 (store.sharingAudiencePinned), because api://<clientId>
+  // alone is satisfied by any access token for the Console's own API.
+  process.env.LOOM_SHARING_SCOPE = 'DeltaSharing.Read';
   const { __setEntraJwksForTest } = await import('@/lib/azure/entra-bearer-verify');
   const jwk = publicKey.export({ format: 'jwk' }) as Record<string, unknown>;
   __setEntraJwksForTest([{ ...jwk, kid: 'test-kid' } as never]);
@@ -406,6 +418,133 @@ describe('audit trail', () => {
     // Bounded writes, but the burst is still visible in the row.
     expect(rows('deny').length).toBe(1);
     expect(auditRows.at(-1)!.detail.suppressedSincePrevious).toBe(0);
+  });
+
+  // ── ATTACK: the burst guard must survive a HOSTILE source header ─────────
+  //
+  // The test above sends no `x-forwarded-for` at all, so every request hashes to
+  // the same key and the coalescing holds trivially — it cannot fail for the
+  // reason the guard exists. The guard was keyed on `xff.split(',')[0]`, which is
+  // a string the CALLER types on a route with no middleware and no rate limiter,
+  // so this same loop with a rotating header produced 25 Cosmos writes, not 1.
+  it('a rotating X-Forwarded-For does NOT buy the caller one audit write per request', async () => {
+    const { GET } = await import('../[...path]/route');
+    for (let i = 0; i < 60; i += 1) {
+      const { req, ctx } = call(['shares'], null, 'GET', '', {
+        // Every request claims a different origin. Real ingress APPENDS its own
+        // hop, so the caller's claim is the LEFTMOST value and ours is the last.
+        'x-forwarded-for': `203.0.113.${i}, 10.0.0.7`,
+      });
+      expect((await GET(req as never, ctx)).status).toBe(401);
+    }
+    // One trusted source ⇒ one key ⇒ one row. The pre-fix code wrote 60.
+    expect(rows('deny').length).toBe(1);
+    expect(rows('deny')[0].detail.sourceIp).toBe('10.0.0.7');
+    // …and the attacker's claim is recorded, but labelled as untrusted so it
+    // can never be mistaken for attribution.
+    expect(rows('deny')[0].detail.claimedClientIpUntrusted).toBe('203.0.113.0');
+    expect(rows('deny')[0].detail.sourceIp).not.toContain('203.0.113');
+  });
+
+  it('bounds anonymous deny writes even when the SOURCE genuinely rotates', async () => {
+    // The backstop. A distributed flood from real addresses — nothing spoofed,
+    // every key legitimately distinct — must still not become an unbounded
+    // Cosmos write amplifier, because "throttled per source" is only as strong
+    // as our ability to identify the source.
+    const { GET } = await import('../[...path]/route');
+    for (let i = 0; i < 200; i += 1) {
+      const { req, ctx } = call(['shares'], null, 'GET', '', { 'x-azure-socketip': `198.51.100.${i}` });
+      await GET(req as never, ctx);
+    }
+    expect(rows('deny').length).toBeLessThanOrEqual(20);
+    // Still non-zero: the burst has to leave a trace, it just has a ceiling.
+    expect(rows('deny').length).toBeGreaterThan(0);
+  });
+
+  it('bounds the not-a-recipient 403 flood, keyed on the VERIFIED principal', async () => {
+    // This path was deliberately unthrottled ("always written, never
+    // throttled"), so any holder of a valid estate token could drive unbounded
+    // Cosmos writes — the same amplification class the 401 path guarded for.
+    const { GET } = await import('../[...path]/route');
+    for (let i = 0; i < 50; i += 1) {
+      const { req, ctx } = call(['shares'], OID_STRANGER, 'GET', '', {
+        'x-forwarded-for': `203.0.113.${i}`,
+      });
+      expect((await GET(req as never, ctx)).status).toBe(403);
+    }
+    const denies = rows('deny');
+    expect(denies.length).toBe(1);
+    expect(denies[0].detail.reason).toBe('not-a-recipient');
+    // The row still attributes the probe to the cryptographically-attested
+    // principal, and still carries the burst size.
+    expect(denies[0].actorOid).toBe(OID_STRANGER);
+    expect(denies[0].detail.suppressedSincePrevious).toBe(0);
+  });
+
+  it('an anonymous flood cannot starve the higher-signal 403 rows out of the trail', async () => {
+    const { GET } = await import('../[...path]/route');
+    for (let i = 0; i < 200; i += 1) {
+      const { req, ctx } = call(['shares'], null, 'GET', '', { 'x-azure-socketip': `198.51.100.${i}` });
+      await GET(req as never, ctx);
+    }
+    const anonRows = rows('deny').length;
+    const { req, ctx } = call(['shares'], OID_STRANGER);
+    expect((await GET(req as never, ctx)).status).toBe(403);
+    // The 403 got its own budget, so it is written despite the flood.
+    expect(rows('deny').length).toBe(anonRows + 1);
+    expect(rows('deny').at(-1)!.detail.reason).toBe('not-a-recipient');
+  });
+});
+
+// ── ATTACK: the endpoint itself has a request ceiling ─────────────────────
+//
+// This was the only internet-reachable, credential-free route in the tree with
+// NO rate limiter at all — no middleware, no route toolkit, no `withSession` —
+// which is what made every other cost on this surface amplifiable.
+describe('request rate ceiling', () => {
+  it('429s a single source past the burst, in the PROTOCOL error shape', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { __resetRateLimiter } = await import('@/lib/azure/rate-limiter');
+    // vitest.setup.ts pins LOOM_RATE_LIMIT='off' globally so the route hammer
+    // does not trip; this spec is specifically about the limiter, so turn it on.
+    const savedFlag = process.env.LOOM_RATE_LIMIT;
+    process.env.LOOM_RATE_LIMIT = 'on';
+    __resetRateLimiter();
+    let limited: Response | null = null;
+    for (let i = 0; i < 400; i += 1) {
+      const { req, ctx } = call(['shares'], null, 'GET', '', { 'x-azure-socketip': '198.51.100.9' });
+      const res = await GET(req as never, ctx);
+      if (res.status === 429) { limited = res as unknown as Response; break; }
+    }
+    expect(limited).not.toBeNull();
+    const body = await limited!.json();
+    // A conforming delta-sharing client parses {errorCode,message}; the Loom
+    // {ok,...} envelope here would break every one of them.
+    expect(body.errorCode).toBe('RESOURCE_EXHAUSTED');
+    expect(body.ok).toBeUndefined();
+    expect(Number(limited!.headers.get('retry-after'))).toBeGreaterThan(0);
+    __resetRateLimiter();
+    if (savedFlag === undefined) delete process.env.LOOM_RATE_LIMIT;
+    else process.env.LOOM_RATE_LIMIT = savedFlag;
+  });
+
+  it('the ceiling is keyed on the TRUSTED source, so a rotating XFF cannot evade it', async () => {
+    const { GET } = await import('../[...path]/route');
+    const { __resetRateLimiter } = await import('@/lib/azure/rate-limiter');
+    const savedFlag = process.env.LOOM_RATE_LIMIT;
+    process.env.LOOM_RATE_LIMIT = 'on';
+    __resetRateLimiter();
+    let limited = false;
+    for (let i = 0; i < 400; i += 1) {
+      const { req, ctx } = call(['shares'], null, 'GET', '', {
+        'x-forwarded-for': `203.0.113.${i % 250}, 10.0.0.7`,
+      });
+      if ((await GET(req as never, ctx)).status === 429) { limited = true; break; }
+    }
+    expect(limited).toBe(true);
+    __resetRateLimiter();
+    if (savedFlag === undefined) delete process.env.LOOM_RATE_LIMIT;
+    else process.env.LOOM_RATE_LIMIT = savedFlag;
   });
 });
 
