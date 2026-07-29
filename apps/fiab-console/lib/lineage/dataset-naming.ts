@@ -137,31 +137,106 @@ const CONTAINER_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
  * IPv6 literals are left alone; a real numeric port — `sqlserver://host:1433`,
  * `https://acct…:443` — survives.)
  */
+/**
+ * Strip leading/trailing `/` by index.
+ *
+ * Deliberately NOT `.replace(/^\/+/, '').replace(/\/+$/, '')`: CodeQL
+ * `js/polynomial-redos` flags that shape here and is right to — every function
+ * in this module runs on attacker-controlled dataset names arriving in a 5 MB
+ * OpenLineage POST body, and `/\/+$/` is quadratic on a long run of slashes.
+ * Index arithmetic is linear and unconditionally safe.
+ */
+export function trimSlashes(p: string): string {
+  const s = String(p || '');
+  let a = 0;
+  let b = s.length;
+  while (a < b && s.charCodeAt(a) === 47) a += 1;
+  while (b > a && s.charCodeAt(b - 1) === 47) b -= 1;
+  return s.slice(a, b);
+}
+
+/** Trailing-slash trim only (same ReDoS reasoning as {@link trimSlashes}). */
+function trimTrailingSlashes(p: string): string {
+  const s = String(p || '');
+  let b = s.length;
+  while (b > 0 && s.charCodeAt(b - 1) === 47) b -= 1;
+  return s.slice(0, b);
+}
+
+/** Scheme charset, applied to a LENGTH-BOUNDED slice — never to the whole URI. */
+const SCHEME_RE = /^[a-z][a-z0-9+.-]{0,31}$/i;
+
+/**
+ * Does this string start with a `scheme://`? Index-based: the regex form
+ * `/^[a-z][a-z0-9+.-]*:\/\//i` is a polynomial-ReDoS vector on a long run of
+ * `.`/`-`/`+` and this is called on attacker-controlled identities.
+ */
+export function hasUriScheme(v: string): boolean {
+  const i = String(v || '').indexOf('://');
+  return i > 0 && i <= 32 && SCHEME_RE.test(v.slice(0, i));
+}
+
+
+/**
+ * Split `scheme://authority/path` by INDEX.
+ *
+ * The single anchored regex this replaces
+ * (`/^([a-z][a-z0-9+.-]*:\/\/)([^/]*)(\/.*)?$/`) is a polynomial-ReDoS
+ * vector on the ingest path. Splitting on the first `://` and the next `/` is
+ * linear, and the only regex left runs on a scheme slice capped at 32 chars.
+ */
+function splitUri(v: string): { scheme: string; authority: string; rest: string } | null {
+  const i = v.indexOf('://');
+  if (i <= 0 || i > 32) return null;
+  const scheme = v.slice(0, i);
+  if (!SCHEME_RE.test(scheme)) return null;
+  const after = v.slice(i + 3);
+  const slash = after.indexOf('/');
+  // `rest` keeps its LEADING slash (and any trailing one) so a caller can
+  // reassemble the URI byte-for-byte apart from the authority it rewrote.
+  if (slash < 0) return { scheme: scheme.toLowerCase(), authority: after, rest: '' };
+  return { scheme: scheme.toLowerCase(), authority: after.slice(0, slash), rest: after.slice(slash) };
+}
+
+/** Drop a malformed `host:<non-numeric>` tail — an authority is `host[:port]`
+ *  and a port is numeric. Index-based for the same ReDoS reason. */
+function stripMalformedPort(host: string): string {
+  if (host.startsWith('[')) return host; // bracketed IPv6 literal
+  const c = host.lastIndexOf(':');
+  if (c < 0) return host;
+  const tail = host.slice(c + 1);
+  if (tail.length > 0 && tail.length <= 5 && /^[0-9]+$/.test(tail)) return host; // real port
+  return host.slice(0, c);
+}
+
 export function stripUriCredentials(raw: string | null | undefined): string {
   let v = String(raw ?? '').trim();
   if (!v) return '';
   // 1. query + fragment (SAS tokens, signed URLs, `?code=` function keys…)
-  const cut = v.search(/[?#]/);
+  const q = v.indexOf('?');
+  const h = v.indexOf('#');
+  const cut = q < 0 ? h : h < 0 ? q : Math.min(q, h);
   if (cut >= 0) v = v.slice(0, cut);
   // 2. userinfo in the authority (`scheme://user:pass@host/…`)
-  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/]*)(\/.*)?$/i.exec(v);
-  if (m) {
-    const [, scheme, authority, rest] = m;
-    let host = authority;
-    const at = authority.lastIndexOf('@');
+  const u = splitUri(v);
+  if (u) {
+    let host = u.authority;
+    const at = u.authority.lastIndexOf('@');
     if (at >= 0) {
-      const userinfo = authority.slice(0, at);
+      const userinfo = u.authority.slice(0, at);
       // https/http storage URLs never carry a container in the authority, so
       // ANY userinfo there is a credential. On abfss/wasbs the slot is the
       // CONTAINER — keep it only when it can actually be one.
-      const isHttp = /^https?:$/i.test(scheme.replace(/\/\/$/, ''));
+      const isHttp = u.scheme === 'http' || u.scheme === 'https';
       host = isHttp || !CONTAINER_RE.test(userinfo.toLowerCase())
-        ? authority.slice(at + 1)
-        : authority;
+        ? u.authority.slice(at + 1)
+        : u.authority;
     }
     // 3. malformed `host:<non-numeric>` — not a port, therefore not a host.
-    if (!host.startsWith('[')) host = host.replace(/:(?!\d+$)[^:]*$/, '');
-    v = `${scheme}${host}${rest || ''}`;
+    host = stripMalformedPort(host);
+    // Reassemble with the ORIGINAL scheme spelling preserved (the previous
+    // regex form kept it verbatim; lowercasing here would change identities).
+    v = `${v.slice(0, v.indexOf('://'))}://${host}${u.rest}`;
   }
   return v;
 }
@@ -193,7 +268,7 @@ const PART_FILE_RE = /^(part-|_committed_|_started_|_SUCCESS$|\.part-)/i;
  * part-file leaf. Idempotent.
  */
 export function foldToTableFolder(rawPath: string): string {
-  let p = String(rawPath || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  let p = trimSlashes(rawPath || '');
   if (!p) return '';
   const segs = p.split('/');
   const markerAt = segs.findIndex((s) => TABLE_FOLDER_MARKERS.includes(s.toLowerCase()));
@@ -245,39 +320,67 @@ export function parseStorageUri(
   const fold = opts.fold !== false;
   const path = (p: string | undefined) => (fold ? foldToTableFolder(p || '') : trimSlashes(p || ''));
 
-  // scheme://container@account.<dfs|blob>.<suffix>/path
-  const at = /^(abfss?|wasbs?):\/\/([^@/]+)@([^./]+)\.(?:dfs|blob)\.([^/]+?)(?:\/(.*))?$/i.exec(v);
-  if (at) {
-    const container = at[2].toLowerCase();
-    const account = at[3].toLowerCase();
-    if (!ACCOUNT_RE.test(account) || !CONTAINER_RE.test(container)) return null;
-    return {
-      account,
-      container,
-      suffix: at[4].toLowerCase().replace(/\/+$/, ''),
-      path: path(at[5]),
-    };
+  // Parsed by INDEX, not by one mega-regex. The two patterns this replaces —
+  //   /^(abfss?|wasbs?):\/\/([^@/]+)@([^./]+)\.(?:dfs|blob)\.([^/]+?)(?:\/(.*))?$/
+  //   /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/]+?)(?::\d+)?\/([^/]+)(?:\/(.*))?$/
+  // — pair a lazy `([^/]+?)` with an optional trailing `(?:\/(.*))?$`, which is
+  // a polynomial-ReDoS vector (CodeQL js/polynomial-redos, HIGH). This function
+  // runs on dataset names lifted straight out of a 5 MB OpenLineage POST body,
+  // so that is a reachable denial of service, not a theoretical one. Splitting
+  // on `://`, `@` and `.` is linear and the remaining regexes only ever see a
+  // single bounded label.
+  const u = splitUri(v);
+  if (!u) return null;
+  const isAbfs = u.scheme === 'abfss' || u.scheme === 'abfs' || u.scheme === 'wasbs' || u.scheme === 'wasb';
+  const isHttp = u.scheme === 'https' || u.scheme === 'http';
+  if (!isAbfs && !isHttp) return null;
+
+  // Authority: `[container@]account.<dfs|blob>.<suffix>`.
+  let authority = u.authority;
+  let container = '';
+  if (isAbfs) {
+    const at = authority.indexOf('@');
+    if (at < 0) return null;
+    container = authority.slice(0, at).toLowerCase();
+    authority = authority.slice(at + 1);
+    if (authority.includes('@')) return null;
+  } else {
+    // The https storage form is `account.<dfs|blob>.<suffix>[:port]/container/…`
+    // and the regex this replaced consumed the port with `(?::\d+)?` — i.e. a
+    // port is NOT part of the identity. Dropping any trailing `:<digits>` keeps
+    // `https://acct.dfs…:443/c/p` on the same node as `https://acct.dfs…/c/p`.
+    const c = authority.lastIndexOf(':');
+    if (c >= 0 && !authority.startsWith('[')) {
+      const port = authority.slice(c + 1);
+      authority = port.length > 0 && port.length <= 5 && /^[0-9]+$/.test(port)
+        ? authority.slice(0, c)
+        : stripMalformedPort(authority);
+    }
   }
 
-  // https://account.<dfs|blob>.<suffix>/container/path
-  const https = /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/]+?)(?::\d+)?\/([^/]+)(?:\/(.*))?$/i.exec(v);
-  if (https) {
-    const account = https[1].toLowerCase();
-    const container = https[3].toLowerCase();
-    if (!ACCOUNT_RE.test(account) || !CONTAINER_RE.test(container)) return null;
-    return {
-      account,
-      container,
-      suffix: https[2].toLowerCase().replace(/\/+$/, ''),
-      path: path(https[4]),
-    };
+  const labels = authority.split('.');
+  if (labels.length < 3) return null;
+  const account = labels[0].toLowerCase();
+  const endpoint = labels[1].toLowerCase();
+  if (endpoint !== 'dfs' && endpoint !== 'blob') return null;
+  const suffix = trimTrailingSlashes(labels.slice(2).join('.').toLowerCase());
+  if (!suffix) return null;
+
+  // https puts the container in the FIRST path segment; abfss already has it.
+  let rel = trimSlashes(u.rest);
+  if (isHttp) {
+    const slash = rel.indexOf('/');
+    if (slash < 0) {
+      container = rel.toLowerCase();
+      rel = '';
+    } else {
+      container = rel.slice(0, slash).toLowerCase();
+      rel = rel.slice(slash + 1);
+    }
   }
 
-  return null;
-}
-
-function trimSlashes(p: string): string {
-  return String(p || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!ACCOUNT_RE.test(account) || !CONTAINER_RE.test(container)) return null;
+  return { account, container, suffix, path: path(rel) };
 }
 
 /**
@@ -307,7 +410,7 @@ function trimSlashes(p: string): string {
  */
 export function canonicalStorageUri(raw: string | null | undefined, opts: CanonicalizeOpts = {}): string {
   const parts = parseStorageUri(raw, opts);
-  if (!parts) return stripUriCredentials(raw).replace(/\/+$/, '').toLowerCase();
+  if (!parts) return trimTrailingSlashes(stripUriCredentials(raw)).toLowerCase();
   return storagePartsToUri(parts).toLowerCase();
 }
 
@@ -330,7 +433,7 @@ export function storageDataset(raw: string): OpenLineageDatasetRef {
     // Not Azure storage — emit it whole in `name` (the OL convention for
     // producers that don't split), credential-stripped and lowercased for a
     // stable, secret-free join key.
-    return { namespace: '', name: stripUriCredentials(raw).replace(/\/+$/, '').toLowerCase() };
+    return { namespace: '', name: trimTrailingSlashes(stripUriCredentials(raw)).toLowerCase() };
   }
   return {
     namespace: `abfss://${parts.container}@${parts.account}.dfs.${parts.suffix}`,
@@ -374,7 +477,7 @@ export function adfLocationToStorageUri(
   const acct = parseStorageAccountUrl(linkedServiceUrl);
   if (!acct) return null;
   const rel = [location.folderPath, location.fileName]
-    .map((s) => String(s || '').trim().replace(/^\/+|\/+$/g, ''))
+    .map((s) => trimSlashes(String(s || '').trim()))
     .filter(Boolean)
     .join('/');
   return storagePartsToUri({
@@ -464,11 +567,11 @@ export function sqlDataset(parts: SqlDatasetParts): OpenLineageDatasetRef {
  * agreement with the joined path a standing invariant.
  */
 export function datasetEdgeId(ds: OpenLineageDatasetRef): string {
-  const ns = stripUriCredentials(ds.namespace).replace(/\/+$/, '');
+  const ns = trimTrailingSlashes(stripUriCredentials(ds.namespace));
   const name = stripUriCredentials(ds.name);
   if (/^sqlserver:\/\//i.test(ns)) return name.toLowerCase();
   if (!ns) return canonicalDatasetIdentity(name);
-  return canonicalDatasetIdentity(`${ns}/${name.replace(/^\/+/, '')}`);
+  return canonicalDatasetIdentity(`${ns}/${trimSlashes(name)}`);
 }
 
 /** `sqlserver://{host}:{port}/` prefix on an already-joined dataset URI. */
@@ -493,6 +596,6 @@ const SQLSERVER_URI_RE = /^sqlserver:\/\/[^/]+\/(.+)$/i;
 export function canonicalDatasetIdentity(uri: string | null | undefined): string {
   const v = stripUriCredentials(uri);
   const sql = SQLSERVER_URI_RE.exec(v);
-  if (sql) return sql[1].replace(/\/+$/, '').toLowerCase();
+  if (sql) return trimTrailingSlashes(sql[1]).toLowerCase();
   return canonicalStorageUri(v);
 }

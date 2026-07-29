@@ -71,6 +71,15 @@ const LOOM_RUN_UUID_NAMESPACE = 'b7f0f4c6-1d3a-5f2e-9c41-6a1e0d5b8a72';
  */
 export function deterministicRunId(key: string): string {
   const ns = Buffer.from(LOOM_RUN_UUID_NAMESPACE.replace(/-/g, ''), 'hex');
+  // SHA-1 here is NOT a security primitive and is not interchangeable: RFC 4122
+  // §4.3 DEFINES a version-5 UUID as SHA-1 over (namespace || name), and this
+  // value is an OpenLineage `run.runId` that downstream consumers (Marquez,
+  // DataHub, OpenMetadata) must be able to recompute independently. Swapping the
+  // digest would silently fork every previously-emitted run id — including the
+  // frozen goldens this module is pinned against — while buying nothing: there
+  // is no secret, no signature, and no collision-resistance requirement. Nothing
+  // is authenticated or authorized by it.
+  // codeql[js/weak-cryptographic-algorithm]
   const hash = crypto.createHash('sha1').update(Buffer.concat([ns, Buffer.from(key, 'utf8')])).digest();
   const b = Buffer.from(hash.subarray(0, 16));
   b[6] = (b[6] & 0x0f) | 0x50; // version 5

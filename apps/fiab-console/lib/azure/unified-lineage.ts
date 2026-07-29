@@ -58,7 +58,7 @@ import {
   UnityCatalogError,
 } from './unity-catalog-client';
 import { resolveAssetIdentities, storagePathIdentity } from './asset-identity';
-import { parseStorageUri, storagePartsToUri, stripUriCredentials } from '@/lib/lineage/dataset-naming';
+import { parseStorageUri, storagePartsToUri, stripUriCredentials, trimSlashes, hasUriScheme } from '@/lib/lineage/dataset-naming';
 import { listThreadEdges, type ThreadEdge } from '@/lib/thread/thread-edges';
 import type { SessionPayload } from '@/lib/auth/session';
 import type {
@@ -78,13 +78,17 @@ import type {
  */
 export function normalizeIdentity(raw: string | undefined | null): string {
   if (!raw) return '';
-  let v = String(raw).trim().replace(/\/+$/, '');
+  let v = trimSlashes(String(raw).trim());
   // SECURITY (LU-8): a join key is persisted on thread edges and rendered as a
   // canvas node label. Any URI-shaped input has its SAS query string and
   // userinfo removed before it can become one. Non-URI ids (item guids, UC
   // full_names, Purview displayText) are untouched — only a `scheme://` value
   // is credential-bearing.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) v = stripUriCredentials(v).replace(/\/+$/, '');
+  // `hasUriScheme` / `trimSlashes` are index-based on purpose: the regex forms
+  // (`/^[a-z][a-z0-9+.-]*:\/\//` and `/\/+$/`) are polynomial-ReDoS vectors
+  // (CodeQL js/polynomial-redos, HIGH) and this runs on every identity that
+  // arrives from the OpenLineage ingest body.
+  if (hasUriScheme(v)) v = trimSlashes(stripUriCredentials(v));
   // A Databricks UC table registered in Atlas by /api/catalog/register:
   //   https://{host}/api/2.1/unity-catalog/tables/{fullName}
   const ucUrl = v.match(/\/unity-catalog\/tables\/(.+)$/i);

@@ -77,10 +77,10 @@ describe('S1 class: a SAS smuggled through the abfss container slot', () => {
   // value that is persisted as a thread-edge endpoint and rendered as a node
   // label. The charset check moved the leak; it did not stop it.
   //
-  // MUTATION that turns this red: in `stripUriCredentials`, restore
-  //   if (userinfo.includes(':') || isHttp)
+  // MUTATION that turns this red: in `stripUriCredentials`, use
+  //   isHttp || userinfo.includes(':')
   // in place of
-  //   if (isHttp || !CONTAINER_RE.test(userinfo.toLowerCase()))
+  //   isHttp || !CONTAINER_RE.test(userinfo.toLowerCase())
   // → observed: 3 failures in this block, `sig=supersecretsignature` survives
   //   into canonicalDatasetIdentity's output.
   const SAS_AUTHORITY =
@@ -124,8 +124,8 @@ describe('S1 class: the SAME defect one field over — a credential in the host 
   // verbatim as the thread-edge endpoint. An authority is `host[:port]` and a
   // port is numeric; a non-numeric `:tail` is not a host.
   //
-  // MUTATION: in `stripUriCredentials`, delete
-  //   if (!host.startsWith('[')) host = host.replace(/:(?!\d+$)[^:]*$/, '');
+  // MUTATION: in `stripUriCredentials`, delete the `stripMalformedPort(host)`
+  // call (or make that helper `return host`).
   // → observed: 2 failures — 'secret' survives into the persisted identity.
   it('drops a non-numeric host tail instead of passing it through', () => {
     const raw = 'abfss://data@st:secret.dfs.core.windows.net/x';
@@ -291,5 +291,76 @@ describe('harvest budget: a truncated pass resumes instead of rewriting the head
     });
     expect(again.reason).toBe('already harvested in this replica');
     expect(edgesWritten).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ReDoS — these parsers run on a 5 MB attacker-controlled OpenLineage body
+// ---------------------------------------------------------------------------
+describe('dataset naming is linear on hostile input (CodeQL js/polynomial-redos)', () => {
+  // CodeQL flagged 7 HIGH polynomial-ReDoS alerts across this module and
+  // `unified-lineage.normalizeIdentity` on the round-3 head, and it was right:
+  // the flagged patterns paired a lazy `([^/]+?)` with an optional trailing
+  // `(?:\/(.*))?$`, and `/\/+$/` is quadratic on a long run of slashes. Every
+  // one of these functions is reachable from `POST /api/lineage/openlineage`
+  // with a 5 MB body, so it is a reachable DoS, not a lint nit. The parsers are
+  // index-based now; these are the regression guards.
+  //
+  // The catastrophic shape was measured, not assumed. Probing each removed
+  // pattern against 100k-200k hostile inputs, the lazy-quantifier authority
+  // regexes came back in ~0ms (V8 optimizes those), but
+  //   ('abfss://x/' + '/'.repeat(200_000) + 'a').replace(/\/+$/, '')
+  // took **26,152 ms** — slashes followed by a non-slash tail force `/+` to
+  // retry from every position. That is the reachable DoS, and it is exactly
+  // the shape a dataset name like `abfss://c@a.dfs…/x/////…////part-0` has.
+  //
+  // MUTATION: `export function trimSlashes(p) { return String(p||'')
+  //   .replace(/^\/+/, '').replace(/\/+$/, ''); }`
+  // → observed: 1 failure — the 200k-slash case takes ~26s against a 1s budget.
+  const BUDGET_MS = 1_000;
+
+  function underBudget(label: string, fn: () => void) {
+    const t0 = Date.now();
+    fn();
+    const ms = Date.now() - t0;
+    expect(ms, `${label} took ${ms}ms`).toBeLessThan(BUDGET_MS);
+  }
+
+  it('survives a 200k-slash run FOLLOWED BY A TAIL (the 26s case)', () => {
+    // The tail is load-bearing: with the slashes at the very end `/+$` matches
+    // on the first try. It is the non-matching tail that makes it quadratic.
+    const evil = `abfss://data@stloom.dfs.core.windows.net/silver/${'/'.repeat(200_000)}part-0`;
+    underBudget('canonicalDatasetIdentity(slashes+tail)', () => canonicalDatasetIdentity(evil));
+  });
+
+  it('survives a 200k-char scheme-ish prefix', () => {
+    const evil = `${'a.'.repeat(100_000)}://host/x`;
+    underBudget('canonicalDatasetIdentity(scheme)', () => canonicalDatasetIdentity(evil));
+  });
+
+  it('survives a 200k-char authority with no terminating slash', () => {
+    const evil = `abfss://data@${'a'.repeat(200_000)}.dfs.core.windows.net`;
+    underBudget('parseStorageUri(authority)', () => parseStorageUri(evil));
+  });
+
+  it('survives a 200k-char path with no separators', () => {
+    const evil = `https://stloom.dfs.core.windows.net/data/${'a'.repeat(200_000)}`;
+    underBudget('canonicalStorageUri(path)', () => canonicalStorageUri(evil));
+  });
+
+  // …and still parses correctly after the index-based rewrite. A fast parser
+  // that stopped parsing would be a worse bug than the one it replaced.
+  it('still parses every spelling onto ONE canonical identity', () => {
+    const want = 'abfss://silver@stloom.dfs.core.windows.net/sales';
+    expect(canonicalStorageUri('abfss://silver@stloom.dfs.core.windows.net/sales')).toBe(want);
+    expect(canonicalStorageUri('wasbs://silver@stloom.blob.core.windows.net/sales')).toBe(want);
+    expect(canonicalStorageUri('https://stloom.dfs.core.windows.net/silver/sales')).toBe(want);
+    expect(canonicalStorageUri('abfss://silver@stloom.dfs.core.windows.net/sales/_delta_log')).toBe(want);
+    expect(canonicalStorageUri('https://stloom.dfs.core.windows.net:443/silver/sales')).toBe(want);
+    // sovereign suffix carried through, never assumed
+    expect(canonicalStorageUri('abfss://silver@stloom.dfs.core.usgovcloudapi.net/sales'))
+      .toBe('abfss://silver@stloom.dfs.core.usgovcloudapi.net/sales');
+    // OneLake still opts out of the ADLS shape
+    expect(parseStorageUri('abfss://ws-guid@onelake.dfs.fabric.microsoft.com/lh/Files/x')).toBeNull();
   });
 });
