@@ -16,8 +16,12 @@ import {
   analyzeUnityChokepoint,
   callsSymbolInFinallyOf,
   maskCommentsAndStrings,
+  maskComments,
   isClientComponent,
   readSources,
+  countOutbound,
+  hasTransport,
+  TRANSPORTS,
   CHOKEPOINT,
   DBX_CHOKEPOINT,
   RECORDER,
@@ -296,6 +300,133 @@ describe('ATTACK: quieter regressions', () => {
   });
 });
 
+/**
+ * ROUND 4. The adjudicator's finding: check 4 (the no-bypass scan) SKIPS every
+ * exempted file, so on the allowlist and on the declared gaps the per-file
+ * outbound ratchet is the ONLY control — and `countOutbound()` matched only
+ * `fetchWithTimeout(` and a bare `fetch(`, a strictly narrower vocabulary than
+ * the scan that had been waived. Each attack below exited 0 against round 3.
+ */
+describe('ATTACK: non-fetch transports inside an EXEMPTED file (round-4 adjudication)', () => {
+  const GRANT_BODY = "JSON.stringify({ changes: [{ principal: 'attacker@contoso.com', add: ['ALL_PRIVILEGES'] }] })";
+
+  it('#15 — fails on undici `request` appended to the allowlisted databricks-client', () => {
+    const s = realSources();
+    s.set(DBX_CHOKEPOINT, `${s.get(DBX_CHOKEPOINT)!}
+import { request as r } from 'undici';
+export async function rogueGrant(host: string, token: string, fq: string) {
+  await r(\`https://\${host}/api/2.1/unity-catalog/permissions/table/\${fq}\`, {
+    method: 'PATCH',
+    headers: { authorization: \`Bearer \${token}\` },
+    body: ${GRANT_BODY},
+  });
+}
+`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/databricks-client\.ts: \d+ outbound calls \(ratchet: 3\)/);
+  });
+
+  it('#16 — fails on node `https.request` appended to the allowlisted databricks-client', () => {
+    const s = realSources();
+    s.set(DBX_CHOKEPOINT, `${s.get(DBX_CHOKEPOINT)!}
+import * as nhttps from 'node:https';
+export function rogueGrant2(host: string, fq: string) {
+  const req = nhttps.request({ host, path: \`/api/2.1/unity-catalog/permissions/table/\${fq}\`, method: 'PATCH' });
+  req.end(${GRANT_BODY});
+}
+`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/databricks-client\.ts: \d+ outbound calls \(ratchet: 3\)/);
+  });
+
+  it('#17 — fails on axios appended to the DECLARED-GAP shortcut-credentials', () => {
+    const s = realSources();
+    const gap = 'lib/azure/shortcut-credentials.ts';
+    expect(KNOWN_UNAUDITED.has(gap)).toBe(true);
+    s.set(gap, `${s.get(gap)!}
+import axios from 'axios';
+export async function rogueCred(host: string, token: string, name: string) {
+  await axios.post(\`https://\${host}/api/2.1/unity-catalog/storage-credentials\`, { name }, {
+    headers: { authorization: \`Bearer \${token}\` },
+  });
+}
+`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/shortcut-credentials\.ts: \d+ outbound calls \(ratchet: 2\)/);
+  });
+
+  it('#18 — fails on a dynamic import() of an HTTP client in an exempted file', () => {
+    const s = realSources();
+    s.set(DBX_CHOKEPOINT, `${s.get(DBX_CHOKEPOINT)!}
+export async function rogueGrant3(host: string, fq: string) {
+  const { request: send } = await import('undici');
+  await send(\`https://\${host}/api/2.1/unity-catalog/permissions/table/\${fq}\`, { method: 'PATCH' });
+}
+`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/databricks-client\.ts: \d+ outbound calls \(ratchet: 3\)/);
+  });
+});
+
+/**
+ * The CLASS fix, asserted directly: the ratchet and the no-bypass scan must not
+ * be able to disagree about what a transport is. Both derive from TRANSPORTS,
+ * and every entry ships a `sample`, so this holds for anything added later —
+ * the invariant is what stops a future transport being pasted into one consumer
+ * and not the other.
+ */
+describe('TRANSPORT VOCABULARY — one definition, two consumers', () => {
+  it('has a sample for every entry', () => {
+    expect(TRANSPORTS.length).toBeGreaterThan(5);
+    for (const t of TRANSPORTS) {
+      expect(typeof t.sample, `${t.id} has no sample`).toBe('string');
+      expect(['code', 'module']).toContain(t.scope);
+      expect(t.re.test(t.sample), `${t.id}: its own sample does not match its regex`).toBe(true);
+    }
+  });
+
+  it('every transport is seen by BOTH hasTransport (check 4) and countOutbound (check 2)', () => {
+    for (const t of TRANSPORTS) {
+      const src = `export async function go(url: string, body: unknown) {\n  ${t.sample}\n}\n`;
+      expect(hasTransport(src), `${t.id}: invisible to the no-bypass scan`).toBe(true);
+      expect(countOutbound(src), `${t.id}: invisible to the outbound ratchet`).toBeGreaterThan(0);
+    }
+  });
+
+  it('every transport, combined with a UC REST path, fails the guard in a NEW file', () => {
+    for (const t of TRANSPORTS) {
+      const s = realSources();
+      s.set('lib/azure/rogue-transport.ts', [
+        "const P = '/api/2.1/unity-catalog/permissions/table/a.b.c';",
+        'export async function go(url: string, body: unknown) {',
+        `  void P; ${t.sample}`,
+        '}',
+      ].join('\n'));
+      expect(analyzeUnityChokepoint(s).join('\n'), `${t.id} walked past the scan`)
+        .toMatch(/rogue-transport\.ts: references a Unity Catalog/);
+    }
+  });
+
+  it('does NOT count transport-shaped PROSE or a doc comment as a call', () => {
+    // env-checks/data-plane.ts really says "present a valid LOOM_INTERNAL_TOKEN
+    // on the request (in addition to a tenant-admin session)". Round 3 tested
+    // the union against RAW source, so that string was request-shaped code.
+    const prose = [
+      "export const SPEC = { remediation: 'present a token on the request (in addition to a session)' };",
+      "// historical: this used to fetch(url) and import { request } from 'undici'",
+      "/** see fetch(…) and axios */",
+    ].join('\n');
+    expect(countOutbound(prose)).toBe(0);
+    expect(hasTransport(prose)).toBe(false);
+  });
+
+  it('still counts a REAL import specifier, which only exists inside a string', () => {
+    const real = ["import { request as r } from 'undici';", 'export const go = (u: string) => r(u);'].join('\n');
+    expect(countOutbound(real)).toBeGreaterThan(0);
+    expect(hasTransport(real)).toBe(true);
+  });
+});
+
 describe('masking', () => {
   it('blanks comments and strings but preserves offsets', () => {
     const src = 'const a = "{{{"; // }}}\nconst b = 1;';
@@ -304,5 +435,13 @@ describe('masking', () => {
     expect(masked).not.toContain('{');
     expect(masked).not.toContain('}');
     expect(masked.slice(0, 9)).toBe('const a =');
+  });
+
+  it('maskComments keeps string bodies so a module specifier is still readable', () => {
+    const src = "// from 'undici'\nimport { request } from 'undici';";
+    const masked = maskComments(src);
+    expect(masked.length).toBe(src.length);
+    expect(masked.slice(0, 16).trim()).toBe(''); // the comment is gone…
+    expect(masked).toContain("from 'undici'"); // …the real import is not.
   });
 });

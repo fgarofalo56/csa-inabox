@@ -78,6 +78,28 @@
  *      one, and the path regex has a second arm matching the bare
  *      `unity-catalog/` segment.
  *
+ * ## HISTORY — round 4 (2026-07-29). The ratchet measured less than the scan.
+ *
+ *   7. TWO VOCABULARIES. Round 3 widened `REQUEST_RE` (check 4) but left
+ *      `countOutbound()` (check 2) matching only `fetchWithTimeout(` and a bare
+ *      `fetch(`. Check 4 SKIPS every exempted file, so on the allowlist and on
+ *      the declared gaps the ratchet is the ONLY control — and it was measuring
+ *      a strictly narrower thing than the waived scan. Three transports walked
+ *      through it with ZERO failures: undici `request` and `https.request`
+ *      appended to the allowlisted `databricks-client.ts` (a
+ *      `PATCH …/unity-catalog/permissions/… ALL_PRIVILEGES`), and `axios.post`
+ *      appended to the declared-gap `shortcut-credentials.ts`.
+ *      FIXED, as a CLASS: {@link TRANSPORTS} is now the single vocabulary and
+ *      BOTH consumers derive from it ({@link hasTransport},
+ *      {@link countOutbound}), so they cannot disagree. Every entry carries a
+ *      `sample`, and the spec asserts per entry that both consumers see it —
+ *      that invariant is what stops a future transport being pasted into one
+ *      consumer and not the other. Regression tests: guard spec #15–#18.
+ *      Side effect: the code arms are now matched against comment+string-masked
+ *      source instead of raw text, which drops the prose false positive in
+ *      `lib/admin/env-checks/data-plane.ts` ("…on the request (in addition to a
+ *      session)") without dropping any real call.
+ *
  * ## LIMITS — what this guard is NOT
  *
  * READ THIS BEFORE CITING THE GUARD AS COVERAGE. It is a lexical scan over the
@@ -88,8 +110,13 @@
  *   - a path assembled from enough pieces (`'unity' + '-catalog/'`), built from
  *     a variable, or read from config defeats the address regexes;
  *   - a transport reached through an indirection this file does not name
- *     (a dynamic `import()`, a generic http helper, a native addon) defeats
- *     REQUEST_RE;
+ *     defeats {@link TRANSPORTS}. The named set covers fetch /
+ *     fetchWithTimeout / `new Request` / XHR / axios / node `http(s).request` /
+ *     undici dispatchers / a bare `request(` / an import|require|import() of
+ *     any HTTP client package — every transport PRESENT in this workspace, plus
+ *     the shapes an author would reach for next. A hand-rolled `net.Socket`
+ *     that speaks HTTP itself, or a helper in a third file whose own module has
+ *     no catalog address, still gets through;
  *   - it proves the recorder is CALLED, never that the row is CORRECT or that
  *     it reached Cosmos.
  *
@@ -112,8 +139,9 @@
  *   1. INTEGRITY (ucFetch)   — `recordUnityAccess(` inside a `finally` block of
  *      `ucFetch`, and the import from lib/azure/unity-audit is present.
  *   2. OUTBOUND RATCHET      — EVERY file this guard exempts from check 4
- *      (allowlisted OR declared-gap) has a frozen outbound-call count
- *      (OUTBOUND_BASELINE). A file exempted without a pin FAILS.
+ *      (allowlisted OR declared-gap) has a frozen count of outbound TRANSPORT
+ *      SITES (OUTBOUND_BASELINE), counted with the SAME {@link TRANSPORTS}
+ *      vocabulary check 4 uses. A file exempted without a pin FAILS.
  *   3. INTEGRITY (dbxFetch)  — `recordDatabricksUnityAccess(` inside a `finally`
  *      block of `dbxFetch`.
  *   4. NO BYPASS             — no file outside the ALLOWLIST may combine a Loom
@@ -330,27 +358,85 @@ export const UNITY_REST_PATH_RE = new RegExp(
 );
 
 /**
- * Request-shaped code.
+ * THE TRANSPORT VOCABULARY — ONE definition, TWO consumers.
  *
- * Round 2 matched only `fetch(` / `fetchWithTimeout(` / `axios` / `http.request(`,
- * so a reviewer bypassed it with `import { request } from 'undici'`. The set
- * below covers the HTTP clients actually resolvable in this workspace plus the
- * generic shapes; an IMPORT of any of them counts on its own, because the call
- * site can always be renamed (`request as r`).
+ * ## Why this is a single exported list and not two regexes
+ *
+ * Round 3 shipped a broad {@link REQUEST_RE} for the no-bypass scan (check 4)
+ * and a SEPARATE, two-shape `countOutbound()` (`fetchWithTimeout(` and a bare
+ * `fetch(`) for the per-file ratchet (check 2). Check 4 SKIPS every exempted
+ * file, so on the allowlist and on the declared gaps the ratchet is the ONLY
+ * control — and it was measuring a strictly narrower thing than the scan that
+ * had been waived. Three transports walked straight through it:
+ *
+ *   - `import { request as r } from 'undici'` + a `PATCH …/unity-catalog/
+ *     permissions/table/…` appended to `databricks-client.ts` (allowlisted,
+ *     ratchet 3) — outbound count stayed 3, guard exited 0;
+ *   - `https.request({ path: '/api/2.1/unity-catalog/permissions/…' })` in the
+ *     same file — same result;
+ *   - `axios.post('…/unity-catalog/storage-credentials')` appended to
+ *     `shortcut-credentials.ts` (a DECLARED gap, ratchet 2) — same result.
+ *
+ * All three are now regression tests (`unity-audit-guard.test.ts` #15–#18).
+ *
+ * The instance fix would have been to paste the extra shapes into
+ * `countOutbound`. The CLASS fix is that the two consumers must not be able to
+ * disagree at all: both are derived from this list, so a transport the scan
+ * knows about is a transport the ratchet counts, by construction. The
+ * `TRANSPORT VOCABULARY — one definition, two consumers` spec proves the
+ * invariant per entry, and every entry carries a `sample` so the invariant is
+ * checkable for anything added later.
+ *
+ * `scope`:
+ *   'code'   — matched against source with comments AND string bodies masked,
+ *              so a URL in a doc comment is not a call.
+ *   'module' — an import/require/dynamic-import SPECIFIER, so it must be
+ *              matched with string bodies INTACT (comments still masked). The
+ *              import alone counts: the local binding can always be renamed
+ *              (`request as r`), but the module name cannot be.
  */
-export const REQUEST_RE = new RegExp([
-  /\bfetchWithTimeout\s*\(/,
-  /(?<![.\w])fetch\s*\(/,
-  /\bnew\s+Request\s*\(/,
-  /\bXMLHttpRequest\b/,
-  /\baxios\b/,
-  /\bhttps?\.request\s*\(/,
-  // Module specifiers — the import alone counts; the local binding can be anything.
-  /['"](?:undici|node-fetch|got|ky|superagent|node:https?|cross-fetch|phin|needle)['"]/,
-  // undici / node:http surface reached through a namespace or a destructure.
-  /\brequest\s*\(\s*[`'"]https?:/,
-  /\bnew\s+(?:undici\.)?(?:Client|Pool|Agent|ProxyAgent)\s*\(/,
-].map((r) => r.source).join('|'));
+export const TRANSPORTS = [
+  { id: 'fetchWithTimeout', scope: 'code', re: /\bfetchWithTimeout\s*\(/, sample: "await fetchWithTimeout(url, { method: 'PATCH' });" },
+  { id: 'bare-fetch', scope: 'code', re: /(?<![.\w])fetch\s*\(/, sample: 'await fetch(url);' },
+  { id: 'new-Request', scope: 'code', re: /\bnew\s+Request\s*\(/, sample: 'const r = new Request(url);' },
+  { id: 'xhr', scope: 'code', re: /\bXMLHttpRequest\b/, sample: 'const x = new XMLHttpRequest();' },
+  { id: 'axios', scope: 'code', re: /\baxios\b/, sample: 'await axios.post(url, body);' },
+  { id: 'node-http-request', scope: 'code', re: /\bhttps?\.request\s*\(/, sample: 'https.request(opts).end();' },
+  { id: 'undici-dispatcher', scope: 'code', re: /\bnew\s+(?:undici\.)?(?:Client|Pool|Agent|ProxyAgent)\s*\(/, sample: 'const p = new undici.Pool(host);' },
+  // A bare `request(…)` call — how undici/got/needle read after a destructure
+  // or a rename. Method calls (`x.request(`) and longer identifiers
+  // (`onRequest(`, `NextRequest(`) are excluded by the lookbehind + case.
+  { id: 'bare-request-call', scope: 'code', re: /(?<![.\w])request\s*\(/, sample: 'await request(url, { method: "PATCH" });' },
+  {
+    id: 'http-module-specifier',
+    scope: 'module',
+    re: /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)['"](?:undici|node-fetch|got|ky|superagent|node:https?|https?|cross-fetch|phin|needle|axios)['"]/,
+    sample: "import { request as r } from 'undici';",
+  },
+];
+
+/**
+ * Request-shaped code — the union of {@link TRANSPORTS}. Kept exported because
+ * it names the whole vocabulary in one place; prefer {@link hasTransport},
+ * which applies each arm to the haystack it belongs to.
+ */
+export const REQUEST_RE = new RegExp(TRANSPORTS.map((t) => t.re.source).join('|'));
+
+/**
+ * TRUE when the file contains outbound-transport CODE.
+ *
+ * Same vocabulary and same haystack rules as {@link countOutbound} — code
+ * shapes read against comments+strings-masked source, module specifiers
+ * against comments-masked source. Matching the code arms against masked source
+ * (round 3 tested the union against RAW text) drops the prose false positives
+ * — `env-checks/data-plane.ts` says "present a valid token on the request (in
+ * addition to a session)" in a remediation string — without dropping any real
+ * call, because a transport call is always code.
+ */
+export function hasTransport(src) {
+  const haystacks = { code: maskCommentsAndStrings(src), module: maskComments(src) };
+  return TRANSPORTS.some((t) => t.re.test(haystacks[t.scope]));
+}
 
 /**
  * TRUE for a Next.js CLIENT component (`'use client'`) — the one kind of file
@@ -391,11 +477,13 @@ export function referencesCatalogAddress(rel, src) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Replace every comment and string/template literal with spaces of the SAME
- * length, so brace matching cannot be fooled by a `{` in a doc comment or a
- * template string, while every index still maps 1:1 onto the original source.
+ * Replace comments — and, when `strings` is true, string/template literal
+ * BODIES — with spaces of the SAME length, so brace matching cannot be fooled
+ * by a `{` in a doc comment or a template string, while every index still maps
+ * 1:1 onto the original source. String delimiters are always preserved, so a
+ * specifier match like `from '…'` still has its quotes.
  */
-export function maskCommentsAndStrings(src) {
+export function maskSource(src, { strings = true } = {}) {
   const out = src.split('');
   let i = 0;
   const n = src.length;
@@ -412,12 +500,23 @@ export function maskCommentsAndStrings(src) {
         if (src[j] === c) break;
         j++;
       }
-      blank(i + 1, j); i = j + 1; continue;
+      if (strings) blank(i + 1, j);
+      i = j + 1; continue;
     }
     i++;
   }
   return out.join('');
 }
+
+/** Comments AND string bodies blanked — the haystack for code-shaped patterns. */
+export function maskCommentsAndStrings(src) { return maskSource(src, { strings: true }); }
+
+/**
+ * Comments blanked, string bodies INTACT — the haystack for module specifiers.
+ * A doc comment saying `from 'undici'` must not count as an import, but the
+ * real import must, and its module name only exists inside a string.
+ */
+export function maskComments(src) { return maskSource(src, { strings: false }); }
 
 /** Index of the `}` matching the `{` at `open` in `masked`. -1 when unbalanced. */
 function matchBrace(masked, open) {
@@ -482,11 +581,31 @@ export function countCalls(src, symbol) {
   return (masked.match(new RegExp(`\\b${symbol}\\s*\\(`, 'g')) || []).length;
 }
 
-/** Outbound-request calls in real code (comments and string bodies masked). */
+/**
+ * Outbound TRANSPORT SITES in real code — every construct in
+ * {@link TRANSPORTS}, not just `fetch`.
+ *
+ * This is the per-file ceiling for the files check 4 waives, so it must
+ * recognise everything check 4 would have caught. It does, by construction:
+ * both read the same vocabulary. See the TRANSPORTS docstring for the three
+ * bypasses that existed while this function had its own two-shape regex.
+ *
+ * De-duplicated per (scope, index) so two alternatives matching the same site
+ * count once — the number in {@link OUTBOUND_BASELINE} stays readable.
+ */
 export function countOutbound(src) {
-  const masked = maskCommentsAndStrings(src);
-  return (masked.match(/\bfetchWithTimeout\s*\(/g) || []).length
-    + (masked.match(/(?<![.\w])fetch\s*\(/g) || []).length;
+  const haystacks = { code: maskCommentsAndStrings(src), module: maskComments(src) };
+  const seen = new Set();
+  for (const t of TRANSPORTS) {
+    const hay = haystacks[t.scope];
+    const re = new RegExp(t.re.source, 'g');
+    let m;
+    while ((m = re.exec(hay)) !== null) {
+      seen.add(`${t.scope}:${m.index}`);
+      if (m.index === re.lastIndex) re.lastIndex++; // zero-width safety
+    }
+  }
+  return seen.size;
 }
 
 /**
@@ -559,7 +678,9 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
       failures.push(
         `${r}: ${outbound} outbound calls (ratchet: ${base}). This file is exempted from the no-bypass scan, so a new ` +
         `raw request here is an un-audited door to Unity Catalog. Route it through ucFetch (${CHOKEPOINT}) or dbxFetch ` +
-        `(${DBX_CHOKEPOINT}), or raise this file's OUTBOUND_BASELINE with a security-review note.`,
+        `(${DBX_CHOKEPOINT}), or raise this file's OUTBOUND_BASELINE with a security-review note. ` +
+        `("Outbound" = any TRANSPORTS site — fetch, undici/axios/got, node http(s).request, XHR, or an import of an ` +
+        `HTTP client — not just fetch(.)`,
       );
     }
   }
@@ -569,7 +690,7 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
     if (CHOKEPOINT_FILES.has(r)) continue;
     if (isTestFile(r)) continue; // specs legitimately stub URLs + fetch
     if (!referencesCatalogAddress(r, src)) continue;
-    if (!REQUEST_RE.test(src)) continue; // env read for a gate/capability check — fine
+    if (!hasTransport(src)) continue; // env read for a gate/capability check — fine
     if (KNOWN_UNAUDITED.has(r)) continue; // declared gap — reported, not silent
     failures.push(
       `${r}: references a Unity Catalog address or REST path (LOOM_UNITY_URL / ossUcBase() / /api/2.x/unity-catalog/) ` +
