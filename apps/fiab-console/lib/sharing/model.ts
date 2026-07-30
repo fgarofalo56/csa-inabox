@@ -86,6 +86,52 @@ export function isValidSharingName(name: string): boolean {
   return NAME_RE.test(name);
 }
 
+/**
+ * THE canonical form of a share or recipient name — the single function that
+ * decides identity on this surface.
+ *
+ * Share and recipient names are CASE-INSENSITIVE identifiers: `Sales` and
+ * `sales` name the same share, so exactly one of them may exist. That has to be
+ * true in both directions or it is worthless:
+ *
+ *   at COMPARISON  every authorization decision, grant, revoke and cascade
+ *                  compares canonical forms (see recipientCanAccessShare);
+ *   at STORAGE     the Cosmos document id and the stored name are canonical
+ *                  (see store.shareDocId / upsertShare), and a document whose
+ *                  stored name is NOT canonical is refused on the way out.
+ *
+ * Round 4 of this change's review found the version where only the first half
+ * held. `recipientCanAccessShare` lower-cased both sides while the document id
+ * was `share:${name}` verbatim — and Cosmos ids are case-sensitive. So a share
+ * literally named `Share-A` could coexist with `share-a`, a recipient granted
+ * `share-a` was authorized for the string `Share-A`, and the subsequent point
+ * read returned the OTHER share's record — a cross-recipient read on the one
+ * endpoint whose purpose is moving data outside the boundary. The same
+ * divergence silently broke revoke and delete-cascade, which compared with
+ * case-sensitive `Array#includes` against a grant list the data plane read
+ * case-insensitively: a revocation typed in the wrong case did nothing at all.
+ *
+ * Anything that puts a share or recipient name into a key, a comparison, or a
+ * document id goes through here. There is deliberately no second spelling of
+ * this rule for the two sides to drift apart on.
+ */
+export function canonicalSharingName(name: string | null | undefined): string {
+  return String(name ?? '').trim().toLowerCase();
+}
+
+/** Is this exactly the stored form? Used to refuse a legacy or hand-inserted
+ *  document rather than serve a record whose identity we cannot vouch for. */
+export function isCanonicalSharingName(name: string | null | undefined): boolean {
+  const raw = String(name ?? '');
+  return raw.length > 0 && raw === canonicalSharingName(raw);
+}
+
+/** Do these two names refer to the same share / recipient? */
+export function sameSharingName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ca = canonicalSharingName(a);
+  return !!ca && ca === canonicalSharingName(b);
+}
+
 /** Entra ids are GUIDs; anything else is a typo or an injection attempt. */
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -109,9 +155,11 @@ export function isValidShareLocation(location: string): boolean {
  */
 export function recipientCanAccessShare(recipient: LoomRecipient | null | undefined, share: string): boolean {
   if (!recipient || recipient.disabled) return false;
-  const want = String(share || '').toLowerCase();
+  // Canonical on BOTH sides, via the same function the document id is built
+  // from — see canonicalSharingName. The two cannot drift.
+  const want = canonicalSharingName(share);
   if (!want) return false;
-  return (recipient.shares || []).some((s) => String(s).toLowerCase() === want);
+  return (recipient.shares || []).some((s) => canonicalSharingName(s) === want);
 }
 
 /** The shares a recipient may see, in a stable order. */

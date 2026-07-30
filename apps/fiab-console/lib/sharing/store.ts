@@ -17,6 +17,7 @@
 
 import { sharingContainer } from '@/lib/azure/cosmos-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { canonicalSharingName, isCanonicalSharingName } from './model';
 import type { LoomRecipient, LoomShare } from './model';
 
 // ── Configuration / honest gate ────────────────────────────────────────────
@@ -213,15 +214,75 @@ export async function loomSharingFetch(
 
 type SharingDoc<T> = T & { kind: 'share' | 'recipient'; name: string };
 
+// NAMES ARE CANONICAL IN THE DOCUMENT ID. Cosmos ids are case-SENSITIVE, so
+// `share:sales` and `share:Sales` would be two different documents while
+// `recipientCanAccessShare` treats the two names as one — the round-4
+// cross-recipient read. Building the id from `canonicalSharingName` makes the
+// collision unrepresentable: there is exactly one document per canonical name,
+// so an authorization decision and the point read that follows it cannot resolve
+// to different records. See lib/sharing/model.ts canonicalSharingName.
+
 function shareDocId(name: string): string {
-  return `share:${name}`;
+  return `share:${canonicalSharingName(name)}`;
 }
 function recipientDocId(name: string): string {
-  return `recipient:${name}`;
+  return `recipient:${canonicalSharingName(name)}`;
 }
-/** Strip the storage prefix so callers only ever see the bare share/recipient name. */
-function fromDoc<T extends { id: string }>(doc: SharingDoc<T>): T {
+
+/**
+ * Strip the storage prefix so callers only ever see the bare share/recipient
+ * name, and REFUSE a document whose stored name is not canonical.
+ *
+ * The refusal is the read-side half of the invariant. `listShares` /
+ * `listRecipients` are SQL queries, not point reads, so a document written
+ * before this fix — or inserted by hand — would otherwise still reach the
+ * authorization code under a name the grant list matches case-insensitively.
+ * Dropping it is fail-closed: the record does not exist as far as Loom is
+ * concerned, so it can neither be discovered nor served.
+ */
+function fromDoc<T extends { id: string }>(doc: SharingDoc<T>): T | null {
+  if (!isCanonicalSharingName(doc.name)) {
+    console.warn(
+      `[sharing] refusing non-canonical ${doc.kind} document "${doc.name}" — `
+      + 'share and recipient names are case-insensitive identifiers and must be stored canonically '
+      + '(lib/sharing/model.ts canonicalSharingName). Re-create the record.',
+    );
+    return null;
+  }
   return { ...doc, id: doc.name } as T;
+}
+
+/** Grant lists are compared case-insensitively by the data plane, so they are
+ *  stored canonical and de-duplicated. A mixed-case entry that survived a write
+ *  is normalised on read too, so the admin view and the authorization decision
+ *  see the same list. */
+function canonicalGrants(shares: unknown): string[] {
+  const list = Array.isArray(shares) ? shares : [];
+  return [...new Set(list.map((s) => canonicalSharingName(s as string)).filter(Boolean))];
+}
+
+/**
+ * Entra principal ids, canonical.
+ *
+ * `matchRecipientByPrincipal` compares them case-insensitively (Entra emits
+ * GUIDs in mixed case across token versions) while they were stored verbatim —
+ * the SAME compare/store divergence as the share name, one field over. Its
+ * consequence is a suspend or a DELETE that appears to work: two recipient
+ * records could each hold the same principal in different case, authentication
+ * matches whichever sorts first, and disabling that one leaves the other
+ * authenticating. Stored canonical, so a duplicate is detectable (see
+ * loomCreateRecipient) and the audit row's `actorOid` matches the record.
+ */
+function canonicalPrincipalIds(ids: unknown): string[] {
+  const list = Array.isArray(ids) ? ids : [];
+  return [...new Set(list.map((p) => String(p ?? '').trim().toLowerCase()).filter(Boolean))];
+}
+
+function recipientFromDoc(doc: SharingDoc<LoomRecipient>): LoomRecipient | null {
+  const base = fromDoc(doc);
+  return base
+    ? { ...base, shares: canonicalGrants(base.shares), principalIds: canonicalPrincipalIds(base.principalIds) }
+    : null;
 }
 
 function nowIso(): string {
@@ -237,7 +298,10 @@ export async function listShares(tenantId: string): Promise<LoomShare[]> {
       parameters: [{ name: '@t', value: tenantId }],
     })
     .fetchAll();
-  return (resources || []).map(fromDoc).sort((a, b) => a.id.localeCompare(b.id));
+  return (resources || [])
+    .map(fromDoc)
+    .filter((s): s is LoomShare => !!s)
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export async function getShare(tenantId: string, name: string): Promise<LoomShare | null> {
@@ -253,16 +317,20 @@ export async function getShare(tenantId: string, name: string): Promise<LoomShar
 
 export async function upsertShare(share: LoomShare): Promise<LoomShare> {
   const c = await sharingContainer();
+  const name = canonicalSharingName(share.id);
   const doc: SharingDoc<LoomShare> = {
     ...share,
-    id: shareDocId(share.id),
-    name: share.id,
+    id: shareDocId(name),
+    // Canonical, so the stored name and the document id agree with every
+    // comparison made against them.
+    name,
     kind: 'share',
     updatedAt: nowIso(),
     createdAt: share.createdAt || nowIso(),
   };
   await c.items.upsert(doc);
-  return fromDoc(doc);
+  // Non-null by construction: `name` came out of canonicalSharingName.
+  return fromDoc(doc) as LoomShare;
 }
 
 export async function deleteShare(tenantId: string, name: string): Promise<void> {
@@ -284,14 +352,17 @@ export async function listRecipients(tenantId: string): Promise<LoomRecipient[]>
       parameters: [{ name: '@t', value: tenantId }],
     })
     .fetchAll();
-  return (resources || []).map(fromDoc).sort((a, b) => a.id.localeCompare(b.id));
+  return (resources || [])
+    .map(recipientFromDoc)
+    .filter((r): r is LoomRecipient => !!r)
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export async function getRecipient(tenantId: string, name: string): Promise<LoomRecipient | null> {
   const c = await sharingContainer();
   try {
     const { resource } = await c.item(recipientDocId(name), tenantId).read<SharingDoc<LoomRecipient>>();
-    return resource ? fromDoc(resource) : null;
+    return resource ? recipientFromDoc(resource) : null;
   } catch (e: any) {
     if (e?.code === 404) return null;
     throw e;
@@ -300,16 +371,22 @@ export async function getRecipient(tenantId: string, name: string): Promise<Loom
 
 export async function upsertRecipient(recipient: LoomRecipient): Promise<LoomRecipient> {
   const c = await sharingContainer();
+  const name = canonicalSharingName(recipient.id);
   const doc: SharingDoc<LoomRecipient> = {
     ...recipient,
-    id: recipientDocId(recipient.id),
-    name: recipient.id,
+    id: recipientDocId(name),
+    name,
+    // The grant list IS the authorization input, so it is stored in the same
+    // canonical form every comparison against it uses.
+    shares: canonicalGrants(recipient.shares),
+    // Likewise the principals: matched case-insensitively, so stored that way.
+    principalIds: canonicalPrincipalIds(recipient.principalIds),
     kind: 'recipient',
     updatedAt: nowIso(),
     createdAt: recipient.createdAt || nowIso(),
   };
   await c.items.upsert(doc);
-  return fromDoc(doc);
+  return recipientFromDoc(doc) as LoomRecipient;
 }
 
 export async function deleteRecipient(tenantId: string, name: string): Promise<void> {

@@ -82,6 +82,7 @@ import {
   upstreamTablePath,
   safeUpstreamQuery,
   isDataPlaneResource,
+  canonicalSharingName,
   type DataPlaneResource,
   type LoomRecipient,
   type LoomShare,
@@ -283,10 +284,21 @@ async function proxyToServer(path: string, init: { method?: string; body?: strin
   });
 }
 
-/** Segments after /api/delta-sharing, e.g. ['shares','fin','schemas']. */
+/** Segments after /api/delta-sharing, e.g. ['shares','fin','schemas'].
+ *
+ *  The SHARE-NAME segment is canonicalised here, at the edge, so that every
+ *  downstream use of it — the authorization compare, the Cosmos point read, the
+ *  audit row and the upstream path — is looking at one string. The round-4
+ *  finding on this route was exactly the absence of that: authorization
+ *  lower-cased the name while the document id used it verbatim, so a request for
+ *  `Share-A` was authorized against a grant for `share-a` and then read a
+ *  DIFFERENT document. Canonicalising in one place is what makes the two
+ *  incapable of disagreeing (lib/sharing/model.ts canonicalSharingName). */
 async function segments(ctx: { params: Promise<{ path?: string[] }> }): Promise<string[]> {
   const p = await ctx.params;
-  return (p?.path || []).filter(Boolean);
+  const seg = (p?.path || []).filter(Boolean);
+  if (seg.length >= 2 && seg[0] === 'shares') seg[1] = canonicalSharingName(seg[1]);
+  return seg;
 }
 
 /**
