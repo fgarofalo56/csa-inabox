@@ -47,11 +47,11 @@ import {
   listSensitivityLabels,
   ensureClassificationDefs,
   addAssetClassification,
-  SENSITIVITY_LABEL_TYPEDEF_PREFIX,
   PurviewNotConfiguredError,
   PurviewError,
   type DataMapSensitivityLabel,
 } from '@/lib/azure/purview-client';
+import { loomSensitivityLabelTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
@@ -218,7 +218,13 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ type: str
     } else if (!assetGuid) {
       purviewStatus = 'skipped:no-asset';
     } else {
-      const typedefName = `${SENSITIVITY_LABEL_TYPEDEF_PREFIX}${labelId}`;
+      // `labelId` arrives from the request body UNVALIDATED, and Atlas typedefs
+      // are ACCOUNT-GLOBAL + permanent — interpolating it straight into
+      // `MICROSOFT.GOVERNANCE.LABELS.` squatted the namespace Purview's own MIP
+      // integration owns with whatever the caller typed. The authority emits
+      // that name ONLY for a real MIP GUID and otherwise falls back to a
+      // Loom-owned, tenant-namespaced `LOOM.LABEL.<t8>.<SLUG>`.
+      const typedefName = loomSensitivityLabelTypedefName(session.claims.oid, { labelId, labelName });
       try {
         await ensureClassificationDefs([typedefName]);
         await addAssetClassification(assetGuid, [typedefName]);

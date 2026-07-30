@@ -711,7 +711,7 @@ function fnv1aHex(s: string): string {
 export const MAX_ATLAS_NAME_LENGTH = 96;
 
 /**
- * The Atlas CLASSIFICATION typedef name for one governed tag.
+ * COLLISION-FREE LENGTH CAP for any Atlas typedef name Loom builds.
  *
  * TRUNCATION MUST NOT COLLIDE. A naive `….slice(0, 96)` is safe ACROSS tenants
  * (the discriminator is leading) but NOT WITHIN one: a 64-char key leaves as
@@ -721,11 +721,19 @@ export const MAX_ATLAS_NAME_LENGTH = 96;
  * revoking one revokes the other. When the natural name overflows, the tail is
  * replaced by an 8-hex digest of the FULL name, which is injective for every
  * input that differs anywhere.
+ *
+ * Shared with `lib/azure/purview-typedef-namespace.ts` so the pre-existing
+ * Purview enrichment paths cap their names the same way (one implementation, so
+ * the two cannot drift into differently-colliding truncation rules).
  */
-export function atlasClassificationName(prefix: string, key: string, value: string): string {
-  const full = `Loom_${prefix}_${key}_${value}`;
+export function capAtlasTypedefName(full: string): string {
   if (full.length <= MAX_ATLAS_NAME_LENGTH) return full;
   return `${full.slice(0, MAX_ATLAS_NAME_LENGTH - 9)}_${fnv1aHex(full)}`;
+}
+
+/** The Atlas CLASSIFICATION typedef name for one governed tag. */
+export function atlasClassificationName(prefix: string, key: string, value: string): string {
+  return capAtlasTypedefName(`Loom_${prefix}_${key}_${value}`);
 }
 
 /**

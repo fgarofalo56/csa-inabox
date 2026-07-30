@@ -36,6 +36,7 @@ import {
   addAssetClassification, ensureClassificationDefs, isPurviewConfigured,
   removeAssetClassification, setBusinessMetadata,
 } from '@/lib/azure/purview-client';
+import { asAtlasClassificationTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { resolveAssetIdentities } from '@/lib/azure/asset-identity';
 import { resolveWorkspaceHostnames } from '@/lib/azure/unity-catalog-client';
 import {
@@ -155,7 +156,13 @@ export async function syncOverlayToPurview(
     await removeAssetClassification(guid, stale);
   }
   if (projection.classifications.length) {
-    await ensureClassificationDefs(projection.classifications);
+    // `model.atlasClassificationName` already puts the tenant discriminator
+    // first; funnel it through the authority so the branded type — not this
+    // file's good intentions — is what lets it reach the account-global
+    // typedef API. `model.ts` cannot import the authority itself (the authority
+    // imports model, and model must stay client-importable), so the mint
+    // happens here, on the server side of the projection.
+    await ensureClassificationDefs(projection.classifications.map(asAtlasClassificationTypedefName));
     await addAssetClassification(guid, projection.classifications);
   }
   const bmKeys = Object.keys(projection.businessMetadata);

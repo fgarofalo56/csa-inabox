@@ -87,6 +87,16 @@ const TOUCH_EXEMPT = new Map([
   // `err('Unauthorized', 401, 'unauthorized')` envelope rather than the literal
   // shape withSession replaces — nothing for the codemod to rewrite.
   ['apps/fiab-console/app/api/items/[type]/[id]/business-metadata/route.ts', '#2657: bespoke err() 401 envelope, codemod-resistant — migrate with the items family'],
+  // LU-5 S4 class sweep touched these two ONLY to route their Atlas typedef name
+  // through lib/azure/purview-typedef-namespace (a 1-line namespace fix each).
+  // `migrate-route-toolkit.mjs --file=<each>` reports SKIPPED — "getSession()
+  // without the exact 401 guard": both use a bespoke `err(msg, 401, code)` helper
+  // whose envelope (`{ok:false,error,code}`) differs from `apiUnauthorized()`, so
+  // the codemod refuses and a hand-migration would change the 401/404 body of two
+  // SHIPPED item routes. Not doing that inside a security fix. Migrate when the
+  // items family gets its `err()` prologue taught to the codemod.
+  ['apps/fiab-console/app/api/items/[type]/[id]/classifications/route.ts', 'LU-5 S4: codemod reports SKIPPED (bespoke err() 401 envelope); typedef-namespace fix only'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity/route.ts', 'LU-5 S4: codemod reports SKIPPED (bespoke err() 401 envelope); typedef-namespace fix only'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */

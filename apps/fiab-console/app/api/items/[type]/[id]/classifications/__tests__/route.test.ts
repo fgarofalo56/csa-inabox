@@ -36,6 +36,8 @@ const taxonomyDoc = {
   ],
 };
 let taxonomyMissing = false;
+/** Owning tenant of ws-1 — mutable so a second tenant can be simulated. */
+let wsTenantId = 'ten-1';
 const replaceMock = vi.fn(async (doc: any) => ({ resource: doc }));
 const auditCreate = vi.fn(async (d: any) => ({ resource: d }));
 
@@ -45,7 +47,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
     item: () => ({ replace: replaceMock }),
   }),
   workspacesContainer: async () => ({
-    item: () => ({ read: async () => ({ resource: { id: 'ws-1', tenantId: 'ten-1' } }) }),
+    item: () => ({ read: async () => ({ resource: { id: 'ws-1', tenantId: wsTenantId } }) }),
   }),
   auditLogContainer: async () => ({ items: { create: auditCreate } }),
   tenantSettingsContainer: async () => ({
@@ -77,6 +79,7 @@ beforeEach(() => {
   purviewConfigured = true;
   gov = false;
   taxonomyMissing = false;
+  wsTenantId = 'ten-1';
   item.state = { purviewAssetGuid: 'guid-asset-1' };
   getSessionMock.mockReturnValue({ claims: { oid: 'ten-1', upn: 'u@t.com', name: 'U' }, exp: Date.now() / 1000 + 3600 } as any);
 });
@@ -142,9 +145,36 @@ describe('PUT /api/items/[type]/[id]/classifications', () => {
     expect(j.purviewStatus).toBe('written');
     const patched = replaceMock.mock.calls.at(-1)?.[0];
     expect(patched.state.classifications).toEqual(['PII', 'Confidential']);
-    expect(ensureDefs).toHaveBeenCalledWith(['LOOM.CLASSIFICATION.PII', 'LOOM.CLASSIFICATION.CONFIDENTIAL']);
-    expect(addClassification).toHaveBeenCalledWith('guid-asset-1', ['LOOM.CLASSIFICATION.PII', 'LOOM.CLASSIFICATION.CONFIDENTIAL']);
+    // TENANT-NAMESPACED (S4 class): the typedef is ACCOUNT-GLOBAL in the classic
+    // Data Map, so the bare `LOOM.CLASSIFICATION.PII` this route used to write
+    // was shared with every other tenant in the Purview account.
+    const { loomClassificationTypedefName } = await import('@/lib/azure/purview-typedef-namespace');
+    const expected = [
+      loomClassificationTypedefName('ten-1', 'PII'),
+      loomClassificationTypedefName('ten-1', 'Confidential'),
+    ];
+    expect(expected[0]).toMatch(/^LOOM\.CLASSIFICATION\.[0-9a-f]{8}\.PII$/);
+    expect(ensureDefs).toHaveBeenCalledWith(expected);
+    expect(addClassification).toHaveBeenCalledWith('guid-asset-1', expected);
     expect(auditCreate).toHaveBeenCalledOnce();
+  });
+
+  it('ATTACK: two tenants applying the SAME taxonomy word get DIFFERENT global typedefs', async () => {
+    const { PUT } = await import('../route');
+    const r1 = await PUT(req({ classifications: ['PII'] }), ctx('lakehouse', 'item-1'));
+    expect(r1.status).toBe(200);
+    const first = ensureDefs.mock.calls.at(-1)?.[0][0];
+
+    // A DIFFERENT tenant, owning its own workspace, applying the same word.
+    wsTenantId = 'ten-2';
+    getSessionMock.mockReturnValue({ claims: { oid: 'ten-2', upn: 'v@t2.com', name: 'V' }, exp: Date.now() / 1000 + 3600 } as any);
+    const r2 = await PUT(req({ classifications: ['PII'] }), ctx('lakehouse', 'item-1'));
+    expect(r2.status).toBe(200);
+    const second = ensureDefs.mock.calls.at(-1)?.[0][0];
+
+    expect(first).not.toBe(second);
+    expect(first.endsWith('.PII')).toBe(true);
+    expect(second.endsWith('.PII')).toBe(true);
   });
 
   it('writes Cosmos even when Purview is NOT configured (Azure-native / IL5)', async () => {

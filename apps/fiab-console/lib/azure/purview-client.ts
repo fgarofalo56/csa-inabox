@@ -72,6 +72,8 @@ import {
   resolvePurviewEndpoints,
 } from './purview-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { assertNamespacedTypedefNames, SENSITIVITY_LABEL_TYPEDEF_PREFIX,
+  type AtlasClassificationTypedefName } from './purview-typedef-namespace';
 import { derivePurviewArmResourceId, purviewArmProviderForKind } from './purview-source-mapping';
 import { dfsUrl, getBlobSuffix } from './cloud-endpoints';
 // L4 — column-lineage pure helpers/types live in a sibling module
@@ -1116,11 +1118,16 @@ export async function deleteAtlasEntityByQualifiedName(
  * with classificationDefs). Lets Loom's classification taxonomy flow into
  * Purview without a manual type-creation step. Swallows 409 (already exists).
  *
+ * ACCOUNT-GLOBAL + PERMANENT: names MUST carry a tenant discriminator, enforced
+ * structurally — the branded {@link AtlasClassificationTypedefName} is mintable
+ * only by ./purview-typedef-namespace, plus a runtime assert as the backstop.
+ *
  * Docs: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
  */
-export async function ensureClassificationDefs(names: string[]): Promise<void> {
+export async function ensureClassificationDefs(names: AtlasClassificationTypedefName[]): Promise<void> {
   const want = [...new Set((names || []).map((n) => (n || '').trim()).filter(Boolean))];
   if (!want.length) return;
+  assertNamespacedTypedefNames(want);
   let existing = new Set<string>();
   try {
     const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs/headers');
@@ -1215,20 +1222,17 @@ export interface DataMapSensitivityLabel {
 }
 
 /**
- * Atlas classification-typedef name prefix used by the Purview Data Map
- * MIP + sensitivity-labels integration. When a Purview account is connected to
- * Microsoft Purview Information Protection and assets are scanned, each MIP
- * sensitivity label is registered in the Data Map as a classification typedef
- * named `MICROSOFT.GOVERNANCE.LABELS.<labelGuid>`. Loom uses this same naming
- * convention when it stamps a label onto an asset (ensureClassificationDefs +
- * addAssetClassification), so the round-trip stays inside the classic Data Map
- * and requires NO Microsoft Fabric / Power BI / Graph dependency.
+ * Re-exported from the typedef-namespace authority (which owns the prefix so
+ * the MIP-GUID requirement and the Loom-namespaced fallback live in ONE place).
+ * `MICROSOFT.GOVERNANCE.LABELS.<labelGuid>` is the typedef Purview's own MIP
+ * integration creates; the round-trip stays inside the classic Data Map and
+ * requires NO Microsoft Fabric / Power BI / Graph dependency.
  *
  * Grounded in:
  *   https://learn.microsoft.com/purview/how-to-automatically-label-your-content
  *   https://learn.microsoft.com/purview/data-gov-api-atlas-2-2 (typedefs)
  */
-export const SENSITIVITY_LABEL_TYPEDEF_PREFIX = 'MICROSOFT.GOVERNANCE.LABELS.';
+export { SENSITIVITY_LABEL_TYPEDEF_PREFIX };
 
 const LABEL_GUID_RE = GUID_RE;
 
