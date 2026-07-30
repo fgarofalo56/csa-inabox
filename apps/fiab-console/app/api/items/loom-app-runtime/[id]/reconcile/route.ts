@@ -12,50 +12,64 @@
  * Idempotent: an unchanged SHA is a no-op. Designed to be hit by a scheduler /
  * cron / the app's own CI — no inbound webhook receiver (no WAF exception).
  */
-import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { NextRequest, type NextResponse } from 'next/server';
+import type { SessionPayload } from '@/lib/auth/session';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, recordBuild, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import { resolveRemoteHeadSha, buildApp, LoomAppsError, LoomAppsNotConfiguredError } from '@/lib/azure/loom-apps-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function resolve(id: string, session: ReturnType<typeof getSession>) {
-  const access = await resolveItemAccessByOid(session!, id, LOOM_APP_RUNTIME_TYPE);
+/**
+ * Discriminated so the withSession handlers can `return r.error` as a Response —
+ * an implicit union here inferred `NextResponse | undefined` at the call site.
+ */
+type ReconcileResolved =
+  | { error: NextResponse; access?: never }
+  | {
+      error?: never;
+      access: NonNullable<Awaited<ReturnType<typeof resolveItemAccessByOid>>>;
+      rt: ReturnType<typeof readAppRuntime>;
+      token: string | undefined;
+      currentSha: string | null;
+      changed: boolean;
+    };
+
+async function resolve(id: string, session: SessionPayload): Promise<ReconcileResolved> {
+  const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
   if (!access) return { error: apiError('Item not found', 404, { code: 'not_found' }) };
   const rt = readAppRuntime(access.item);
   if (!rt.gitSource) return { error: apiError('This app has no git source — reconcile applies to git-backed apps only.', 400, { code: 'not_git' }) };
   let token: string | undefined;
   if (rt.gitAuth?.secretName) {
     const { getKeyVaultSecretValue } = await import('@/lib/azure/kv-secrets-client');
-    token = await getKeyVaultSecretValue(rt.gitAuth.secretName).catch(() => undefined);
+    token = await getKeyVaultSecretValue(rt.gitAuth.secretName, 'git-credential').catch(() => undefined);
   }
   const currentSha = await resolveRemoteHeadSha(rt.gitSource, token);
   return { access, rt, token, currentSha, changed: !!currentSha && currentSha !== rt.lastBuiltSha };
 }
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const r = await resolve(id, session);
-    if ('error' in r) return r.error;
+    if (r.error) return r.error;
     return apiOk({ gitSource: r.rt.gitSource, currentSha: r.currentSha, lastBuiltSha: r.rt.lastBuiltSha || null, changed: r.changed });
   } catch (e) {
+    // An unapproved git host is an honest 400 from assertAllowedGitSource, not a 500.
+    if (e instanceof LoomAppsError) return apiError(e.message, e.status >= 400 && e.status < 600 ? e.status : 502, { code: 'bad_git_source' });
     return apiServerError(e, 'reconcile check failed');
   }
-}
+});
 
-export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const r = await resolve(id, session);
-    if ('error' in r) return r.error;
+    if (r.error) return r.error;
     if (!r.access.canWrite) return apiError('Read-only access', 403, { code: 'forbidden' });
     const body = (await req.json().catch(() => ({}))) as { build?: boolean; autoRedeploy?: boolean };
 
@@ -88,4 +102,4 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     if (e instanceof LoomAppsError) return apiError(e.message, e.status >= 400 && e.status < 600 ? e.status : 502);
     return apiServerError(e, 'reconcile failed');
   }
-}
+});
