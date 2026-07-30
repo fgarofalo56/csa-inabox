@@ -10,8 +10,13 @@ import { describe, it, expect } from 'vitest';
 import {
   parseStorageUri,
   canonicalStorageUri,
+  storageDataset,
   storagePartsToUri,
   foldToTableFolder,
+  adfLocationToStorageUri,
+  parseStorageAccountUrl,
+  sqlDataset,
+  datasetEdgeId,
   canonicalDatasetIdentity,
 } from '@/lib/lineage/dataset-naming';
 
@@ -121,3 +126,75 @@ describe('canonicalDatasetIdentity — the value persisted as a thread-edge endp
   });
 });
 
+describe('storageDataset (OpenLineage namespace/name split)', () => {
+  it('splits exactly the way the openlineage-spark integration does', () => {
+    expect(storageDataset('https://stloom.dfs.core.windows.net/data/silver/sales')).toEqual({
+      namespace: 'abfss://data@stloom.dfs.core.windows.net',
+      name: '/silver/sales',
+    });
+  });
+
+  it('rejoins to the canonical URI via datasetEdgeId', () => {
+    expect(datasetEdgeId(storageDataset('wasbs://data@stloom.blob.core.windows.net/silver/sales')))
+      .toBe(ABFSS);
+  });
+});
+
+describe('adfLocationToStorageUri', () => {
+  it('builds the canonical URI from an ADF AzureBlobFS dataset + linked service', () => {
+    expect(
+      adfLocationToStorageUri(
+        { type: 'AzureBlobFSLocation', fileSystem: 'data', folderPath: 'silver/sales' },
+        'https://stloom.dfs.core.windows.net',
+      ),
+    ).toBe(ABFSS);
+  });
+
+  it('joins folderPath + fileName and folds a part file', () => {
+    expect(
+      adfLocationToStorageUri(
+        { type: 'AzureBlobStorageLocation', container: 'data', folderPath: '/silver/sales/', fileName: 'part-00000.parquet' },
+        'https://stloom.blob.core.windows.net',
+      ),
+    ).toBe(ABFSS);
+  });
+
+  it('returns null when the account or container cannot be determined', () => {
+    // An un-anchored path would produce a node that joins to nothing.
+    expect(adfLocationToStorageUri({ fileSystem: 'data', folderPath: 'x' }, undefined)).toBeNull();
+    expect(adfLocationToStorageUri({ folderPath: 'x' }, 'https://stloom.dfs.core.windows.net')).toBeNull();
+    expect(adfLocationToStorageUri(undefined, 'https://stloom.dfs.core.windows.net')).toBeNull();
+  });
+
+  it('rejects a linked-service url that is not a storage endpoint', () => {
+    expect(parseStorageAccountUrl('https://syn-loom.sql.azuresynapse.net')).toBeNull();
+    expect(adfLocationToStorageUri({ fileSystem: 'data' }, 'https://api.example.com')).toBeNull();
+  });
+});
+
+describe('sqlDataset', () => {
+  it('emits sqlserver://host:port + database.schema.table', () => {
+    expect(sqlDataset({ server: 'syn-loom.sql.azuresynapse.net', database: 'loomdw', schema: 'sales', table: 'orders' }))
+      .toEqual({ namespace: 'sqlserver://syn-loom.sql.azuresynapse.net:1433', name: 'loomdw.sales.orders' });
+  });
+
+  it('lets a dotted tableName override the separate schema field (ADF authoring shape)', () => {
+    expect(sqlDataset({ server: 'h', database: 'db', schema: 'ignored', table: 'dbo.orders' }).name)
+      .toBe('db.dbo.orders');
+    expect(sqlDataset({ server: 'h', database: 'ignored', table: '[db2].[dbo].[orders]' }).name)
+      .toBe('db2.dbo.orders');
+  });
+
+  it('strips a tcp: prefix and an embedded port from the server host', () => {
+    expect(sqlDataset({ server: 'tcp:syn.sql.azuresynapse.net,1433', database: 'db', table: 'dbo.o' }).namespace)
+      .toBe('sqlserver://syn.sql.azuresynapse.net:1433');
+  });
+
+  it('still yields a joinable 3-part edge id when the server is unknown (KV-ref connection string)', () => {
+    const ds = sqlDataset({ database: 'db', schema: 'dbo', table: 'orders' });
+    expect(ds.namespace).toBe('');
+    // The edge id is the bare relation — the SAME convention the dbt manifest
+    // parser emits, so both collapse onto one `uc:` node.
+    expect(datasetEdgeId(ds)).toBe('db.dbo.orders');
+  });
+});

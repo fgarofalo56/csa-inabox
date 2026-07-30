@@ -154,3 +154,18 @@ export async function loadForeignPathItems(workspaceId: string): Promise<PathIte
 export async function findForeignOwner(uri: string, workspaceId: string): Promise<PathItem | null> {
   return resolveOwner(uri, await loadForeignPathItems(workspaceId));
 }
+
+
+/**
+ * A findForeignOwner that loads the foreign candidate set at most ONCE, for
+ * callers probing many URIs in a single request (the Synapse harvest walks
+ * every endpoint of every emitted event). Same decision, one cross-partition
+ * query instead of N.
+ */
+export function foreignOwnerProbe(workspaceId: string): (uri: string) => Promise<PathItem | null> {
+  let pending: Promise<PathItem[]> | null = null;
+  return async (uri: string) => {
+    if (!pending) pending = loadForeignPathItems(workspaceId);
+    return resolveOwner(uri, await pending);
+  };
+}
