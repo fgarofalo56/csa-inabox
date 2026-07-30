@@ -48,7 +48,6 @@
  * No mocks. All errors surfaced verbatim.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import {
   AasError,
@@ -83,6 +82,7 @@ import {
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -145,20 +145,14 @@ async function dqResolveDefaultServer(sourceType: DqSourceType, database: string
   return '';
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return dqErr('unauthenticated', 401);
-  await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
   const itemId = req.nextUrl.searchParams.get('itemId');
   const existing = itemId ? await dqFindItem(itemId, session.claims.oid) : null;
   const config = (existing?.state as any)?.dqSource ?? null;
   return NextResponse.json({ ok: true, config });
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return dqErr('unauthenticated', 401);
-  await ctx.params;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
   const itemId = req.nextUrl.searchParams.get('itemId');
 
   const body = await req.json().catch(() => ({} as any));
@@ -177,7 +171,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const kvGate = kvSecretsConfigGate();
     if (kvGate) return dqGate(kvGate.missing, kvGate.detail);
     try {
-      await getKeyVaultSecretValue(secretRef);
+      await getKeyVaultSecretValue(secretRef, 'directquery-source');
     } catch (e: any) {
       return dqGate(
         secretRef,
@@ -283,7 +277,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = typeof e?.status === 'number' ? Math.min(Math.max(e.status, 400), 599) : 502;
     return dqErr(e?.message || String(e), status);
   }
-}
+});
 
 interface DatasourceBody {
   displayName?: string;
@@ -309,13 +303,11 @@ function fabricBackend(workspaceId: string): { ws: string } | null {
   return ws ? { ws } : null;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
-  const id = (await ctx.params).id;
+  const id = params.id;
 
   const body = (await req.json().catch(() => ({}))) as DatasourceBody;
   const rawTables = Array.isArray(body.tables) ? body.tables : [];
@@ -413,4 +405,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   return NextResponse.json({ ok: true, tmsl, applied, probe, steps });
-}
+});
