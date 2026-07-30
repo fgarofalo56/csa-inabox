@@ -5,7 +5,8 @@
  * TWO backends, selected by `sharingBackend()` (LU-9):
  *   loom       — the Azure-native DEFAULT wherever the OSS Delta Sharing server
  *                is deployed (LOOM_SHARING_URL). Shares live in Cosmos and are
- *                served to recipients by /api/delta-sharing/*.
+ *                The recipient-facing endpoint that serves them is a follow-up
+ *                change; see docs/fiab/security/loom-sharing-threat-model.md.
  *   databricks — the Unity Catalog Delta Sharing REST, for estates that have a
  *                Databricks workspace and no loom-sharing.
  *

@@ -12,6 +12,29 @@ Without this, the Marketplace "Data shares" surface has no backend at all in Gov
 No Microsoft Fabric, Power BI, or Databricks workspace is involved on this path
 (`.claude/rules/no-fabric-dependency.md`).
 
+> ## SPLIT NOTICE — read this first
+>
+> The **recipient-facing endpoint** `/api/delta-sharing/*` described below is **not part of the
+> change that introduces this document**. It was split into a follow-up
+> (`feat/lu9-sharing-data-plane`) after four review rounds each found a new exploitable
+> finding on that one route.
+>
+> **What ships here:** the `loom-sharing` Container App (internal ingress, no external caller
+> at all now that the proxy is out) and the full Marketplace control plane — create a share,
+> publish tables, register recipients, grant, revoke, suspend, render the server's config
+> manifest, audit. All real, all against Cosmos and Azure.
+>
+> **What does not:** an external recipient cannot read a granted share yet. The Data-shares
+> surface says so in a MessageBar rather than letting an operator believe a publish is live.
+> Grants recorded now take effect the moment the endpoint ships.
+>
+> Everything from "Recipients are Entra principals" through the recipient-credential pin
+> (`LOOM_SHARING_AUDIENCE` / `LOOM_SHARING_SCOPE`) is retained below as the design the
+> follow-up implements — it is **not** configuration to apply today, and those two env vars are
+> deliberately absent from `/admin/env-config` and the gate registry on this branch.
+>
+> See `docs/fiab/security/loom-sharing-threat-model.md` for the carried-forward open findings.
+
 ---
 
 ## Architecture — and the one upstream fact that drives it

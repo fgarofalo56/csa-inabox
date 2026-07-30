@@ -30,8 +30,8 @@ import {
   getRecipient,
   upsertRecipient,
   deleteRecipient as deleteLoomRecipient,
+  sharingOwnerTenantId,
 } from '@/lib/sharing/store';
-import { sharingOwnerTenantId } from '@/lib/sharing/recipient-auth';
 import {
   isValidSharingName,
   isValidPrincipalId,
