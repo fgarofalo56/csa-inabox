@@ -33,6 +33,7 @@
  * `assertAllowedUcHost`.
  */
 import { ossUcBase } from '@/lib/azure/uc-backend';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 /**
  * Upstream's token-exchange endpoint (unity-CONTROL, not unity-catalog) and the
@@ -207,16 +208,20 @@ export async function exchangeForInternalUcToken(subjectToken: string): Promise<
 
     let res: Response;
     try {
-      res = await fetch(`${base}${EXCHANGE_PATH}`, {
+      // fetchWithTimeout, not bare fetch (no-bare-server-fetch guard). A raw
+      // AbortSignal.timeout would bound this call too, but the shared wrapper is
+      // the single audited transport: it reports a timeout-abort distinctly from a
+      // caller-abort, and it is the chokepoint the dependency-chaos harness
+      // injects into, so a bare fetch here would be invisible to that testing.
+      res = await fetchWithTimeout(`${base}${EXCHANGE_PATH}`, {
         method: 'POST',
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
           accept: 'application/json',
         },
         body: body.toString(),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
         cache: 'no-store',
-      });
+      }, TIMEOUT_MS);
     } catch (e) {
       // Network / timeout. The message deliberately carries no token material.
       void recordExchange(base, 0, 'failure', `unreachable: ${(e as Error)?.message || String(e)}`);
