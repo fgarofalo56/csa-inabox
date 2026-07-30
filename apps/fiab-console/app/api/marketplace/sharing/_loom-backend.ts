@@ -37,6 +37,8 @@ import {
   isValidPrincipalId,
   isValidShareLocation,
   renderSharesManifest,
+  canonicalSharingName,
+  sameSharingName,
   type LoomShare,
   type LoomRecipient,
   type SharedTable,
@@ -76,6 +78,19 @@ function badRequest(error: string): NextResponse {
  */
 export type SharingViewScope = { full: boolean };
 
+/**
+ * Recipients granted this share.
+ *
+ * Uses {@link sameSharingName} rather than `Array#includes`, for the same reason
+ * the data plane does: share names are case-insensitive identifiers, and a
+ * display that disagrees with the authorization decision is how a revocation
+ * gets believed. `includes` here would show "not granted" for a grant the
+ * protocol path honours.
+ */
+function grantedTo(recipients: LoomRecipient[], shareName: string): LoomRecipient[] {
+  return recipients.filter((r) => (r.shares || []).some((s) => sameSharingName(s, shareName)));
+}
+
 /** UC-shaped view of a Loom share, so the existing UI renders it unchanged. */
 function toUiShare(share: LoomShare, recipients: LoomRecipient[], scope: SharingViewScope) {
   return {
@@ -91,7 +106,7 @@ function toUiShare(share: LoomShare, recipients: LoomRecipient[], scope: Sharing
       id: t.id,
       historyShared: !!t.historyShared,
     })),
-    recipients: recipients.filter((r) => r.shares?.includes(share.id)).map((r) => r.id),
+    recipients: grantedTo(recipients, share.id).map((r) => r.id),
   };
 }
 
@@ -126,11 +141,17 @@ export async function loomListShares(scope: SharingViewScope): Promise<NextRespo
 }
 
 export async function loomCreateShare(body: any, actor: string): Promise<NextResponse> {
-  const name = String(body?.name || '').trim();
+  // Canonical from the first line: the name is a case-insensitive identifier, so
+  // the existence check, the document id and every later comparison must all be
+  // looking at the same string. See lib/sharing/model.ts canonicalSharingName.
+  const name = canonicalSharingName(body?.name);
   if (!isValidSharingName(name)) {
     return badRequest('Share name must be 1-63 characters of letters, digits, dash or underscore (it travels into a YAML config and a URL path).');
   }
   const tenantId = sharingOwnerTenantId();
+  // Case-insensitive by construction — `Sales` and `sales` resolve to one
+  // document, so this catches the collision rather than creating a second share
+  // that a grant for either name would authorize.
   if (await getLoomShare(tenantId, name)) return badRequest(`A share named "${name}" already exists.`);
   const share = await upsertShare({
     id: name,
@@ -142,7 +163,8 @@ export async function loomCreateShare(body: any, actor: string): Promise<NextRes
   return NextResponse.json({ ok: true, backend: 'loom', share: toUiShare(share, [], { full: true }) });
 }
 
-export async function loomGetShare(name: string, scope: SharingViewScope): Promise<NextResponse> {
+export async function loomGetShare(rawName: string, scope: SharingViewScope): Promise<NextResponse> {
+  const name = canonicalSharingName(rawName);
   const tenantId = sharingOwnerTenantId();
   const share = await getLoomShare(tenantId, name);
   if (!share) return NextResponse.json({ ok: false, error: `Share "${name}" not found.` }, { status: 404 });
@@ -152,8 +174,7 @@ export async function loomGetShare(name: string, scope: SharingViewScope): Promi
     backend: 'loom',
     share: toUiShare(share, recipients, scope),
     permissions: {
-      privilege_assignments: recipients
-        .filter((r) => r.shares?.includes(name))
+      privilege_assignments: grantedTo(recipients, share.id)
         .map((r) => ({ principal: r.id, privileges: ['SELECT'] })),
     },
   });
@@ -177,7 +198,8 @@ function toSharedTable(o: any): SharedTable | string {
   return { schema, name, location, id, historyShared: !!o?.historyShared };
 }
 
-export async function loomPatchShare(name: string, body: any): Promise<NextResponse> {
+export async function loomPatchShare(rawName: string, body: any): Promise<NextResponse> {
+  const name = canonicalSharingName(rawName);
   const tenantId = sharingOwnerTenantId();
   const share = await getLoomShare(tenantId, name);
   if (!share) return NextResponse.json({ ok: false, error: `Share "${name}" not found.` }, { status: 404 });
@@ -209,15 +231,19 @@ export async function loomPatchShare(name: string, body: any): Promise<NextRespo
   if (Array.isArray(body?.grant) || Array.isArray(body?.revoke)) {
     for (const rn of (body.grant || []) as string[]) {
       const r = await getRecipient(tenantId, String(rn));
-      if (!r) return badRequest(`Recipient "${rn}" does not exist.`);
-      if (!r.shares.includes(name)) await upsertRecipient({ ...r, shares: [...r.shares, name] });
+      if (!r) return badRequest(`Recipient "${canonicalSharingName(rn)}" does not exist.`);
+      if (!r.shares.some((s) => sameSharingName(s, name))) {
+        await upsertRecipient({ ...r, shares: [...r.shares, name] });
+      }
     }
     for (const rn of (body.revoke || []) as string[]) {
       const r = await getRecipient(tenantId, String(rn));
       if (!r) continue;
-      if (r.shares.includes(name)) {
-        await upsertRecipient({ ...r, shares: r.shares.filter((s) => s !== name) });
-      }
+      // Canonical compare, not `includes`/`!==`. A revocation that silently
+      // matched nothing because the operator typed a different case would leave
+      // the data plane — which compares case-insensitively — still serving.
+      const kept = r.shares.filter((s) => !sameSharingName(s, name));
+      if (kept.length !== r.shares.length) await upsertRecipient({ ...r, shares: kept });
     }
   }
 
@@ -227,8 +253,7 @@ export async function loomPatchShare(name: string, body: any): Promise<NextRespo
     backend: 'loom',
     share: toUiShare(updated, recipients, { full: true }),
     permissions: {
-      privilege_assignments: recipients
-        .filter((r) => r.shares?.includes(name))
+      privilege_assignments: grantedTo(recipients, name)
         .map((r) => ({ principal: r.id, privileges: ['SELECT'] })),
     },
     // Publishing a table only takes effect once the server's config manifest is
@@ -238,15 +263,15 @@ export async function loomPatchShare(name: string, body: any): Promise<NextRespo
   });
 }
 
-export async function loomDeleteShare(name: string): Promise<NextResponse> {
+export async function loomDeleteShare(rawName: string): Promise<NextResponse> {
+  const name = canonicalSharingName(rawName);
   const tenantId = sharingOwnerTenantId();
   // Revoke first: a deleted share whose grants survive would silently re-grant
-  // if the name were ever reused.
+  // if the name were ever reused. Canonical compare, so a delete typed in a
+  // different case cannot leave that orphan grant behind.
   const recipients = await listLoomRecipients(tenantId);
-  for (const r of recipients) {
-    if (r.shares?.includes(name)) {
-      await upsertRecipient({ ...r, shares: r.shares.filter((s) => s !== name) });
-    }
+  for (const r of grantedTo(recipients, name)) {
+    await upsertRecipient({ ...r, shares: r.shares.filter((s) => !sameSharingName(s, name)) });
   }
   await deleteLoomShare(tenantId, name);
   return NextResponse.json({ ok: true, backend: 'loom' });
@@ -264,7 +289,11 @@ export async function loomListRecipients(scope: SharingViewScope): Promise<NextR
 }
 
 export async function loomCreateRecipient(body: any, actor: string): Promise<NextResponse> {
-  const name = String(body?.name || '').trim();
+  // Canonical for the same reason a share name is: the recipient name is the key
+  // a grant, a revoke and the kill-switch are all typed against, and two records
+  // differing only by case could hold the SAME Entra principal — so a DELETE or a
+  // suspend would hit one of them and leave the other authorizing.
+  const name = canonicalSharingName(body?.name);
   if (!isValidSharingName(name)) {
     return badRequest('Recipient name must be 1-63 characters of letters, digits, dash or underscore.');
   }
@@ -279,6 +308,24 @@ export async function loomCreateRecipient(body: any, actor: string): Promise<Nex
 
   const tenantId = sharingOwnerTenantId();
   if (await getRecipient(tenantId, name)) return badRequest(`A recipient named "${name}" already exists.`);
+
+  // ONE principal may belong to ONE recipient. Otherwise the kill-switch and
+  // DELETE become unreliable in exactly the way a case-colliding name was:
+  // authentication resolves to whichever record matches first, so suspending
+  // "the" recipient for a principal can leave a second record still
+  // authenticating it — a revocation that looks applied and is not.
+  const existing = await listLoomRecipients(tenantId);
+  const wanted = new Set(principals.map((p) => p.trim().toLowerCase()));
+  const clash = existing.find((r) => (r.principalIds || []).some((p) => wanted.has(p.trim().toLowerCase())));
+  if (clash) {
+    return badRequest(
+      `One of those Entra principals is already registered to recipient "${clash.id}". `
+      + 'A principal belongs to exactly one recipient, so that suspending or deleting that recipient '
+      + 'reliably removes its access. Grant the existing recipient the share instead, or remove the '
+      + 'principal from it first.',
+    );
+  }
+
   const recipient = await upsertRecipient({
     id: name,
     tenantId,
@@ -292,8 +339,8 @@ export async function loomCreateRecipient(body: any, actor: string): Promise<Nex
   return NextResponse.json({ ok: true, backend: 'loom', recipient: toUiRecipient(recipient, { full: true }) });
 }
 
-export async function loomDeleteRecipient(name: string): Promise<NextResponse> {
-  await deleteLoomRecipient(sharingOwnerTenantId(), name);
+export async function loomDeleteRecipient(rawName: string): Promise<NextResponse> {
+  await deleteLoomRecipient(sharingOwnerTenantId(), canonicalSharingName(rawName));
   return NextResponse.json({ ok: true, backend: 'loom' });
 }
 
@@ -307,7 +354,8 @@ export async function loomDeleteRecipient(name: string): Promise<NextResponse> {
  * unanswerable during an incident. Tenant-admin, like every other act that
  * changes who can read estate data.
  */
-export async function loomSetRecipientDisabled(name: string, disabled: boolean): Promise<NextResponse> {
+export async function loomSetRecipientDisabled(rawName: string, disabled: boolean): Promise<NextResponse> {
+  const name = canonicalSharingName(rawName);
   const tenantId = sharingOwnerTenantId();
   const recipient = await getRecipient(tenantId, name);
   if (!recipient) return NextResponse.json({ ok: false, error: `Recipient "${name}" not found.` }, { status: 404 });
