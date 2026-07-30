@@ -36,6 +36,7 @@ import {
   STORAGE_ACCOUNT_CONTRIBUTOR_ROLE_ID,
 } from '@/lib/clients/cmk-client';
 import { apiError } from '@/lib/api/respond';
+import { stripTrailingSlashes } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -171,7 +172,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           'cosmos_not_configured',
         );
       }
-      const keyUri = `${vaultUri.replace(/\/+$/, '')}/keys/${encodeURIComponent(keyName)}`;
+      const keyUri = `${stripTrailingSlashes(vaultUri)}/keys/${encodeURIComponent(keyName)}`;
       await bindCosmosCmk(cosmosId, keyUri, uami);
       cosmosBound = true;
     }
@@ -181,7 +182,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       ...ws,
       cmkBinding: {
         status: 'bound',
-        vaultUri: vaultUri.replace(/\/+$/, ''),
+        vaultUri: stripTrailingSlashes(vaultUri),
         keyName,
         keyVersion: keyVersion || '',
         uamiResourceId: uami,
