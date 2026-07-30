@@ -33,6 +33,10 @@ on:
         description: 'DIAGNOSTIC (#2706) — build on the DEFAULT hosted ACR agent instead of the loombuild S3 pool. Separates "the pool is broken" from "ACR is broken": two instrumented runs had az acr build exit 0 while pushing no tag. The default agent has less memory, so an OOM here is a MEANINGFUL result (it means the pool is genuinely required), while a successful build means the pool is at fault.'
         type: boolean
         default: false
+      agent_pool_name:
+        description: 'ACR agent pool to build on (#2706). Default loombuild. The original loombuild queue is stuck in "being deleted" (409), which is what made az acr build exit 0 while pushing nothing — a FRESH NAME sidesteps it without waiting on Azure. Precedent: loompool -> loompool2 in the 2026-07-14 Spark incident.'
+        type: string
+        default: 'loombuild'
       recreate_agent_pool:
         description: 'REMEDIATION (#2706) — delete + recreate the loombuild agent pool before building. The bypass diagnostic proved the pool is at fault: on it az acr build runs 60min, exits 0 and pushes nothing; off it the same commit fails in 7min with real logs. Safe: an agent pool is stateless build compute (no data, no config beyond itself) and the build step already recreates it when absent.'
         type: boolean
@@ -106,6 +110,14 @@ jobs:
           # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
           # the trusted-service bypass, so the ACR stays open through the build
           # (it already is for the tarball upload).
+          # #2706 — the pool NAME is an input. The original `loombuild` queue is
+          # stuck in "being deleted" (409), which is what made az acr build exit 0
+          # while pushing nothing; a FRESH NAME sidesteps it without waiting on
+          # Azure to unstick anything.
+          POOL="${{ inputs.agent_pool_name }}"
+          POOL="${POOL:-loombuild}"
+          echo "::notice::building on ACR agent pool: $POOL"
+
           # #2706 REMEDIATION — recreate the pool when asked. The bypass diagnostic
           # (run 30564119314) established the pool is at fault: ON it `az acr build`
           # runs 60min, exits 0 and pushes NOTHING; OFF it the same commit fails in
@@ -113,18 +125,18 @@ jobs:
           # stateless build compute, and the `|| create` below rebuilds it, so this
           # is self-healing rather than destructive.
           if [ "${{ inputs.recreate_agent_pool }}" = "true" ]; then
-            echo "::warning::#2706 — recreating the loombuild agent pool."
+            echo "::warning::#2706 — recreating the $POOL agent pool."
             echo "  runs before delete (evidence for Azure support if this does not fix it):"
             az acr task list-runs -r "$ACR" --top 10 -o table 2>&1 | sed 's/^/    /' | head -14 || true
-            az acr agentpool delete -r "$ACR" -n loombuild --yes -o none 2>&1 | head -3 || true
-            az acr agentpool create -r "$ACR" -n loombuild --tier S3 --count 1 -o none
-            echo "::notice::loombuild recreated (S3, count 1)"
+            az acr agentpool delete -r "$ACR" -n "$POOL" --yes -o none 2>&1 | head -3 || true
+            az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 --count 1 -o none
+            echo "::notice::$POOL recreated (S3, count 1)"
           fi
 
-          az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
-            || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
-          CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
-          [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
+          az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
+            || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+          CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
+          [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # #2706 — report the agent pool BEFORE building. Two consecutive runs
           # sat in `az acr build` for 3.5-4.5h with zero output; if the single S3
@@ -132,9 +144,9 @@ jobs:
           # than failing, and `--no-logs` made a stall indistinguishable from a
           # slow build. Print what we are about to build on.
           echo "::notice::agent pool state before build:"
-          az acr agentpool show -r "$ACR" -n loombuild \
+          az acr agentpool show -r "$ACR" -n "$POOL" \
             --query "{count:count,tier:tier,state:provisioningState}" -o tsv 2>&1 | sed 's/^/  pool: /' || true
-          az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>&1 | sed 's/^/  queued: /' || true
+          az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>&1 | sed 's/^/  queued: /' || true
 
           # Logs STREAM now (the `--no-logs` opt-out is gone). A silent build is
           # exactly the shape this repo keeps getting burned by: it looks
@@ -145,7 +157,7 @@ jobs:
           # while pushing no tag; this separates "the pool is broken" from "ACR is
           # broken". An OOM on the default agent is a MEANINGFUL result (the pool
           # is genuinely required); a successful build indicts the pool.
-          POOL_ARGS=(--agent-pool loombuild)
+          POOL_ARGS=(--agent-pool "$POOL")
           if [ "${{ inputs.bypass_agent_pool }}" = "true" ]; then
             echo "::warning::#2706 DIAGNOSTIC — building on the DEFAULT hosted agent, NOT loombuild."
             POOL_ARGS=()
@@ -165,8 +177,8 @@ jobs:
             exit 1
           fi
           echo "::notice::verified loom-console:$SHA exists on $ACR"
-          q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
+          q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
           # NOTE (SC1): the ACR re-lock moved to a dedicated `if: always()` step
           # below so (a) the supply-chain gate can pull the image + push the
           # signature while the data plane is still open, and (b) a failed
