@@ -29,6 +29,10 @@ on:
         description: 'EMERGENCY VALVE — skip the SC1 Trivy CRITICAL gate + cosign sign/verify (mirrors skip_uat semantics). The roll ships WITHOUT supply-chain verification.'
         type: boolean
         default: false
+      bypass_agent_pool:
+        description: 'DIAGNOSTIC (#2706) — build on the DEFAULT hosted ACR agent instead of the loombuild S3 pool. Separates "the pool is broken" from "ACR is broken": two instrumented runs had az acr build exit 0 while pushing no tag. The default agent has less memory, so an OOM here is a MEANINGFUL result (it means the pool is genuinely required), while a successful build means the pool is at fault.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -117,11 +121,31 @@ jobs:
           # exactly the shape this repo keeps getting burned by: it looks
           # identical whether it is compiling or wedged. The extra output is a
           # rounding error next to a 4-hour blind wait.
-          az acr build --registry "$ACR" --agent-pool loombuild \
+          # #2706 diagnostic — bypass_agent_pool builds on the DEFAULT hosted ACR
+          # agent. Two instrumented runs had `az acr build` exit 0 on the pool
+          # while pushing no tag; this separates "the pool is broken" from "ACR is
+          # broken". An OOM on the default agent is a MEANINGFUL result (the pool
+          # is genuinely required); a successful build indicts the pool.
+          POOL_ARGS=(--agent-pool loombuild)
+          if [ "${{ inputs.bypass_agent_pool }}" = "true" ]; then
+            echo "::warning::#2706 DIAGNOSTIC — building on the DEFAULT hosted agent, NOT loombuild."
+            POOL_ARGS=()
+          fi
+
+          az acr build --registry "$ACR" "${POOL_ARGS[@]}" \
             --image "loom-console:$SHA" --image "loom-console:latest" \
             --file apps/fiab-console/Dockerfile \
             --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
             apps/fiab-console
+
+          # #2706 — VERIFY THE TAG EXISTS HERE, not one step later. Both failures
+          # had this command report success and the tag be absent; asserting it
+          # inside the build step makes "success" mean the image is really there.
+          if ! az acr repository show --name "$ACR" --image "loom-console:$SHA" -o none 2>/dev/null; then
+            echo "::error::az acr build exited 0 but loom-console:$SHA does NOT exist on $ACR — the build silently produced nothing (#2706)."
+            exit 1
+          fi
+          echo "::notice::verified loom-console:$SHA exists on $ACR"
           q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
           [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
           # NOTE (SC1): the ACR re-lock moved to a dedicated `if: always()` step
