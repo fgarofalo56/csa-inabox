@@ -38,11 +38,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   runPipeline, upsertPipeline, upsertLinkedService, upsertDataset,
   type AdfPipeline, type AdfDataset, type AdfLinkedService,
+  getLinkedService,
 } from '@/lib/azure/adf-client';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
 import {
   CopyJobSqlError,
   assertUserLinkedService,
+  assertUserLinkedServiceTarget,
   buildBoundedSelectSql,
   buildCdcNetChangesSql,
   buildFullSelectSql,
@@ -432,6 +434,14 @@ export const POST = withSession<{ id: string }>(async (_req: NextRequest, { sess
         linkedService: assertUserLinkedService(persisted?.sink?.linkedService, 'sink.linkedService'),
       },
     };
+
+    // The name reservation above is a cheap first pass. It keys on the ADF
+    // artifact NAME, so a caller could create their own differently-named linked
+    // service whose connection string points at the shared control database and
+    // slip past it. Resolve what each side actually POINTS AT and refuse on the
+    // target. Fails closed if the definition cannot be read.
+    await assertUserLinkedServiceTarget(spec.source.linkedService, 'source.linkedService', getLinkedService);
+    await assertUserLinkedServiceTarget(spec.sink.linkedService, 'sink.linkedService', getLinkedService);
 
     if (!spec.source.type || !spec.sink.type) {
       return jerr('source.type and sink.type are required', 400);

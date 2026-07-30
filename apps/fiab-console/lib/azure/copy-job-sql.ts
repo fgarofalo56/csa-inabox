@@ -129,7 +129,7 @@ export function copyJobLiteral(raw: unknown): string {
 
 /**
  * The linked service(s) THIS ROUTE drives itself, against the SHARED control
- * database (`dbo.copy_watermark` — every tenant's watermark / CDC LSN
+        + 'every tenant watermark and CDC checkpoint in the deployment. Point a copy source or sink at your own data.',
  * checkpoint), as the FACTORY'S system-assigned managed identity.
  *
  * A copy job may never name one as its OWN source or sink. Escaping the
@@ -176,6 +176,60 @@ export function assertUserLinkedService(raw: unknown, label: string): string {
     );
   }
   return v;
+}
+
+/**
+ * The NAME check above is necessary but NOT sufficient, and the round-3 review
+ * was right to call it bypassable: it keys on the ADF artifact NAME, while what
+ * actually matters is the connection TARGET. Nothing stops a caller from
+ * creating their own linked service — any name they like — whose connection
+ * string points at Loom's shared control database, then naming that as a copy
+ * source or sink. The reservation would pass and the SQL would still run
+ * against `dbo.copy_watermark` as the factory managed identity.
+ *
+ * So resolve what the linked service actually POINTS AT and refuse on the
+ * target. The name check stays as a cheap first pass (it needs no ARM call and
+ * catches the obvious attempt), but this is the one that closes the class.
+ *
+ * Fails CLOSED: if the definition cannot be read we refuse, because proceeding
+ * on an unknown target is exactly the gap.
+ */
+export async function assertUserLinkedServiceTarget(
+  name: string,
+  label: string,
+  readLinkedService: (n: string) => Promise<{ properties?: { typeProperties?: Record<string, unknown> } }>,
+): Promise<void> {
+  const controlServer = (process.env.LOOM_COPYJOB_CONTROL_SQL_SERVER || '').trim().toLowerCase();
+  // With no control server configured there is no shared control DB to protect.
+  if (!controlServer) return;
+
+  let def: { properties?: { typeProperties?: Record<string, unknown> } };
+  try {
+    def = await readLinkedService(name);
+  } catch {
+    throw new CopyJobSqlError(
+      `${label}: could not read the linked service "${name}" to confirm what it points at. `
+        + 'Refusing rather than running SQL against an unverified target.',
+    );
+  }
+
+  const tp = def?.properties?.typeProperties ?? {};
+  // Azure SQL linked services carry the target in a connection string (or, for
+  // the newer shape, discrete server/database fields). Check whatever is present.
+  const haystack = [
+    typeof tp.connectionString === 'string' ? tp.connectionString : '',
+    typeof (tp as { server?: unknown }).server === 'string' ? String((tp as { server?: unknown }).server) : '',
+    typeof (tp as { fullyQualifiedDomainName?: unknown }).fullyQualifiedDomainName === 'string'
+      ? String((tp as { fullyQualifiedDomainName?: unknown }).fullyQualifiedDomainName)
+      : '',
+  ].join(' ').toLowerCase();
+
+  if (haystack.includes(controlServer)) {
+    throw new CopyJobSqlError(
+      `${label}: "${name}" points at Loom's copy-job control server (${controlServer}), which holds `
+        + 'every tenant watermark and CDC checkpoint in the deployment. Point a copy source or sink at your own data.',
+    );
+  }
 }
 
 /** Validate a CDC capture-instance name (spliced into an object name). */
