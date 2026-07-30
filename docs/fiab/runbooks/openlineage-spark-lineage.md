@@ -238,6 +238,81 @@ ingest module can reintroduce the regex form.
    Purview / Unity Catalog node for the same asset.
 3. The Purview overlay derived its join key from `displayText` (usually just the
    leaf name) and ignored the Atlas **qualifiedName** — the actual FQN.
+## LU-8b — Loom-side emitters (Synapse pipeline + Spark batch), no operator setup
+
+Builds directly on LU-8a above: everything here writes through the canonical
+dataset identity, the shared resolver, and the shared denial audit.
+
+The listener needs a one-time pool config. These two emitters run **inside the
+console** and need none, so a merged lineage graph exists on day one:
+
+| Emitter | Trigger (real backend read) | Event | ThreadEdge `action` |
+|---------|-----------------------------|-------|---------------------|
+| **Synapse / ADF pipeline** | `GET /api/items/data-pipeline/[id]/jobs` (newest Succeeded run) and `…/output?runId=` — reads the pipeline definition, its datasets + linked services, and `queryActivityRuns` | one `RunEvent` per lineage-bearing **activity** (`job.name = <pipeline>.<activity>`), Copy `translator.mappings` → `columnLineage` facet | `openlineage-pipeline` |
+| **Synapse Spark batch** | `GET /api/items/spark-job-definition/[id]/runs/[runId]` — reads the Livy batch's own `livyInfo.jobCreationRequest` (the args + conf Loom submitted). No fallback to the item's stored draft: a draft edited after the run would attribute a fabricated edge to a real run. Only a batch whose Livy `name` carries this item's `loom-<name>-` submit prefix is harvested (Livy ids are pool-scoped). | one `RunEvent` per batch; datasets from `spark.loom.lineage.inputs/outputs` conf or `--input`/`--output` argv | `openlineage-spark` |
+
+Both build spec-valid OpenLineage 1.x `RunEvent`s (`lib/lineage/synapse-emitters.ts`,
+pure) and write them through the **same L2 sink** — `mapRunEventToEdges` →
+`recordThreadEdge` (`lib/lineage/synapse-lineage-harvest.ts`). No second store, no
+second mapper. Note the partition difference: the listener ingest is a machine path
+and writes with `machineSession(ws.tenantId)` (the workspace OWNER's partition);
+the harvests run inside an authenticated request and resolve the same owner via
+`writerSession()`, with the real caller preserved on `createdBy` and in the audit
+row. `run.runId` is a deterministic UUIDv5 of the run's natural key — which
+includes the submit time for a Spark batch, because Livy batch ids restart from 0
+when a pool is recreated — so re-harvesting is idempotent for downstream OL
+consumers too. Only a **succeeded** run/activity emits `COMPLETE`; anything else
+maps to `FAIL`/`ABORT`, which the mapper drops — a failed copy never stamps
+lineage, and an UNKNOWN run status is treated as not-succeeded rather than
+skipping the gate.
+
+Honest limits (no fabrication): a Spark batch whose IO is not in its conf/argv
+emits nothing and returns a reason naming the listener; an ADF dataset that cannot
+be anchored to a physical location is skipped rather than rendered as an
+un-joinable node.
+
+### Caller-supplied run identifiers gate DISCLOSURE, not only the write
+
+- **ADF / Synapse `?runId=`** must belong to the item's own bound pipeline
+  (`getPipelineRun` / `getPipelineRunOrNull`) before ANY activity `input`/`output`
+  is read, on all three routes that accept one — `data-pipeline/[id]/output`,
+  `synapse-pipeline/[id]/runs`, and `adf-pipeline/[id]/runs`. On the ADF route the
+  oracle runs inside the same factory override as the activity read: proving a run
+  belongs to pipeline X in factory A says nothing about activities read from
+  factory B. Fail-closed but not fail-stupid: a real 404 (a run past ADF's 45-day
+  retention) falls through to the Log Analytics `ADFPipelineRun` oracle, which is
+  PipelineName-filtered and returns the same last-50 set the runs list renders; a
+  transient 429/5xx propagates as a 502 instead of telling the owner their run
+  does not exist.
+- **Livy `batchId`** is POOL-scoped, not item-scoped, and this estate runs one
+  shared pool. A batch without this item's submit-name prefix contributes no
+  lineage **and** comes back as an allow-list status projection: `livyInfo`
+  (jobCreationRequest = another team's argv, conf and storage paths), `log[]`,
+  `errorInfo`, `tags`, `submitterName` are dropped, with an honest
+  `redacted`/`redactedReason` the Runs tab renders instead of an empty log. One
+  `attributed` boolean drives both the harvest and the response, so they cannot
+  drift apart.
+- The `?pool=` override on the Spark run route is removed — the pool is the item's
+  own `spec.pool`, matching the sibling cancel route.
+- The same class on the **Copilot tool layer** (`pipeline_explain_error`, which
+  reaches `listActivityRuns` with a model-supplied runId) is closed in its own PR;
+  it has a different auth model and does not belong here.
+
+### Harvest budget and dedupe
+
+Harvests are wall-clocked at 8 s, rate-limited per principal, and non-throwing —
+a status poll can never be turned into an error by lineage. The dedupe key is
+recorded on SUCCESS only, so a transient ARM failure stays retryable, and a
+truncated pass records a `resumeCursor` so the next poll continues from where it
+stopped instead of rewriting the head forever.
+
+### Dependency
+
+The emitters are the first writers to persist a physical dataset URI as a
+thread-edge endpoint, which is what makes the Cosmos document id derivation
+(`threadEdgeDocId`) load-bearing: without it, `…/a/b` and `…/a_b` collide on
+upsert and a deep sovereign path pair exceeds the 255-byte id limit. That change
+ships separately, with its own migration reasoning; this PR must land after it.
 ## MIG1 note (Cosmos doc shapes)
 
 No migration required: `ThreadEdge.columnMappings` is **additive** and shipped
@@ -251,6 +326,7 @@ upgrade. L2 only writes NEW edges in the L1 shape.
   equivalences AND the deliberate non-equivalences (different account /
   container / path, and `sales` vs `sales_archive`), plus what
   `canonicalDatasetIdentity` persists.
+- Unit (LU-8b): `…/synapse-emitters.test.ts` (RunEvent conformance, status→eventType, translator → columnLineage) and `…/lineage-join.test.ts` — **the join proof**: it emits from BOTH sides over the same folders (Spark by `…/_delta_log` argv, the pipeline by fileSystem+folderPath on an https linked service) and asserts the real merge engine renders ONE connected `bronze → silver → gold` chain that also collapses with the Purview node for the same path. Attack coverage for the emitters is `…/lineage-security.test.ts` (cross-workspace denial for BOTH producers, unattributed Livy batch, unknown-run-status gate, dedupe-after-failure, owner-partition write) plus the three `run-ownership.test.ts` route specs and `batch-disclosure.test.ts`.
 - Attack (LU-8a): `lib/lineage/__tests__/lineage-ingest-security.test.ts` —
   every case asserts a DENIAL: a SAS or userinfo reaching no persisted identity
   and no rendered node id on the Azure path, the non-Azure passthrough and the

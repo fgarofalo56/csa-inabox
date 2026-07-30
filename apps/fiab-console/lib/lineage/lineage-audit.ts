@@ -24,6 +24,7 @@ import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { canonicalDatasetIdentity } from '@/lib/lineage/dataset-naming';
 
 export const LINEAGE_DENIED_KIND = 'lineage.cross-workspace-denied';
+export const LINEAGE_WRITE_KIND = 'lineage.harvested';
 
 function auditId(): string {
   return `audit-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
@@ -89,5 +90,48 @@ export async function auditCrossWorkspaceDenial(opts: CrossWorkspaceDenial): Pro
       authorizedWorkspaceId: opts.authorizedWorkspaceId,
       targetWorkspaceId: opts.targetWorkspaceId,
     },
+  });
+}
+
+export interface LineageWriteAudit {
+  principal: string;
+  producer: string;
+  workspaceId: string;
+  /** The run the edges were derived from (ADF run id / Livy batch id). */
+  runKey: string;
+  written: number;
+  denied: number;
+}
+
+/** Authoritative audit row + SIEM emit for a harvest that wrote lineage. */
+export async function auditLineageWrite(opts: LineageWriteAudit): Promise<void> {
+  if (!opts.written && !opts.denied) return; // nothing happened — no row
+  try {
+    const audit = await auditLogContainer();
+    await audit.items
+      .create({
+        id: auditId(),
+        itemId: `lineage:${opts.producer}:${opts.runKey}`,
+        tenantId: opts.workspaceId,
+        who: opts.principal,
+        actorOid: opts.principal,
+        at: new Date().toISOString(),
+        kind: LINEAGE_WRITE_KIND,
+        target: opts.runKey,
+        detail: { producer: opts.producer, written: opts.written, denied: opts.denied },
+      })
+      .catch(() => undefined);
+  } catch {
+    /* best-effort */
+  }
+  emitAuditEvent({
+    actorOid: opts.principal,
+    actorUpn: opts.principal,
+    action: LINEAGE_WRITE_KIND,
+    targetType: 'thread-edge',
+    targetId: opts.runKey,
+    outcome: opts.denied && !opts.written ? 'denied' : 'success',
+    tenantId: opts.workspaceId,
+    detail: { producer: opts.producer, written: opts.written, denied: opts.denied },
   });
 }

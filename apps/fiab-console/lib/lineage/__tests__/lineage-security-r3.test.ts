@@ -9,7 +9,41 @@
  * the fix, watching the spec go red, and then restoring it — the mutation is
  * named in each block comment so the next reviewer can repeat it.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const edgesWritten: any[] = [];
+
+const mocks = vi.hoisted(() => ({
+  getPipeline: vi.fn(),
+  getDataset: vi.fn(),
+  getLinkedService: vi.fn(async () => null),
+  listActivityRuns: vi.fn(async () => []),
+  queryItems: vi.fn(async () => ({ resources: [] })),
+}));
+
+vi.mock('@/lib/azure/adf-client', () => ({
+  getPipeline: mocks.getPipeline,
+  getDataset: mocks.getDataset,
+  getLinkedService: mocks.getLinkedService,
+  listActivityRuns: mocks.listActivityRuns,
+}));
+
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({
+    items: { query: (s: any) => ({ fetchAll: async () => mocks.queryItems(String(s?.query || '')) }) },
+  }),
+  auditLogContainer: async () => ({ items: { create: async (d: any) => ({ resource: d }) } }),
+  workspacesContainer: async () => ({
+    items: { query: () => ({ fetchAll: async () => ({ resources: [{ tenantId: 'owner-1' }] }) }) },
+  }),
+}));
+
+vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: vi.fn() }));
+
+vi.mock('@/lib/thread/thread-edges', () => ({
+  recordThreadEdge: vi.fn(async (_s: any, e: any) => { edgesWritten.push(e); }),
+  listThreadEdges: vi.fn(async () => edgesWritten),
+}));
 
 import {
   stripUriCredentials,
@@ -18,7 +52,19 @@ import {
   parseStorageUri,
 } from '@/lib/lineage/dataset-naming';
 import { resolveOwner, type PathItem } from '@/lib/lineage/dataset-item-resolver';
+import { harvestPipelineRunLineage, __resetHarvestDedupe } from '@/lib/lineage/synapse-lineage-harvest';
 import { datasetUri, mapRunEventToEdges, parseRunEvent } from '@/lib/azure/openlineage-ingest';
+
+const SESSION = { claims: { oid: 'caller-1', upn: 'caller@loom.test' }, exp: 0 } as any;
+
+beforeEach(() => {
+  edgesWritten.length = 0;
+  __resetHarvestDedupe();
+  vi.clearAllMocks();
+  mocks.queryItems.mockResolvedValue({ resources: [] } as any);
+  mocks.listActivityRuns.mockResolvedValue([] as any);
+  mocks.getLinkedService.mockResolvedValue(null as any);
+});
 
 // ---------------------------------------------------------------------------
 // S1 CLASS — the query-string-free SAS the "charset validation" never stopped
@@ -151,6 +197,105 @@ describe('S5 residual: an item rooted at a folded segment still owns itself', ()
 });
 
 // ---------------------------------------------------------------------------
+// Budget treadmill — a truncated pass must ADVANCE, not restart
+// ---------------------------------------------------------------------------
+describe('harvest budget: a truncated pass resumes instead of rewriting the head', () => {
+  // The 8s wall clock deliberately does not mark a truncated run harvested, so
+  // the next poll retries — but the retry re-entered at activity 0, rewriting
+  // the same leading activities every poll and never reaching the tail. The
+  // per-principal 5/s limit does not bound that: it permits five 8-second ARM
+  // fan-outs per second per user.
+  //
+  // MUTATION: in `harvestPipelineRunLineage`, `const start = 0;` (ignore
+  // resumeCursor).
+  // → observed: 1 failure — pass 2 re-writes act-0/act-1's sinks
+  //   (`['sink0','sink1','sink2','sink3']` becomes `['sink0','sink1']` again).
+  const ACTS = ['a0', 'a1', 'a2', 'a3'];
+
+  function wireFourCopies() {
+    mocks.getPipeline.mockResolvedValue({
+      properties: {
+        activities: ACTS.map((n) => ({
+          type: 'Copy',
+          name: n,
+          inputs: [{ referenceName: 'src' }],
+          outputs: [{ referenceName: `sink_${n}` }],
+        })),
+      },
+    } as any);
+    mocks.getDataset.mockImplementation(async (name: string) => ({
+      properties: {
+        type: 'Parquet',
+        linkedServiceName: { referenceName: 'ls' },
+        typeProperties: {
+          location: {
+            type: 'AzureBlobFSLocation',
+            fileSystem: 'data',
+            folderPath: name === 'src' ? 'bronze/src' : `silver/${name}`,
+          },
+        },
+      },
+    } as any));
+    mocks.getLinkedService.mockResolvedValue({
+      properties: { typeProperties: { url: 'https://stloom.dfs.core.windows.net' } },
+    } as any);
+  }
+
+  function sinkLeaves(): string[] {
+    return edgesWritten.map((e) => String(e.toItemId).split('/').pop() as string);
+  }
+
+  it('the second poll harvests the activities the first one could not reach', async () => {
+    wireFourCopies();
+
+    // Clock: t0 = 0 (deadline 8000), then +3000 per read. The loop's pre-check
+    // trips on the third activity, so pass 1 collects a0 + a1 only.
+    let t = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => { t += 3000; return t - 3000; });
+
+    const first = await harvestPipelineRunLineage(SESSION, {
+      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
+      runId: 'run-1', runStatus: 'Succeeded',
+    });
+    clock.mockRestore();
+
+    expect(first.ok).toBe(true);
+    const pass1 = sinkLeaves();
+    expect(pass1.length).toBeGreaterThan(0);
+    expect(pass1.length).toBeLessThan(ACTS.length);
+
+    // Pass 2: real clock, no truncation. It must pick up where pass 1 stopped.
+    edgesWritten.length = 0;
+    const second = await harvestPipelineRunLineage(SESSION, {
+      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
+      runId: 'run-1', runStatus: 'Succeeded',
+    });
+    expect(second.ok).toBe(true);
+    const pass2 = sinkLeaves();
+
+    // THE ASSERTION: no activity is harvested twice, and between the two passes
+    // every activity is covered exactly once.
+    expect(pass2.filter((s) => pass1.includes(s))).toEqual([]);
+    expect([...pass1, ...pass2].sort()).toEqual(ACTS.map((a) => `sink_${a}`).sort());
+  });
+
+  it('a completed pass clears the cursor so a later poll is a no-op', async () => {
+    wireFourCopies();
+    await harvestPipelineRunLineage(SESSION, {
+      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
+      runId: 'run-2', runStatus: 'Succeeded',
+    });
+    edgesWritten.length = 0;
+    const again = await harvestPipelineRunLineage(SESSION, {
+      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
+      runId: 'run-2', runStatus: 'Succeeded',
+    });
+    expect(again.reason).toBe('already harvested in this replica');
+    expect(edgesWritten).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ReDoS — these parsers run on a 5 MB attacker-controlled OpenLineage body
 // ---------------------------------------------------------------------------
 describe('dataset naming is linear on hostile input (CodeQL js/polynomial-redos)', () => {
@@ -220,6 +365,7 @@ describe('dataset naming is linear on hostile input (CodeQL js/polynomial-redos)
     expect(parseStorageUri('abfss://ws-guid@onelake.dfs.fabric.microsoft.com/lh/Files/x')).toBeNull();
   });
 });
+
 
 // ---------------------------------------------------------------------------
 // ROUND 4 — the SAME ReDoS, one function UPSTREAM of everything above

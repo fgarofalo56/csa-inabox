@@ -46,13 +46,6 @@
  *     contribute. A 2-part name would be ambiguous across databases on the
  *     same server anyway.
  *
- * SCOPE: this module is the READ/IDENTITY half — it canonicalizes a dataset
- * name that ALREADY exists (arriving on the OpenLineage ingest route, or stored
- * on a Loom item's state) into the one join key. The OpenLineage dataset
- * *builders* a Loom-side emitter needs (`storageDataset`, `sqlDataset`,
- * `adfLocationToStorageUri`) belong to the emitter PR that produces events and
- * are added there, not parked here without a caller.
- *
  * SECURITY: every identity produced here is PERSISTED (Cosmos thread edge,
  * graph node id) and RENDERED (canvas node label). `stripUriCredentials()`
  * removes SAS query strings and URI userinfo at the door — see its doc.
@@ -66,6 +59,8 @@
  * (`core.windows.net` / `core.usgovcloudapi.net` / any future sovereign suffix)
  * is carried through from the input, never assumed.
  */
+
+import type { OpenLineageDatasetRef } from '@/lib/azure/openlineage-ingest';
 
 // ---------------------------------------------------------------------------
 // Storage URIs
@@ -473,6 +468,159 @@ export function storagePartsToUri(p: StorageUriParts): string {
   return p.path ? `${base}/${p.path}` : base;
 }
 
+/**
+ * The canonical OpenLineage `{namespace, name}` for a storage dataset, split
+ * exactly the way the openlineage-spark integration splits it (namespace =
+ * scheme + authority, name = `/path`) so a Loom-emitted event and a
+ * listener-emitted event over the same folder are byte-identical, and
+ * `openlineage-ingest.datasetUri()` rejoins both to the same canonical URI.
+ */
+export function storageDataset(raw: string): OpenLineageDatasetRef {
+  const parts = parseStorageUri(raw);
+  if (!parts) {
+    // Not Azure storage — emit it whole in `name` (the OL convention for
+    // producers that don't split), credential-stripped and lowercased for a
+    // stable, secret-free join key.
+    return { namespace: '', name: trimTrailingSlashes(stripUriCredentials(raw)).toLowerCase() };
+  }
+  return {
+    namespace: `abfss://${parts.container}@${parts.account}.dfs.${parts.suffix}`,
+    name: `/${parts.path}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ADF / Synapse dataset descriptors → the canonical storage dataset
+// ---------------------------------------------------------------------------
+
+/** The location fields an ADF/Synapse file dataset carries (see adf-dataset-builder). */
+export interface AdfFileLocation {
+  /** `AzureBlobFSLocation` | `AzureBlobStorageLocation` | … */
+  type?: string;
+  /** AzureBlobFSLocation container key. */
+  fileSystem?: string;
+  /** AzureBlobStorageLocation container key. */
+  container?: string;
+  folderPath?: string;
+  fileName?: string;
+}
+
+/**
+ * Build the canonical storage URI for an ADF/Synapse file dataset from its
+ * `typeProperties.location` plus the account URL of the linked service it
+ * references (`AzureBlobFS.url` = `https://acct.dfs.<suffix>`,
+ * `AzureBlobStorage.serviceEndpoint` = `https://acct.blob.<suffix>`).
+ *
+ * Returns null when the account can't be determined or no container is named —
+ * an un-anchored path would produce a node that joins to nothing, which is
+ * worse than no node at all (no-vaporware: degrade, never fabricate).
+ */
+export function adfLocationToStorageUri(
+  location: AdfFileLocation | undefined,
+  linkedServiceUrl: string | undefined,
+): string | null {
+  if (!location) return null;
+  const container = (location.fileSystem || location.container || '').trim();
+  if (!container) return null;
+  const acct = parseStorageAccountUrl(linkedServiceUrl);
+  if (!acct) return null;
+  const rel = [location.folderPath, location.fileName]
+    .map((s) => trimSlashes(String(s || '').trim()))
+    .filter(Boolean)
+    .join('/');
+  return storagePartsToUri({
+    account: acct.account,
+    container: container.toLowerCase(),
+    suffix: acct.suffix,
+    path: foldToTableFolder(rel),
+  });
+}
+
+/** `https://acct.dfs.core.windows.net` (or blob) → { account, suffix }.
+ *  Credential-stripped first: an ADF linked-service url frequently carries a
+ *  SAS (`?sv=…&sig=…`), which would otherwise be captured INTO the suffix and
+ *  ride into the persisted dataset identity. */
+export function parseStorageAccountUrl(
+  url: string | null | undefined,
+): { account: string; suffix: string } | null {
+  const clean = stripUriCredentials(url);
+  if (ONELAKE_HOST_RE.test(clean)) return null;
+  const m = /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/:]+)/i.exec(clean);
+  if (!m) return null;
+  const account = m[1].toLowerCase();
+  if (!ACCOUNT_RE.test(account)) return null;
+  return { account, suffix: m[2].toLowerCase() };
+}
+
+// ---------------------------------------------------------------------------
+// SQL (Synapse dedicated / serverless, Azure SQL) datasets
+// ---------------------------------------------------------------------------
+
+export interface SqlDatasetParts {
+  /** Fully-qualified server host, e.g. `syn-loom.sql.azuresynapse.net`. */
+  server?: string;
+  port?: number;
+  database?: string;
+  schema?: string;
+  table: string;
+}
+
+/** Default TDS port — the OL naming spec wants `{host}:{port}` explicitly. */
+export const TDS_PORT = 1433;
+
+/**
+ * Canonical OpenLineage dataset for a SQL relation:
+ * namespace `sqlserver://{host}:{port}`, name `{database}.{schema}.{table}`
+ * (see the header for why the 3-part name, not the spec's 2-part one).
+ * When `table` already arrives dotted (e.g. `dbo.orders`) its parts win over
+ * the separate `schema` field, matching how ADF `tableName` is authored.
+ */
+export function sqlDataset(parts: SqlDatasetParts): OpenLineageDatasetRef {
+  const dotted = String(parts.table || '').trim().replace(/[[\]"`]/g, '');
+  const segs = dotted.split('.').map((s) => s.trim()).filter(Boolean);
+  let database = parts.database?.trim() || '';
+  let schema = parts.schema?.trim() || '';
+  let table = '';
+  if (segs.length >= 3) { [database, schema, table] = segs.slice(-3); }
+  else if (segs.length === 2) { [schema, table] = segs; }
+  else { table = segs[0] || ''; }
+  const name = [database, schema, table].filter(Boolean).join('.').toLowerCase();
+  const host = (parts.server || '').trim().toLowerCase().replace(/^tcp:/, '').replace(/,\d+$/, '');
+  return {
+    namespace: host ? `sqlserver://${host}:${parts.port || TDS_PORT}` : '',
+    name,
+  };
+}
+
+/**
+ * The string identity Loom stores on a thread edge for a dataset — the value
+ * `normalizeIdentity()` must see to produce a `path:` / `uc:` join key.
+ *
+ *  - storage dataset → the canonical `abfss://…` URI          → `path:…`
+ *  - SQL dataset     → the bare `database.schema.table` name   → `uc:…`
+ *                      (the SAME convention `dbt-manifest-lineage.
+ *                      physicalRelation()` emits, which is what lets a
+ *                      pipeline's SQL sink collapse onto the dbt / Unity
+ *                      Catalog node for the same relation)
+ *
+ * SCOPE, honestly: the production write path calls
+ * {@link canonicalDatasetIdentity} on an ALREADY-JOINED uri (that is what
+ * `mapRunEventToEdges` hands the harvest), so this split-ref overload has no
+ * production caller today — only the naming specs, which use it to pin that a
+ * `{namespace, name}` pair and the joined uri reduce to the SAME id. Two
+ * earlier revisions of this comment claimed it was "what the harvest's endpoint
+ * resolver calls"; that was never true and is corrected here rather than
+ * quietly deleted. It is kept (not removed) because it is the natural entry
+ * point for a producer that has the split ref in hand, and the specs make its
+ * agreement with the joined path a standing invariant.
+ */
+export function datasetEdgeId(ds: OpenLineageDatasetRef): string {
+  const ns = trimTrailingSlashes(stripUriCredentials(ds.namespace));
+  const name = stripUriCredentials(ds.name);
+  if (/^sqlserver:\/\//i.test(ns)) return name.toLowerCase();
+  if (!ns) return canonicalDatasetIdentity(name);
+  return canonicalDatasetIdentity(`${ns}/${trimSlashes(name)}`);
+}
 /** `sqlserver://{host}:{port}/` prefix on an already-joined dataset URI. */
 const SQLSERVER_URI_RE = /^sqlserver:\/\/[^/]+\/(.+)$/i;
 

@@ -417,10 +417,15 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
       if (!j.ok) throw new Error(j.error || 'log fetch failed');
       const log: string[] = j.job?.log || [];
       const errInfo: any[] = j.job?.errorInfo || [];
-      const text = [
-        ...log,
-        ...(errInfo.length ? ['', '--- errorInfo ---', JSON.stringify(errInfo, null, 2)] : []),
-      ].join('\n') || '(no driver log lines returned yet — the job may still be starting)';
+      // Honest gate: an unattributed pool-scoped Livy batch comes back as a
+      // status-only projection (see the route's redactUnattributedBatch) — say
+      // WHY the log is empty instead of implying the job produced none.
+      const text = j.job?.redacted
+        ? String(j.job.redactedReason || 'driver log withheld — this batch was not submitted by this item')
+        : [
+            ...log,
+            ...(errInfo.length ? ['', '--- errorInfo ---', JSON.stringify(errInfo, null, 2)] : []),
+          ].join('\n') || '(no driver log lines returned yet — the job may still be starting)';
       setLogs((m) => ({ ...m, [runId]: { loading: false, text } }));
     } catch (e: any) {
       setLogs((m) => ({ ...m, [runId]: { loading: false, error: e?.message || String(e) } }));

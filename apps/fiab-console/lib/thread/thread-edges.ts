@@ -42,6 +42,11 @@ export interface ThreadEdge {
   toItemId: string;
   toType: string;
   toName?: string;
+  /** Whether the SOURCE is a Loom item (deep-linkable) or external. An
+   *  OpenLineage producer can name an unowned physical dataset on EITHER side;
+   *  without this the canvas rendered a source node with a deep link to
+   *  `/items/dataset/<uri>`, a route that does not exist. */
+  fromExternal?: boolean;
   /** Whether the target is a Loom item (deep-linkable) or external. */
   toExternal?: boolean;
   /** Optional external deep link (e.g. the Power BI service URL). */
@@ -75,6 +80,8 @@ export interface RecordEdgeInput {
   fromItemId: string;
   fromType: string;
   fromName?: string;
+  /** Whether the SOURCE is a Loom item (deep-linkable) or external. */
+  fromExternal?: boolean;
   toItemId: string;
   toType: string;
   toName?: string;
@@ -111,6 +118,7 @@ export async function recordThreadEdge(session: SessionPayload, input: RecordEdg
       fromItemId: input.fromItemId,
       fromType: input.fromType,
       fromName: input.fromName,
+      ...(input.fromExternal ? { fromExternal: true } : {}),
       toItemId: input.toItemId,
       toType: input.toType,
       toName: input.toName,
