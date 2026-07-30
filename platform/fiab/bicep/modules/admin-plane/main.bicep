@@ -4986,6 +4986,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           duckdbTierActive ? [
             { name: 'LOOM_DUCKDB_URL', value: 'https://${duckdbTier!.outputs.fqdn}' }
             { name: 'LOOM_FLIGHTSQL_URL', value: duckdbTier!.outputs.flightEndpoint }
+          ] : [],
           // N7a streaming tier — the Postgres-wire credential the BFF presents to
           // loom-risingwave. A secretRef, NEVER `value:`: this is the only thing
           // that distinguishes the Console from loom-script-runner and
