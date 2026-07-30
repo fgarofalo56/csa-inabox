@@ -30,14 +30,15 @@ import { KNOWN_CONTAINERS, downloadFile, getAccountName } from '@/lib/azure/adls
 import { getLabelForAdlsPath, type MipLabelInfo } from '@/lib/azure/purview-mip-client';
 import { isMipSupportedType, stampMipLabel } from '@/lib/azure/mip-file-inject';
 import { withSession } from '@/lib/api/route-toolkit';
+import { lastSegment } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function leaf(path: string): string {
-  const t = path.replace(/\/+$/, '');
-  const i = t.lastIndexOf('/');
-  return i >= 0 ? t.slice(i + 1) : t;
+  // #2655 — `path` is request-derived and `/\/+$/` is O(n^2) on a long slash
+  // run that does not end the string. lastSegment is an index walk.
+  return lastSegment(path);
 }
 
 /**
