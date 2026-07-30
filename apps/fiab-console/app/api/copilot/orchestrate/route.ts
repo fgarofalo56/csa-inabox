@@ -37,6 +37,7 @@ import {
 import { isSafetyConfigured, shieldPrompt, moderateContent } from '@/lib/azure/foundry-client';
 import { VALID_CONTEXT_SLUGS, type PersonaContextPayload } from '@/lib/azure/copilot-personas';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { randomId } from '@/lib/util/random-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
   if (!prompt) {
     return NextResponse.json({ ok: false, error: 'prompt is required' }, { status: 400 });
   }
-  const sessionId = body.sessionId || `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = body.sessionId || randomId('sess');
   // Copilot surface tag for per-persona usage metering (App Insights). Defaults
   // to the cross-item orchestrator; resolvePersona() narrows the tool set when
   // the tag matches a registered persona, otherwise the full cross-item Copilot
