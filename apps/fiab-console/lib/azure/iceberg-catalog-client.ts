@@ -56,6 +56,7 @@ import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 
 /** Registry gate id — mirrors the ENV_CHECKS spec in env-checks/data-plane.ts. */
 export const ICEBERG_CATALOG_GATE_ID = 'svc-iceberg-catalog';
@@ -386,8 +387,14 @@ export async function listNamespaceGrants(namespace: string): Promise<IcebergNam
   encodeNamespace(namespace);
   const dotted = String(namespace).split('.').map((s) => s.trim()).filter(Boolean).join('.');
   const full = `${icebergWarehouse()}.${dotted}`;
-  const url = `${icebergCatalogBase()}/api/2.1/unity-catalog/permissions/schema/${encodeURIComponent(full)}`;
+  const ucPath = `/api/2.1/unity-catalog/permissions/schema/${encodeURIComponent(full)}`;
+  const url = `${icebergCatalogBase()}${ucPath}`;
 
+  // LU-3 — this is a REAL Unity Catalog grant read issued outside ucFetch (it
+  // goes to the IRC's catalog base with the Iceberg auth header), so it records
+  // its own audit row. Allowlisted + asserted in
+  // scripts/ci/check-unity-audit-chokepoint.mjs.
+  const t0 = Date.now();
   let res: Response;
   try {
     res = await fetchWithTimeout(url, {
@@ -395,12 +402,14 @@ export async function listNamespaceGrants(namespace: string): Promise<IcebergNam
       headers: { accept: 'application/json', ...(await icebergAuthHeader()) },
     });
   } catch (e) {
+    recordDatabricksUnityAccess({ path: ucPath, method: 'GET', status: 0, durationMs: Date.now() - t0, error: e });
     throw new IcebergCatalogError(
       `Iceberg REST Catalog unreachable at ${icebergCatalogBase()}: ${(e as Error)?.message || String(e)}`,
       502,
       'unreachable',
     );
   }
+  recordDatabricksUnityAccess({ path: ucPath, method: 'GET', status: res.status, durationMs: Date.now() - t0 });
 
   if (res.status === 404 || res.status === 501) {
     return {
