@@ -272,7 +272,37 @@ export function stripUriCredentials(raw: string | null | undefined): string {
  * OneLake/mirroring identity. It keeps its raw spelling (see
  * `normalizeIdentity`'s dedicated OneLake branch).
  */
-const ONELAKE_HOST_RE = /(^|\/\/|@)[^/]*onelake\.(dfs|blob)\./i;
+/**
+ * Is this URI's HOST a Fabric OneLake endpoint?
+ *
+ * Index-based on purpose. This replaced a pattern whose leading alternation
+ * followed by an unbounded negated class is a polynomial-ReDoS vector: the
+ * engine has several ways to divide the same prefix, and it ran on the FULL
+ * request-derived URI on the OpenLineage ingest path. The rest of this module
+ * was already converted away from regex host matching for exactly that reason
+ * (see splitUri) - this one predicate was left behind.
+ *
+ * Matching only the AUTHORITY is also stricter than the old pattern, which
+ * could match anywhere before the first '/', including inside userinfo.
+ */
+/** Exported for test: the ReDoS bound and the authority-only semantics. */
+export function isOneLakeHost(v: string): boolean {
+  const parts = splitUri(v);
+  // No scheme => the leading segment is the authority (the old pattern's '^'
+  // branch accepted a bare host).
+  let authority: string;
+  if (parts) {
+    authority = parts.authority;
+  } else {
+    const slash = v.indexOf('/');
+    authority = slash < 0 ? v : v.slice(0, slash);
+  }
+  // Drop userinfo ('user:pass@host') - the host is what the HTTP stack resolves.
+  const at = authority.lastIndexOf('@');
+  if (at >= 0) authority = authority.slice(at + 1);
+  const host = stripMalformedPort(authority).toLowerCase();
+  return host.includes('onelake.dfs.') || host.includes('onelake.blob.');
+}
 
 /**
  * Delta/Parquet writers name the LOG and the PART FILES, not the table folder.
@@ -339,7 +369,7 @@ export function parseStorageUri(
 ): StorageUriParts | null {
   const v = stripUriCredentials(raw);
   if (!v) return null;
-  if (ONELAKE_HOST_RE.test(v)) return null; // Fabric OneLake keeps its own spelling
+  if (isOneLakeHost(v)) return null; // Fabric OneLake keeps its own spelling
   const fold = opts.fold !== false;
   const path = (p: string | undefined) => (fold ? foldToTableFolder(p || '') : trimSlashes(p || ''));
 
