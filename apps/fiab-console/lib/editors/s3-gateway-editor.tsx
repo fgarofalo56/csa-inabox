@@ -191,7 +191,7 @@ export function S3GatewayEditor({ item, id }: { item: FabricItemType; id: string
           <EmptyState
             icon={<Link20Regular />}
             title="No S3 gateway wired — and most deployments don't need one"
-            body="Prefer the native path above (Iceberg REST Catalog + abfss://). If you have s3://-exclusive clients, Loom already deploys an Apache-2.0 s3proxy in front of ADLS (data-plane/s3-gateway-aca.bicep, internal ingress + managed identity + read-only). This panel is empty only when the apps tier was deployed without it — use the Fix-it above to point LOOM_S3_GATEWAY_URL at the gateway and get real connect snippets here."
+            body="Prefer the native path above (Iceberg REST Catalog + abfss://). If you have s3://-exclusive clients, deploy an Apache-2.0 s3proxy in front of ADLS and set LOOM_S3_GATEWAY_URL with the Fix-it above to get real connect snippets here."
           />
         )}
       </div>

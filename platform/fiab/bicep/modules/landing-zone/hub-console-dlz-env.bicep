@@ -58,9 +58,6 @@ param dlzServiceBusNamespace string = ''
 @description('DLZ dedicated Event Grid custom-topic NAME → presence flag for re-pointing LOOM_EVENTGRID_RG / LOOM_EVENTGRID_SUB at the attached DLZ (the event-grid-topic navigator is RG-scoped). Empty when no dedicated topic is provisioned (the var set is skipped; LOOM_DLZ_RG re-point still covers the business topic).')
 param dlzEventGridTopic string = ''
 
-@description('N8 lab 3 — internal endpoint of the s3proxy Container App the dlz-attach pass deployed into the HUB in front of THIS DLZ\'s lake → LOOM_S3_GATEWAY_URL. The gateway can only exist once a lake is bound, which first happens on this pass; without this var the app runs and the Console still honest-gates. Empty => the var is skipped (correct honest-gate behaviour).')
-param dlzS3GatewayUrl string = ''
-
 @description('Compliance tags.')
 param complianceTags object
 
@@ -175,7 +172,6 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'ADF_NAME', value: dlzAdfFactoryName }
       { name: 'SERVICEBUS_NS', value: dlzServiceBusNamespace }
       { name: 'EVENTGRID_TOPIC', value: dlzEventGridTopic }
-      { name: 'S3_GATEWAY_URL', value: dlzS3GatewayUrl }
     ]
     scriptContent: '''
 set -euo pipefail
@@ -278,14 +274,6 @@ if [ -n "$EVENTGRID_TOPIC" ]; then
   if [ -n "$DLZ_SUB" ]; then
     SET_ARGS+=( "LOOM_EVENTGRID_SUB=$DLZ_SUB" )
   fi
-fi
-
-
-# N8 lab 3 — the S3-compatible ADLS gateway the dlz-attach pass deployed into
-# the hub CAE in front of THIS DLZ's lake. Empty => skip the var so the Console
-# renders its honest gate rather than a URL that answers nothing.
-if [ -n "$S3_GATEWAY_URL" ]; then
-  SET_ARGS+=( "LOOM_S3_GATEWAY_URL=$S3_GATEWAY_URL" )
 fi
 
 echo "  set-env-vars: ${SET_ARGS[*]}"

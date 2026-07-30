@@ -443,7 +443,7 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     id: 'n8-s3-gateway',
     label: 'S3-compatible ADLS gateway (Preview)',
     description:
-      'The N8 S3-compatible gateway config surface: expose an S3-compatible endpoint over ADLS so s3://-native OSS clients connect. OFF replaces the editor body with a guided notice on the next render. LOOM_S3_GATEWAY_URL is wired by the deploy itself (data-plane/s3-gateway-aca.bicep runs an Apache-2.0 s3proxy Container App in front of ADLS — internal ingress, managed-identity storage auth, read-only, scale-to-zero), so the honest gate only appears when the apps tier is off; the surface then documents that the N1 IRC + ADLS SDK path already covers most external-engine access without a gateway. No AGPL MinIO dependency.',
+      'The N8 S3-compatible gateway config surface: expose an S3-compatible endpoint over ADLS so s3://-native OSS clients connect. OFF replaces the editor body with a guided notice on the next render. Honest-gated on LOOM_S3_GATEWAY_URL (an operator-deployed Apache-2.0 s3proxy in front of ADLS); the surface documents that the N1 IRC + ADLS SDK path already covers most external-engine access without a gateway. No AGPL MinIO dependency.',
     ownerItem: 'N8',
     surface: 'S3 gateway editor (/items/s3-gateway/[id])',
   },

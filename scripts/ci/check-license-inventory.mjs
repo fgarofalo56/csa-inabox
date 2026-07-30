@@ -23,23 +23,41 @@
  *   3. Verifies THIRD_PARTY_LICENSES.md exists and names every apps/ sidecar dir.
  *   4. Scans requirements + the manifest for the explicitly-forbidden libs
  *      (minio, univer) that policy says must not ship.
- *   5. (round-3, PR #2640) Scans platform/fiab/bicep/** for UPSTREAM CONTAINER
- *      IMAGES pinned on a deploy path — anything registry-qualified
- *      (docker.io / ghcr.io / quay.io / registry.k8s.io / public.ecr.aws). Each
- *      must be in REVIEWED_IMAGES with a permissive SPDX id AND named in
- *      THIRD_PARTY_LICENSES.md.
+ *   5. (round-3/4, PR #2640) Scans platform/fiab/bicep/** for UPSTREAM CONTAINER
+ *      IMAGES pinned on a deploy path. Each must be in REVIEWED_BICEP_IMAGES with a
+ *      permissive SPDX id AND named in THIRD_PARTY_LICENSES.md. TWO ref shapes
+ *      are recognised, because both appear in this tree:
+ *        a. registry-qualified — docker.io / ghcr.io / quay.io / registry.k8s.io /
+ *           public.ecr.aws / gcr.io;
+ *        b. BARE Docker Hub — `apache/airflow:2.10.5-python3.12`, the ordinary
+ *           way a Docker Hub image is written. Docker resolves it against
+ *           docker.io, so it is exactly as much of an internet pull as (a).
+ *      `mcr.microsoft.com` is EXEMPT and documented as such: it is the
+ *      Microsoft-published first-party registry, reachable in every sovereign
+ *      cloud, and those artifacts are covered by Microsoft product terms rather
+ *      than third-party OSS redistribution. Nothing else is exempt.
  *
- * WHY 5 EXISTS. Until this PR the guard read ONLY requirements.txt files, so a
- *   third-party image deployed by default — `docker.io/andrewgaul/s3proxy:3.3.0`
- *   in data-plane/s3-gateway-aca.bicep — was covered by a hand-written markdown
+ * WHY 5 EXISTS. The guard used to read ONLY requirements.txt files, so a
+ *   third-party image deployed by default was covered by a hand-written markdown
  *   row and NOTHING enforced it. A markdown row nobody checks is exactly the
  *   "gate that measures nothing" class this repo has already been burned by. The
- *   copyleft risk here is real and specific: the obvious alternative for this
- *   very feature (MinIO's S3 gateway) is AGPL-v3, and swapping the image string
- *   would have shipped it with a green LIC0.
+ *   copyleft risk is real and specific: the obvious alternative for the N8 S3
+ *   lab (MinIO's S3 gateway) is AGPL-v3, and swapping an image string would have
+ *   shipped it with a green LIC0.
+ *
+ * WHY 5b EXISTS (round 4). Shipped as (a)-only, this scan matched exactly ONE
+ *   image — the one the PR that added the scan introduced — and was blind to the
+ *   third-party Docker Hub pulls the tree ALREADY deploys, because they are
+ *   written bare: `apache/airflow:2.10.5-python3.12` (admin-plane/airflow.bicep,
+ *   default-ON wherever postgresQuotaAvailable is true) and
+ *   `curlimages/curl:8.10.1` (compute/loom-memory-consolidate-job.bicep). A gate
+ *   whose regex cannot match the ordinary spelling of the thing it polices is a
+ *   gate that measures nothing. `assertObservesSomething()` below now also fails
+ *   when the scan finds ZERO images, so the scan cannot silently go hollow again.
  *
  * ESCAPE HATCH: a genuinely-new permissive embed = add it to REVIEWED_PY /
- *   REVIEWED_IMAGES below with its SPDX id (that IS the review record) AND a row
+ *   REVIEWED_IMAGES (Dockerfile-baked) or REVIEWED_BICEP_IMAGES (bicep-pinned)
+ *   below with its SPDX id (that IS the review record) AND a row
  *   in THIRD_PARTY_LICENSES.md. A copyleft dep is NEVER allowlisted — replace it.
  *
  * Owner: loom-next-level WS-N / LIC0 — compliance/distribution.
@@ -221,21 +239,50 @@ function listAppDockerfiles() {
  * not from a README badge and not from the image description.
  */
 const REVIEWED_BICEP_IMAGES = {
-  'docker.io/andrewgaul/s3proxy': {
+  'apache/airflow': {
     license: 'Apache-2.0',
-    manifestKey: 's3proxy',
-    // Verified 2026-07-29 against raw.githubusercontent.com/gaul/s3proxy/master/LICENSE,
-    // which opens "Apache License / Version 2.0, January 2004". The published
-    // andrewgaul/s3proxy image is built from that same tree. Deployed by
-    // data-plane/s3-gateway-aca.bicep as the permissive replacement for the
-    // AGPL-v3 MinIO gateway (which LIC0 hard-blocks).
-    notice: 'github.com/gaul/s3proxy LICENSE = Apache License, Version 2.0',
+    manifestKey: 'apache/airflow',
+    // Apache Airflow is an Apache Software Foundation project distributed under
+    // the Apache License 2.0 (LICENSE at github.com/apache/airflow), and the
+    // `apache/airflow` Docker Hub image is the ASF's own publication of that
+    // tree. Deployed by admin-plane/airflow.bicep as the OSS Airflow host
+    // (no-fabric-dependency: the Azure-native alternative to a Fabric/ADF WOM
+    // environment). Pulled unmodified — a NOTICE row, not a redistribution.
+    notice: 'github.com/apache/airflow LICENSE = Apache License, Version 2.0',
+  },
+  'curlimages/curl': {
+    license: 'curl',
+    manifestKey: 'curlimages/curl',
+    // curl ships under the "curl" license (an MIT/X11 derivative — permissive,
+    // no copyleft obligation): curl.se/docs/copyright.html. Used as the HTTP
+    // client for the compute/loom-memory-consolidate-job scheduled job. Pulled
+    // unmodified.
+    notice: 'curl.se/docs/copyright.html = curl license (MIT/X derivative)',
   },
 };
+
+/**
+ * Registries whose artifacts are NOT third-party OSS redistribution for LIC0
+ * purposes: Microsoft's own first-party registry, reachable in every sovereign
+ * cloud and covered by Microsoft product terms. Deliberately narrow — this is
+ * the ONLY exemption, and it is stated here rather than hidden in a regex.
+ */
+const EXEMPT_REGISTRY_RE = /^mcr\.microsoft\.com\//;
 
 /** Registry-qualified upstream image refs pinned anywhere under platform/fiab/bicep. */
 const UPSTREAM_IMAGE_RE =
   /\b((?:docker\.io|index\.docker\.io|ghcr\.io|quay\.io|registry\.k8s\.io|public\.ecr\.aws|gcr\.io)\/[A-Za-z0-9._/-]+):([A-Za-z0-9._-]+)/g;
+
+/**
+ * BARE Docker Hub refs written as a quoted bicep literal: `'<ns>/<name>:<tag>'`.
+ * Anchored on the quotes so it cannot match a URL path or a resource id, and the
+ * namespace must contain no `.` or `:` (that would be a registry host, handled by
+ * UPSTREAM_IMAGE_RE / the MCR exemption). Literals containing a bicep
+ * interpolation (`${…}`) are skipped by the caller: those resolve to the
+ * deployment's OWN ACR, which is not an upstream pull.
+ */
+const BARE_DOCKERHUB_IMAGE_RE =
+  /'([A-Za-z0-9][A-Za-z0-9_-]*\/[A-Za-z0-9][A-Za-z0-9._-]*):([A-Za-z0-9._-]+)'/g;
 
 /** Reviewed image refs actually found on a deploy path (reporting only). */
 const IMAGE_RESULTS = [];
@@ -270,14 +317,22 @@ function scanUpstreamImages(errors) {
     src.split('\n').forEach((line, i) => {
       const trimmed = line.trim();
       if (trimmed.startsWith('//') || trimmed.startsWith('*') || line.includes('@description(')) return;
-      UPSTREAM_IMAGE_RE.lastIndex = 0;
-      let m;
-      while ((m = UPSTREAM_IMAGE_RE.exec(line)) !== null) {
-        const repo = m[1];
-        const tag = m[2];
+      const record = (repo, tag) => {
+        if (EXEMPT_REGISTRY_RE.test(`${repo}/`)) return; // MCR first-party — see EXEMPT_REGISTRY_RE
         const key = `${repo}:${tag}`;
         if (!found.has(key)) found.set(key, []);
         found.get(key).push(`${rel}:${i + 1}`);
+      };
+      UPSTREAM_IMAGE_RE.lastIndex = 0;
+      let m;
+      while ((m = UPSTREAM_IMAGE_RE.exec(line)) !== null) record(m[1], m[2]);
+      // Bare Docker Hub form (`'apache/airflow:2.10.5-python3.12'`). Skipped when
+      // the literal is a bicep interpolation — `'${acr}/loom-duckdb:v0.1'` is the
+      // deployment's own ACR, not an upstream pull.
+      BARE_DOCKERHUB_IMAGE_RE.lastIndex = 0;
+      while ((m = BARE_DOCKERHUB_IMAGE_RE.exec(line)) !== null) {
+        if (m[0].includes('${')) continue;
+        record(m[1], m[2]);
       }
     });
   }
@@ -319,6 +374,22 @@ function scanUpstreamImages(errors) {
       continue;
     }
     IMAGE_RESULTS.push(`${ref} → ${reviewed.license} (${locations.length} ref(s))`);
+  }
+
+  // ANTI-HOLLOW RATCHET. This tree deploys upstream container images today
+  // (apache/airflow, curlimages/curl). If the scan suddenly matches NONE, the far
+  // likelier cause is that the ref spelling drifted out of the regex than that
+  // every third-party image was removed — which is precisely how the round-3
+  // version of this scan passed while observing nothing. Fail instead of
+  // reporting a green "0 reviewed".
+  if (found.size === 0) {
+    errors.push(
+      'LIC0 upstream-image scan matched ZERO images under platform/fiab/bicep. Either the ref-matching ' +
+        'regexes in scripts/ci/check-license-inventory.mjs no longer recognise how images are written in ' +
+        'this tree (the likely cause — fix the regex), or the tree genuinely deploys no third-party image ' +
+        'any more (then delete this assertion in the same commit, deliberately). A scan that observes ' +
+        'nothing must never report success.',
+    );
   }
   return IMAGE_RESULTS;
 }

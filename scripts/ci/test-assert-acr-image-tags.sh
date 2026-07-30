@@ -75,7 +75,7 @@ check "all referenced tags present" 0 $?
 # The exact round-2 defect: the template pulls :v0.1 while the Gov producer only
 # ever stamped the short SHA. The preflight MUST catch this.
 OUT=$(MODE=ok PRESENT_REF="loom-duckdb:1a2b3c4d" \
-  bash "$UNDER_TEST" --acr stubacr loom-duckdb:v0.1 s3proxy:3.3.0 2>&1)
+  bash "$UNDER_TEST" --acr stubacr loom-duckdb:v0.1 loom-console:v0.7 2>&1)
 check "missing tag is refused" 1 $?
 case "$OUT" in
   *"MISSING in stubacr"*"loom-duckdb:v0.1"*) echo "  ok   refusal names the missing tag" ;;

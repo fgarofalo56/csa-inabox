@@ -5,9 +5,9 @@
 # in the target Azure Container Registry, and FAIL LOUDLY when it does not.
 #
 # WHY THIS EXISTS. `platform/fiab/bicep/modules/admin-plane/main.bicep` now
-# deploys `loom-duckdb` (and, once a lake is bound, `loom-s3-gateway`) BY
+# deploys `loom-duckdb` BY
 # DEFAULT, pulling `<acr>/loom-duckdb:<appImageTags.duckdb>` and
-# `<acr>/s3proxy:3.3.0`. A subscription-scoped re-deploy over a LIVE estate
+# A subscription-scoped re-deploy over a LIVE estate
 # ADOPTS every running app in that estate. If one of those tags is missing, the
 # new Container App can never pull an image, the nested deployment fails, and it
 # takes the surrounding deployment — the one that is also re-PUTting the live
@@ -42,7 +42,7 @@
 #
 # EXAMPLES
 #   scripts/ci/assert-acr-image-tags.sh --acr acrloomabc --lease \
-#     loom-duckdb:v0.1 s3proxy:3.3.0
+#     loom-duckdb:v0.1
 set -uo pipefail
 
 ACR=""
@@ -137,7 +137,7 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
 ::error::PRODUCERS — run the one for this cloud FIRST, then re-run this deploy:
 ::error::  Commercial : .github/workflows/full-app-deploy-commercial.yml
 ::error::               (build matrix stamps loom-duckdb:<tag>; the `mirror-upstream`
-::error::                job `az acr import`s s3proxy:3.3.0)
+::error::                job builds it)
 ::error::  GCC-High   : .github/workflows/gov-provision-dataplane-images.yml
 ::error::               boundary=gcc-high  apply=true   [NEVER EXECUTED as of PR #2640]
 ::error::  IL5        : .github/workflows/gov-provision-dataplane-images.yml

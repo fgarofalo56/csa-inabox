@@ -198,12 +198,24 @@ param apimEnabled = true
 // and the Gov comparison page records NO Flexible Server feature gaps beyond
 // Cosmos DB for PostgreSQL and Single Server extras
 // (https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure#databases).
-// Stated EXPLICITLY here (round-2 fix) so the IL5 posture is a deliberate,
-// reviewable decision rather than an inherited default: ON, opt-out only.
-// An estate whose subscription is quota-restricted from provisioning
-// Microsoft.DBforPostgreSQL/flexibleServers sets LOOM_POSTGRES_QUOTA_AVAILABLE=false
-// to skip those two hosts while the rest of the app tier deploys.
-param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'true'))
+// So `false` is not a service gap; it is a DELIBERATE, reviewable IL5 posture
+// stated here rather than inherited.
+//
+// ROUND-4: kept OFF in this PR. `postgresQuotaAvailable` gates TWO hosts, and
+// turning it on would bring the OSS Airflow host into IL5 with (1) an anonymous
+// `apache/airflow:2.10.5-python3.12` DOCKER HUB pull that nothing mirrors into
+// the IL5 ACR (unpullable in a locked-egress boundary, unscanned on the way in),
+// and (2) a metadata Postgres created with `publicNetworkAccess: 'Enabled'` and a
+// `0.0.0.0` AllowAllAzureServices firewall rule (admin-plane passes
+// `privateEndpointsEnabled: false`). Neither belongs in an IL5 boundary as a side
+// effect of a DuckLake change. Both are handled by the follow-up that mirrors
+// upstream images into each cloud's ACR and adds the private endpoint; flip this
+// true there.
+//
+// Consequence: the N8 DuckLake catalog store is skipped in IL5 and its editor
+// honest-gates with a Fix-it (the pre-existing state). The DuckDB serving tier
+// has no Postgres dependency and still deploys by default.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 param hubFirewallEnabled = true
 param aiSearchEnabled = false
 // Azure Analysis Services is NOT available in the DoD regions — pin OFF (main.bicep

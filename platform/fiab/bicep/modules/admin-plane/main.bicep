@@ -789,24 +789,29 @@ var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'cont
 var ducklakePgPassword = 'Dl7${uniqueString(loomGeneratedSecretSeed, 'loom-ducklake-pg-v1')}!Qz'
 var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 
-// ── N8 lab 3 — S3-compatible ADLS gateway (default-ON) ────────────────────────
-// s3GatewayEnabled (var, default true — same 256-param-cap rationale): deploys
-// the Apache-2.0 s3proxy Container App (data-plane/s3-gateway-aca.bicep) in
-// front of the deployment's own ADLS Gen2 and binds LOOM_S3_GATEWAY_URL. It was
-// likewise documented as "operator-deployed … out-of-band"; same rule fix.
-// Container Apps only (an AKS boundary deploys this workload via the cluster
-// GitOps path) and only once the apps tier is on.
-//
-// `!empty(loomStorageAccount)` is a REAL condition, not a stub: a proxy with no
-// account to front would be a wired URL that 404s every bucket (no-vaporware).
-// On tenant topology main.bicep leaves loomStorageAccount EMPTY because no DLZ
-// exists yet — so on that path the gateway is deployed by the **dlz-attach
-// pass** instead (platform/fiab/bicep/main.bicep `dlzAttachS3Gateway`, which
-// also patches LOOM_S3_GATEWAY_URL onto the running Console via
-// hub-console-dlz-env). Round 1 shipped only this branch, so on every shipped
-// bicepparam (all five set topology='tenant') the module never fired at all.
-var s3GatewayEnabled = true
-var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && !empty(loomStorageAccount)
+// ── N8 lab 3 — S3-compatible ADLS gateway: NOT DEPLOYED FROM HERE ────────────
+// ROUND-4 SPLIT (PR #2640). The default-ON s3proxy gateway was pulled out of
+// this PR and moved to a follow-up. It is NOT a "we ran out of time" deferral —
+// the surface had two unfixed supply-chain/documentation defects that could not
+// be closed at template level:
+//   1. The only shipped lane on which the gateway could ever deploy is the
+//      dlz-attach pass (this module's branch needed a lake bound at admin-plane
+//      time, which no shipped bicepparam produces), and on that lane the image
+//      resolved to an anonymous `docker.io/andrewgaul/s3proxy:3.3.0` pull: the
+//      hub-ACR coordinate arrives only in `hubCoordinates`, and NO producer of
+//      dlz-attach parameters passes that object (deploy-fiab-*.yml pass flat
+//      `hub*` params; the orchestrator's `_HUB_COORDINATE_FIELDS` and the BFF's
+//      `HUB_COORD_PARAM` have no acrLoginServer key; write-tenant-topology.sh
+//      never captures one). A third-party image pulled from the internet is not
+//      acceptable in a federal estate and is unpullable in an air-gapped one.
+//   2. On that same lane `keyVaultId` was empty, so the two Key Vault secrets
+//      the tutorial/editor tell an operator to read (loom-s3-gateway-access-key
+//      / -secret-key) were never created — a documented step that cannot be
+//      performed.
+// The follow-up closes both together: mirror the image into every cloud's ACR,
+// thread the ACR + Key Vault coordinates through the hub-coordinate chain end to
+// end, and only then re-enable. Until then `LOOM_S3_GATEWAY_URL` stays on the
+// check-env-sync allowlist and the editor honest-gates, exactly as before.
 
 // ── N2b/N3 — loom-duckdb serving tier (default-ON) ────────────────────────────
 // The engine that runs DuckLake's `ATTACH 'ducklake:postgres:<dsn>'` and every
@@ -818,15 +823,6 @@ var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' &
 // default-ON is ~$0 at idle (see the block there).
 var duckdbTierEnabled = true
 var duckdbTierActive = duckdbTierEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
-
-// S3 wire credential — NOT derived here any more (round-2 fix). It used to be
-// `uniqueString(loomGeneratedSecretSeed, …)`, and `loomGeneratedSecretSeed`
-// defaults to `newGuid()`, so the credential ROTATED on every full redeploy and
-// silently broke every external S3 client (Trino, Spark, boto3) with
-// SignatureDoesNotMatch while the module header advertised handing those values
-// to clients. The module now derives a STABLE value from its own dedicated
-// storage identity's principal id instead. Both modes and their trade-offs are
-// documented in data-plane/s3-gateway-aca.bicep's SECURITY POSTURE block.
 
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
 param postgresQuotaAvailable bool = true
@@ -4866,13 +4862,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ducklakeCatalogActive ? [
             { name: 'LOOM_DUCKLAKE_CATALOG_URL', secretRef: 'loom-ducklake-catalog-url' }
           ] : [],
-          // N8 lab 3 — S3-compatible ADLS gateway (gate svc-s3-gateway). The
-          // internal-ingress s3proxy endpoint; the Console only ever reads the
-          // URL to render connect info (the S3 wire credential lives in Key
-          // Vault, never in the Console's environment).
-          s3GatewayActive ? [
-            { name: 'LOOM_S3_GATEWAY_URL', value: s3Gateway!.outputs.internalEndpoint }
-          ] : [],
           // N2b/N3 — loom-duckdb serving tier (gate svc-loom-duckdb). The engine
           // that runs DuckLake's ATTACH and every other DuckDB-backed surface.
           // Round 2: these two vars were emitted by NO bicep before this change,
@@ -5298,66 +5287,6 @@ module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (duc
     catalogUrlSecretName: ducklakeCatalogUrlSecretName
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
-  }
-}
-
-// =====================================================================
-// N8 lab 3 — S3-compatible ADLS gateway (DEFAULT-ON, gate svc-s3-gateway).
-//
-// Apache-2.0 s3proxy in front of the deployment's own ADLS Gen2 so s3://-native
-// OSS clients (Trino, Spark, DuckDB's httpfs/s3 extension) can address the lake
-// with an S3 API. Internal ingress only; read-only by default; minReplicas 0 so
-// default-ON is also $0-at-idle. The AGPL MinIO gateway path is NOT used.
-//
-// IDENTITY (round-2 fix): the proxy does NOT run as the Console UAMI. The
-// module creates its own `uami-loom-s3gw-<location>` and that identity — which
-// holds ONLY Storage Blob Data READER, granted by `s3GatewayLakeRbac` below at
-// the lake's own RG scope — is what AZURE_CLIENT_ID selects for the storage
-// data plane. The Console UAMI is passed in solely as the ACR pull credential.
-// Running a Java proxy that parses attacker-influenced S3 signatures and XML as
-// the Console identity (Blob Data CONTRIBUTOR + Key Vault Secrets User +
-// Network Contributor + AKS Cluster Admin) was the wrong blast radius.
-//
-// IMAGE (round-2 fix): the image is pulled from the deployment's OWN ACR
-// (`<acr>/s3proxy:3.3.0`), mirrored there by `az acr import` in the image
-// producer for each cloud — full-app-deploy-commercial.yml for Commercial and
-// gov-provision-dataplane-images.yml for GCC-High/IL5. Round 1 referenced
-// docker.io directly, which a locked-egress sovereign CAE cannot reach.
-//
-// TOPOLOGY: only fires when a lake is actually bound (`loomStorageAccount`).
-// On tenant topology no DLZ exists yet, so the gateway is deployed by the
-// dlz-attach pass instead — platform/fiab/bicep/main.bicep `dlzAttachS3Gateway`,
-// which also patches LOOM_S3_GATEWAY_URL onto the already-running Console. See
-// the honest-gate note in lib/gates/registry/data-plane.ts.
-// =====================================================================
-module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
-  name: 'loom-s3-gateway'
-  params: {
-    location: location
-    s3GatewayConfig: {
-      environmentId: containerPlatformModule.outputs.caeId
-      // ACR pull credential ONLY — the storage data plane runs as the module's
-      // own dedicated Storage-Blob-Data-Reader identity.
-      uamiId: identity.outputs.uamiConsoleId
-      lakeStorageAccountName: loomStorageAccount
-      image: '${registry.outputs.acrLoginServer}/s3proxy:3.3.0'
-      acrLoginServer: registry.outputs.acrLoginServer
-    }
-    keyVaultId: keyvault.outputs.keyVaultId
-    complianceTags: complianceTags
-  }
-}
-
-// Least-privilege lake grant for the gateway's dedicated identity. Scoped to
-// the DLZ RG — the lake is NOT in the admin RG — exactly like labelRbacGrants /
-// azureConnectionsRbac / orgVisualsRbac above.
-module s3GatewayLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (s3GatewayActive && !skipRoleGrants) {
-  name: 'loom-s3-gateway-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
-  params: {
-    storageAccountName: loomStorageAccount
-    principalId: s3Gateway!.outputs.storageUamiPrincipalId
-    assignRole: !skipRoleGrants
   }
 }
 

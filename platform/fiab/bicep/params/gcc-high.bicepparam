@@ -181,21 +181,34 @@ param appImageTags = {
 // carries zone-redundant HA and geo-redundant backup):
 //   https://learn.microsoft.com/azure/postgresql/overview#azure-regions
 //   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure#databases
-// So this is NOT a sovereign service gap. It defaults TRUE (round-2 fix):
-// `loom_default_on_opt_out` is a BLOCKING repo rule, and a `false` default made
-// the Postgres-backed services (OSS Airflow metadata DB, and now the N8 DuckLake
-// catalog store) opt-IN in the one boundary Loom actually runs in — nothing in
-// .github/, scripts/ or platform/ ever set LOOM_POSTGRES_QUOTA_AVAILABLE=true,
-// so they were dead in GCC-High by default.
+// So the `false` default below is NOT a sovereign service gap, and flipping it
+// true is the right END STATE for `loom_default_on_opt_out`.
 //
-// It stays a PARAMETER because the restriction that does bite is a SUBSCRIPTION
-// quota state ("Subscriptions are restricted from provisioning in location
-// 'usgovvirginia'"), not a regional one. An estate that hits it sets
-// LOOM_POSTGRES_QUOTA_AVAILABLE=false to skip the Postgres-backed hosts while
-// the rest of the app tier deploys, requests the increase
-// (https://aka.ms/postgres-request-quota-increase), and unsets it. That is a
-// DISABLE toggle, not an enablement gate.
-param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'true'))
+// ROUND-4: THE FLIP IS DELIBERATELY NOT IN THIS PR. It stays `false` because
+// `postgresQuotaAvailable` gates TWO hosts, and enabling it here would drag the
+// OSS Airflow host into a sovereign boundary with two unrelated defects:
+//   1. SUPPLY CHAIN. `admin-plane/airflow.bicep` defaults `airflowImage` to
+//      `apache/airflow:2.10.5-python3.12` — an anonymous DOCKER HUB pull. No
+//      caller passes an ACR-mirrored override, and no image producer mirrors it,
+//      so a locked-egress / air-gapped GCC-High or IL5 CAE cannot pull it at all
+//      (and nothing Trivy-scans or cosign-verifies it on the way in).
+//   2. NETWORK POSTURE. `admin-plane/main.bicep` invokes airflow.bicep with
+//      `privateEndpointsEnabled: false`, which resolves to
+//      `publicNetworkAccess: 'Enabled'` plus a `0.0.0.0` firewall rule
+//      (`AllowAllAzureServicesAndResourcesWithinAzureIps`) on its metadata
+//      Postgres. That is an accepted documented carve-out in Commercial; turning
+//      it on in GCC-High / IL5 is a decision that needs its own review, not a
+//      side effect of a DuckLake PR.
+// Both belong to the same follow-up as the s3proxy ACR mirror (see the PR
+// description): mirror `apache/airflow` into each cloud's ACR, wire
+// `airflowImage`, give that Postgres a private endpoint — THEN flip this true.
+//
+// Consequence, stated plainly: on GCC-High the N8 DuckLake catalog store is
+// SKIPPED by default and the editor honest-gates with a Fix-it. That is the
+// pre-existing state (unchanged by this PR), not a new gate. The DuckDB serving
+// tier itself is NOT affected — it has no Postgres dependency and deploys by
+// default in both Gov boundaries.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 
 // MSAL — Gov tenant client id+secret via env (don't commit)
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')

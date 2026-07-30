@@ -175,8 +175,7 @@ jobs:
       # in the live GCC-High estate (loom-console, loom-unity, …). admin-plane/
       # main.bicep now creates `loom-duckdb` by default from
       # `<acr>/loom-duckdb:${appImageTags.duckdb}` (LOOM_DUCKDB_TAG, default
-      # v0.1) and, once a lake is bound, `loom-s3-gateway` from
-      # `<acr>/s3proxy:3.3.0`. The producer for those two images —
+      # v0.1). The producer for that image —
       # .github/workflows/gov-provision-dataplane-images.yml — HAS NEVER BEEN
       # RUN, so "a build lane exists" is not evidence the tags exist. Prove it,
       # or refuse: a Container App that cannot pull fails its nested deployment
@@ -199,7 +198,7 @@ jobs:
           fi
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
-            "loom-duckdb:${LOOM_DUCKDB_TAG}" "s3proxy:3.3.0"
+            "loom-duckdb:${LOOM_DUCKDB_TAG}"
 
       - name: Provision (with full Gov dispatch)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'

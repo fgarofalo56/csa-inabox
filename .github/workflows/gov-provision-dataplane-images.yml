@@ -6,13 +6,13 @@ name: gov-provision-dataplane-images
 #   * loom-duckdb  — the DuckDB serving tier + Arrow Flight SQL wire, and the
 #                    engine that runs DuckLake's `ATTACH 'ducklake:postgres:…'`.
 #                    Backs LOOM_DUCKDB_URL / LOOM_FLIGHTSQL_URL.
-#   * loom-s3-gateway — Apache-2.0 s3proxy in front of the deployment's ADLS.
-#                    Backs LOOM_S3_GATEWAY_URL; the image is the pinned upstream
-#                    `docker.io/andrewgaul/s3proxy:3.3.0`, MIRRORED into the Gov
-#                    ACR so a locked-egress sovereign CAE needs no docker.io.
 #
-# Commercial gets both from full-app-deploy-commercial.yml (build matrix +
-# `mirror-upstream` job). GOV HAD NEITHER — deploy-gov.yml contains no
+# (PR #2640 round 4 pulled the sibling loom-s3-gateway / s3proxy mirror out of
+# this lane along with the module itself — see the PR description. When that
+# surface returns, its `az acr import` step and preflight ref return here too.)
+#
+# Commercial gets loom-duckdb from full-app-deploy-commercial.yml's build matrix.
+# GOV HAD NOTHING — deploy-gov.yml contains no
 # `az acr build` at all, gov-console-roll.yml builds only loom-console, and the
 # per-service gov-provision-*.yml jobs each cover one app. Without this workflow
 # a Gov deploy creates Container Apps pointing at images nobody produces, which
@@ -43,8 +43,6 @@ name: gov-provision-dataplane-images
 # the short SHA is pushed ALONGSIDE it as a provenance tag. If you override
 # `image_tag` here you MUST set `LOOM_DUCKDB_TAG` to the same value on the
 # deploy lane (.github/workflows/deploy-fiab-gcch.yml / deploy-fiab-il5.yml).
-# The s3proxy tag is `3.3.0` on both sides and is pinned in the bicep module, so
-# it needs no env plumbing.
 on:
   workflow_dispatch:
     inputs:
@@ -75,10 +73,9 @@ env:
   APP: loom-console
   # Pinned upstream Apache-2.0 tag — never :latest. Registered in
   # THIRD_PARTY_LICENSES.md under "Container-baked engines".
-  S3PROXY_SRC: docker.io/andrewgaul/s3proxy:3.3.0
 jobs:
   provision:
-    name: Produce loom-duckdb + s3proxy images in the ${{ inputs.boundary }} ACR
+    name: Produce the loom-duckdb image in the ${{ inputs.boundary }} ACR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
@@ -138,8 +135,8 @@ jobs:
             echo "LOCATION=$LOCATION"; echo "TAG=$TAG"; echo "SHA_TAG=$SHA_TAG"
           } >> "$GITHUB_ENV"
           echo "::notice::RG=$RG ACR=$ACR CAE=$CAE_ID location=$LOCATION tag=$TAG (+provenance $SHA_TAG)"
-          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-duckdb:$TAG  and  $ACR_LOGIN/s3proxy:3.3.0"
-          echo "::notice::THIS LANE PUSHES $ACR_LOGIN/loom-duckdb:$TAG, :$SHA_TAG  and imports s3proxy:3.3.0 — tags match."
+          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-duckdb:$TAG"
+          echo "::notice::THIS LANE PUSHES $ACR_LOGIN/loom-duckdb:$TAG, :$SHA_TAG — tags match."
           [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI — is loom-console deployed in $RG?"; exit 1; }
 
       - name: Build loom-duckdb on the Gov ACR
@@ -157,24 +154,6 @@ jobs:
             --image "loom-duckdb:$TAG" --image "loom-duckdb:$SHA_TAG" --image "loom-duckdb:latest" \
             apps/loom-duckdb
 
-      - name: Mirror s3proxy (Apache-2.0) into the Gov ACR
-        if: ${{ inputs.apply == 'true' }}
-        run: |
-          set -euo pipefail
-          # `az acr import` is a server-side registry copy, so the sovereign CAE
-          # never needs docker.io egress at pull time. NOT cosign-signed: this is
-          # an unmodified third-party artifact, not a Loom-built image — the
-          # digest below is the provenance record.
-          for attempt in 1 2 3; do
-            if az acr import --name "$ACR" --source "$S3PROXY_SRC" --image "s3proxy:3.3.0" --force -o none; then
-              echo "✓ imported $S3PROXY_SRC -> $ACR/s3proxy:3.3.0"
-              az acr repository show --name "$ACR" --image "s3proxy:3.3.0" --query '{digest:digest,created:createdTime}' -o json || true
-              break
-            fi
-            echo "::warning::s3proxy import attempt $attempt failed — retrying"; sleep 20
-            [ "$attempt" = "3" ] && { echo "::error::s3proxy import failed — svc-s3-gateway cannot come up without it"; exit 1; }
-          done
-
       - name: Release the ACR firewall lease (always)
         if: always()
         run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${ACR:-}" || true
@@ -188,7 +167,7 @@ jobs:
         continue-on-error: true
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-duckdb:$TAG" "s3proxy:3.3.0"
+            "loom-duckdb:$TAG"
 
       # Apply mode: HARD GATE. The next step deploys a Container App and the one
       # after it `az containerapp update`s the LIVE loom-console. Neither may run
@@ -199,7 +178,7 @@ jobs:
         if: ${{ inputs.apply == 'true' }}
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-duckdb:$TAG" "s3proxy:3.3.0"
+            "loom-duckdb:$TAG"
 
       - name: What-if the loom-duckdb Container App (never touches other resources)
         run: |
@@ -251,7 +230,5 @@ jobs:
 
       - name: Report what still needs the subscription-scoped deploy
         run: |
-          echo "::notice::s3proxy is now in the Gov ACR as $ACR_LOGIN/s3proxy:3.3.0."
-          echo "::notice::svc-s3-gateway itself is deployed by the TEMPLATE, not this workflow —"
           echo "::notice::admin-plane/main.bicep (single-sub) or main.bicep's dlzAttachS3Gateway (tenant + dlz-attach)."
           echo "::notice::This job only guarantees the image exists so that deploy can actually pull it."

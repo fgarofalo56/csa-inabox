@@ -66,13 +66,38 @@ WRITE_VERBS = frozenset(
 #:   1. target MUST start with `ducklake:` — no plain file/postgres/https ATTACH;
 #:   2. the `(READ_ONLY)` option MUST be present, so the attached catalog cannot
 #:      be written even by DuckDB;
-#:   3. the DSN host MUST end in a known Azure PostgreSQL Flexible Server suffix,
-#:      which bounds the outbound connection an attacker-chosen DSN could open
-#:      (the tier accepts SQL from the authenticated Console BFF, so a creative
-#:      caller must not be able to point it at an arbitrary host);
+#:   3. the DSN must resolve to EXACTLY ONE host, and that host MUST end in a
+#:      known Azure PostgreSQL Flexible Server suffix, which bounds the outbound
+#:      connection an attacker-chosen DSN could open (the tier accepts SQL from
+#:      the authenticated Console BFF, so a creative caller must not be able to
+#:      point it at an arbitrary host);
 #:   4. at most ONE ATTACH per script, and the script must still contain a read.
 #: `DETACH` remains refused — the handle is connection-scoped and goes away with
 #: the cursor.
+#:
+#: ROUND-4 FIX — rule 3 was BYPASSABLE FIVE WAYS. The first implementation
+#: searched the DSN for a `host=…` substring (or the URI authority) and checked
+#: only THAT. libpq does not work that way, so every one of these was admitted
+#: while the connection went somewhere else entirely:
+#:   a. `host=ok.postgres.database.azure.com hostaddr=10.0.0.5` — libpq connects
+#:      to `hostaddr`; `host` is then only an SNI / certificate name.
+#:   b. `host=evil.example.com,ok.postgres.database.azure.com` — libpq accepts a
+#:      COMMA-SEPARATED host list and tries them left to right, so the
+#:      attacker-chosen host is contacted FIRST. `str.endswith` on the whole
+#:      value passed.
+#:   c. `host=ok.postgres.database.azure.com host=evil.example.com` — a repeated
+#:      keyword: libpq keeps the LAST, the old regex read the FIRST.
+#:   d. `postgresql://ok.postgres.database.azure.com/db?hostaddr=10.0.0.5` — URI
+#:      QUERY PARAMETERS are libpq connection keywords too, so the authority the
+#:      guard validated was not the host used.
+#:   e. `postgresql://evil.example.com,ok.postgres.database.azure.com/db` — the
+#:      multi-host list again, in URI form.
+#: The check below therefore VALIDATES THE WHOLE DSN instead of finding a host in
+#: it: `hostaddr` and `service` are refused outright (both redirect the
+#: connection past the name being checked), exactly one `host` may appear, and
+#: that value may not be a list. Anything it cannot parse with confidence is
+#: refused — fail closed. Refusals still never echo the DSN (it carries the
+#: admin password).
 _DUCKLAKE_PREFIX = "ducklake:"
 
 #: Overridable so a sovereign/air-gapped estate can name its own Postgres host
@@ -100,20 +125,75 @@ _ATTACH_RE = re.compile(
     re.IGNORECASE,
 )
 
-_KEYWORD_HOST_RE = re.compile(r"(?:^|[\s;])host\s*=\s*([^\s;]+)", re.IGNORECASE)
 #: URI form — `postgresql://[user[:pass]@]host[:port][/db][?opts]`. The password
 #: may itself contain '@' or '/', so anchor on the LAST '@' before the first
 #: '/' that follows the scheme.
 _URI_RE = re.compile(r"^\s*postgres(?:ql)?://(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
 
+#: libpq connection keywords that move the connection somewhere OTHER than the
+#: `host` name being validated. None of them has a legitimate use in a DuckLake
+#: DSN Loom accepts, and each one defeats a host-suffix check:
+#:   hostaddr — a numeric address used INSTEAD of resolving `host`
+#:   service  — pulls host/hostaddr/port out of a pg_service.conf entry
+#:   passfile / sslrootcert etc. are harmless, so they are NOT listed: this set
+#:   is deliberately about connection REDIRECTION only.
+_REDIRECT_KEYWORDS = ("hostaddr", "service")
 
-def _dsn_host(target: str) -> str | None:
-    """Extract the host from a `ducklake:postgres:<dsn>` target.
+#: A libpq keyword/value token: `key = value`, value unquoted (no whitespace).
+#: Quoted or backslash-escaped values are NOT parsed — see _keyword_pairs().
+_KEYWORD_PAIR_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s]*)")
 
-    Handles BOTH shapes DuckDB/libpq accept: the `postgresql://` URI the Loom
-    bicep module emits, and the `host=… dbname=…` keyword form. Returns None
-    when no host can be determined. NEVER returns any other part of the DSN —
-    the string carries a password and must not reach a log or an error message.
+
+class _DsnRejected(Exception):
+    """Internal: carries the refusal reason. NEVER carries any DSN text."""
+
+
+def _keyword_pairs(dsn: str) -> list[tuple[str, str]]:
+    """Tokenize a libpq keyword/value DSN into (lowercased key, value) pairs.
+
+    Fails CLOSED on anything this simple tokenizer cannot claim to understand:
+    libpq also accepts single-quoted values with backslash escapes, and a guard
+    that half-parses those would be worse than one that refuses them. Loom's own
+    DSN is the URI form, so this path only serves a BYO connection string.
+    """
+    if "'" in dsn or "\\" in dsn:
+        raise _DsnRejected(
+            "the DuckLake DSN uses quoted or escaped libpq values, which this "
+            "read-only guard will not parse — supply the postgresql:// URI form"
+        )
+    return [(m.group(1).lower(), m.group(2)) for m in _KEYWORD_PAIR_RE.finditer(dsn)]
+
+
+def _single_host(value: str) -> str:
+    """Validate one `host` value and return it lowercased.
+
+    libpq accepts a COMMA-SEPARATED host list and tries the entries in order, so
+    a list is refused outright: allowing it would let an attacker put their own
+    host first and still satisfy a suffix check on the string as a whole.
+    """
+    host = value.strip().rstrip("/")
+    if "," in host:
+        raise _DsnRejected(
+            "the DuckLake DSN names MORE THAN ONE host (libpq tries a "
+            "comma-separated list in order); supply exactly one host"
+        )
+    if host.startswith("["):  # IPv6 literal
+        host = host[1:].split("]", 1)[0]
+    elif host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    host = host.strip().lower()
+    if not host:
+        raise _DsnRejected("the DuckLake DSN must name an explicit host")
+    return host
+
+
+def _dsn_host(target: str) -> str:
+    """Return the ONE host a `ducklake:postgres:<dsn>` target will connect to.
+
+    Raises :class:`_DsnRejected` with a precise, DSN-free reason when the DSN
+    does not resolve to exactly one host, or when it carries a keyword that would
+    redirect the connection away from that host (see `_REDIRECT_KEYWORDS`).
+    NEVER returns or reports any other part of the DSN — it carries a password.
     """
     dsn = target[len(_DUCKLAKE_PREFIX):]
     # `ducklake:postgres:<dsn>` is the DuckLake form; the inner <dsn> may itself
@@ -121,23 +201,46 @@ def _dsn_host(target: str) -> str | None:
     # ONLY when it is not already the URI scheme (`postgres://…`).
     if dsn.lower().startswith("postgres:") and not dsn.lower().startswith("postgres://"):
         dsn = dsn[len("postgres:"):]
+
     uri = _URI_RE.match(dsn)
     if uri:
         rest = uri.group("rest")
-        authority = rest.split("/", 1)[0].split("?", 1)[0]
+        before_query, _, query = rest.partition("?")
+        authority = before_query.split("/", 1)[0]
         # Strip userinfo at the LAST '@' so a password containing '@' is safe.
         if "@" in authority:
             authority = authority.rsplit("@", 1)[1]
-        # Strip the port (and IPv6 brackets).
-        if authority.startswith("["):
-            authority = authority[1:].split("]", 1)[0]
-        else:
-            authority = authority.split(":", 1)[0]
-        return authority.strip().lower() or None
-    keyword = _KEYWORD_HOST_RE.search(dsn)
-    if keyword:
-        return keyword.group(1).strip().lower().rstrip("/") or None
-    return None
+        # A URI's query string is a libpq keyword list too: `?hostaddr=…` or a
+        # second `?host=…` silently replaces the authority we are validating.
+        if query:
+            for key, value in _keyword_pairs(query.replace("&", " ")):
+                if key in _REDIRECT_KEYWORDS:
+                    raise _DsnRejected(
+                        f"the DuckLake DSN sets '{key}' in its URI query, which redirects the "
+                        "connection away from the host name being checked"
+                    )
+                if key == "host":
+                    raise _DsnRejected(
+                        "the DuckLake DSN overrides 'host' in its URI query; put the host in "
+                        "the URI authority only"
+                    )
+        return _single_host(authority)
+
+    pairs = _keyword_pairs(dsn)
+    for key, _value in pairs:
+        if key in _REDIRECT_KEYWORDS:
+            raise _DsnRejected(
+                f"the DuckLake DSN sets '{key}', which redirects the connection away from the "
+                "host name being checked"
+            )
+    hosts = [value for key, value in pairs if key == "host"]
+    if not hosts:
+        raise _DsnRejected("the DuckLake DSN must name an explicit host")
+    if len(hosts) > 1:
+        # libpq keeps the LAST occurrence; a guard that reads the first is a
+        # bypass, so a repeated keyword is refused rather than resolved.
+        raise _DsnRejected("the DuckLake DSN repeats the 'host' keyword; supply it exactly once")
+    return _single_host(hosts[0])
 
 
 def ducklake_attach_reason(statement: str) -> str | None:
@@ -157,9 +260,12 @@ def ducklake_attach_reason(statement: str) -> str | None:
     opts = [o.strip().upper() for o in match.group("opts").split(",")]
     if "READ_ONLY" not in opts:
         return "the (READ_ONLY) option is required"
-    host = _dsn_host(target)
-    if not host:
-        return "the DuckLake DSN must name an explicit host"
+    try:
+        host = _dsn_host(target)
+    except _DsnRejected as rejected:
+        # Every message raised there is DSN-free by construction (see the
+        # password-leak test in tests/loom_duckdb/test_sqlguard.py).
+        return str(rejected)
     if not any(host.endswith(suffix) for suffix in _allowed_pg_host_suffixes()):
         return (
             f"host '{host}' is not an Azure PostgreSQL Flexible Server endpoint "

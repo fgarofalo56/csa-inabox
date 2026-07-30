@@ -166,8 +166,7 @@ jobs:
       # ── IMAGE PREFLIGHT (round-3, PR #2640) ───────────────────────────────
       # Same contract as deploy-fiab-gcch.yml. admin-plane/main.bicep now creates
       # `loom-duckdb` by default from `<acr>/loom-duckdb:${appImageTags.duckdb}`
-      # (LOOM_DUCKDB_TAG, default v0.1) and `loom-s3-gateway` from
-      # `<acr>/s3proxy:3.3.0`. The IL5 producer
+      # (LOOM_DUCKDB_TAG, default v0.1). The IL5 producer
       # (.github/workflows/gov-provision-dataplane-images.yml, boundary=il5) has
       # NEVER been executed. Prove the tags exist before a deploy that adopts a
       # live estate — or refuse. --skip-if-registry-absent keeps the genuine
@@ -186,7 +185,7 @@ jobs:
           fi
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
-            "loom-duckdb:${LOOM_DUCKDB_TAG}" "s3proxy:3.3.0"
+            "loom-duckdb:${LOOM_DUCKDB_TAG}"
 
       - name: Teardown -> redeploy -> smoke (full mode only)
         if: inputs.run_mode == 'full'
