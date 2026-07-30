@@ -267,6 +267,8 @@ export const OUTBOUND_BASELINE = new Map([
   // The recorder and the backend resolver build no requests at all.
   [RECORDER, 0],
   ['lib/azure/uc-backend.ts', 0],
+  // #2679: the one token-exchange POST to /api/1.0/unity-control/auth/tokens.
+  ['lib/azure/uc-token-exchange.ts', 1],
   // The LU-2 anonymous probe + its two sibling probes.
   ['lib/admin/health-probes.ts', 3],
   // dq-monitor's own dbxFetch.
@@ -296,6 +298,16 @@ export const CHOKEPOINT_FILES = new Map([
   [DBX_CHOKEPOINT, 'The Databricks workspace client. Its dbxFetch finally calls recordDatabricksUnityAccess, which audits the /api/2.x/unity-catalog/** subset (catalog owner change, catalog delete, grant mutation).'],
   [RECORDER, 'The recorder. Writes the audit sinks; issues no catalog requests.'],
   ['lib/azure/uc-backend.ts', 'Resolves the backend + base URL + credential. Builds no request of its own.'],
+  [
+    'lib/azure/uc-token-exchange.ts',
+    '#2679: the RFC-8693 exchange that turns the Console UAMI\'s Entra token into the server-minted INTERNAL '
+    + 'token upstream AuthDecorator actually accepts (it 403s any other issuer). It CANNOT route through ucFetch: '
+    + 'ucFetch calls ossUcAuthHeader(), which calls this — the dependency is circular by construction. It targets '
+    + '/api/1.0/unity-control/auth/tokens, not the catalog surface, so it reads and mutates no securable. It '
+    + 'records its own row via recordExchange() on ALL FOUR outcomes (unreachable / rejected / non-JSON / '
+    + 'no-access_token) plus success, mirroring probe-loom-unity-authz. 401/403 is logged as `denied` — the '
+    + 'catalog refusing this principal — and everything else as `failure`.',
+  ],
   [
     'lib/admin/health-probes.ts',
     'probe-loom-unity-authz (LU-2) sends ONE deliberately UNAUTHENTICATED read to prove the catalog rejects '

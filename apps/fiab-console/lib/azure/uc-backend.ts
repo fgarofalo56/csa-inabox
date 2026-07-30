@@ -251,12 +251,12 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
         'Set LOOM_UNITY_CLIENT_ID (the Loom Unity Entra app registration) so the Console mints api://<client-id>/.default, or LOOM_UNITY_TOKEN from Key Vault. See docs/fiab/security/loom-unity-threat-model.md.',
     });
   }
+  let entraToken: string | undefined;
   try {
     // Lazy import: this module is imported by the pure capability surface, so the
     // Azure credential chain must never be pulled in eagerly.
     const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
-    const token = await uamiArmCredential().getToken(audience);
-    if (token?.token) return { authorization: `Bearer ${token.token}` };
+    entraToken = (await uamiArmCredential().getToken(audience))?.token;
   } catch (e) {
     throw new OssUcAuthNotConfiguredError({
       missingEnvVar: 'LOOM_UNITY_AUDIENCE',
@@ -266,6 +266,24 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
         'Confirm the Loom Unity app registration exposes that scope and the Console UAMI is permitted on it (or set LOOM_UNITY_TOKEN from Key Vault). See docs/fiab/security/loom-unity-threat-model.md.',
     });
   }
+
+  if (entraToken) {
+    // #2679 — the Entra token is the SUBJECT of an exchange, not the API
+    // credential. Upstream AuthDecorator rejects any bearer whose `iss` is not
+    // its own `internal` issuer, so presenting this directly is answered 403
+    // even with a byte-exact audience. Exchange it for a server-minted internal
+    // token and send that. Measured receipt:
+    // docs/fiab/security/loom-unity-authz-proof.md.
+    //
+    // The exchange failure is raised on its OWN path rather than through the
+    // minting catch above: minting SUCCEEDED here, and reporting an exchange
+    // failure as "the managed identity could not mint a token" would send an
+    // operator to Entra to debug a problem that lives in the catalog.
+    const { exchangeForInternalUcToken } = await import('@/lib/azure/uc-token-exchange');
+    const internal = await exchangeForInternalUcToken(entraToken);
+    return { authorization: `Bearer ${internal}` };
+  }
+
   throw new OssUcAuthNotConfiguredError({
     missingEnvVar: 'LOOM_UNITY_AUDIENCE',
     bicepModule: 'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
@@ -273,6 +291,40 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
     followUp:
       'Confirm the Loom Unity app registration exposes that scope and the Console UAMI is permitted on it (or set LOOM_UNITY_TOKEN from Key Vault). See docs/fiab/security/loom-unity-threat-model.md.',
   });
+}
+
+/**
+ * Drop the cached Loom Unity internal token, if this posture uses one.
+ *
+ * Called by the UC client when the catalog answers 401/403: a token the server
+ * has stopped honouring (principal disabled, server restarted and forgot its
+ * minted tokens) would otherwise keep failing every request for the rest of the
+ * cache TTL.
+ *
+ * Re-minting the Entra token to recompute the cache key is cheap — the Azure
+ * credential caches it and hands back the same string, so the digest matches the
+ * entry that was used. If the Entra token HAS rotated in between, the recomputed
+ * key simply misses, which is harmless: a rotated subject token cannot hit the
+ * stale entry anyway.
+ *
+ * Deliberately does NOT retry the failed call. The 401/403 may have arrived on a
+ * POST/PATCH/DELETE, and an automatic replay could double-apply a mutation. The
+ * next request re-exchanges and succeeds.
+ */
+export async function invalidateUnityInternalToken(): Promise<void> {
+  if (resolveUnityAuthMode() !== 'entra') return;
+  const audience = unityAudience();
+  if (!audience) return;
+  try {
+    const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
+    const token = (await uamiArmCredential().getToken(audience))?.token;
+    if (!token) return;
+    const { invalidateUcInternalToken } = await import('@/lib/azure/uc-token-exchange');
+    await invalidateUcInternalToken(token);
+  } catch {
+    // Best-effort cache eviction on an error path — never mask the original
+    // catalog failure the caller is about to surface.
+  }
 }
 
 /**
