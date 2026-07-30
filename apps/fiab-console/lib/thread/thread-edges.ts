@@ -12,6 +12,7 @@
  * is the real backend; the graph is an observability layer over it).
  */
 
+import crypto from 'node:crypto';
 import { threadEdgesContainer } from '@/lib/azure/cosmos-client';
 import type { SessionPayload } from '@/lib/auth/session';
 
@@ -96,6 +97,50 @@ export interface RecordEdgeInput {
 }
 
 /**
+ * The Cosmos document id for an edge.
+ *
+ * The historical form is `edge_{tenant}_{from}_{to}_{action}` with every
+ * non-`[A-Za-z0-9_-]` character replaced by `_`. That was lossless while both
+ * endpoints were Loom item ids (guids / slugs). Since LU-8 an endpoint can be a
+ * physical dataset URI, and the substitution is then BOTH lossy and unbounded:
+ *   - `…/a/b` and `…/a_b` sanitize to the same id, so one edge silently
+ *     overwrites the other on upsert;
+ *   - a realistic sovereign `abfss://…usgovcloudapi.net/…` pair exceeds Cosmos's
+ *     255-byte id limit and the write throws (swallowed — the edge vanishes).
+ *
+ * So: keep the exact historical id for every endpoint shape that EXISTED before
+ * LU-8, and append a SHA-256 digest only for the genuinely new (URI) shapes.
+ *
+ * The round-2 cut of this got the boundary wrong. It kept the historical id
+ * only when `safe === raw` — i.e. only when NO character needed substituting —
+ * which silently RE-KEYED every pre-existing endpoint containing a `.` or `:`:
+ * ontology-object edges (`toItemId: `${objectType}:${objId}``, written by the
+ * ontology / workshop-app run-action routes) and dbt/Unity-Catalog 3-part
+ * relations (`db.schema.table`). After deploy those wrote a SECOND Cosmos
+ * document for the same logical edge and stopped upserting onto the existing
+ * row, so the doc comment's "existing documents keep their existing ids" was
+ * true only of the orphaned row. {@link LEGACY_ID_CHARSET} is therefore the
+ * test, not `safe === raw`: it admits exactly the characters those historical
+ * endpoints use, so their ids are byte-identical to what is already stored,
+ * while anything carrying URI syntax (`/`, `@`, `?`, `%`, `&`, whitespace)
+ * takes the digest. `.`/`:` → `_` remains lossy in the same way it always was;
+ * that ambiguity predates LU-8 and preserving it is what preserves idempotency.
+ */
+const LEGACY_ID_CHARSET = /^[A-Za-z0-9_.:-]*$/;
+
+export function threadEdgeDocId(tenantId: string, input: { fromItemId: string; toItemId: string; action: string }): string {
+  const raw = `edge_${tenantId}_${input.fromItemId}_${input.toItemId}_${input.action}`;
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, '_');
+  if (LEGACY_ID_CHARSET.test(raw) && Buffer.byteLength(safe, 'utf-8') <= 200) return safe;
+  const digest = crypto
+    .createHash('sha256')
+    .update(`${tenantId}\0${input.fromItemId}\0${input.toItemId}\0${input.action}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `${safe.slice(0, 160)}_${digest}`;
+}
+
+/**
  * Record a Thread edge. Best-effort — swallows errors so an edge action never
  * fails because of the observability write. `createdAt` is stamped by the
  * caller-free `new Date()` at write time (server route context).
@@ -111,7 +156,7 @@ export async function recordThreadEdge(session: SessionPayload, input: RecordEdg
     const tenantId = session.claims.oid;
     const container = await threadEdgesContainer();
     const now = new Date().toISOString();
-    edgeId = `edge_${tenantId}_${input.fromItemId}_${input.toItemId}_${input.action}`.replace(/[^A-Za-z0-9_-]/g, '_');
+    edgeId = threadEdgeDocId(tenantId, input);
     const doc: ThreadEdge = {
       id: edgeId,
       tenantId,
