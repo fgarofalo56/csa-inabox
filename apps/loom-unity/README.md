@@ -154,6 +154,31 @@ docker run -p 8080:8080 \
 Deploy to Azure: `platform/fiab/bicep/modules/compute/loom-unity-app.bicep`
 (see `docs/fiab/unity-gov.md` for the full `az acr build` + deploy steps).
 
+## Supply chain (SC1 Trivy CRITICAL gate)
+
+The image is scanned by the blocking `Trivy gate` step in
+`build-fiab-images-acr-tasks.yml` (`--severity CRITICAL --ignore-unfixed
+--scanners vuln`). Two hardening steps in the Dockerfile keep it at **0
+CRITICAL**; neither touches auth, network posture, config or the entrypoint:
+
+| Layer | Finding | Fix |
+| --- | --- | --- |
+| alpine 3.20.9 | `CVE-2026-31789` — `libcrypto3` + `libssl3` 3.3.6-r0 | `apk upgrade --no-cache` pulls the already-published 3.3.7-r0 ahead of the pinned base tag (the alpine analogue of the `apt-get dist-upgrade` in `fiab-mcp-bridge` / `loom-transform-runner`) |
+| jar | `CVE-2025-14813` — `bcprov-jdk18on` 1.80 | `scripts/sc1-prune-cache.sh` removes it with the other 553 coursier-cached jars that no classpath file references |
+
+The upstream image bakes its whole sbt build cache (864 jars, 1.3 GB) into the
+runtime layer, but the launch scripts only load the 310 of them named by the
+image's eight `classpath` files. `sc1-prune-cache.sh` derives the keep-set **from
+those files at build time** — never a hand-written list — deletes the 554
+unreferenced jars, and then asserts that every classpath entry which existed
+beforehand still exists. A single missing entry fails the build. The Loom-added
+Postgres driver and Entra auth plugin (`lib-loom/`) are covered by the same
+assertion because the prune runs after the classpath rewrite.
+
+Verify locally with `docker build` — the prune prints its own arithmetic
+(`classpath files: 8` / `jars in the coursier cache: 864` / `unreferenced jars to
+remove: 554` / `assertions passed`).
+
 ## Tests
 
 ```bash

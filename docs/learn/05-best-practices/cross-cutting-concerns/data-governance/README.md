@@ -26,7 +26,7 @@ Data governance practices for Azure analytics platforms.
 
 ## Related Documentation
 
-- [Metadata Governance](../governance/metadata-governance.md)
+- [Metadata Governance](metadata-governance.md)
 - [Compliance Guide](../../../security/compliance-guide.md)
 
 ---

@@ -662,7 +662,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `databricks/unity-catalog/external-locations/route.ts` | GET POST PATCH DELETE | session-only | ● | Databricks |
 | `databricks/unity-catalog/functions/route.ts` | GET DELETE | session-only | ● | Databricks |
 | `databricks/unity-catalog/governed-tags/route.ts` | GET POST | session-only | ● | Databricks |
-| `databricks/unity-catalog/grants/route.ts` | GET PATCH | session-only | ● | Databricks |
+| `databricks/unity-catalog/grants/route.ts` | GET PATCH | admin | ● | Databricks |
 | `databricks/unity-catalog/lineage/route.ts` | GET | session-only | ● | Databricks |
 | `databricks/unity-catalog/marketplace/route.ts` | GET | session-only | ● | Databricks |
 | `databricks/unity-catalog/metric-views/route.ts` | GET POST | session-only | ● | Databricks |

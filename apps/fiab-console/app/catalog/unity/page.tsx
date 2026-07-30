@@ -22,6 +22,7 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
+import { UC_PRIVILEGES_BY_SECURABLE, ucPrivilegesFor } from '@/lib/azure/uc-effective-permissions';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
@@ -32,13 +33,13 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import {
   Badge, Body1, Button, Caption1, Checkbox, Dialog, DialogActions, DialogBody,
   DialogContent, DialogSurface, DialogTitle, DialogTrigger, Dropdown, Field,
-  Input, MessageBar, MessageBarBody, MessageBarTitle, Option, Spinner, Subtitle2,
+  Input, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Option, Spinner, Subtitle2,
   Tab, TabList, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Add24Regular, ArrowSync24Regular, Delete24Regular, Database24Regular,
   Key24Regular, LockClosed24Regular, Share24Regular, CloudArrowUp24Regular,
-  CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular,
+  CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 
 // ============================================================
@@ -61,26 +62,45 @@ interface TableRow { name: string; full_name?: string; table_type?: string; data
 interface VolumeRow { name: string; full_name?: string; volume_type?: string; storage_location?: string; comment?: string; }
 interface FunctionRow { name: string; full_name?: string; data_type?: string; full_data_type?: string; comment?: string; external_language?: string; }
 interface ModelRow { name: string; full_name?: string; comment?: string; owner?: string; }
-interface GrantRow { principal: string; privileges: string[]; }
+/** Structured provenance for one effective privilege, as the BFF returns it.
+ *  The pane reads THESE fields — it never re-parses the display string. */
+interface GrantPrivilegeDetail {
+  privilege: string;
+  /** The annotated display text for this privilege — always `privileges[i]`. */
+  display: string;
+  inherited_from_type?: string;
+  inherited_from_name?: string;
+  via_principal?: string;
+  source?: 'GRANT' | 'OWNERSHIP';
+  implied_by?: string;
+  blocked_by?: string[];
+  revocableHere: boolean;
+  blocked: boolean;
+}
+interface UsagePrereq {
+  privilege: string;
+  securable_type: string;
+  securable_name: string;
+  status: 'held' | 'missing' | 'unknown';
+  via_principal?: string;
+  source?: 'GRANT' | 'OWNERSHIP';
+}
+interface GrantRow {
+  principal: string;
+  privileges: string[];
+  /** Present on the effective answer; absent for plain direct grants. */
+  detail?: GrantPrivilegeDetail[];
+  usage?: UsagePrereq[];
+}
 interface ExtLocRow { name: string; url: string; credential_name?: string; read_only?: boolean; comment?: string; owner?: string; }
 interface CredRow { name: string; comment?: string; owner?: string; read_only?: boolean; azure_managed_identity?: { access_connector_id?: string }; }
 interface ShareRow { name: string; comment?: string; owner?: string; }
 
-// Curated privilege sets per securable — the union both backends accept; the
-// BFF normalizes spelling (underscores ↔ spaces) per backend.
-const PRIVS_BY_SECURABLE: Record<string, string[]> = {
-  METASTORE: ['CREATE_CATALOG', 'CREATE_EXTERNAL_LOCATION', 'CREATE_STORAGE_CREDENTIAL', 'CREATE_CONNECTION', 'CREATE_SHARE', 'CREATE_RECIPIENT', 'CREATE_PROVIDER'],
-  CATALOG: ['USE_CATALOG', 'USE_SCHEMA', 'CREATE_SCHEMA', 'CREATE_TABLE', 'CREATE_FUNCTION', 'CREATE_VOLUME', 'CREATE_MODEL', 'SELECT', 'MODIFY', 'EXECUTE', 'READ_VOLUME', 'WRITE_VOLUME', 'BROWSE', 'MANAGE'],
-  SCHEMA: ['USE_SCHEMA', 'CREATE_TABLE', 'CREATE_FUNCTION', 'CREATE_VOLUME', 'CREATE_MODEL', 'SELECT', 'MODIFY', 'EXECUTE', 'READ_VOLUME', 'WRITE_VOLUME', 'MANAGE'],
-  TABLE: ['SELECT', 'MODIFY', 'MANAGE'],
-  VOLUME: ['READ_VOLUME', 'WRITE_VOLUME', 'MANAGE'],
-  FUNCTION: ['EXECUTE', 'MANAGE'],
-  REGISTERED_MODEL: ['EXECUTE', 'MANAGE'],
-  EXTERNAL_LOCATION: ['CREATE_EXTERNAL_TABLE', 'CREATE_EXTERNAL_VOLUME', 'READ_FILES', 'WRITE_FILES', 'CREATE_MANAGED_STORAGE', 'BROWSE', 'MANAGE'],
-  STORAGE_CREDENTIAL: ['CREATE_EXTERNAL_LOCATION', 'CREATE_EXTERNAL_TABLE', 'READ_FILES', 'WRITE_FILES', 'MANAGE'],
-};
-// Databricks-only privileges hidden on the OSS backend (OSS UC 0.5 spec set).
-const DBX_ONLY_PRIVS = new Set(['BROWSE', 'MANAGE', 'CREATE_CONNECTION', 'CREATE_SHARE', 'CREATE_RECIPIENT', 'CREATE_PROVIDER', 'CREATE_MANAGED_STORAGE']);
+// Privilege sets per securable + the OSS-unsupported subset come from the
+// shared LU-4 model (lib/azure/uc-effective-permissions.ts) — the SAME table the
+// effective-permissions resolver uses to decide which parent privileges inherit
+// down to a child, so the checkbox grid and the inheritance walk can never drift.
+const SECURABLE_TYPES = Object.keys(UC_PRIVILEGES_BY_SECURABLE);
 
 const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
@@ -639,13 +659,53 @@ function CreateVolumeDialog({ catalog, schema, onCreated }: { catalog: string; s
 // Grants — securable ACLs (both backends)
 // ============================================================
 
+/** brand = granted right here · informative = inherited from a parent or held
+ *  through a group · important = implied by ownership · danger = present but NOT
+ *  exercisable because a USE CATALOG / USE SCHEMA prerequisite is missing.
+ *
+ *  Reads the STRUCTURED provenance the BFF returns alongside the display text.
+ *  It used to regex the display string, which mis-tinted a securable literally
+ *  named `owner`. */
+function privilegeBadgeColor(d: GrantPrivilegeDetail | undefined): 'brand' | 'informative' | 'important' | 'danger' {
+  if (!d) return 'brand';
+  if (d.blocked) return 'danger';
+  if (d.source === 'OWNERSHIP') return 'important';
+  if (d.inherited_from_type || d.via_principal) return 'informative';
+  return 'brand';
+}
+
+/** The privilege cells for a row. `detail[]` is the single source of truth
+ *  (display text + provenance in ONE object, 1:1 with `privileges[]`); the
+ *  fallback only covers a stale/older BFF response that omits it. */
+function privilegeCells(g: GrantRow): GrantPrivilegeDetail[] {
+  if (g.detail?.length) return g.detail;
+  return g.privileges.map((p) => ({ privilege: p, display: p, revocableHere: true, blocked: false }));
+}
+
+/** The privileges on this row that can actually be revoked HERE. Anything
+ *  inherited from a parent, implied by ownership, or held through a group lives
+ *  somewhere else and must be revoked there — issuing the REVOKE against the
+ *  queried principal would silently do nothing (or hit the wrong grantee).
+ *  Structured — no string parsing. */
+function revocableHere(g: GrantRow): string[] {
+  return privilegeCells(g).filter((d) => d.revocableHere).map((d) => d.privilege);
+}
+
 function GrantsPane({ oss }: { oss: boolean }) {
   const s = useStyles();
   const [securable, setSecurable] = useState('CATALOG');
   const [fullName, setFullName] = useState('');
   const [effective, setEffective] = useState(false);
   const [grants, setGrants] = useState<GrantRow[] | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  // "What can THIS principal do here?" — scopes the effective walk to one
+  // principal and unions in its transitive Entra group memberships.
+  const [forPrincipal, setForPrincipal] = useState('');
+  const [closure, setClosure] = useState<string[] | null>(null);
+  // Whether the transitive group closure was ACTUALLY resolved from Entra. When
+  // Graph is unavailable the closure is just [principal], and the pane must not
+  // then claim "…nor through any group it belongs to".
+  const [closureResolved, setClosureResolved] = useState(false);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [gated, setGated] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -663,29 +723,34 @@ function GrantsPane({ oss }: { oss: boolean }) {
     return () => window.removeEventListener('uc-grant-seed', h);
   }, []);
 
-  const privileges = useMemo(
-    () => (PRIVS_BY_SECURABLE[securable] || []).filter((p) => !oss || !DBX_ONLY_PRIVS.has(p)),
-    [securable, oss],
-  );
+  const privileges = useMemo(() => ucPrivilegesFor(securable, { oss }), [securable, oss]);
 
   const load = useCallback(async () => {
     if (!fullName.trim() && securable !== 'METASTORE') { setErr('Enter the securable full name (e.g. main.sales or main.sales.orders).'); return; }
-    setBusy(true); setErr(null); setGated(null); setNote(null);
+    setBusy(true); setErr(null); setGated(null); setWarnings([]); setClosure(null); setClosureResolved(false);
     try {
       const p = new URLSearchParams({ securable_type: securable, full_name: fullName.trim() });
-      if (effective) p.set('effective', 'true');
+      if (effective) {
+        p.set('effective', 'true');
+        if (forPrincipal.trim()) p.set('principal', forPrincipal.trim());
+      }
       const r = await clientFetch(`/api/databricks/unity-catalog/grants?${p.toString()}`);
       const j = await r.json();
       if (!j.ok) {
         if (j.code === 'not_configured') setGated(j.error);
+        // The directory-enumeration guard: honest 403 with its remediation,
+        // not a bare "forbidden".
+        else if (j.code === 'principal_probe_forbidden') setErr(`${j.reason} ${j.remediation}`);
         else setErr(j.error || `HTTP ${r.status}`);
         setGrants(null); return;
       }
       setGrants(j.grants || []);
-      if (j.note) setNote(j.note);
+      setWarnings(Array.isArray(j.warnings) ? j.warnings : []);
+      setClosure(Array.isArray(j.principalClosure) ? j.principalClosure : null);
+      setClosureResolved(j.closureResolved === true);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [securable, fullName, effective]);
+  }, [securable, fullName, effective, forPrincipal]);
 
   const apply = useCallback(async (mode: 'add' | 'remove', principalOverride?: string, privsOverride?: string[]) => {
     const prin = (principalOverride ?? principal).trim();
@@ -711,13 +776,38 @@ function GrantsPane({ oss }: { oss: boolean }) {
   const grantColumns: LoomColumn<GrantRow>[] = [
     { key: 'principal', label: 'Principal', width: 280, filterType: 'text', getValue: (g) => g.principal, render: (g) => <strong>{g.principal}</strong> },
     { key: 'privileges', label: 'Privileges', filterType: 'text', getValue: (g) => g.privileges.join(' '), render: (g) => (
-      <span className={s.actionsRow}>{g.privileges.map((p) => <Badge key={p} appearance="tint" color={p.includes('inherited') ? 'informative' : 'brand'}>{p}</Badge>)}</span>) },
-    { key: 'actions', label: '', width: 130, getValue: () => '', render: (g) => (
-      <Button size="small" appearance="subtle" icon={<Delete24Regular />}
-        disabled={effective}
-        onClick={() => apply('remove', g.principal, g.privileges.filter((p) => !p.includes('inherited')))}>
-        Revoke all
-      </Button>) },
+      <span className={s.actionsRow}>
+        {/* Render from `detail[]` — ONE array carrying both the display text and
+            the provenance that tints it. The two used to be separate arrays the
+            BFF built with different filters, so a string entry shifted every
+            later index and a BLOCKED privilege could render "granted here".
+            `key` is index-qualified because two privileges can format to the
+            same display string. */}
+        {privilegeCells(g).map((d, i) => (
+          <Badge key={`${d.privilege}-${i}`} appearance="tint" color={privilegeBadgeColor(d)}>{d.display}</Badge>
+        ))}
+        {g.usage?.filter((u) => u.status !== 'held').map((u) => (
+          <Badge key={`usage-${u.privilege}-${u.securable_name}`} appearance="outline" color={u.status === 'missing' ? 'danger' : 'warning'}>
+            {u.status === 'missing' ? 'missing ' : 'unknown '}{u.privilege} on {u.securable_type} {u.securable_name || '(unqualified)'}
+          </Badge>
+        ))}
+      </span>) },
+    { key: 'actions', label: '', width: 130, getValue: () => '', render: (g) => {
+      // Only privileges that live on THIS securable are revocable here; in
+      // effective mode a row can be entirely inherited, in which case there is
+      // nothing to revoke and the button is off.
+      const revocable = revocableHere(g);
+      return (
+        <Button size="small" appearance="subtle" icon={<Delete24Regular />}
+          disabled={busy || revocable.length === 0}
+          title={revocable.length === 0
+            ? 'Everything on this row is inherited, implied by ownership, or held through a group — revoke it where it lives.'
+            : `Revoke ${revocable.join(', ')} on this securable`}
+          onClick={() => apply('remove', g.principal, revocable)}>
+          Revoke all
+        </Button>
+      );
+    } },
   ];
 
   return (
@@ -732,12 +822,27 @@ function GrantsPane({ oss }: { oss: boolean }) {
       </Body1>
       {gated && <MessageBar intent="warning" className={s.mb}><MessageBarBody>{gated}</MessageBarBody></MessageBar>}
       {err && <MessageBar intent="error" className={s.mb}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-      {note && <MessageBar intent="info" className={s.mb}><MessageBarBody>{note}</MessageBarBody></MessageBar>}
+      {warnings.map((w) => {
+        // G2 — a remediation banner is only compliant with an inline Fix it that
+        // lands on the registered gate. The resolver names the gate id in the
+        // warning; this extracts it rather than guessing.
+        const gateId = /Gate:\s*([a-z0-9-]+)/.exec(w)?.[1];
+        return (
+          <MessageBar key={w} intent="warning" layout="multiline" className={s.mb}>
+            <MessageBarBody><MessageBarTitle>Partial answer</MessageBarTitle>{w}</MessageBarBody>
+            {gateId && (
+              <MessageBarActions>
+                <Button size="small" icon={<Wrench16Regular />} as="a" href={`/admin/gates?gate=${encodeURIComponent(gateId)}`}>Fix it</Button>
+              </MessageBarActions>
+            )}
+          </MessageBar>
+        );
+      })}
 
       <div className={s.grantsRow}>
         <Field label="Securable type">
           <Dropdown value={securable} selectedOptions={[securable]} onOptionSelect={(_, d) => { setSecurable(d.optionValue || 'CATALOG'); setPrivs(new Set()); }}>
-            {Object.keys(PRIVS_BY_SECURABLE).map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+            {SECURABLE_TYPES.map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
           </Dropdown>
         </Field>
         <Field label="Full name" hint={securable === 'METASTORE' ? 'Not needed for the metastore' : 'e.g. main, main.sales, main.sales.orders'}>
@@ -746,12 +851,35 @@ function GrantsPane({ oss }: { oss: boolean }) {
         <Checkbox
           label="Effective (inherited)"
           checked={effective}
-          disabled={oss}
-          onChange={(_, d) => setEffective(!!d.checked)}
+          onChange={(_, d) => { setEffective(!!d.checked); if (!d.checked) { setForPrincipal(''); setClosure(null); } }}
         />
         <Button appearance="primary" disabled={busy} onClick={load}>{busy ? 'Loading…' : 'Load grants'}</Button>
       </div>
-      {oss && <Caption1 className={s.mutedBlock}>Effective (inherited) permission expansion is Databricks-only — the OSS backend shows the direct grants.</Caption1>}
+      {effective && (
+        <div className={s.formGrid}>
+          <Field
+            label="Effective for principal (optional)"
+            hint="Answers “what can this one principal actually do here?” — its transitive Entra group memberships are unioned in."
+          >
+            <Input
+              value={forPrincipal}
+              onChange={(_, d) => setForPrincipal(d.value)}
+              placeholder="ada@contoso.com or data-engineers"
+            />
+          </Field>
+        </div>
+      )}
+      <Caption1 className={s.mutedBlock}>
+        {effective
+          ? `Effective permissions resolve inheritance down the containment chain (catalog → schema → object), expand ALL PRIVILEGES, add what ownership implies (the owner of THIS securable holds everything applicable to it; the owner of a PARENT gets MANAGE on it and nothing more — ownership does not inherit downward in Unity Catalog), check the USE CATALOG / USE SCHEMA prerequisites, and — with a principal — union in its transitive group memberships. ${oss ? 'Resolved by the Loom BFF from the OSS catalog’s direct grants.' : 'Resolved by the Databricks effective-permissions API.'}`
+          : 'Showing the grants recorded directly on this securable. Tick “Effective (inherited)” to include everything inherited from its parents and from ownership.'}
+      </Caption1>
+      {closure && closure.length > 1 && (
+        <span className={s.actionsRow}>
+          <Caption1 className={s.muted}>Group memberships applied:</Caption1>
+          {closure.slice(1).map((g) => <Badge key={g} appearance="tint" color="informative">{g}</Badge>)}
+        </span>
+      )}
 
       {grants && (
         <LoomDataTable<GrantRow>
@@ -759,7 +887,15 @@ function GrantsPane({ oss }: { oss: boolean }) {
           columns={grantColumns}
           rows={grants}
           getRowId={(g) => g.principal}
-          empty="No grants on this securable yet — add one below."
+          empty={effective
+            ? (forPrincipal.trim()
+              ? (closureResolved
+                // Only claim the group dimension when the directory ACTUALLY
+                // answered. With Graph unavailable the closure is [principal].
+                ? `${forPrincipal.trim()} holds no privileges here — not directly, not from a parent, not through ownership, and not through any group it belongs to.`
+                : `${forPrincipal.trim()} holds no privileges here from any grant, parent or owner that Loom could read. Group memberships were NOT resolved (see the warning above), so a privilege held via a group would not appear.`)
+              : 'Nobody holds any privilege here — no direct grant, no inherited grant, no owner.')
+            : 'No grants on this securable yet — add one below.'}
         />
       )}
 

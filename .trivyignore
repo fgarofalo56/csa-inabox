@@ -40,5 +40,44 @@
 # node:20* tag on 2026-04-22, so every Loom node image moved to node 22 "Jod"
 # (LTS through 2027-04-30). Next base-image review is due before that date.
 #
+# ── 2026-07-28: loom-risingwave + loom-unity burned down, STILL EMPTY ──────
+# The two newest images were the last CRITICAL holdouts (they blocked the
+# svc-loom-risingwave and svc-loom-unity-authz gates). Both were fixed in the
+# image; nothing was added to this file. Recorded here for the audit trail.
+#
+#   loom-risingwave (risingwavelabs/risingwave:v2.1.3): 105 CRITICAL -> 0.
+#     - 84 kernel CVEs across linux-libc-dev + linux-tools-{6.8.0-52,
+#       6.8.0-52-generic,common}, all 6.8.0-52.53. `dist-upgrade` alone does NOT
+#       clear the linux-tools set (ABI-pinned: it installs a parallel 6.8.0-136
+#       set and leaves 6.8.0-52 behind), so the Dockerfile PURGES linux-tools-*
+#       first and then dist-upgrades, taking linux-libc-dev to 6.8.0-136.136.
+#     - 19 jackson-databind 2.4.0 CVEs (the polymorphic-deserialization gadget
+#       family) SHADED inside htrace-core-3.2.0-incubating.jar. HTrace is in the
+#       Apache Attic with no 3.x successor and 4.x renamed the API, so there is
+#       no upgrade; the jar is DELETED. It sits in a dead 15-jar island — a
+#       constant-pool sweep of the other 460 jars in connector-node/libs finds
+#       ZERO references to org/apache/htrace, org/apache/hadoop/hbase or
+#       co/cask/tephra, and no META-INF/services entry names them.
+#     - CVE-2024-47561 in avro-1.11.3.jar (the same CVE burned down on
+#       loom-mirroring above): UPGRADED in place to 1.11.4 with a pinned sha256.
+#     - CVE-2025-30065 in parquet-avro-1.12.3.jar: DELETED, not upgraded. Every
+#       parquet-avro >= 1.11 needs org.apache.parquet.schema.LogicalTypeAnnotation
+#       and the only parquet core on that classpath is parquet-hadoop-bundle
+#       1.10.0, so the class cannot load in the unmodified base either — shipping
+#       1.15.x would be a newer version string on the same unloadable jar.
+#     A build-time JVM link check (apps/loom-risingwave/scripts) proves every
+#     affected class still resolves; it is what rejected the first htrace fix.
+#
+#   loom-unity (unitycatalog/unitycatalog:v0.5.0): 3 CRITICAL -> 0.
+#     - CVE-2026-31789 (openssl heap overflow) in libcrypto3 + libssl3 3.3.6-r0.
+#       alpine v3.20 already publishes 3.3.7-r0, so the base tag was simply
+#       behind: `apk upgrade --no-cache` — the alpine analogue of the
+#       dist-upgrade above — pulls it ahead of the pin.
+#     - CVE-2025-14813 in bcprov-jdk18on-1.80.jar, one of the 554 jars the upstream
+#       image bakes into its sbt/coursier cache that NO classpath file names.
+#       Removed with the rest of the unreferenced set; the keep-set is derived
+#       from the image's own eight classpath files at build time and every
+#       surviving entry is asserted, so the prune cannot cut live code.
+#
 # Do NOT add an entry here to make a build go green. Fix the image, or open the
 # gate's emergency valve (skip_supply_chain) with an incident note.

@@ -78,6 +78,13 @@ export interface Bm25Index {
   lengths: Float64Array;
   /** Per-chunk filename + heading token set (only used when a title boost is on). */
   titles: Array<Set<string>>;
+  /**
+   * Per-chunk corpus source class (see `corpusSourceClass`). Stored as the class
+   * NAME, not a weight: classification is a pure function of the path and can be
+   * computed once at index time, while the weight attached to each class is a
+   * tunable ranking policy supplied per query.
+   */
+  sources: Array<CorpusSourceClass>;
 }
 
 /** Filename stem of a repo-relative path, with separators turned into spaces. */
@@ -87,12 +94,115 @@ export function titleTokensFor(chunk: RankableChunk): Set<string> {
   return new Set(tokenize(`${stem} ${chunk.heading || ''}`));
 }
 
+// ── Corpus source classes (#2585 P2 / apex D5) ───────────────────────────────
+
+/**
+ * What KIND of document a corpus path is, for ranking purposes.
+ *
+ * The corpus deliberately mixes three very different bodies of text and, until
+ * this classification existed, ranked them as peers:
+ *
+ * * `product`  — the published CSA Loom docs a user is entitled to be answered
+ *                from (`docs/fiab/parity/**`, `concepts/`, `admin/`, …). Every
+ *                one of the 20 documents the golden sets expect is one of these.
+ * * `reference`— generic Azure / migration reference material (`docs/learn/**`,
+ *                `docs/migrations/**`). Real content, but it answers "how does
+ *                Azure work", not "how does Loom work", so it should not outrank
+ *                a Loom product doc for a question about a Loom surface.
+ * * `ledger`   — the ENGINEERING ledger: in-flight plans, audit sweeps, gap
+ *                reports, PRPs. Written for the people building Loom, often
+ *                describing things that are not built yet or no longer true.
+ * * `archive`  — explicitly retired material kept for history.
+ *
+ * This is the "stop masking user-doc gaps with engineering-ledger RAG hits"
+ * lever. It is a DOWN-WEIGHT, never an exclusion: a ledger receipt is still
+ * reachable when nothing better exists, which is why `PRPs/active/**` was added
+ * to the corpus in the first place (see `loom-docs-index` module header).
+ *
+ * Pure and path-only, so it is computable at index time and testable without a
+ * corpus.
+ */
+export type CorpusSourceClass = 'product' | 'reference' | 'ledger' | 'archive';
+
+/** Ordered prefix rules; first match wins. Paths are matched case-insensitively. */
+const SOURCE_CLASS_RULES: ReadonlyArray<{ test: RegExp; cls: CorpusSourceClass }> = [
+  // Explicitly retired.
+  { test: /(^|\/)docs\/fiab\/archive\//, cls: 'archive' },
+  { test: /(^|\/)docs\/archive\//, cls: 'archive' },
+  // Engineering ledger — plans, audits, gap reports, receipts.
+  { test: /(^|\/)prps\//, cls: 'ledger' },
+  { test: /(^|\/)docs\/fiab\/prp\//, cls: 'ledger' },
+  { test: /(^|\/)docs\/fiab\/audit\//, cls: 'ledger' },
+  { test: /(^|\/)docs\/fiab\/parity-gap\//, cls: 'ledger' },
+  { test: /(^|\/)docs\/fiab\/research\//, cls: 'ledger' },
+  // Generic Azure / migration reference, not Loom product documentation.
+  { test: /(^|\/)docs\/learn\//, cls: 'reference' },
+  { test: /(^|\/)docs\/migrations\//, cls: 'reference' },
+];
+
+/** Classify one corpus path. Anything unmatched is `product`. */
+export function corpusSourceClass(docPath: string | undefined): CorpusSourceClass {
+  const p = (docPath || '').replace(/\\/g, '/').toLowerCase();
+  for (const rule of SOURCE_CLASS_RULES) if (rule.test.test(p)) return rule.cls;
+  return 'product';
+}
+
+/**
+ * Score multiplier per source class.
+ *
+ * MEASURED sweep over the 146 golden rows at top-8 with the shipped ranker
+ * (`measure-retrieval.mjs --source-weights ref:ledger:archive`), reading
+ * overall hit-rate and the share of returned chunks that came from the ledger:
+ *
+ * | ref:ledger:archive | overall | `health` | product share | ledger share |
+ * |---|---|---|---|---|
+ * | 1 : 1 : 1 (before)  | 0.760 | 0.467 | 72.2% | 16.3% |
+ * | 0.95 : 0.90 : 0.85  | 0.795 | 0.533 | 83.1% |  8.2% |
+ * | **0.90 : 0.75 : 0.70** | **0.808** | **0.600** | **92.5%** | **1.9%** |
+ * | 0.85 : 0.60 : 0.50  | 0.808 | 0.600 | 96.2% |  0.4% |
+ * | 0.75 : 0.45 : 0.35  | 0.822 | 0.733 | 98.8% |  0.0% |
+ * | 0.60 : 0.30 : 0.20  | 0.829 | 0.733 | 100.0% | 0.0% |
+ *
+ * The score keeps rising as the weights fall, which is exactly the shape that
+ * should stop you taking the maximum: past 0.75 the ledger contributes **zero**
+ * chunks to any of the 146 windows, i.e. the down-weight has become a delete,
+ * and the remaining gain is the metric being fitted rather than retrieval being
+ * improved. 0.90/0.75/0.70 is the MILDEST setting that reaches the 0.808
+ * plateau while leaving the ledger reachable (1.9% of returned evidence, and
+ * `bm25Rank` still returns a ledger chunk when it is the only match — asserted
+ * in `docs-ranker.test.ts`).
+ */
+export const DEFAULT_SOURCE_WEIGHTS: Readonly<Record<CorpusSourceClass, number>> = {
+  product: 1,
+  reference: 0.9,
+  ledger: 0.75,
+  archive: 0.7,
+};
+
+/** Neutral weights — every class at 1. The flag-off path. */
+export const NEUTRAL_SOURCE_WEIGHTS: Readonly<Record<CorpusSourceClass, number>> = {
+  product: 1, reference: 1, ledger: 1, archive: 1,
+};
+
+/**
+ * Weight for one chunk path. Used by the AI Search re-sort, which has documents
+ * rather than an index to consult.
+ */
+export function sourceWeightFor(
+  docPath: string | undefined,
+  weights: Readonly<Record<CorpusSourceClass, number>> = DEFAULT_SOURCE_WEIGHTS,
+): number {
+  const w = weights[corpusSourceClass(docPath)];
+  return typeof w === 'number' && w > 0 ? w : 1;
+}
+
 /** Build the inverted index. Pure; the caller owns caching. */
 export function buildBm25Index(chunks: readonly RankableChunk[]): Bm25Index {
   const size = chunks.length;
   const postings = new Map<string, number[]>();
   const lengths = new Float64Array(size);
   const titles: Array<Set<string>> = new Array(size);
+  const sources: Array<CorpusSourceClass> = new Array(size);
   let total = 0;
   for (let i = 0; i < size; i++) {
     const c = chunks[i];
@@ -100,6 +210,7 @@ export function buildBm25Index(chunks: readonly RankableChunk[]): Bm25Index {
     lengths[i] = toks.length;
     total += toks.length;
     titles[i] = titleTokensFor(c);
+    sources[i] = corpusSourceClass(c.path);
     const tf = new Map<string, number>();
     for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1);
     for (const [t, f] of tf) {
@@ -108,7 +219,7 @@ export function buildBm25Index(chunks: readonly RankableChunk[]): Bm25Index {
       arr.push(i, f);
     }
   }
-  return { size, avgdl: size > 0 ? total / size : 0, postings, lengths, titles };
+  return { size, avgdl: size > 0 ? total / size : 0, postings, lengths, titles, sources };
 }
 
 /** One scored chunk position from `bm25Rank`. */
@@ -137,6 +248,13 @@ export interface Bm25RankOptions {
    */
   surfaceTerms?: readonly string[];
   surfaceBoost?: number;
+  /**
+   * Per-source-class score multiplier (`corpusSourceClass`). DEFAULT undefined =
+   * neutral, so an un-opted caller ranks exactly as before this option existed.
+   * Pass `DEFAULT_SOURCE_WEIGHTS` to demote engineering-ledger and generic
+   * reference material below published product docs.
+   */
+  sourceWeights?: Readonly<Record<CorpusSourceClass, number>> | null;
 }
 
 /**
@@ -173,7 +291,10 @@ export function bm25Rank(
   const titleBoost = opts.titleBoost ?? 0;
   const surfaceTerms = opts.surfaceTerms ?? [];
   const surfaceBoost = opts.surfaceBoost ?? 0;
-  if (titleBoost > 0 || (surfaceBoost > 0 && surfaceTerms.length > 0)) {
+  const sourceWeights = opts.sourceWeights ?? null;
+  const weighted = sourceWeights !== null
+    && (['product', 'reference', 'ledger', 'archive'] as const).some((k) => sourceWeights[k] !== 1);
+  if (titleBoost > 0 || (surfaceBoost > 0 && surfaceTerms.length > 0) || weighted) {
     const surfaceSet = new Set(surfaceTerms);
     for (const [i, s] of scores) {
       let next = s;
@@ -188,6 +309,10 @@ export function bm25Rank(
           if (surfaceSet.has(t)) { onTopic = true; break; }
         }
         if (onTopic) next *= 1 + surfaceBoost;
+      }
+      if (weighted && sourceWeights) {
+        const w = sourceWeights[index.sources[i]];
+        if (typeof w === 'number' && w > 0) next *= w;
       }
       scores.set(i, next);
     }

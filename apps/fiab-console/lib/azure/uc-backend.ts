@@ -285,14 +285,23 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
  * catalogs / schemas / tables / volumes / functions / registered models (+
  * versions) / external locations / credentials / **permissions (grants)** /
  * temporary credentials / metastore_summary are all implemented and return
- * `null`. Delta Sharing, lineage-tracking, effective-permissions, Lakehouse
- * Federation connections, workspace bindings, system schemas, online tables,
- * clean rooms, Databricks Marketplace, and the Jobs API are Databricks-only.
+ * `null`. Delta Sharing, lineage-tracking, Lakehouse Federation connections,
+ * workspace bindings, system schemas, online tables, clean rooms, Databricks
+ * Marketplace, and the Jobs API are Databricks-only.
+ *
+ * `effective-permissions` STAYS in this list. LU-4 resolves the inheritance walk
+ * in the BFF from the direct grants the OSS server DOES expose, so the FEATURE
+ * is available on both backends — but the upstream OSS server still has no such
+ * endpoint. Keeping the gate is defence in depth: `listEffectivePermissions`
+ * never builds that path on OSS today, and if any future caller does, it gets
+ * the honest 501 naming the missing capability instead of an opaque upstream
+ * 404. (See `uc-effective-permissions.ts` for the resolver that makes the
+ * feature work anyway.)
  */
 export function ossUcUnsupportedPath(path: string): string | null {
   if (/\/(shares|recipients|providers)(\/|$|\?)/.test(path)) return 'Delta Sharing';
   if (/\/lineage-tracking\//.test(path)) return 'table/column lineage';
-  if (/\/effective-permissions\//.test(path)) return 'effective (inherited) permissions';
+  if (/\/effective-permissions\//.test(path)) return 'the upstream effective-permissions endpoint (Loom resolves effective permissions in the BFF instead)';
   if (/\/unity-catalog\/connections(\/|$|\?)/.test(path)) return 'Lakehouse Federation connections';
   if (/\/unity-catalog\/bindings\//.test(path)) return 'workspace-catalog bindings';
   if (/\/systemschemas(\/|$)/.test(path)) return 'system schemas';
@@ -354,7 +363,8 @@ export const UC_CAPABILITIES: UcCapability[] = [
   { id: 'volumes', label: 'Volumes (CRUD)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Explore' },
   { id: 'functions', label: 'Functions (list/get/create/delete)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Explore' },
   { id: 'models', label: 'Registered models + versions', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Explore', note: 'Databricks governs models through the FUNCTION permissions path; OSS UC has a first-class registered_model securable.' },
-  { id: 'grants', label: 'Grants / privileges (securable ACLs)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Grants', note: 'Both backends implement GET/PATCH /permissions/{securable}/{name}. Effective (inherited) permissions are Databricks-only; on OSS the direct grants are shown.' },
+  { id: 'grants', label: 'Grants / privileges (securable ACLs)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Grants', note: 'Both backends implement GET/PATCH /permissions/{securable}/{name}.' },
+  { id: 'effective-permissions', label: 'Effective (inherited) permissions', databricks: 'full', oss: 'partial', loomSurface: '/catalog/unity — Grants → "Effective (inherited)"', note: 'Databricks answers with its native /effective-permissions endpoint. The OSS Unity Catalog server has no such endpoint, so on that backend the Loom BFF composes the answer itself (LU-4) from the direct grants + owners of the containment chain, following the Unity Catalog permissions model on Learn: downward privilege inheritance filtered by what the child type accepts, ALL PRIVILEGES expanded (minus MANAGE / EXTERNAL USE *), ownership NON-inheriting (the owner of an ancestor gets MANAGE on the descendant and nothing more), USE CATALOG / USE SCHEMA prerequisites evaluated and reported, and — when you scope to one principal — its transitive group memberships unioned in. It is NOT byte-identical to the Databricks endpoint: the OSS privilege vocabulary has no MANAGE / BROWSE / APPLY TAG, so ancestor ownership confers nothing there, and a partially-qualified name yields direct grants only. Every such narrowing comes back as a warning. Optional: the group expansion needs Microsoft Graph Group.Read.All on the Console UAMI; without it the answer covers direct + inherited + ownership and says so.' },
   { id: 'external-locations', label: 'External locations (CRUD)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Storage' },
   { id: 'storage-credentials', label: 'Storage credentials (CRUD)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Storage', note: 'OSS UC names the same family "credentials" (purpose=STORAGE); Loom rewrites the path transparently.' },
   { id: 'temporary-credentials', label: 'Temporary credential vending', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Storage', note: 'On OSS, ADLS vending needs the LOOM_UNITY_ADLS_* service principal on loom-unity; unset, data access stays on Loom managed-identity/ACL paths.' },

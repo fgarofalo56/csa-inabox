@@ -216,7 +216,7 @@ ORDER BY days_since_vacuum DESC;
 
 ## Related Documentation
 
-- [Data Governance](../governance/metadata-governance.md)
+- [Data Governance](metadata-governance.md)
 - [Storage Best Practices](../../service-specific/storage/README.md)
 - [Compliance Guide](../../../security/compliance-guide.md)
 

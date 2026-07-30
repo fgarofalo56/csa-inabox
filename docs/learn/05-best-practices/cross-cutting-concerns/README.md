@@ -37,7 +37,7 @@ Cross-cutting concerns are aspects of the platform that affect multiple componen
 
 ### Governance
 
-- **[Metadata Governance](governance/metadata-governance.md)** - Catalog and lineage management
+- **[Metadata Governance](data-governance/metadata-governance.md)** - Catalog and lineage management
 
 ### Networking
 

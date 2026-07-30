@@ -85,6 +85,6 @@ df = spark.read.format("delta").option("versionAsOf", 1).load("/delta/events")
 
 ## Related Resources
 
-- [Delta Lake Guide](../../delta-lake-guide.md) - Comprehensive guide to Delta Lake
+- [Delta Lake Guide](../delta-lake-guide.md) - Comprehensive guide to Delta Lake
 - [Delta Lake Architecture](../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md) - Reference architecture for Delta Lake
 - [Performance Best Practices](../../multimedia/video-tutorials/scripts/best-practices/performance.md) - Performance optimization for Delta Lake
