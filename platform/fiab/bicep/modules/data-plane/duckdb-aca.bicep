@@ -25,10 +25,16 @@
 //     as a literal app setting.
 //
 // R0 PARAM-CAP RULE: admin-plane/main.bicep is at the ARM 256-parameter
-// ceiling, so this module takes a single typed CONFIG-OBJECT bag and deploys
-// OUT OF BAND (standalone entrypoint, orphan-allowlisted in
-// scripts/ci/check-bicep-sync.mjs) exactly like the sibling
-// data-plane/iceberg-catalog-aca.bicep.
+// ceiling, so this module takes a single typed CONFIG-OBJECT bag.
+//
+// DEPLOYED BY DEFAULT (round-2 change). It used to be an out-of-band standalone
+// entrypoint, which meant LOOM_DUCKDB_URL was emitted by NO bicep anywhere and
+// every DuckDB-backed surface — including the DuckLake catalog whose Postgres
+// store IS deployed by default — honest-gated on `duckdb_tier_required` on a
+// fresh install. `admin-plane/main.bicep` now invokes it (`duckdbTierActive`,
+// var-gated, no new top-level params) and binds LOOM_DUCKDB_URL +
+// LOOM_FLIGHTSQL_URL on the Console. The standalone invocation below still
+// works for an out-of-band redeploy:
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep \
@@ -38,9 +44,6 @@
 //                        "acrLoginServer": "<acr>.azurecr.io", \
 //                        "image": "<acr>.azurecr.io/loom-duckdb:<tag>", \
 //                        "lakeStorageAccountName": "<dlz-adls-account>" }'
-//   # then: az containerapp update -n <console> -g <admin-rg> --set-env-vars \
-//   #         LOOM_DUCKDB_URL=https://<this-app-fqdn> \
-//   #         LOOM_FLIGHTSQL_URL=grpc://<this-app-fqdn>:8815
 
 targetScope = 'resourceGroup'
 
@@ -114,13 +117,25 @@ var tags = union(complianceTags, { 'loom-next-level': 'true' })
 // rather than advisory. Built-in role id is cloud-invariant.
 var storageBlobDataReaderRoleId = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 
-resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
-  name: lakeStorageAccountName
+// CROSS-RG SAFETY (round-2 fix): this `existing` reference resolves in THIS
+// module's resource group. The lake almost never lives there — single-sub puts
+// it in the DLZ RG and dlz-attach puts it in a different SUBSCRIPTION — so an
+// unconditional declaration made the role assignment fail whenever a lake was
+// actually bound. The orchestrator (admin-plane/main.bicep) therefore passes
+// `assignLakeRole: false` and relies on the DLZ-scoped grant the Console UAMI
+// already holds; a standalone out-of-band deploy INTO the lake's own RG can
+// still pass true. An empty `lakeStorageAccountName` (tenant topology, no lake
+// bound yet) no longer breaks the template — the engine starts and serves the
+// DuckLake/Postgres catalog path, which needs no lake at all.
+var grantLakeRole = assignLakeRole && !empty(lakeStorageAccountName) && !empty(uamiPrincipalId)
+
+resource lake 'Microsoft.Storage/storageAccounts@2024-01-01' existing = if (grantLakeRole) {
+  name: empty(lakeStorageAccountName) ? 'placeholderaccount' : lakeStorageAccountName
 }
 
 // Guarded guid() name — deterministic per (scope, identity, role) so a
 // re-deploy is idempotent and two modules granting the same pair never collide.
-resource lakeReadRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (assignLakeRole) {
+resource lakeReadRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantLakeRole) {
   name: guid(lake.id, uamiPrincipalId, storageBlobDataReaderRoleId)
   scope: lake
   properties: {
@@ -232,7 +247,7 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
       }
     }
   }
-  dependsOn: assignLakeRole ? [ lakeReadRole ] : []
+  dependsOn: grantLakeRole ? [ lakeReadRole ] : []
 }
 
 @description('Internal FQDN — set on the Console app as LOOM_DUCKDB_URL (prefix https://).')

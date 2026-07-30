@@ -67,6 +67,9 @@ param resultsAccount string = ''
 @description('Blob container for run artifacts (LOOM_UAT_RESULTS_CONTAINER).')
 param resultsContainer string = 'uat-results'
 
+@description('Blob endpoint suffix for THIS cloud (blob.core.windows.net | blob.core.usgovcloudapi.net) — LOOM_STORAGE_BLOB_SUFFIX. e2e/run-uat-unattended.mjs used to hard-code the commercial suffix, so every Gov upload silently no-op\'d (the upload is best-effort). Empty falls back to the per-cloud default derived here.')
+param resultsBlobSuffix string = 'blob.${environment().suffixes.storage}'
+
 @description('UPN of the least-privilege synthetic automation account for the TRUE MSAL login probe (J1). Empty → J1 records an honest SKIP (minted-session journeys still run).')
 param syntheticLoginUpn string = ''
 
@@ -165,6 +168,7 @@ resource syntheticMonitorJob 'Microsoft.App/jobs@2025-02-02-preview' = {
               { name: 'SESSION_SECRET', secretRef: 'session-secret' }
               { name: 'LOOM_UAT_RESULTS_ACCOUNT', value: resultsAccount }
               { name: 'LOOM_UAT_RESULTS_CONTAINER', value: resultsContainer }
+              { name: 'LOOM_STORAGE_BLOB_SUFFIX', value: resultsBlobSuffix }
               { name: 'LOOM_UAMI_CLIENT_ID', value: consoleUamiClientId }
               { name: 'LOOM_ALERT_ACTION_GROUP_ID', value: alertActionGroupId }
               { name: 'LOOM_AUTOMATION_UPN', value: 'loom-synthetic@automation.local' }

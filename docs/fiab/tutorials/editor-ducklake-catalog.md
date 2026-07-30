@@ -49,7 +49,11 @@ Microsoft Fabric.
 ## The Azure backend it rides on
 
 - **Catalog store:** a **Postgres** database addressed by
-  `LOOM_DUCKLAKE_CATALOG_URL`.
+  `LOOM_DUCKLAKE_CATALOG_URL`. Deployed by default with the platform
+  (`platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep` — a
+  private-endpoint-only Azure Database for PostgreSQL flexible server,
+  `Standard_B1ms`); the connection string is written to the Loom Key Vault and
+  bound to the Console as a secretRef, never as a plain env var.
 - **Query engine:** the **DuckDB serving tier** (`LOOM_DUCKDB_URL`) — the same
   Container App SQL Lab uses — which performs the `ATTACH` and the
   `information_schema` read.
@@ -60,8 +64,8 @@ Microsoft Fabric.
 
 | Condition | What you see | Exact remediation |
 |---|---|---|
-| `LOOM_DUCKLAKE_CATALOG_URL` unset | Guided empty state + Fix-it card (warning, never red on first open) | Set `LOOM_DUCKLAKE_CATALOG_URL` to a Postgres store. The Iceberg REST Catalog and every other surface are unaffected |
-| DuckDB tier missing (upstream 503) | Fix-it card naming the missing variable | Deploy the DuckDB serving tier and set `LOOM_DUCKDB_URL` |
+| `LOOM_DUCKLAKE_CATALOG_URL` unset | Guided empty state + Fix-it card (warning, never red on first open) | **Commercial:** bicep wires this by default — nothing to do. **GCC-High / IL5:** `postgresQuotaAvailable` defaults to `false` today, so the store is skipped and this gate is the expected state. That is *not* a sovereign service gap — PostgreSQL Flexible Server is an Azure Government service ([Learn: supported regions](https://learn.microsoft.com/azure/postgresql/overview#azure-regions)) — but the same flag also gates the OSS Airflow host, whose image is an unmirrored `docker.io` pull and whose metadata Postgres is created with public network access enabled; both are being fixed before the sovereign flip (see the comment on `postgresQuotaAvailable` in `params/gcc-high.bicepparam`). Until then, point the var at your own in-VNet flexible server with the Fix-it. A genuinely quota-restricted subscription requests an increase at <https://aka.ms/postgres-request-quota-increase>. The Iceberg REST Catalog and every other surface are unaffected |
+| DuckDB tier missing (upstream 503) | Fix-it card naming the missing variable | The N2 DuckDB serving tier is also deployed by default (`admin-plane/main.bicep` → `duckdbTierActive`), so this too should not appear on a normal install. If it does, the `loom-duckdb` image is almost certainly not in the deployment's ACR. **The tag the template pulls is `appImageTags.duckdb` (`LOOM_DUCKDB_TAG`, default `v0.1`)** — run `full-app-deploy-commercial.yml` (Commercial, `tag` input defaults to the same `v0.1`) or `gov-provision-dataplane-images.yml` (GCC-High / IL5, `image_tag` input defaults to the same `v0.1`). Both Gov deploy lanes now image-preflight that exact tag (`scripts/ci/assert-acr-image-tags.sh`) and refuse to deploy over a live estate without it |
 | Catalog wired but unreachable | *"The DuckLake catalog did not answer"* empty state carrying the upstream reason | Check Postgres reachability / firewall from the DuckDB tier |
 | Wired and reachable, no tables | *"No tables in the DuckLake catalog yet"* | Register a Delta/Parquet table into the DuckLake store |
 | `n8-ducklake-catalog` flag off | Guided "turned off" notice; the Iceberg REST Catalog, the `/api/ducklake/**` routes and every other editor keep working | Re-enable the flag in **Admin → Runtime flags** |

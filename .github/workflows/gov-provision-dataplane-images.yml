@@ -1,0 +1,234 @@
+name: gov-provision-dataplane-images
+# CSA Loom — GOV IMAGE PRODUCER for the N2/N8 data-plane services.
+#
+# WHY THIS EXISTS (round-2 fix, PR #2640). `admin-plane/main.bicep` now deploys
+# two data-plane workloads BY DEFAULT in every cloud:
+#   * loom-duckdb  — the DuckDB serving tier + Arrow Flight SQL wire, and the
+#                    engine that runs DuckLake's `ATTACH 'ducklake:postgres:…'`.
+#                    Backs LOOM_DUCKDB_URL / LOOM_FLIGHTSQL_URL.
+#
+# (PR #2640 round 4 pulled the sibling loom-s3-gateway / s3proxy mirror out of
+# this lane along with the module itself — see the PR description. When that
+# surface returns, its `az acr import` step and preflight ref return here too.)
+#
+# Commercial gets loom-duckdb from full-app-deploy-commercial.yml's build matrix.
+# GOV HAD NOTHING — deploy-gov.yml contains no
+# `az acr build` at all, gov-console-roll.yml builds only loom-console, and the
+# per-service gov-provision-*.yml jobs each cover one app. Without this workflow
+# a Gov deploy creates Container Apps pointing at images nobody produces, which
+# is the exact failure `.claude/rules/no-vaporware.md` documents and which has
+# already bitten this repo twice.
+#
+# Covers BOTH Gov boundaries. `boundary` picks the RG/ACR pair; the GCC-High
+# defaults match the live estate, and IL5 coordinates are supplied as inputs
+# (there is no standing IL5 estate to hard-code, and hard-coding a wrong one is
+# worse than requiring the operator to name it). A what-if preview runs first
+# and the apply NEVER touches other resources. Idempotent + safe to re-run.
+#
+# ── STATUS: THIS WORKFLOW HAS NEVER BEEN EXECUTED (round-3, honest disclosure) ─
+# It was authored in round 2 of PR #2640 and has zero runs. A green CI badge on
+# this PR says NOTHING about it: no CI job dispatches it, and `workflow_dispatch`
+# lanes are never exercised by push/PR CI. Treat every step below as UNPROVEN
+# until the first `apply=true` run posts a log. Run it with `apply=false` first —
+# that path performs only discovery + `az deployment group what-if`, touches
+# nothing, and is the cheapest way to validate the coordinate resolution.
+#
+# ── TAG CONTRACT (round-3 blocker fix) ───────────────────────────────────────
+# The GOV TEMPLATE pulls `<acr>/loom-duckdb:${appImageTags.duckdb}`, and both
+# platform/fiab/bicep/params/gcc-high.bicepparam and .../il5.bicepparam resolve
+# that key as `readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')`. Round 2 had
+# this lane stamp only the short SHA + `latest`, so the template referenced
+# `:v0.1` — a tag NOTHING produced — and a Gov app deploy could not have come up.
+# `image_tag` therefore DEFAULTS TO `v0.1`, exactly matching the template, and
+# the short SHA is pushed ALONGSIDE it as a provenance tag. If you override
+# `image_tag` here you MUST set `LOOM_DUCKDB_TAG` to the same value on the
+# deploy lane (.github/workflows/deploy-fiab-gcch.yml / deploy-fiab-il5.yml).
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Sovereign boundary to target.'
+        type: choice
+        options: [gcc-high, il5]
+        default: gcc-high
+      apply:
+        description: 'false = discovery + what-if preview only (safe); true = build/import + deploy + wire.'
+        required: false
+        default: 'false'
+      resource_group:
+        description: 'Admin-plane RG. Blank = the gcc-high default (rg-csa-loom-admin-usgovvirginia). REQUIRED for il5.'
+        required: false
+        default: ''
+      acr:
+        description: 'ACR NAME (not login server). Blank = discovered from the admin RG.'
+        required: false
+        default: ''
+      image_tag:
+        description: 'Tag the GOV TEMPLATE will pull for loom-duckdb. Blank = v0.1, which is exactly what gcc-high/il5.bicepparam resolve appImageTags.duckdb to. Override ONLY together with LOOM_DUCKDB_TAG on the deploy lane. The short SHA is always pushed as an extra provenance tag.'
+        required: false
+        default: ''
+permissions:
+  contents: read
+env:
+  APP: loom-console
+  # Pinned upstream Apache-2.0 tag — never :latest. Registered in
+  # THIRD_PARTY_LICENSES.md under "Container-baked engines".
+jobs:
+  provision:
+    name: Produce the loom-duckdb image in the ${{ inputs.boundary }} ACR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve boundary coordinates (RG / ACR / CAE / UAMI / location)
+        run: |
+          set -euo pipefail
+          RG="${{ inputs.resource_group }}"
+          if [ -z "$RG" ]; then
+            if [ "${{ inputs.boundary }}" = "gcc-high" ]; then
+              RG="rg-csa-loom-admin-usgovvirginia"
+            else
+              echo "::error::boundary=il5 requires an explicit resource_group input — there is no safe default."
+              exit 1
+            fi
+          fi
+          ACR="${{ inputs.acr }}"
+          if [ -z "$ACR" ]; then
+            ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv | tr -d '\r')
+          fi
+          [ -n "$ACR" ] || { echo "::error::no ACR found in $RG — pass the acr input."; exit 1; }
+          ACR_LOGIN=$(az acr show -n "$ACR" --query loginServer -o tsv | tr -d '\r')
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          UAMI_PRINCIPAL=$(az identity show --ids "$UAMI_ID" --query principalId -o tsv | tr -d '\r')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          # TAG CONTRACT: default to the tag the GOV TEMPLATE actually pulls
+          # (appImageTags.duckdb -> LOOM_DUCKDB_TAG -> 'v0.1'). Round 2 defaulted
+          # to the short SHA, which produced an image the template never
+          # references. SHA_TAG is pushed alongside purely for provenance.
+          TAG="${{ inputs.image_tag }}"
+          [ -n "$TAG" ] || TAG=v0.1
+          SHA_TAG=$(git rev-parse --short=8 HEAD)
+          {
+            echo "RG=$RG"; echo "ACR=$ACR"; echo "ACR_LOGIN=$ACR_LOGIN"; echo "CAE_ID=$CAE_ID"
+            echo "UAMI_ID=$UAMI_ID"; echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"
+            echo "LOCATION=$LOCATION"; echo "TAG=$TAG"; echo "SHA_TAG=$SHA_TAG"
+          } >> "$GITHUB_ENV"
+          echo "::notice::RG=$RG ACR=$ACR CAE=$CAE_ID location=$LOCATION tag=$TAG (+provenance $SHA_TAG)"
+          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-duckdb:$TAG"
+          echo "::notice::THIS LANE PUSHES $ACR_LOGIN/loom-duckdb:$TAG, :$SHA_TAG — tags match."
+          [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI — is loom-console deployed in $RG?"; exit 1; }
+
+      - name: Build loom-duckdb on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          # #2603: lease the ACR firewall instead of a bare toggle, so this
+          # step's re-lock cannot deny another run's in-flight push.
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # $TAG is the tag the TEMPLATE pulls (v0.1 by default); $SHA_TAG is the
+          # provenance tag. `latest` is stamped too, but NOTHING references it —
+          # a floating tag must never be what a Container App resolves.
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-duckdb:$TAG" --image "loom-duckdb:$SHA_TAG" --image "loom-duckdb:latest" \
+            apps/loom-duckdb
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "${ACR:-}" || true
+
+      # ── IMAGE PREFLIGHT ───────────────────────────────────────────────────
+      # Discovery mode (apply=false): report which referenced tags are missing
+      # WITHOUT failing, so an operator can run this lane read-only to find out
+      # whether the Gov ACR is ready. Never blocks; nothing is deployed here.
+      - name: Image preflight — report-only (discovery mode)
+        if: ${{ inputs.apply != 'true' }}
+        continue-on-error: true
+        run: |
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            "loom-duckdb:$TAG"
+
+      # Apply mode: HARD GATE. The next step deploys a Container App and the one
+      # after it `az containerapp update`s the LIVE loom-console. Neither may run
+      # against a tag that does not exist — a Container App pointing at a missing
+      # image cannot activate a revision, and the surrounding deployment fails
+      # while it is also re-PUTting live apps. Fail loudly, before anything moves.
+      - name: Image preflight — assert every referenced tag exists (BLOCKING)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            "loom-duckdb:$TAG"
+
+      - name: What-if the loom-duckdb Container App (never touches other resources)
+        run: |
+          set -euo pipefail
+          CFG=$(cat <<JSON
+          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID","uamiPrincipalId":"$UAMI_PRINCIPAL",
+           "acrLoginServer":"$ACR_LOGIN","image":"$ACR_LOGIN/loom-duckdb:$TAG",
+           "lakeStorageAccountName":"","assignLakeRole":false,
+           "minReplicas":0,"cpu":"1.0","memory":"2Gi"}
+          JSON
+          )
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep \
+            -p location="$LOCATION" duckdbConfig="$CFG" \
+               complianceTags='{"env":"gov","boundary":"'"${{ inputs.boundary }}"'","app":"loom-duckdb"}' \
+            --mode Incremental 2>&1 | tee whatif.txt || true
+          echo "::notice::what-if above — apply only creates/updates loom-duckdb."
+
+      - name: Deploy loom-duckdb Container App (Incremental)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          CFG=$(cat <<JSON
+          {"environmentId":"$CAE_ID","uamiId":"$UAMI_ID","uamiPrincipalId":"$UAMI_PRINCIPAL",
+           "acrLoginServer":"$ACR_LOGIN","image":"$ACR_LOGIN/loom-duckdb:$TAG",
+           "lakeStorageAccountName":"","assignLakeRole":false,
+           "minReplicas":0,"cpu":"1.0","memory":"2Gi"}
+          JSON
+          )
+          az deployment group create -g "$RG" \
+            -n "loom-duckdb-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/data-plane/duckdb-aca.bicep \
+            -p location="$LOCATION" duckdbConfig="$CFG" \
+               complianceTags='{"env":"gov","boundary":"'"${{ inputs.boundary }}"'","app":"loom-duckdb"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n loom-duckdb -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "DUCKDB_URL=https://$FQDN" >> "$GITHUB_ENV"
+          echo "::notice::loom-duckdb endpoint: https://$FQDN"
+
+      - name: Wire LOOM_DUCKDB_URL + LOOM_FLIGHTSQL_URL on the console
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          [ -n "${DUCKDB_URL:-}" ] || { echo "::error::no DuckDB URL"; exit 1; }
+          HOST="${DUCKDB_URL#https://}"
+          az containerapp update -n "$APP" -g "$RG" \
+            --set-env-vars "LOOM_DUCKDB_URL=$DUCKDB_URL" "LOOM_FLIGHTSQL_URL=grpc://$HOST:8815" -o none
+          echo "::notice::svc-loom-duckdb wired — svc-ducklake-catalog can now run its ATTACH. Re-run gov-selfaudit to confirm."
+
+      - name: Report what still needs the subscription-scoped deploy
+        run: |
+          echo "::notice::admin-plane/main.bicep (single-sub) or main.bicep's dlzAttachS3Gateway (tenant + dlz-attach)."
+          echo "::notice::This job only guarantees the image exists so that deploy can actually pull it."

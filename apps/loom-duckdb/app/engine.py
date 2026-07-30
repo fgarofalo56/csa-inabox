@@ -37,8 +37,15 @@ from .sqlguard import assert_read_only
 
 log = logging.getLogger("loom-duckdb.engine")
 
-#: Extensions the image carries. Order matters: `azure` depends on `httpfs`.
-BUNDLED_EXTENSIONS = ("httpfs", "azure", "delta", "iceberg")
+#: Extensions the image carries. Order matters: `azure` depends on `httpfs`, and
+#: `ducklake` needs `postgres` present for a Postgres-backed catalog.
+#: `postgres` + `ducklake` back the N8 DuckLake catalog: the console issues
+#: `ATTACH 'ducklake:postgres:<dsn>'` against the in-VNet DuckLake Postgres store
+#: (platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep).
+#: Because `autoload_known_extensions` is turned OFF below, an extension that is
+#: not LOADed here is simply unavailable at runtime — so this tuple, the
+#: Dockerfile INSTALL list, and the catalog feature have to move together.
+BUNDLED_EXTENSIONS = ("httpfs", "azure", "delta", "iceberg", "postgres", "ducklake")
 
 #: Hard ceiling on rows returned in one response. Beyond this a caller pages
 #: with LIMIT/OFFSET or streams over Flight. Never silently truncated: the

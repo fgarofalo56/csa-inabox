@@ -1,11 +1,38 @@
 name: "CodeQL Analysis"
 
 on:
+  # The push filter MUST cover the same source globs as the pull_request filter
+  # below. It did not: it listed only `**.py` and `portal/**`, so a merge that
+  # changed TypeScript never re-analyzed main. JS/TS alerts on main could then
+  # only refresh on the Monday cron or on an incidental Python/portal push.
+  #
+  # Measured 2026-07-30: main was at f70cd57e after ~23 merges that day, while
+  # the newest CodeQL `/language:javascript-typescript` analysis on main was
+  # 395bc151 from 09:45Z. The alert list still showed 41 js/incomplete-
+  # sanitization and 31 js/polynomial-redos — the two classes #2677 had just
+  # closed (79 triaged, 76 fixed). The findings were not open; the SCAN was old.
+  #
+  # That is worse than a slow gate. The code-scanning list is the artifact this
+  # repo triages from, and for its dominant language it could be up to a week
+  # behind — so fixed alerts keep being re-reported and re-worked, and genuinely
+  # new ones sit unseen for the same window.
   push:
     branches: [main]
     paths:
       - '**.py'
+      - '**.ts'
+      - '**.tsx'
+      - '**.js'
+      - '**.jsx'
+      - '**.mjs'
+      - '**.cjs'
       - 'portal/**'
+      - 'apps/**'
+      - '.github/workflows/codeql.yml'
+  # On demand: after landing a security sweep you need the alert list to reflect
+  # the fix NOW, to confirm the class actually closed rather than waiting for
+  # Monday and triaging against stale data.
+  workflow_dispatch:
   # rel-T27 / B13: also analyze on PRs so security findings surface BEFORE merge,
   # not only after landing on main / on the weekly cron. Path-filtered to source
   # for both analyzed languages (python + javascript-typescript) so doc/bicep-only

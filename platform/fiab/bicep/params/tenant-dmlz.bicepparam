@@ -135,6 +135,11 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // loom-duckdb — deployed by default (duckdbTierActive). Same value the
+  // module's `?? 'v0.1'` fallback already produced; stated explicitly so the
+  // tag the template pulls is visible next to the producer that stamps it
+  // (.github/workflows/full-app-deploy-commercial.yml, `tag` input default v0.1).
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
 }
 
 // MSAL — passed from env (don't commit secrets to disk)

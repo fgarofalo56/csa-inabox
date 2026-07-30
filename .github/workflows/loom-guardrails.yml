@@ -80,5 +80,15 @@ jobs:
         run: node scripts/ci/check-parity-doc-freshness.mjs
       - name: acr-firewall-lease (ownership + fail-closed semantics — #2603)
         run: bash scripts/ci/test-acr-firewall-lease.sh
+      # LIC0 lives in license-scan.yml too, but THAT workflow is path-filtered to
+      # package.json / requirements.txt / the manifest — it does NOT run on a
+      # bicep change. The guard now also reviews UPSTREAM CONTAINER IMAGES pinned
+      # in platform/fiab/bicep/** (PR #2640), and the change that introduces one
+      # is by definition a bicep change, so it has to run here, unfiltered, or it
+      # is a gate that cannot fire on the edit it exists to catch.
+      - name: license-inventory (LIC0 — Python embeds + pinned upstream images)
+        run: node scripts/ci/check-license-inventory.mjs
+      - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
+        run: bash scripts/ci/test-assert-acr-image-tags.sh
       - name: route-inventory (route taxonomy drift gate — WS-D D3)
         run: node scripts/ci/generate-route-inventory.mjs --check
