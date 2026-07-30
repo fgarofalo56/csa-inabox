@@ -73,6 +73,7 @@ import { trustedClientIp, claimedClientIp } from '@/lib/azure/client-ip';
 import { checkRate } from '@/lib/azure/rate-limiter';
 import { authenticateRecipient, assertShareAccess, sharingOwnerTenantId } from '@/lib/sharing/recipient-auth';
 import { listShares, getShare, loomSharingFetch, LoomSharingNotConfiguredError } from '@/lib/sharing/store';
+import { randomId } from '@/lib/util/random-id';
 import {
   toProtocolShare,
   toProtocolSchemas,
@@ -247,7 +248,9 @@ async function auditRecipientAccess(input: {
     const audit = await auditLogContainer();
     await audit.items
       .create({
-        id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        // #2656 — crypto-backed. An audit row on the data-EGRESS path should not
+        // carry a guessable id; randomId() refuses to fall back to Math.random.
+        id: randomId('audit'),
         itemId: `delta-sharing:${input.share || '*'}`,
         tenantId: sharingOwnerTenantId(),
         who: `recipient:${input.recipient}`,
