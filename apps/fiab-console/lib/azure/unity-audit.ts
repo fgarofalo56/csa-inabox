@@ -57,10 +57,14 @@
  * ## Two sinks, one call
  *
  *   1. **Cosmos `_auditLog`** — the authoritative Loom trail (`itemType:
- *      'loom-unity'`), read back by the "Loom Unity system tables" pane. NOTE:
- *      /admin/audit-logs scopes its Cosmos read to `c.tenantId = <session oid>`
- *      while these rows carry the Entra **tenant** id, so they do NOT appear on
- *      that surface — the tenant-admin-gated system-tables pane is their reader.
+ *      'loom-unity'`). NOTE: /admin/audit-logs scopes its Cosmos read to
+ *      `c.tenantId = <session oid>` while these rows carry the Entra **tenant**
+ *      id, so they do NOT appear on that surface. Until the tenant-admin
+ *      "Loom Unity system tables" reader + pane land (SPLIT OUT of this PR —
+ *      they have no in-browser E2E receipt yet, `ux-baseline.md` G1), the trail
+ *      is read with {@link unityAuditKql} against the SIEM sink, or with a direct
+ *      Cosmos query. The WRITE side is what this file and its CI guard are
+ *      responsible for, and it is complete.
  *   2. **`LoomAudit_CL`** — fanned out through `emitAuditEvent`, the existing
  *      Azure Monitor Logs-Ingestion (DCR) stream that Sentinel/any SIEM reads.
  *      Un-provisioned DCR = silent no-op (see lib/admin/audit-stream.ts); the
@@ -310,7 +314,11 @@ export interface UnityAccessEvent extends UnityCallDescriptor {
   detail?: string;
 }
 
-/** A Loom Unity access row as read back by the system-tables pane. */
+/**
+ * The persisted shape of one Loom Unity access row in `_auditLog` — what
+ * {@link recordUnityAccess} writes, and therefore the contract any reader binds
+ * to. Declared next to the writer so the two cannot drift.
+ */
 export interface UnityAuditRecord {
   id: string;
   at: string;
@@ -630,149 +638,22 @@ export function recordDatabricksUnityAccess(opts: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4) Reader — "Loom Unity system tables"
+// 4) Reading the SIEM half of the trail
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface UnityAuditQuery {
-  /** Lower bound (ISO). Defaults to 7 days ago. */
-  since?: string;
-  /** Upper bound (ISO). */
-  until?: string;
-  /** `denied` narrows to refusals — the pane's highest-value view. */
-  outcome?: UnityAuditOutcome;
-  /** Substring match on the dotted operation. */
-  operation?: string;
-  /** Substring match on the securable FQN. */
-  securable?: string;
-  /** Substring match on the acting UPN / oid. */
-  actor?: string;
-  /** Max rows (1..1000, default 200). */
-  limit?: number;
-}
-
-const MAX_LIMIT = 1000;
-
-/** Clamp + normalize a caller-supplied query. Pure — unit-tested. */
-export function normalizeUnityAuditQuery(q: UnityAuditQuery = {}): Required<Pick<UnityAuditQuery, 'since' | 'limit'>> & UnityAuditQuery {
-  const limitRaw = Number(q.limit);
-  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(MAX_LIMIT, Math.floor(limitRaw)) : 200;
-  const since = (q.since || '').trim() || new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
-  return { ...q, since, limit };
-}
+/** Upper bound on any row limit this module hands to a reader. */
+export const MAX_LIMIT = 1000;
 
 /**
- * Read Loom Unity access rows from the authoritative Cosmos `_auditLog` trail.
- * Cross-partition by design: the pane asks "what happened across the catalog",
- * not "what happened to one securable".
- *
- * EVERY caller filter is pushed INTO the Cosmos query — none is applied in JS
- * after `SELECT TOP @top`. Post-filtering a truncated page is the exact
- * "auditor concludes nothing happened" failure this item exists to prevent:
- * searching for one user would return rows only if that user appeared in the
- * most recent N records of the window, and would otherwise render the pane's
- * "no catalog activity" empty state on a user who was very active.
- *
- * `CONTAINS(LOWER(...), @x)` is the Cosmos substring form; the needle is passed
- * as a bound parameter (never concatenated into the query text).
- */
-export async function listUnityAccessRecords(q: UnityAuditQuery = {}): Promise<UnityAuditRecord[]> {
-  const nq = normalizeUnityAuditQuery(q);
-  const { auditLogContainer } = await import('@/lib/azure/cosmos-client');
-  const c = await auditLogContainer();
-  const where: string[] = ['c.itemType = @itemType', 'c.at >= @since'];
-  const parameters: Array<{ name: string; value: string | number }> = [
-    { name: '@itemType', value: UNITY_AUDIT_ITEM_TYPE },
-    { name: '@since', value: nq.since },
-  ];
-  if (nq.until) { where.push('c.at <= @until'); parameters.push({ name: '@until', value: nq.until }); }
-  if (nq.outcome) { where.push('c.outcome = @outcome'); parameters.push({ name: '@outcome', value: nq.outcome }); }
-  if (nq.operation) {
-    where.push('CONTAINS(LOWER(c.operation), @operation)');
-    parameters.push({ name: '@operation', value: nq.operation.toLowerCase() });
-  }
-  if (nq.securable) {
-    where.push('CONTAINS(LOWER(c.securableFqn), @securable)');
-    parameters.push({ name: '@securable', value: nq.securable.toLowerCase() });
-  }
-  if (nq.actor) {
-    where.push('(CONTAINS(LOWER(c.actorUpn), @actor) OR CONTAINS(LOWER(c.actorOid), @actor) OR CONTAINS(LOWER(c.upn), @actor))');
-    parameters.push({ name: '@actor', value: nq.actor.toLowerCase() });
-  }
-  const { resources } = await c.items
-    .query({
-      query: `SELECT TOP @top * FROM c WHERE ${where.join(' AND ')} ORDER BY c.at DESC`,
-      parameters: [...parameters, { name: '@top', value: nq.limit }],
-    })
-    .fetchAll();
-
-  return resources as unknown as UnityAuditRecord[];
-}
-
-/** Aggregated shape backing the pane's summary strip. */
-export interface UnityAuditSummary {
-  total: number;
-  success: number;
-  failure: number;
-  denied: number;
-  /** Distinct acting principals in the window. */
-  actors: number;
-  /** Top operations by volume, densest first. */
-  byOperation: Array<{ operation: string; count: number; denied: number }>;
-  /** Top securables by volume. */
-  bySecurable: Array<{ securableFqn: string; count: number; denied: number }>;
-  /** Every denial in the window, newest first — never truncated by ranking. */
-  denials: UnityAuditRecord[];
-}
-
-/**
- * Aggregate access rows for the pane. PURE — the pane's numbers are unit-tested
- * against hand-written rows rather than against whatever the reader returned.
- */
-export function summarizeUnityAccess(records: UnityAuditRecord[], topN = 10): UnityAuditSummary {
-  const byOp = new Map<string, { count: number; denied: number }>();
-  const bySec = new Map<string, { count: number; denied: number }>();
-  const actors = new Set<string>();
-  let success = 0, failure = 0, denied = 0;
-
-  for (const r of records) {
-    if (r.outcome === 'denied') denied++;
-    else if (r.outcome === 'failure') failure++;
-    else success++;
-    if (r.actorOid) actors.add(r.actorOid);
-
-    const opKey = r.operation || 'unknown';
-    const op = byOp.get(opKey) || { count: 0, denied: 0 };
-    op.count++; if (r.outcome === 'denied') op.denied++;
-    byOp.set(opKey, op);
-
-    const secKey = r.securableFqn || UNITY_SECURABLE_ALL;
-    const sec = bySec.get(secKey) || { count: 0, denied: 0 };
-    sec.count++; if (r.outcome === 'denied') sec.denied++;
-    bySec.set(secKey, sec);
-  }
-
-  const rank = (m: Map<string, { count: number; denied: number }>) =>
-    Array.from(m.entries())
-      .sort((a, b) => (b[1].count - a[1].count) || a[0].localeCompare(b[0]))
-      .slice(0, topN);
-
-  return {
-    total: records.length,
-    success,
-    failure,
-    denied,
-    actors: actors.size,
-    byOperation: rank(byOp).map(([operation, v]) => ({ operation, count: v.count, denied: v.denied })),
-    bySecurable: rank(bySec).map(([securableFqn, v]) => ({ securableFqn, count: v.count, denied: v.denied })),
-    denials: records.filter((r) => r.outcome === 'denied'),
-  };
-}
-
-/**
- * The KQL the SIEM half of the trail is read with. Exported (and unit-tested)
- * so the pane can SHOW the operator the exact query to paste into Log Analytics
- * / Sentinel — the `LoomAudit_CL` rows are the same events, mirrored by
+ * The KQL the SIEM half of the trail is read with. Exported (and unit-tested) so
+ * a surface can SHOW the operator the exact query to paste into Log Analytics /
+ * Sentinel — the `LoomAudit_CL` rows are the same events, mirrored by
  * `emitAuditEvent`.
+ *
+ * Until the Cosmos-side reader + the `/catalog/unity` System-tables pane land
+ * (SPLIT OUT of this PR pending a G1 in-browser E2E receipt), this is the
+ * supported way to read what the choke point wrote without querying Cosmos
+ * directly.
  *
  * `sinceHours` is coerced to an integer and clamped, so it can never carry a
  * caller-supplied fragment into the query text.
@@ -790,115 +671,4 @@ export function unityAuditKql(opts: { sinceHours?: number; deniedOnly?: boolean;
     '| order by TimeGenerated desc',
     `| take ${limit}`,
   ].filter(Boolean).join('\n');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 5) The "Loom Unity system tables" surface
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Views the Loom Unity system-tables surface serves. These are the OSS-backend
- * answer to Databricks' `system.access.audit` — the same question ("who touched
- * which securable, and were they allowed to"), sourced from the BFF choke point
- * instead of a Databricks-managed schema.
- */
-export type UnitySystemTable = 'audit' | 'denials' | 'summary';
-
-export const UNITY_SYSTEM_TABLES: ReadonlyArray<{ id: UnitySystemTable; label: string; description: string }> = [
-  { id: 'audit', label: 'access.audit', description: 'Every catalog call the Console BFF made — actor, operation, securable, outcome, latency.' },
-  { id: 'denials', label: 'access.denied', description: 'Authorization refusals only: 401/403 from the catalog, plus calls the BFF refused to make because it could not present a credential.' },
-  { id: 'summary', label: 'access.summary', description: 'Volume and denial counts per operation and per securable over the window.' },
-];
-
-/** Tabular result shape — matches the existing UC audit dialog's contract. */
-export interface UnitySystemTableResult {
-  columns: string[];
-  rows: Record<string, unknown>[];
-  executionMs: number;
-  /** How many raw access records the view was computed from. */
-  recordCount: number;
-  /**
-   * TRUE when the read hit the row limit, so `recordCount` (and every number in
-   * the `summary` view) describes the most recent `limit` records in the window
-   * rather than the whole window. The pane MUST say so — "2 denials in the last
-   * 7 days" is a different claim from "2 denials in the last 200 calls".
-   */
-  truncated: boolean;
-  /** The row limit the read was capped at (what `truncated` is relative to). */
-  limit: number;
-  /** The equivalent KQL against `LoomAudit_CL`, for SIEM/Sentinel. */
-  kql: string;
-}
-
-const AUDIT_COLUMNS = [
-  'time', 'actor', 'actor_oid', 'operation', 'securable_type', 'securable',
-  'outcome', 'status', 'duration_ms', 'backend', 'method', 'detail',
-];
-
-function auditRow(r: UnityAuditRecord): Record<string, unknown> {
-  return {
-    time: r.at,
-    actor: r.actorUpn,
-    actor_oid: r.actorOid,
-    operation: r.operation,
-    securable_type: r.securableType,
-    securable: r.securableFqn,
-    outcome: r.outcome,
-    status: r.status,
-    duration_ms: r.durationMs,
-    backend: r.backend,
-    method: r.method,
-    detail: r.detail || '',
-  };
-}
-
-/**
- * Read one Loom Unity system-table view from the authoritative Cosmos
- * `_auditLog` trail. This is the REAL backend behind the pane that replaced the
- * "system tables are not available at this boundary" gate: the rows exist
- * because {@link recordUnityAccess} wrote them at the choke point.
- */
-export async function readUnitySystemTable(
-  table: UnitySystemTable,
-  q: UnityAuditQuery = {},
-): Promise<UnitySystemTableResult> {
-  const started = Date.now();
-  const nq = normalizeUnityAuditQuery(q);
-  const records = await listUnityAccessRecords(
-    table === 'denials' ? { ...nq, outcome: 'denied' } : nq,
-  );
-  const sinceHours = Math.max(1, Math.round((Date.now() - new Date(nq.since).getTime()) / 3_600_000));
-  const kql = unityAuditKql({ sinceHours, deniedOnly: table === 'denials', limit: nq.limit });
-  // A full page means the window was cut off at `limit`, so the summary numbers
-  // below are "within the most recent N records", not "within the window".
-  const truncated = records.length >= nq.limit;
-
-  if (table === 'summary') {
-    const s = summarizeUnityAccess(records);
-    const scopeLabel = truncated ? `most recent ${nq.limit} calls` : 'window';
-    const rows: Record<string, unknown>[] = [
-      { scope: scopeLabel, key: 'all operations', calls: s.total, denied: s.denied, failed: s.failure, distinct_actors: s.actors },
-      ...s.byOperation.map((o) => ({ scope: 'operation', key: o.operation, calls: o.count, denied: o.denied, failed: '', distinct_actors: '' })),
-      ...s.bySecurable.map((o) => ({ scope: 'securable', key: o.securableFqn, calls: o.count, denied: o.denied, failed: '', distinct_actors: '' })),
-    ];
-    return {
-      columns: ['scope', 'key', 'calls', 'denied', 'failed', 'distinct_actors'],
-      rows,
-      executionMs: Date.now() - started,
-      recordCount: records.length,
-      truncated,
-      limit: nq.limit,
-      kql,
-    };
-  }
-
-  return {
-    columns: AUDIT_COLUMNS,
-    rows: records.map(auditRow),
-    executionMs: Date.now() - started,
-    recordCount: records.length,
-    truncated,
-    limit: nq.limit,
-    kql,
-  };
 }

@@ -54,10 +54,8 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import {
-  classifyUnityCall, unityOutcomeForError, summarizeUnityAccess, unityAuditKql,
-  normalizeUnityAuditQuery, readUnitySystemTable, flushUnityAudit,
+  classifyUnityCall, unityOutcomeForError, unityAuditKql, flushUnityAudit,
   UNITY_AUDIT_ITEM_TYPE, UNITY_SECURABLE_ALL,
-  type UnityAuditRecord,
 } from '../unity-audit';
 import { listCatalogs, listTables } from '../unity-catalog-client';
 import { OssUcAuthNotConfiguredError } from '../uc-backend';
@@ -290,75 +288,7 @@ describe('the choke point audits EVERY call', () => {
   });
 });
 
-describe('readUnitySystemTable — the pane that replaced the gate', () => {
-  beforeEach(reset);
-  afterEach(reset);
-
-  const rows: UnityAuditRecord[] = [
-    { id: '1', at: '2026-07-27T10:00:00.000Z', actorOid: 'oid-a', actorUpn: 'a@x', operation: 'catalog.list', securableType: 'catalog', securableFqn: '*', backend: 'oss', method: 'GET', path: '/p', outcome: 'success', status: 200, durationMs: 12 },
-    { id: '2', at: '2026-07-27T10:01:00.000Z', actorOid: 'oid-b', actorUpn: 'b@x', operation: 'grant.update', securableType: 'catalog', securableFqn: 'sales', backend: 'oss', method: 'PATCH', path: '/p', outcome: 'denied', status: 403, durationMs: 20 },
-    { id: '3', at: '2026-07-27T10:02:00.000Z', actorOid: 'oid-b', actorUpn: 'b@x', operation: 'grant.update', securableType: 'catalog', securableFqn: 'sales', backend: 'oss', method: 'PATCH', path: '/p', outcome: 'denied', status: 403, durationMs: 18 },
-    { id: '4', at: '2026-07-27T10:03:00.000Z', actorOid: 'oid-a', actorUpn: 'a@x', operation: 'table.get', securableType: 'table', securableFqn: 'sales.bronze.orders', backend: 'oss', method: 'GET', path: '/p', outcome: 'failure', status: 500, durationMs: 5 },
-  ];
-
-  it('pushes the denied filter into the Cosmos query — the denials view must not return everything', async () => {
-    cosmosQuery.mockResolvedValue({ resources: rows.filter((r) => r.outcome === 'denied') });
-    const res = await readUnitySystemTable('denials', { limit: 50 });
-
-    const spec = cosmosQuery.mock.calls[0][0] as { query: string; parameters: Array<{ name: string; value: unknown }> };
-    expect(spec.query).toMatch(/c\.outcome = @outcome/);
-    expect(spec.parameters).toContainEqual({ name: '@outcome', value: 'denied' });
-    expect(spec.parameters).toContainEqual({ name: '@itemType', value: UNITY_AUDIT_ITEM_TYPE });
-    expect(spec.parameters).toContainEqual({ name: '@top', value: 50 });
-    expect(res.rows).toHaveLength(2);
-    expect(res.rows[0]).toMatchObject({ operation: 'grant.update', outcome: 'denied', securable: 'sales' });
-  });
-
-  it('shapes the audit view with the columns the pane renders', async () => {
-    cosmosQuery.mockResolvedValue({ resources: rows });
-    const res = await readUnitySystemTable('audit');
-    expect(res.columns).toContain('actor');
-    expect(res.columns).toContain('operation');
-    expect(res.columns).toContain('securable');
-    expect(res.columns).toContain('outcome');
-    expect(res.recordCount).toBe(4);
-    expect(res.kql).toMatch(/LoomAudit_CL/);
-  });
-
-  it('summary counts denials per operation and per securable', async () => {
-    cosmosQuery.mockResolvedValue({ resources: rows });
-    const res = await readUnitySystemTable('summary');
-    const window = res.rows.find((r) => r.scope === 'window');
-    expect(window).toMatchObject({ calls: 4, denied: 2, failed: 1, distinct_actors: 2 });
-    const grant = res.rows.find((r) => r.scope === 'operation' && r.key === 'grant.update');
-    expect(grant).toMatchObject({ calls: 2, denied: 2 });
-    const sales = res.rows.find((r) => r.scope === 'securable' && r.key === 'sales');
-    expect(sales).toMatchObject({ calls: 2, denied: 2 });
-  });
-});
-
-describe('summarizeUnityAccess / normalizeUnityAuditQuery / unityAuditKql', () => {
-  it('counts outcomes and distinct actors from hand-written rows', () => {
-    const s = summarizeUnityAccess([
-      { id: '1', at: '', actorOid: 'a', actorUpn: 'a', operation: 'x.list', securableType: 'catalog', securableFqn: '*', backend: 'oss', method: 'GET', path: '', outcome: 'success', status: 200, durationMs: 1 },
-      { id: '2', at: '', actorOid: 'a', actorUpn: 'a', operation: 'x.list', securableType: 'catalog', securableFqn: '*', backend: 'oss', method: 'GET', path: '', outcome: 'denied', status: 403, durationMs: 1 },
-      { id: '3', at: '', actorOid: 'b', actorUpn: 'b', operation: 'y.get', securableType: 'table', securableFqn: 't', backend: 'oss', method: 'GET', path: '', outcome: 'failure', status: 500, durationMs: 1 },
-    ]);
-    expect(s).toMatchObject({ total: 3, success: 1, denied: 1, failure: 1, actors: 2 });
-    expect(s.byOperation[0]).toEqual({ operation: 'x.list', count: 2, denied: 1 });
-    expect(s.denials).toHaveLength(1);
-    expect(s.denials[0].id).toBe('2');
-  });
-
-  it('clamps the row limit so a caller cannot ask for the whole container', () => {
-    expect(normalizeUnityAuditQuery({ limit: 99_999 }).limit).toBe(1000);
-    expect(normalizeUnityAuditQuery({ limit: -5 }).limit).toBe(200);
-    expect(normalizeUnityAuditQuery({}).limit).toBe(200);
-    // Default window is 7 days back, not "everything".
-    const since = new Date(normalizeUnityAuditQuery({}).since).getTime();
-    expect(Date.now() - since).toBeGreaterThan(6.5 * 24 * 3600 * 1000);
-  });
-
+describe('unityAuditKql — the SIEM half of the trail', () => {
   it('builds SIEM KQL scoped to unity events with a clamped, integer window', () => {
     const kql = unityAuditKql({ sinceHours: 24, deniedOnly: true, limit: 10 });
     expect(kql).toContain('LoomAudit_CL');
