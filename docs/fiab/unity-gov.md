@@ -230,7 +230,13 @@ fails the build when:
    with comments and string literals masked, so a decoy call elsewhere in the
    file does not satisfy it;
 4. `unity-audit.ts` stops writing either sink or stops classifying denials;
-5. `unity-catalog-client.ts` grows a new `executeStatement(` exit (see gaps).
+5. any file pinned in `SQL_EXIT_BASELINES` grows a new `executeStatement(` exit,
+   or a pinned file disappears. The pin is per FILE because a *refactor* can
+   narrow a ratchet: LU-3's audit `try/finally` pushed `unity-catalog-client.ts`
+   over its `check-file-size` ceiling, so the 165-line Databricks system-table
+   block moved to `lib/azure/uc-system-tables.ts` — carrying one
+   `executeStatement(` out of view of a single-file ratchet. Both files are
+   pinned (24 + 1), and a vanished pin now fails.
 
 The guard's own bypasses are covered by negative tests in
 `apps/fiab-console/lib/azure/__tests__/unity-audit-guard.test.ts`, which replay
@@ -252,14 +258,14 @@ transports plus the gap list below.
 The trail is **not** complete, and this section is the honest inventory. Trusting
 a trail with an undisclosed hole is worse than having none.
 
-- **SQL-DDL governance mutations are not in this trail.**
-  `unity-catalog-client.ts` reaches the catalog through ~25
-  `executeStatement(...)` calls — the Databricks **SQL Statement Execution** API,
-  a different surface from UC REST. These include `createUcPolicy` /
-  `dropUcPolicy` (ABAC row filters + column masks), `mutateUcGovernedTag` and
-  `setUcTags`. They produce **no Loom row**; the count is ratcheted
-  (`SQL_EXIT_BASELINE`) so a new un-audited SQL exit fails the build (issue
-  #2622).
+- **SQL-DDL governance mutations are not in this trail.** Loom reaches the
+  catalog through 25 `executeStatement(...)` calls — 24 in
+  `unity-catalog-client.ts` and 1 in `uc-system-tables.ts` — over the Databricks
+  **SQL Statement Execution** API, a different surface from UC REST. These include
+  `createUcPolicy` / `dropUcPolicy` (ABAC row filters + column masks),
+  `mutateUcGovernedTag` and `setUcTags`. They produce **no Loom row**; both counts
+  are ratcheted per file (`SQL_EXIT_BASELINES`) so a new un-audited SQL exit fails
+  the build (issue #2622).
   *Scope of the exposure:* `executeStatement` targets a Databricks **SQL
   warehouse** (`POST /api/2.0/sql/statements`), and every caller route is gated
   by `databricksConfigGate()` (and, for ABAC policies, `isGovCloud()`), so on the

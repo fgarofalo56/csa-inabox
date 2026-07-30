@@ -100,6 +100,17 @@
  *      `lib/admin/env-checks/data-plane.ts` ("…on the request (in addition to a
  *      session)") without dropping any real call.
  *
+ *   8. A DECOMPOSITION NARROWED A RATCHET. Same round, found while fixing #7.
+ *      `unity-catalog-client.ts` sits AT its `check-file-size` ceiling, so LU-3's
+ *      audit `try/finally` forced the 165-line Databricks system-table block out
+ *      into `lib/azure/uc-system-tables.ts` — carrying ONE `executeStatement(`
+ *      (the shared `runSystemTableRead`) out of view of a ratchet that was
+ *      scoped to a single file. FIXED: {@link SQL_EXIT_BASELINES} is a per-file
+ *      Map (24 + 1, still 25 in total), and a pinned file that DISAPPEARS fails,
+ *      so a rename cannot drop a ceiling either. Lesson worth keeping: any
+ *      refactor that moves code out of a ratcheted file must move the ratchet
+ *      with it, or the refactor IS the bypass.
+ *
  * ## LIMITS — what this guard is NOT
  *
  * READ THIS BEFORE CITING THE GUARD AS COVERAGE. It is a lexical scan over the
@@ -151,8 +162,9 @@
  *   5. ALLOWLISTED CALLERS MUST AUDIT.
  *   6. SINK REACHABILITY     — `unity-audit.ts` writes both sinks and still
  *      classifies denials.
- *   7. SQL-EXIT RATCHET      — `executeStatement(` count in
- *      unity-catalog-client.ts must not grow (see history #3).
+ *   7. SQL-EXIT RATCHET      — the `executeStatement(` count in EVERY file
+ *      pinned by SQL_EXIT_BASELINES must not grow, and a pinned file that
+ *      disappears FAILS (see history #3 and #8).
  *
  * ALLOWLIST — a file that legitimately needs the catalog address AND makes
  *   requests must be added to CHOKEPOINT_FILES below WITH a justification, and
@@ -185,17 +197,37 @@ export const DBX_CHOKEPOINT = 'lib/azure/databricks-client.ts';
 export const RECORDER = 'lib/azure/unity-audit.ts';
 
 /**
- * `executeStatement(` occurrences allowed in unity-catalog-client.ts.
+ * `executeStatement(` occurrences allowed PER FILE that reaches Unity Catalog
+ * over SQL.
  *
  * These are Databricks **SQL Statement Execution** calls, not UC REST, so they
  * do NOT produce a row in this trail — they are covered by Databricks'
- * `system.access.audit` instead. The count is frozen so a NEW un-audited SQL
- * exit fails the build. Lowering it (by routing a call through an audited path)
- * is always welcome; raising it requires a security review and a note here.
+ * `system.access.audit` instead. The counts are frozen so a NEW un-audited SQL
+ * exit fails the build. Lowering one (by routing a call through an audited path)
+ * is always welcome; raising one requires a security review and a note here.
  * Tracked: audit the governance DDL half (createUcPolicy / dropUcPolicy /
  * mutateUcGovernedTag / setUcTags).
+ *
+ * ## Why this is a Map (round 4)
+ *
+ * It was a single number scoped to `unity-catalog-client.ts`. Splitting the
+ * Databricks system-table readers out of that file (for the `check-file-size`
+ * ratchet) carried ONE `executeStatement(` — the shared `runSystemTableRead` —
+ * into `uc-system-tables.ts`, where a file-scoped ratchet could not see it. A
+ * decomposition that silently narrows a security ratchet is the same defect
+ * class as round 4's transport-vocabulary split, so both files are pinned and
+ * {@link analyzeUnityChokepoint} FAILS if a pinned file disappears (a rename
+ * must not drop its ceiling).
  */
-export const SQL_EXIT_BASELINE = 25;
+export const SQL_EXIT_BASELINES = new Map([
+  // Catalog REST client — the governance DDL (policies, governed tags, setUcTags).
+  ['lib/azure/unity-catalog-client.ts', 24],
+  // Databricks system-table readers — one shared runSystemTableRead exit.
+  ['lib/azure/uc-system-tables.ts', 1],
+]);
+
+/** Back-compat scalar: the primary choke point's own ceiling. */
+export const SQL_EXIT_BASELINE = SQL_EXIT_BASELINES.get('lib/azure/unity-catalog-client.ts');
 
 /**
  * FROZEN outbound-call count for EVERY file this guard exempts from the
@@ -613,14 +645,17 @@ export function countOutbound(src) {
  * Returns an array of failure strings (empty === pass).
  */
 export function analyzeUnityChokepoint(sources, opts = {}) {
-  const sqlBaseline = opts.sqlExitBaseline ?? SQL_EXIT_BASELINE;
+  const sqlBaselines = new Map(SQL_EXIT_BASELINES);
+  if (opts.sqlExitBaselines) for (const [k, v] of opts.sqlExitBaselines) sqlBaselines.set(k, v);
+  // Back-compat: callers that only override the primary choke point's ceiling.
+  if (opts.sqlExitBaseline != null) sqlBaselines.set(CHOKEPOINT, opts.sqlExitBaseline);
   const outboundBaseline = new Map(OUTBOUND_BASELINE);
   if (opts.outboundBaseline) for (const [k, v] of opts.outboundBaseline) outboundBaseline.set(k, v);
   // Back-compat: callers that only override the Databricks ceiling.
   if (opts.dbxOutboundBaseline != null) outboundBaseline.set(DBX_CHOKEPOINT, opts.dbxOutboundBaseline);
   const failures = [];
 
-  // ── 1 + 7. The ucFetch choke point ────────────────────────────────────────
+  // ── 1. The ucFetch choke point ────────────────────────────────────────────
   const chokeSrc = sources.get(CHOKEPOINT);
   if (chokeSrc == null) {
     failures.push(`MISSING CHOKE POINT: ${CHOKEPOINT} does not exist. Every Unity Catalog call must funnel through its ucFetch.`);
@@ -635,13 +670,29 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
         `(A call elsewhere in the file does NOT satisfy this check.)`,
       );
     }
-    const sqlExits = countCalls(chokeSrc, 'executeStatement');
-    if (sqlExits > sqlBaseline) {
+  }
+
+  // ── 7. SQL-EXIT RATCHET, per pinned file ──────────────────────────────────
+  // Pinned per FILE, not once for the choke point: splitting the system-table
+  // readers out of unity-catalog-client.ts carried one executeStatement( with
+  // them, and a file-scoped ratchet stopped seeing it. A pinned file that
+  // disappears FAILS, so a rename cannot drop a ceiling either.
+  for (const [rel, base] of sqlBaselines) {
+    const src = sources.get(rel);
+    if (src == null) {
       failures.push(
-        `${CHOKEPOINT}: ${sqlExits} executeStatement( exits (ratchet: ${sqlBaseline}). These reach the catalog over the ` +
+        `${rel}: pinned in SQL_EXIT_BASELINES but not present. If it was renamed or merged away, move its ceiling to the ` +
+        `new path in the same commit — a vanished pin silently un-ratchets its SQL exits.`,
+      );
+      continue;
+    }
+    const sqlExits = countCalls(src, 'executeStatement');
+    if (sqlExits > base) {
+      failures.push(
+        `${rel}: ${sqlExits} executeStatement( exits (ratchet: ${base}). These reach the catalog over the ` +
         `Databricks SQL Statement Execution API and produce NO row in the Loom Unity audit trail. Route the new call ` +
-        `through an audited path, or — if it genuinely must be raw SQL — raise SQL_EXIT_BASELINE in this guard with a ` +
-        `security-review note. The count may go DOWN freely.`,
+        `through an audited path, or — if it genuinely must be raw SQL — raise this file's SQL_EXIT_BASELINES entry with ` +
+        `a security-review note. The count may go DOWN freely.`,
       );
     }
   }

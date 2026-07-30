@@ -26,6 +26,7 @@ import {
   DBX_CHOKEPOINT,
   RECORDER,
   SQL_EXIT_BASELINE,
+  SQL_EXIT_BASELINES,
   OUTBOUND_BASELINE,
   CHOKEPOINT_FILES,
   KNOWN_UNAUDITED,
@@ -263,6 +264,27 @@ describe('ATTACK: quieter regressions', () => {
     s.set(CHOKEPOINT, `${s.get(CHOKEPOINT)!}\nasync function sneak(w: string) { return executeStatement(w, 'DROP TABLE x'); }\n`);
     const failures = analyzeUnityChokepoint(s);
     expect(failures.join('\n')).toMatch(new RegExp(`executeStatement\\( exits \\(ratchet: ${SQL_EXIT_BASELINE}\\)`));
+  });
+
+  // Round 4, #8: the LU-3 audit try/finally pushed unity-catalog-client.ts over
+  // its check-file-size ceiling, so the 165-line system-table block moved to
+  // uc-system-tables.ts — carrying one executeStatement( out of a ratchet that
+  // was scoped to ONE file. A refactor must not be able to narrow a ratchet.
+  it('#19 — ratchets SQL exits in EVERY pinned file, not just the choke point', () => {
+    const s = realSources();
+    const moved = 'lib/azure/uc-system-tables.ts';
+    expect(SQL_EXIT_BASELINES.has(moved), `${moved} is not pinned`).toBe(true);
+    expect(s.has(moved)).toBe(true);
+    s.set(moved, `${s.get(moved)!}\nexport async function sneak(w: string) { return executeStatement(w, 'DROP TABLE x'); }\n`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/uc-system-tables\.ts: \d+ executeStatement\( exits \(ratchet: \d+\)/);
+  });
+
+  it('#19 — fails when a pinned SQL-exit file disappears (a rename must move the ceiling)', () => {
+    const s = realSources();
+    s.delete('lib/azure/uc-system-tables.ts');
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/uc-system-tables\.ts: pinned in SQL_EXIT_BASELINES but not present/);
   });
 
   it('fails when a new file combines the Loom Unity address with a request', () => {
