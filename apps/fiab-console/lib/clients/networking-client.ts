@@ -134,9 +134,55 @@ async function token(): Promise<string> {
   return t.token;
 }
 
+/**
+ * Resolve an ARM request target, REFUSING any absolute URL that is not ARM.
+ *
+ * #2652 (js/request-forgery). This function used to be:
+ *
+ *     const url = path.startsWith('http') ? path : `${ARM}${path}`;
+ *
+ * and the result is fetched with `authorization: Bearer <ARM token>`. The
+ * absolute-URL branch exists for ARM pagination (`nextLink`), but as written it
+ * accepted ANY host — so anything that could influence `path` could make the
+ * Console send its ARM access token to an attacker-controlled server. That is the
+ * recurring defect class in this codebase (#2683, #2691, #2607, and the
+ * workflow-run-status instance in this same sweep): a credential travelling to a
+ * caller-chosen address.
+ *
+ * Absolute URLs are still allowed — pagination needs them — but only when the
+ * ORIGIN matches the configured ARM endpoint. Compared on parsed `origin`, not
+ * with `startsWith`, because `https://management.azure.com.evil.test/` and
+ * `https://management.azure.com@evil.test/` both pass a prefix test and both
+ * resolve to `evil.test`.
+ *
+ * Fails CLOSED: an unparseable or non-ARM URL throws rather than falling back to
+ * treating it as a relative path, which would silently hit a wrong ARM route.
+ */
+export function resolveArmUrl(path: string, armBase: string = ARM): string {
+  if (!/^https?:\/\//i.test(path)) {
+    return `${armBase}${path}`;
+  }
+  let target: URL;
+  let base: URL;
+  try {
+    target = new URL(path);
+    base = new URL(armBase);
+  } catch {
+    throw new NetworkingArmError('Refusing to send an ARM token to an unparseable URL', 400);
+  }
+  if (target.origin !== base.origin) {
+    // Deliberately does not echo the rejected origin back to a caller.
+    throw new NetworkingArmError(
+      'Refusing to send the ARM token to a non-ARM origin',
+      400,
+    );
+  }
+  return target.toString();
+}
+
 async function armReq<T>(method: string, path: string, body?: unknown): Promise<T> {
   const tk = await token();
-  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const url = resolveArmUrl(path);
   const res = await fetch(url, {
     method,
     headers: {

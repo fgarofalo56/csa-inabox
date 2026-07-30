@@ -12,21 +12,36 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { ALLOWED_DEPLOY_WORKFLOWS, resolveAllowedWorkflow } from '@/lib/setup/deploy-workflows';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const GET = withSession(async (req: NextRequest) => {
 
-  const workflowFile = req.nextUrl.searchParams.get('workflow');
-  if (!workflowFile) {
+  // #2652 — this value is interpolated into an api.github.com URL that carries
+  // the deployment GitHub token. `fetch` normalises `../`, so an unvalidated
+  // value let any authenticated session walk out of /actions/workflows/ and read
+  // arbitrary GitHub API paths AS THAT TOKEN. Exact-match allow-list, shared with
+  // the dispatch route so the two cannot drift apart.
+  const requestedWorkflow = req.nextUrl.searchParams.get('workflow');
+  if (!requestedWorkflow) {
     return NextResponse.json(
       { ok: false, error: 'workflow query param required' },
+      { status: 400 },
+    );
+  }
+  const workflowFile = resolveAllowedWorkflow(requestedWorkflow);
+  if (!workflowFile) {
+    // Deliberately does NOT echo the rejected value — it is attacker-chosen and
+    // would land in logs and in the client. Names the allowed set instead.
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'unrecognised workflow',
+        allowed: [...ALLOWED_DEPLOY_WORKFLOWS].sort(),
+      },
       { status: 400 },
     );
   }
@@ -100,4 +115,4 @@ export async function GET(req: NextRequest) {
       { status: 500 },
     );
   }
-}
+});
