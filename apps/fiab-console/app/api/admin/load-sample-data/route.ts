@@ -23,9 +23,8 @@
 
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { createTable, ingestInline, dropTable, KustoError, defaultDatabase } from '@/lib/azure/kusto-client';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -209,11 +208,7 @@ async function loadTable(db: string, create: string, ingest: string): Promise<st
   return name;
 }
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = requireTenantAdmin(s);
-  if (denied) return denied;
+export const POST = withTenantAdmin(async (req: NextRequest) => {
 
   const kind = req.nextUrl.searchParams.get('kind') || 'geo';
   if (!['geo', 'graph', 'investigation'].includes(kind)) {
@@ -237,4 +232,4 @@ export async function POST(req: NextRequest) {
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

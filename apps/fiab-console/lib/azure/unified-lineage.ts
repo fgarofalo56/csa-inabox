@@ -97,8 +97,7 @@ export function normalizeIdentity(raw: string | undefined | null): string {
   // Linear equivalent of /\/unity-catalog\/tables\/(.+)$/i (#2677): the regex
   // retried (.+)$ at every marker occurrence — quadratic on crafted input. Dot
   // never crosses a line break, so only the final line can match.
-  const lastBreak = Math.max(v.lastIndexOf('
-'), v.lastIndexOf(''));
+  const lastBreak = Math.max(v.lastIndexOf('\n'), v.lastIndexOf('\r'));
   const lastLine = lastBreak >= 0 ? v.slice(lastBreak + 1) : v;
   const ucIdx = lastLine.toLowerCase().indexOf(UC_TABLES_MARKER);
   if (ucIdx >= 0) {

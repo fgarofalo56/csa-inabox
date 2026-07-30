@@ -26,7 +26,6 @@
  * the route.
  */
 
-import { trimLeadingSlashes, trimTrailingSlashes } from '@/lib/util/trim';
 import type { ThreadColumnMapping } from '@/lib/thread/thread-edges';
 // The ONLY slash-trim / scheme-probe primitives allowed on the ingest path.
 // Both are index-based; the regex spellings they replace are polynomial-ReDoS

@@ -15,7 +15,6 @@
  */
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
@@ -30,6 +29,7 @@ import { migrateLegacyTools, toolsToFoundryTools } from '@/lib/copilot/agent-too
 import { normalizeSubAgents, subAgentsToFoundryTools, foundryAgentNameFor } from '@/lib/copilot/connected-agents';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,11 +42,9 @@ function foundryAgentName(itemId: string): string {
   return trimEdges(trimmed, '-') || `loom-data-${itemId.slice(0, 8)}`;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
 
   let item: WorkspaceItem | null;
@@ -136,4 +134,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     return apiServerError(e);
   }
-}
+});

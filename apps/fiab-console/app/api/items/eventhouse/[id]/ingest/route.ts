@@ -28,12 +28,12 @@
 
 import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   executeMgmtCommand, ingestInline, KustoError,
 } from '@/lib/azure/kusto-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -275,17 +275,15 @@ async function handleOneLake(_id: string, body: any): Promise<NextResponse> {
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
 
   const ct = (req.headers.get('content-type') || '').toLowerCase();
   if (ct.includes('multipart/form-data')) {
-    return handleFile(ctx.params.id, req);
+    return handleFile(params.id, req);
   }
   const body = await req.json().catch(() => ({}));
   const kind = String(body?.kind || '').toLowerCase();
-  if (kind === 'eventhub') return handleEventHub(ctx.params.id, body);
-  if (kind === 'onelake') return handleOneLake(ctx.params.id, body);
+  if (kind === 'eventhub') return handleEventHub(params.id, body);
+  if (kind === 'onelake') return handleOneLake(params.id, body);
   return NextResponse.json({ ok: false, error: 'unknown ingest kind; expected file / eventhub / onelake' }, { status: 400 });
-}
+});

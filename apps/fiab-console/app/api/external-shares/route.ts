@@ -15,8 +15,8 @@
  * receipt, and the shared subset is validated to sit under that root.
  */
 import { NextRequest } from 'next/server';
-import { getSession, tenantScopeId } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiForbidden, apiHonestError, apiServerError } from '@/lib/api/respond';
+import { tenantScopeId } from '@/lib/auth/session';
+import { apiOk, apiError, apiForbidden, apiHonestError, apiServerError } from '@/lib/api/respond';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem, Workspace } from '@/lib/types/workspace';
 import {
@@ -27,6 +27,7 @@ import {
   GraphIdentityError,
 } from '@/lib/azure/external-share-client';
 import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,9 +61,7 @@ function resolveItemStorage(item: WorkspaceItem): { container?: string; root?: s
   return { container, root };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const url = new URL(req.url);
   const sourceItemId = (url.searchParams.get('sourceItemId') || '').trim();
   const sourceItemType = (url.searchParams.get('sourceItemType') || '').trim();
@@ -79,11 +78,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return apiServerError(e, 'Failed to list external shares');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({} as any));
   const sourceItemId = String(body?.sourceItemId || '').trim();
@@ -147,4 +144,4 @@ export async function POST(req: NextRequest) {
     }
     return apiServerError(e, 'Failed to create the external share');
   }
-}
+});

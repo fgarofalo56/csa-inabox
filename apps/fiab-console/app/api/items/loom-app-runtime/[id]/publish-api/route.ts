@@ -13,12 +13,12 @@
  */
 import { slugify } from '@/lib/util/trim';
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import { importApiFromOpenApi, apimConfigGate, ApimError } from '@/lib/azure/apim-client';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,10 +27,8 @@ function slug(s: string): string {
   return slugify(s || 'app', { allow: /[^a-z0-9]+/g, max: 55, fallback: 'app' });
 }
 
-export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
-  const { id } = await props.params;
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   if (!id || id === 'new') return apiError('Deploy the app first.', 400, { code: 'no_id' });
   try {
     const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
@@ -108,4 +106,4 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   } catch (e) {
     return apiServerError(e, 'failed to publish the app API');
   }
-}
+});

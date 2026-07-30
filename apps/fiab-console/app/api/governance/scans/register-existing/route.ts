@@ -30,8 +30,6 @@
  */
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   registerDataSource, upsertScan,
   PurviewNotConfiguredError, PurviewError,
@@ -42,6 +40,7 @@ import {
 } from '@/lib/azure/purview-source-map';
 import type { ConnectionType } from '@/lib/azure/connections-store';
 import { apiServerError } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,10 +58,7 @@ const CONN_TYPES: ConnectionType[] = [
   'event-hub', 'service-bus', 'key-vault',
 ];
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  const denied = requireTenantAdmin(session);
-  if (denied) return denied;
+export const POST = withTenantAdmin(async (req: NextRequest) => {
 
   const body = await req.json().catch(() => ({} as any));
   const rawName = String(body?.name || '').trim();
@@ -156,4 +152,4 @@ export async function POST(req: NextRequest) {
     }
     return apiServerError(e);
   }
-}
+});

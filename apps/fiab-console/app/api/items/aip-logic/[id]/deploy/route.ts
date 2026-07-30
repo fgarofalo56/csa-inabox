@@ -18,7 +18,6 @@
  */
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import {
   createOrUpdateAgent,
@@ -34,6 +33,7 @@ import { resolveSpindleGrounding } from '../_spindle-grounding';
 import { composeGraphPrompt } from '../_block-graph';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,13 +47,11 @@ function foundryAgentName(itemId: string): string {
   return trimEdges(trimmed, '-') || `loom-spindle-${itemId.slice(0, 8)}`;
 }
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
 
   let item: WorkspaceItem | null;
   try {
-    item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
+    item = await loadOwnedItem(params.id, ITEM_TYPE, session.claims.oid);
   } catch (e: any) {
     return apiServerError(e, 'cosmos error');
   }
@@ -147,4 +145,4 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     }
     return apiServerError(e);
   }
-}
+});

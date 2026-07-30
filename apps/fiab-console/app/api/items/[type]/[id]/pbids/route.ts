@@ -25,7 +25,6 @@
 
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -39,6 +38,7 @@ import {
 import { serverlessEndpoint, dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import { clusterUri, defaultDatabase, normalizeClusterUri } from '@/lib/azure/kusto-client';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -175,11 +175,9 @@ function resolveSource(kind: PbidsItemKind, item: WorkspaceItem, mode: PbidsSour
   return gate('kind', `Unsupported item kind for .pbids: ${kind}`);
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ type: string; id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ type: string; id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const { type, id } = await ctx.params;
+  const { type, id } = params;
   const kind = SUPPORTED[type];
   if (!kind) {
     return NextResponse.json(
@@ -221,4 +219,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
       'cache-control': 'no-store',
     },
   });
-}
+});

@@ -32,12 +32,12 @@
 
 import { kqlIdent } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { executeQuery, defaultDatabase } from '@/lib/azure/kusto-client';
 import { adxConfigGate } from '@/lib/azure/data-quality-client';
 import { resolveDataProductDataAccess } from '../../_lib/access-gate';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,11 +47,9 @@ const PREVIEW_ROWS = 25;
 
 interface Dataset { name?: string; guid?: string; qualifiedName?: string }
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
 
   // Load the item cross-partition (NOT ownership-gated) — data products are
   // discoverable by any authenticated catalog reader, matching the GET
@@ -140,4 +138,4 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       { status: 502 },
     );
   }
-}
+});

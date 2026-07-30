@@ -31,12 +31,12 @@
  * `dlp-meta:<tenant>` doc — the authoritative "item-permissions" change.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { listContainerRoleAssignments, revokeContainerRoleAssignment, removePrincipalFromPathAcl } from '@/lib/azure/adls-client';
 import { revokeStructuredGrant, denySchemaAccess, type PrincipalType } from '@/lib/azure/access-policy-client';
 import { loadDlpMeta, saveDlpMeta, type DlpRestriction } from '../_lib/meta';
 import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,9 +44,7 @@ export const dynamic = 'force-dynamic';
 type ScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database';
 const SCOPE_TYPES: ScopeType[] = ['adls-container', 'adls-path', 'warehouse', 'warehouse-schema', 'kql-database'];
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const body = await req.json().catch(() => ({}));
   const scopeType = String(body?.scopeType || '') as ScopeType;
   const scopeRef = String(body?.scopeRef || '').trim();
@@ -221,4 +219,4 @@ export async function POST(req: NextRequest) {
     note,
     restriction,
   });
-}
+});

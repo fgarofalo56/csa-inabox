@@ -23,13 +23,13 @@
 
 import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
 import {
   createOrUpdateOutput,
   AsaNotConfiguredError,
   type AsaOutputCreateSpec,
 } from '@/lib/azure/stream-analytics-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -150,9 +150,7 @@ function collectSinks(state: any): SinkLike[] {
   return [];
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
   const body = await req.json().catch(() => ({}));
   const asaJobName = typeof body?.asaJobName === 'string' ? body.asaJobName.trim() : '';
@@ -161,7 +159,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   try {
-    const id = (await ctx.params).id;
+    const id = params.id;
     const item = await loadKustoItem(id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
 
@@ -200,4 +198,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), hint: HINT }, { status });
   }
-}
+});

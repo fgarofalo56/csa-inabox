@@ -44,7 +44,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   createExternalDeltaTable,
   setQueryAccelerationPolicy,
@@ -59,6 +58,7 @@ import {
 import { listContainers } from '@/lib/azure/adls-client';
 import { getDfsSuffix } from '@/lib/azure/cloud-endpoints';
 import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,9 +96,7 @@ async function pickerContainers(): Promise<string[]> {
  *   { tableName, abfssUri }            → BIND mode (Delta source → KQL external table)
  *   { sourceTable, exportName, container } → EXPORT mode (continuous-export → ADLS Delta)
  */
-export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
 
@@ -109,7 +107,7 @@ export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
 
   // EXPORT mode (default): a continuous-export job writing Delta to ADLS.
   return continuousExport(body);
-}
+});
 
 /** BIND mode — ADLS Delta source → ADX external table + query acceleration. */
 async function bindDelta(body: any) {
@@ -294,9 +292,7 @@ async function continuousExport(body: any) {
  * the Delta external tables (for the bind dialog). Both are best-effort: a
  * failure in one does not blank the other.
  */
-export async function GET(req: NextRequest, _ctx: { params: { id: string } }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest) => {
 
   const { searchParams } = new URL(req.url);
   const database = (searchParams.get('database') || '').trim();
@@ -338,4 +334,4 @@ export async function GET(req: NextRequest, _ctx: { params: { id: string } }) {
     config: { adlsAccount, containers, configured: !!adlsAccount },
     ...(exportsError ? { exportsError } : {}),
   });
-}
+});

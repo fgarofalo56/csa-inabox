@@ -47,7 +47,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
   resolveAoaiTarget,
@@ -62,6 +61,7 @@ import {
 import { executeStatement } from '@/lib/azure/databricks-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { stripTrailingSemicolons } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 type AssistMode = 'generate' | 'explain' | 'fix' | 'comments' | 'optimize';
 type Engine =
@@ -316,21 +316,14 @@ function buildMessages(
   ];
 }
 
-export async function POST(
-  _req: NextRequest,
-  ctx: { params: Promise<{ type: string; id: string }> },
-) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const POST = withSession<{ type: string; id: string }>(async (_req: NextRequest, { session, params }) => {
 
   // Per-principal AOAI rate limit — opt-in (LOOM_RATE_LIMIT=on). Default = no-op
   // (returns null → identical behavior).
   const limited = await enforceRateLimit(session, 'aoai');
   if (limited) return limited;
 
-  const { type } = await ctx.params;
+  const { type } = params;
   const engine = type as Engine;
   if (!ENGINES.includes(engine)) {
     return NextResponse.json(
@@ -449,4 +442,4 @@ export async function POST(
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

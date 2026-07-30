@@ -93,6 +93,27 @@ const TOUCH_EXEMPT = new Map([
   // by applying the migration and watching the suite go red, then reverting.
   // Migrate when withSession learns to re-raise structured not-configured gates.
   ['apps/fiab-console/app/api/catalog/register/route.ts', 'LU-5/#2607: withSession swallows the 501 not-configured gate into a 500 (register.test.ts proves it)'],
+  // #2677 touched 45 routes for a ONE-LINE quadratic-trim swap each (the
+  // js/polynomial-redos sweep). 34 of them the codemod migrated cleanly and
+  // they ARE migrated in this PR — verified by 2020 app/api tests staying green.
+  // These 11 are codemod-RESISTANT: 9 use a bespoke `err(msg, 401, code)`
+  // envelope rather than the literal getSession()+401 shape withSession
+  // replaces, 1 has no getSession() prologue at all, and 1 aborts on
+  // overlapping edits. Hand-migrating them would change shipped 401/404 bodies
+  // inside a security sweep — the same trade already rejected for
+  // catalog/register, where doing it made withSession swallow an honest 501
+  // into a 500 and register.test.ts caught it.
+  ['apps/fiab-console/app/api/apim/named-values/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/dataflow/profile/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/eventstream/[id]/activator/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/kql-dashboard/[id]/activator/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/lakehouse-shortcut/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/ontology-sdk/[id]/publish/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/report/[id]/native-query/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/report/[id]/profile/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/thread/materialize-to-kql/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/thread/promote-medallion/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
   ['apps/fiab-console/app/api/items/[type]/[id]/business-metadata/route.ts', '#2657: bespoke err() 401 envelope, codemod-resistant — migrate with the items family'],
   // LU-5 S4 class sweep touched these two ONLY to route their Atlas typedef name
   // through lib/azure/purview-typedef-namespace (a 1-line namespace fix each).

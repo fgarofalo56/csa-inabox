@@ -34,7 +34,6 @@
  */
 import { trimChar } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { normalizePurviewAccountName, purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import {
   listAllMetastores, listMetastoresFromWorkspace, listWorkspaceHostnames, listCatalogs,
@@ -51,6 +50,7 @@ import {
   registerDatabricksUnityCatalogSource, defineDatabricksUnityCatalogScan, triggerScanRun,
   PurviewNotConfiguredError, PurviewError,
 } from '@/lib/azure/purview-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 /** Detect the "calling identity is not a Databricks account admin" 403 that
  *  the UC account/metastore API returns. Databricks phrases this a few ways
@@ -108,9 +108,7 @@ async function listRegistrations(tenantId: string): Promise<MetastoreRegistratio
   }
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session: s }) => {
   const tenantId = s.claims.oid;
 
   const result: any = { ok: true };
@@ -221,16 +219,14 @@ export async function GET() {
   }
 
   return NextResponse.json(result);
-}
+});
 
 /** Env-only hostnames without throwing the NotConfigured gate (for display). */
 function safeEnvHosts(): string[] {
   try { return listWorkspaceHostnames(); } catch { return []; }
 }
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || s.claims.oid;
 
@@ -471,7 +467,7 @@ export async function POST(req: NextRequest) {
     steps,
     ...(accountAdminGate ? { accountAdminGate } : {}),
   });
-}
+});
 
 /** Build the account-API not-configured hint without constructing the error
  *  (the constructor needs a hint object). Kept inline so the route stays one
