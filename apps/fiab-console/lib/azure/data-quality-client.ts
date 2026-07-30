@@ -20,6 +20,7 @@
  * charts) instead of querying a phantom cluster.
  */
 
+import { kqlEscapeDouble, kqlVerbatimDouble } from '@/lib/azure/kql-escape';
 import { executeQuery, kustoConfigGate, getTableCslSchema, qName, KustoError } from './kusto-client';
 import { tenantSettingsContainer } from './cosmos-client';
 import {
@@ -180,7 +181,10 @@ async function scoreRule(database: string, rule: DqRule): Promise<{ percentage: 
     }
     case 'regex': {
       if (!rule.pattern) return { percentage: null, detail: 'regex rule needs a pattern' };
-      const pat = rule.pattern.replace(/"/g, '\\"');
+      // @"…" is a VERBATIM literal — backslash is a plain char there, so the
+      // old \" escape left the quote LIVE and a quote in the pattern broke out
+      // into raw KQL. The only verbatim escape is doubling the quote.
+      const pat = kqlVerbatimDouble(rule.pattern);
       const kql = `${T} | summarize total=count(), matching=countif(tostring(${C}) matches regex @"${pat}") | project pct=iff(total==0, 100.0, todouble(matching)/total*100)`;
       const r = await executeQuery(database, kql);
       const pct = firstNumber(r.columns, r.rows, 'pct');
@@ -495,7 +499,10 @@ export async function runHealthCharts(database: string, tableName?: string): Pro
 
   // 1. Cluster reachability — always a live, valid KQL response.
   {
-    const kql = `print Status="reachable", Database="${database.replace(/"/g, '')}", CheckedAt=now()`;
+    // `database` is item state (`state.databaseName`, set from the editor's PUT
+    // body) — a request-reachable value. Deleting the quote is not a complete
+    // escape: a trailing `\` re-arms the closing quote (js/incomplete-sanitization).
+    const kql = `print Status="reachable", Database="${kqlEscapeDouble(database)}", CheckedAt=now()`;
     try {
       const r = await executeQuery(database, kql);
       charts.push({ title: 'ADX cluster reachability', kql, columns: r.columns, rows: r.rows, visualization: r.visualization?.Visualization });

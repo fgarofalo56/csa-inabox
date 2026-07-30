@@ -58,6 +58,7 @@
  *   - 401/403 from the data plane → PurviewError(status) ("UAMI lacks Data Map role").
  *   - DNS/000 → surfaced by probePurview as 'not_configured' with the actionable hint.
  */
+import { trimChar } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { randomUUID } from 'node:crypto';
 import {
@@ -94,6 +95,7 @@ export type {
   DatasetColumnMapping,
   PurviewColumnEdge,
 } from './purview-column-lineage';
+import { trimEdges } from '@/lib/util/trim';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -1470,7 +1472,7 @@ export const LOOM_BUSINESS_METADATA_NAME = 'LoomCustomTags';
 
 /** Normalize a free-form key into a valid Atlas attribute name (letters/digits/_). */
 function businessMetadataAttrName(key: string): string {
-  return (key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tag';
+  return trimEdges((key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_'), '_') || 'tag';
 }
 
 function buildBmAttributeDef(name: string): Record<string, unknown> {
@@ -2580,11 +2582,9 @@ async function rootCollectionName(): Promise<string | undefined> {
 
 /** Stable Purview collection referenceName for a Loom domain (≤ 36 chars). */
 export function domainCollectionName(idOrName: string): string {
-  return (idOrName || 'domain')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 36) || 'domain';
+  return (
+    trimChar((idOrName || 'domain').toLowerCase().replace(/[^a-z0-9-]+/g, '-'), '-').slice(0, 36) || 'domain'
+  );
 }
 
 export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {

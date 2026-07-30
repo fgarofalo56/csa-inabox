@@ -17,6 +17,7 @@
  */
 
 import { analyzeRelationships, type HealthTable, type HealthRelationship, type HealthFinding } from './model-health';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 /** A DAX identifier that is safe to interpolate — no brackets/quotes. */
 function safeName(s: string): string {
@@ -37,7 +38,7 @@ export function quoteTable(table: string): string {
  *   • anything else              → returned unchanged (full-DAX path; AAS only)
  */
 export function normalizeScalarExpression(expression: string): string {
-  const e = String(expression ?? '').trim().replace(/;+\s*$/, '');
+  const e = stripTrailingSemicolons(String(expression ?? ''));
   if (/^CALCULATE\s*\(/i.test(e)) return e;
   if (/^(SUM|COUNT|COUNTA|COUNTROWS|DISTINCTCOUNT|AVERAGE|MIN|MAX)\s*\(/i.test(e)) return `CALCULATE(${e})`;
   return e;

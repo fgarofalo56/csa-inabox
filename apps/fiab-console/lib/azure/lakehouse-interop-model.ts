@@ -30,6 +30,7 @@
  */
 
 import { registerMigrator, type DocMigrator } from './cosmos-migrations';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const LAKEHOUSE_INTEROP_CONTAINER = 'loom-lakehouse-interop';
 export const LAKEHOUSE_INTEROP_SCHEMA_VERSION = 1;
@@ -110,7 +111,7 @@ export function emptyInteropDoc(tenantId: string, container: string): LakehouseI
  * table identity). Returns '' for anything unusable so callers can 400.
  */
 export function normalizeTableKey(table: unknown): string {
-  const s = String(table ?? '').trim().replace(/^\/+|\/+$/g, '').replace(/^Tables\//i, '');
+  const s = trimSlashes(String(table ?? '').trim()).replace(/^Tables\//i, '');
   if (!s || s.includes('..')) return '';
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,255}$/.test(s)) return '';
   return s;

@@ -75,6 +75,7 @@ import {
   splitTopLevel,
   foldAppliedStepsToSql,
 } from '@/lib/components/pipeline/dataflow/m-script';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -130,7 +131,7 @@ function q(ident: string): string {
 
 /** Strip a trailing `;` so a base SELECT splices cleanly as a derived relation. */
 function stripSemicolons(sql: string): string {
-  return sql.trim().replace(/;+\s*$/, '');
+  return stripTrailingSemicolons(sql);
 }
 
 /** Normalize a TDS scalar (MIN/MAX) to the response's string|number|undefined. */

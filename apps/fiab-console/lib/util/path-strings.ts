@@ -1,66 +1,67 @@
 /**
- * lib/util/path-strings.ts — linear-time replacements for the trailing/leading
- * slash regexes (#2655, CodeQL js/polynomial-redos).
+ * lib/util/path-strings.ts — slash-trimming for URI/path strings.
  *
- * THE SHAPE. `s.replace(/\/+$/, '')` is the idiom this repo uses ~35 times to
- * strip trailing slashes. It is anchored at `$` but NOT at `^`, so on input with
- * a long run of slashes that does NOT end the string the engine retries the
- * `/+` match from every slash position, each time scanning to the end and
- * failing. That is O(n²).
+ * THIS MODULE IS NOW A THIN FACADE OVER `lib/util/trim.ts`. It keeps its own
+ * names because existing call sites and a 28-case test suite use them, but it
+ * owns NO implementation.
  *
- *   'a' + '/'.repeat(50_000) + 'b'
+ * WHY. Two modules landed independently solving the same problem:
  *
- * Several of the reported call sites take that string straight from a request —
- * a lakehouse download path, a Key Vault URI — so a single request can burn
- * quadratic CPU on the server. Not memory-unsafe, but a cheap way to degrade a
- * shared BFF.
+ *   path-strings.ts  (#2655)  stripTrailingSlashes / stripLeadingSlashes /
+ *                             trimSlashes / lastSegment
+ *   trim.ts          (#2677)  trimCharEnd/Start/Char / trim*Slashes /
+ *                             stripTrailingSemicolons / trimEdges / slugify
  *
- * The fix is not a cleverer regex. Trimming characters from an end is a job for
- * an index walk: obviously linear, obviously correct, and no engine to reason
- * about. Same approach taken for the OneLake host predicate in #2609, where the
- * regex was replaced with `splitUri()` + `lastIndexOf`.
+ * Both replaced quadratic trailing-run regexes (`s.replace(/\/+$/, '')`) with
+ * linear index scans, and both are correct. But TWO implementations of one
+ * trimming rule is exactly the hazard `lib/sql/quoting.ts` exists to prevent:
+ * a divergence in either copy becomes a latent ReDoS while the other copy's
+ * tests still report green.
+ *
+ * Found when #2677 rebased onto main and the two collided at four call sites —
+ * each having fixed a DIFFERENT subset. In `marketplace/mini-app`, main had
+ * fixed `gatewayUrl` and #2677 had fixed `apiPath`; taking either side alone
+ * would have silently left the other quadratic. That is the concrete cost of
+ * duplication, not a hypothetical one.
+ *
+ * `trim.ts` is the strict SUPERSET — it generalises to any character, and it
+ * carries the `slugify` fix for ~75 pasted quadratic slug builders, a class this
+ * module never covered. So `trim.ts` is canonical and this file delegates.
+ *
+ * PREFER `lib/util/trim.ts` IN NEW CODE. This facade exists so the existing call
+ * sites and their tests keep working without a rename sweep inside a security PR.
  */
+import {
+  trimTrailingSlashes,
+  trimLeadingSlashes,
+  trimSlashes as trimBothSlashes,
+} from '@/lib/util/trim';
 
-/** '/' */
-const SLASH = 47;
-
-/**
- * Strip every trailing '/' — the linear equivalent of `.replace(/\/+$/, '')`.
- *
- * Returns the input unchanged (same reference) when there is nothing to strip,
- * so the common case allocates nothing.
- */
+/** Strip every trailing '/'. Alias of `trim.ts` {@link trimTrailingSlashes}. */
 export function stripTrailingSlashes(s: string): string {
-  let end = s.length;
-  while (end > 0 && s.charCodeAt(end - 1) === SLASH) end--;
-  return end === s.length ? s : s.slice(0, end);
+  return trimTrailingSlashes(s);
 }
 
-/** Strip every leading '/' — linear equivalent of `.replace(/^\/+/, '')`. */
+/** Strip every leading '/'. Alias of `trim.ts` {@link trimLeadingSlashes}. */
 export function stripLeadingSlashes(s: string): string {
-  let start = 0;
-  while (start < s.length && s.charCodeAt(start) === SLASH) start++;
-  return start === 0 ? s : s.slice(start);
+  return trimLeadingSlashes(s);
 }
 
-/** Strip leading AND trailing '/' in one pass. */
+/** Strip leading AND trailing '/'. Alias of `trim.ts` `trimSlashes`. */
 export function trimSlashes(s: string): string {
-  let start = 0;
-  let end = s.length;
-  while (start < end && s.charCodeAt(start) === SLASH) start++;
-  while (end > start && s.charCodeAt(end - 1) === SLASH) end--;
-  return start === 0 && end === s.length ? s : s.slice(start, end);
+  return trimBothSlashes(s);
 }
 
 /**
- * The final path segment — the linear equivalent of the `leaf()` helpers that
- * did `path.replace(/\/+$/, '')` then `lastIndexOf('/')`.
+ * The final path segment, ignoring trailing slashes (`/a/b/` → `b`).
  *
- * Trailing slashes are ignored, so `/a/b/` yields `b` (not an empty string),
- * which is what every current caller expects.
+ * Kept here rather than pushed into `trim.ts`: this is path semantics, not
+ * character trimming. The "a trailing slash still yields the parent name"
+ * behaviour is relied on by the lakehouse download filename, where an empty
+ * name would be a user-visible bug rather than a style difference.
  */
 export function lastSegment(path: string): string {
-  const t = stripTrailingSlashes(path);
+  const t = trimTrailingSlashes(path);
   const i = t.lastIndexOf('/');
   return i >= 0 ? t.slice(i + 1) : t;
 }

@@ -28,6 +28,7 @@ import {
   executeStatement,
 } from '@/lib/azure/databricks-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -125,7 +126,7 @@ function parseIcebergExpose(v: any): IcebergExpose | undefined {
  */
 function icebergPaths(account: string, container: string, ie: IcebergExpose) {
   const cleanTable = ie.tableName.replace(/^\/+/, '').replace(/^Tables\//i, '');
-  const schemaSeg = ie.schemaName ? `${ie.schemaName.replace(/^\/+|\/+$/g, '')}/` : '';
+  const schemaSeg = ie.schemaName ? `${trimSlashes(ie.schemaName)}/` : '';
   const tablesRel = `Tables/${schemaSeg}${cleanTable}`;
   const host = `${account}.dfs.core.windows.net`;
   return {

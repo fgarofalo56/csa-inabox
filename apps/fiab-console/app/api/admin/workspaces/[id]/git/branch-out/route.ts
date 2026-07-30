@@ -41,6 +41,7 @@ import {
   GitIntegrationError,
 } from '@/lib/clients/git-integration-client';
 import type { Workspace } from '@/lib/types/workspace';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ function fail(error: string, status: number, extra?: Record<string, unknown>) {
 
 /** Git ref-name safety: reject the characters git forbids in a branch name. */
 function sanitizeBranchName(raw: string): string | null {
-  const b = (raw || '').trim().replace(/^\/+|\/+$/g, '');
+  const b = trimSlashes((raw || '').trim());
   if (!b) return null;
   if (b.length > 200) return null;
   if (/\s/.test(b)) return null;

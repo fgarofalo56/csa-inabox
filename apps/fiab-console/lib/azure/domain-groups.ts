@@ -35,6 +35,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
+import { trimEdges } from '@/lib/util/trim';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -107,10 +108,7 @@ async function graphFetch(path: string, init?: RequestInit): Promise<any> {
 
 /** Valid mailNickname for a security group (letters/digits/dashes, <=64). */
 function nicknameFor(domainId: string, suffix: 'admins' | 'contributors'): string {
-  const base = `loom-domain-${domainId}-${suffix}`
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const base = trimEdges(`loom-domain-${domainId}-${suffix}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-'), '-')
     .slice(0, 64);
   return base || `loom-domain-${suffix}`;
 }

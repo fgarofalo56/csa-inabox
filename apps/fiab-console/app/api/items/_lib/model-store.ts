@@ -23,6 +23,7 @@
  */
 
 import { loadOwnedItem, updateOwnedItem } from './item-crud';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export type Cardinality = 'one-to-many' | 'many-to-one' | 'one-to-one' | 'many-to-many';
 export type CrossFilter = 'single' | 'both';
@@ -301,7 +302,7 @@ export function upsertMeasure(model: LoomModelState, measure: StoredMeasure): Lo
 export function tvfDdl(measure: StoredMeasure): string {
   const schema = (measure.schema || 'dbo').replace(/[[\]]/g, '');
   const name = measure.name.replace(/[[\]]/g, '');
-  const body = measure.expression.trim().replace(/;+\s*$/, '');
+  const body = stripTrailingSemicolons(measure.expression);
   return `CREATE OR ALTER FUNCTION [${schema}].[${name}]()\nRETURNS TABLE\nAS RETURN (\n${body}\n);`;
 }
 
@@ -402,7 +403,7 @@ export function normalizeCalculatedTable(input: unknown): CalculatedTable {
     throw new Error('calculated table name must start with a letter or underscore and contain only letters, digits, spaces or underscores');
   }
   const language: CalculatedTable['language'] = t.language === 'sql' ? 'sql' : 'dax';
-  const expression = String(t.expression ?? '').trim().replace(/;+\s*$/, '').trim();
+  const expression = stripTrailingSemicolons(String(t.expression ?? ''));
   if (!expression) throw new Error('calculated table expression is required');
   if (expression.includes(';')) {
     throw new Error('calculated table expression must be a single statement (no ";")');

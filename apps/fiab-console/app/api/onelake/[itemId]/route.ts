@@ -18,11 +18,12 @@
  * recoverable backing. No Fabric/Power BI dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { ONELAKE_TYPES, isOneLakeType } from '@/lib/catalog/onelake-types';
 import { softDeleteOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { listRoles } from '@/lib/azure/onelake-security-client';
+import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,7 +32,7 @@ export const dynamic = 'force-dynamic';
  *  directory. Returns '' for the container root ('*' / empty). */
 function normPath(raw: string): string {
   if (!raw || raw === '*') return '';
-  return raw.replace(/^\/+|\/+$/g, '');
+  return trimSlashes(raw);
 }
 
 /**
@@ -62,11 +63,9 @@ async function deriveAdlsHints(itemId: string): Promise<Array<{ container: strin
   }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ itemId: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ itemId: string }>(async (req: NextRequest, { session: s, params }) => {
 
-  const { itemId } = await ctx.params;
+  const { itemId } = params;
   if (!itemId) return NextResponse.json({ ok: false, error: 'itemId is required' }, { status: 400 });
 
   let body: { itemType?: string; adlsHints?: Array<{ container: string; path: string }> } = {};
@@ -121,4 +120,4 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ itemId: 
       adlsSoftDeleted: Array.isArray(r?.adlsRefs) ? r!.adlsRefs!.length : 0,
     },
   });
-}
+});

@@ -50,6 +50,7 @@
  * Azure-native / sovereign: nothing here reaches Fabric or Power BI.
  */
 
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import type { A2aAgentSkill } from './a2a-protocol';
 
 // ---------------------------------------------------------------------------
@@ -256,7 +257,7 @@ function loomSecurityRequirements(): A2aCardSecurityRequirement[] {
 // ---------------------------------------------------------------------------
 
 function trimSlashes(s: string): string {
-  return (s || '').replace(/\/+$/, '');
+  return trimTrailingSlashes(s || '');
 }
 
 /** The opaque §4.4.6 `tenant` routing id for a registered agent. */

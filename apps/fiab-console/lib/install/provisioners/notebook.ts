@@ -44,6 +44,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
+import { trimEdges } from '@/lib/util/trim';
 
 /** Normalize a bundle cell to { type, lang, sourceLines[] } regardless of the
  * legacy alias used (`type`/`kind`, `lang`/`language`, string|string[] source). */
@@ -248,7 +249,7 @@ async function provisionAzureNative(
     steps.push(`No Fabric workspace bound — importing into Synapse workspace '${ws}'.`);
     // Synapse artifact names disallow spaces and several punctuation chars;
     // normalize to a safe artifact name while keeping it human-readable.
-    const safeName = input.displayName.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'loom_notebook';
+    const safeName = trimEdges(input.displayName.replace(/[^A-Za-z0-9_]+/g, '_'), '_') || 'loom_notebook';
     const artifact = buildSynapseNotebook(input.content, safeName, input.appId);
     steps.push(`Built Synapse notebook artifact '${safeName}' with ${cellCount} cells.`);
     try {

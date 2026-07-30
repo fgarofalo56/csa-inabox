@@ -37,6 +37,7 @@ import {
   type OdcsQualityRule,
   type OdcsSchemaObject,
 } from '@/lib/azure/data-contract-model';
+import { trimSlashes } from '@/lib/util/trim';
 
 export { DEFAULT_ENFORCEMENT_MODE };
 
@@ -494,7 +495,7 @@ export function safeDatasetSegment(dataset: string): string {
  * `<basePath>/<dataset>/` never picks it up (different folder).
  */
 export function deadLetterPath(basePath: string, dataset: string, at: Date | string = new Date()): string {
-  const base = String(basePath || '').replace(/^\/+|\/+$/g, '');
+  const base = trimSlashes(String(basePath || ''));
   const ts = (at instanceof Date ? at : new Date(at)).toISOString().replace(/[:.]/g, '-');
   const prefix = base ? `${base}/` : '';
   return `${prefix}_rejected/${safeDatasetSegment(dataset)}/rejected-${ts}.jsonl`;

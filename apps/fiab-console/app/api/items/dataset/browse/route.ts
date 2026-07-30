@@ -12,8 +12,8 @@
  * lakehouse explorer uses; honest gate when the DLZ lake isn't wired.
  */
 
+import { trimSlashes, trimTrailingSlashes } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   KNOWN_CONTAINERS,
   listContainers,
@@ -21,6 +21,7 @@ import {
   hasConfiguredContainers,
   type KnownContainer,
 } from '@/lib/azure/adls-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,9 +31,7 @@ function dfsHostFor(url: string, account: string): string {
   return (url.match(/^https:\/\/([^/]+)/i) || [])[1] || `${account}.dfs.core.windows.net`;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
 
   const container = req.nextUrl.searchParams.get('container') || '';
   const prefix = req.nextUrl.searchParams.get('prefix') || '';
@@ -80,10 +79,10 @@ export async function GET(req: NextRequest) {
       uri: `abfss://${container}@${dfsHost}/${(p.name || '').replace(/^\/+/, '')}`,
       dataType: p.isDirectory ? 'uri_folder' : 'uri_file',
     }));
-    const folderUri = `abfss://${container}@${dfsHost}/${prefix.replace(/^\/+|\/+$/g, '')}`.replace(/\/+$/, '');
+    const folderUri = trimTrailingSlashes(`abfss://${container}@${dfsHost}/${trimSlashes(prefix)}`);
     return NextResponse.json({ ok: true, container, prefix, account, dfsHost, folderUri, paths });
   } catch (e: any) {
     const status = e?.statusCode === 404 ? 404 : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), code: e?.code }, { status });
   }
-}
+});

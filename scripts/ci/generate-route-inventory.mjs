@@ -39,7 +39,24 @@ const METHOD_RES = {
 };
 const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(/;
+/**
+ * A route is session-checked if it calls getSession() or is wrapped by one of the
+ * toolkit HOCs.
+ *
+ * `(?:<[^(]*>)?` matters: the toolkit wrappers are GENERIC, and the real call
+ * shape is often `withSession<{ id: string }>(...)`. Without it the regex sees
+ * `withSession` followed by `<` rather than `(`, fails to match, and the route
+ * is classified **public** — i.e. the inventory reports a PROTECTED route as
+ * unprotected.
+ *
+ * Caught live: the boy-scout codemod migrated 34 routes to `withSession<T>(`
+ * and this table's "Public (no session)" count jumped 117 -> 124, naming seven
+ * genuinely-authenticated routes as public. A security inventory that
+ * under-reports protection is not merely noisy — it trains readers to ignore
+ * the `public` column, which is the column that matters. `[^(]*` rather than
+ * `[^>]*` so nested generics (`<Foo<Bar>>`) still match.
+ */
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*(?:<[^(]*>)?\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',

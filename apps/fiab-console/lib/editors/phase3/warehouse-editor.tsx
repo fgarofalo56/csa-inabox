@@ -68,6 +68,7 @@ import { SqlMigrationWizard } from '../sql-migration-wizard';
 import { ConnectTab } from '@/lib/components/shared/connect-tab';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { useStyles } from './styles';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 /** Warehouse editor tab ids (N3 adds 'connect'). */
 type WarehouseEditorTab = 'query' | 'model' | 'monitoring' | 'migrate' | 'time-travel' | 'connect';
@@ -324,7 +325,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     setCtasBusy(true); setCtasError(null);
     try {
       // Strip a trailing semicolon if present so we can wrap in CTAS.
-      const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+      const cleaned = stripTrailingSemicolons(sqlText);
       if (!/^select\b/i.test(cleaned)) {
         throw new Error('CTAS requires the current query to start with SELECT.');
       }

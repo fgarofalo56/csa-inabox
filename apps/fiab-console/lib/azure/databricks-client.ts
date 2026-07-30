@@ -2299,7 +2299,7 @@ export interface UcPrincipal {
 
 /** SCIM `co` (contains) filter, value-escaped so a quote in the query is safe. */
 function scimContains(attr: string, q: string): string {
-  return `${attr} co "${q.replace(/"/g, '\\"')}"`;
+  return `${attr} co "${q.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 export async function listUcPrincipals(query: string): Promise<UcPrincipal[]> {

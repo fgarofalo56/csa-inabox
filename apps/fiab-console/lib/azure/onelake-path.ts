@@ -34,6 +34,7 @@
  * host is ever produced here.
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { dfsSuffix, getBlobSuffix } from './cloud-endpoints';
 
 export interface OneLakePathParams {
@@ -69,7 +70,7 @@ export interface OneLakePaths {
 
 /** Strip leading/trailing slashes from a path segment so joins never double up. */
 function clean(p: string): string {
-  return (p ?? '').replace(/^\/+|\/+$/g, '');
+  return trimSlashes(p ?? '');
 }
 
 /**

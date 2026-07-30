@@ -41,6 +41,7 @@
  *     api.fabric.microsoft.com and is opt-in only.
  */
 
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import {
   getLineageSubgraph,
   isPurviewConfigured,
@@ -76,6 +77,8 @@ import type {
  * key. Pure + deterministic so it is unit-testable and the same string is
  * produced for the same asset regardless of which source surfaced it.
  */
+const UC_TABLES_MARKER = '/unity-catalog/tables/';
+
 export function normalizeIdentity(raw: string | undefined | null): string {
   if (!raw) return '';
   let v = trimSlashes(String(raw).trim());
@@ -91,8 +94,16 @@ export function normalizeIdentity(raw: string | undefined | null): string {
   if (hasUriScheme(v)) v = trimSlashes(stripUriCredentials(v));
   // A Databricks UC table registered in Atlas by /api/catalog/register:
   //   https://{host}/api/2.1/unity-catalog/tables/{fullName}
-  const ucUrl = v.match(/\/unity-catalog\/tables\/(.+)$/i);
-  if (ucUrl) return `uc:${decodeURIComponent(ucUrl[1]).toLowerCase()}`;
+  // Linear equivalent of /\/unity-catalog\/tables\/(.+)$/i (#2677): the regex
+  // retried (.+)$ at every marker occurrence — quadratic on crafted input. Dot
+  // never crosses a line break, so only the final line can match.
+  const lastBreak = Math.max(v.lastIndexOf('\n'), v.lastIndexOf('\r'));
+  const lastLine = lastBreak >= 0 ? v.slice(lastBreak + 1) : v;
+  const ucIdx = lastLine.toLowerCase().indexOf(UC_TABLES_MARKER);
+  if (ucIdx >= 0) {
+    const rest = lastLine.slice(ucIdx + UC_TABLES_MARKER.length);
+    if (rest) return `uc:${decodeURIComponent(rest).toLowerCase()}`;
+  }
   // Azure storage (LU-8): abfss / abfs / wasbs / wasb AND the https dfs/blob
   // endpoint spelling Purview qualifiedNames and ADF linked services use — all
   // reduced to ONE canonical `abfss://…` URI so the same folder surfaced by

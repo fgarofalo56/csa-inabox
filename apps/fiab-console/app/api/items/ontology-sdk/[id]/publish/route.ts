@@ -14,6 +14,7 @@
  * Honest gate (503) when APIM isn't configured (apimConfigGate). On success a
  * Thread edge ontology-sdk → apim-api is recorded.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
@@ -31,7 +32,7 @@ function err(error: string, status: number, code?: string, gate?: Record<string,
 }
 
 function slug(s: string): string {
-  return (s || 'ontology').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'ontology';
+  return slugify(s || 'ontology', { allow: /[^a-z0-9]+/g, max: 60, fallback: 'ontology' });
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

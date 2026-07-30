@@ -21,6 +21,7 @@
  * the browser, and never cached in module state (client objects are built per
  * call so one user's credential can never serve another user's read).
  */
+import { trimSlashes } from '@/lib/util/trim';
 import { DataLakeServiceClient, type DataLakeFileSystemClient } from '@azure/storage-file-datalake';
 import type { TokenCredential } from '@azure/identity';
 import { dfsUrl } from './cloud-endpoints';
@@ -83,7 +84,7 @@ export async function listPathsAsUser(
   account?: string,
 ): Promise<PathEntry[]> {
   const fs = getUserFileSystem(container, oid, account);
-  const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
+  const cleanPrefix = trimSlashes(prefix);
   const iter = fs.listPaths({ path: cleanPrefix || undefined, recursive: false });
   const out: PathEntry[] = [];
   for await (const p of iter) {

@@ -24,6 +24,7 @@
 
 import type { Container } from '@azure/cosmos';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { trimEdges } from '@/lib/util/trim';
 
 /** Supported field primitive types for a governed event schema. */
 export type BusinessFieldType = 'string' | 'number' | 'boolean' | 'datetime' | 'json';
@@ -118,11 +119,7 @@ async function container(): Promise<Container> {
 
 /** Slugify an event-type name into a stable document id. */
 export function eventTypeId(eventType: string): string {
-  return (eventType || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9.]+/g, '.')
-    .replace(/^\.+|\.+$/g, '');
+  return trimEdges((eventType || '').trim().toLowerCase().replace(/[^a-z0-9.]+/g, '.'), '.');
 }
 
 /** List every registered governed event type, newest-updated first. */

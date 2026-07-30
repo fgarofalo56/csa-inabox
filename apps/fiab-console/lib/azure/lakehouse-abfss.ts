@@ -35,6 +35,7 @@ import {
   type KnownContainer,
 } from '@/lib/azure/adls-client';
 import { dfsSuffix } from '@/lib/azure/cloud-endpoints';
+import { trimSlashes } from '@/lib/util/trim';
 
 const CONTAINER_URL_ENV: Record<KnownContainer, string> = {
   bronze: 'LOOM_BRONZE_URL',
@@ -113,7 +114,7 @@ export async function resolveLakehouseAbfss(
     return {
       abfss: stampedAbfss,
       container: m?.[1] || (typeof sec.container === 'string' ? sec.container : ''),
-      root: (m?.[2] || (typeof sec.rootPath === 'string' ? sec.rootPath : '')).replace(/^\/+|\/+$/g, ''),
+      root: trimSlashes((m?.[2] || (typeof sec.rootPath === 'string' ? sec.rootPath : ''))),
     };
   }
 
@@ -122,13 +123,13 @@ export async function resolveLakehouseAbfss(
   const recRoot = typeof sec.rootPath === 'string' ? sec.rootPath : '';
   if (recContainer && recRoot && isKnownContainer(recContainer)) {
     const abfss = resolveAbfssRoot(recContainer, recRoot);
-    if (abfss) return { abfss, container: recContainer, root: recRoot.replace(/^\/+|\/+$/g, '') };
+    if (abfss) return { abfss, container: recContainer, root: trimSlashes(recRoot) };
   }
 
   // 2b. Lakehouse bound to an explicit external storage account (state.storageAccount).
   const explicitAccount = typeof state.storageAccount === 'string' ? state.storageAccount.trim() : '';
   if (explicitAccount && recContainer && recRoot) {
-    const clean = recRoot.replace(/^\/+|\/+$/g, '');
+    const clean = trimSlashes(recRoot);
     return {
       abfss: `abfss://${recContainer}@${explicitAccount}.${dfsSuffix()}/${clean}`,
       container: recContainer,

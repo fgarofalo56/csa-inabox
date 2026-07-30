@@ -23,6 +23,7 @@
  * `loomOnelakeSecurityEnabled` — see synapse-storage-rbac.bicep.
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import {
   getServiceClient,
   getServiceClientFor,
@@ -175,7 +176,7 @@ export async function deleteRole(itemId: string, roleId: string): Promise<void> 
  *  relative directory path. Returns '' for the container root ('*'). */
 function normalizePath(p: string): string {
   if (p === '*' || p === '/' || p === '') return '';
-  return p.replace(/^\/+|\/+$/g, '');
+  return trimSlashes(p);
 }
 
 /** Build the POSIX ACL entries for a role's members on one path. We add BOTH an

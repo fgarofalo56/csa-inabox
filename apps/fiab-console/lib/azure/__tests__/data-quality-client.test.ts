@@ -18,7 +18,7 @@ vi.mock('../kusto-client', () => ({
   executeQuery: (...a: any[]) => executeQuery(...a),
   getTableCslSchema: (...a: any[]) => getTableCslSchema(...a),
   kustoConfigGate: () => (process.env.LOOM_KUSTO_CLUSTER_URI ? null : { missing: 'LOOM_KUSTO_CLUSTER_URI' }),
-  qName: (n: string) => `["${n.replace(/"/g, '\\"')}"]`,
+  qName: (n: string) => `["${n.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`,
   KustoError: class KustoError extends Error {},
 }));
 

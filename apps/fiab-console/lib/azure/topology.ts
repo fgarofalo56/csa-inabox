@@ -54,6 +54,7 @@ import { armBase, armScope } from './cloud-endpoints';
 import { fetchWithTimeout } from './fetch-with-timeout';
 import { getDomainsStore, type LoomDomain } from './domains-client';
 import { workspacesContainer } from './cosmos-client';
+import { trimEdges } from '@/lib/util/trim';
 
 // ---------------------------------------------------------------------------
 // Item-type taxonomy
@@ -175,7 +176,7 @@ function deployLocation(): string {
  * bicep receives them (lower-case, no spaces). Pure — unit-testable.
  */
 export function deriveDlzResourceGroup(domainName: string, location?: string): string {
-  const slug = (domainName || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = trimEdges((domainName || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'), '-');
   return `rg-csa-loom-dlz-${slug}-${location || deployLocation()}`;
 }
 

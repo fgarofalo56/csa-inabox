@@ -12,11 +12,12 @@
  * we use a fixed value to keep partition cardinality reasonable).
  */
 
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import type { Container } from '@azure/cosmos';
 import { CosmosClient } from '@azure/cosmos';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -205,9 +206,7 @@ async function ensureSeeded(container: Container) {
   _seeded = true;
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
   try {
     const container = await getContainer();
     await ensureSeeded(container);
@@ -218,18 +217,16 @@ export async function GET() {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e), status: 502 }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   if (!body?.name || !body?.description || !body?.instructions) {
     return NextResponse.json({ ok: false, error: 'name, description, and instructions are required' }, { status: 400 });
   }
   try {
     const container = await getContainer();
-    const id = String(body.id || body.name).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || `tmpl-${Date.now()}`;
+    const id = slugify(String(body.id || body.name), { max: 64 }) || `tmpl-${Date.now()}`;
     const doc: TemplateDoc = {
       id,
       tenantId: TENANT_PK,
@@ -247,4 +244,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e), status: 502 }, { status: 502 });
   }
-}
+});

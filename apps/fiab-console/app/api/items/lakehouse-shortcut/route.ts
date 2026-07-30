@@ -48,6 +48,7 @@ import {
 } from '@/lib/azure/shortcut-engines';
 import type { ShortcutCredentialRef } from '@/lib/azure/lakehouse-shortcuts';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -149,7 +150,7 @@ async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
 /** Sovereign-cloud-correct abfss:// for an ADLS-family target (bare account name). */
 function buildAbfss(account: string, container: string, path: string): string {
   const acct = (account || '').replace(/^https?:\/\//, '').split('.')[0];
-  const clean = (path || '').replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes((path || ''));
   return `abfss://${container}@${acct}.${getDfsSuffix()}/${clean}`;
 }
 
@@ -173,7 +174,7 @@ type ResolveNo = { resolved: false; reason: string; code?: string; status: numbe
  * entry count, or an honest not-resolved reason with a machine code + status.
  */
 async function resolveByType(sourceType: SourceType, cfg: Connector, secret?: string): Promise<ResolveOk | ResolveNo> {
-  const path = (cfg.path || '').replace(/^\/+|\/+$/g, '');
+  const path = trimSlashes((cfg.path || ''));
   const sas = (secret || '').trim();
   try {
     if (sourceType === 'internal') {

@@ -776,7 +776,7 @@ export async function searchMlflowModelVersions(
 ): Promise<MlflowModelVersion[]> {
   const out: MlflowModelVersion[] = [];
   let pageToken: string | undefined;
-  const filter = `name='${name.replace(/'/g, "\\'")}'`;
+  const filter = `name='${name.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
   do {
     const body: any = { filter, max_results: 200 };
     if (pageToken) body.page_token = pageToken;

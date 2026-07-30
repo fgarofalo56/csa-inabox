@@ -1,3 +1,4 @@
+import { slugify } from '@/lib/util/trim';
 /**
  * OpenAPI generation for publishing a Spindle (AIP-Logic) function as REST.
  *
@@ -36,7 +37,7 @@ export function outputTypeToJsonSchema(outputType: string): Record<string, unkno
 
 /** Turn a name into a safe slug for an APIM api id / path. */
 export function slugifyApi(s: string): string {
-  return (s || 'spindle').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 54) || 'spindle';
+  return slugify(s || 'spindle', { allow: /[^a-z0-9]+/g, max: 54, fallback: 'spindle' });
 }
 
 export interface BuildLogicOpenApiInput {

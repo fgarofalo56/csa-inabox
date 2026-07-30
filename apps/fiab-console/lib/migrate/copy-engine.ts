@@ -47,6 +47,7 @@ import { buildLoadToTablePySpark, parseLoadRowCount } from '@/lib/azure/load-to-
 import type { MigrationSourceType } from './assessment';
 import type { CopyInPlan, CopyObjectPlan } from './copy-plan';
 import type { CopyObjectResult } from './copy-job-model';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** Bronze landing container (the deployment's own ADLS Gen2). */
 const BRONZE = 'bronze';
@@ -340,7 +341,7 @@ export async function materializeDelta(
 
   // The Bronze Parquet was landed at migrations/<...>/<seg>/ — read it, write a
   // managed Delta table under the container's Tables/ folder.
-  const relPath = (obj.landingPath || '').split(`/${BRONZE}/`).pop()?.replace(/^\/+|\/+$/g, '') || '';
+  const relPath = trimSlashes((obj.landingPath || '').split(`/${BRONZE}/`).pop() ?? '') || '';
   if (!relPath) return { ...obj, note: 'Bronze landing path unresolved; re-run the copy.' };
 
   let code: string;

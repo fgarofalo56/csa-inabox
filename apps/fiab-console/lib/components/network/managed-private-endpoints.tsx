@@ -31,6 +31,7 @@ import {
   Checkmark16Filled, Warning16Filled, Dismiss16Filled, Info16Filled,
 } from '@fluentui/react-icons';
 import { groupOptionsForArmType, type PeGroupOption } from '@/lib/azure/pe-subresource-groups';
+import { trimEdges } from '@/lib/util/trim';
 
 const API = '/api/network/managed-private-endpoints';
 
@@ -103,10 +104,7 @@ function dnsIndicator(e: ManagedPe) {
 
 /** Suggest an ARM-safe PE name from the target + sub-resource. */
 function suggestName(resourceName: string, groupId: string): string {
-  const base = `pe-${(resourceName || 'target').toLowerCase()}-${(groupId || '').toLowerCase()}`
-    .replace(/[^a-z0-9-_]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  const base = trimEdges(`pe-${(resourceName || 'target').toLowerCase()}-${(groupId || '').toLowerCase()}`.replace(/[^a-z0-9-_]/g, '-').replace(/-+/g, '-'), '-');
   return base.slice(0, 60) || 'pe-managed';
 }
 

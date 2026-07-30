@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeStatement, getWarehouse, databricksConfigGate } from '@/lib/azure/databricks-client';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const sql = (body?.sql || '').toString().trim().replace(/;+\s*$/, '');
+  const sql = stripTrailingSemicolons((body?.sql || '').toString());
   const warehouseId = (body?.warehouseId || '').toString().trim();
   const catalog = (body?.catalog || '').toString().trim();
   const schema = (body?.schema || '').toString().trim();

@@ -367,8 +367,12 @@ export function githubAvailable(): boolean {
 export function githubApiBase(host?: string): string {
   const raw = (host || '').trim();
   if (!raw) return GH_BASE;
-  // Strip scheme and everything from the first slash (path), lowercase the host.
-  const hostOnly = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+  // Strip scheme and everything from the first slash (path), lowercase the
+  // host. indexOf/slice, not /\/.*$/ — that regex is quadratic on crafted
+  // multi-line input (CodeQL js/polynomial-redos).
+  const noScheme = raw.replace(/^https?:\/\//i, '');
+  const slash = noScheme.indexOf('/');
+  const hostOnly = (slash >= 0 ? noScheme.slice(0, slash) : noScheme).toLowerCase();
   if (!hostOnly || hostOnly === 'github.com' || hostOnly === 'api.github.com') return GH_BASE;
   // Derive the data-residency subdomain.
   let sub: string;

@@ -30,6 +30,7 @@
 import type { DaxVisual, DaxWellField } from './aas-dax';
 import type { SynapseQueryParam, SynapseTarget } from './synapse-sql-client';
 import { escapeSqlLiteral, quoteIdent as quoteIdentDialect, type SqlDialect } from '@/lib/sql/quoting';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 // ── SQL source (resolver-supplied; the FROM relation + identifier whitelist) ───
 
@@ -393,7 +394,7 @@ function renderFrom(src: SqlSource): string {
     return `${schema}${quoteIdent(src.from.table, d)} AS ${alias}`;
   }
   // Derived: resolver-supplied, sql-guard-validated read-only SELECT.
-  return `(${src.from.sql.trim().replace(/;+\s*$/, '')}) AS ${alias}`;
+  return `(${stripTrailingSemicolons(src.from.sql)}) AS ${alias}`;
 }
 
 /**

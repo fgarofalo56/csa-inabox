@@ -27,6 +27,7 @@
 
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { parseNotebookFile, type ParsedNotebook } from './import-parser';
+import { trimEdges } from '@/lib/util/trim';
 
 /** Percent-cell tag written for each Loom cell language (parser-symmetric). */
 const LANG_TAG: Record<NotebookCellLang, string> = {
@@ -121,6 +122,6 @@ export function percentPyToCells(text: string, defaultLang: NotebookCellLang = '
 
 /** Safe `<name>.py` filename for the download. */
 export function percentPyFilename(displayName: string | undefined): string {
-  const base = (displayName || 'notebook').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'notebook';
+  const base = trimEdges((displayName || 'notebook').replace(/[^A-Za-z0-9._-]+/g, '-'), '-') || 'notebook';
   return `${base}.py`;
 }

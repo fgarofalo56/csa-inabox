@@ -24,21 +24,22 @@
  * On error returns JSON { ok:false, error } so the caller can surface it.
  */
 
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { KNOWN_CONTAINERS, downloadFile, getAccountName } from '@/lib/azure/adls-client';
 import { getLabelForAdlsPath, type MipLabelInfo } from '@/lib/azure/purview-mip-client';
 import { isMipSupportedType, stampMipLabel } from '@/lib/azure/mip-file-inject';
+import { contentDisposition } from '@/lib/api/content-disposition';
 import { withSession } from '@/lib/api/route-toolkit';
-import { lastSegment } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function leaf(path: string): string {
-  // #2655 — `path` is request-derived and `/\/+$/` is O(n^2) on a long slash
-  // run that does not end the string. lastSegment is an index walk.
-  return lastSegment(path);
+  const t = trimTrailingSlashes(path);
+  const i = t.lastIndexOf('/');
+  return i >= 0 ? t.slice(i + 1) : t;
 }
 
 /**
@@ -121,7 +122,7 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
     const headers: Record<string, string> = {
       'content-type': contentType || 'application/octet-stream',
       'content-length': String(finalBody.length),
-      'content-disposition': `attachment; filename="${filename.replace(/"/g, '')}"`,
+      'content-disposition': contentDisposition('attachment', filename, 'download.bin'),
       'cache-control': 'no-store',
       'x-loom-mip-status': mipStatus,
     };

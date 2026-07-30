@@ -46,6 +46,7 @@ import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { dfsSuffix, serviceBusSuffix } from '@/lib/azure/cloud-endpoints';
 import { quoteIdent, quoteLiteral } from '@/lib/sql/quoting';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** Registry gate id — mirrors the ENV_CHECKS spec in env-checks/data-plane.ts. */
 export const RISINGWAVE_GATE_ID = 'svc-loom-risingwave';
@@ -120,7 +121,7 @@ export function resolveRisingWaveTarget(): RisingWaveTarget {
       throw new RisingWaveError(`LOOM_RISINGWAVE_URL is not a valid URL: ${raw}`, 503, 'not_configured');
     }
   } else {
-    const stripped = raw.replace(/^\/+|\/+$/g, '');
+    const stripped = trimSlashes(raw);
     const lastColon = stripped.lastIndexOf(':');
     if (lastColon > 0 && /^\d+$/.test(stripped.slice(lastColon + 1))) {
       host = stripped.slice(0, lastColon);

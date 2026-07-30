@@ -33,6 +33,7 @@ import {
 } from './purview-typedef-namespace';
 import { dfsSuffix } from './cloud-endpoints';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { trimEdges } from '@/lib/util/trim';
 
 /**
  * Stable `loom://` qualifiedName for an item's Purview Atlas entity. The same
@@ -136,10 +137,7 @@ export interface LoomScanSource {
 
 /** Sanitised, stable Purview data-source name Loom owns for an item. */
 function loomSourceName(item: WorkspaceItem): string {
-  const base = `loom-${item.itemType}-${item.id}`
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const base = trimEdges(`loom-${item.itemType}-${item.id}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-'), '-')
     .slice(0, 60);
   return base || `loom-${item.id}`.slice(0, 60);
 }
