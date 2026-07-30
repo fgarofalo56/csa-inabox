@@ -33,6 +33,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { getSession } from '@/lib/auth/session';
 import {
   listContainerRoleAssignments,
@@ -195,6 +196,24 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // Granting data-plane access to the SHARED lake is a tenant-admin action.
+  // This POST was session-only, so ANY authenticated user could assign
+  // themselves a blob data role on any container — and, before the allow-list
+  // added to adls-client.grantContainerRole, ANY Azure role at all (the role
+  // name fell through as a raw role-definition GUID, and the Console UAMI holds
+  // Role Based Access Control Administrator at that scope). Note `principalType`
+  // was validated here while `role` and `principalId` were not, which is what
+  // made the gap easy to miss on review.
+  if (!isTenantAdmin(session)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'forbidden',
+        hint: 'Granting lakehouse permissions requires tenant-admin. Ask an administrator, or grant the role in the Azure portal.',
+      },
+      { status: 403 },
+    );
+  }
   const body = await req.json().catch(() => ({}));
   const tab = parseTab(body?.tab ?? req.nextUrl.searchParams.get('tab'));
 
