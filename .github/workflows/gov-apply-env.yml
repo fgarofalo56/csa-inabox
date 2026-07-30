@@ -56,6 +56,39 @@ jobs:
           set -euo pipefail
           # Normalize newlines to spaces; keep KEY=VALUE tokens intact.
           PAIRS=$(printf '%s' "${{ inputs.env_pairs }}" | tr '\n' ' ')
+
+          # Server-side resolution tokens.
+          #
+          # Some day-one values are ARM resource ids, which embed the SUBSCRIPTION
+          # ID. Passing one as a dispatch input would publish that id in this
+          # PUBLIC repo's run-inputs panel, which is NOT redacted (unlike the
+          # value echo below). So instead of a literal, the caller passes a token
+          # and this step resolves it with the Gov SP that is already logged in —
+          # the id is then only ever an in-process shell variable.
+          #
+          #   LOOM_ALERT_ACTION_GROUP_ID=@action-group:loom-default-alerts
+          #
+          # Resolution FAILS the run if the named resource does not exist, so a
+          # typo can never be stamped as a plausible-looking dead pointer.
+          RESOLVED=""
+          for tok in $PAIRS; do
+            key="${tok%%=*}"; val="${tok#*=}"
+            case "$val" in
+              @action-group:*)
+                ag="${val#@action-group:}"
+                id=$(az monitor action-group show -n "$ag" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r')
+                if [ -z "$id" ]; then
+                  echo "::error::@action-group:$ag does not exist in $RG — refusing to stamp $key with an unresolvable pointer"
+                  exit 1
+                fi
+                echo "resolved $key <- action group '$ag' (id withheld from log)"
+                RESOLVED="$RESOLVED $key=$id"
+                ;;
+              *) RESOLVED="$RESOLVED $key=$val" ;;
+            esac
+          done
+          PAIRS="${RESOLVED# }"
+
           echo "Setting: $(printf '%s' "$PAIRS" | sed -E 's/=[^ ]*/=<redacted>/g')"
           # shellcheck disable=SC2086
           az containerapp update -n "$APP" -g "$RG" --set-env-vars $PAIRS -o none

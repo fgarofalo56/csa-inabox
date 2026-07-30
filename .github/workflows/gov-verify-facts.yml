@@ -99,7 +99,13 @@ jobs:
           # instead of reporting the 403 it was written to distinguish.
           set +e -uo pipefail
           echo "action groups (whole sub):"
-          az monitor action-group list --query "[].{name:name,rg:resourceGroup,id:id}" -o tsv 2>&1 | sed 's/^/  /' | head -20
+          # NAME + RG only. The full ARM id embeds the SUBSCRIPTION ID, and this
+          # repo is PUBLIC — Actions logs are world-readable. The first run of
+          # this workflow printed `id` and published the Gov subscription id;
+          # that is fixed here. Name + RG is all a caller needs, because
+          # gov-apply-env resolves the id server-side from
+          # `@action-group:<name>`.
+          az monitor action-group list --query "[].{name:name,rg:resourceGroup}" -o tsv 2>&1 | sed 's/^/  /' | head -20
           N=$(az monitor action-group list --query "length(@)" -o tsv 2>/dev/null || echo "?")
           echo "Q2: count=$N  (0 => LOOM_ALERT_ACTION_GROUP_ID has no legitimate value yet)"
           # Informational probe: its OUTPUT is the deliverable, so a non-zero tail
