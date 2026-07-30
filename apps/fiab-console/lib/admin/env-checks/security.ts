@@ -162,4 +162,39 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'Fully supported in Azure Government — the issuer is pinned to https://login.microsoftonline.us/<tenant>/v2.0, derived from the cloud, never hard-coded.',
     },
   },
+  // ── LU-9 — Loom Sharing (the open Delta Sharing endpoint) ──────────────────
+  // Databricks Delta Sharing has no Azure Government endpoint and OSS Unity
+  // Catalog 0.5 does not implement the sharing server, so on the sovereign path
+  // the Marketplace "Data shares" surface has no backend at all until the
+  // loom-sharing Container App is deployed. This spec declares the CONSOLE half
+  // (the URL + the shared bearer) so the state is visible on /admin/gates with an
+  // inline Fix-it and resolvable through the one shared env-apply write path.
+  //
+  // SCOPE NOTE (honest): ENV_CHECKS has no "applies only when X" predicate, so on
+  // a Commercial estate that publishes shares through Databricks this row reads as
+  // an unset optional gate — which is correct: nothing is broken there.
+  {
+    id: 'svc-loom-sharing', category: 'security',
+    title: 'Loom Sharing — open Delta Sharing server (sovereign path)', severity: 'optional',
+    required: ['LOOM_SHARING_URL'],
+    // NOTE: the RECIPIENT credential pin (LOOM_SHARING_AUDIENCE /
+    // LOOM_SHARING_SCOPE) is deliberately NOT declared here. It only means
+    // anything once the recipient-facing endpoint exists, and that was split out
+    // of this change — declaring it now would tell an operator to configure a
+    // credential for an endpoint this build does not serve. It comes back with
+    // the endpoint; see docs/fiab/security/loom-sharing-threat-model.md.
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'unset → the Marketplace Data-shares surface uses the Databricks Delta Sharing backend wherever a workspace is bound. In Azure Government there is no Databricks Unity Catalog endpoint, so that surface stays gated until loom-sharing is deployed.',
+    remediation: 'Deploy the OSS Delta Sharing reference server and point the Console at it. (1) SERVER: az deployment group create -f platform/fiab/bicep/modules/compute/loom-sharing-app.bicep with sharingBearerSecretUri=<Key Vault secret URI for the Console-to-server bearer>, adlsAccount/adlsTenantId/adlsClientId/adlsClientSecretUri for a READ-ONLY storage principal (hadoop-azure cannot use a Container Apps managed identity - it queries the classic IMDS endpoint, which ACA does not serve), and consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR>. Ingress is INTERNAL in every configuration: the upstream server has ONE global bearer and cannot scope a caller to a subset of shares. (2) CONSOLE: set LOOM_SHARING_URL to the app FQDN and the LOOM_SHARING_BEARER secretref to the SAME Key Vault secret. That gives you the CONTROL plane - publish a share, register a recipient, grant/revoke, render the server manifest, audit. The RECIPIENT-facing protocol endpoint is not part of this build and no external party can reach the server: see docs/fiab/security/loom-sharing-threat-model.md for the follow-up that adds it. Threat model: docs/fiab/security/loom-sharing-threat-model.md.',
+    provisionedBy: 'modules/compute/loom-sharing-app.bicep (standalone out-of-band entrypoint — admin-plane/main.bicep is at the 256-param ceiling) → LOOM_SHARING_URL + the LOOM_SHARING_BEARER secretref on the Console app',
+    role: 'Key Vault Secrets User (loom-sharing UAMI) on the vault holding the server bearer + the storage OAuth secret; Storage Blob Data Reader (storage OAuth principal) on the shared container(s) only — this server never writes',
+    docs: 'https://delta.io/sharing/',
+    // Container Apps internal ingress, Key Vault secretrefs, and Entra token
+    // validation are GA in every boundary; only the authority + storage endpoint
+    // suffixes differ, and both are derived from environment() in the bicep.
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Fully supported in Azure Government — this IS the Gov path, since Databricks Delta Sharing has no Gov endpoint. The storage endpoint suffix and the Entra authority are derived from environment(), never hard-coded.',
+    },
+  },
 ];

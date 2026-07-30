@@ -26,7 +26,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Divider, Card, CardHeader,
-  Input, Textarea, Field, Select, Tag, Tooltip, Tab, TabList,
+  Input, Textarea, Field, Select, Tag, Tooltip, Tab, TabList, Switch, Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -73,7 +73,7 @@ const useStyles = makeStyles({
 interface Gate { error: string; hint?: string; missing?: string }
 interface ShareObj { name: string; data_object_type?: string; shared_as?: string }
 interface Share { name: string; comment?: string; owner?: string; objects?: ShareObj[] }
-interface Recipient { name: string; authentication_type?: string; comment?: string; tokens?: Array<{ activation_url?: string }> }
+interface Recipient { name: string; authentication_type?: string; comment?: string; tokens?: Array<{ activation_url?: string }>; disabled?: boolean }
 interface Provider { name: string; comment?: string; data_provider_global_metastore_id?: string; shares?: Share[] }
 interface MountedCatalog { name: string; provider_name?: string; share_name?: string; comment?: string; catalog_type?: string }
 
@@ -97,6 +97,12 @@ export function DataShares() {
 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Which sharing backend answered (LU-9). 'loom' = the Azure-native OSS Delta
+  // Sharing server, where a recipient is Entra principals and a shared table is
+  // an ADLS Delta path; 'databricks' = Unity Catalog Delta Sharing. The two need
+  // genuinely different inputs, so the publishing dialogs branch on it rather
+  // than showing fields that cannot work.
+  const [backend, setBackend] = useState<'loom' | 'databricks'>('databricks');
 
   // Explore/Query dialog — opened from a successful mount OR the mounted-catalogs
   // list, scoped to a single subscribed catalog. Lifted here so both entry points
@@ -130,7 +136,7 @@ export function DataShares() {
     if (handleGate(sh.status, sh.j)) { setShares([]); setRecipients([]); return; }
     setGate(null);
     if (!sh.j.ok) { setErr(sh.j.error || `HTTP ${sh.status}`); setShares([]); }
-    else { setHost(sh.j.host || null); setShares(sh.j.shares || []); }
+    else { setHost(sh.j.host || null); setShares(sh.j.shares || []); setBackend(sh.j.backend === 'loom' ? 'loom' : 'databricks'); }
     if (rc.j.ok) setRecipients(rc.j.recipients || []); else setRecipients([]);
   }, []);
 
@@ -185,6 +191,28 @@ export function DataShares() {
       )}
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
 
+      {/* HONEST DISCLOSURE (no-vaporware.md). On the Loom backend every control on
+          this surface is real and writes to Cosmos — publish, grant, revoke,
+          suspend, and the server config manifest. What is NOT in this build is the
+          recipient-facing protocol endpoint: the sharing server has internal-only
+          ingress and, with the proxy split into a follow-up change, no external
+          caller. So a recipient cannot read a granted share YET, and saying nothing
+          would let an operator believe a publish is live when it is not. */}
+      {backend === 'loom' && !gate && tab === 'outbound' && (
+        <MessageBar intent="warning" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Publishing is live; recipient reads are not yet</MessageBarTitle>
+            Shares, recipients and grants are recorded and the server manifest renders, so
+            everything on this tab does exactly what it says. The recipient-facing Delta Sharing
+            endpoint (<code>/api/delta-sharing/*</code>) is not part of this deployment — the
+            sharing server has internal-only ingress and no external caller — so an external
+            recipient cannot read a granted share until that endpoint ships. Grants and
+            revocations you make now take effect the moment it does. See
+            <code>docs/fiab/security/loom-sharing-threat-model.md</code>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
       {tab === 'inbound' && !gate && (
         <InboundPanel
           providers={providers} host={host} styles={s} onChange={loadInbound}
@@ -193,7 +221,7 @@ export function DataShares() {
       )}
       {tab === 'outbound' && !gate && (
         <OutboundPanel
-          shares={shares} recipients={recipients} host={host} styles={s}
+          shares={shares} recipients={recipients} host={host} styles={s} backend={backend}
           onChange={loadOutbound} busy={busy} setBusy={setBusy}
         />
       )}
@@ -684,12 +712,13 @@ function AddProviderDialog({ open, setOpen, onDone }: { open: boolean; setOpen: 
 /* ----------------------------- OUTBOUND ----------------------------- */
 
 function OutboundPanel({
-  shares, recipients, host, styles, onChange, busy, setBusy,
+  shares, recipients, host, styles, backend, onChange, busy, setBusy,
 }: {
   shares: Share[] | null;
   recipients: Recipient[] | null;
   host: string | null;
   styles: ReturnType<typeof useStyles>;
+  backend: 'loom' | 'databricks';
   onChange: () => void;
   busy: boolean;
   setBusy: (b: boolean) => void;
@@ -715,7 +744,7 @@ function OutboundPanel({
       <TileGrid minTileWidth={280}>
         {(shares || []).map((sh) => (
           <ShareCard key={sh.name} share={sh} recipients={recipients || []} host={host} styles={styles}
-            onChange={onChange} busy={busy} setBusy={setBusy} />
+            backend={backend} onChange={onChange} busy={busy} setBusy={setBusy} />
         ))}
       </TileGrid>
 
@@ -745,6 +774,7 @@ function OutboundPanel({
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Auth</TableHeaderCell>
               <TableHeaderCell>Activation</TableHeaderCell>
+              {backend === 'loom' && <TableHeaderCell>Access</TableHeaderCell>}
               <TableHeaderCell>Actions</TableHeaderCell>
             </TableRow>
           </TableHeader>
@@ -761,6 +791,35 @@ function OutboundPanel({
                       </Tooltip>
                     : <Caption1 className={styles.hint}>—</Caption1>}
                 </TableCell>
+                {backend === 'loom' && (
+                  <TableCell>
+                    {/* Suspend keeps the record, the grants, and the audit history
+                        while stopping every protocol call on the next request —
+                        DELETE loses the grant list an investigation needs. */}
+                    <Tooltip
+                      relationship="description"
+                      content={r.disabled
+                        ? 'Suspended: this recipient is refused at authentication. Its grants are preserved.'
+                        : 'Active. Turn off to suspend all access immediately without deleting the recipient.'}
+                    >
+                      <Switch
+                        checked={!r.disabled}
+                        disabled={busy}
+                        label={r.disabled ? 'Suspended' : 'Active'}
+                        aria-label={`Access for ${r.name}`}
+                        onChange={async (_, d) => {
+                          setBusy(true);
+                          await clientFetch(`/api/marketplace/sharing/recipients/${encodeURIComponent(r.name)}`, {
+                            method: 'PATCH',
+                            headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ disabled: !d.checked }),
+                          });
+                          setBusy(false); onChange();
+                        }}
+                      />
+                    </Tooltip>
+                  </TableCell>
+                )}
                 <TableCell>
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete recipient"
                     onClick={async () => {
@@ -776,16 +835,17 @@ function OutboundPanel({
       )}
 
       <NewShareDialog open={shareOpen} setOpen={setShareOpen} onDone={onChange} />
-      <NewRecipientDialog open={recipOpen} setOpen={setRecipOpen} onDone={onChange} />
+      <NewRecipientDialog open={recipOpen} setOpen={setRecipOpen} backend={backend} onDone={onChange} />
     </>
   );
 }
 
 function ShareCard({
-  share, recipients, host, styles, onChange, busy, setBusy,
+  share, recipients, host, styles, backend, onChange, busy, setBusy,
 }: {
   share: Share; recipients: Recipient[]; host: string | null;
-  styles: ReturnType<typeof useStyles>; onChange: () => void; busy: boolean; setBusy: (b: boolean) => void;
+  styles: ReturnType<typeof useStyles>; backend: 'loom' | 'databricks';
+  onChange: () => void; busy: boolean; setBusy: (b: boolean) => void;
 }) {
   const [addObjOpen, setAddObjOpen] = useState(false);
   const [grant, setGrant] = useState('');
@@ -821,16 +881,29 @@ function ShareCard({
             setBusy(false); onChange();
           }} />
       </div>
-      <AddObjectDialog open={addObjOpen} setOpen={setAddObjOpen} shareName={share.name} host={host} onDone={onChange} />
+      <AddObjectDialog open={addObjOpen} setOpen={setAddObjOpen} shareName={share.name} host={host}
+        backend={backend} onDone={onChange} />
     </Card>
   );
 }
 
 /** Cascading Catalog → Schema → Table picker over /api/catalog/browse (UC). */
 function AddObjectDialog({
-  open, setOpen, shareName, host, onDone,
-}: { open: boolean; setOpen: (b: boolean) => void; shareName: string; host: string | null; onDone: () => void }) {
+  open, setOpen, shareName, host, backend, onDone,
+}: {
+  open: boolean; setOpen: (b: boolean) => void; shareName: string; host: string | null;
+  backend: 'loom' | 'databricks'; onDone: () => void;
+}) {
   const s = useStyles();
+  // LU-9 Loom backend: a share entry is a schema + table name + the ADLS Gen2
+  // Delta root the sharing server reads. The Databricks cascade below browses a
+  // Unity Catalog metastore, which does not exist on this path.
+  const [loomSchema, setLoomSchema] = useState('');
+  const [loomTable, setLoomTable] = useState('');
+  const [loomLocation, setLoomLocation] = useState('');
+  // Change Data Feed. The protocol's `changes` endpoint only works for a table
+  // the server was told to share history for, so this has to reach the manifest.
+  const [loomHistory, setLoomHistory] = useState(false);
   const [catalogs, setCatalogs] = useState<string[]>([]);
   const [schemas, setSchemas] = useState<string[]>([]);
   const [tables, setTables] = useState<Array<{ full: string; name: string }>>([]);
@@ -844,9 +917,14 @@ function AddObjectDialog({
     return j.ok ? (j.nodes || []) : [];
   }, [host]);
 
-  useEffect(() => { if (open && host) void browse([]).then((n) => setCatalogs(n.map((x: any) => x.id))); }, [open, host, browse]);
-  useEffect(() => { setSch(''); setTbl(''); setSchemas([]); setTables([]); if (cat) void browse([cat]).then((n) => setSchemas(n.map((x: any) => x.id))); }, [cat, browse]);
-  useEffect(() => { setTbl(''); setTables([]); if (cat && sch) void browse([cat, sch]).then((n) => setTables(n.filter((x: any) => x.kind === 'table').map((x: any) => ({ full: x.meta?.full_name || `${cat}.${sch}.${x.id}`, name: x.id })))); }, [cat, sch, browse]);
+  // The cascade below browses a Unity Catalog metastore. On the Loom backend
+  // `host` is the sharing SERVER's FQDN and no metastore exists, so firing these
+  // would issue /api/catalog/browse?source=unity-catalog&path=<sharing-fqdn> on
+  // every dialog open — a call to the wrong backend that can only fail.
+  const ucBrowse = backend !== 'loom';
+  useEffect(() => { if (ucBrowse && open && host) void browse([]).then((n) => setCatalogs(n.map((x: any) => x.id))); }, [ucBrowse, open, host, browse]);
+  useEffect(() => { setSch(''); setTbl(''); setSchemas([]); setTables([]); if (ucBrowse && cat) void browse([cat]).then((n) => setSchemas(n.map((x: any) => x.id))); }, [ucBrowse, cat, browse]);
+  useEffect(() => { setTbl(''); setTables([]); if (ucBrowse && cat && sch) void browse([cat, sch]).then((n) => setTables(n.filter((x: any) => x.kind === 'table').map((x: any) => ({ full: x.meta?.full_name || `${cat}.${sch}.${x.id}`, name: x.id })))); }, [ucBrowse, cat, sch, browse]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
@@ -854,6 +932,33 @@ function AddObjectDialog({
         <DialogBody>
           <DialogTitle>Add a table to {shareName}</DialogTitle>
           <DialogContent>
+            {backend === 'loom' ? (
+              <div className={s.formGrid}>
+                <Field label="Schema" required className={s.field} hint="The middle level of share.schema.table.">
+                  <Input value={loomSchema} onChange={(_, d) => setLoomSchema(d.value)} placeholder="gold" />
+                </Field>
+                <Field label="Table" required className={s.field} hint="The name the recipient sees.">
+                  <Input value={loomTable} onChange={(_, d) => setLoomTable(d.value)} placeholder="revenue" />
+                </Field>
+                <Field
+                  label="ADLS Delta location" required className={s.field}
+                  hint="abfss://<container>@<account>.dfs.<suffix>/<path> — the Delta table root in this estate's lake."
+                >
+                  <Input value={loomLocation} onChange={(_, d) => setLoomLocation(d.value)}
+                    placeholder="abfss://lake@stloom.dfs.core.usgovcloudapi.net/gold/revenue" />
+                </Field>
+                <Field
+                  label="Share history (CDF)" className={s.field}
+                  hint="Publishes the Delta change data feed as well as the current snapshot, so the recipient's client can call /changes. Without it, a CDF read fails at the server."
+                >
+                  <Checkbox
+                    checked={loomHistory}
+                    onChange={(_, d) => setLoomHistory(!!d.checked)}
+                    label="Recipients may read table history"
+                  />
+                </Field>
+              </div>
+            ) : (
             <div className={s.formGrid}>
               <Field label="Catalog" required className={s.field}>
                 <Select value={cat} onChange={(_, d) => setCat(d.value)}>
@@ -874,19 +979,39 @@ function AddObjectDialog({
                 <Input value={sharedAs} onChange={(_, d) => setSharedAs(d.value)} placeholder={tbl.split('.').pop() || ''} />
               </Field>
             </div>
+            )}
+            {backend === 'loom' && (
+              <MessageBar intent="info" layout="multiline" style={{ marginTop: tokens.spacingVerticalS }}>
+                <MessageBarBody>
+                  Recipients see this table after the sharing server&apos;s manifest is re-applied — it
+                  reads its share list at boot. Grants and revocations take effect immediately.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
-            <Button appearance="primary" disabled={busy || !tbl} onClick={async () => {
-              setBusy(true); setErr(null);
-              const r = await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(shareName)}`, {
-                method: 'PATCH', headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ addObjects: [{ name: tbl, data_object_type: 'TABLE', ...(sharedAs ? { shared_as: sharedAs } : {}) }] }),
-              });
-              const j = await r.json(); setBusy(false);
-              if (!j.ok) { setErr(j.error || 'Failed'); return; }
-              setOpen(false); setCat(''); setSch(''); setTbl(''); setSharedAs(''); onDone();
-            }}>{busy ? 'Adding…' : 'Add table'}</Button>
+            <Button
+              appearance="primary"
+              disabled={busy || (backend === 'loom' ? !(loomSchema && loomTable && loomLocation) : !tbl)}
+              onClick={async () => {
+                setBusy(true); setErr(null);
+                const addObjects = backend === 'loom'
+                  ? [{
+                    schema: loomSchema.trim(), name: loomTable.trim(),
+                    location: loomLocation.trim(), historyShared: loomHistory,
+                  }]
+                  : [{ name: tbl, data_object_type: 'TABLE', ...(sharedAs ? { shared_as: sharedAs } : {}) }];
+                const r = await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(shareName)}`, {
+                  method: 'PATCH', headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ addObjects }),
+                });
+                const j = await r.json(); setBusy(false);
+                if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
+                setOpen(false); setCat(''); setSch(''); setTbl(''); setSharedAs('');
+                setLoomSchema(''); setLoomTable(''); setLoomLocation(''); setLoomHistory(false); onDone();
+              }}
+            >{busy ? 'Adding…' : 'Add table'}</Button>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>
           </DialogActions>
         </DialogBody>
@@ -926,7 +1051,14 @@ function NewShareDialog({ open, setOpen, onDone }: { open: boolean; setOpen: (b:
   );
 }
 
-function NewRecipientDialog({ open, setOpen, onDone }: { open: boolean; setOpen: (b: boolean) => void; onDone: () => void }) {
+function NewRecipientDialog({ open, setOpen, backend, onDone }: {
+  open: boolean; setOpen: (b: boolean) => void; backend: 'loom' | 'databricks'; onDone: () => void;
+}) {
+  // LU-9 Loom backend: a recipient IS a set of Entra principals. There is no
+  // activation URL to surface and no long-lived bearer profile to mail — that
+  // file would be both the identity and the credential, unrevocable per
+  // recipient and unattributable per call.
+  const [principals, setPrincipals] = useState('');
   const s = useStyles();
   const [name, setName] = useState(''); const [auth, setAuth] = useState('TOKEN');
   const [gmid, setGmid] = useState(''); const [comment, setComment] = useState('');
@@ -948,13 +1080,31 @@ function NewRecipientDialog({ open, setOpen, onDone }: { open: boolean; setOpen:
             ) : (
               <>
                 <Field label="Recipient name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="partner-acme" /></Field>
+                {backend === 'loom' ? (
+                  <>
+                    <Field
+                      label="Entra principal id(s)" required style={{ marginTop: tokens.spacingVerticalS }}
+                      hint="Object id (oid) of a guest/B2B user, or application id of a service principal. Comma-separated for several. The recipient presents an Entra token — Loom mints no long-lived bearer profile."
+                    >
+                      <Input value={principals} onChange={(_, d) => setPrincipals(d.value)}
+                        placeholder="00000000-0000-0000-0000-000000000000" />
+                    </Field>
+                    <MessageBar intent="info" layout="multiline" style={{ marginTop: tokens.spacingVerticalS }}>
+                      <MessageBarBody>
+                        Created with no shares. Grant it a share from the share card — creation never
+                        implies access.
+                      </MessageBarBody>
+                    </MessageBar>
+                  </>
+                ) : (
                 <Field label="Authentication" style={{ marginTop: tokens.spacingVerticalS }}>
                   <Select value={auth} onChange={(_, d) => setAuth(d.value)}>
                     <option value="TOKEN">TOKEN — open Delta Sharing (any client)</option>
                     <option value="DATABRICKS">DATABRICKS — another Unity Catalog metastore</option>
                   </Select>
                 </Field>
-                {auth === 'DATABRICKS' && (
+                )}
+                {backend !== 'loom' && auth === 'DATABRICKS' && (
                   <Field label="Consumer sharing identifier" required style={{ marginTop: tokens.spacingVerticalS }}
                     hint="The recipient metastore's global sharing id (cloud:region:uuid).">
                     <Input value={gmid} onChange={(_, d) => setGmid(d.value)} placeholder="azure:eastus2:…" />
@@ -967,21 +1117,28 @@ function NewRecipientDialog({ open, setOpen, onDone }: { open: boolean; setOpen:
           </DialogContent>
           <DialogActions>
             {!activation && (
-              <Button appearance="primary" disabled={busy || !name || (auth === 'DATABRICKS' && !gmid)} onClick={async () => {
-                setBusy(true); setErr(null);
-                const r = await clientFetch('/api/marketplace/sharing/recipients', {
-                  method: 'POST', headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ name, authentication_type: auth, comment, ...(auth === 'DATABRICKS' ? { data_recipient_global_metastore_id: gmid } : {}) }),
-                });
-                const j = await r.json(); setBusy(false);
-                if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
-                onDone();
-                const url = j.recipient?.tokens?.[0]?.activation_url;
-                if (url) setActivation(url); else { setOpen(false); setName(''); }
-              }}>{busy ? 'Creating…' : 'Create'}</Button>
+              <Button
+                appearance="primary"
+                disabled={busy || !name || (backend === 'loom' ? !principals.trim() : auth === 'DATABRICKS' && !gmid)}
+                onClick={async () => {
+                  setBusy(true); setErr(null);
+                  const body = backend === 'loom'
+                    ? { name, comment, principalIds: principals.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean) }
+                    : { name, authentication_type: auth, comment, ...(auth === 'DATABRICKS' ? { data_recipient_global_metastore_id: gmid } : {}) };
+                  const r = await clientFetch('/api/marketplace/sharing/recipients', {
+                    method: 'POST', headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(body),
+                  });
+                  const j = await r.json(); setBusy(false);
+                  if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
+                  onDone();
+                  const url = j.recipient?.tokens?.[0]?.activation_url;
+                  if (url) setActivation(url); else { setOpen(false); setName(''); setPrincipals(''); }
+                }}
+              >{busy ? 'Creating…' : 'Create'}</Button>
             )}
             <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary" onClick={() => { setName(''); setComment(''); setGmid(''); }}>Close</Button>
+              <Button appearance="secondary" onClick={() => { setName(''); setComment(''); setGmid(''); setPrincipals(''); }}>Close</Button>
             </DialogTrigger>
           </DialogActions>
         </DialogBody>

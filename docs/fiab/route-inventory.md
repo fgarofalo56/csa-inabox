@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1659 |
+| Total routes | 1660 |
 | Public (no session) | 116 |
-| Session-only | 568 |
+| Session-only | 564 |
 | Owner-scoped | 696 |
-| Admin | 279 |
+| Admin | 284 |
 | Gated (backend config) | 530 |
 | Areas | 119 |
 
@@ -1808,13 +1808,14 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `marketplace/products/[id]/subscribe/route.ts` | POST | owner-scoped |  | — |
 | `marketplace/products/route.ts` | GET POST | owner-scoped |  | — |
 | `marketplace/sharing/catalogs/route.ts` | GET DELETE | session-only |  | — |
+| `marketplace/sharing/manifest/route.ts` | GET | admin |  | — |
 | `marketplace/sharing/providers/[name]/route.ts` | GET POST DELETE | session-only |  | — |
 | `marketplace/sharing/providers/route.ts` | GET POST | session-only | ● | — |
 | `marketplace/sharing/query/route.ts` | POST | session-only | ● | Databricks |
-| `marketplace/sharing/recipients/[name]/route.ts` | GET DELETE | session-only |  | — |
-| `marketplace/sharing/recipients/route.ts` | GET POST | session-only |  | — |
-| `marketplace/sharing/shares/[name]/route.ts` | GET PATCH DELETE | session-only |  | — |
-| `marketplace/sharing/shares/route.ts` | GET POST | session-only |  | — |
+| `marketplace/sharing/recipients/[name]/route.ts` | GET PATCH DELETE | admin |  | — |
+| `marketplace/sharing/recipients/route.ts` | GET POST | admin |  | — |
+| `marketplace/sharing/shares/[name]/route.ts` | GET PATCH DELETE | admin |  | — |
+| `marketplace/sharing/shares/route.ts` | GET POST | admin |  | — |
 | `marketplace/subscriptions/[sid]/keys/regenerate/route.ts` | POST | session-only |  | APIM |
 | `marketplace/subscriptions/[sid]/keys/route.ts` | POST | session-only |  | APIM |
 | `marketplace/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only |  | APIM |

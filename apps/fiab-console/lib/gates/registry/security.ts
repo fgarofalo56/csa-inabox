@@ -110,4 +110,23 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
     },
     legacyCodes: ['unity_authz_not_configured'],
   },
+  // LU-9 — the open Delta Sharing endpoint. Fix-it is a WIZARD because the value
+  // only takes effect once the loom-sharing Container App is deployed WITH a Key
+  // Vault bearer the Console also holds: setting LOOM_SHARING_URL alone would
+  // point the BFF at nothing, and deploying the server without the shared bearer
+  // would leave the Console unable to authenticate to it. Both halves, one
+  // secret. Until wired, the Marketplace Data-shares surface keeps its existing
+  // Databricks backend (or its honest 501 where there is no Databricks).
+  'svc-loom-sharing': {
+    surfaces: [
+      { path: '/marketplace', label: 'Marketplace — Data shares (publish + grant)' },
+      { path: '/api/marketplace/sharing/*', label: 'Sharing BFF (shares / recipients / manifest)' },
+    ],
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'Two halves, ONE Key Vault secret. (1) SERVER: deploy modules/compute/loom-sharing-app.bicep with sharingBearerSecretUri=<KV secret URI>, adlsAccount/adlsClientId/adlsClientSecretUri for the read-only storage principal (hadoop-azure cannot use a Container Apps managed identity - it asks the classic IMDS endpoint ACA does not serve), and consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR>. Ingress is INTERNAL in every configuration by design. (2) CONSOLE: set LOOM_SHARING_URL to the app FQDN and the LOOM_SHARING_BEARER secretref to the SAME Key Vault secret. This wires the CONTROL plane only - publish, grant/revoke, suspend, manifest, audit. The recipient-facing protocol endpoint (and the recipient credential pin it needs) is not in this build; the server has no external caller. See docs/fiab/security/loom-sharing-threat-model.md.',
+    },
+    autoResolveNote: 'Unset → the Marketplace Data-shares surface uses the Databricks Delta Sharing backend where a workspace is bound. In Azure Government (no Databricks UC endpoint) that surface has no backend at all until loom-sharing is deployed, which is exactly the gap LU-9 closes.',
+    legacyCodes: [],
+  },
 };
