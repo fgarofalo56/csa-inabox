@@ -85,11 +85,13 @@ function base(t?: AdfArmTarget): string {
   return `${ARM_BASE}/subscriptions/${sub(eff)}/resourceGroups/${rg(eff)}/providers/Microsoft.DataFactory/factories/${adfName(eff)}`;
 }
 
-/** The EFFECTIVE factory coordinates {@link base} would build from — explicit
- *  `target`, else the selected-factory override, else the env default. Exported
- *  so the bind route can persist the actually-targeted factory onto the item and
- *  tests can assert selected-wins / env-fallback. Throws (via `required`) only
- *  when a coord is neither supplied nor in the env. */
+/**
+ * The EFFECTIVE factory coordinates {@link base} would build from — the
+ * explicit `target`, else the selected-factory override, else the env default.
+ * Exported so the bind route can persist the actually-targeted factory onto the
+ * item and so unit tests can assert selected-wins / env-fallback resolution.
+ * Throws (via `required`) only when a coord is neither supplied nor in the env.
+ */
 export function resolveFactoryCoords(t?: AdfArmTarget): { subscriptionId: string; resourceGroup: string; factoryName: string } {
   const eff = effectiveTarget(t);
   return { subscriptionId: sub(eff), resourceGroup: rg(eff), factoryName: adfName(eff) };
@@ -168,9 +170,12 @@ async function callRaw(url: string, init?: RequestInit): Promise<Response> {
 // resourceGroup} by name via Azure Resource Graph, cache it, and retry by
 // rewriting the /subscriptions/<sub>/resourceGroups/<rg> segment — a single
 // choke-point fix that covers every ARM op without touching its call site.
-// Scoped to the DEFAULT factory only: cross-factory `externalBase(...)` URLs and
-// explicit domain `target` URLs already carry authoritative coords and are NOT
-// rewritten (discovery keys on LOOM_ADF_NAME, correct only for the default).
+//
+// Scoped to the DEFAULT factory only: URLs that target the configured default
+// sub+rg+factory name. Cross-factory `externalBase(...)` URLs and explicit
+// domain `target` URLs (which already carry authoritative coords) are NOT
+// rewritten — discovery keys on LOOM_ADF_NAME, which is only correct for the
+// default factory.
 // ---------------------------------------------------------------------------
 
 let resolvedDefaultCoords: { subscriptionId: string; resourceGroup: string } | null = null;
@@ -405,16 +410,6 @@ export interface AdfPipelineRun {
   isLatest?: boolean;
 }
 
-/** ONE pipeline run by id (ARM "Pipeline Runs - Get"); null on 404. The
- *  response's `pipelineName` is the ownership oracle for a caller-supplied
- *  `runId` — see the data-pipeline output route, which must prove the run
- *  belongs to the item before reading or harvesting it. */
-export async function getPipelineRun(runId: string): Promise<AdfPipelineRun | null> {
-  const r = await call(`${base()}/pipelineruns/${encodeURIComponent(runId)}?api-version=${API}`);
-  if (r.status === 404) return null;
-  return jsonOrThrow<AdfPipelineRun>(r, `getPipelineRun(${runId})`);
-}
-
 export async function listPipelineRuns(
   pipelineName?: string,
   windowDays = 7,
@@ -438,23 +433,25 @@ export async function listPipelineRuns(
 }
 
 // ============================================================
-// Log Analytics fallback — queries the typed ADFPipelineRun / ADFActivityRun
-// tables when LOOM_ADF_LOG_ANALYTICS_WORKSPACE is set.
+// Log Analytics fallback — queries the typed ADFPipelineRun /
+// ADFActivityRun tables when LOOM_ADF_LOG_ANALYTICS_WORKSPACE is set.
 //
-// ADF's native monitoring API (queryPipelineRuns / queryActivityruns, above)
-// enforces a 45-day maximum retention window — an older run returns ZERO rows
-// even though it happened. Log Analytics keeps the diagnostic logs for the full
-// workspace retention (90d default, up to 730), so this is the Output-pane
-// fallback for "where did my older runs go?".
+// ADF's native monitoring API (queryPipelineRuns / queryActivityruns,
+// used above) enforces a 45-day maximum retention window — a run older
+// than that returns ZERO rows even though it happened. Log Analytics keeps
+// the diagnostic logs for the full workspace retention (90 days default,
+// up to 730), so this is the Output-pane fallback for "where did my older
+// runs go?".
 //
-// Query endpoint is cloud-aware via LOOM_LOG_ANALYTICS_ENDPOINT: Commercial /
-// GCC https://api.loganalytics.azure.com (default), GCC-High / IL5
-// https://api.loganalytics.us. (ods.opinsights.azure.us is the *ingestion*
-// host, not the query API.) Same credential chain as the ARM calls above.
+// The query endpoint is cloud-aware via LOOM_LOG_ANALYTICS_ENDPOINT:
+//   Commercial / GCC: https://api.loganalytics.azure.com  (default)
+//   GCC-High / IL5  : https://api.loganalytics.us         (Azure Government)
+// (Note: ods.opinsights.azure.us is the *ingestion* host — the query API
+//  is api.loganalytics.us.) Same credential chain as the ARM calls above.
 //
-// Requires adf.bicep's diagnosticSettings in Dedicated mode
-// (logAnalyticsDestinationType: 'Dedicated') so logs land in the typed tables
-// rather than the legacy AzureDiagnostics catch-all.
+// Requires adf.bicep's diagnosticSettings to run in Dedicated
+// (logAnalyticsDestinationType: 'Dedicated') mode so logs land in the typed
+// tables rather than the legacy AzureDiagnostics catch-all.
 // ============================================================
 
 const LA_ENDPOINT_ADF =

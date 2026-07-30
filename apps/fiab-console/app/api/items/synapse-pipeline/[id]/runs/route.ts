@@ -10,21 +10,10 @@
  * state.pipelineName binding. Unbound items return an empty run list (the
  * editor shows the bind picker) rather than 412 — run history is a passive
  * panel and shouldn't hard-error before binding.
- *
- * OWNERSHIP (round-3 remediation of the LU-8 review's S2 CLASS). `?runId=` is
- * caller-supplied and Synapse run ids are WORKSPACE-scoped, not item-scoped, so
- * without a check any authenticated owner of any Loom pipeline item could read
- * ANOTHER pipeline's per-activity `input`/`output` payloads — which carry the
- * source/sink connection details, storage paths and row counts of a run they
- * have no claim to. The sibling `data-pipeline/[id]/output` route grew this
- * gate; this route and `adf-pipeline/[id]/runs` had the identical shape and
- * were left open, which is precisely the "close the reported call site, leave
- * the sibling" pattern the review named. All three now prove
- * `run.pipelineName === <the item's bound pipeline>` BEFORE reading activities.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { queryPipelineRuns, listActivityRuns, getPipelineRunOrNull } from '@/lib/azure/synapse-dev-client';
+import { queryPipelineRuns, listActivityRuns } from '@/lib/azure/synapse-dev-client';
 import { resolveBinding, UnboundPipelineError, ItemNotFoundError } from '@/lib/azure/pipeline-binding';
 import { withSession } from '@/lib/api/route-toolkit';
 
@@ -71,13 +60,6 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
 
   if (runId) {
     try {
-      // OWNERSHIP FIRST — prove the run belongs to the BOUND pipeline before
-      // any activity payload is read. A 404 (not 403) so the response cannot
-      // be used to enumerate which run ids exist in the workspace.
-      const run = await getPipelineRunOrNull(runId);
-      if (!run || run.pipelineName !== pipelineName) {
-        return NextResponse.json({ ok: false, error: 'run not found' }, { status: 404 });
-      }
       const acts = await listActivityRuns(runId);
       return NextResponse.json({
         ok: true,

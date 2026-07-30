@@ -27,6 +27,11 @@
  */
 
 import type { ThreadColumnMapping } from '@/lib/thread/thread-edges';
+// The ONLY slash-trim / scheme-probe primitives allowed on the ingest path.
+// Both are index-based; the regex spellings they replace are polynomial-ReDoS
+// vectors on a body this route accepts up to 5 MB of. `dataset-naming` is pure
+// (no imports of its own), so this stays an SDK-free leaf module.
+import { trimTrailingSlashes, trimLeadingSlashes, hasUriScheme } from '@/lib/lineage/dataset-naming';
 
 // ── Binding caps (rev-2 security redesign #3) ───────────────────────────────
 /** Body-size cap for one POSTed RunEvent — mirrors the eventhouse ingest
@@ -81,13 +86,34 @@ export type MapResult =
  * and name = path; other producers put the whole URI in `name`. Lowercased so
  * the result feeds `unified-lineage.normalizeIdentity` (`path:` keys are
  * lowercase) and prefix-matching is case-stable.
+ *
+ * DoS (CodeQL js/polynomial-redos, HIGH — measured, not assumed). This is the
+ * FIRST function every attacker-supplied dataset name in a 5 MB
+ * `POST /api/lineage/openlineage` body passes through, and until this commit it
+ * ran `namespace.replace(/\/+$/, '')`. `/\/+$/` retries from every position
+ * when the slash run is followed by a non-slash tail, which is quadratic:
+ *
+ *     namespace = 'abfss://data@st.dfs.core.windows.net/silver' + '/'*N + 'a'
+ *     N =  20_000 ->    219 ms
+ *     N =  50_000 ->  1_357 ms
+ *     N = 100_000 ->  6_362 ms
+ *     N = 200_000 -> 28_743 ms      (one CPU core, one field)
+ *
+ * `namespace` has no length cap in `parseRunEvent` (only `name`, `runId` and
+ * `job.name` do) and `OL_MAX_DATASETS` is 50, so a single in-budget request
+ * could buy minutes of event-loop time. The trims are index-based now and the
+ * scheme probe runs on a slice capped at 32 chars — see `dataset-naming`, which
+ * owns the only slash-trimming primitives on this path so no future edit here
+ * can reintroduce the regex form. A previous commit (`bc267d6d`) claimed this
+ * whole path was clear; it had fixed `dataset-naming` and `unified-lineage` and
+ * MISSED this call site, which is upstream of both.
  */
 export function datasetUri(ds: OpenLineageDatasetRef): string {
-  const ns = String(ds.namespace || '').trim().replace(/\/+$/, '');
+  const ns = trimTrailingSlashes(String(ds.namespace || '').trim());
   const name = String(ds.name || '').trim();
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(name)) return name.toLowerCase();
+  if (hasUriScheme(name)) return name.toLowerCase();
   if (!ns) return name.toLowerCase();
-  return `${ns}/${name.replace(/^\/+/, '')}`.toLowerCase();
+  return `${ns}/${trimLeadingSlashes(name)}`.toLowerCase();
 }
 
 /** Compress an OpenLineage `transformations[]` entry into the L1 `transform`

@@ -2,11 +2,14 @@
  * Physical dataset URI → Loom item resolution, shared by every OpenLineage
  * producer (LU-8).
  *
- * Extracted verbatim from `app/api/lineage/openlineage/route.ts` (L2) so the
- * listener ingest, the Synapse pipeline emitter, and the Synapse Spark emitter
- * all resolve dataset URIs to items THE SAME WAY. Two producers with two copies
- * of "which item owns this path?" is how a merged lineage graph quietly splits
- * into two.
+ * Extracted verbatim from `app/api/lineage/openlineage/route.ts` (L2) so every
+ * OpenLineage producer resolves dataset URIs to items THE SAME WAY. Two
+ * producers with two copies of "which item owns this path?" is how a merged
+ * lineage graph quietly splits into two — and, because a resolved LOCAL owner
+ * short-circuits the cross-workspace forgery probe below it, how one producer's
+ * looser matcher becomes the other's authorization bypass. The ingest route is
+ * the only caller on this branch; the Synapse emitters that share it arrive in
+ * their own PR.
  *
  * ONE behavioural fix rides along with the extraction: both the stored item
  * paths and the incoming dataset URI are now run through
@@ -150,18 +153,4 @@ export async function loadForeignPathItems(workspaceId: string): Promise<PathIte
  */
 export async function findForeignOwner(uri: string, workspaceId: string): Promise<PathItem | null> {
   return resolveOwner(uri, await loadForeignPathItems(workspaceId));
-}
-
-/**
- * A findForeignOwner that loads the foreign candidate set at most ONCE, for
- * callers probing many URIs in a single request (the Synapse harvest walks
- * every endpoint of every emitted event). Same decision, one cross-partition
- * query instead of N.
- */
-export function foreignOwnerProbe(workspaceId: string): (uri: string) => Promise<PathItem | null> {
-  let pending: Promise<PathItem[]> | null = null;
-  return async (uri: string) => {
-    if (!pending) pending = loadForeignPathItems(workspaceId);
-    return resolveOwner(uri, await pending);
-  };
 }

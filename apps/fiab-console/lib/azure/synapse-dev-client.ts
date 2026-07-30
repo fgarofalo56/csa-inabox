@@ -688,24 +688,6 @@ export async function getPipelineRun(runId: string): Promise<PipelineRun> {
 }
 
 /**
- * `getPipelineRun` that distinguishes "this run does not exist" (null) from
- * "Synapse could not tell us" (throws) — the ADF client's `getPipelineRun`
- * contract, mirrored here.
- *
- * That distinction is a SECURITY requirement for the `?runId=` ownership gates
- * in `items/synapse-pipeline/[id]/runs` and `items/data-pipeline/[id]/output`:
- * collapsing both cases (`.catch(() => null)`) means a transient 429/5xx is
- * reported to the caller as "run not found", so a run the user genuinely owns
- * disappears from the Output pane whenever Synapse throttles. Fail-closed on a
- * real 404, propagate everything else.
- */
-export async function getPipelineRunOrNull(runId: string): Promise<PipelineRun | null> {
-  const r = await callDev(`/pipelineruns/${encodeURIComponent(runId)}?api-version=${DEV_API}`);
-  if (r.status === 404) return null;
-  return jsonOrThrow<PipelineRun>(r, `getPipelineRun(${runId})`);
-}
-
-/**
  * Per-activity output for a single Synapse pipeline run (dev endpoint
  * `/pipelineruns/{runId}/queryActivityruns`). The Pipeline Copilot's error
  * assistant filters these to status==='Failed' to explain the REAL failure

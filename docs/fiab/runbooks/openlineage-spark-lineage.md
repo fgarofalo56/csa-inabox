@@ -111,36 +111,14 @@ Never one global static secret. `LOOM_OPENLINEAGE_AUTH_MODE` selects:
   (listener runs inside existing Spark sessions; ingest is the existing
   console).
 
-## LU-8 — Loom-side emitters (Synapse pipeline + Spark batch), no operator setup
+## LU-8a — ONE canonical dataset identity for every OpenLineage producer
 
 The listener above is the HIGHEST-fidelity source (it sees the physical plan, so
-it emits true column lineage). It is not the only one. LU-8 adds two emitters
-that run **inside the console** and need no pool config at all, so a merged
-lineage graph exists on day one:
-
-| Emitter | Trigger (real backend read) | Event | ThreadEdge `action` |
-|---------|-----------------------------|-------|---------------------|
-| **Synapse / ADF pipeline** | `GET /api/items/data-pipeline/[id]/jobs` (newest Succeeded run) and `…/output?runId=` — reads the pipeline definition, its datasets + linked services, and `queryActivityRuns` | one `RunEvent` per lineage-bearing **activity** (`job.name = <pipeline>.<activity>`), Copy `translator.mappings` → `columnLineage` facet | `openlineage-pipeline` |
-| **Synapse Spark batch** | `GET /api/items/spark-job-definition/[id]/runs/[runId]` — reads the Livy batch's own `livyInfo.jobCreationRequest` (the args + conf Loom submitted). No fallback to the item's stored draft: a draft edited after the run would attribute a fabricated edge to a real run. Only a batch whose Livy `name` carries this item's `loom-<name>-` submit prefix is harvested (Livy ids are pool-scoped). | one `RunEvent` per batch; datasets from `spark.loom.lineage.inputs/outputs` conf or `--input`/`--output` argv | `openlineage-spark` |
-
-Both build spec-valid OpenLineage 1.x `RunEvent`s (`lib/lineage/synapse-emitters.ts`,
-pure) and write them through the **same L2 sink** — `mapRunEventToEdges` →
-`recordThreadEdge` (`lib/lineage/synapse-lineage-harvest.ts`). No second store,
-no second mapper. Note the partition difference: the listener ingest is a
-machine path and writes with `machineSession(ws.tenantId)` (the workspace
-OWNER's partition); the harvests run inside an authenticated request and write
-with the caller's session. `run.runId` is a deterministic UUIDv5 of the run's
-natural key — which includes the submit time for a Spark batch, because Livy
-batch ids restart from 0 when a pool is recreated — so re-harvesting is
-idempotent for downstream OL consumers too. Only a **succeeded** run/activity
-emits `COMPLETE`; anything else maps to `FAIL`/`ABORT`, which the mapper drops —
-a failed copy never stamps lineage, and an UNKNOWN run status is treated as
-not-succeeded rather than skipping the gate.
-
-Honest limits (no fabrication): a Spark batch whose IO is not in its conf/argv
-emits nothing and returns a reason naming the listener; an ADF dataset that
-cannot be anchored to a physical location is skipped rather than rendered as an
-un-joinable node.
+it emits true column lineage). It has never been the only writer of the lineage
+store, and it is about to stop being the only *producer*: the Synapse pipeline /
+Spark batch emitters are the next PR. Everything below is the shared
+read/identity layer they and the existing ingest route both go through, landed on
+its own so it can be reviewed on its own.
 
 ### Canonical dataset naming (`lib/lineage/dataset-naming.ts`)
 
@@ -151,25 +129,32 @@ Spark write that names `…/_delta_log`). All of them reduce to ONE canonical
 identity, per the [OpenLineage naming spec](https://openlineage.io/docs/spec/naming)
 (docs release 1.52.0; RunEvent schema pinned to `1-0-5`):
 
-- **ADLS Gen2 / Blob** → namespace `abfss://{container}@{account}.dfs.{suffix}`,
-  name `/{path}`. `wasbs`/`abfs`/`https` dfs+blob spellings all fold in (one
-  storage account + container + path is one dataset), `_delta_log` /
-  `_spark_metadata` / part-file leaves fold onto the table folder, and the
-  identity is case-folded. Sovereign suffixes are carried through, never assumed.
-- **Synapse / SQL** → the OpenLineage dataset is namespace
-  `sqlserver://{host}:{port}` + name `{database}.{schema}.{table}`, and the
-  identity **persisted on the thread edge** is the bare 3-part
-  `{database}.{schema}.{table}` (`canonicalDatasetIdentity()`). That is the only
-  spelling `normalizeIdentity` turns into a `uc:` key, so the SQL sink collapses
-  onto the node the Unity Catalog overlay and the dbt L6 parser
+- **ADLS Gen2 / Blob** → the canonical identity is
+  `abfss://{container}@{account}.dfs.{suffix}/{path}`. `wasbs`/`abfs`/`https`
+  dfs+blob spellings all fold in (one storage account + container + path is one
+  dataset), `_delta_log` / `_spark_metadata` / part-file leaves fold onto the
+  table folder, and the identity is case-folded. Sovereign suffixes are carried
+  through, never assumed. OneLake deliberately opts OUT — it keeps its
+  pre-existing raw `path:` key rather than having a container fabricated out of a
+  Fabric workspace GUID.
+- **Synapse / SQL** → the identity **persisted on the thread edge** is the bare
+  3-part `{database}.{schema}.{table}` (`canonicalDatasetIdentity()`), reduced
+  from a `sqlserver://{host}:{port}/…` dataset URI. That is the only spelling
+  `normalizeIdentity` turns into a `uc:` key, so a SQL relation collapses onto
+  the node the Unity Catalog overlay and the dbt L6 parser
   (`physicalRelation()`, identical 3-part form) contribute. Persisting the full
-  `sqlserver://…` URI instead — as the first cut of LU-8 did — yields a node
-  that normalizes to itself and joins to nothing.
+  `sqlserver://…` URI instead — as the first cut of LU-8 did — yields a node that
+  normalizes to itself and joins to nothing.
+
+The module is the READ/IDENTITY half only. The OpenLineage dataset *builders* a
+Loom-side emitter needs (`storageDataset`, `sqlDataset`,
+`adfLocationToStorageUri`) arrive with the emitters that call them, rather than
+being parked here with no caller.
 
 ### Security properties of a dataset identity
 
-A dataset identity is **persisted** (thread edge, Cosmos document id, graph node
-id) and **rendered** (canvas node label), so it is treated as untrusted input:
+A dataset identity is **persisted** (thread edge, graph node id) and **rendered**
+(canvas node label), so it is treated as untrusted input:
 
 - `stripUriCredentials()` removes, before parsing: the query string (SAS
   `?sv=…&sig=…`) and fragment; URI userinfo (`https://user:pass@acct…`);
@@ -187,53 +172,72 @@ id) and **rendered** (canvas node label), so it is treated as untrusted input:
   oracle — mutating it to `/^.*$/` turns three specs red); `ACCOUNT_RE` is **not**
   a credential defense and never was — it is a well-formedness check that keeps a
   malformed authority out of the canonical `abfss://{container}@{account}` shape.
-  Asserted end-to-end in `lib/lineage/__tests__/lineage-security.test.ts` and
-  `lineage-security-r3.test.ts`.
 - An item's stored state path is canonicalized **without** the table-folder fold
   (`{ fold: false }`): folding an ownership CLAIM widens it to the parent folder,
-  and a resolved local owner suppresses the cross-workspace forgery probe.
-- Both producers run the same `findForeignOwner` probe. A dataset owned by an
-  item in another workspace is refused (never written, never labelled) and the
-  denial is audited (`lineage.cross-workspace-denied`); harvest writes are
-  audited too (`lineage.harvested`).
+  and a resolved local owner suppresses the cross-workspace forgery probe, so a
+  widened claim turns a would-be 403 into an allow. An OBSERVED dataset URI still
+  folds (the direction the `_delta_log` join needs), and `resolveOwner` matches an
+  observation both folded and literal so an item whose root genuinely ends in
+  `part-…` can still resolve itself.
 - The denial audit strips too. `auditCrossWorkspaceDenial` canonicalizes the URI
-  it writes to the Cosmos audit `target` and the SIEM stream, **inside the
+  it writes to the Cosmos audit `target` and the SIEM stream **inside the
   function**, not only at its callers — the audit log is a durable store exactly
   like the thread edge, and one producer forgetting to strip is how the first
   remediation left the ingest route leaking after the harvests were fixed.
-- Caller-supplied run identifiers gate **disclosure**, not only the write:
-  - **ADF / Synapse `?runId=`** must belong to the item's own bound pipeline
-    (`getPipelineRun` / `getPipelineRunOrNull`) before ANY activity `input`/
-    `output` is read, on all three routes that accept it —
-    `data-pipeline/[id]/output`, `synapse-pipeline/[id]/runs`, and
-    `adf-pipeline/[id]/runs`. On the ADF route the oracle runs inside the same
-    factory override as the activity read. The ownership answer is fail-closed
-    but not fail-stupid: a real 404 (a run past ADF's 45-day retention) falls
-    through to the Log Analytics `ADFPipelineRun` oracle, which is
-    PipelineName-filtered and returns the same last-50 set the runs list renders;
-    a transient 429/5xx propagates as a 502 instead of telling the owner their
-    run does not exist.
-  - **Livy `batchId`** is POOL-scoped, not item-scoped, and this estate runs one
-    shared pool. A batch without this item's submit-name prefix contributes no
-    lineage **and** comes back as a status-only projection: `livyInfo`
-    (jobCreationRequest = another team's argv, conf and storage paths), `log[]`,
-    `errorInfo`, `tags`, `submitterName` are dropped, with an honest
-    `redacted`/`redactedReason` the Runs tab renders instead of an empty log.
 
-Three joins were repaired by adopting it:
+### Denial of service — the parse path is index-based
+
+Every function above runs on dataset names lifted straight out of a 5 MB
+attacker-controlled `POST /api/lineage/openlineage` body, so a quadratic regex
+here is a reachable DoS, not a lint nit. `trimSlashes` / `trimTrailingSlashes` /
+`trimLeadingSlashes` (charCode scans), `hasUriScheme` / `splitUri`
+(`indexOf('://')`, with the only surviving regex applied to a scheme slice capped
+at 32 chars), `stripMalformedPort` (`lastIndexOf(':')` + digit check) and
+`parseStorageUri` (split on `://`, `@`, `.`) replace the regex forms.
+
+Measured, per field, on one core, before the rewrite:
+
+| slash-run length in `namespace` | time |
+| --- | --- |
+| 20 000 | 219 ms |
+| 50 000 | 1 357 ms |
+| 100 000 | 6 362 ms |
+| 200 000 | 28 743 ms |
+
+`/\/+$/` is quadratic only when the slash run is followed by a NON-slash tail
+(that forces `/+` to retry from every position) — i.e. exactly what a dataset
+name like `abfss://c@a.dfs…/x/////…////part-0` looks like. `namespace` has no
+length cap in `parseRunEvent` (only `name`, `run.runId` and `job.name` do) and
+`OL_MAX_DATASETS` is 50, so the end-to-end number is the one that matters:
+`mapRunEventToEdges` over 50 hostile datasets took **209 032 ms** with the regex
+restored — 3.5 minutes of event-loop time on a shared console replica, bought by
+ONE request that is inside every declared limit (under the 5 MB body cap, at the
+fan-out cap, one rate-limit token). Both figures are the recorded output of the
+mutation run in `lineage-security-r3.test.ts`, not estimates.
+
+**Correction to the record.** Commit `bc267d6d` ("kill the polynomial ReDoS on
+the OpenLineage ingest path") fixed `dataset-naming` and `unified-lineage` — the
+two modules CodeQL had flagged — and MISSED `openlineage-ingest.datasetUri()`,
+which runs BEFORE either of them on every dataset in the body and still ran
+`namespace.replace(/\/+$/, '')`. CodeQL never flagged that call site, so
+"alerts 7 to 0" was true and irrelevant. It is fixed here, and `dataset-naming`
+now owns the only slash-trimming primitives on this path so no future edit to the
+ingest module can reintroduce the regex form.
+
+### Three joins repaired
 
 1. `POST /api/lineage/openlineage` matched dataset URIs against item state paths
    **verbatim** — an item whose `state.adlsRoot` held the `https://…` spelling
    could never be matched by a Spark event, so those events were silently
-   skipped. Both sides are now canonicalized (`lib/lineage/dataset-item-resolver.ts`,
-   shared by all three producers).
+   skipped. Both sides are now canonicalized
+   (`lib/lineage/dataset-item-resolver.ts`, extracted from the route so every
+   producer shares one answer to "which item owns this path?").
 2. Weave/thread-edge endpoints only carried an `item:<id>` identity, so an edge
-   recorded against a physical path or a `catalog.schema.table` relation (the
-   emitters, and the dbt L6 parser) could never collapse onto the Purview /
-   Unity Catalog node for the same asset.
+   recorded against a physical path or a `catalog.schema.table` relation (the dbt
+   L6 parser today, the Synapse emitters next) could never collapse onto the
+   Purview / Unity Catalog node for the same asset.
 3. The Purview overlay derived its join key from `displayText` (usually just the
    leaf name) and ignored the Atlas **qualifiedName** — the actual FQN.
-
 ## MIG1 note (Cosmos doc shapes)
 
 No migration required: `ThreadEdge.columnMappings` is **additive** and shipped
@@ -243,19 +247,22 @@ upgrade. L2 only writes NEW edges in the L1 shape.
 
 ## Verification
 
-- Unit (LU-8): `lib/lineage/__tests__/dataset-naming.test.ts` (spelling
-  equivalences + the non-equivalences), `…/synapse-emitters.test.ts` (RunEvent
-  conformance, status→eventType, translator → columnLineage) and
-  `…/lineage-join.test.ts` — **the join proof**: it emits from BOTH sides over
-  the same folders (Spark by `…/_delta_log` argv, the pipeline by
-  fileSystem+folderPath on an https linked service) and asserts the real merge
-  engine renders ONE connected `bronze → silver → gold` chain that also collapses
-  with the Purview node for the same path. Negative/attack coverage lives in
-  `…/lineage-security.test.ts` (SAS + userinfo stripping end-to-end,
-  cross-workspace denial for BOTH producers, ownership-claim widening,
-  unattributed Livy batch, unknown-run-status gate, dedupe-after-failure) and
-  `lib/thread/__tests__/thread-edge-doc-id.test.ts` (id collision + 255-byte
-  limit).
+- Unit (LU-8a): `lib/lineage/__tests__/dataset-naming.test.ts` — spelling
+  equivalences AND the deliberate non-equivalences (different account /
+  container / path, and `sales` vs `sales_archive`), plus what
+  `canonicalDatasetIdentity` persists.
+- Attack (LU-8a): `lib/lineage/__tests__/lineage-ingest-security.test.ts` —
+  every case asserts a DENIAL: a SAS or userinfo reaching no persisted identity
+  and no rendered node id on the Azure path, the non-Azure passthrough and the
+  `{namespace, name}` join; a folded ownership CLAIM failing to swallow siblings;
+  the cross-workspace probe firing across the https/abfss spelling mismatch and
+  NOT firing on a prefix look-alike; OneLake keeping its own key.
+  `lineage-security-r3.test.ts` carries the mutation-named credential-strip cases
+  and the hostile-input budget guards (including
+  `openlineage-ingest.datasetUri`), and
+  `app/api/lineage/openlineage/__tests__/denial-audit-strip.test.ts` drives the
+  real route end-to-end and asserts neither the Cosmos audit row nor the SIEM
+  event carries the signature.
 - Unit: `lib/azure/__tests__/openlineage-ingest.test.ts` (golden RunEvent →
   declared column mappings; fan-out caps) and
   `lib/azure/__tests__/openlineage-auth.test.ts` (real-RS256 accept path;

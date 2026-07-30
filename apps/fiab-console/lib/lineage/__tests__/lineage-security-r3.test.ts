@@ -9,41 +9,7 @@
  * the fix, watching the spec go red, and then restoring it — the mutation is
  * named in each block comment so the next reviewer can repeat it.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-const edgesWritten: any[] = [];
-
-const mocks = vi.hoisted(() => ({
-  getPipeline: vi.fn(),
-  getDataset: vi.fn(),
-  getLinkedService: vi.fn(async () => null),
-  listActivityRuns: vi.fn(async () => []),
-  queryItems: vi.fn(async () => ({ resources: [] })),
-}));
-
-vi.mock('@/lib/azure/adf-client', () => ({
-  getPipeline: mocks.getPipeline,
-  getDataset: mocks.getDataset,
-  getLinkedService: mocks.getLinkedService,
-  listActivityRuns: mocks.listActivityRuns,
-}));
-
-vi.mock('@/lib/azure/cosmos-client', () => ({
-  itemsContainer: async () => ({
-    items: { query: (s: any) => ({ fetchAll: async () => mocks.queryItems(String(s?.query || '')) }) },
-  }),
-  auditLogContainer: async () => ({ items: { create: async (d: any) => ({ resource: d }) } }),
-  workspacesContainer: async () => ({
-    items: { query: () => ({ fetchAll: async () => ({ resources: [{ tenantId: 'owner-1' }] }) }) },
-  }),
-}));
-
-vi.mock('@/lib/admin/audit-stream', () => ({ emitAuditEvent: vi.fn() }));
-
-vi.mock('@/lib/thread/thread-edges', () => ({
-  recordThreadEdge: vi.fn(async (_s: any, e: any) => { edgesWritten.push(e); }),
-  listThreadEdges: vi.fn(async () => edgesWritten),
-}));
+import { describe, it, expect } from 'vitest';
 
 import {
   stripUriCredentials,
@@ -52,18 +18,7 @@ import {
   parseStorageUri,
 } from '@/lib/lineage/dataset-naming';
 import { resolveOwner, type PathItem } from '@/lib/lineage/dataset-item-resolver';
-import { harvestPipelineRunLineage, __resetHarvestDedupe } from '@/lib/lineage/synapse-lineage-harvest';
-
-const SESSION = { claims: { oid: 'caller-1', upn: 'caller@loom.test' }, exp: 0 } as any;
-
-beforeEach(() => {
-  edgesWritten.length = 0;
-  __resetHarvestDedupe();
-  vi.clearAllMocks();
-  mocks.queryItems.mockResolvedValue({ resources: [] } as any);
-  mocks.listActivityRuns.mockResolvedValue([] as any);
-  mocks.getLinkedService.mockResolvedValue(null as any);
-});
+import { datasetUri, mapRunEventToEdges, parseRunEvent } from '@/lib/azure/openlineage-ingest';
 
 // ---------------------------------------------------------------------------
 // S1 CLASS — the query-string-free SAS the "charset validation" never stopped
@@ -196,105 +151,6 @@ describe('S5 residual: an item rooted at a folded segment still owns itself', ()
 });
 
 // ---------------------------------------------------------------------------
-// Budget treadmill — a truncated pass must ADVANCE, not restart
-// ---------------------------------------------------------------------------
-describe('harvest budget: a truncated pass resumes instead of rewriting the head', () => {
-  // The 8s wall clock deliberately does not mark a truncated run harvested, so
-  // the next poll retries — but the retry re-entered at activity 0, rewriting
-  // the same leading activities every poll and never reaching the tail. The
-  // per-principal 5/s limit does not bound that: it permits five 8-second ARM
-  // fan-outs per second per user.
-  //
-  // MUTATION: in `harvestPipelineRunLineage`, `const start = 0;` (ignore
-  // resumeCursor).
-  // → observed: 1 failure — pass 2 re-writes act-0/act-1's sinks
-  //   (`['sink0','sink1','sink2','sink3']` becomes `['sink0','sink1']` again).
-  const ACTS = ['a0', 'a1', 'a2', 'a3'];
-
-  function wireFourCopies() {
-    mocks.getPipeline.mockResolvedValue({
-      properties: {
-        activities: ACTS.map((n) => ({
-          type: 'Copy',
-          name: n,
-          inputs: [{ referenceName: 'src' }],
-          outputs: [{ referenceName: `sink_${n}` }],
-        })),
-      },
-    } as any);
-    mocks.getDataset.mockImplementation(async (name: string) => ({
-      properties: {
-        type: 'Parquet',
-        linkedServiceName: { referenceName: 'ls' },
-        typeProperties: {
-          location: {
-            type: 'AzureBlobFSLocation',
-            fileSystem: 'data',
-            folderPath: name === 'src' ? 'bronze/src' : `silver/${name}`,
-          },
-        },
-      },
-    } as any));
-    mocks.getLinkedService.mockResolvedValue({
-      properties: { typeProperties: { url: 'https://stloom.dfs.core.windows.net' } },
-    } as any);
-  }
-
-  function sinkLeaves(): string[] {
-    return edgesWritten.map((e) => String(e.toItemId).split('/').pop() as string);
-  }
-
-  it('the second poll harvests the activities the first one could not reach', async () => {
-    wireFourCopies();
-
-    // Clock: t0 = 0 (deadline 8000), then +3000 per read. The loop's pre-check
-    // trips on the third activity, so pass 1 collects a0 + a1 only.
-    let t = 0;
-    const clock = vi.spyOn(Date, 'now').mockImplementation(() => { t += 3000; return t - 3000; });
-
-    const first = await harvestPipelineRunLineage(SESSION, {
-      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
-      runId: 'run-1', runStatus: 'Succeeded',
-    });
-    clock.mockRestore();
-
-    expect(first.ok).toBe(true);
-    const pass1 = sinkLeaves();
-    expect(pass1.length).toBeGreaterThan(0);
-    expect(pass1.length).toBeLessThan(ACTS.length);
-
-    // Pass 2: real clock, no truncation. It must pick up where pass 1 stopped.
-    edgesWritten.length = 0;
-    const second = await harvestPipelineRunLineage(SESSION, {
-      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
-      runId: 'run-1', runStatus: 'Succeeded',
-    });
-    expect(second.ok).toBe(true);
-    const pass2 = sinkLeaves();
-
-    // THE ASSERTION: no activity is harvested twice, and between the two passes
-    // every activity is covered exactly once.
-    expect(pass2.filter((s) => pass1.includes(s))).toEqual([]);
-    expect([...pass1, ...pass2].sort()).toEqual(ACTS.map((a) => `sink_${a}`).sort());
-  });
-
-  it('a completed pass clears the cursor so a later poll is a no-op', async () => {
-    wireFourCopies();
-    await harvestPipelineRunLineage(SESSION, {
-      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
-      runId: 'run-2', runStatus: 'Succeeded',
-    });
-    edgesWritten.length = 0;
-    const again = await harvestPipelineRunLineage(SESSION, {
-      workspaceId: 'ws-1', adfPipelineName: 'p1', factoryName: 'f1',
-      runId: 'run-2', runStatus: 'Succeeded',
-    });
-    expect(again.reason).toBe('already harvested in this replica');
-    expect(edgesWritten).toHaveLength(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // ReDoS — these parsers run on a 5 MB attacker-controlled OpenLineage body
 // ---------------------------------------------------------------------------
 describe('dataset naming is linear on hostile input (CodeQL js/polynomial-redos)', () => {
@@ -362,5 +218,97 @@ describe('dataset naming is linear on hostile input (CodeQL js/polynomial-redos)
       .toBe('abfss://silver@stloom.dfs.core.usgovcloudapi.net/sales');
     // OneLake still opts out of the ADLS shape
     expect(parseStorageUri('abfss://ws-guid@onelake.dfs.fabric.microsoft.com/lh/Files/x')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ROUND 4 — the SAME ReDoS, one function UPSTREAM of everything above
+// ---------------------------------------------------------------------------
+describe('openlineage-ingest.datasetUri is linear on hostile input', () => {
+  // Commit `bc267d6d` said "kill the polynomial ReDoS on the OpenLineage ingest
+  // path" and did not. It rewrote `dataset-naming` + `unified-lineage` — the
+  // modules CodeQL had flagged — and left the quadratic `/\/+$/` in
+  // `openlineage-ingest.datasetUri()`, which runs BEFORE either of them on every
+  // dataset in the POST body. CodeQL did not flag it (`datasetUri` joins two
+  // fields and returns; the taint step into the trim was not modelled), so
+  // "alerts 7 -> 0" was true and irrelevant. A commit message asserting a fix
+  // that did not land stops the next person looking, which is why this block
+  // names it.
+  //
+  // Measured against the pre-fix expression, one field, one core:
+  //   N =  20_000 slashes ->    219 ms
+  //   N =  50_000          ->  1_357 ms
+  //   N = 100_000          ->  6_362 ms
+  //   N = 200_000          -> 28_743 ms
+  // `namespace` has NO length cap in `parseRunEvent` (only `name`, `run.runId`
+  // and `job.name` do) and OL_MAX_DATASETS is 50, so one in-budget 5 MB request
+  // could buy minutes of event-loop time on the shared console replicas.
+  //
+  // MUTATION: in `datasetUri`, restore
+  //   const ns = String(ds.namespace || '').trim().replace(/\/+$/, '');
+  // → observed: 2 failures against a 1,000 ms budget —
+  //     'survives a 200k-slash namespace'            26,152 ms
+  //     'survives the whole END-TO-END map'         209,032 ms
+  //   The second one is the number that matters: 3.5 minutes of event-loop time
+  //   bought by ONE request that is inside every declared limit (under the 5 MB
+  //   body cap, at the 50-dataset fan-out cap, one rate-limit token). It is
+  //   3.5 MINUTES, not 3.5 seconds.
+  const BUDGET_MS = 1_000;
+
+  function underBudget(label: string, fn: () => void) {
+    const t0 = Date.now();
+    fn();
+    const ms = Date.now() - t0;
+    expect(ms, `${label} took ${ms}ms`).toBeLessThan(BUDGET_MS);
+  }
+
+  it('survives a 200k-slash namespace with a non-slash tail', () => {
+    const evil = `abfss://data@stloom.dfs.core.windows.net/silver${'/'.repeat(200_000)}a`;
+    underBudget('datasetUri(namespace)', () => datasetUri({ namespace: evil, name: 'sales' }));
+  });
+
+  it('survives a 200k-char scheme-ish `name` (the scheme probe is slice-bounded)', () => {
+    const evil = `${'a.'.repeat(100_000)}://host/x`;
+    underBudget('datasetUri(name scheme)', () => datasetUri({ namespace: '', name: evil }));
+  });
+
+  it('survives the whole END-TO-END map with the cap-many hostile datasets', () => {
+    // The reachable shape: ONE request, inputs+outputs at the fan-out cap, each
+    // namespace hostile. This is the spec that makes the DoS concrete rather
+    // than a micro-benchmark.
+    const evilNs = `abfss://data@stloom.dfs.core.windows.net/silver${'/'.repeat(20_000)}a`;
+    const ds = (i: number) => ({ namespace: evilNs, name: `/t${i}` });
+    const parsed = parseRunEvent({
+      eventType: 'COMPLETE',
+      eventTime: '2026-07-29T00:00:00Z',
+      run: { runId: 'r1' },
+      job: { namespace: 'j', name: 'evil' },
+      inputs: Array.from({ length: 25 }, (_, i) => ds(i)),
+      outputs: Array.from({ length: 25 }, (_, i) => ds(100 + i)),
+    });
+    expect(parsed.ok).toBe(true);
+    underBudget('mapRunEventToEdges(50 hostile datasets)', () => {
+      if (parsed.ok) mapRunEventToEdges(parsed.event);
+    });
+  });
+
+  // …and the join still behaves. A fast function that stopped joining would be
+  // a worse bug than the one it replaced.
+  it('still joins namespace + name exactly as before', () => {
+    expect(datasetUri({ namespace: 'abfss://data@stloom.dfs.core.windows.net/', name: '/silver/sales' }))
+      .toBe('abfss://data@stloom.dfs.core.windows.net/silver/sales');
+    expect(datasetUri({ namespace: 'abfss://data@stloom.dfs.core.windows.net', name: 'silver/sales' }))
+      .toBe('abfss://data@stloom.dfs.core.windows.net/silver/sales');
+    // a whole URI in `name` wins over the namespace (the OL convention)
+    expect(datasetUri({ namespace: 'ignored', name: 'S3://Bucket/Key' })).toBe('s3://bucket/key');
+    // `sqlserver://` is a scheme too — it must NOT be re-prefixed
+    expect(datasetUri({ namespace: 'sqlserver://h:1433', name: 'sqlserver://h:1433/db.s.t' }))
+      .toBe('sqlserver://h:1433/db.s.t');
+    expect(datasetUri({ namespace: '', name: '/Silver/Sales' })).toBe('/silver/sales');
+    // and the canonical identity the route persists is unchanged end-to-end
+    expect(canonicalDatasetIdentity(datasetUri({
+      namespace: 'wasbs://data@stloom.blob.core.windows.net',
+      name: '/silver/sales/_delta_log',
+    }))).toBe('abfss://data@stloom.dfs.core.windows.net/silver/sales');
   });
 });

@@ -716,7 +716,7 @@ function weaveGraph(
     const next: string[] = [];
     for (const cur of frontier) {
       for (const e of adj.get(cur) || []) {
-        ensureNode(e.fromItemId, e.fromType, e.fromName, e.fromExternal);
+        ensureNode(e.fromItemId, e.fromType, e.fromName);
         ensureNode(e.toItemId, e.toType, e.toName, e.toExternal, e.toLink);
         const k = `${e.fromItemId}->${e.toItemId}`;
         if (!out.some((x) => `${x.from}->${x.to}` === k)) {

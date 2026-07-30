@@ -1,22 +1,21 @@
 /**
  * LU-8 — the ONE audit path every OpenLineage producer writes through.
  *
- * Loom now has three producers mutating the same lineage store: the
- * openlineage-spark listener ingest (`POST /api/lineage/openlineage`), the
- * Synapse/ADF pipeline harvest, and the Synapse Spark batch harvest. Before
- * this module the ingest route owned a private copy of the cross-workspace
- * denial audit and the harvests emitted nothing at all — so a write the ingest
- * route would 403-and-audit, a harvest performed silently, and no harvest write
- * was attributable at all.
+ * The cross-workspace denial audit used to be a PRIVATE copy inside
+ * `POST /api/lineage/openlineage`, which meant every additional producer of the
+ * shared lineage store either had to duplicate it or (as the first cut of the
+ * Synapse harvests did) skip silently with no attributable record. It lives here
+ * so a new producer inherits the row and the credential strip instead of
+ * re-deciding them.
  *
- * Two rows, both authoritative:
- *   - `lineage.cross-workspace-denied` — a producer named a dataset owned by an
- *     item in a DIFFERENT workspace. Denials must be audited (SI-7/SC-8: a
- *     rejected write is exactly the event a reviewer needs to see).
- *   - `lineage.harvested` — a producer wrote N edges. A new authenticated
- *     mutation of a shared store is auditable by construction.
+ * `lineage.cross-workspace-denied` — a producer named a dataset owned by an item
+ * in a DIFFERENT workspace. Denials must be audited (SI-7/SC-8: a rejected write
+ * is exactly the event a reviewer needs to see). Best-effort: the enforcement is
+ * the 403, not the row.
  *
- * Both are best-effort: the enforcement is the 403 / the skip, not the row.
+ * The write-side row (`lineage.harvested`) belongs to the producer PR that
+ * actually harvests — it is added there with its emitters rather than parked
+ * here with no caller.
  */
 
 import crypto from 'node:crypto';
@@ -25,7 +24,6 @@ import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { canonicalDatasetIdentity } from '@/lib/lineage/dataset-naming';
 
 export const LINEAGE_DENIED_KIND = 'lineage.cross-workspace-denied';
-export const LINEAGE_WRITE_KIND = 'lineage.harvested';
 
 function auditId(): string {
   return `audit-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
@@ -91,48 +89,5 @@ export async function auditCrossWorkspaceDenial(opts: CrossWorkspaceDenial): Pro
       authorizedWorkspaceId: opts.authorizedWorkspaceId,
       targetWorkspaceId: opts.targetWorkspaceId,
     },
-  });
-}
-
-export interface LineageWriteAudit {
-  principal: string;
-  producer: string;
-  workspaceId: string;
-  /** The run the edges were derived from (ADF run id / Livy batch id). */
-  runKey: string;
-  written: number;
-  denied: number;
-}
-
-/** Authoritative audit row + SIEM emit for a harvest that wrote lineage. */
-export async function auditLineageWrite(opts: LineageWriteAudit): Promise<void> {
-  if (!opts.written && !opts.denied) return; // nothing happened — no row
-  try {
-    const audit = await auditLogContainer();
-    await audit.items
-      .create({
-        id: auditId(),
-        itemId: `lineage:${opts.producer}:${opts.runKey}`,
-        tenantId: opts.workspaceId,
-        who: opts.principal,
-        actorOid: opts.principal,
-        at: new Date().toISOString(),
-        kind: LINEAGE_WRITE_KIND,
-        target: opts.runKey,
-        detail: { producer: opts.producer, written: opts.written, denied: opts.denied },
-      })
-      .catch(() => undefined);
-  } catch {
-    /* best-effort */
-  }
-  emitAuditEvent({
-    actorOid: opts.principal,
-    actorUpn: opts.principal,
-    action: LINEAGE_WRITE_KIND,
-    targetType: 'thread-edge',
-    targetId: opts.runKey,
-    outcome: opts.denied && !opts.written ? 'denied' : 'success',
-    tenantId: opts.workspaceId,
-    detail: { producer: opts.producer, written: opts.written, denied: opts.denied },
   });
 }
