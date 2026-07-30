@@ -18,6 +18,7 @@ place, and hold the host to admitting when it is missing.
 import importlib.util
 import os
 import pathlib
+from types import ModuleType
 
 import pytest
 
@@ -41,10 +42,15 @@ SCRIPT_RUNNER_BICEP = (
 SANCTIONED_EXEC_HOSTS = {APP_PY.resolve(), SCRIPT_RUNNER_PY.resolve()}
 
 
-def _load_app_module():
+def _load_app_module() -> ModuleType:
     """Import app.py directly. Module scope only reads the bundled source file
     (returning {} when absent) and does NOT bind a socket, so this is safe."""
     spec = importlib.util.spec_from_file_location("loom_udf_app", APP_PY)
+    # Explicit guard rather than a cast: if app.py ever moves, this must fail with
+    # "cannot load <path>" instead of an opaque NoneType attribute error that
+    # reads like a test bug rather than a missing security-relevant file.
+    assert spec is not None, f"cannot load {APP_PY}"
+    assert spec.loader is not None, f"no loader for {APP_PY}"
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -54,7 +60,7 @@ def _load_app_module():
 # The host must ADMIT when its only control is "reachable on the VNet".
 # ---------------------------------------------------------------------------
 
-def test_warns_when_ingress_has_no_ip_allowlist():
+def test_warns_when_ingress_has_no_ip_allowlist() -> None:
     app = _load_app_module()
     warn = app.ingress_warning(env={})
     assert warn is not None, "an unpinned deployment must not boot silently"
@@ -65,12 +71,12 @@ def test_warns_when_ingress_has_no_ip_allowlist():
     assert "#2653" in warn
 
 
-def test_silent_when_ingress_is_ip_restricted():
+def test_silent_when_ingress_is_ip_restricted() -> None:
     app = _load_app_module()
     assert app.ingress_warning(env={"LOOM_UDF_INGRESS_IP_RESTRICTED": "1"}) is None
 
 
-def test_empty_string_counts_as_unrestricted():
+def test_empty_string_counts_as_unrestricted() -> None:
     # bicep emits '' (not an absent var) when consoleAllowedCidrs is empty, so a
     # truthiness check is required — `in env` would report a pinned host.
     app = _load_app_module()
@@ -83,11 +89,11 @@ def test_empty_string_counts_as_unrestricted():
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def bicep_src():
+def bicep_src() -> str:
     return BICEP.read_text(encoding="utf-8")
 
 
-def test_bicep_accepts_and_applies_an_ip_allowlist(bicep_src):
+def test_bicep_accepts_and_applies_an_ip_allowlist(bicep_src: str) -> None:
     assert "param consoleAllowedCidrs array" in bicep_src
     assert "ipSecurityRestrictions" in bicep_src
     # The rules must be DERIVED from the param, not a hard-coded list.
@@ -95,14 +101,14 @@ def test_bicep_accepts_and_applies_an_ip_allowlist(bicep_src):
     assert "action: 'Allow'" in bicep_src
 
 
-def test_bicep_keeps_ingress_internal(bicep_src):
+def test_bicep_keeps_ingress_internal(bicep_src: str) -> None:
     # Public exposure of an arbitrary-code-execution host would turn a VNet-scoped
     # finding into an internet-facing one.
     assert "external: false" in bicep_src
     assert "external: true" not in bicep_src
 
 
-def test_bicep_tells_the_host_whether_the_control_is_present(bicep_src):
+def test_bicep_tells_the_host_whether_the_control_is_present(bicep_src: str) -> None:
     assert "LOOM_UDF_INGRESS_IP_RESTRICTED" in bicep_src
     # Must reflect the actual param, not be pinned to a constant that would make
     # the host claim it is protected when it is not.
@@ -113,7 +119,7 @@ def test_bicep_tells_the_host_whether_the_control_is_present(bicep_src):
 # Class sweep: no OTHER Python in the repo may exec/eval request-derived source.
 # ---------------------------------------------------------------------------
 
-def test_no_other_python_execs_caller_supplied_source():
+def test_no_other_python_execs_caller_supplied_source() -> None:
     """The unit of work for this class is the sweep, not the one reported line.
 
     app.py is the single sanctioned `exec` of caller-supplied code and is
@@ -172,7 +178,7 @@ def test_no_other_python_execs_caller_supplied_source():
     )
 
 
-def test_script_runner_bicep_also_pins_ingress():
+def test_script_runner_bicep_also_pins_ingress() -> None:
     """The sibling instance the sweep found. Same class, same required control.
 
     CodeQL alert #545 reported only udf-runtime; script-runner has the identical
