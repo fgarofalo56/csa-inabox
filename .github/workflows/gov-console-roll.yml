@@ -33,6 +33,10 @@ on:
         description: 'DIAGNOSTIC (#2706) — build on the DEFAULT hosted ACR agent instead of the loombuild S3 pool. Separates "the pool is broken" from "ACR is broken": two instrumented runs had az acr build exit 0 while pushing no tag. The default agent has less memory, so an OOM here is a MEANINGFUL result (it means the pool is genuinely required), while a successful build means the pool is at fault.'
         type: boolean
         default: false
+      recreate_agent_pool:
+        description: 'REMEDIATION (#2706) — delete + recreate the loombuild agent pool before building. The bypass diagnostic proved the pool is at fault: on it az acr build runs 60min, exits 0 and pushes nothing; off it the same commit fails in 7min with real logs. Safe: an agent pool is stateless build compute (no data, no config beyond itself) and the build step already recreates it when absent.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -102,6 +106,21 @@ jobs:
           # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
           # the trusted-service bypass, so the ACR stays open through the build
           # (it already is for the tarball upload).
+          # #2706 REMEDIATION — recreate the pool when asked. The bypass diagnostic
+          # (run 30564119314) established the pool is at fault: ON it `az acr build`
+          # runs 60min, exits 0 and pushes NOTHING; OFF it the same commit fails in
+          # 7min with real streaming logs. Deleting is safe — an agent pool is
+          # stateless build compute, and the `|| create` below rebuilds it, so this
+          # is self-healing rather than destructive.
+          if [ "${{ inputs.recreate_agent_pool }}" = "true" ]; then
+            echo "::warning::#2706 — recreating the loombuild agent pool."
+            echo "  runs before delete (evidence for Azure support if this does not fix it):"
+            az acr task list-runs -r "$ACR" --top 10 -o table 2>&1 | sed 's/^/    /' | head -14 || true
+            az acr agentpool delete -r "$ACR" -n loombuild --yes -o none 2>&1 | head -3 || true
+            az acr agentpool create -r "$ACR" -n loombuild --tier S3 --count 1 -o none
+            echo "::notice::loombuild recreated (S3, count 1)"
+          fi
+
           az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
             || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
           CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
