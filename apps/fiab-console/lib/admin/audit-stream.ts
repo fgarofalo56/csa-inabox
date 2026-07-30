@@ -192,24 +192,8 @@ export async function postAuditEvents(
  * `void emitAuditEvent({...})` after its Cosmos write. On any failure (auth,
  * network, un-provisioned) it logs and moves on; the authoritative record is the
  * Cosmos audit trail, and SIEM forwarding is best-effort telemetry.
- *
- * ## `opts.webhook` — the BOUNDARY control
- *
- * The SIEM half of this function stays INSIDE the estate: it POSTs to the Loom
- * Log Analytics workspace's DCR endpoint. The BR-WEBHOOK half does NOT — it
- * forwards the event to whatever third-party URLs a tenant has registered.
- *
- * That is correct for the admin-plane MUTATIONS this stream was built for, and
- * wrong for high-volume READ telemetry: forwarding every catalog list/get would
- * ship actor UPNs + securable names out of the boundary, at request volume,
- * mislabelled as `admin.mutation` (the catch-all every generic subscriber
- * receives). Callers that record reads pass `{ webhook: false }` — the row still
- * lands in Cosmos and in `LoomAudit_CL`, it just does not egress.
- *
- * Default stays `true`, so every pre-existing admin-mutation call site is
- * byte-identical.
  */
-export function emitAuditEvent(ev: AdminAuditEvent, opts?: { webhook?: boolean }): void {
+export function emitAuditEvent(ev: AdminAuditEvent): void {
   try {
     void postAuditEvents([ev]).catch((e) => {
       // eslint-disable-next-line no-console
@@ -224,7 +208,6 @@ export function emitAuditEvent(ev: AdminAuditEvent, opts?: { webhook?: boolean }
   // outbound webhook. This reuses every choke point BR-SIEM already instruments
   // (workspace/permission/mcp-server/tenant-settings/env-config/domain/platform)
   // with zero new edits to those routes. Fire-and-forget; never blocks/throws.
-  if (opts?.webhook === false) return; // read telemetry — must not leave the boundary
   try {
     void emitLoomEvent({
       type: auditActionToEventType(ev.action),

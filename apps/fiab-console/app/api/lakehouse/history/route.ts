@@ -20,6 +20,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth/session';
 import {
   KNOWN_CONTAINERS,
   listPaths,
@@ -31,7 +32,6 @@ import {
   listWarehouses,
   executeStatement,
 } from '@/lib/azure/databricks-client';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -72,7 +72,9 @@ function num(v: unknown): number | undefined {
 // ------------------------------------------------------------------
 // GET — version listing from _delta_log
 // ------------------------------------------------------------------
-export const GET = withSession(async (req: NextRequest, { session }) => {
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   const container = req.nextUrl.searchParams.get('container') || '';
   const tablePathRaw = req.nextUrl.searchParams.get('tablePath') || '';
@@ -162,12 +164,14 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         : e?.message || String(e);
     return NextResponse.json({ ok: false, error: msg, code: e?.code }, { status });
   }
-});
+}
 
 // ------------------------------------------------------------------
 // POST — restore / preview-as-of (Databricks Delta time-travel SQL)
 // ------------------------------------------------------------------
-export const POST = withSession(async (req: NextRequest) => {
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   let body: any;
   try {
@@ -278,4 +282,4 @@ export const POST = withSession(async (req: NextRequest) => {
       { status: 502 },
     );
   }
-});
+}

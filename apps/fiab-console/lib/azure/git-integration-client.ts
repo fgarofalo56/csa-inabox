@@ -119,7 +119,7 @@ export async function getPat(config: GitRepoConfig): Promise<string> {
   let value = '';
   try {
     const { getKeyVaultSecretValue } = await import('./kv-secrets-client');
-    value = await getKeyVaultSecretValue(ref, 'git-credential');
+    value = await getKeyVaultSecretValue(ref);
   } catch (e: any) {
     const status = typeof e?.status === 'number' ? e.status : 502;
     if (status === 404) {

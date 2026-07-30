@@ -11,10 +11,13 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
+import {
+  DefaultAzureCredential,
+  ManagedIdentityCredential,
+  ChainedTokenCredential,
+} from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
-import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -50,26 +53,16 @@ async function dbxToken(): Promise<string> {
   return t.token;
 }
 
-/**
- * The Databricks-side half of the LU-3 Unity Catalog audit choke point: the
- * `finally` records every `/api/2.x/unity-catalog/**` call. Catalog owner change,
- * catalog/schema/table delete and the `PATCH .../permissions/...` grant mutation
- * all issue from THIS client on the Commercial default backend, not from ucFetch.
- */
 async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
-  const t0 = Date.now();
-  let res: Response | undefined;
-  let err: unknown;
-  try {
-    const token = await dbxToken();
-    res = await fetchWithTimeout(`https://${host()}${path}`, {
-      ...init,
-      headers: { ...(init?.headers || {}), authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    });
-    return res;
-  } catch (e) { err = e; throw e; } finally {
-    recordDatabricksUnityAccess({ path, method: String(init?.method || 'GET'), status: res?.status ?? 0, durationMs: Date.now() - t0, error: err });
-  }
+  const token = await dbxToken();
+  return fetchWithTimeout(`https://${host()}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers || {}),
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+  });
 }
 
 // ------------------------------------------------------------

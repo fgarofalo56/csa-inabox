@@ -1610,7 +1610,7 @@ async function resolveConnectionSecret(conn: LoomConnection): Promise<string | n
         'Re-create it via Add existing connection so its secret lands in Key Vault.',
     );
   }
-  return getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
+  return getKeyVaultSecretValue(conn.secretRef);
 }
 
 /**

@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
+import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -26,7 +27,6 @@ import { listPostgresTables } from '@/lib/azure/postgres-flex-client';
 import { listContainers } from '@/lib/azure/cosmos-account-client';
 import { loadConnection } from '@/lib/azure/connections-store';
 import { getKeyVaultSecretValue } from '@/lib/azure/kv-secrets-client';
-import { withSession } from '@/lib/api/route-toolkit';
 import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib/azure/mirror-engine';
 
 export const runtime = 'nodejs';
@@ -46,26 +46,28 @@ async function resolveSqlAuth(tenantId: string, connectionId?: string): Promise<
   const conn = await loadConnection(tenantId, connectionId);
   if (!conn || !conn.secretRef) return undefined;
   if (conn.authMethod === 'connection-string') {
-    const connectionString = await getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
+    const connectionString = await getKeyVaultSecretValue(conn.secretRef);
     return { connectionString };
   }
   if (conn.authMethod === 'sql-password') {
     if (!conn.username) return undefined; // can't build SQL auth without a login
-    const password = await getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
+    const password = await getKeyVaultSecretValue(conn.secretRef);
     return { user: conn.username, password };
   }
   // service-principal / account-key are not TDS logins — fall back to UAMI.
   return undefined;
 }
 
-export const GET = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const s = getSession();
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
   if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('mirrored database not found', 404);
 
   try {
     const items = await itemsContainer();
-    const { resource } = await items.item(params.id, workspaceId).read<WorkspaceItem>();
+    const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const st = (resource.state || {}) as Record<string, any>;
     const def = st?.definition?.properties?.source?.typeProperties || {};
@@ -98,4 +100,4 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     if (e?.code === 404) return apiError('mirrored database not found', 404);
     return apiError(e?.message || String(e), e?.status || 500);
   }
-});
+}

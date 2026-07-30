@@ -13,11 +13,10 @@
  * installer reviews source on the Source tab, then Build → Deploy.
  */
 import { NextRequest } from 'next/server';
-import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
+import { getSession } from '@/lib/auth/session';
+import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import { createOwnedItem } from '../../_lib/item-crud';
 import { getLoomAppTemplate } from '@/lib/azure/loom-apps-runtime-templates';
-import { isAllowedGitSource } from '@/lib/azure/loom-apps-client';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,7 +24,9 @@ export const dynamic = 'force-dynamic';
 const MAX_FILES = 200;
 const MAX_FILE_CHARS = 200_000;
 
-export const POST = withSession(async (req: NextRequest, { session }) => {
+export async function POST(req: NextRequest) {
+  const session = getSession();
+  if (!session) return apiUnauthorized();
   try {
     const body = (await req.json().catch(() => ({}))) as { workspaceId?: string; bundle?: any; name?: string };
     const workspaceId = String(body.workspaceId || '').trim();
@@ -38,19 +39,6 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     const templateId = typeof bundle.templateId === 'string' ? bundle.templateId : 'streamlit';
     if (!bundle.gitSource && !getLoomAppTemplate(templateId)) {
       return apiError(`Unknown template '${templateId}' in the bundle.`, 400, { code: 'bad_template' });
-    }
-
-    // A bundle's `gitSource` is persisted verbatim onto the item and is later
-    // read back by the build AND by the redeploy-on-push poller, which embeds
-    // the item's Key Vault PAT in the clone URL. Validate the provider HERE so
-    // an unapproved host can never be persisted in the first place.
-    const gitSource = bundle.gitSource ? String(bundle.gitSource).trim() : '';
-    if (gitSource && !isAllowedGitSource(gitSource)) {
-      return apiError(
-        'The bundle\'s gitSource must be an https repository on github.com / dev.azure.com / gitlab.com / bitbucket.org, with no credentials in the URL.',
-        400,
-        { code: 'bad_git_source' },
-      );
     }
 
     // Sanitize userFiles: path-safe, count/size-bounded, never a Dockerfile.
@@ -80,7 +68,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
       state: {
         appRuntime: {
           templateId,
-          ...(gitSource ? { gitSource } : {}),
+          ...(bundle.gitSource ? { gitSource: String(bundle.gitSource) } : {}),
           port: typeof bundle.port === 'number' ? bundle.port : undefined,
           env,
           userFiles,
@@ -98,4 +86,4 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   } catch (e) {
     return apiServerError(e, 'failed to import the app bundle');
   }
-});
+}

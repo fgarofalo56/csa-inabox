@@ -20,6 +20,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { getAccountName } from '@/lib/azure/adls-client';
 import {
@@ -27,7 +28,6 @@ import {
   listWarehouses,
   executeStatement,
 } from '@/lib/azure/databricks-client';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -148,7 +148,9 @@ function parseFabricToggles(v: any): FabricToggles | undefined {
   };
 }
 
-export const GET = withSession(async (req: NextRequest, { session }) => {
+export async function GET(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const container = req.nextUrl.searchParams.get('container');
   if (!container) return NextResponse.json({ ok: false, error: 'container query param required' }, { status: 400 });
   const tenantId = session.claims.oid;
@@ -211,9 +213,11 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-});
+}
 
-export const PUT = withSession(async (req: NextRequest, { session }) => {
+export async function PUT(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   const container: string = body?.container;
   if (!container) return NextResponse.json({ ok: false, error: 'container is required' }, { status: 400 });
@@ -419,4 +423,4 @@ export const PUT = withSession(async (req: NextRequest, { session }) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-});
+}

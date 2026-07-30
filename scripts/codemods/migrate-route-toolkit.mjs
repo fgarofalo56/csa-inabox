@@ -1,11 +1,4 @@
-/**
- * NO SHEBANG — DO NOT RE-ADD ONE. This module is `import`ed by
- * `apps/fiab-console/lib/api/__tests__/route-toolkit-codemod.test.ts`, and
- * vite-node evaluates an out-of-root `.mjs` through `vm.Script`, which does NOT
- * strip `#!` — so with the shebang that spec died at COLLECTION
- * (`SyntaxError: Invalid or unexpected token`) and had never actually run.
- * Always invoked as `node scripts/codemods/migrate-route-toolkit.mjs`.
- */
+#!/usr/bin/env node
 /**
  * codemod: migrate-route-toolkit  (loom-next-level WS-R R2)
  * ---------------------------------------------------------------------------

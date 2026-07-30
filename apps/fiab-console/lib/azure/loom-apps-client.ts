@@ -264,55 +264,7 @@ async function acrScheduleRunUrl(cfg: LoomAppsConfig, action: string): Promise<s
  * PRIVATE repository. The username segment is each provider's documented
  * PAT-basic-auth convention; the token is URL-encoded. Exported for tests.
  */
-/**
- * The git hosts a Loom App may be sourced from. Kept HERE (module scope) rather
- * than inside `buildApp` because it is a *credential* rule, not a build rule:
- * every path that composes {@link tokenizedGitUrl} embeds a Key Vault PAT in the
- * URL, so it must be checked at each of them. It previously lived inside
- * `buildApp`, which left `resolveRemoteHeadSha` — the redeploy-on-push poller,
- * reached with `gitSource` read back from persisted item state — sending the PAT
- * to whatever host that state named.
- */
-const ALLOWED_GIT_HOST_RE =
-  /^https:\/\/(github\.com|dev\.azure\.com|[a-z0-9.-]+\.visualstudio\.com|gitlab\.com|bitbucket\.org)\//i;
-
-/** True when `gitUrl` is an https repo on an approved provider with no embedded credentials. */
-export function isAllowedGitSource(gitUrl: string): boolean {
-  const git = String(gitUrl || '').trim();
-  if (!ALLOWED_GIT_HOST_RE.test(git)) return false;
-  // Any '@' means embedded credentials (user:pass@host) or an scp-style ref, and
-  // is also how an approved host is smuggled into the userinfo of another one.
-  // Plain includes() avoids a backtracking regex (js/polynomial-redos).
-  if (git.includes('@')) return false;
-  return true;
-}
-
-/**
- * Assert an approved git source, or throw the honest 400 the UI surfaces. Call
- * this at EVERY point that persists a git source or authenticates one.
- */
-export function assertAllowedGitSource(gitUrl: string): string {
-  const git = String(gitUrl || '').trim();
-  if (!ALLOWED_GIT_HOST_RE.test(git)) {
-    throw new LoomAppsError(
-      'Only https git repositories on github.com / dev.azure.com / gitlab.com / bitbucket.org are supported.',
-      400,
-    );
-  }
-  if (git.includes('@')) {
-    throw new LoomAppsError(
-      'Credentials in the git URL are not accepted — store a token via the Source tab (kept in Key Vault) for private repositories.',
-      400,
-    );
-  }
-  return git;
-}
-
 export function tokenizedGitUrl(gitUrl: string, token: string): string {
-  // Belt-and-braces: this function is the one that puts a Key Vault PAT into a
-  // URL, so it refuses to do so for a host outside the allow-list even if a
-  // future caller forgets to check.
-  assertAllowedGitSource(gitUrl);
   const t = encodeURIComponent(token);
   const host = gitUrl.replace(/^https:\/\//i, '').split('/')[0].toLowerCase();
   const user =
@@ -354,10 +306,6 @@ export async function resolveRemoteHeadSha(gitSource: string, token?: string): P
   const hashIdx = gitSource.indexOf('#');
   const base = (hashIdx >= 0 ? gitSource.slice(0, hashIdx) : gitSource).replace(/\.git$/, '');
   const branch = hashIdx >= 0 ? gitSource.slice(hashIdx + 1).split(':')[0] : '';
-  // `gitSource` is persisted item state (a `.loomapp` import can seed it), and
-  // the line below embeds the item's Key Vault PAT in the URL. Enforce the same
-  // provider allow-list the build path enforces — this poller was never covered.
-  assertAllowedGitSource(base);
   const url = `${token ? tokenizedGitUrl(base, token) : base}.git/info/refs?service=git-upload-pack`;
   try {
     const res = await fetchWithTimeout(url, { headers: { 'user-agent': 'git/2.40' } });
@@ -380,10 +328,24 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuildAppResult> {
   let dockerFilePath = 'Dockerfile';
 
   if (opts.gitSource && opts.gitSource.trim()) {
-    // Approved provider + no credentials pasted into the URL. Private repos are
-    // authenticated via the STORED Key Vault PAT (gitToken below). Shared with
-    // the redeploy-on-push poller so both credentialed paths enforce it.
-    const git = assertAllowedGitSource(opts.gitSource);
+    const git = opts.gitSource.trim();
+    if (!/^https:\/\/(github\.com|dev\.azure\.com|[a-z0-9.-]+\.visualstudio\.com|gitlab\.com|bitbucket\.org)\//i.test(git)) {
+      throw new LoomAppsError(
+        'Only https git repositories on github.com / dev.azure.com / gitlab.com / bitbucket.org are supported.',
+        400,
+      );
+    }
+    // Any '@' in the USER-SUPPLIED url means embedded credentials
+    // (user:pass@host) or an scp-style ref — reject outright. Private repos
+    // are authenticated via the STORED Key Vault PAT (gitToken below), never a
+    // credential pasted into the URL. Plain includes() avoids a backtracking
+    // regex (js/polynomial-redos).
+    if (git.includes('@')) {
+      throw new LoomAppsError(
+        'Credentials in the git URL are not accepted — store a token via the Source tab (kept in Key Vault) for private repositories.',
+        400,
+      );
+    }
     source = 'git';
     // Private repo (APP-W4 S3): compose the provider's tokenized clone URL
     // SERVER-SIDE for ACR's source fetch. The token comes from Key Vault at

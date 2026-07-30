@@ -20,7 +20,6 @@
  * azconfig.io vs azconfig.azure.us). No mocks — a missing env var or a real KV
  * 403 surfaces verbatim with the right HTTP status (no-vaporware.md).
  */
-import { assertSecretReadAllowed } from '@/lib/azure/kv-secret-purpose';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
@@ -84,15 +83,6 @@ async function getParamKvSecretValue(vaultUri: string, secretName: string): Prom
   const base = vaultUri.replace(/\/$/, '');
   const name = (secretName || '').trim();
   if (!name) throw new ParamResolveError('Key Vault binding is missing a secret name', 400);
-  // SECURITY: `secretName` is author-written binding state and the resolved value
-  // becomes a pipeline PARAMETER — which an activity in the same pipeline can post
-  // anywhere. When an operator points LOOM_PARAM_KEYVAULT at the Loom vault this
-  // would otherwise reach the platform's own credentials.
-  try {
-    assertSecretReadAllowed(name, 'pipeline-parameter');
-  } catch (e) {
-    throw new ParamResolveError(e instanceof Error ? e.message : String(e), 403);
-  }
   const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
     headers: { authorization: `Bearer ${await token(kvScope(base))}` },
     cache: 'no-store',

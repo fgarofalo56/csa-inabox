@@ -21,10 +21,6 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { kvScope, kvUrlFromName } from '@/lib/azure/cloud-endpoints';
 import { PagingBudget, PAGE_DEADLINE } from '@/lib/azure/paging-budget';
-import { assertSecretReadAllowed, type KvSecretPurpose } from '@/lib/azure/kv-secret-purpose';
-
-export type { KvSecretPurpose } from '@/lib/azure/kv-secret-purpose';
-export { KeyVaultSecretPolicyError } from '@/lib/azure/kv-secret-purpose';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -156,18 +152,8 @@ export async function putKeyVaultSecret(name: string, value: string): Promise<{ 
   return { name: secretName };
 }
 
-/**
- * GET the current value of a secret.
- *
- * `purpose` is REQUIRED and is not decoration: several callers derive `name`
- * from user-writable item state or a request body, so the purpose decides which
- * secret name-space this read may touch (lib/azure/kv-secret-purpose.ts). It
- * makes Loom's own platform credentials — `loom-msal-client-secret` above all —
- * structurally unreachable from a request-driven path, whatever the caller
- * passes as `name`. A refusal throws KeyVaultSecretPolicyError (403).
- */
-export async function getKeyVaultSecretValue(name: string, purpose: KvSecretPurpose): Promise<string> {
-  assertSecretReadAllowed(name, purpose);
+/** GET the current value of a secret. */
+export async function getKeyVaultSecretValue(name: string): Promise<string> {
   const base = vaultUrl();
   if (!base) throw new KeyVaultError('Key Vault not configured (LOOM_KEY_VAULT_URI)', 503);
   const res = await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {

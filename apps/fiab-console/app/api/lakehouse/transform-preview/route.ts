@@ -29,12 +29,12 @@
  *   https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/create-spark-statement
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
 import { KNOWN_CONTAINERS, pathToHttpsUrl } from '@/lib/azure/adls-client';
 import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -182,7 +182,9 @@ async function kickoff(container: string, path: string, poolParam: string, code:
   return NextResponse.json({ ok: true, status: 'running', jobId: `${pool}:${sessionId}:${stmt.id}` });
 }
 
-export const POST = withSession(async (req: NextRequest, { session }) => {
+export async function POST(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
 
   let body: any;
@@ -199,9 +201,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, status: 'error', error: e?.message || String(e) }, { status: 502 });
   }
-});
+}
 
-export const GET = withSession(async (req: NextRequest) => {
+export async function GET(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
 
   const sp = req.nextUrl.searchParams;
@@ -280,4 +284,4 @@ export const GET = withSession(async (req: NextRequest) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, status: 'error', error: e?.message || String(e) }, { status: 502 });
   }
-});
+}

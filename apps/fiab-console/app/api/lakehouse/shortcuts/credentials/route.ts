@@ -20,13 +20,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth/session';
 import {
   putShortcutSecret,
   shortcutKeyVaultConfigGate,
   sanitizeSecretName,
   KeyVaultError,
 } from '@/lib/azure/kv-secrets-client';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,7 +63,9 @@ function validate(sourceType: SourceType, value: string): string | null {
   return null;
 }
 
-export const POST = withSession(async (req: NextRequest) => {
+export async function POST(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   const gate = shortcutKeyVaultConfigGate();
   if (gate) {
@@ -106,4 +108,4 @@ export const POST = withSession(async (req: NextRequest) => {
       { status: denied ? 503 : 502 },
     );
   }
-});
+}

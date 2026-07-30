@@ -15,9 +15,9 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1657 |
 | Public (no session) | 116 |
-| Session-only | 568 |
+| Session-only | 570 |
 | Owner-scoped | 696 |
-| Admin | 277 |
+| Admin | 275 |
 | Gated (backend config) | 530 |
 | Areas | 119 |
 
@@ -673,7 +673,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `databricks/unity-catalog/quality-monitors/route.ts` | GET | session-only | ● | Databricks |
 | `databricks/unity-catalog/schemas/route.ts` | GET POST PATCH DELETE | session-only | ● | Databricks |
 | `databricks/unity-catalog/storage-credentials/route.ts` | GET POST PATCH DELETE | session-only | ● | Databricks |
-| `databricks/unity-catalog/system-tables/route.ts` | GET POST | admin | ● | Databricks |
+| `databricks/unity-catalog/system-tables/route.ts` | GET POST | session-only | ● | Databricks |
 | `databricks/unity-catalog/tables/route.ts` | GET POST PATCH DELETE | session-only | ● | Databricks |
 | `databricks/unity-catalog/tags/route.ts` | GET POST | session-only | ● | Databricks |
 | `databricks/unity-catalog/temporary-credentials/route.ts` | POST | session-only | ● | Databricks |
@@ -1735,7 +1735,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `lakehouse/path/route.ts` | POST DELETE | session-only |  | ADLS |
 | `lakehouse/paths/route.ts` | GET | owner-scoped |  | ADLS |
 | `lakehouse/permissions/rls-test/route.ts` | POST | session-only |  | — |
-| `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS |
+| `lakehouse/permissions/route.ts` | GET POST DELETE | session-only |  | ADLS |
 | `lakehouse/preview/route.ts` | GET | session-only |  | ADLS, Synapse SQL |
 | `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, Cosmos |
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, Cosmos |

@@ -34,6 +34,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { getSession } from '@/lib/auth/session';
 import {
   listContainerRoleAssignments,
   grantContainerRole,
@@ -62,7 +63,6 @@ import {
   type SynapseTarget,
 } from '@/lib/azure/synapse-permissions-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -141,7 +141,9 @@ async function enrichUpns(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export const GET = withSession(async (req: NextRequest, { session }) => {
+export async function GET(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const sp = req.nextUrl.searchParams;
   const tab = parseTab(sp.get('tab'));
 
@@ -189,9 +191,11 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-});
+}
 
-export const POST = withSession(async (req: NextRequest, { session }) => {
+export async function POST(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   // Granting data-plane access to the SHARED lake is a tenant-admin action.
   // This POST was session-only, so ANY authenticated user could assign
   // themselves a blob data role on any container — and, before the allow-list
@@ -301,9 +305,11 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-});
+}
 
-export const DELETE = withSession(async (req: NextRequest) => {
+export async function DELETE(req: NextRequest) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const sp = req.nextUrl.searchParams;
   const tab = parseTab(sp.get('tab'));
 
@@ -354,4 +360,4 @@ export const DELETE = withSession(async (req: NextRequest) => {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-});
+}

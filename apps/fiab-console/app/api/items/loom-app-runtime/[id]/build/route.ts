@@ -10,19 +10,21 @@
  * GET /api/items/loom-app-runtime/[id]/build?runId=... → poll the build status.
  */
 import { NextRequest } from 'next/server';
-import { apiOk, apiError, apiServerError, apiHonestError } from '@/lib/api/respond';
+import { getSession } from '@/lib/auth/session';
+import { apiOk, apiError, apiUnauthorized, apiServerError, apiHonestError } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, recordBuild, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import { resolveAppsRuntimeState, appsRuntimeDisabledReason } from '@/lib/apps/runtime-flag';
 import { buildApp, getBuildStatus, LoomAppsNotConfiguredError, LoomAppsError } from '@/lib/azure/loom-apps-client';
 import { getLoomAppTemplate } from '@/lib/azure/loom-apps-runtime-templates';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
-  const { id } = params;
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const { id } = await props.params;
+  const session = getSession();
+  if (!session) return apiUnauthorized();
   let body: any;
   try { body = await req.json(); } catch { return apiError('Invalid JSON', 400, { code: 'bad_json' }); }
   try {
@@ -60,7 +62,7 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     if (gitSource && rt.gitAuth?.secretName) {
       const { getKeyVaultSecretValue } = await import('@/lib/azure/kv-secrets-client');
       try {
-        gitToken = await getKeyVaultSecretValue(rt.gitAuth.secretName, 'git-credential');
+        gitToken = await getKeyVaultSecretValue(rt.gitAuth.secretName);
       } catch (e: any) {
         return apiError(
           `Could not resolve the stored git token (${rt.gitAuth.secretName}) from Key Vault: ${e?.message || e}. ` +
@@ -93,10 +95,12 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
     if (e instanceof LoomAppsError) return apiHonestError(e.message, e.status >= 400 && e.status < 600 ? e.status : 502);
     return apiServerError(e, 'build failed');
   }
-});
+}
 
-export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
-  const { id } = params;
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const { id } = await props.params;
+  const session = getSession();
+  if (!session) return apiUnauthorized();
   const runId = req.nextUrl.searchParams.get('runId') || '';
   if (!runId) return apiError('runId required', 400);
   try {
@@ -114,4 +118,4 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
     if (e instanceof LoomAppsNotConfiguredError) return apiHonestError(e.message, 503);
     return apiServerError(e, 'failed to read build status');
   }
-});
+}

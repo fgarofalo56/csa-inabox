@@ -294,7 +294,7 @@ async function resolveSqlAuth(conn: LoomConnection): Promise<SqlExplicitAuth | u
         `Re-create it via "Add existing connection" so its secret lands in Key Vault.`,
     );
   }
-  const secret = await getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
+  const secret = await getKeyVaultSecretValue(conn.secretRef);
   if (conn.authMethod === 'connection-string') return { connectionString: secret };
   return { user: conn.username || '', password: secret };
 }

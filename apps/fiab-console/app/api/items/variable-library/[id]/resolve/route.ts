@@ -16,12 +16,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
+import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
   resolveVariableSet, expandVariables, type VarDef, type ValueSet,
 } from '@/lib/variables/resolve';
 import { getKeyVaultSecretValue, vaultUrl } from '@/lib/azure/kv-secrets-client';
-import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,11 +51,13 @@ async function resolveSecretRef(raw: string): Promise<string> {
   if (!vaultUrl()) {
     throw new Error('secret-ref requires a Key Vault — set LOOM_KEY_VAULT_URI (or LOOM_KEY_VAULT_NAME) and grant the Console UAMI "Key Vault Secrets User"');
   }
-  return getKeyVaultSecretValue(secretName, 'variable-library');
+  return getKeyVaultSecretValue(secretName);
 }
 
-export const POST = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
-  const { id } = params;
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const s = getSession();
+  if (!s) return apiError('unauthenticated', 401);
+  const { id } = await ctx.params;
   if (!id || id === 'new') return apiError('save the variable library before resolving', 400);
   const body = await req.json().catch(() => ({} as any));
   try {
@@ -83,4 +85,4 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
   } catch (e: any) {
     return apiServerError(e);
   }
-});
+}

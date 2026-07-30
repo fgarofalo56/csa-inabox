@@ -84,7 +84,7 @@ export async function loadBinding(workspaceId: string): Promise<GitBinding | nul
 /** Resolve the PAT/SPN secret for a binding from Key Vault. */
 export async function resolveSecret(b: GitBinding): Promise<string> {
   if (!b.secretRef) throw Object.assign(new Error('No credential stored for this Git binding. Reconnect and supply a PAT.'), { status: 400 });
-  return getKeyVaultSecretValue(b.secretRef, 'git-credential');
+  return getKeyVaultSecretValue(b.secretRef);
 }
 
 export interface ConnectInput {
