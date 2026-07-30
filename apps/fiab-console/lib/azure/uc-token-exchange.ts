@@ -88,6 +88,43 @@ const cache = new Map<string, CacheEntry>();
 /** In-flight exchanges, so a burst of concurrent calls fires ONE POST. */
 const inflight = new Map<string, Promise<string>>();
 
+/**
+ * Record the exchange on the LU-3 audit trail.
+ *
+ * The audit choke-point guard requires any file that talks to a Loom Unity
+ * address to land a row — "an audit trail with a hole in it is worse than no
+ * trail, because it is trusted." This exchange cannot go through `ucFetch`
+ * (`ucFetch` calls `ossUcAuthHeader()`, which calls THIS — routing it back
+ * through would be circular), so it records directly, exactly as
+ * `probe-loom-unity-authz` does in `lib/admin/health-probes.ts`.
+ *
+ * It is also genuinely worth auditing rather than a box-tick: a burst of failed
+ * exchanges is the signature of a disabled/renamed Console principal or a
+ * catalog that has forgotten its minted tokens, and a SUCCESSFUL exchange is the
+ * moment the Console acquires catalog authority.
+ *
+ * Never carries token material — `detail` names the endpoint and status only.
+ */
+async function recordExchange(base: string, status: number, outcome: 'success' | 'failure' | 'denied', detail: string): Promise<void> {
+  try {
+    const { recordUnityAccess } = await import('@/lib/azure/unity-audit');
+    await recordUnityAccess({
+      operation: 'auth.token-exchange',
+      securableType: 'metastore',
+      securableFqn: '*',
+      backend: 'oss',
+      method: 'POST',
+      path: EXCHANGE_PATH,
+      status,
+      durationMs: 0,
+      outcome,
+      detail: `${base}${EXCHANGE_PATH}: ${detail}`,
+    });
+  } catch {
+    /* audit is additive telemetry — never fail the exchange on it */
+  }
+}
+
 /** Thrown when the exchange cannot produce an internal token. The Console fails
  * closed on this rather than retrying with the raw Entra token, which would
  * either 403 opaquely or — far worse — succeed against a server running with
@@ -182,6 +219,7 @@ export async function exchangeForInternalUcToken(subjectToken: string): Promise<
       });
     } catch (e) {
       // Network / timeout. The message deliberately carries no token material.
+      void recordExchange(base, 0, 'failure', `unreachable: ${(e as Error)?.message || String(e)}`);
       throw new UcTokenExchangeError(
         `Loom Unity token exchange could not reach ${base}${EXCHANGE_PATH}: ${(e as Error)?.message || String(e)}`,
       );
@@ -191,6 +229,14 @@ export async function exchangeForInternalUcToken(subjectToken: string): Promise<
       // Upstream error text can be echoed — it is the server's own message, not
       // ours — but cap it so a stray HTML error page cannot flood a log line.
       const detail = (await res.text().catch(() => '')).slice(0, 300);
+      // 401/403 is the catalog REFUSING this principal — an auditor's row.
+      // Anything else is an availability failure.
+      void recordExchange(
+        base,
+        res.status,
+        res.status === 401 || res.status === 403 ? 'denied' : 'failure',
+        `rejected (HTTP ${res.status})`,
+      );
       throw new UcTokenExchangeError(
         `Loom Unity rejected the token exchange (HTTP ${res.status}). ${detail}`,
         res.status,
@@ -201,6 +247,7 @@ export async function exchangeForInternalUcToken(subjectToken: string): Promise<
     try {
       payload = await res.json();
     } catch {
+      void recordExchange(base, res.status, 'failure', 'non-JSON response');
       throw new UcTokenExchangeError(
         'Loom Unity returned a non-JSON token-exchange response.',
         res.status,
@@ -211,6 +258,7 @@ export async function exchangeForInternalUcToken(subjectToken: string): Promise<
     if (typeof token !== 'string' || !token) {
       // A 200 with no usable token is a failure, not a success. Returning
       // undefined here would send an anonymous request downstream.
+      void recordExchange(base, res.status, 'failure', 'response carried no access_token');
       throw new UcTokenExchangeError(
         'Loom Unity token-exchange response carried no access_token.',
         res.status,
@@ -218,6 +266,9 @@ export async function exchangeForInternalUcToken(subjectToken: string): Promise<
     }
 
     cache.set(key, { token, expiresAt: Date.now() + TTL_MS });
+    // The moment the Console acquires catalog authority — the row an auditor
+    // correlates every subsequent catalog operation back to.
+    void recordExchange(base, res.status, 'success', 'internal token minted');
     return token;
   })();
 
