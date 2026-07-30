@@ -26,7 +26,6 @@ import { UC_PRIVILEGES_BY_SECURABLE, ucPrivilegesFor } from '@/lib/azure/uc-effe
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
-import { UcGovernancePane } from '@/lib/components/catalog/uc-governance-pane';
 import { Section } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -41,7 +40,6 @@ import {
   Add24Regular, ArrowSync24Regular, Delete24Regular, Database24Regular,
   Key24Regular, LockClosed24Regular, Share24Regular, CloudArrowUp24Regular,
   CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular, Wrench16Regular,
-  ShieldCheckmark24Regular,
 } from '@fluentui/react-icons';
 
 // ============================================================
@@ -183,7 +181,7 @@ function BackendBadge({ cap }: { cap: CapabilitiesPayload | null }) {
 
 export default function UnityCatalogPage() {
   const s = useStyles();
-  const [tab, setTab] = useState<'explore' | 'grants' | 'governance' | 'storage' | 'sharing' | 'capabilities'>('explore');
+  const [tab, setTab] = useState<'explore' | 'grants' | 'storage' | 'sharing' | 'capabilities'>('explore');
   const [cap, setCap] = useState<CapabilitiesPayload | null>(null);
   const [capError, setCapError] = useState<string | null>(null);
 
@@ -270,7 +268,6 @@ export default function UnityCatalogPage() {
       >
         <Tab value="explore" icon={<Database24Regular />}>Explore</Tab>
         <Tab value="grants" icon={<LockClosed24Regular />}>Grants</Tab>
-        <Tab value="governance" icon={<ShieldCheckmark24Regular />}>Governance</Tab>
         <Tab value="storage" icon={<CloudArrowUp24Regular />}>Storage</Tab>
         <Tab value="sharing" icon={<Share24Regular />}>Sharing</Tab>
         <Tab value="capabilities" icon={<Key24Regular />}>Capabilities</Tab>
@@ -278,7 +275,6 @@ export default function UnityCatalogPage() {
 
       {tab === 'explore' && <ExplorePane oss={oss} onGrant={(sec, name) => { setTab('grants'); window.dispatchEvent(new CustomEvent('uc-grant-seed', { detail: { securable: sec, fullName: name } })); }} />}
       {tab === 'grants' && <GrantsPane oss={oss} />}
-      {tab === 'governance' && <UcGovernancePane oss={oss} />}
       {tab === 'storage' && <StoragePane oss={oss} />}
       {tab === 'sharing' && <SharingPane oss={oss} />}
       {tab === 'capabilities' && <CapabilitiesPane cap={cap} />}
