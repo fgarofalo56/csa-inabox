@@ -15,9 +15,9 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1657 |
 | Public (no session) | 116 |
-| Session-only | 569 |
+| Session-only | 568 |
 | Owner-scoped | 696 |
-| Admin | 276 |
+| Admin | 277 |
 | Gated (backend config) | 530 |
 | Areas | 119 |
 
@@ -1735,7 +1735,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `lakehouse/path/route.ts` | POST DELETE | session-only |  | ADLS |
 | `lakehouse/paths/route.ts` | GET | owner-scoped |  | ADLS |
 | `lakehouse/permissions/rls-test/route.ts` | POST | session-only |  | — |
-| `lakehouse/permissions/route.ts` | GET POST DELETE | session-only |  | ADLS |
+| `lakehouse/permissions/route.ts` | GET POST DELETE | admin |  | ADLS |
 | `lakehouse/preview/route.ts` | GET | session-only |  | ADLS, Synapse SQL |
 | `lakehouse/references/paths/route.ts` | GET | owner-scoped |  | ADLS, Cosmos |
 | `lakehouse/references/route.ts` | GET POST | owner-scoped |  | ADLS, Cosmos |
