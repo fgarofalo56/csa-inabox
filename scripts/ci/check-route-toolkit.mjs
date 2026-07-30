@@ -64,6 +64,14 @@ const TOUCH_EXEMPT = new Map([
   // streaming — a legitimate codemod-resistant prologue. Migrate when the streaming
   // routes get a dedicated stream-safe toolkit wrapper.
   ['apps/fiab-console/app/api/items/data-agent/[id]/chat/route.ts', 'N9: streaming SSE agent route, custom envelopes — not withSession-migratable yet'],
+  // #2652 touched this route to share the deploy-workflow allow-list with
+  // /api/setup/workflow-run-status (a token-bearing SSRF fix). The codemod reports
+  // SKIPPED — "no hand-rolled getSession() prologue" — because this route gates on
+  // enforceCapability() rather than the getSession()+401 shape withSession
+  // replaces, so there is nothing for it to rewrite. Migrating it by hand inside a
+  // security PR would put a ~900-line refactor of the deploy path next to a
+  // two-line allow-list change and make both harder to review.
+  ['apps/fiab-console/app/api/setup/deploy/route.ts', '#2652: enforceCapability prologue, codemod-resistant — migrate in a dedicated setup-family PR'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
