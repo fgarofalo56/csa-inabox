@@ -62,7 +62,11 @@ jobs:
 
       - name: Q1 — synthetic-monitor results container
         run: |
-          set -uo pipefail
+          # GitHub's default shell is `bash -e`. `set -uo pipefail` does NOT clear
+          # -e, so a failing command substitution aborts the step BEFORE the RC
+          # check below can classify it — which is how the first run died at Q1
+          # instead of reporting the 403 it was written to distinguish.
+          set +e -uo pipefail
           ACCT=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_ADLS_ACCOUNT'].value | [0]" -o tsv 2>/dev/null)
           echo "lake account: ${ACCT:-<unset>}"
@@ -82,18 +86,34 @@ jobs:
               echo "Q1: ABSENT — uat-results does NOT exist; #2641 must create it"
             fi
           fi
+          # Informational probe: its OUTPUT is the deliverable, so a non-zero tail
+          # (a closed pipe under pipefail, an az probe for an absent provider) must
+          # not fail the step and suppress the remaining answers.
+          exit 0
 
       - name: Q2 — action groups in the Gov sub
         run: |
-          set -uo pipefail
+          # GitHub's default shell is `bash -e`. `set -uo pipefail` does NOT clear
+          # -e, so a failing command substitution aborts the step BEFORE the RC
+          # check below can classify it — which is how the first run died at Q1
+          # instead of reporting the 403 it was written to distinguish.
+          set +e -uo pipefail
           echo "action groups (whole sub):"
           az monitor action-group list --query "[].{name:name,rg:resourceGroup,id:id}" -o tsv 2>&1 | sed 's/^/  /' | head -20
           N=$(az monitor action-group list --query "length(@)" -o tsv 2>/dev/null || echo "?")
           echo "Q2: count=$N  (0 => LOOM_ALERT_ACTION_GROUP_ID has no legitimate value yet)"
+          # Informational probe: its OUTPUT is the deliverable, so a non-zero tail
+          # (a closed pipe under pipefail, an az probe for an absent provider) must
+          # not fail the step and suppress the remaining answers.
+          exit 0
 
       - name: Q3 — loom-unity authorization posture
         run: |
-          set -uo pipefail
+          # GitHub's default shell is `bash -e`. `set -uo pipefail` does NOT clear
+          # -e, so a failing command substitution aborts the step BEFORE the RC
+          # check below can classify it — which is how the first run died at Q1
+          # instead of reporting the 403 it was written to distinguish.
+          set +e -uo pipefail
           if ! az containerapp show -n loom-unity -g "$RG" -o none 2>/dev/null; then
             echo "Q3: loom-unity NOT DEPLOYED in $RG"; exit 0
           fi
@@ -106,10 +126,18 @@ jobs:
           echo "--- easyauth (platform auth) ---"
           az containerapp auth show -n loom-unity -g "$RG" -o json 2>&1 | head -30 || echo "(no easyauth config)"
           echo "Q3: read the three blocks above — an externally-reachable ingress with no auth env and no easyauth == unauthenticated."
+          # Informational probe: its OUTPUT is the deliverable, so a non-zero tail
+          # (a closed pipe under pipefail, an az probe for an absent provider) must
+          # not fail the step and suppress the remaining answers.
+          exit 0
 
       - name: Q4 — live console image + does it carry the security fixes
         run: |
-          set -uo pipefail
+          # GitHub's default shell is `bash -e`. `set -uo pipefail` does NOT clear
+          # -e, so a failing command substitution aborts the step BEFORE the RC
+          # check below can classify it — which is how the first run died at Q1
+          # instead of reporting the 403 it was written to distinguish.
+          set +e -uo pipefail
           IMG=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].image" -o tsv 2>/dev/null)
           echo "live image: ${IMG:-<none>}"
@@ -134,10 +162,18 @@ jobs:
           else
             echo "Q4: tag '$TAG' is not a commit in this checkout — cannot correlate. Fetch depth or a non-SHA tag."
           fi
+          # Informational probe: its OUTPUT is the deliverable, so a non-zero tail
+          # (a closed pipe under pipefail, an az probe for an absent provider) must
+          # not fail the step and suppress the remaining answers.
+          exit 0
 
       - name: Q5 — backing resources for the still-blocked optional gates
         run: |
-          set -uo pipefail
+          # GitHub's default shell is `bash -e`. `set -uo pipefail` does NOT clear
+          # -e, so a failing command substitution aborts the step BEFORE the RC
+          # check below can classify it — which is how the first run died at Q1
+          # instead of reporting the 403 it was written to distinguish.
+          set +e -uo pipefail
           probe() { # probe <label> <az-list-cmd...>
             local label="$1"; shift
             local out; out=$("$@" 2>&1)
@@ -159,3 +195,7 @@ jobs:
           probe "cognitive"      az cognitiveservices account list --query "[].name" -o tsv
           echo "--- container apps in $RG ---"
           az containerapp list -g "$RG" --query "[].{n:name,ext:properties.configuration.ingress.external,img:properties.template.containers[0].image}" -o table 2>&1 | head -40
+          # Informational probe: its OUTPUT is the deliverable, so a non-zero tail
+          # (a closed pipe under pipefail, an az probe for an absent provider) must
+          # not fail the step and suppress the remaining answers.
+          exit 0
