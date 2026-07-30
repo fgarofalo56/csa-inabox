@@ -50,11 +50,38 @@ PORT = int(os.environ.get("PORT") or os.environ.get("FUNCTIONS_HTTPWORKER_PORT")
 
 
 def load_functions(source_code):
-    """Execute UDF source and return {name: callable} for @udf.function() defs."""
+    """Execute UDF source and return {name: callable} for @udf.function() defs.
+
+    THIS IS ARBITRARY CODE EXECUTION, BY DESIGN. That is the product: a User Data
+    Function host runs the Python its author wrote. CodeQL flags it as
+    py/code-injection (#2653) and the alert is correct about the mechanism.
+
+    What matters is who can reach it. Two sources feed this:
+
+      1. DEFAULT_SOURCE_PATH — written by the ACA init container from a
+         bicep-delivered secret. Operator-supplied. Fine.
+      2. The `X-Udf-Source-B64` request header — **CALLER-supplied.** Whoever can
+         open a connection to this host can execute anything as this container.
+
+    The previous comment here read "trusted, author-owned code", which was wrong
+    from the host's point of view: the host cannot tell an author from any other
+    caller, because it holds no credential to check them with — and deliberately
+    so. main.bicep records the reason: this host executes the item's own Python,
+    so a shared key in its environment could simply be read back out by that
+    Python and exfiltrated. Adding a key here would move the secret INTO the
+    blast radius, not reduce it.
+
+    With no secret available, the boundary is necessarily the NETWORK:
+    internal-only ACA ingress plus `consoleAllowedCidrs` IP rules pinning it to
+    the Console's subnet (udf-runtime.bicep). Without those IP rules, "on the CAE
+    VNet" is sufficient to get RCE here — see the boot warning in main().
+    """
     import fabric.functions as fn  # bundled shim
     fn.reset_registry()
     ns = {}
-    exec(compile(source_code, "<udf-source>", "exec"), ns, ns)  # noqa: S102 — trusted, author-owned code
+    # noqa: S102 — see the docstring above. Executing caller source IS the
+    # feature; the control is network isolation, enforced in udf-runtime.bicep.
+    exec(compile(source_code, "<udf-source>", "exec"), ns, ns)  # noqa: S102
     return dict(fn.registry())
 
 
@@ -138,10 +165,40 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, result)
 
 
+def ingress_warning(env=None):
+    """#2653 — the boot-time notice when the ONLY control is "reachable on the VNet".
+
+    Returns the warning string, or None when ingress carries an IP allow-list.
+
+    Extracted from main() so it is testable without starting a server. The host
+    cannot discover its own ingress rules — ACA enforces them in front of the
+    container and they are invisible from inside it — so udf-runtime.bicep passes
+    LOOM_UDF_INGRESS_IP_RESTRICTED to say whether the control it depends on is
+    actually in place. An unpinned deployment must not look identical to a pinned
+    one in the logs.
+    """
+    env = os.environ if env is None else env
+    if env.get("LOOM_UDF_INGRESS_IP_RESTRICTED"):
+        return None
+    return (
+        "loom-udf-host SECURITY WARNING: ingress is internal-only but has NO IP "
+        "allow-list, so ANY workload that can reach this Container Apps environment "
+        "can POST arbitrary Python via the X-Udf-Source-B64 header and have it "
+        "executed as this container. This host holds no credential to authenticate "
+        "callers with — deliberately, because it executes the item's own Python and "
+        "that code could read a key back out of the environment. The control is "
+        "therefore the network: redeploy udf-runtime.bicep with "
+        "consoleAllowedCidrs=['<cae-infrastructure-subnet-cidr>']. See issue #2653."
+    )
+
+
 def main():
     httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     sys.stderr.write("loom-udf-host listening on :%d — %d bundled function(s): %s\n"
                      % (PORT, len(FUNCS), ", ".join(sorted(FUNCS.keys())) or "(none)"))
+    warn = ingress_warning()
+    if warn:
+        sys.stderr.write(warn + "\n")
     httpd.serve_forever()
 
 
