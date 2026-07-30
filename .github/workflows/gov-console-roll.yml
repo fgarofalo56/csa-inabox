@@ -46,6 +46,11 @@ jobs:
   roll:
     name: Build + roll Gov console
     runs-on: ubuntu-latest
+    # #2706 — this job inherited the 6-hour default. Two consecutive runs spent
+    # 4h25m and 3h29m+ in `az acr build` (Commercial builds the same commit in
+    # ~30min) and burned most of a day before anyone could learn anything. A
+    # bound turns "silently stuck" into a failed run someone can act on.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +85,12 @@ jobs:
           # still the recorded holder — an `if: always()` cleanup that fires on
           # cancellation can no longer deny another run's in-flight push. See
           # docs/fiab/acr-firewall-lease.md.
-          LOOM_ACR_LEASE_TTL_MINUTES=120 \
+          # #2706 — was 120, which BOTH long runs exceeded while still building.
+          # An expired lease mid-build means the re-lock cleanup can close the
+          # data plane under an in-flight push. Kept just above the job's
+          # timeout-minutes so the lease outlives any run that can still be
+          # alive, and no longer.
+          LOOM_ACR_LEASE_TTL_MINUTES=100 \
             bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # 2026-07-16: console builds run on a dedicated 16 GB S3 agent pool —
@@ -93,7 +103,21 @@ jobs:
           CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
           [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          az acr build --registry "$ACR" --no-logs --agent-pool loombuild \
+          # #2706 — report the agent pool BEFORE building. Two consecutive runs
+          # sat in `az acr build` for 3.5-4.5h with zero output; if the single S3
+          # agent is unhealthy or still scaling from 0 the run just queues rather
+          # than failing, and `--no-logs` made a stall indistinguishable from a
+          # slow build. Print what we are about to build on.
+          echo "::notice::agent pool state before build:"
+          az acr agentpool show -r "$ACR" -n loombuild \
+            --query "{count:count,tier:tier,state:provisioningState}" -o tsv 2>&1 | sed 's/^/  pool: /' || true
+          az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>&1 | sed 's/^/  queued: /' || true
+
+          # Logs STREAM now (the `--no-logs` opt-out is gone). A silent build is
+          # exactly the shape this repo keeps getting burned by: it looks
+          # identical whether it is compiling or wedged. The extra output is a
+          # rounding error next to a 4-hour blind wait.
+          az acr build --registry "$ACR" --agent-pool loombuild \
             --image "loom-console:$SHA" --image "loom-console:latest" \
             --file apps/fiab-console/Dockerfile \
             --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
