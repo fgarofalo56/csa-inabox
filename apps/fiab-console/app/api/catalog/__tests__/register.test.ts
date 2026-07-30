@@ -38,6 +38,12 @@ function req(body: any) {
 beforeEach(() => {
   vi.resetAllMocks();
   process.env.LOOM_PURVIEW_ACCOUNT = 'purview-test';
+  // The route now runs `assertAllowedUcHost(body.host)` — a request must not be
+  // able to point a CREDENTIALED ucFetch at an arbitrary host. That check FAILS
+  // CLOSED, so with no workspace configured every unity-catalog case threw and
+  // surfaced as a 500, masking the real 501/200 assertions. Declaring the host
+  // this deployment owns is what a real deployment does; it is not a workaround.
+  process.env.LOOM_DATABRICKS_HOSTNAME = 'adb.host';
 });
 
 describe('POST /api/catalog/register', () => {
@@ -93,6 +99,25 @@ describe('POST /api/catalog/register', () => {
     }
   });
 
+  it('REFUSES a host this deployment does not own (#2607)', async () => {
+    // The whole point of assertAllowedUcHost: a request must not be able to aim
+    // a CREDENTIALED ucFetch at an arbitrary host. Fixing the two tests above by
+    // declaring LOOM_DATABRICKS_HOSTNAME made every case use an ALLOWED host,
+    // which left nothing asserting the refusal actually happens on this route.
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    (getTable as any).mockResolvedValue({ full_name: 'main.bronze.customers', name: 'customers' });
+
+    const res = await POST(req({
+      source: 'unity-catalog',
+      host: 'attacker.example',
+      fullName: 'main.bronze.customers',
+    }));
+
+    expect(res.status).not.toBe(200);
+    // and the credentialed call must never have been made
+    expect(getTable).not.toHaveBeenCalled();
+  });
+
   it('returns 501 + hint if Purview is not configured', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     (getTable as any).mockResolvedValue({ full_name: 't', name: 't' });
@@ -100,7 +125,10 @@ describe('POST /api/catalog/register', () => {
       missingEnvVar: 'LOOM_PURVIEW_ACCOUNT',
       bicepModule: 'platform/x', bicepStatus: 's', rolesRequired: [], followUp: 'set env',
     }));
-    const res = await POST(req({ source: 'unity-catalog', host: 'h', fullName: 'a.b.c' }));
+    // Must be the DECLARED workspace host: this case exercises the Purview 501
+    // gate, so it has to get past assertAllowedUcHost to reach it. A throwaway
+    // 'h' is now rejected upstream and the 501 would never be observed.
+    const res = await POST(req({ source: 'unity-catalog', host: 'adb.host', fullName: 'a.b.c' }));
     expect(res.status).toBe(501);
     const j = await res.json();
     expect(j.hint.missingEnvVar).toBe('LOOM_PURVIEW_ACCOUNT');
