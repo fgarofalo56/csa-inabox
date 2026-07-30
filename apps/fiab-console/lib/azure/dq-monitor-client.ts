@@ -50,6 +50,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { executeStatement } from './databricks-client';
 import type { DqRule } from './data-quality-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -74,16 +75,31 @@ async function dbxToken(): Promise<string> {
   return t.token;
 }
 
+/**
+ * LU-3 — this module keeps its OWN Databricks transport (it predates the shared
+ * one), and two of its calls are Unity Catalog REST reads
+ * (`/api/2.1/unity-catalog/tables|schemas/...`). The `finally` records those;
+ * `recordDatabricksUnityAccess` ignores the quality-monitor paths, which are not
+ * catalog access. Allowlisted + asserted in scripts/ci/check-unity-audit-chokepoint.mjs.
+ */
 async function dbxFetch(path: string, init?: RequestInit): Promise<Response> {
-  const token = await dbxToken();
-  return fetchWithTimeout(`https://${host()}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
-  });
+  const t0 = Date.now();
+  let res: Response | undefined;
+  let err: unknown;
+  try {
+    const token = await dbxToken();
+    res = await fetchWithTimeout(`https://${host()}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+    });
+    return res;
+  } catch (e) { err = e; throw e; } finally {
+    recordDatabricksUnityAccess({ path, method: String(init?.method || 'GET'), status: res?.status ?? 0, durationMs: Date.now() - t0, error: err });
+  }
 }
 
 /**

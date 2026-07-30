@@ -2,9 +2,9 @@
  * Unity Catalog SYSTEM TABLES / AUDIT surface — wave c3.
  *
  *   GET /api/databricks/unity-catalog/system-tables?table=audit|billing|query-history[&days=&limit=&service=&action=&status=&warehouseId=]
- *         → { ok, table, columns[], rows[], executionMs }
+ *         → { ok, backend, table, columns[], rows[], executionMs }
  *   GET /api/databricks/unity-catalog/system-tables?info=schemas
- *         → { ok, metastore, schemas:[{schema,state}] }   (enablement state)
+ *         → { ok, backend, metastore, schemas:[{schema,state}] }   (enablement state)
  *   POST /api/databricks/unity-catalog/system-tables
  *         body { action:'enable-schema', schema }          → { ok }
  *
@@ -18,10 +18,32 @@
  * Honest gate when Databricks is not configured, at the GCC-High / DoD boundary,
  * and (from the client) when a system schema isn't enabled or the Console UAMI
  * lacks USE CATALOG/USE SCHEMA/SELECT on it — the error names the exact grant.
+ *
+ * ## AUTHORIZATION — tenant admin, org-wide  (loom-apex LU-3)
+ *
+ * This is an ORG-WIDE AUDIT surface: `system.access.audit` is the whole
+ * metastore's activity, not the caller's. The rows carry actor UPNs + Entra
+ * oids, securable FQNs, and DENIALS — a map of what other people tried to reach
+ * and were refused. It used to be a bare `getSession()` check, so ANY signed-in
+ * user could read all of it. The whole route (GET + POST) is now
+ * `withTenantAdmin`, exactly like the sibling reader of the same trail
+ * (app/api/admin/audit-logs/route.ts). Attack-tested in `__tests__/route.test.ts`.
+ *
+ * ## The Loom Unity (OSS) backend is NOT served here yet
+ *
+ * LU-3 also builds a Loom-native `access.audit` equivalent for the OSS backend —
+ * every catalog call funnels through the BFF audit choke point
+ * (`ucFetch`/`dbxFetch` → `recordUnityAccess`, `lib/azure/unity-audit.ts`) and
+ * lands in the Cosmos `_auditLog` trail + the `LoomAudit_CL` SIEM stream. Those
+ * WRITES ship in this PR. The READER and the `/catalog/unity` System-tables pane
+ * that surface them are SPLIT OUT to a follow-up PR, because they have no
+ * in-browser E2E receipt and `ux-baseline.md` G1 makes that blocking. Until then
+ * the Gov gate below stands (unchanged from before LU-3), and the trail is read
+ * with `unityAuditKql()` against Log Analytics / Sentinel.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { databricksConfigGate, listWarehouses } from '@/lib/azure/databricks-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import {
@@ -32,20 +54,22 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface Gate { gated: true; error: string }
+interface Gate { gated: true; error: string; code: string }
 
 function resolveGate(): Gate | null {
   const cfg = databricksConfigGate();
   if (cfg) {
-    return { gated: true, error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
+    return { gated: true, code: 'svc-databricks', error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
   }
   if (isGovCloud()) {
     return {
       gated: true,
+      code: 'uc_system_tables_boundary',
       error:
         `Unity Catalog system tables (audit / billing / query history) are not available at the ${cloudBoundaryLabel()} boundary. ` +
         `They require a Commercial or GCC Databricks account (Microsoft Entra-connected Unity Catalog metastore). ` +
-        `At this boundary use Azure Monitor / Log Analytics on the Databricks diagnostic logs instead.`,
+        `At this boundary use Azure Monitor / Log Analytics on the Databricks diagnostic logs instead — and for Loom's own ` +
+        `catalog access trail, the LoomAudit_CL stream written by the LU-3 BFF audit choke point (unityAuditKql()).`,
     };
   }
   return null;
@@ -65,11 +89,22 @@ const numOr = (v: string | null, def?: number): number | undefined => {
   return Number.isFinite(n) ? n : def;
 };
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+/**
+ * A window must look BACKWARD. `days=-30` would compute a lower bound 30 days in
+ * the FUTURE, the predicate would match nothing, and the surface would render
+ * "no activity in this window" — an audit surface reporting "nothing happened"
+ * for a malformed input is a false negative, which is the failure class this
+ * whole item exists to avoid. Reject it instead.
+ */
+function invalidWindow(days: number | undefined, limit: number | undefined): string | null {
+  if (days !== undefined && !(days > 0)) return 'days must be a positive number of days to look back';
+  if (limit !== undefined && !(limit > 0)) return 'limit must be a positive number of rows';
+  return null;
+}
+
+export const GET = withTenantAdmin(async (req) => {
   const gate = resolveGate();
-  if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
+  if (gate) return NextResponse.json({ ok: false, gated: true, code: gate.code, error: gate.error }, { status: 200 });
 
   const sp = req.nextUrl.searchParams;
 
@@ -83,10 +118,10 @@ export async function GET(req: NextRequest) {
         try { schemas = await listSystemSchemas(host, summary.metastoreId); }
         catch (e: any) {
           // Listing requires metastore/account admin — surface honestly, don't 500.
-          return NextResponse.json({ ok: true, metastore: summary, schemas: [], schemasError: e?.message || String(e) });
+          return NextResponse.json({ ok: true, backend: 'databricks', metastore: summary, schemas: [], schemasError: e?.message || String(e) });
         }
       }
-      return NextResponse.json({ ok: true, metastore: summary, schemas });
+      return NextResponse.json({ ok: true, backend: 'databricks', metastore: summary, schemas });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
     }
@@ -94,15 +129,18 @@ export async function GET(req: NextRequest) {
 
   // ---- System table read ----
   const table = (sp.get('table') || 'audit').toLowerCase().trim();
+  const days = numOr(sp.get('days'));
+  const limit = numOr(sp.get('limit'));
+  const badWindow = invalidWindow(days, limit);
+  if (badWindow) return NextResponse.json({ ok: false, error: badWindow }, { status: 400 });
+
   let warehouseId: string;
   try {
     warehouseId = await resolveWarehouseId(sp.get('warehouseId')?.trim() || undefined);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, gated: true, error: e?.message || String(e) }, { status: 200 });
+    return NextResponse.json({ ok: false, gated: true, code: 'svc-databricks-sql', error: e?.message || String(e) }, { status: 200 });
   }
 
-  const days = numOr(sp.get('days'));
-  const limit = numOr(sp.get('limit'));
   try {
     let result;
     if (table === 'audit') {
@@ -112,22 +150,20 @@ export async function GET(req: NextRequest) {
     } else if (table === 'query-history' || table === 'query' || table === 'history') {
       result = await readQueryHistory(warehouseId, { days, limit, status: sp.get('status')?.trim() || undefined });
     } else {
-      return NextResponse.json({ ok: false, error: "table must be one of: audit, billing, query-history" }, { status: 400 });
+      return NextResponse.json({ ok: false, error: 'table must be one of: audit, billing, query-history' }, { status: 400 });
     }
-    return NextResponse.json({ ok: true, table, ...result });
+    return NextResponse.json({ ok: true, backend: 'databricks', table, ...result });
   } catch (e: any) {
     // The client throws a typed gate (schema not enabled / UAMI missing grants)
     // with a 403; surface it as a gated MessageBar rather than a hard error.
-    if (e?.status === 403) return NextResponse.json({ ok: false, gated: true, error: e?.message || String(e) }, { status: 200 });
+    if (e?.status === 403) return NextResponse.json({ ok: false, gated: true, code: 'uc_system_schema_grant', error: e?.message || String(e) }, { status: 200 });
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withTenantAdmin(async (req, { session }) => {
   const gate = resolveGate();
-  if (gate) return NextResponse.json({ ok: false, gated: true, error: gate.error }, { status: 200 });
+  if (gate) return NextResponse.json({ ok: false, gated: true, code: gate.code, error: gate.error }, { status: 200 });
 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -146,10 +182,10 @@ export async function POST(req: NextRequest) {
     // Enabling needs metastore/account admin — a 403 is an honest admin-action gate.
     if (e?.status === 403) {
       return NextResponse.json({
-        ok: false, gated: true,
+        ok: false, gated: true, code: 'uc_system_schema_grant',
         error: `Enabling the system.${schema} schema requires a metastore or account admin. The Console UAMI is not one — ask an admin to run \`databricks system-schemas enable <metastore_id> system.${schema}\` (or PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas/${schema}).`,
       }, { status: 200 });
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

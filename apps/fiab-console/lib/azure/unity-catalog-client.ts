@@ -27,6 +27,9 @@
  *
  * No mocks. No `return []` placeholders. Every export hits api.azuredatabricks
  * or throws `UnityCatalogError` with status + body + endpoint.
+ *
+ * LU-3 — AUDIT CHOKE POINT: every catalog call, on EITHER backend, funnels
+ * through the single {@link ucFetch} below (lib/azure/unity-audit.ts).
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
@@ -36,6 +39,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
+import { UnityCatalogError, ucRows, clampInt } from '@/lib/azure/uc-primitives';
+import { classifyUnityCall, recordUnityAccess, unityOutcomeForError } from '@/lib/azure/unity-audit';
 import type { UCEffectivePermissions } from '@/lib/azure/uc-effective-permissions';
 import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
@@ -91,18 +96,19 @@ export class UnityCatalogNotConfiguredError extends Error {
   }
 }
 
-export class UnityCatalogError extends Error {
-  status: number;
-  body?: unknown;
-  endpoint?: string;
-  constructor(message: string, status: number, body?: unknown, endpoint?: string) {
-    super(message);
-    this.name = 'UnityCatalogError';
-    this.status = status;
-    this.body = body;
-    this.endpoint = endpoint;
-  }
-}
+// UnityCatalogError, ucRows and clampInt now live in `./uc-primitives` (imported
+// above) so `./uc-system-tables` — split out of this file for the file-size
+// ratchet — can use them without an import cycle. Re-exported here so every
+// existing `import { UnityCatalogError } from '@/lib/azure/unity-catalog-client'`
+// and every `instanceof` keeps working: a re-export is the same class binding.
+export { UnityCatalogError, ucRows, clampInt };
+
+// The Databricks system-table readers were 165 lines of this file. Re-exported
+// from their new home so no caller changes its import.
+export {
+  readAccessAudit, readBillingUsage, readQueryHistory, readDataClassification,
+  readDataQualityMonitorResults, type SystemReadResult,
+} from './uc-system-tables';
 
 // ============================================================
 // Workspace discovery (multi-workspace federation)
@@ -190,6 +196,17 @@ async function dbxToken(): Promise<string> {
   return t.token;
 }
 
+/**
+ * The ONE outbound call to a Unity Catalog / Loom Unity server, and therefore
+ * the LU-3 **audit choke point**: the `finally` records every call — success,
+ * failure, and every authorization DENIAL — to the Cosmos `_auditLog` trail and
+ * the `LoomAudit_CL` SIEM stream (lib/azure/unity-audit.ts). Because this holds
+ * the file's only outbound fetch, a new call site cannot reach the catalog
+ * un-audited; `scripts/ci/check-unity-audit-chokepoint.mjs` fails the build on a
+ * second fetch, a removed `recordUnityAccess(`, or any other file building a
+ * Loom Unity request URL. Recording is fire-and-forget so an audit-store hiccup
+ * never fails a read; await `flushUnityAudit()` when durability matters.
+ */
 async function ucFetch<T = any>(
   host: string,
   path: string,
@@ -200,63 +217,87 @@ async function ucFetch<T = any>(
   // default). Both speak the same /api/2.1/unity-catalog/* REST surface, so the
   // only differences are the base URL + auth.
   const oss = isOssUc();
-  const authHeaders: Record<string, string> = {};
-  let url: string;
-  if (oss) {
-    // Gate Databricks-only families honestly rather than 404-ing the OSS server.
-    const unsupported = ossUcUnsupportedPath(path);
-    if (unsupported) {
-      throw new UnityCatalogError(
-        `${unsupported} is not available on the OSS Unity Catalog backend (LOOM_UC_BACKEND=oss). ` +
-          'These are Databricks Unity Catalog features; use the Databricks backend for them, or the ' +
-          'Loom-native equivalent (see /api/catalog/unity/capabilities). Catalogs, schemas, tables, ' +
-          'volumes, functions, models, grants, external locations, and storage credentials are supported.',
-        501,
-        undefined,
-        path,
-      );
+  const method = init?.method ?? 'GET';
+  const startedMs = Date.now();
+  // Classify BEFORE the OSS path rewrite so the audit vocabulary is identical
+  // on both backends (`storage-credentials` and `credentials` are one family).
+  const call = classifyUnityCall(method, path);
+  let status = 0;
+  let failure: unknown;
+  try {
+    const authHeaders: Record<string, string> = {};
+    let url: string;
+    if (oss) {
+      // Gate Databricks-only families honestly rather than 404-ing the OSS server.
+      const unsupported = ossUcUnsupportedPath(path);
+      if (unsupported) {
+        throw new UnityCatalogError(
+          `${unsupported} is not available on the OSS Unity Catalog backend (LOOM_UC_BACKEND=oss). ` +
+            'These are Databricks Unity Catalog features; use the Databricks backend for them, or the ' +
+            'Loom-native equivalent (see /api/catalog/unity/capabilities). Catalogs, schemas, tables, ' +
+            'volumes, functions, models, grants, external locations, and storage credentials are supported.',
+          501,
+          undefined,
+          path,
+        );
+      }
+      // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
+      // The path rewrite maps the one Databricks↔OSS naming split
+      // (storage-credentials → credentials) so callers stay backend-agnostic.
+      url = `${ossUcBase()}${ossUcRewritePath(path)}`;
+      // LU-2 — the BFF is the single choke point: inject the Console's credential
+      // (pre-shared server token, or an Entra bearer minted by the Console UAMI for
+      // the Loom Unity audience). Fails CLOSED when authorization is required but
+      // unmintable; returns {} only in the explicitly-anonymous posture, which the
+      // svc-loom-unity-authz gate + probe-loom-unity-authz probe surface as a
+      // security finding rather than a silent open door.
+      Object.assign(authHeaders, await ossUcAuthHeader());
+    } else {
+      const token = await dbxToken();
+      url = `https://${host}${path}`;
+      authHeaders.authorization = `Bearer ${token}`;
     }
-    // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
-    // The path rewrite maps the one Databricks↔OSS naming split
-    // (storage-credentials → credentials) so callers stay backend-agnostic.
-    url = `${ossUcBase()}${ossUcRewritePath(path)}`;
-    // LU-2 — the BFF is the single choke point: inject the Console's credential
-    // (pre-shared server token, or an Entra bearer minted by the Console UAMI for
-    // the Loom Unity audience). Fails CLOSED when authorization is required but
-    // unmintable; returns {} only in the explicitly-anonymous posture, which the
-    // svc-loom-unity-authz gate + probe-loom-unity-authz probe surface as a
-    // security finding rather than a silent open door.
-    Object.assign(authHeaders, await ossUcAuthHeader());
-  } else {
-    const token = await dbxToken();
-    url = `https://${host}${path}`;
-    authHeaders.authorization = `Bearer ${token}`;
+    if (init?.query) {
+      const qs = new URLSearchParams(init.query).toString();
+      if (qs) url += (url.includes('?') ? '&' : '?') + qs;
+    }
+    const res = await fetchWithTimeout(url, {
+      method,
+      headers: {
+        ...authHeaders,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      cache: 'no-store',
+    });
+    status = res.status;
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+    if (!res.ok) {
+      const msg =
+        json?.message ||
+        json?.error_code ||
+        (typeof json === 'string' ? json : `${method} ${path} failed ${res.status}`);
+      throw new UnityCatalogError(msg, res.status, json, url);
+    }
+    return (json as T) ?? ({} as T);
+  } catch (e) {
+    failure = e;
+    throw e;
+  } finally {
+    // `finally`, not the success path: a DENIED call is the row an auditor most
+    // wants and the one a happy-path-only emitter silently drops. Loom Unity is
+    // a single server (LOOM_UNITY_URL), so only Databricks rows carry a host.
+    const st = status || Number((failure as { status?: number } | null)?.status) || 0;
+    void recordUnityAccess({
+      ...call, backend: oss ? 'oss' : 'databricks', method, path,
+      workspaceHost: oss ? undefined : host, status: st, durationMs: Date.now() - startedMs,
+      outcome: failure ? unityOutcomeForError(failure, st) : 'success',
+      detail: failure ? String((failure as Error)?.message || failure).slice(0, 400) : undefined,
+    });
   }
-  if (init?.query) {
-    const qs = new URLSearchParams(init.query).toString();
-    if (qs) url += (url.includes('?') ? '&' : '?') + qs;
-  }
-  const res = await fetchWithTimeout(url, {
-    method: init?.method ?? 'GET',
-    headers: {
-      ...authHeaders,
-      'content-type': 'application/json',
-      accept: 'application/json',
-    },
-    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  if (!res.ok) {
-    const msg =
-      json?.message ||
-      json?.error_code ||
-      (typeof json === 'string' ? json : `${init?.method ?? 'GET'} ${path} failed ${res.status}`);
-    throw new UnityCatalogError(msg, res.status, json, url);
-  }
-  return (json as T) ?? ({} as T);
 }
 
 // ============================================================
@@ -1544,11 +1585,6 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
 // resolves a running warehouse id and handles config / Gov-boundary gates.
 // ============================================================
 
-/** QueryResult rows → array of column-keyed objects. */
-function ucRows(r: QueryResult): Record<string, unknown>[] {
-  return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])));
-}
-
 export interface UcTagRow {
   catalog_name?: string;
   schema_name?: string;
@@ -2108,134 +2144,6 @@ export async function enableSystemSchema(host: string, metastoreId: string, sche
   );
 }
 
-// ---- 2b. System table reads (audit / billing / query history) --------
-
-export interface SystemReadResult {
-  columns: string[];
-  rows: Record<string, unknown>[];
-  rowCount: number;
-  executionMs: number;
-}
-
-const clampInt = (v: number | undefined, def: number, min: number, max: number): number => {
-  const n = Number.isFinite(v as number) ? Math.trunc(v as number) : def;
-  return Math.min(max, Math.max(min, n));
-};
-
-/**
- * Run a `system.*` read and convert a "schema not enabled / not authorized"
- * failure into a typed {@link UnityCatalogError} that names the exact remediation
- * (enable the system schema + grant the UAMI USE CATALOG/USE SCHEMA/SELECT),
- * rather than returning a silent empty result (per no-vaporware.md).
- */
-async function runSystemTableRead(
-  warehouseId: string,
-  fullTable: string,     // e.g. system.access.audit
-  systemSchema: string,  // e.g. access
-  sql: string,
-  params?: DbxQueryParam[],
-): Promise<SystemReadResult> {
-  try {
-    const r = await executeStatement(warehouseId, sql, undefined, undefined, params);
-    return { columns: r.columns, rows: ucRows(r), rowCount: r.rowCount, executionMs: r.executionMs };
-  } catch (e: any) {
-    const msg = String(e?.message || e);
-    if (/TABLE_OR_VIEW_NOT_FOUND|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS|SCHEMA_NOT_FOUND|REQUIRES_SINGLE_PART_NAMESPACE|system\./i.test(msg)) {
-      throw new UnityCatalogError(
-        `The Databricks system table ${fullTable} is unavailable: ${msg}. Enable the ` +
-          `system.${systemSchema} schema (as a metastore admin: PUT /api/2.1/unity-catalog/` +
-          `metastores/{metastore_id}/systemschemas/${systemSchema}) and grant the Loom UAMI ` +
-          `USE CATALOG on \`system\` + USE SCHEMA on system.${systemSchema} + SELECT (see ` +
-          `scripts/csa-loom/grant-databricks-system-tables-role.sh).`,
-        typeof e?.status === 'number' ? e.status : 403,
-        e?.body,
-        fullTable,
-      );
-    }
-    throw e;
-  }
-}
-
-/** Recent rows from `system.access.audit` (the UC audit log). Filter on
- *  `event_date` (partition) for performance. */
-export async function readAccessAudit(
-  warehouseId: string,
-  opts: { days?: number; limit?: number; service?: string; action?: string } = {},
-): Promise<SystemReadResult> {
-  const days = clampInt(opts.days, 7, 1, 365);
-  const limit = clampInt(opts.limit, 100, 1, 1000);
-  const params: DbxQueryParam[] = [];
-  const filters = [`event_date >= current_date() - INTERVAL ${days} DAYS`];
-  if (opts.service?.trim()) { filters.push('service_name = :service'); params.push({ name: 'service', value: opts.service.trim(), type: 'STRING' }); }
-  if (opts.action?.trim()) { filters.push('action_name = :action'); params.push({ name: 'action', value: opts.action.trim(), type: 'STRING' }); }
-  const sql = `SELECT event_time, workspace_id, service_name, action_name, user_identity.email AS user_email, source_ip_address, request_id
-    FROM system.access.audit
-    WHERE ${filters.join(' AND ')}
-    ORDER BY event_time DESC
-    LIMIT ${limit}`;
-  return runSystemTableRead(warehouseId, 'system.access.audit', 'access', sql, params.length ? params : undefined);
-}
-
-/** Billable-usage summary from `system.billing.usage`, aggregated by product +
- *  SKU over a recent window (the audit pane's "spend" tab). */
-export async function readBillingUsage(
-  warehouseId: string,
-  opts: { days?: number; limit?: number } = {},
-): Promise<SystemReadResult> {
-  const days = clampInt(opts.days, 30, 1, 365);
-  const limit = clampInt(opts.limit, 100, 1, 1000);
-  const sql = `SELECT billing_origin_product, sku_name, usage_unit, ROUND(SUM(usage_quantity), 4) AS usage_quantity, COUNT(*) AS records
-    FROM system.billing.usage
-    WHERE usage_date >= current_date() - INTERVAL ${days} DAYS
-    GROUP BY billing_origin_product, sku_name, usage_unit
-    ORDER BY usage_quantity DESC
-    LIMIT ${limit}`;
-  return runSystemTableRead(warehouseId, 'system.billing.usage', 'billing', sql);
-}
-
-/** Recent statements from `system.query.history`. `statement_text` may be
- *  `<Redacted>` for non-admins (Databricks-side redaction) — surfaced as-is. */
-export async function readQueryHistory(
-  warehouseId: string,
-  opts: { days?: number; limit?: number; status?: string } = {},
-): Promise<SystemReadResult> {
-  const days = clampInt(opts.days, 7, 1, 365);
-  const limit = clampInt(opts.limit, 100, 1, 1000);
-  const params: DbxQueryParam[] = [];
-  const filters = [`start_time >= current_timestamp() - INTERVAL ${days} DAYS`];
-  if (opts.status?.trim()) { filters.push('execution_status = :status'); params.push({ name: 'status', value: opts.status.trim().toUpperCase(), type: 'STRING' }); }
-  const sql = `SELECT start_time, executed_by, statement_type, execution_status, total_duration_ms, produced_rows, statement_text
-    FROM system.query.history
-    WHERE ${filters.join(' AND ')}
-    ORDER BY start_time DESC
-    LIMIT ${limit}`;
-  return runSystemTableRead(warehouseId, 'system.query.history', 'query', sql, params.length ? params : undefined);
-}
-
-// ---- 3. UC-native data classification (auto-PII) ---------------------
-
-/** Column-level sensitive-class detections from `system.data_classification.results`
- *  (HIGH/LOW confidence per `class_tag`). Honest-gated when the
- *  `data_classification` system schema isn't enabled. */
-export async function readDataClassification(
-  warehouseId: string,
-  opts: { catalog?: string; schema?: string; table?: string; confidence?: string; limit?: number } = {},
-): Promise<SystemReadResult> {
-  const limit = clampInt(opts.limit, 200, 1, 1000);
-  const params: DbxQueryParam[] = [];
-  const filters = ['class_tag IS NOT NULL'];
-  if (opts.catalog?.trim()) { filters.push('catalog_name = :catalog'); params.push({ name: 'catalog', value: opts.catalog.trim(), type: 'STRING' }); }
-  if (opts.schema?.trim()) { filters.push('schema_name = :schema'); params.push({ name: 'schema', value: opts.schema.trim(), type: 'STRING' }); }
-  if (opts.table?.trim()) { filters.push('table_name = :table'); params.push({ name: 'table', value: opts.table.trim(), type: 'STRING' }); }
-  if (opts.confidence?.trim()) { filters.push('confidence = :confidence'); params.push({ name: 'confidence', value: opts.confidence.trim().toUpperCase(), type: 'STRING' }); }
-  const sql = `SELECT catalog_name, schema_name, table_name, column_name, class_tag, confidence, frequency, latest_detected_time
-    FROM system.data_classification.results
-    WHERE ${filters.join(' AND ')}
-    ORDER BY confidence DESC, latest_detected_time DESC
-    LIMIT ${limit}`;
-  return runSystemTableRead(warehouseId, 'system.data_classification.results', 'data_classification', sql, params.length ? params : undefined);
-}
-
 // ============================================================
 // Registered models as UC securables (wave c3 finish)
 //
@@ -2359,43 +2267,6 @@ export async function getQualityMonitor(host: string, tableFullName: string): Pr
     `/api/2.1/unity-catalog/quality-monitors/${encodeURIComponent(tableFullName)}`,
   );
   return { ...j, workspace_hostname: host };
-}
-
-/**
- * "List monitors + their latest status" over the documented data-quality system
- * table. Returns the LATEST row per monitored table (ROW_NUMBER window per the
- * Learn example), projecting the consolidated table-level `status` plus the
- * freshness / completeness sub-statuses. Unhealthy tables are ordered first.
- * Honest-gated via {@link runSystemTableRead} when the system schema isn't
- * enabled or the UAMI lacks SELECT.
- */
-export async function readDataQualityMonitorResults(
-  warehouseId: string,
-  opts: { catalog?: string; schema?: string; table?: string; status?: string; limit?: number } = {},
-): Promise<SystemReadResult> {
-  const limit = clampInt(opts.limit, 200, 1, 1000);
-  const params: DbxQueryParam[] = [];
-  const innerFilters: string[] = [];
-  if (opts.catalog?.trim()) { innerFilters.push('catalog_name = :catalog'); params.push({ name: 'catalog', value: opts.catalog.trim(), type: 'STRING' }); }
-  if (opts.schema?.trim()) { innerFilters.push('schema_name = :schema'); params.push({ name: 'schema', value: opts.schema.trim(), type: 'STRING' }); }
-  if (opts.table?.trim()) { innerFilters.push('table_name = :table'); params.push({ name: 'table', value: opts.table.trim(), type: 'STRING' }); }
-  const inner = innerFilters.length ? `WHERE ${innerFilters.join(' AND ')}` : '';
-  let outer = 'WHERE rn = 1';
-  if (opts.status?.trim()) { outer += ' AND status = :status'; params.push({ name: 'status', value: opts.status.trim(), type: 'STRING' }); }
-  const sql = `WITH latest_rows AS (
-      SELECT *, ROW_NUMBER() OVER (PARTITION BY table_id ORDER BY event_time DESC) AS rn
-      FROM system.data_quality_monitoring.table_results
-      ${inner}
-    )
-    SELECT catalog_name, schema_name, table_name, status,
-           freshness.status AS freshness_status,
-           completeness.status AS completeness_status,
-           event_time
-    FROM latest_rows
-    ${outer}
-    ORDER BY CASE WHEN status = 'Unhealthy' THEN 0 WHEN status = 'Unknown' THEN 1 ELSE 2 END, event_time DESC
-    LIMIT ${limit}`;
-  return runSystemTableRead(warehouseId, 'system.data_quality_monitoring.table_results', 'data_quality_monitoring', sql, params.length ? params : undefined);
 }
 
 // ============================================================
