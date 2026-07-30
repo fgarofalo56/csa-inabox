@@ -19,6 +19,23 @@ vi.mock('@/lib/azure/adf-client', () => ({
   upsertPipeline: vi.fn(async () => {}),
   upsertLinkedService: vi.fn(async () => {}),
   upsertDataset: vi.fn(async () => {}),
+  // REQUIRED, not incidental. The route's SECOND-order defence resolves what a
+  // linked service actually POINTS AT (assertUserLinkedServiceTarget), because
+  // the name check alone is bypassed by creating an innocuously-named service
+  // whose connection string targets the shared control DB. That resolver takes
+  // `getLinkedService` and FAILS CLOSED when it throws.
+  //
+  // Omitting it here did not merely skip a check — vitest threw "No
+  // getLinkedService export is defined on the mock", the route caught a PLAIN
+  // Error (not CopyJobSqlError) and returned 502, and every downstream test
+  // "passed" its `expect(upsertPipeline).not.toHaveBeenCalled()` assertion
+  // VACUOUSLY: nothing shipped because the route died early, not because the
+  // validation under test rejected anything. Default it to a benign target so
+  // each test exercises the rule it names.
+  getLinkedService: vi.fn(async (name: string) => ({
+    name,
+    properties: { typeProperties: { connectionString: 'Server=tcp:sql-contoso.database.windows.net,1433;Database=app' } },
+  })),
 }));
 vi.mock('@/lib/azure/azure-sql-client', () => ({ executeQuery: vi.fn(async () => ({ rows: [] })) }));
 vi.mock('@/lib/auth/session', () => ({
@@ -35,7 +52,7 @@ vi.mock('../../../../_lib/item-crud', async () => {
 });
 
 import { POST } from '../route';
-import { runPipeline, upsertPipeline, upsertDataset } from '@/lib/azure/adf-client';
+import { runPipeline, upsertPipeline, upsertDataset, getLinkedService } from '@/lib/azure/adf-client';
 
 const ctx = { params: Promise.resolve({ id: 'cj-1' }) } as any;
 const req = {} as any;
@@ -55,6 +72,15 @@ const persist = (state: any) => {
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.LOOM_COPYJOB_CONTROL_SQL_SERVER = 'sql-loom-control';
+  // `clearAllMocks` resets CALLS but NOT implementations, so a
+  // `mockRejectedValue` / `mockImplementation` set by one test would leak into
+  // every test after it — the fail-closed case below would silently turn the
+  // later hostile-state cases into 400s for the wrong reason. Re-establish the
+  // benign default here so each test starts from the same known target.
+  (getLinkedService as any).mockImplementation(async (name: string) => ({
+    name,
+    properties: { typeProperties: { connectionString: 'Server=tcp:sql-contoso.database.windows.net,1433;Database=app' } },
+  }));
 });
 
 describe('copy-job run — the control linked service is reserved', () => {
@@ -102,6 +128,62 @@ describe('copy-job run — the control linked service is reserved', () => {
     const pipeline = (upsertPipeline as any).mock.calls[0][1];
     const copy = pipeline.properties.activities[0];
     expect(copy.typeProperties.source.sqlReaderQuery).toBe('SELECT * FROM [dbo].[orders]');
+  });
+});
+
+/**
+ * The NAME reservation above is only the cheap first pass — it keys on the ADF
+ * artifact name, so a caller who can create linked services just names theirs
+ * something innocuous and points its connection string at the shared control
+ * database. That is the actual second-order attack, and `route.ts` defends it
+ * with `assertUserLinkedServiceTarget`, which resolves the DEFINITION.
+ *
+ * That resolver had NO direct coverage: every existing case here is stopped by
+ * the name check first, so the target check was never the thing under test.
+ */
+describe('copy-job run — the control DB is refused by TARGET, not just by name', () => {
+  it('refuses an innocuously-NAMED linked service whose connection string points at the control server', async () => {
+    (getLinkedService as any).mockImplementation(async (name: string) => ({
+      name,
+      properties: {
+        typeProperties: {
+          // Passes the name check ('ls-my-own-data'), targets the control DB.
+          connectionString: 'Server=tcp:sql-loom-control.database.windows.net,1433;Database=loomctl',
+        },
+      },
+    }));
+    persist({
+      ...goodSpec(),
+      source: { linkedService: 'ls-my-own-data', type: 'AzureSqlSource', sourceTable: 'dbo.copy_watermark' },
+    });
+    const res = await POST(req, ctx);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toMatch(/control server/i);
+    expect(upsertPipeline).not.toHaveBeenCalled();
+    expect(runPipeline).not.toHaveBeenCalled();
+  });
+
+  it('FAILS CLOSED with a 400 when the linked-service definition cannot be read', async () => {
+    // Unreadable definition => cannot prove the target is safe => refuse. A 502
+    // here would be wrong twice: it blames the upstream for a request we chose
+    // to reject, and it reads as transient so a client would retry it.
+    (getLinkedService as any).mockRejectedValue(new Error('ARM 403'));
+    persist(goodSpec());
+    const res = await POST(req, ctx);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toMatch(/could not read the linked service/i);
+    expect(upsertPipeline).not.toHaveBeenCalled();
+    expect(runPipeline).not.toHaveBeenCalled();
+  });
+
+  it('does NOT consult the resolver when no control server is configured', async () => {
+    // With no shared control DB there is nothing to protect, and the route must
+    // not pay an ARM read (or fail closed) on every run.
+    delete process.env.LOOM_COPYJOB_CONTROL_SQL_SERVER;
+    persist(goodSpec());
+    const res = await POST(req, ctx);
+    expect(res.status).toBe(200);
+    expect(getLinkedService).not.toHaveBeenCalled();
   });
 });
 
