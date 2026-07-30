@@ -11,6 +11,7 @@
  * is set on an ADX resource so the author moves it to a Synapse/UC resource).
  */
 
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { validateKustoRlsQuery } from '@/lib/azure/kusto-rls-predicate';
 import type { PolicyCodeSet, PolicyPrincipal, PolicyStatement } from '../dsl';
 import { type CompiledArtifact, type CompiledOp, dedupeOps } from './types';
@@ -27,9 +28,18 @@ const ROLE: Record<'read' | 'write' | 'admin', string> = {
   admin: 'admins',
 };
 
-/** KQL identifier — bareword when safe, else bracket-quoted. */
+/**
+ * KQL identifier — bareword when safe, else bracket-quoted.
+ *
+ * The escape must run through `kqlEscapeDouble`, not a local
+ * `.replace(/["\\]/g, '\\$&')`: that form escaped quote + backslash but left
+ * raw CR/LF intact, and a KQL string literal is single-line — a newline in a
+ * policy-authored table/database name terminated the literal and the remainder
+ * of the `.alter table … policy` command parsed as fresh management-command
+ * text (CodeQL js/incomplete-sanitization, "does not escape all characters").
+ */
 export function kqlName(name: string): string {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : `["${name.replace(/["\\]/g, '\\$&')}"]`;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : `["${kqlEscapeDouble(name)}"]`;
 }
 
 /** ADX principal FQN — `aadgroup=<id>[;tid]` / `aaduser=<upn|oid>[;tid]`. */

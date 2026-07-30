@@ -42,6 +42,7 @@ import {
   saveTransformation,
 } from './stream-analytics-client';
 import { clusterUri, defaultDatabase } from './kusto-client';
+import { trimEdges } from '@/lib/util/trim';
 
 // ── Topology shapes (mirror the visual designer + bundle EventstreamContent) ──
 export interface EsSourceNode { kind?: string; name?: string; namespace?: string; consumerGroup?: string; }
@@ -92,11 +93,11 @@ export interface EsStandUpResult {
 
 /** Event Hub entity names: alnum, -, ., _ ; ≤ 250. Keep it portable. */
 export function safeHubName(s: string): string {
-  const cleaned = (s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200);
+  const cleaned = trimEdges((s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), '-').slice(0, 200);
   return cleaned || 'loom-eventstream';
 }
 export function safeCgName(s: string, i: number): string {
-  const c = (s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
+  const c = trimEdges((s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), '-').slice(0, 50);
   return c || `dest${i}`;
 }
 

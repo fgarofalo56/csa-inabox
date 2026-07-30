@@ -29,7 +29,6 @@
  * No mocks, no return [] placeholders — real storage walks or an honest gate.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { ONELAKE_TYPES } from '@/lib/catalog/onelake-types';
 import {
@@ -38,6 +37,8 @@ import {
   KNOWN_CONTAINERS,
   type PrefixUsage,
 } from '@/lib/azure/adls-client';
+import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -83,7 +84,7 @@ function resolveItemPrefix(state: any): ResolvedPrefix | null {
     if (!c) return null;
     const container = String(c).trim();
     if (!KNOWN.has(container)) return null;
-    return { container, prefix: String(p ?? '').replace(/^\/+|\/+$/g, '') };
+    return { container, prefix: trimSlashes(String(p ?? '')) };
   };
 
   // 1. secondaryIds.container + rootPath
@@ -114,9 +115,7 @@ function resolveItemPrefix(state: any): ResolvedPrefix | null {
   return null;
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
 
   const sp = req.nextUrl.searchParams;
   const wsFilter = sp.get('workspaceId')?.trim() || undefined;
@@ -269,4 +268,4 @@ export async function GET(req: NextRequest) {
     items: out,
     totals,
   });
-}
+});

@@ -34,6 +34,7 @@ import {
 } from './adls-client';
 import { eventhubsConfigGate, createEventHub } from './eventhubs-client';
 import { readEventHubsDataConfig, sendEvents, type SendEvent } from './eventhubs-data-client';
+import { trimEdges } from '@/lib/util/trim';
 
 const BRONZE = 'bronze' as const;
 /** Bronze path the inline PySpark CDF-reader script is uploaded to before each run. */
@@ -116,7 +117,7 @@ function cdfGate(needSpark: boolean): MirrorCdfGate | null {
 
 /** Sink Event Hub name for a mirror-cdf source on an eventstream (idempotent, EH-safe). */
 export function mirrorCdfHubName(eventstreamId: string, nodeIdx: number): string {
-  const slug = (eventstreamId || 'es').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = trimEdges((eventstreamId || 'es').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), '-');
   return `loom-mirrorcdf-${slug}-${Math.max(0, nodeIdx)}`.slice(0, 50);
 }
 

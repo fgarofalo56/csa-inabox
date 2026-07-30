@@ -34,6 +34,7 @@ import {
   type FieldRow,
   type Vectorizer,
 } from './search-field-shapes';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** The three Loom source item types the wizard launches from. */
 export type IndexableSourceType = 'lakehouse' | 'warehouse' | 'kql-database';
@@ -252,7 +253,7 @@ export function buildAdlsDataSourceDefinition(input: AdlsDataSourceInput): {
     credentials: { connectionString: `ResourceId=${rid};` },
     container: {
       name: input.container,
-      ...(input.query && input.query.trim() ? { query: input.query.replace(/^\/+|\/+$/g, '') } : {}),
+      ...(input.query && input.query.trim() ? { query: trimSlashes(input.query) } : {}),
     },
   };
   if (input.description) def.description = input.description;
@@ -500,7 +501,7 @@ export function buildIndexerDefinition(input: IndexerInput): Record<string, any>
 export function parseAbfss(abfss: string): { account: string; container: string; root: string } | null {
   const m = /^abfss:\/\/([^@]+)@([^.]+)\.dfs\.[^/]+\/(.*)$/i.exec(String(abfss || '').trim());
   if (!m) return null;
-  return { container: m[1], account: m[2], root: (m[3] || '').replace(/^\/+|\/+$/g, '') };
+  return { container: m[1], account: m[2], root: trimSlashes((m[3] || '')) };
 }
 
 /** Build the storage-account ARM ResourceId from its coordinates. */

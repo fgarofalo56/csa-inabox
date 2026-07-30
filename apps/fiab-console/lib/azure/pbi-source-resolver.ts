@@ -39,6 +39,7 @@ import {
 import { clusterUri as kustoClusterUri, defaultDatabase as kustoDefaultDatabase } from '@/lib/azure/kusto-client';
 import type { ReportDataSource } from '@/lib/editors/report/report-data-source';
 import { bracket } from '@/lib/sql/quoting';
+import { trimEdges } from '@/lib/util/trim';
 
 /** The Azure-native backend family the source item sits on. */
 export type PbiConnector = 'synapse-sql' | 'adx' | 'adls' | 'azure-sql';
@@ -145,7 +146,7 @@ function lakehouseDb(): string {
 /** The per-mirror serverless user database (mirror of ITEM_PAIRING_RULES['mirrored-database']). */
 function mirrorDb(displayName: string): string {
   const sanitized =
-    String(displayName || 'mirror').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'mirror';
+    trimEdges(String(displayName || 'mirror').replace(/[^A-Za-z0-9_]/g, '_'), '_') || 'mirror';
   return `loom_mirror_${sanitized}`.slice(0, 128);
 }
 

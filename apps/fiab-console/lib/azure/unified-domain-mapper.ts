@@ -45,6 +45,7 @@ import {
   listUcCatalogs,
   listUcSchemas,
 } from './databricks-client';
+import { trimEdges } from '@/lib/util/trim';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,10 +116,7 @@ export interface UnifiedMirrorResult {
  * UC catalog/schema name never drifts when a domain is renamed.
  */
 export function unityName(idOrName: string): string {
-  const n = (idOrName || 'domain')
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, '_')
-    .replace(/^_+|_+$/g, '')
+  const n = trimEdges((idOrName || 'domain').toLowerCase().replace(/[^a-z0-9_]+/g, '_'), '_')
     .slice(0, 255);
   // UC identifiers may not start with a digit.
   return /^[0-9]/.test(n) ? `d_${n}` : (n || 'domain');

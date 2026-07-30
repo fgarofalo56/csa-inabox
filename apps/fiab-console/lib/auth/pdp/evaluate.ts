@@ -44,6 +44,7 @@ import type {
   ResourceRef,
   WorkspaceRoleName,
 } from './resource-ref';
+import { trimSlashes } from '@/lib/util/trim';
 
 // ---------------------------------------------------------------------------
 // Capability tiers
@@ -155,7 +156,7 @@ function roleCoversResource(role: OneLakeRoleBinding, table: string | undefined)
   if (role.paths.includes('*')) return true;
   if (!table) return role.paths.length > 0;
   return role.paths.some((p) => {
-    const norm = p.replace(/^\/+|\/+$/g, ''); // '/Tables/sales' → 'Tables/sales'
+    const norm = trimSlashes(p); // '/Tables/sales' → 'Tables/sales'
     return norm === 'Tables' || norm === `Tables/${table}` || norm.startsWith(`Tables/${table}/`);
   });
 }

@@ -122,6 +122,7 @@ let _governanceDomains: Container | null = null;
 let _functionRegistry: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _externalShares: Container | null = null;
+let _sharing: Container | null = null;
 let _wsRoles: Container | null = null;
 let _labelAssignments: Container | null = null;
 // F16 — Access-request approval workflow (manager → privacy → approver →
@@ -259,6 +260,9 @@ let _envConfig: Container | null = null;
 // reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES. Created lazily so a
 // fresh environment needs no extra ARM/Bicep step beyond the account+database.
 let _metastoreRegistrations: Container | null = null;
+// LU-5 — Loom Unity governance overlay: one row per UC securable identity
+// (`uc:<fqn>`), PK /tenantId. Detail: lib/governance/uc-overlay/store.ts.
+let _ucGovernance: Container | null = null;
 // Tenant topology (audit-t157). One doc per tenant (id='tenant-topology') with
 // the deployed hub's coordinates (VNet/LAW/DNS/ADX/Cosmos + Console UAMI ids),
 // written by the tenant deploy's post-bootstrap. Read by the Setup Wizard "Add
@@ -1006,6 +1010,10 @@ async function ensure() {
   // scoped ADLS POSIX ACL on just the shared path) is applied by the
   // external-share-client; Cosmos is the source of truth for the share list.
   _externalShares = await mk('external-shares', '/sourceItemId');
+  // Loom Sharing (LU-9) — published shares AND the recipients granted them, in ONE tenant-
+  // partitioned container (ids `share:<name>`/`recipient:<name>`) so the recipient hot path
+  // resolves both in a single-partition read. Grants live here and NOWHERE else (lib/sharing).
+  _sharing = await mk('sharing', '/tenantId');
   // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
   // One row per principal (user / group / SP) per workspace, partitioned by the
   // workspace so the Manage Access pane hits a single physical partition. Keyed
@@ -1152,6 +1160,7 @@ async function ensure() {
   // list hits a single physical partition. Survives Console reloads without a
   // bicep flip of LOOM_DATABRICKS_HOSTNAMES.
   _metastoreRegistrations = await mk('metastore-registrations', '/tenantId');
+  _ucGovernance = await mk('uc-governance', '/tenantId'); // LU-5 governance overlay
   // Tenant topology — hub coordinates for the dlz-attach flow (audit-t157).
   _tenantTopology = await mk('tenant-topology', '/tenantId');
   // Durable rate-limiter store (rel-T16) — PK /key, TTL-enabled so per-doc `ttl`
@@ -1375,6 +1384,7 @@ export async function recommendedActionsAdminContainer(): Promise<Container> { a
 export async function onelakeSecurityRolesContainer(): Promise<Container> { await ensure(); return _onelakeSecurityRoles!; }
 export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
 export async function externalSharesContainer(): Promise<Container> { await ensure(); return _externalShares!; }
+export async function sharingContainer(): Promise<Container> { await ensure(); return _sharing!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 export async function functionRegistryContainer(): Promise<Container> { await ensure(); return _functionRegistry!; }
@@ -1450,6 +1460,8 @@ export async function coeTemplatesContainer(): Promise<Container> { await ensure
 export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
 /** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
 export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
+/** LU-5 — Loom Unity governance overlay rows (PK /tenantId, id = `uc:<fqn>`). */
+export async function ucGovernanceContainer(): Promise<Container> { await ensure(); return _ucGovernance!; }
 /** Tenant topology (audit-t157) — hub coordinates doc (id='tenant-topology', PK /tenantId). */
 export async function tenantTopologyContainer(): Promise<Container> { await ensure(); return _tenantTopology!; }
 /** Durable rate-limiter store (rel-T16) — fixed-window counters + dedupe markers, PK /key, TTL-enabled. */
@@ -1678,6 +1690,7 @@ const KNOWN_CONTAINER_IDS = [
   'coe-templates',
   'env-config',
   'metastore-registrations',
+  'uc-governance',
   'rate-limits',
   'item-versions',
   'loom-agent-memory',

@@ -1,0 +1,13 @@
+{
+  "name": "csa-loom-sharing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom Sharing — the OSS Delta Sharing reference server (delta-io/delta-sharing, Apache-2.0) packaged for Azure Government over the same ADLS Gen2 Delta tables the Loom lakehouse writes. Thin config-rendering overlay on the official deltaio/delta-sharing-server image: fail-closed server bearer, OAuth-only ADLS access, short credential lifetimes. Internal ingress only — recipients authenticate to the Loom Console with Microsoft Entra tokens, which is where per-recipient share scoping is enforced. Azure-native, no Microsoft Fabric dependency.",
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

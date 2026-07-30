@@ -34,12 +34,16 @@ jobs:
         run: node scripts/ci/check-env-sync.mjs
       - name: route-guards (cross-tenant BFF authorization)
         run: node scripts/ci/check-route-guards.mjs
+      - name: kv-secret-purpose (every Key Vault read declares its name-space)
+        run: node scripts/ci/check-kv-secret-purpose.mjs
       - name: no-freeform (raw-JSON config surfaces)
         run: node scripts/ci/check-no-freeform.mjs
       - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
         run: node scripts/ci/check-sql-quoting.mjs
       - name: bff-errors (raw exception text on 500 + raw-envelope helpers)
         run: node scripts/ci/check-bff-errors.mjs
+      - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
+        run: node scripts/ci/check-quadratic-trims.mjs
       - name: no-raw-px (raw-px inline styles vs Loom tokens, ratchet)
         run: node scripts/ci/check-no-raw-px.mjs
       - name: learn-doc-registry (Learning Hub slug sets vs authored guides/captures — loom-apex D1)
@@ -48,6 +52,8 @@ jobs:
         run: node scripts/ci/check-no-bare-client-fetch.mjs
       - name: route-toolkit (hand-rolled session-route ratchet — loom-next-level R3)
         run: node scripts/ci/check-route-toolkit.mjs
+      - name: unity-audit-chokepoint (every Unity Catalog call is audited — loom-apex LU-3)
+        run: node scripts/ci/check-unity-audit-chokepoint.mjs
       - name: breaker-coverage (unbounded-fetch ratchet — loom-next-level CH1)
         run: node scripts/ci/check-breaker-coverage.mjs
       - name: file-size (monolith-creep ratchet — WS-E E3)

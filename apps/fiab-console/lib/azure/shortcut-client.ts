@@ -21,6 +21,7 @@
  * (Cosmos reads/writes + a live ADLS HEAD / listPaths). No mock arrays.
  */
 
+import { trimLeadingSlashes, trimSlashes, trimTrailingSlashes } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   parseAbfss as parseEngineAbfss,
@@ -605,7 +606,7 @@ export interface AdlsBrowseArgs {
 }
 
 function pathEntriesToRemote(rows: PathEntry[], prefix: string): RemoteEntry[] {
-  const clean = prefix.replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes(prefix);
   return rows.map((r) => {
     const full = r.name;
     const rel = clean && full.startsWith(clean + '/') ? full.slice(clean.length + 1) : full;
@@ -625,7 +626,7 @@ export async function browseAdls(args: AdlsBrowseArgs): Promise<BrowseResult> {
   const container = (args.container || '').trim();
   if (!account) throw new ShortcutSourceError('ADLS storage account is required', 'adls_bad_target', 400);
   if (!container) throw new ShortcutSourceError('ADLS container/filesystem is required', 'adls_bad_target', 400);
-  const prefix = (args.prefix || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes(args.prefix || '');
   const maxResults = Math.min(Math.max(args.maxResults ?? 200, 1), 1000);
   let rows: PathEntry[];
   try {
@@ -670,8 +671,8 @@ export function parseAbfss(uri: string): { account: string; container: string; p
 
 export async function listDataverseEntities(args: DataverseBrowseArgs): Promise<BrowseResult> {
   const { account, container, path } = parseAbfss(args.exportAbfssUri);
-  const base = path.replace(/\/+$/, '');
-  const prefix = args.prefix ? `${base}/${args.prefix.replace(/^\/+/, '')}`.replace(/\/+$/, '') : base;
+  const base = trimTrailingSlashes(path);
+  const prefix = args.prefix ? trimTrailingSlashes(`${base}/${trimLeadingSlashes(args.prefix)}`) : base;
   const result = await browseAdls({ account, container, prefix, maxResults: args.maxResults });
   // Re-base entry names relative to the export root so the tree reads as tables.
   return result;
@@ -742,7 +743,7 @@ export function buildAdlsSasListUrl(
     recursive: 'false',
     maxResults: String(Math.min(Math.max(maxResults, 1), 5000)),
   });
-  const dir = (directory || '').replace(/^\/+|\/+$/g, '');
+  const dir = trimSlashes((directory || ''));
   if (dir) qs.set('directory', dir);
   const url = `https://${acct}.${getDfsSuffix()}/${fs}?${qs.toString()}`;
   return appendSasToken(url, sasToken);
@@ -765,7 +766,7 @@ export async function listAdlsWithSas(args: AdlsSasBrowseArgs): Promise<BrowseRe
       'A SAS token (or storage-key SAS) is required for a SAS-authenticated ADLS Gen2 shortcut.',
       'adls_sas_missing', 400);
   }
-  const prefix = (args.path || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes((args.path || ''));
   const maxResults = Math.min(Math.max(args.maxResults ?? 200, 1), 5000);
   const url = buildAdlsSasListUrl(account, container, prefix, sas, maxResults);
 
@@ -833,6 +834,6 @@ export async function probeAdlsSas(targetUri: string, sasToken: string): Promise
     sasToken,
     maxResults: 1,
   });
-  const clean = parts.path.replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes(parts.path);
   return { abfssUri: `abfss://${parts.container}@${parts.account}.${getDfsSuffix()}/${clean}` };
 }

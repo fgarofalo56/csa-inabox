@@ -18,6 +18,7 @@
  * admins (requireTenantAdmin), mirroring the sibling admin routes. Honest 503
  * gate when the APIM service is unset. Real ARM REST. No mocks.
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
@@ -45,7 +46,7 @@ function gate() {
 
 // displayName for a named value must match ^[A-Za-z0-9-._]+$.
 function nvId(s: string): string {
-  return s.replace(/[^A-Za-z0-9-._]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 256) || `nv-${Date.now()}`;
+  return trimEdges(s.replace(/[^A-Za-z0-9-._]+/g, '-'), '-.').slice(0, 256) || `nv-${Date.now()}`;
 }
 
 // A Key Vault secret identifier: https://<vault>.vault.<suffix>/secrets/<name>[/<version>].

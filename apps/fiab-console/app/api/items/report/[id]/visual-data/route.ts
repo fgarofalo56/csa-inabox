@@ -48,8 +48,8 @@
  *   502  → a backend execution error (surfaced verbatim)
  */
 
+import { slugify as sharedSlugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { executeQuery } from '@/lib/azure/synapse-sql-client';
 import {
   resolveReportModel,
@@ -77,6 +77,7 @@ import {
   cosmosIdFromLoomId,
   loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -298,14 +299,7 @@ async function buildRecordset(
 
 /** Spreadsheet-safe slug for the download filename. */
 function slugify(s: string): string {
-  return (
-    (s || 'visual')
-      .toString()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'visual'
-  );
+  return sharedSlugify(s || 'visual', { allow: /[^a-z0-9]+/g, max: 60, fallback: 'visual' });
 }
 
 /** RFC-4180 CSV with a leading UTF-8 BOM (U+FEFF) so Excel opens unicode
@@ -321,11 +315,9 @@ function toCsv(columns: string[], rows: unknown[][]): string {
   return '﻿' + lines.join('\r\n');
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const id = (await ctx.params).id;
+  const id = params.id;
   const body = (await req.json().catch(() => ({}))) as VisualDataRequest;
   const visual = body.visual;
   if (!visual) {
@@ -423,4 +415,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       'cache-control': 'no-store',
     },
   });
-}
+});

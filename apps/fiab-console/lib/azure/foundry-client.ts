@@ -15,6 +15,7 @@
  *
  * 404 → null. Any other non-2xx throws FoundryError(status, body).
  */
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
   DefaultAzureCredential,
@@ -1380,7 +1381,7 @@ export async function queryTraces(opts: { hours?: number; operation?: string } =
   }
   const hours = Math.max(1, Math.min(24 * 7, opts.hours || 24));
   let query = `union traces, dependencies, customEvents | where timestamp > ago(${hours}h)`;
-  if (opts.operation) query += ` | where operation_Name == "${opts.operation.replace(/"/g, '\\"')}"`;
+  if (opts.operation) query += ` | where operation_Name == "${kqlEscapeDouble(opts.operation)}"`;
   query += ` | order by timestamp desc | take 200 | project timestamp, name, operation_Name, operation_Id, duration, success, resultCode, message, customDimensions`;
   // App Insights query via Log Analytics-backed API. /query supports KQL.
   // Using 2015-05-01 (stable GA) on the application/components resource.

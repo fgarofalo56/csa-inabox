@@ -17,23 +17,22 @@
  *   UpdatedEntityState, ChangeCommand, Principal
  */
 
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { executeMgmtCommand, KustoError } from '@/lib/azure/kusto-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** KQL bracketed-string quote for a (possibly hyphenated) db name. */
 function qName(name: string): string {
-  return `["${name.replace(/"/g, '\\"')}"]`;
+  return `["${kqlEscapeDouble(name)}"]`;
 }
 
-export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: Request, { params }) => {
 
-  await ctx.params; // [id] = Loom item id; journal is cluster/db scoped.
+  params; // [id] = Loom item id; journal is cluster/db scoped.
 
   const url = new URL(req.url);
   const limitRaw = parseInt(url.searchParams.get('limit') || '100', 10);
@@ -85,4 +84,4 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       { status },
     );
   }
-}
+});

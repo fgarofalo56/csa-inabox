@@ -27,8 +27,13 @@ import {
   ensureColumnEntities,
 } from './purview-client';
 import { scanRulesetName } from './purview-classification-sync';
+import {
+  loomClassificationTypedefName, loomSensitivityLabelTypedefName,
+  type AtlasClassificationTypedefName,
+} from './purview-typedef-namespace';
 import { dfsSuffix } from './cloud-endpoints';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { trimEdges } from '@/lib/util/trim';
 
 /**
  * Stable `loom://` qualifiedName for an item's Purview Atlas entity. The same
@@ -132,10 +137,7 @@ export interface LoomScanSource {
 
 /** Sanitised, stable Purview data-source name Loom owns for an item. */
 function loomSourceName(item: WorkspaceItem): string {
-  const base = `loom-${item.itemType}-${item.id}`
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const base = trimEdges(`loom-${item.itemType}-${item.id}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-'), '-')
     .slice(0, 60);
   return base || `loom-${item.id}`.slice(0, 60);
 }
@@ -319,12 +321,24 @@ async function registerLoomItemAsScanSource(item: WorkspaceItem, tenantId: strin
 export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string): Promise<void> {
   if (!process.env.LOOM_PURVIEW_ACCOUNT) return; // not configured → silent no-op
   try {
+    // TENANT-NAMESPACED TYPEDEF NAMES — `state.classifications` and
+    // `state.sensitivityLabel` are TENANT-AUTHORED, and Atlas classification
+    // typedefs are ACCOUNT-GLOBAL + permanent. Passing those strings verbatim
+    // (as this function used to) let tenant A's vocabulary word create — and
+    // semantically collide with — tenant B's inside a shared Purview account,
+    // AND produced names that no other Loom surface uses, so an asset onboarded
+    // with `PII` was invisible to the classifications editor that manages
+    // `LOOM.CLASSIFICATION.<t8>.PII`. Both go through the namespace authority
+    // now, which is also the name the managing routes write.
     const state = (item.state || {}) as Record<string, unknown>;
-    const raw = [
-      ...(Array.isArray(state.classifications) ? (state.classifications as unknown[]) : []),
-      ...(typeof state.sensitivityLabel === 'string' && state.sensitivityLabel ? [state.sensitivityLabel] : []),
-    ].map((c) => String(c).trim()).filter(Boolean);
-    const classifications = [...new Set(raw)];
+    const rawClasses = (Array.isArray(state.classifications) ? (state.classifications as unknown[]) : [])
+      .map((c) => String(c).trim()).filter(Boolean);
+    const labelName = typeof state.sensitivityLabel === 'string' ? state.sensitivityLabel.trim() : '';
+    const labelId = typeof state.sensitivityLabelId === 'string' ? state.sensitivityLabelId.trim() : '';
+    const classifications: AtlasClassificationTypedefName[] = [...new Set([
+      ...rawClasses.map((c) => loomClassificationTypedefName(tenantId, c) as string),
+      ...(labelName || labelId ? [loomSensitivityLabelTypedefName(tenantId, { labelId, labelName }) as string] : []),
+    ])] as AtlasClassificationTypedefName[];
     let withClass = classifications.length > 0;
     if (withClass) {
       // If the defs can't be created, still onboard the asset WITHOUT tags

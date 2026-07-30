@@ -19,6 +19,7 @@
 // the SAME dialect set so a folded transform quotes identifiers exactly like the
 // wells→SQL compiler the report `/query` route already runs.
 import type { SqlDialect } from '../../../azure/wells-to-sql';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export interface AppliedStep {
   /** Step (let-binding) name, e.g. `Source`, `Filtered Rows`. */
@@ -940,7 +941,7 @@ export function foldAppliedStepsToSql(
   dialect?: SqlDialect,
 ): { ok: true; sql: string } | { ok: false; unfoldableStep: string } {
   const { steps } = parseLetBody(mLetBody);
-  let current = baseSelect.trim().replace(/;+\s*$/, '');
+  let current = stripTrailingSemicolons(baseSelect);
   let cols: string[] | null = null;
   for (let i = 1; i < steps.length; i += 1) {
     const step = steps[i];

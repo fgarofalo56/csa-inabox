@@ -39,6 +39,7 @@ import {
   ossUcAuthHeader, OssUcAuthNotConfiguredError,
 } from '../uc-backend';
 import { listCatalogs } from '../unity-catalog-client';
+import { resetUcTokenExchangeCache } from '../uc-token-exchange';
 
 const AUTH_ENV = [
   'LOOM_UC_BACKEND', 'LOOM_UNITY_URL', 'LOOM_UNITY_TOKEN',
@@ -49,6 +50,12 @@ const AUTH_ENV = [
 function clearAuthEnv() {
   for (const k of AUTH_ENV) delete process.env[k];
   getToken.mockReset();
+  // The minted-internal-token cache lives at module scope (deliberately — it is
+  // process-wide in production). Without this reset the tests are order-
+  // dependent: a cache hit from an earlier case makes the next one skip the
+  // exchange POST entirely, and a fail-closed assertion silently passes on a
+  // token it should never have had.
+  resetUcTokenExchangeCache();
 }
 
 function okResponse(body: unknown = {}): Response {
@@ -139,11 +146,35 @@ describe('ossUcAuthHeader', () => {
     expect(getToken).not.toHaveBeenCalled();
   });
 
-  it('mints an Entra token for exactly the declared scope', async () => {
+  it('mints an Entra token for exactly the declared scope, then EXCHANGES it', async () => {
+    // #2679: the Entra token is the exchange SUBJECT, not the API credential.
+    // Upstream AuthDecorator answers 403 for any bearer whose `iss` is not its
+    // own `internal` issuer, so sending 'entra-token' straight through — which
+    // this test used to assert — is the production bug, not the contract.
     process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
     getToken.mockResolvedValue({ token: 'entra-token', expiresOnTimestamp: Date.now() + 3_600_000 });
-    await expect(ossUcAuthHeader()).resolves.toEqual({ authorization: 'Bearer entra-token' });
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({ access_token: 'internal-token' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(ossUcAuthHeader()).resolves.toEqual({ authorization: 'Bearer internal-token' });
     expect(getToken).toHaveBeenCalledWith('api://unity-app-id/.default');
+    expect(fetchMock.mock.calls[0][0]).toBe('https://loom-unity.internal/api/1.0/unity-control/auth/tokens');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('FAILS CLOSED when the exchange rejects the minted Entra token', async () => {
+    // The 403-on-direct-Entra case. It must NOT degrade to an anonymous call,
+    // which would succeed against a server with authorization disabled.
+    process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    getToken.mockResolvedValue({ token: 'entra-token', expiresOnTimestamp: Date.now() + 3_600_000 });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('denied', { status: 403 })));
+
+    await expect(ossUcAuthHeader()).rejects.toThrow(/token exchange/i);
+
+    vi.unstubAllGlobals();
   });
 
   it('FAILS CLOSED when the managed identity cannot mint the token', async () => {
@@ -174,19 +205,25 @@ describe('the credential reaches the real Loom Unity REST call', () => {
   beforeEach(clearAuthEnv);
   afterEach(() => { clearAuthEnv(); vi.unstubAllGlobals(); });
 
-  it('sends the minted Entra bearer on the OSS catalogs call', async () => {
+  it('sends the EXCHANGED internal bearer on the OSS catalogs call', async () => {
     process.env.LOOM_UC_BACKEND = 'oss';
     process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
     process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';
     getToken.mockResolvedValue({ token: 'entra-token', expiresOnTimestamp: Date.now() + 3_600_000 });
-    const fetchMock = vi.fn().mockResolvedValue(okResponse({ catalogs: [] }));
+    // Call 1 is the exchange; call 2 is the catalog request that carries its result.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(okResponse({ access_token: 'internal-token' }))
+      .mockResolvedValueOnce(okResponse({ catalogs: [] }));
     vi.stubGlobal('fetch', fetchMock);
 
     await listCatalogs('ignored-host');
 
-    const [url, init] = fetchMock.mock.calls[0];
+    expect(fetchMock.mock.calls[0][0]).toBe('https://loom-unity.internal/api/1.0/unity-control/auth/tokens');
+    const [url, init] = fetchMock.mock.calls[1];
     expect(url).toBe('https://loom-unity.internal/api/2.1/unity-catalog/catalogs');
-    expect((init.headers as Record<string, string>).authorization).toBe('Bearer entra-token');
+    // The raw Entra token must NEVER be what reaches the catalog API — that is
+    // the 403 path, and the whole point of #2679.
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer internal-token');
   });
 
   it('does not fall back to an anonymous call when the token cannot be minted', async () => {

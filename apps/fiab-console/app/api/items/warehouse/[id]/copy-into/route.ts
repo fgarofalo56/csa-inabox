@@ -15,15 +15,16 @@
  *   https://learn.microsoft.com/sql/t-sql/statements/copy-into-transact-sql?view=azure-sqldw-latest
  */
 
+import { trimSlashes } from '@/lib/util/trim';
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiServerError, apiUnauthorized } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { KNOWN_CONTAINERS, listPaths, getAccountName } from '@/lib/azure/adls-client';
 import { toHttps } from '@/lib/azure/delta-source-uri';
 import { cleanTablePath, isKnownContainer } from '@/lib/azure/delta-history';
 import { bracket, escapeSqlLiteral } from '@/lib/sql/quoting';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,16 +46,14 @@ function terminator(v: unknown, fallback: string): string {
   return escapeSqlLiteral(s);
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const container = req.nextUrl.searchParams.get('container') || '';
   if (!container) {
     return apiOk({ containers: [...KNOWN_CONTAINERS] });
   }
   if (!isKnownContainer(container)) return apiError(`unknown container: ${container}`, 404);
-  const prefix = (req.nextUrl.searchParams.get('prefix') || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes(req.nextUrl.searchParams.get('prefix') || '');
   if (prefix.includes('..')) return apiError('invalid prefix', 400);
   try {
     const entries = await listPaths(container, prefix, 200);
@@ -66,11 +65,9 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     return apiServerError(e, 'Failed to list storage paths', 'list_failed');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const tgtSchema = safeIdent(body?.targetSchema ?? 'dbo');
@@ -124,4 +121,4 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return apiServerError(e, 'COPY INTO failed', 'copy_failed');
   }
-}
+});

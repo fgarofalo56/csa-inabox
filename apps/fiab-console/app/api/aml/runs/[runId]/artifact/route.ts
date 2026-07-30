@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { contentDisposition } from '@/lib/api/content-disposition';
 import { getArtifactBlob, MlflowNotConfiguredError, MlflowError } from '@/lib/azure/mlflow-client';
 
 export const runtime = 'nodejs';
@@ -26,7 +27,7 @@ export const GET = withSession<{ runId: string }>(async (req, { params }) => {
       headers: {
         'content-type': contentType,
         'x-truncated': truncated ? '1' : '0',
-        'content-disposition': `${download ? 'attachment' : 'inline'}; filename="${file.replace(/"/g, '')}"`,
+        'content-disposition': contentDisposition(download ? 'attachment' : 'inline', file, 'artifact'),
       },
     });
   } catch (e: any) {

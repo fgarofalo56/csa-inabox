@@ -21,8 +21,8 @@
  * On success the deployment receipt (monitor rule ids + optional foundryAgentId +
  * lastDeployedAt) is persisted back to the Cosmos item.
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import {
   createOrUpdateAgent,
@@ -40,6 +40,7 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { migrateLegacyTools, toolsToFoundryTools } from '@/lib/copilot/agent-tool-catalog';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,8 +50,8 @@ const ITEM_TYPE = 'operations-agent';
 /** Build a Foundry-Agent-Service-compatible name from a Loom item id. */
 function foundryAgentName(itemId: string): string {
   const base = `loom-ops-${itemId}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  const trimmed = base.replace(/^-+|-+$/g, '').slice(0, 63);
-  return trimmed.replace(/^-+|-+$/g, '') || `loom-ops-${itemId.slice(0, 8)}`;
+  const trimmed = trimEdges(base, '-').slice(0, 63);
+  return trimEdges(trimmed, '-') || `loom-ops-${itemId.slice(0, 8)}`;
 }
 
 function stateToolsToFoundry(raw: unknown): Array<Record<string, unknown>> {
@@ -61,15 +62,11 @@ function persistedRules(item: WorkspaceItem): MonitorRuleRecord[] {
   return Array.isArray((item.state as any)?.rules) ? (item.state as any).rules : [];
 }
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const POST = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
 
   let item: WorkspaceItem | null;
   try {
-    item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
+    item = await loadOwnedItem(params.id, ITEM_TYPE, session.claims.oid);
   } catch (e: any) {
     return apiServerError(e, 'cosmos error');
   }
@@ -217,4 +214,4 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     lastDeployedAt: now,
     item: resource,
   });
-}
+});

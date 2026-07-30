@@ -14,6 +14,7 @@
  * gate naming the exact role + GUID + bicep module — never a raw 5xx.
  */
 
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
@@ -171,7 +172,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
           'cosmos_not_configured',
         );
       }
-      const keyUri = `${vaultUri.replace(/\/+$/, '')}/keys/${encodeURIComponent(keyName)}`;
+      const keyUri = `${trimTrailingSlashes(vaultUri)}/keys/${encodeURIComponent(keyName)}`;
       await bindCosmosCmk(cosmosId, keyUri, uami);
       cosmosBound = true;
     }
@@ -181,7 +182,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       ...ws,
       cmkBinding: {
         status: 'bound',
-        vaultUri: vaultUri.replace(/\/+$/, ''),
+        vaultUri: trimTrailingSlashes(vaultUri),
         keyName,
         keyVersion: keyVersion || '',
         uamiResourceId: uami,

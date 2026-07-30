@@ -47,6 +47,7 @@ import {
 } from '@/lib/azure/purview-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { safeRecordFrom, UnsafeKeyError } from '@/lib/util/safe-keys';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -192,11 +193,24 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   }
 
   // Normalise to a clean { key: string-value } map; drop blank keys.
-  const attributes: Record<string, string> = {};
+  // #2657 — the keys here come straight from the request body, and a raw
+  // `attributes[key] = ...` would let `__proto__` REPLACE this object's prototype
+  // instead of storing an attribute. safeRecordFrom refuses the three reserved
+  // names and returns a null-prototype bag that cannot be polluted later.
+  const pairs: Array<[string, string]> = [];
   for (const [k, v] of Object.entries(body.attributes as Record<string, unknown>)) {
     const key = String(k).trim();
     if (!key) continue;
-    attributes[key] = v == null ? '' : String(v);
+    pairs.push([key, v == null ? '' : String(v)]);
+  }
+  let attributes: Record<string, string>;
+  try {
+    attributes = safeRecordFrom(pairs);
+  } catch (e) {
+    if (e instanceof UnsafeKeyError) {
+      return err(e.message, 400, 'invalid_attribute_key');
+    }
+    throw e;
   }
 
   try {

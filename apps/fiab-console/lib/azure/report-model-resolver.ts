@@ -92,6 +92,7 @@ import { parseDeltaSchema } from '@/lib/azure/delta-schema-parse';
 import { resolveMlvDeltaUrl } from '@/lib/azure/materialized-lake-view-engine';
 import { safeSegment, type MlvSpec } from '@/lib/azure/materialized-lake-view-model';
 import { escapeSqlLiteral, quoteIdent, bracket as qbracket } from '@/lib/sql/quoting';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export const SEMANTIC_MODEL_ITEM_TYPE = 'semantic-model';
 
@@ -1105,7 +1106,7 @@ function topSelectStar(dialect: ReportSqlDialect, n: number, fromBody: string): 
 
 /** Build the FROM body (`FROM <relation|derived>`) for an object ref. */
 function fromBodyFor(dialect: ReportSqlDialect, ref: ReportObjectRef): string {
-  if (ref.mode === 'query') return `FROM (${ref.sql.trim().replace(/;+\s*$/, '')}) AS _loom_q`;
+  if (ref.mode === 'query') return `FROM (${stripTrailingSemicolons(ref.sql)}) AS _loom_q`;
   if (ref.mode === 'table') return `FROM ${relationRef(dialect, ref.schema, ref.table)}`;
   // 'file' / 'kql' are handled by their own executors — never reached here.
   return 'FROM (SELECT 1 AS _x) AS _loom_q';
@@ -1610,7 +1611,7 @@ async function resolveConnectionSecret(conn: LoomConnection): Promise<string | n
         'Re-create it via Add existing connection so its secret lands in Key Vault.',
     );
   }
-  return getKeyVaultSecretValue(conn.secretRef);
+  return getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
 }
 
 /**

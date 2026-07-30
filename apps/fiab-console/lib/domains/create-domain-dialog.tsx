@@ -42,6 +42,7 @@ import {
   planLibrarySeed, toDomainSeedPayload,
   type DomainLibraryNode,
 } from '@/lib/domains/libraries';
+import { trimEdges } from '@/lib/util/trim';
 
 export interface ExistingDomain { id: string; name: string; parentId?: string; }
 
@@ -123,7 +124,7 @@ const useStyles = makeStyles({
 type Mode = 'library' | 'custom';
 
 function slugify(s: string): string {
-  return s.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  return trimEdges(s.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'), '-').slice(0, 60);
 }
 
 export function CreateDomainDialog({

@@ -21,8 +21,7 @@
  *         chunkSize?, chunkOverlap?, subPath?, scheduleInterval? }
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { resolveIndexPlan } from '@/lib/azure/index-my-data-plan';
 import {
   buildAdlsDataSourceDefinition,
@@ -39,15 +38,15 @@ import {
   createIndexer, deleteIndexer,
   getIndexerStatus,
 } from '@/lib/azure/search-index-client';
+import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const SOURCE_TYPES: IndexableSourceType[] = ['lakehouse', 'warehouse', 'kql-database'];
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const sourceType = body?.sourceType as IndexableSourceType | undefined;
@@ -55,7 +54,7 @@ export async function POST(req: NextRequest) {
   const preset: ContentPreset = body?.preset === 'structured' ? 'structured' : 'documents';
   const chunkSize = Number.isFinite(body?.chunkSize) ? Number(body.chunkSize) : 2000;
   const chunkOverlap = Number.isFinite(body?.chunkOverlap) ? Number(body.chunkOverlap) : 500;
-  const subPath = typeof body?.subPath === 'string' ? body.subPath.replace(/^\/+|\/+$/g, '') : '';
+  const subPath = typeof body?.subPath === 'string' ? trimSlashes(body.subPath) : '';
   const scheduleInterval = typeof body?.scheduleInterval === 'string' && body.scheduleInterval.trim() ? body.scheduleInterval.trim() : undefined;
 
   if (!sourceType || !SOURCE_TYPES.includes(sourceType)) return apiError(`sourceType must be one of ${SOURCE_TYPES.join(', ')}`, 400);
@@ -174,4 +173,4 @@ export async function POST(req: NextRequest) {
     status,
     searchRoute: `/api/ai-search/indexes/${encodeURIComponent(names.indexName)}/search`,
   });
-}
+});

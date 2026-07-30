@@ -30,12 +30,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate } from '@/lib/azure/synapse-artifacts-client';
 import { KNOWN_CONTAINERS, pathToHttpsUrl } from '@/lib/azure/adls-client';
 import {
   createLivySessionAsync, getLivySession, submitLivyStatement, getLivyStatement,
 } from '@/lib/azure/synapse-dev-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -169,9 +169,7 @@ function parseStatsOutput(output: any): { columns: string[]; stats: Record<strin
 
 const DEAD_SESSION = new Set(['error', 'dead', 'killed', 'shutting_down', 'success']);
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
 
   const sp = req.nextUrl.searchParams;
@@ -256,4 +254,4 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, status: 'error', error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

@@ -11,6 +11,7 @@
  * Honest 503 gate when LOOM_SUBSCRIPTION_ID / the APIM service is unset. Real
  * ARM REST. No mocks.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { apimConfigGate, listApis, upsertApi, deleteApi, ApimError } from '@/lib/azure/apim-client';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
@@ -34,7 +35,7 @@ function gate() {
 }
 
 function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `api-${Date.now()}`;
+  return slugify(s, { max: 80 }) || `api-${Date.now()}`;
 }
 
 function fail(e: any) {

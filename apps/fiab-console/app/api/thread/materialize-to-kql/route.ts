@@ -18,6 +18,7 @@
  * Body: { from:{id,type,name}, values:{ table:'name|adlsPath', kqlDatabaseId, accelerate? } }
  * Returns: { ok, message, externalTable, database, link, linkLabel } | { ok:false, error }
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../items/_lib/item-crud';
@@ -43,7 +44,7 @@ function bad(error: string, status = 400) {
 
 /** ADX identifier from a free string (letters/digits/underscore; never empty). */
 function adxIdent(s: string): string {
-  const cleaned = String(s).replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+  const cleaned = trimEdges(String(s).replace(/[^A-Za-z0-9_]/g, '_'), '_');
   return cleaned || 'loom';
 }
 

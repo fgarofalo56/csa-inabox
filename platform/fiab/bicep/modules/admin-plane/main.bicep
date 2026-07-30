@@ -3956,6 +3956,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // Azure Functions host (byoExisting.udfFunctionBase ← root param
           // loomUdfFunctionBase) overrides it. Empty only when neither is present
           // → the invoke route keeps its honest 503 gate (no-vaporware.md).
+          // SECURITY (apps/fiab-console/lib/azure/udf-endpoint-policy.ts): this is
+          // the ONLY approved invoke destination unless an operator adds more via
+          // LOOM_UDF_ALLOWED_FUNCTION_BASES. An item's state.azureFunctionUrl may
+          // only SELECT among them. A function key is DEPLOYMENT config too —
+          // LOOM_UDF_FUNCTION_KEY_SECRET (or `<base>=<kv-secret>` in the allowed
+          // list) — never item config, because the default host below executes the
+          // item's own Python and must therefore never receive a credential.
           !empty(effectiveUdfFunctionBase) ? [
             { name: 'LOOM_UDF_FUNCTION_BASE', value: effectiveUdfFunctionBase }
           ] : [],

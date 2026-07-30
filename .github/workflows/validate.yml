@@ -57,10 +57,35 @@ jobs:
     needs: changes
     if: needs.changes.outputs.bicep == 'true'
     runs-on: ubuntu-latest
-    # Lints AND compiles every .bicep in the monorepo (hundreds) serially, which
-    # exceeds 15 min and was canceling mid-build on any bicep-touching PR. 30 min
-    # gives the full sweep headroom. (Future: scope to changed files only.)
-    timeout-minutes: 30
+    # This job HIT its 30-minute ceiling and was killed on PR #2641 — a
+    # bicep-heavy PR, i.e. exactly the PR it exists to guard. A timed-out gate
+    # reports `failure` without having checked anything, and because the job is
+    # path-filtered it shows `skipped` (green) on main, so the ceiling was
+    # invisible until a bicep PR needed it. Same shape as the hollow gates in
+    # #2585 / #2656: a check that looks like it works because it never runs.
+    #
+    # Two measured causes, both fixed below:
+    #   1. It ran `bicep lint` over every file AND then `bicep build` over every
+    #      file. Those two passes are BEHAVIOURALLY IDENTICAL on exit code —
+    #      verified against bicep 0.45.15:
+    #        broken (BCP057)  -> lint exit 1, build exit 1
+    #        warning-only     -> lint exit 0, build exit 0   (SAME warning text)
+    #        clean            -> lint exit 0, build exit 0
+    #      `bicep build` runs the linter and emits the identical diagnostics, so
+    #      the lint pass bought zero signal for half the job's wall-clock.
+    #   2. Both passes were serial — 263 in-scope files x 2 = 526 sequential CLI
+    #      invocations, each a cold .NET start. The big orchestrators are not
+    #      cheap: `platform/fiab/bicep/main.bicep` alone measures ~14s.
+    #
+    # So: one pass instead of two, run in parallel. Keeps FULL coverage (every
+    # in-scope file is still compiled) rather than the "scope to changed files"
+    # shortcut the old comment proposed — narrowing to changed files is what
+    # lets cross-module drift like #2540/#2541 through, since editing a module
+    # breaks its CONSUMERS, which are by definition unchanged files.
+    #
+    # 20 min, not 30: the new shape should land well inside it, so a timeout
+    # again becomes real news rather than the steady state.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 
@@ -70,49 +95,51 @@ jobs:
           chmod +x bicep
           sudo mv bicep /usr/local/bin/
 
-      - name: Lint all Bicep files
+      - name: Build every Bicep file (compile + lint in one pass)
         run: |
-          echo "=== Linting Bicep files ==="
-          ERROR_FILE=$(mktemp)
-          echo "0" > "$ERROR_FILE"
-          while IFS= read -r file; do
-            echo "Linting: $file"
-            if ! bicep lint "$file" 2>&1; then
-              echo $(( $(cat "$ERROR_FILE") + 1 )) > "$ERROR_FILE"
-            fi
-          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" \
-            -not -path "*/landing-zone-alz/*" `# ALZ accelerator — vendored templates, lint-incompatible` \
-            -not -path "*/gov/main.bicep" `# Governance policy definitions — uses dynamic expressions unsupported by bicep lint` \
-            -not -path "*/alerts/*" `# Alert rule bicep — threshold expressions trigger false positives` \
-            -not -path "*/templates/example-vertical/*" `# Cookiecutter template — contains {{ cookiecutter.* }} Jinja placeholders that are not valid Bicep until rendered`)
-          ERRORS=$(cat "$ERROR_FILE")
-          rm -f "$ERROR_FILE"
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::$ERRORS Bicep file(s) failed linting"
-            exit 1
-          fi
+          set -uo pipefail
+          # `git ls-files` rather than `find`: tracked files only, so it cannot
+          # wander into node_modules, and it is deterministic. The exclusion
+          # list is unchanged from the previous `find -not -path` chain:
+          #   landing-zone-alz/    ALZ accelerator, vendored + lint-incompatible
+          #   gov/main.bicep       policy defs using dynamic expressions
+          #   alerts/              threshold expressions -> false positives
+          #   example-vertical/    cookiecutter {{ }} Jinja, not valid until rendered
+          git ls-files '*.bicep' \
+            | grep -vE '^codeqlDB/|/node_modules/|landing-zone-alz/|gov/main\.bicep$|/alerts/|templates/example-vertical/' \
+            > /tmp/bicep-files.txt
+          COUNT=$(wc -l < /tmp/bicep-files.txt)
+          echo "=== Compiling $COUNT Bicep files across $(nproc) workers ==="
 
-      - name: Build all Bicep files (compile check)
-        run: |
-          echo "=== Building Bicep files ==="
-          ERROR_FILE=$(mktemp)
-          echo "0" > "$ERROR_FILE"
-          while IFS= read -r file; do
-            echo "Building: $file"
-            if ! bicep build "$file" --no-restore 2>&1; then
-              echo $(( $(cat "$ERROR_FILE") + 1 )) > "$ERROR_FILE"
+          # EXPORTED, not a plain shell var: the `sh -c` workers below are
+          # separate processes spawned by xargs and inherit only the
+          # environment. A non-exported FAIL_DIR would arrive empty there and
+          # every `touch` would target /<name> instead — failures would be
+          # recorded nowhere and the gate would report success on a broken tree.
+          export FAIL_DIR
+          FAIL_DIR=$(mktemp -d)
+
+          # -d '\n' so paths containing spaces stay intact; `sh -c ... _` passes
+          # the filename as $1 rather than interpolating it into the script.
+          # --stdout >/dev/null: the old form wrote a sibling .json for all 263
+          # files, littering the checkout mid-run. We want the diagnostics on
+          # stderr, never the ARM output.
+          xargs -d '\n' -P "$(nproc)" -n1 sh -c '
+            f="$1"
+            if ! out=$(bicep build "$f" --no-restore --stdout 2>&1 >/dev/null); then
+              printf "%s\n" "$out"
+              printf "::error file=%s::bicep build failed\n" "$f"
+              touch "$FAIL_DIR/$(printf "%s" "$f" | tr "/" "_")"
             fi
-          done < <(find . -name "*.bicep" -not -path "./codeqlDB/*" -not -path "*/node_modules/*" \
-            -not -path "*/landing-zone-alz/*" `# ALZ accelerator — vendored templates, lint-incompatible` \
-            -not -path "*/gov/main.bicep" `# Governance policy definitions — uses dynamic expressions unsupported by bicep lint` \
-            -not -path "*/alerts/*" `# Alert rule bicep — threshold expressions trigger false positives` \
-            -not -path "*/templates/example-vertical/*" `# Cookiecutter template — contains {{ cookiecutter.* }} Jinja placeholders that are not valid Bicep until rendered`)
-          ERRORS=$(cat "$ERROR_FILE")
-          rm -f "$ERROR_FILE"
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::$ERRORS Bicep file(s) failed to build"
+          ' _ < /tmp/bicep-files.txt
+
+          FAILED=$(find "$FAIL_DIR" -type f | wc -l)
+          rm -rf "$FAIL_DIR"
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::$FAILED Bicep file(s) failed to compile"
             exit 1
           fi
+          echo "All $COUNT Bicep files compiled clean."
 
   # -------------------------------------------------------------------------
   # Secret Scanning

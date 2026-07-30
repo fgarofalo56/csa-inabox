@@ -251,12 +251,12 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
         'Set LOOM_UNITY_CLIENT_ID (the Loom Unity Entra app registration) so the Console mints api://<client-id>/.default, or LOOM_UNITY_TOKEN from Key Vault. See docs/fiab/security/loom-unity-threat-model.md.',
     });
   }
+  let entraToken: string | undefined;
   try {
     // Lazy import: this module is imported by the pure capability surface, so the
     // Azure credential chain must never be pulled in eagerly.
     const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
-    const token = await uamiArmCredential().getToken(audience);
-    if (token?.token) return { authorization: `Bearer ${token.token}` };
+    entraToken = (await uamiArmCredential().getToken(audience))?.token;
   } catch (e) {
     throw new OssUcAuthNotConfiguredError({
       missingEnvVar: 'LOOM_UNITY_AUDIENCE',
@@ -266,6 +266,24 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
         'Confirm the Loom Unity app registration exposes that scope and the Console UAMI is permitted on it (or set LOOM_UNITY_TOKEN from Key Vault). See docs/fiab/security/loom-unity-threat-model.md.',
     });
   }
+
+  if (entraToken) {
+    // #2679 — the Entra token is the SUBJECT of an exchange, not the API
+    // credential. Upstream AuthDecorator rejects any bearer whose `iss` is not
+    // its own `internal` issuer, so presenting this directly is answered 403
+    // even with a byte-exact audience. Exchange it for a server-minted internal
+    // token and send that. Measured receipt:
+    // docs/fiab/security/loom-unity-authz-proof.md.
+    //
+    // The exchange failure is raised on its OWN path rather than through the
+    // minting catch above: minting SUCCEEDED here, and reporting an exchange
+    // failure as "the managed identity could not mint a token" would send an
+    // operator to Entra to debug a problem that lives in the catalog.
+    const { exchangeForInternalUcToken } = await import('@/lib/azure/uc-token-exchange');
+    const internal = await exchangeForInternalUcToken(entraToken);
+    return { authorization: `Bearer ${internal}` };
+  }
+
   throw new OssUcAuthNotConfiguredError({
     missingEnvVar: 'LOOM_UNITY_AUDIENCE',
     bicepModule: 'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
@@ -273,6 +291,40 @@ export async function ossUcAuthHeader(): Promise<Record<string, string>> {
     followUp:
       'Confirm the Loom Unity app registration exposes that scope and the Console UAMI is permitted on it (or set LOOM_UNITY_TOKEN from Key Vault). See docs/fiab/security/loom-unity-threat-model.md.',
   });
+}
+
+/**
+ * Drop the cached Loom Unity internal token, if this posture uses one.
+ *
+ * Called by the UC client when the catalog answers 401/403: a token the server
+ * has stopped honouring (principal disabled, server restarted and forgot its
+ * minted tokens) would otherwise keep failing every request for the rest of the
+ * cache TTL.
+ *
+ * Re-minting the Entra token to recompute the cache key is cheap — the Azure
+ * credential caches it and hands back the same string, so the digest matches the
+ * entry that was used. If the Entra token HAS rotated in between, the recomputed
+ * key simply misses, which is harmless: a rotated subject token cannot hit the
+ * stale entry anyway.
+ *
+ * Deliberately does NOT retry the failed call. The 401/403 may have arrived on a
+ * POST/PATCH/DELETE, and an automatic replay could double-apply a mutation. The
+ * next request re-exchanges and succeeds.
+ */
+export async function invalidateUnityInternalToken(): Promise<void> {
+  if (resolveUnityAuthMode() !== 'entra') return;
+  const audience = unityAudience();
+  if (!audience) return;
+  try {
+    const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
+    const token = (await uamiArmCredential().getToken(audience))?.token;
+    if (!token) return;
+    const { invalidateUcInternalToken } = await import('@/lib/azure/uc-token-exchange');
+    await invalidateUcInternalToken(token);
+  } catch {
+    // Best-effort cache eviction on an error path — never mask the original
+    // catalog failure the caller is about to surface.
+  }
 }
 
 /**
@@ -371,9 +423,10 @@ export const UC_CAPABILITIES: UcCapability[] = [
   { id: 'connections', label: 'Connections (Lakehouse Federation)', databricks: 'full', oss: 'none', loomSurface: '/catalog/unity — Federation', note: 'OSS UC has no federation. Loom-native fallback: Linked Services / Synapse + ADF connectors cover remote DBMS access in Gov.' },
   { id: 'delta-sharing', label: 'Delta Sharing (shares/recipients/providers)', databricks: 'full', oss: 'none', loomSurface: 'Marketplace — Data shares', note: 'OSS UC 0.5 does not implement the sharing server. Loom-native fallback: Loom Marketplace shares + access grants.' },
   { id: 'lineage', label: 'Lineage (table + column)', databricks: 'full', oss: 'none', loomSurface: '/catalog/lineage', note: 'Databricks system.access table + column lineage (via /lineage-tracking/). On OSS/Gov the equivalent is Loom-native UNIFIED COLUMN lineage: the shared col:<table>::<column> model (L1) that merges Purview column facets, Weave/Thread columnMappings, and OpenLineage ingest (L2/L3) into the same column-grain graph surface — default-ON, no gate. UC is simply one more source that folds onto that identity when a Databricks warehouse is present.' },
-  { id: 'tags', label: 'Tags (object + column, governed tags)', databricks: 'full', oss: 'none', loomSurface: 'SQL warehouse editor — UC dialogs', note: 'Tag DDL runs on a Databricks SQL warehouse. OSS fallback: Purview classifications + Loom catalog annotations.' },
+  { id: 'tags', label: 'Tags (object + column, governed tags)', databricks: 'full', oss: 'partial', loomSurface: '/catalog/unity — Governance · SQL warehouse editor — UC dialogs', note: 'UC-NATIVE tag DDL (ALTER … SET TAGS / CREATE GOVERNED TAG) runs on a Databricks SQL warehouse and stays Databricks-only. The Azure-native DEFAULT on BOTH backends is the LU-5 Loom governance overlay (/catalog/unity → Governance): tags, governed tags with an enforced value vocabulary, certification, and custom attributes stored against the `uc:<fqn>` securable identity in Cosmos, optionally folded into the classic Purview Data Map. No SQL warehouse, no Databricks, no Fabric.' },
+  { id: 'governance-overlay', label: 'Governance overlay (tags / certification / attributes on uc:<fqn>)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Governance', note: 'Loom-native (LU-5). Keyed on the SAME securable identity the lineage merge collapses on, so an overlay row joins a lineage node, a Purview asset, and a Loom item with no extra mapping. Certification uses the shared Loom endorsement ladder; custom attributes reuse the tenant attribute groups.' },
   { id: 'abac', label: 'ABAC / row filters / column masks', databricks: 'full', oss: 'none', loomSurface: 'Governance — UC security panel', note: 'Policy DDL is warehouse-side. OSS fallback: enforce at the serving engine (Synapse/ADX policies).' },
-  { id: 'system-tables', label: 'System tables (audit/billing/query/classification)', databricks: 'full', oss: 'none', loomSurface: 'SQL warehouse editor — audit dialogs', note: 'OSS fallback: Azure Monitor / Log Analytics on the loom-unity Container App.' },
+  { id: 'system-tables', label: 'System tables (audit/billing/query/classification)', databricks: 'full', oss: 'none', loomSurface: 'SQL warehouse editor — audit dialogs', note: 'LU-3 built the WRITE half of an OSS access-audit equivalent: every catalog call funnels through the BFF audit choke point (ucFetch/dbxFetch → recordUnityAccess) into the Cosmos _auditLog trail and the LoomAudit_CL SIEM stream, so who/what/when/outcome (including DENIALS) is recorded today and readable with unityAuditKql() in Log Analytics / Sentinel. The in-product READER + /catalog/unity System-tables pane are a follow-up (no G1 in-browser E2E receipt yet) — until they land this row stays `none`, not `partial`. Billing and warehouse query history have no Loom Unity equivalent at all (no DBU meter, no query engine): /admin/finops and the engine surfaces answer those.' },
   { id: 'bindings', label: 'Workspace bindings (catalog isolation)', databricks: 'full', oss: 'none', loomSurface: 'SQL warehouse editor — bindings dialog', note: 'OSS UC is single-server; Loom workspace isolation is enforced by Loom workspace ACLs instead.' },
   { id: 'quality-monitors', label: 'Data quality monitors', databricks: 'full', oss: 'none', loomSurface: 'Catalog — data quality', note: 'OSS fallback: Loom data-quality checks (Great-Expectations-style) on Spark.' },
   { id: 'online-tables', label: 'Online tables', databricks: 'full', oss: 'none', loomSurface: 'SQL warehouse editor', note: 'OSS fallback: Lakebase/Postgres serving tables.' },

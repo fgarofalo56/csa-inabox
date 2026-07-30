@@ -23,6 +23,7 @@ import { fetchWithTimeout } from './fetch-with-timeout';
 import { resolveAgentInvokeUrl, type DataAgentSource } from './data-agent-client';
 import { evalDax, TabularError } from './tabular-eval-client';
 import { resolveOntologyObjectForGrounding } from '@/lib/foundry/ontology-resolver';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 /** Owner/runtime context threaded from the grounded-chat caller (session oid).
  * Required to run a `semantic-model` DAX query, since the Azure-native tabular
@@ -70,7 +71,7 @@ function assertReadonlySql(sql: string): void {
 
 /** Add a TOP n to a bare SELECT when it has no row cap, so we never pull a table. */
 function capSql(sql: string): string {
-  const t = sql.trim().replace(/;+\s*$/, '');
+  const t = stripTrailingSemicolons(sql);
   if (/\b(top|offset|fetch)\b/i.test(t)) return t;
   return t.replace(/^select\b/i, `SELECT TOP ${MAX_ROWS}`);
 }
@@ -87,7 +88,7 @@ function assertReadonlyKql(kql: string): void {
 }
 
 function capKql(kql: string): string {
-  const t = kql.trim().replace(/;+\s*$/, '');
+  const t = stripTrailingSemicolons(kql);
   if (/\|\s*(take|limit|top)\b/i.test(t)) return t;
   return `${t}\n| take ${MAX_ROWS}`;
 }

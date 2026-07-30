@@ -16,6 +16,7 @@
  */
 
 import { lakehouseShortcutsContainer } from './cosmos-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse' | 'delta_sharing' | 'sharepoint';
 export type ShortcutKind = 'files' | 'tables';
@@ -97,7 +98,7 @@ export function shortcutId(lakehouseId: string, kind: ShortcutKind, parentPath: 
 /** Explorer path for a shortcut. `kind` maps to the Fabric section (Files/Tables). */
 export function shortcutFullPath(kind: ShortcutKind, parentPath: string, name: string): string {
   const section = kind === 'tables' ? 'Tables' : 'Files';
-  const mid = (parentPath || '').replace(/^\/+|\/+$/g, '');
+  const mid = trimSlashes((parentPath || ''));
   return [section, mid, name].filter(Boolean).join('/');
 }
 
@@ -130,7 +131,7 @@ export async function getShortcut(lakehouseId: string, id: string): Promise<Lake
 
 /** Create (upsert) a shortcut from a definition. Fills derived + audit fields. */
 export async function createShortcut(def: ShortcutDef): Promise<LakehouseShortcut> {
-  const parentPath = (def.parentPath || '').replace(/^\/+|\/+$/g, '');
+  const parentPath = trimSlashes((def.parentPath || ''));
   const id = shortcutId(def.lakehouseId, def.kind, parentPath, def.name);
   const now = new Date().toISOString();
   const existing = await getShortcut(def.lakehouseId, id);

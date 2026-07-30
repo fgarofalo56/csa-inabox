@@ -58,6 +58,7 @@
  *   - 401/403 from the data plane → PurviewError(status) ("UAMI lacks Data Map role").
  *   - DNS/000 → surfaced by probePurview as 'not_configured' with the actionable hint.
  */
+import { trimChar } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { randomUUID } from 'node:crypto';
 import {
@@ -72,6 +73,8 @@ import {
   resolvePurviewEndpoints,
 } from './purview-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { assertNamespacedTypedefNames, SENSITIVITY_LABEL_TYPEDEF_PREFIX,
+  type AtlasClassificationTypedefName } from './purview-typedef-namespace';
 import { derivePurviewArmResourceId, purviewArmProviderForKind } from './purview-source-mapping';
 import { dfsUrl, getBlobSuffix } from './cloud-endpoints';
 // L4 — column-lineage pure helpers/types live in a sibling module
@@ -92,6 +95,7 @@ export type {
   DatasetColumnMapping,
   PurviewColumnEdge,
 } from './purview-column-lineage';
+import { trimEdges } from '@/lib/util/trim';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -1116,11 +1120,16 @@ export async function deleteAtlasEntityByQualifiedName(
  * with classificationDefs). Lets Loom's classification taxonomy flow into
  * Purview without a manual type-creation step. Swallows 409 (already exists).
  *
+ * ACCOUNT-GLOBAL + PERMANENT: names MUST carry a tenant discriminator, enforced
+ * structurally — the branded {@link AtlasClassificationTypedefName} is mintable
+ * only by ./purview-typedef-namespace, plus a runtime assert as the backstop.
+ *
  * Docs: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
  */
-export async function ensureClassificationDefs(names: string[]): Promise<void> {
+export async function ensureClassificationDefs(names: AtlasClassificationTypedefName[]): Promise<void> {
   const want = [...new Set((names || []).map((n) => (n || '').trim()).filter(Boolean))];
   if (!want.length) return;
+  assertNamespacedTypedefNames(want);
   let existing = new Set<string>();
   try {
     const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs/headers');
@@ -1169,10 +1178,41 @@ export async function addAssetClassification(guid: string, classificationNames: 
   throw new PurviewError(res.status, t, `addAssetClassification failed: ${t || res.statusText}`);
 }
 
+/**
+ * REMOVE one or more classifications from a catalog asset (Atlas entity).
+ *   DELETE /datamap/api/atlas/v2/entity/guid/{guid}/classification/{name}
+ *
+ * The counterpart {@link addAssetClassification} deliberately lacked. Without
+ * it, a Loom-applied classification is UNREVOCABLE: an asset re-tagged
+ * `pii=no` would keep carrying the earlier `..._pii_yes` classification, and a
+ * de-certified asset would keep its `certified` signal forever. Atlas
+ * classifications feed downstream Purview labelling/DLP decisions, so a stale
+ * "not PII" / "certified" claim is actively dangerous, not merely untidy.
+ *
+ * 204 (deleted) and 404 (not attached / typedef unknown) are both success —
+ * the caller's intent is "this asset must not carry X", and both outcomes
+ * satisfy it. Any other non-2xx surfaces verbatim as a PurviewError.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/purview/datamapdataplane/entity/remove-classification
+ */
+export async function removeAssetClassification(guid: string, classificationNames: string[]): Promise<void> {
+  purviewAccount();
+  if (!guid) throw new PurviewError(400, null, 'guid is required');
+  const names = [...new Set((classificationNames || []).map((n) => (n || '').trim()).filter(Boolean))];
+  for (const n of names) {
+    const res = await purviewFetch(
+      `/datamap/api/atlas/v2/entity/guid/${encodeURIComponent(guid)}/classification/${encodeURIComponent(n)}`,
+      { method: 'DELETE' },
+    );
+    if (res.ok || res.status === 204 || res.status === 404) continue;
+    const t = await res.text();
+    throw new PurviewError(res.status, t, `removeAssetClassification(${n}) failed: ${t || res.statusText}`);
+  }
+}
+
 // ------------------------------------------------------------
 // MIP sensitivity labels — Data Map (Atlas) classification typedefs
 // ------------------------------------------------------------
-
 export interface DataMapSensitivityLabel {
   /** Full Atlas classification typedef name, e.g. 'MICROSOFT.GOVERNANCE.LABELS.<labelGuid>'. */
   typedefName: string;
@@ -1184,20 +1224,17 @@ export interface DataMapSensitivityLabel {
 }
 
 /**
- * Atlas classification-typedef name prefix used by the Purview Data Map
- * MIP + sensitivity-labels integration. When a Purview account is connected to
- * Microsoft Purview Information Protection and assets are scanned, each MIP
- * sensitivity label is registered in the Data Map as a classification typedef
- * named `MICROSOFT.GOVERNANCE.LABELS.<labelGuid>`. Loom uses this same naming
- * convention when it stamps a label onto an asset (ensureClassificationDefs +
- * addAssetClassification), so the round-trip stays inside the classic Data Map
- * and requires NO Microsoft Fabric / Power BI / Graph dependency.
+ * Re-exported from the typedef-namespace authority (which owns the prefix so
+ * the MIP-GUID requirement and the Loom-namespaced fallback live in ONE place).
+ * `MICROSOFT.GOVERNANCE.LABELS.<labelGuid>` is the typedef Purview's own MIP
+ * integration creates; the round-trip stays inside the classic Data Map and
+ * requires NO Microsoft Fabric / Power BI / Graph dependency.
  *
  * Grounded in:
  *   https://learn.microsoft.com/purview/how-to-automatically-label-your-content
  *   https://learn.microsoft.com/purview/data-gov-api-atlas-2-2 (typedefs)
  */
-export const SENSITIVITY_LABEL_TYPEDEF_PREFIX = 'MICROSOFT.GOVERNANCE.LABELS.';
+export { SENSITIVITY_LABEL_TYPEDEF_PREFIX };
 
 const LABEL_GUID_RE = GUID_RE;
 
@@ -1435,7 +1472,7 @@ export const LOOM_BUSINESS_METADATA_NAME = 'LoomCustomTags';
 
 /** Normalize a free-form key into a valid Atlas attribute name (letters/digits/_). */
 function businessMetadataAttrName(key: string): string {
-  return (key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tag';
+  return trimEdges((key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_'), '_') || 'tag';
 }
 
 function buildBmAttributeDef(name: string): Record<string, unknown> {
@@ -2545,11 +2582,9 @@ async function rootCollectionName(): Promise<string | undefined> {
 
 /** Stable Purview collection referenceName for a Loom domain (≤ 36 chars). */
 export function domainCollectionName(idOrName: string): string {
-  return (idOrName || 'domain')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 36) || 'domain';
+  return (
+    trimChar((idOrName || 'domain').toLowerCase().replace(/[^a-z0-9-]+/g, '-'), '-').slice(0, 36) || 'domain'
+  );
 }
 
 export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {

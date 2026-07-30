@@ -8,12 +8,13 @@
  * Audit:    every mutation → Cosmos audit-log (kind: governance-domain.*),
  *           surfaced in the existing Admin → Audit Logs reader.
  */
+import { trimEdges } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getDomainsStore, DomainsBackendGateError } from '@/lib/azure/domains-client';
 import { governanceDomainsContainer } from '@/lib/azure/cosmos-client';
 import { writeDomainAudit } from '@/lib/governance/domain-audit';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,9 +68,7 @@ async function copyGlobalDomainDefaults(tenantId: string): Promise<void> {
   }
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session: s }) => {
   const tenantId = s.claims.oid;
   try {
     let domains = await getDomainsStore().listDomains(tenantId);
@@ -88,20 +87,19 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: e.message, gate: e.backend }, { status: 501 });
     return apiServerError(e);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const who = s.claims.upn || tenantId;
   const body = await req.json().catch(() => ({}));
-  const id = (body?.id || '')
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, '-')
-    .replace(/^-+|-+$/g, '');
+  // `[^a-z0-9-]` PERMITS the dash, so a dash run from the body survives the
+  // collapse and `-+$` then retried it from every offset (quadratic —
+  // CodeQL js/polynomial-redos). trimEdges is a linear index scan.
+  const id = trimEdges(
+    (body?.id || '').toString().trim().toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+    '-',
+  );
   const name = (body?.name || '').toString().trim();
   if (!id || !name)
     return NextResponse.json({ ok: false, error: 'id and name are required' }, { status: 400 });
@@ -138,4 +136,4 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: e.message, gate: e.backend }, { status: 501 });
     return apiServerError(e);
   }
-}
+});

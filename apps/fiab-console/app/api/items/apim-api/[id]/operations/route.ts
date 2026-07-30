@@ -9,8 +9,8 @@
  * Real ARM REST (PUT/DELETE …/apis/{id}/operations/{opId}). Session-guarded,
  * honest 503 infra-gate, ApimError passthrough — mirrors /api/apim/apis.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   apimConfigGate,
   listOperations,
@@ -20,6 +20,7 @@ import {
   ApimError,
   type ApimOperationBody,
 } from '@/lib/azure/apim-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +43,7 @@ function fail(e: any) {
 
 /** APIM operation ids must match ^[\w]+$-ish; slug a display name when none given. */
 function slugOp(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `op-${Date.now()}`;
+  return slugify(s, { max: 80 }) || `op-${Date.now()}`;
 }
 
 function toBody(b: any): ApimOperationBody {
@@ -57,11 +58,9 @@ function toBody(b: any): ApimOperationBody {
   };
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const g = gate(); if (g) return g;
-  const apiId = (await ctx.params).id;
+  const apiId = params.id;
   // ?operationId=… returns the full detail for one operation (edit form load).
   const opId = req.nextUrl.searchParams.get('operationId')?.trim();
   try {
@@ -72,13 +71,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
     return NextResponse.json({ ok: true, operations: await listOperations(apiId) });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const g = gate(); if (g) return g;
-  const apiId = (await ctx.params).id;
+  const apiId = params.id;
   const body = await req.json().catch(() => ({}));
   if (!body?.displayName) return NextResponse.json({ ok: false, error: 'displayName is required' }, { status: 400 });
   if (!body?.urlTemplate) return NextResponse.json({ ok: false, error: 'urlTemplate is required' }, { status: 400 });
@@ -87,13 +84,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const operation = await upsertOperation(apiId, operationId, toBody(body));
     return NextResponse.json({ ok: true, operation });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const g = gate(); if (g) return g;
-  const apiId = (await ctx.params).id;
+  const apiId = params.id;
   const body = await req.json().catch(() => ({}));
   const operationId = body?.operationId ? String(body.operationId) : '';
   if (!operationId) return NextResponse.json({ ok: false, error: 'operationId is required' }, { status: 400 });
@@ -103,17 +98,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const operation = await upsertOperation(apiId, operationId, toBody(body));
     return NextResponse.json({ ok: true, operation });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { params }) => {
   const g = gate(); if (g) return g;
-  const apiId = (await ctx.params).id;
+  const apiId = params.id;
   const operationId = req.nextUrl.searchParams.get('operationId')?.trim();
   if (!operationId) return NextResponse.json({ ok: false, error: 'operationId is required' }, { status: 400 });
   try {
     await deleteOperation(apiId, operationId);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return fail(e); }
-}
+});

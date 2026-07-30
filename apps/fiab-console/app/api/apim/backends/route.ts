@@ -13,6 +13,7 @@
  * url is required; protocol defaults to 'http'. Honest 503 gate when the APIM
  * service is unset. Real ARM REST. No mocks.
  */
+import { slugify } from '@/lib/util/trim';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   apimConfigGate, listBackends, upsertBackend, deleteBackend, ApimError,
@@ -37,7 +38,7 @@ function gate() {
 }
 
 function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || `backend-${Date.now()}`;
+  return slugify(s, { max: 80 }) || `backend-${Date.now()}`;
 }
 
 function fail(e: any) {

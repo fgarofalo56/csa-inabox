@@ -33,6 +33,7 @@ import type {
   IntegrationStepResult,
 } from './attached-services-store';
 import type { ConnectionType } from './connections-store';
+import { trimEdges } from '@/lib/util/trim';
 
 /** Diagnostic-settings profile name — stable so bicep + console reference one. */
 const DIAG_SETTING_NAME = 'loom-attached';
@@ -97,10 +98,7 @@ async function stepRbac(input: AttachIntegrationInput): Promise<IntegrationStepR
 // ---------------------------------------------------------------------------
 /** Purview source name for an attached service (letters/digits/-/_; ≤ 63 chars). */
 function attachedSourceName(displayName: string, kind: string): string {
-  const slug = (displayName || kind || 'service')
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const slug = trimEdges((displayName || kind || 'service').trim().replace(/[^A-Za-z0-9_-]+/g, '-'), '-')
     .slice(0, 44) || 'service';
   return `loom-attach-${slug}`;
 }

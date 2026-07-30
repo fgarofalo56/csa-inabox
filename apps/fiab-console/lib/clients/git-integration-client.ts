@@ -367,8 +367,12 @@ export function githubAvailable(): boolean {
 export function githubApiBase(host?: string): string {
   const raw = (host || '').trim();
   if (!raw) return GH_BASE;
-  // Strip scheme and everything from the first slash (path), lowercase the host.
-  const hostOnly = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+  // Strip scheme and everything from the first slash (path), lowercase the
+  // host. indexOf/slice, not /\/.*$/ — that regex is quadratic on crafted
+  // multi-line input (CodeQL js/polynomial-redos).
+  const noScheme = raw.replace(/^https?:\/\//i, '');
+  const slash = noScheme.indexOf('/');
+  const hostOnly = (slash >= 0 ? noScheme.slice(0, slash) : noScheme).toLowerCase();
   if (!hostOnly || hostOnly === 'github.com' || hostOnly === 'api.github.com') return GH_BASE;
   // Derive the data-residency subdomain.
   let sub: string;
@@ -382,9 +386,44 @@ export function githubApiBase(host?: string): string {
   return `https://api.${sub}.ghe.com`;
 }
 
+/**
+ * Refuse to attach the user's GitHub PAT to anything outside GitHub.
+ *
+ * #2652 (js/request-forgery, alert #520). `ghFetch` sends
+ * `authorization: Bearer <pat>`, so its `url` argument decides where a
+ * long-lived user credential goes. Every current caller builds it from
+ * {@link ghApiBase}, which is safe — but nothing enforced that, and this is the
+ * repeated defect class in this codebase (#2683, #2691, #2607, and two more in
+ * this same sweep): a credential travelling to a caller-chosen address.
+ *
+ * Allowed origins are api.github.com and GitHub Enterprise Cloud
+ * (`https://api.<sub>.ghe.com`, the shape ghApiBase emits after stripping
+ * everything outside `[a-z0-9-]`). Compared on parsed `origin` — a `startsWith`
+ * check would accept `https://api.github.com.evil.test` and
+ * `https://api.github.com@evil.test`, both of which resolve to evil.test.
+ *
+ * Fails closed, and does not echo the rejected origin into an error string that
+ * would land in logs.
+ */
+export function assertGitHubOrigin(url: string): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error('Refusing to send a GitHub token to an unparseable URL');
+  }
+  const ok =
+    u.protocol === 'https:' &&
+    (u.host === 'api.github.com' || /^api\.[a-z0-9-]+\.ghe\.com$/.test(u.host));
+  if (!ok) {
+    throw new Error('Refusing to send the GitHub token to a non-GitHub origin');
+  }
+}
+
 async function ghFetch(url: string, pat: string, init?: RequestInit): Promise<Response> {
   const gate = githubCloudGate();
   if (gate) throw gate;
+  assertGitHubOrigin(url);
   let res: Response;
   try {
     res = await fetch(url, {

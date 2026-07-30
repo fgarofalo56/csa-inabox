@@ -19,6 +19,7 @@
  * properties / completion metadata. We surface Table_0 only.
  */
 
+import { kqlEscapeDouble, kqlEscapeSingle, kqlVerbatimSingle } from '@/lib/azure/kql-escape';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
@@ -790,7 +791,7 @@ export async function executePurgeCommit(
 ): Promise<PurgeCommitResult> {
   const csl =
     `.purge table ["${table}"] records in database ["${database}"]` +
-    ` with(verificationtoken=h'${verificationToken.replace(/'/g, "\\'")}')` +
+    ` with(verificationtoken=h'${kqlEscapeSingle(verificationToken)}')` +
     ` <| ${predicateWhere}`;
   const json = await postMgmtDm(database, csl);
   const cols: string[] = ((json?.Tables?.[0]?.Columns) || []).map((c: any) => String(c.ColumnName));
@@ -822,7 +823,7 @@ export async function executePurgeCommit(
 
 /** Safe-quote a KQL entity name as a bracketed string literal: `["name"]`. */
 export function qName(name: string): string {
-  return `["${name.replace(/"/g, '\\"')}"]`;
+  return `["${kqlEscapeDouble(name)}"]`;
 }
 
 export interface KustoTableDetail {
@@ -1006,10 +1007,10 @@ export async function createExternalDeltaTable(
     throw new KustoError('createExternalDeltaTable: abfssUri must be an abfss:// URI', 400);
   }
   const auth = opts?.miObjectId ? `;managed_identity=${opts.miObjectId}` : ';managed_identity=system';
-  const connStr = `h@'${uri}${auth}'`;
+  const connStr = `h@'${kqlVerbatimSingle(uri)}${auth}'`;
   const withParts: string[] = [];
-  if (opts?.folder) withParts.push(`folder = "${opts.folder.replace(/"/g, '\\"')}"`);
-  if (opts?.docString) withParts.push(`docstring = "${opts.docString.replace(/"/g, '\\"')}"`);
+  if (opts?.folder) withParts.push(`folder = "${kqlEscapeDouble(opts.folder)}"`);
+  if (opts?.docString) withParts.push(`docstring = "${kqlEscapeDouble(opts.docString)}"`);
   const withClause = withParts.length ? ` with (${withParts.join(', ')})` : '';
   const command = `.create-or-alter external table ${qName(name)}\nkind=delta\n(\n  ${connStr}\n)${withClause}`;
   return executeMgmtCommand(db, command);
@@ -1126,10 +1127,10 @@ export async function createExternalStorageTable(
     throw new KustoError(`createExternalStorageTable: dataFormat must be one of ${KUSTO_EXTERNAL_TABLE_FORMATS.join(', ')}`, 400);
   }
   const auth = opts?.miObjectId ? `;managed_identity=${opts.miObjectId}` : ';managed_identity=system';
-  const connStr = `h@'${uri}${auth}'`;
+  const connStr = `h@'${kqlVerbatimSingle(uri)}${auth}'`;
   const withParts: string[] = [];
-  if (opts?.folder) withParts.push(`folder = "${opts.folder.replace(/"/g, '\\"')}"`);
-  if (opts?.docString) withParts.push(`docstring = "${opts.docString.replace(/"/g, '\\"')}"`);
+  if (opts?.folder) withParts.push(`folder = "${kqlEscapeDouble(opts.folder)}"`);
+  if (opts?.docString) withParts.push(`docstring = "${kqlEscapeDouble(opts.docString)}"`);
   const withClause = withParts.length ? ` with (${withParts.join(', ')})` : '';
   const command = `.create-or-alter external table ${qName(name)} (${cslSchema})\nkind=storage\ndataformat=${dataFormat}\n(\n  ${connStr}\n)${withClause}`;
   return executeMgmtCommand(db, command);
@@ -1160,7 +1161,7 @@ export async function createExternalTableView(
   if (!viewName.trim() || !externalTableName.trim()) {
     throw new KustoError('createExternalTableView: viewName and externalTableName are required', 400);
   }
-  const body = `external_table("${externalTableName.replace(/"/g, '\\"')}")`;
+  const body = `external_table("${kqlEscapeDouble(externalTableName)}")`;
   return executeMgmtCommand(
     db,
     `.create-or-alter function with (folder = "Loom Delta", docstring = "Delta view via CSA Loom") ${viewName}() { ${body} }`,
@@ -1302,7 +1303,7 @@ export async function setTableRetentionPolicy(
 ): Promise<KustoQueryResult> {
   if (!table.trim()) throw new KustoError('setTableRetentionPolicy: table is required', 400);
   const rec = assertRecoverability(recoverability);
-  const policy = JSON.stringify({ SoftDeletePeriod: retentionTimespanFromDays(softDeleteDays), Recoverability: rec }).replace(/'/g, "\\'");
+  const policy = kqlEscapeSingle(JSON.stringify({ SoftDeletePeriod: retentionTimespanFromDays(softDeleteDays), Recoverability: rec }));
   return executeMgmtCommand(db, `.alter table ${qName(table)} policy retention '${policy}'`);
 }
 
@@ -1311,7 +1312,7 @@ export async function setDatabaseRetentionPolicy(
   db: string, softDeleteDays: number, recoverability: KustoRecoverability,
 ): Promise<KustoQueryResult> {
   const rec = assertRecoverability(recoverability);
-  const policy = JSON.stringify({ SoftDeletePeriod: retentionTimespanFromDays(softDeleteDays), Recoverability: rec }).replace(/'/g, "\\'");
+  const policy = kqlEscapeSingle(JSON.stringify({ SoftDeletePeriod: retentionTimespanFromDays(softDeleteDays), Recoverability: rec }));
   return executeMgmtCommand(db, `.alter database ${qName(db)} policy retention '${policy}'`);
 }
 
@@ -1466,7 +1467,13 @@ export async function setTableUpdatePolicy(
   targetTable: string,
   policies: KustoUpdatePolicyEntry[],
 ): Promise<KustoQueryResult> {
-  const escaped = JSON.stringify(policies).replace(/'/g, "\\'");
+  // `@'…'` is a VERBATIM literal — backslash is a plain character there, so the
+  // previous `.replace(/'/g, "\\'")` left the quote LIVE: a `'` inside the
+  // caller-supplied `Query` terminated the literal and the rest of the string
+  // was parsed as raw ADX management-command text. `/api/adx/policies` passes
+  // `body.query` straight through, so this was reachable. Verbatim literals
+  // escape by DOUBLING the quote.
+  const escaped = kqlVerbatimSingle(JSON.stringify(policies));
   return executeMgmtCommand(
     db,
     `.alter table ${qName(targetTable)} policy update @'${escaped}'`,
@@ -1802,8 +1809,10 @@ export async function createIngestionMapping(
   }
   let json = mappingJson.trim();
   try { JSON.parse(json); } catch { throw new KustoError('createIngestionMapping: mapping must be valid JSON', 400); }
-  // Single-quote the JSON literal; escape embedded single quotes the KQL way.
-  json = json.replace(/'/g, "\\'");
+  // Single-quote the JSON literal. Backslash FIRST, then the quote — quote-only
+  // escaping corrupted every mapping containing a JSON escape and let a
+  // trailing backslash re-arm the closing quote (js/incomplete-sanitization).
+  json = kqlEscapeSingle(json);
   return executeMgmtCommand(
     db,
     `.create-or-alter table ${qName(table.trim())} ingestion ${k} mapping "${name}" '${json}'`,
@@ -1867,8 +1876,10 @@ export async function createOrAlterExternalTableDelta(
   if (!/^abfss:\/\//i.test(abfssUri)) {
     throw new KustoError('createOrAlterExternalTableDelta: abfssUri must start with abfss://', 400);
   }
-  // Escape single-quotes inside the URI for the KQL string literal.
-  const escaped = abfssUri.replace(/'/g, "\\'");
+  // h@'…' is a VERBATIM literal: backslash is a plain char and the ONLY escape
+  // is doubling the quote. The old \' escape left the backslash literal and
+  // the quote LIVE — a quote in the URI broke out of the literal.
+  const escaped = kqlVerbatimSingle(abfssUri);
   const cmd = `.create-or-alter external table ${qName(extName)} kind=delta (h@'${escaped};impersonate')`;
   return executeMgmtCommand(db, cmd);
 }

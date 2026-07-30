@@ -276,7 +276,20 @@ describe('admin/env-config registry', () => {
     // call), +3: 186 → 189. LOOM_UNITY_TOKEN is deliberately NOT in the spec: a
     // bearer is a Key Vault secretref, not an env-config field (same treatment as
     // LOOM_ICEBERG_CATALOG_TOKEN).
-    expect(EDITABLE_ENV.length).toBe(189);
+    // Bumped to 190 by LU-9 (Loom Sharing — the open Delta Sharing server): the
+    // svc-loom-sharing spec adds LOOM_SHARING_URL, the Console half that points
+    // the sharing BFF at the deployed reference server, +1: 189 -> 190.
+    // LOOM_SHARING_BEARER is deliberately NOT in the spec: it is a Key Vault
+    // secretref, not an env-config field (same treatment as LOOM_UNITY_TOKEN).
+    // Bumped to 192 by the LU-9 round-3 credential pin: the svc-loom-sharing
+    // spec gains an anyOf group [LOOM_SHARING_AUDIENCE, LOOM_SHARING_SCOPE],
+    // +2: 190 -> 192. One of the two is REQUIRED once LOOM_SHARING_URL is set —
+    // the fallback audience is the Console's own API, so an unpinned recipient
+    // endpoint would accept any Console access token as a data-export
+    // credential, and /api/delta-sharing/* fails closed (503) until one is set.
+    // They belong on /admin/env-config precisely because an operator has to see
+    // and set them (round 2 shipped LOOM_SHARING_SCOPE nowhere an operator looks).
+    expect(EDITABLE_ENV.length).toBe(192);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -405,6 +418,17 @@ describe('admin/env-config registry', () => {
       'LOOM_RESULT_CACHE_REDIS',
       // RUM1 svc-client-rum — default-ON knobs (unset = enabled @ 100%).
       'LOOM_RUM_ENABLED', 'LOOM_RUM_SAMPLE_RATE',
+      // LU-9 svc-loom-sharing — unset is fully functional wherever Databricks
+      // Delta Sharing is available: the Marketplace Data-shares surface uses
+      // that backend. On the sovereign path (no Databricks UC endpoint in Gov)
+      // there is no sharing backend at all until loom-sharing is deployed,
+      // which is exactly the gap this closes.
+      // …and the credential pin for the recipient endpoint. Optional in the
+      // env-check sense (unset LOOM_SHARING_URL = nothing is broken), but once
+      // the server IS wired one of these two must be set or /api/delta-sharing/*
+      // stays 503 by design.
+      'LOOM_SHARING_AUDIENCE', 'LOOM_SHARING_SCOPE',
+      'LOOM_SHARING_URL',
       // A11/A12/A13 Spark reliability — all default-ON/opt-out (chaos default-OFF
       // is the intended production posture): auto-recovery enable + thrash cap,
       // the vCore-budget + session-cap ceiling, and the chaos-drill switch.

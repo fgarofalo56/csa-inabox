@@ -38,6 +38,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, kvScope } from '@/lib/azure/cloud-endpoints';
+import { trimTrailingSlashes } from '@/lib/util/trim';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { walkPagedList, type PagedEnvelope } from '@/lib/azure/paging-budget';
 
@@ -229,7 +230,7 @@ function versionFromKid(kid: string): string {
  * `CmkError` the panel would render as an inaccessible vault.
  */
 export async function listVaultKeys(vaultUri: string): Promise<KvKeyItem[]> {
-  const base = vaultUri.replace(/\/+$/, '');
+  const base = trimTrailingSlashes(vaultUri);
   const first = `${base}/keys?api-version=${KV_API}&maxresults=25`;
   const rows = await walkPagedList<any>(
     'key-vault keys',
@@ -254,7 +255,7 @@ export async function listVaultKeys(vaultUri: string): Promise<KvKeyItem[]> {
  * vault. Bounded exactly like {@link listVaultKeys}.
  */
 export async function listKeyVersions(vaultUri: string, keyName: string): Promise<KvKeyVersionItem[]> {
-  const base = vaultUri.replace(/\/+$/, '');
+  const base = trimTrailingSlashes(vaultUri);
   const first = `${base}/keys/${encodeURIComponent(keyName)}/versions?api-version=${KV_API}&maxresults=25`;
   const rows = await walkPagedList<any>(
     `key-vault key-versions ${keyName}`,
@@ -398,7 +399,7 @@ export async function bindStorageCmk(input: BindStorageCmkInput): Promise<Storag
         keySource: 'Microsoft.Keyvault',
         identity: { userAssignedIdentity: uamiResourceId },
         keyvaultproperties: {
-          keyvaulturi: vaultUri.replace(/\/+$/, ''),
+          keyvaulturi: trimTrailingSlashes(vaultUri),
           keyname: keyName,
           // Empty string = auto-rotate to latest; a version hex pins it.
           keyversion: keyVersion,

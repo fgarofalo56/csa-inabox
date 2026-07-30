@@ -30,6 +30,7 @@
  *   https://learn.microsoft.com/rest/api/azureresourcegraph/resourcegraph/resources/resources
  */
 
+import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import type { TokenCredential } from '@azure/identity';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope } from './cloud-endpoints';
@@ -84,8 +85,8 @@ export async function discoverResourceCoordsByName(
   const credential = opts.credential || loomServerCredential;
 
   // Single-quote-escape for the KQL string literals.
-  const typeLit = resourceType.replace(/'/g, "\\'");
-  const nameLit = name.replace(/'/g, "\\'");
+  const typeLit = kqlEscapeSingle(resourceType);
+  const nameLit = kqlEscapeSingle(name);
   const query = [
     'Resources',
     `| where type =~ '${typeLit}' and name =~ '${nameLit}'`,

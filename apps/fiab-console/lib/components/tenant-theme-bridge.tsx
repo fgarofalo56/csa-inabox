@@ -28,7 +28,7 @@ export function TenantThemeBridge() {
         root.style.setProperty('--loom-tenant-accent', accent);
       }
       if (brandName) {
-        root.style.setProperty('--loom-tenant-brand', `"${brandName.replace(/"/g, '\\"')}"`);
+        root.style.setProperty('--loom-tenant-brand', `"${brandName.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
         document.title = `${brandName} — CSA Loom`;
       }
     }).catch(() => { /* keep defaults */ });

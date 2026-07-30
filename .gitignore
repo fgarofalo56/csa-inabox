@@ -107,6 +107,12 @@ MANIFEST
 # it (EH-P1-MANIFEST, #1801).
 !apps/fiab-console/lib/items/manifest/
 !apps/fiab-console/lib/items/manifest/**
+# Same trap, second victim: the Delta Sharing manifest BFF route (LU-9). A route
+# directory named `manifest` is INVISIBLE to git on a case-insensitive
+# filesystem, so the endpoint the docs told operators to call silently never got
+# committed and 404d in production.
+!apps/fiab-console/app/api/marketplace/sharing/manifest/
+!apps/fiab-console/app/api/marketplace/sharing/manifest/**
 pip-log.txt
 pip-delete-this-directory.txt
 *.whl

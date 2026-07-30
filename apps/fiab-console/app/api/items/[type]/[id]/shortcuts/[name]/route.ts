@@ -18,7 +18,6 @@
  * Per no-vaporware.md — real Cosmos + ADLS/engine calls, no mock.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   getShortcut,
@@ -28,6 +27,8 @@ import {
   type ShortcutKind,
 } from '@/lib/azure/shortcut-client';
 import { shortcutId } from '@/lib/azure/lakehouse-shortcuts';
+import { trimSlashes } from '@/lib/util/trim';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,10 +40,8 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
-export async function DELETE(_req: NextRequest, props: { params: Promise<{ type: string; id: string; name: string }> }) {
-  const { type, id, name } = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ type: string; id: string; name: string }>(async (_req: NextRequest, { session, params }) => {
+  const { type, id, name } = params;
 
   const item = await loadOwnedItem(id, type, session.claims.oid);
   if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
@@ -61,12 +60,10 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ type:
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
   }
-}
+});
 
-export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string; name: string }> }) {
-  const { type, id, name } = await props.params;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession<{ type: string; id: string; name: string }>(async (req: NextRequest, { session, params }) => {
+  const { type, id, name } = params;
 
   const item = await loadOwnedItem(id, type, session.claims.oid);
   if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
@@ -105,7 +102,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     return NextResponse.json({ ok: false, error: `format must be one of ${FORMATS.join(', ')}` }, { status: 400 });
   }
 
-  const cleanParent = (newParentPath || '').replace(/^\/+|\/+$/g, '');
+  const cleanParent = trimSlashes((newParentPath || ''));
   const newId = shortcutId(id, newKind, cleanParent, newName);
 
   try {
@@ -147,4 +144,4 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
       { status: 502 },
     );
   }
-}
+});

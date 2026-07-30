@@ -22,6 +22,7 @@ import { getAccountName } from './adls-client';
 import { dfsSuffix } from './cloud-endpoints';
 import { duckdbQueryJson, isDuckDbConfigured } from './duckdb-client';
 import { activeFilesAtVersion, readCommitActions, maxVersion, replayActiveFiles } from './delta-version-files';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** One side of a diff: a table at a container/path, optionally pinned to a version. */
 export interface DiffSide {
@@ -285,7 +286,7 @@ export async function computeDataDiff(req: DataDiffRequest): Promise<DataDiffRes
 /** Resolve one side to its concrete abfss file URIs (version-pinned when asked). */
 async function resolveSide(side: DiffSide, account: string): Promise<{ uris: string[]; version?: number }> {
   const container = String(side.container || '').trim();
-  const path = String(side.path || '').trim().replace(/^\/+|\/+$/g, '');
+  const path = trimSlashes(String(side.path || '').trim());
   if (!CONTAINER_RE.test(container)) throw new DataDiffError(`"${container}" is not a valid container name.`, 400);
   if (!path || !PATH_RE.test(path)) throw new DataDiffError(`"${side.path}" is not a readable table path.`, 400);
 

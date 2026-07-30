@@ -11,23 +11,24 @@
  * Body: { workspaceId, apiId, apiName, gatewayUrl, apiPath, appName }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { createOwnedItem } from '../../items/_lib/item-crud';
 import { listOperations, ApimError } from '@/lib/azure/apim-client';
+import { stripTrailingSlashes } from '@/lib/util/path-strings';
+import { withSession } from '@/lib/api/route-toolkit';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({} as any));
   const workspaceId = String(body?.workspaceId || '').trim();
   const apiId = String(body?.apiId || '').trim();
   const apiName = String(body?.apiName || apiId || 'API').trim();
-  const gatewayUrl = String(body?.gatewayUrl || '').trim().replace(/\/+$/, '');
-  const apiPath = String(body?.apiPath || '').trim().replace(/^\/+|\/+$/g, '');
+  const gatewayUrl = stripTrailingSlashes(String(body?.gatewayUrl || '').trim());
+  // apiPath also needed it — main fixed only gatewayUrl, this PR only apiPath.
+  const apiPath = trimSlashes(String(body?.apiPath || '').trim());
   const appName = String(body?.appName || `${apiName} mini-app`).trim();
 
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'pick a workspace' }, { status: 400 });
@@ -78,4 +79,4 @@ export async function POST(req: NextRequest) {
     link: `/items/notebook/${res.item.id}`,
     linkLabel: 'Open the mini-app notebook',
   });
-}
+});

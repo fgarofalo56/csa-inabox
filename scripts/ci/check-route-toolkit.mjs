@@ -64,6 +64,67 @@ const TOUCH_EXEMPT = new Map([
   // streaming — a legitimate codemod-resistant prologue. Migrate when the streaming
   // routes get a dedicated stream-safe toolkit wrapper.
   ['apps/fiab-console/app/api/items/data-agent/[id]/chat/route.ts', 'N9: streaming SSE agent route, custom envelopes — not withSession-migratable yet'],
+  // #2652 touched this route to share the deploy-workflow allow-list with
+  // /api/setup/workflow-run-status (a token-bearing SSRF fix). The codemod reports
+  // SKIPPED — "no hand-rolled getSession() prologue" — because this route gates on
+  // enforceCapability() rather than the getSession()+401 shape withSession
+  // replaces, so there is nothing for it to rewrite. Migrating it by hand inside a
+  // security PR would put a ~900-line refactor of the deploy path next to a
+  // two-line allow-list change and make both harder to review.
+  ['apps/fiab-console/app/api/setup/deploy/route.ts', '#2652: enforceCapability prologue, codemod-resistant — migrate in a dedicated setup-family PR'],
+  // #2656 touched these three only to swap a Math.random() sessionId for the
+  // crypto-backed randomId(). The codemod reports SKIPPED (streaming/SSE
+  // handler) for each — same reason the data-agent chat route above is exempt:
+  // withSession's try/catch→apiServerError wrapper would break the SSE stream.
+  // Migrating them needs the stream-safe toolkit wrapper that entry is waiting
+  // on, not a hand-roll inside a one-line randomness change.
+  ['apps/fiab-console/app/api/copilot/dax/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet (see data-agent chat)'],
+  ['apps/fiab-console/app/api/copilot/notebook-assist/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
+  ['apps/fiab-console/app/api/copilot/orchestrate/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
+  // #2657 touched this route only to build the attribute bag through
+  // safeRecordFrom (prototype-pollution fix). The codemod reports SKIPPED
+  // ("getSession() without the exact 401 guard") because it returns its own
+  // `err('Unauthorized', 401, 'unauthorized')` envelope rather than the literal
+  // shape withSession replaces — nothing for the codemod to rewrite.
+  // LU-5 touched this route only to add assertAllowedUcHost (#2607). The codemod
+  // DOES apply here — and MEASURABLY breaks it: wrapping in withSession makes its
+  // try/catch swallow the route's honest `PurviewNotConfiguredError -> 501` into a
+  // generic 500, and register.test.ts catches that (expected 501, got 500). Proven
+  // by applying the migration and watching the suite go red, then reverting.
+  // Migrate when withSession learns to re-raise structured not-configured gates.
+  ['apps/fiab-console/app/api/catalog/register/route.ts', 'LU-5/#2607: withSession swallows the 501 not-configured gate into a 500 (register.test.ts proves it)'],
+  // #2677 touched 45 routes for a ONE-LINE quadratic-trim swap each (the
+  // js/polynomial-redos sweep). 34 of them the codemod migrated cleanly and
+  // they ARE migrated in this PR — verified by 2020 app/api tests staying green.
+  // These 11 are codemod-RESISTANT: 9 use a bespoke `err(msg, 401, code)`
+  // envelope rather than the literal getSession()+401 shape withSession
+  // replaces, 1 has no getSession() prologue at all, and 1 aborts on
+  // overlapping edits. Hand-migrating them would change shipped 401/404 bodies
+  // inside a security sweep — the same trade already rejected for
+  // catalog/register, where doing it made withSession swallow an honest 501
+  // into a 500 and register.test.ts caught it.
+  ['apps/fiab-console/app/api/apim/named-values/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/databricks-sql-warehouse/[id]/ctas/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/dataflow/profile/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/eventstream/[id]/activator/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/kql-dashboard/[id]/activator/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/lakehouse-shortcut/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/ontology-sdk/[id]/publish/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/report/[id]/native-query/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/report/[id]/profile/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/thread/materialize-to-kql/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/thread/promote-medallion/route.ts', '#2677: codemod-resistant prologue; one-line ReDoS trim swap only'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/business-metadata/route.ts', '#2657: bespoke err() 401 envelope, codemod-resistant — migrate with the items family'],
+  // LU-5 S4 class sweep touched these two ONLY to route their Atlas typedef name
+  // through lib/azure/purview-typedef-namespace (a 1-line namespace fix each).
+  // `migrate-route-toolkit.mjs --file=<each>` reports SKIPPED — "getSession()
+  // without the exact 401 guard": both use a bespoke `err(msg, 401, code)` helper
+  // whose envelope (`{ok:false,error,code}`) differs from `apiUnauthorized()`, so
+  // the codemod refuses and a hand-migration would change the 401/404 body of two
+  // SHIPPED item routes. Not doing that inside a security fix. Migrate when the
+  // items family gets its `err()` prologue taught to the codemod.
+  ['apps/fiab-console/app/api/items/[type]/[id]/classifications/route.ts', 'LU-5 S4: codemod reports SKIPPED (bespoke err() 401 envelope); typedef-namespace fix only'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity/route.ts', 'LU-5 S4: codemod reports SKIPPED (bespoke err() 401 envelope); typedef-namespace fix only'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */

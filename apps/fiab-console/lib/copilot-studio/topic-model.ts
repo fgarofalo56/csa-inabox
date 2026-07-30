@@ -111,10 +111,10 @@ export function newStepId(): string {
 function yamlString(v: string): string {
   // Quote when needed; escape embedded double-quotes.
   if (v === '') return '""';
-  if (/^[\w .,;:!?@/#%&()+=-]+$/.test(v) && !/^[-?:#&*!|>'"%@`]/.test(v)) {
-    // Safe-ish bareword — but still quote to be deterministic for multi-word.
-    return `"${v.replace(/"/g, '\\"')}"`;
-  }
+  // One escape path for every value: backslash FIRST, then quote, then LF.
+  // (The old "safe bareword" fast path escaped only the quote — its guard
+  // regex excluded quote+backslash so it was a no-op, but it left the
+  // incomplete-escape shape live for the next editor of this file.)
   return `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 }
 

@@ -23,9 +23,10 @@
  *             counts:{ [table]: rows }, graph:{ relationships } | null,
  *             gate?:{ remediation } }
  */
+import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { executeMgmtCommand, executeQuery, defaultDatabase, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +67,7 @@ function safeIdent(s: string): string {
 }
 /** Bracket-quote an arbitrary ADX identifier (tolerates spaces/hyphens). */
 function bq(name: string): string {
-  return `['${String(name).replace(/'/g, "\\'")}']`;
+  return `['${kqlEscapeSingle(String(name))}']`;
 }
 /** A composite-key expression: strcat(tostring(['k1']),'|',tostring(['k2'])). */
 function keyExpr(cols: string[]): string {
@@ -84,12 +85,10 @@ function buildCreate(table: string, columns: { name: string; type: string }[]): 
 
 /** Source ref `database('db').['table']` (db omitted → current database). */
 function sourceRef(db: string | undefined, table: string): string {
-  return db ? `database('${db.replace(/'/g, "\\'")}').${bq(table)}` : bq(table);
+  return db ? `database('${kqlEscapeSingle(db)}').${bq(table)}` : bq(table);
 }
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest) => {
 
   const gate = kustoConfigGate();
   if (gate) {
@@ -206,4 +205,4 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
   }
 
   return NextResponse.json({ ok: true, database: db, created, loaded, counts, graph });
-}
+});

@@ -73,6 +73,108 @@ const REVIEWED_PY = {
   numpy: 'BSD-3-Clause',
 };
 
+/**
+ * REVIEWED third-party OSS *application* images that Loom DEPLOYS, keyed by the
+ * image repository as it appears in an `apps/<name>/Dockerfile` FROM line
+ * (registry + repo, tag stripped) → SPDX license (the human review record).
+ *
+ * WHY (LU-9): the Python-requirements scan above cannot see an engine that
+ * ships as a whole container — the OSS Unity Catalog server, RisingWave,
+ * Debezium, the tile server, and (new) the Delta Sharing reference server all
+ * enter the distribution through a `FROM`. Those are exactly the embeds a
+ * license review must cover, and until now nothing forced them into the NOTICE
+ * manifest. A FROM that is not listed here FAILS, which is the ratchet: a new
+ * container-baked engine cannot ship without a recorded license decision.
+ *
+ * Add a genuinely-new permissive embed with its real SPDX id + a
+ * THIRD_PARTY_LICENSES.md row. A copyleft image is NEVER allowlisted.
+ */
+const REVIEWED_IMAGES = {
+  // github.com/unitycatalog/unitycatalog — Apache-2.0 (LU-1/LU-2 metastore).
+  'unitycatalog/unitycatalog': 'Apache-2.0',
+  // github.com/risingwavelabs/risingwave — Apache-2.0 (N7a streaming tier).
+  'risingwavelabs/risingwave': 'Apache-2.0',
+  // github.com/debezium/debezium — Apache-2.0 (CDC connect runtime).
+  'quay.io/debezium/connect': 'Apache-2.0',
+  // github.com/maptiler/tileserver-gl — BSD-2-Clause (sovereign OSS maps tier).
+  'maptiler/tileserver-gl': 'BSD-2-Clause',
+  // github.com/delta-io/delta-sharing — Apache-2.0 (LU-9 loom-sharing). The
+  // image is published by the upstream build itself (build.sbt dockerUsername
+  // = "deltaio"), so it is the same Apache-2.0 codebase, not a third-party
+  // redistribution under different terms.
+  'deltaio/delta-sharing-server': 'Apache-2.0',
+};
+
+/**
+ * Language/OS BASE images — the runtime a Loom-authored app is compiled onto,
+ * not an OSS product Loom ships. These carry their vendors' own composite
+ * licensing (a JDK base is GPLv2+CE, a debian base is a whole distribution) and
+ * are governed by the base-image CVE gate, not by this manifest. Matching is by
+ * prefix so tag/variant churn does not need a guard edit.
+ */
+const BASE_IMAGE_PREFIXES = [
+  'node', 'python', 'debian', 'ubuntu', 'alpine', 'golang', 'rust',
+  'amazoncorretto', 'eclipse-temurin', 'openjdk', 'busybox', 'scratch',
+  'mcr.microsoft.com/', 'gcr.io/distroless/',
+];
+
+/** Strip the tag/digest and any `AS stage` suffix off a FROM line's image ref. */
+function imageRepo(fromLine) {
+  const raw = fromLine.replace(/^FROM\s+/i, '').trim().split(/\s+/)[0];
+  const noPlatform = raw.replace(/^--platform=\S+\s+/, '');
+  return noPlatform.split('@')[0].replace(/:[^/:]+$/, '');
+}
+
+function isBaseImage(repo) {
+  return BASE_IMAGE_PREFIXES.some((p) => (p.endsWith('/') ? repo.startsWith(p) : repo === p || repo.startsWith(`${p}/`)));
+}
+
+/**
+ * Yield only the REAL Dockerfile instructions - never a line inside a RUN
+ * heredoc, a shell continuation, or a comment.
+ *
+ * A naive per-line `/^\s*FROM\s+/i` is wrong, and wrong in a way that fails the
+ * build for an unrelated app: apps/loom-transform-runner/Dockerfile embeds a
+ * Python snippet containing `from importlib.metadata import version`, which the
+ * naive scan read as `FROM importlib.metadata` and reported as an unreviewed
+ * container-baked OSS image. A license gate that invents dependencies is worse
+ * than no gate, because the fix people reach for is to allowlist the phantom.
+ *
+ * Also drops build-stage aliases (`FROM x AS builder` then `FROM builder`):
+ * a stage is internal plumbing, not a third-party image to license.
+ */
+function* dockerfileInstructions(src) {
+  const lines = src.split('\n');
+  const stages = new Set();
+  let heredocEnd = null;      // terminator we are waiting for, if inside a heredoc
+  let continuing = false;     // previous instruction line ended with a backslash
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (heredocEnd !== null) {
+      if (line.trim() === heredocEnd) heredocEnd = null;
+      continue;
+    }
+    const wasContinuing = continuing;
+    // A trailing backslash continues the CURRENT instruction into the next line.
+    continuing = /\\\s*$/.test(line);
+    // `<<EOF` / `<<-'EOF'` opens a heredoc whose body is shell input, not Dockerfile.
+    const here = line.match(/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
+    if (here && !continuing) heredocEnd = here[1];
+    if (wasContinuing) continue;                    // body of a multi-line instruction
+    if (/^\s*(#|$)/.test(line)) continue;           // comment / blank
+    const alias = line.match(/^\s*FROM\s+.*?\sAS\s+(\S+)\s*$/i);
+    if (alias) stages.add(alias[1].toLowerCase());
+    const ref = line.match(/^\s*FROM\s+(\S+)/i);
+    if (ref && stages.has(ref[1].toLowerCase())) continue;
+    yield { line, lineNo: i + 1 };
+  }
+}
+
+function listAppDockerfiles() {
+  const out = execSync('git ls-files "apps/*/Dockerfile" "apps/*/*/Dockerfile"', { cwd: REPO_ROOT, encoding: 'utf8' });
+  return out.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
 /** Strip a requirements.txt line to its base package name (drops extras/pins/markers). */
 function pkgName(line) {
   const noComment = line.replace(/#.*$/, '').trim();
@@ -93,6 +195,7 @@ function main() {
   const reqFiles = listRequirements();
   const sidecarDirs = new Set();
   const seen = new Set();
+  const seenImages = new Set();
 
   for (const rel of reqFiles) {
     sidecarDirs.add(rel.split('/').slice(0, 2).join('/')); // apps/<name>
@@ -122,6 +225,43 @@ function main() {
     }
   }
 
+  // ── Container-baked OSS engines (LU-9) ────────────────────────────────────
+  // Every third-party APPLICATION image an apps/ Dockerfile builds FROM must
+  // carry a recorded license AND a NOTICE row. Language/OS bases are excluded
+  // (see BASE_IMAGE_PREFIXES) — they are the runtime, not a shipped product.
+  const shippedImages = new Map(); // repo -> Set(dockerfile)
+  for (const rel of listAppDockerfiles()) {
+    let src;
+    try { src = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'); } catch { continue; }
+    for (const { line } of dockerfileInstructions(src)) {
+      if (!/^\s*FROM\s+/i.test(line)) continue;
+      const repo = imageRepo(line.trim());
+      if (!repo || isBaseImage(repo)) continue;
+      if (!shippedImages.has(repo)) shippedImages.set(repo, new Set());
+      shippedImages.get(repo).add(rel);
+    }
+  }
+  for (const [repo, files] of shippedImages) {
+    const where = [...files].join(', ');
+    if (FORBIDDEN_PKG_RE.test(repo.split('/').pop() || repo)) {
+      errors.push(`${where}: FORBIDDEN image "${repo}" — policy says it must not ship (MinIO dropped / Univer review-gated).`);
+      continue;
+    }
+    const lic = REVIEWED_IMAGES[repo];
+    if (!lic) {
+      errors.push(`${where}: container-baked OSS image "${repo}" is NOT in REVIEWED_IMAGES (scripts/ci/check-license-inventory.mjs). ` +
+        `Add it with its SPDX license + a THIRD_PARTY_LICENSES.md row (that is the review), or build on a reviewed base. ` +
+        `A copyleft (A?GPL/BSL/SSPL) image is never allowlisted.`);
+      continue;
+    }
+    if (FORBIDDEN_LICENSE_RE.test(lic)) {
+      errors.push(`${where}: "${repo}" is ${lic} — a copyleft/commercial-source license that may NEVER ship. Replace it.`);
+      continue;
+    }
+    seenImages.add(`${repo}@${lic}`);
+    if (wantList) console.log(`  ${repo.padEnd(36)} ${lic}`);
+  }
+
   // Manifest must exist and name every sidecar dir + must not mention a forbidden lib as shipped.
   const manifestAbs = path.join(REPO_ROOT, MANIFEST);
   if (!fs.existsSync(manifestAbs)) {
@@ -133,6 +273,15 @@ function main() {
         errors.push(`${MANIFEST} does not mention "${dir}" — every apps/ sidecar with a requirements.txt needs a NOTICE section.`);
       }
     }
+    for (const repo of shippedImages.keys()) {
+      if (!manifest.includes(repo)) {
+        errors.push(`${MANIFEST} does not mention the container-baked image "${repo}" — every deployed third-party OSS image needs a NOTICE row (the "Container-baked engines" table).`);
+      }
+    }
+  }
+
+  if (wantList) {
+    console.log(`[license-inventory] ${seenImages.size} reviewed container-baked OSS images across ${shippedImages.size} image repo(s).`);
   }
 
   if (wantList) {
@@ -146,7 +295,7 @@ function main() {
       'copyleft/forbidden dependency. No A?GPL / BSL / SSPL in the distributed set.');
     process.exit(1);
   }
-  console.log(`[license-inventory] OK — ${seen.size} shipped Python embeds reviewed (all permissive); ` +
+  console.log(`[license-inventory] OK — ${seen.size} shipped Python embeds + ${seenImages.size} container-baked OSS image(s) reviewed (all permissive); ` +
     `${MANIFEST} present and covers ${sidecarDirs.size} sidecar(s); no MinIO/Univer/copyleft in the distributed set.`);
 }
 

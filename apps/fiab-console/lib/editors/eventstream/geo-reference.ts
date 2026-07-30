@@ -23,6 +23,7 @@
  */
 
 import type { GeoFenceDef, GeoFenceVertex } from './geo-sql';
+import { trimEdges } from '@/lib/util/trim';
 
 // ============================================================
 // GeoJSON polygon for one fence (ASA reference-data `polygon` column)
@@ -115,7 +116,7 @@ export function fenceReferenceBlobBody(
 
 /** Alphanumeric+dash safe token from a name (ASA input aliases / blob path segments). */
 export function safeToken(v: string | undefined, fallback: string): string {
-  const cleaned = (v || '').trim().replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  const cleaned = trimEdges((v || '').trim().replace(/[^A-Za-z0-9_-]/g, '-'), '-');
   return cleaned || fallback;
 }
 

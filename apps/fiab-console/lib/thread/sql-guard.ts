@@ -7,10 +7,12 @@
  * (no identifier interpolation), so this verb/statement check is defense in
  * depth — it keeps the query read-only and single-statement.
  */
+import { trimCharEnd } from '@/lib/util/trim';
+
 export type SqlGuardResult = { ok: true; sql: string } | { ok: false; error: string };
 
 export function readOnlySelect(q: string): SqlGuardResult {
-  const sql = (q || '').trim().replace(/;+\s*$/, ''); // allow a single trailing semicolon
+  const sql = trimCharEnd((q || '').trim(), ';'); // allow trailing semicolons (linear; the old /;+\s*$/ backtracked quadratically)
   if (!sql) return { ok: false, error: 'Enter a SQL query.' };
   if (sql.includes(';')) return { ok: false, error: 'Only a single SELECT statement is allowed (no semicolons).' };
   if (!/^(select|with)\b/i.test(sql)) return { ok: false, error: 'The query must start with SELECT (or a WITH … SELECT CTE).' };

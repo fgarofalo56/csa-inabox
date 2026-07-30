@@ -42,6 +42,9 @@ import {
   PurviewError,
   type PurviewNotConfiguredHint,
 } from './purview-client';
+import {
+  asAtlasClassificationTypedefName, type AtlasClassificationTypedefName,
+} from './purview-typedef-namespace';
 
 /** A single Loom classification rule from the Cosmos taxonomy. */
 export interface LoomClassificationRule {
@@ -88,9 +91,11 @@ function tenantSlug(tenantId: string): string {
  * Custom classifications MUST be namespaced; this also keeps them distinct from
  * the System (MICROSOFT.*) classifications.
  */
-export function classificationName(tenantId: string, classification: string): string {
+export function classificationName(tenantId: string, classification: string): AtlasClassificationTypedefName {
   const c = (classification || 'CLASSIFICATION').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase() || 'CLASSIFICATION';
-  return `LOOM.${tenantSlug(tenantId)}.${c}`;
+  // Already tenant-namespaced (leading slug); funnelled through the authority so
+  // the brand is the ONLY way to reach `ensureClassificationDefs`.
+  return asAtlasClassificationTypedefName(`LOOM.${tenantSlug(tenantId)}.${c}`);
 }
 
 /**

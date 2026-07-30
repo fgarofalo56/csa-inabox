@@ -39,7 +39,6 @@
  */
 
 import { NextRequest } from 'next/server';
-import crypto from 'node:crypto';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { verifyOpenLineageAuth } from '@/lib/azure/openlineage-auth';
 import {
@@ -49,9 +48,16 @@ import {
   type MappedOpenLineageEdge,
 } from '@/lib/azure/openlineage-ingest';
 import { enforceRateLimitForKey } from '@/lib/azure/rate-limiter';
-import { itemsContainer, workspacesContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+import { workspacesContainer } from '@/lib/azure/cosmos-client';
+// LU-8: the dataset URI -> Loom item resolver is SHARED with the Synapse
+// pipeline / Spark emitters so every OpenLineage producer resolves paths the
+// same way (and canonicalizes abfss/wasbs/https spellings before matching).
+import { resolveOwner, loadWorkspacePathItems, findForeignOwner } from '@/lib/lineage/dataset-item-resolver';
+// LU-8: the cross-workspace denial audit is SHARED with the Synapse harvests —
+// two producers writing one lineage store must audit denials identically.
+import { auditCrossWorkspaceDenial } from '@/lib/lineage/lineage-audit';
+import { canonicalDatasetIdentity } from '@/lib/lineage/dataset-naming';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
-import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { SessionPayload } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
@@ -62,87 +68,6 @@ export const dynamic = 'force-dynamic';
  *  a runaway or hostile producer. The durable Cosmos window (default class:
  *  120/min cross-replica) backstops replica spreading. */
 const OL_RATE_LIMITS = { ratePerSec: 5, burst: 20 };
-
-/** A Loom item that carries at least one physical storage path in its state. */
-interface PathItem {
-  id: string;
-  workspaceId: string;
-  itemType: string;
-  displayName?: string;
-  paths: string[]; // normalized (lowercase, no trailing slash)
-}
-
-function normPath(p: string): string {
-  return p.trim().replace(/\/+$/, '').toLowerCase();
-}
-
-/** Collect the physical storage-path strings on an item's state (top level —
- *  e.g. lakehouse `state.adlsRoot`, mirror bronze roots). */
-function statePaths(state: Record<string, unknown> | undefined): string[] {
-  if (!state || typeof state !== 'object') return [];
-  const out: string[] = [];
-  for (const v of Object.values(state)) {
-    if (typeof v === 'string' && /^(abfss?|wasbs?|https):\/\//i.test(v.trim())) out.push(normPath(v));
-  }
-  return out;
-}
-
-/** True when `uri` is the item path itself or a child of it (`/` boundary). */
-function pathOwns(itemPath: string, uri: string): boolean {
-  if (!itemPath) return false;
-  if (uri === itemPath) return true;
-  return uri.startsWith(`${itemPath}/`);
-}
-
-/** Longest-prefix owner of `uri` among the candidates, or null. */
-function resolveOwner(uri: string, candidates: PathItem[]): PathItem | null {
-  let best: PathItem | null = null;
-  let bestLen = -1;
-  for (const c of candidates) {
-    for (const p of c.paths) {
-      if (pathOwns(p, uri) && p.length > bestLen) {
-        best = c;
-        bestLen = p.length;
-      }
-    }
-  }
-  return best;
-}
-
-/** Path-bearing items of ONE workspace (the authorized scope). */
-async function loadWorkspacePathItems(workspaceId: string): Promise<PathItem[]> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<{ id: string; workspaceId: string; itemType: string; displayName?: string; state?: Record<string, unknown> }>({
-      query: 'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
-      parameters: [{ name: '@w', value: workspaceId }],
-    })
-    .fetchAll();
-  return (resources || [])
-    .map((r) => ({ id: r.id, workspaceId: r.workspaceId, itemType: r.itemType, displayName: r.displayName, paths: statePaths(r.state) }))
-    .filter((r) => r.paths.length > 0);
-}
-
-/**
- * Cross-workspace forgery probe (redesign #2): find an item in a DIFFERENT
- * workspace that owns `uri`. Queries only the path-bearing item classes
- * (bounded), then prefix-matches in process.
- */
-async function findForeignOwner(uri: string, workspaceId: string): Promise<PathItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<{ id: string; workspaceId: string; itemType: string; displayName?: string; state?: Record<string, unknown> }>({
-      query:
-        'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.state FROM c ' +
-        'WHERE c.workspaceId != @w AND (IS_DEFINED(c.state.adlsRoot) OR IS_DEFINED(c.state.abfssUri) OR IS_DEFINED(c.state.storageLocation))',
-      parameters: [{ name: '@w', value: workspaceId }],
-    })
-    .fetchAll();
-  const candidates = (resources || [])
-    .map((r) => ({ id: r.id, workspaceId: r.workspaceId, itemType: r.itemType, displayName: r.displayName, paths: statePaths(r.state) }))
-    .filter((r) => r.paths.length > 0);
-  return resolveOwner(uri, candidates);
-}
 
 /** Cross-partition workspace load (machine path — no user session). */
 async function loadWorkspaceDoc(workspaceId: string): Promise<{ id: string; tenantId: string; name?: string } | null> {
@@ -164,50 +89,6 @@ function machineSession(ownerOid: string): SessionPayload {
     claims: { oid: ownerOid, name: 'OpenLineage ingest', upn: 'openlineage-ingest@loom.internal' },
     exp: Math.floor(Date.now() / 1000) + 60,
   };
-}
-
-/** 403 + authoritative audit row + SIEM emit for a cross-workspace write
- *  attempt (redesign #2 — every rejection is attributable + discoverable). */
-async function auditCrossWorkspaceDenial(opts: {
-  principal: string;
-  authorizedWorkspaceId: string;
-  targetWorkspaceId: string;
-  uri: string;
-  itemId: string;
-}): Promise<void> {
-  const now = new Date().toISOString();
-  try {
-    const audit = await auditLogContainer();
-    await audit.items
-      .create({
-        id: `audit-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-        itemId: `openlineage:${opts.itemId}`,
-        tenantId: opts.authorizedWorkspaceId,
-        who: opts.principal,
-        actorOid: opts.principal,
-        at: now,
-        kind: 'lineage.openlineage.cross-workspace-denied',
-        target: opts.uri,
-        detail: {
-          authorizedWorkspaceId: opts.authorizedWorkspaceId,
-          targetWorkspaceId: opts.targetWorkspaceId,
-          resolvedItemId: opts.itemId,
-        },
-      })
-      .catch(() => undefined);
-  } catch {
-    /* audit is best-effort; the 403 itself is the enforcement */
-  }
-  emitAuditEvent({
-    actorOid: opts.principal,
-    actorUpn: opts.principal,
-    action: 'lineage.openlineage.cross-workspace-denied',
-    targetType: 'thread-edge',
-    targetId: opts.itemId,
-    outcome: 'denied',
-    tenantId: opts.authorizedWorkspaceId,
-    detail: { uri: opts.uri, authorizedWorkspaceId: opts.authorizedWorkspaceId, targetWorkspaceId: opts.targetWorkspaceId },
-  });
 }
 
 export async function POST(req: NextRequest) {
@@ -276,9 +157,16 @@ export async function POST(req: NextRequest) {
         if (foreign) {
           await auditCrossWorkspaceDenial({
             principal: auth.principal,
+            producer: 'openlineage-ingest',
             authorizedWorkspaceId: auth.workspaceId,
             targetWorkspaceId: foreign.workspaceId,
-            uri: edge.toUri,
+            // Strip at the door, same as the Synapse harvests: `edge.toUri` is
+            // attacker-supplied and `datasetUri()` only lowercases it, so a
+            // SAS-bearing output dataset name would otherwise persist
+            // `sig=…` into the audit row and onto the SIEM stream.
+            // `auditCrossWorkspaceDenial` canonicalizes again — belt AND
+            // braces, deliberately.
+            uri: canonicalDatasetIdentity(edge.toUri),
             itemId: foreign.id,
           });
           return apiError(

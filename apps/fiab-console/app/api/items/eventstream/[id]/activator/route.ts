@@ -25,6 +25,7 @@
  * from the eventstream's first source node (its name + kind), so the alert is
  * ready to fire against that stream's events table the moment it is created.
  */
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -95,7 +96,7 @@ function buildStreamAlertQuery(
       process.env.LOOM_EVENTSTREAM_EVENTS_TABLE ||
       process.env.LOOM_ACTIVATOR_DEFAULT_TABLE ||
       'AppEvents').trim() || 'AppEvents';
-  const srcName = source?.name ? String(source.name).replace(/"/g, '\\"') : '';
+  const srcName = source?.name ? kqlEscapeDouble(String(source.name)) : '';
   const rawOp = String(cond.operator || '').toLowerCase();
   const isNullCheck = rawOp === 'isnotnull' || rawOp === 'isnull';
   const op = mapOp(cond.operator);
@@ -104,12 +105,18 @@ function buildStreamAlertQuery(
   // column-safe accessors (column_ifexists + Properties bag fallback) so the
   // rule VALIDATES / provisions against a real table whose literal columns may
   // not exist — instead of a SEM0100 that surfaces as a 502.
-  const safe = (c: string) =>
-    `column_ifexists("${c}", tostring(parse_json(tostring(column_ifexists("Properties", dynamic({}))))["${c}"]))`;
+  // NOTE: c is user-supplied (cond.property) — escape it or the literal breaks
+  // out of column_ifexists("…").
+  const safe = (c: string) => {
+    const ec = kqlEscapeDouble(c);
+    return `column_ifexists("${ec}", tostring(parse_json(tostring(column_ifexists("Properties", dynamic({}))))["${ec}"]))`;
+  };
   const lines = [
-    `// Loom Eventstream alert — stream "${streamName.replace(/"/g, '\\"')}"`,
-    `// pre-seeded source: ${source ? `${source.kind} "${source.name}"` : '(no source yet)'}`,
-    table,
+    `// Loom Eventstream alert — stream "${kqlEscapeDouble(streamName)}"`,
+    `// pre-seeded source: ${source ? `${source.kind} "${source.name}"`.replace(/[\r\n]+/g, ' ') : '(no source yet)'}`,
+    // table is user-overridable (cond.sourceTable): a bare identifier passes
+    // through; anything else is bracket-quoted so it stays a TABLE REF, not KQL.
+    /^[A-Za-z_][A-Za-z0-9_]*$/.test(table) ? table : `["${kqlEscapeDouble(table)}"]`,
     `| extend _src = ${safe('source')}, _streamSource = ${safe('streamSource_s')}, _v = ${safe(prop)}`,
   ];
   if (srcName) lines.push(`| where _src == "${srcName}" or _streamSource == "${srcName}"`);
@@ -143,7 +150,7 @@ function formatVal(v: unknown): string {
   if (v === null || v === undefined || v === '') return '0';
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) return v.trim();
-  return `"${String(v).replace(/"/g, '\\"')}"`;
+  return `"${kqlEscapeDouble(String(v))}"`;
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

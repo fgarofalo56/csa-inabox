@@ -45,6 +45,7 @@ import {
   getSynapseSqlSuffix,
 } from '@/lib/azure/synapse-sql-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { trimEdges } from '@/lib/util/trim';
 
 /** Content shape the install engine's pairing rule stamps onto the item. */
 interface SynapseServerlessSqlPoolContent {
@@ -109,7 +110,7 @@ export function splitAbfss(loc: string): { root: string; relative: string } | nu
 
 /** SQL-safe identifier fragment (letters/digits/underscore only). */
 function safeIdent(s: string): string {
-  return String(s || '').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'lakehouse';
+  return trimEdges(String(s || '').replace(/[^A-Za-z0-9_]/g, '_'), '_') || 'lakehouse';
 }
 
 /** True when a TDS error looks like an authn/authz failure (→ remediation). */

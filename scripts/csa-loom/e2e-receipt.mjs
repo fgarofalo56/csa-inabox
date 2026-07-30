@@ -115,15 +115,24 @@ function parseArgs(argv) {
   return args;
 }
 
+/** Strip leading+trailing runs of `ch` with a linear index scan (no regex). */
+function trimRun(s, ch) {
+  const code = ch.charCodeAt(0);
+  let start = 0;
+  let end = s.length;
+  while (start < end && s.charCodeAt(start) === code) start++;
+  while (end > start && s.charCodeAt(end - 1) === code) end--;
+  return s.slice(start, end);
+}
+
 function slugify(route) {
-  return (
-    route
-      .replace(/^https?:\/\/[^/]+/, '')
-      .replace(/^\/+|\/+$/g, '')
-      .replace(/[^a-zA-Z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .toLowerCase() || 'root'
-  );
+  // The `/\/+$/` and `/-+$/` arms of the old chain were quadratic
+  // (js/polynomial-redos). CI-only, so this is hygiene rather than a fix —
+  // but leaving it in place would make `scripts/ci/check-quadratic-trims.mjs`
+  // need an exemption, and an exemption is a worse artifact than a 6-line scan.
+  const noHost = route.replace(/^https?:\/\/[^/]+/, '');
+  const collapsed = trimRun(noHost, '/').replace(/[^a-zA-Z0-9]+/g, '-');
+  return trimRun(collapsed, '-').toLowerCase() || 'root';
 }
 
 /** Resolve Chromium from the fiab-console package regardless of where we run. */

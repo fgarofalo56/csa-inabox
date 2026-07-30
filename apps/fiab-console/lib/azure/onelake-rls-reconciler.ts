@@ -38,6 +38,7 @@
  * honest-gate path never loads `@azure/identity`.
  */
 
+import { kqlEscapeDouble, kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { safeIdent, sqlBracket, splitSchemaTable, RLS_SCHEMA } from '@/lib/azure/rls-compiler';
 import { isValidRlsPredicate } from './onelake-security-rules';
 import type { RowLevelRule, ColumnLevelRule } from './onelake-security-rules';
@@ -266,10 +267,10 @@ export function buildSynapseClsSteps(
 // ════════════════════════════════════════════════════════════════════════════
 
 function kqlName(t: string): string {
-  return `["${String(t).replace(/"/g, '\\"')}"]`;
+  return `["${kqlEscapeDouble(String(t))}"]`;
 }
 function kqlCol(c: string): string {
-  return `['${stripBrackets(c).replace(/'/g, "\\'")}']`;
+  return `['${kqlEscapeSingle(stripBrackets(c))}']`;
 }
 
 /**

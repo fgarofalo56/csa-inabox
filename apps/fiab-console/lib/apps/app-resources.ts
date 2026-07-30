@@ -22,6 +22,7 @@
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { kqlEscapeSingle } from '@/lib/azure/kql-escape';
 import { deterministicAssignmentGuid } from '@/lib/azure/role-grant-client';
 import type { LoomAppEnvVar } from '@/lib/azure/loom-apps-runtime-templates';
 
@@ -340,7 +341,13 @@ async function resolveArmIdByName(resourceType: string, name: string): Promise<s
       {
         method: 'POST',
         body: JSON.stringify({
-          query: `resources | where type =~ '${resourceType}' and name =~ '${name.replace(/'/g, '')}' | project id | limit 1`,
+          // Both interpolations are ARG (KQL) string literals. `resourceType` is
+          // a module constant (KIND_ARM_TYPE) and `name` is env/config-derived
+          // (the tail of `resolved.grantScope`) — NOT request-supplied — so this
+          // is hardening, not a live injection. Deleting the quote was still an
+          // incomplete escape: a trailing `\` escapes the closing quote in a
+          // KQL literal and the rest of the query becomes string content.
+          query: `resources | where type =~ '${kqlEscapeSingle(resourceType)}' and name =~ '${kqlEscapeSingle(name)}' | project id | limit 1`,
         }),
       },
     );

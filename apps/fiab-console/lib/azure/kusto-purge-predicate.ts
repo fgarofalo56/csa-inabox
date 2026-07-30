@@ -10,7 +10,10 @@
  * Only scalar `where` comparisons are permitted — no pipes, no system functions
  * (ingestion_time(), extent_id()), no cross-table references. We never accept a
  * freeform predicate string; callers supply {column, op, value} parts only.
+ * (kql-escape is itself a pure zero-import module, so the isolation holds.)
  */
+
+import { kqlEscapeDouble } from '@/lib/azure/kql-escape';
 
 export class PurgePredicateError extends Error {
   status: number;
@@ -44,14 +47,14 @@ export function buildPurgeWhere(parts: PurgePredicatePart[]): string {
     if (!(PURGE_ALLOWED_OPS as readonly string[]).includes(op)) {
       throw new PurgePredicateError(`Unsupported operator: ${op}`);
     }
-    const col = `["${column.replace(/"/g, '\\"')}"]`;
+    const col = `["${kqlEscapeDouble(column)}"]`;
     // contains / startswith take a string-literal RHS.
     if (op === 'contains' || op === 'startswith') {
-      return `${col} ${op} "${value.replace(/"/g, '\\"')}"`;
+      return `${col} ${op} "${kqlEscapeDouble(value)}"`;
     }
     // Numeric literals emitted bare; everything else quoted.
     const isNum = /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(value);
-    const rhs = isNum ? value : `"${value.replace(/"/g, '\\"')}"`;
+    const rhs = isNum ? value : `"${kqlEscapeDouble(value)}"`;
     return `${col} ${op} ${rhs}`;
   });
   return `where ${clauses.join(' and ')}`;
