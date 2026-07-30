@@ -191,28 +191,6 @@ export function DataShares() {
       )}
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
 
-      {/* HONEST DISCLOSURE (no-vaporware.md). On the Loom backend every control on
-          this surface is real and writes to Cosmos — publish, grant, revoke,
-          suspend, and the server config manifest. What is NOT in this build is the
-          recipient-facing protocol endpoint: the sharing server has internal-only
-          ingress and, with the proxy split into a follow-up change, no external
-          caller. So a recipient cannot read a granted share YET, and saying nothing
-          would let an operator believe a publish is live when it is not. */}
-      {backend === 'loom' && !gate && tab === 'outbound' && (
-        <MessageBar intent="warning" layout="multiline">
-          <MessageBarBody>
-            <MessageBarTitle>Publishing is live; recipient reads are not yet</MessageBarTitle>
-            Shares, recipients and grants are recorded and the server manifest renders, so
-            everything on this tab does exactly what it says. The recipient-facing Delta Sharing
-            endpoint (<code>/api/delta-sharing/*</code>) is not part of this deployment — the
-            sharing server has internal-only ingress and no external caller — so an external
-            recipient cannot read a granted share until that endpoint ships. Grants and
-            revocations you make now take effect the moment it does. See
-            <code>docs/fiab/security/loom-sharing-threat-model.md</code>.
-          </MessageBarBody>
-        </MessageBar>
-      )}
-
       {tab === 'inbound' && !gate && (
         <InboundPanel
           providers={providers} host={host} styles={s} onChange={loadInbound}
