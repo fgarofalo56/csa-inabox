@@ -47,9 +47,10 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import {
-  recordUnityAccess, recordDatabricksUnityAccess,
-  flushUnityAudit, isUnityMutation, isUnityCatalogPath,
+  recordUnityAccess, recordDatabricksUnityAccess, listUnityAccessRecords,
+  readUnitySystemTable, flushUnityAudit, isUnityMutation, isUnityCatalogPath,
   unityAuditPartitionKey, FLUSH_MAX_PASSES, UNITY_SECURABLE_ALL,
+  type UnityAuditRecord,
 } from '../unity-audit';
 
 function reset() {
@@ -154,7 +155,7 @@ describe('BOUNDARY EGRESS — a catalog READ must not leave the estate', () => {
   });
 });
 
-describe('the row the recorder writes must be READABLE and SCALABLE', () => {
+describe('the pane must be able to read what the recorder wrote', () => {
   it('writes actorUpn — the field the pane column and the actor filter read', async () => {
     await recordUnityAccess(READ);
     const row = auditCreate.mock.calls[0][0];
@@ -181,6 +182,60 @@ describe('the row the recorder writes must be READABLE and SCALABLE', () => {
     const row = auditCreate.mock.calls[0][0];
     expect(row.itemId).not.toBe(UNITY_SECURABLE_ALL);
     expect(row.securableFqn).toBe(UNITY_SECURABLE_ALL); // the queryable field is unchanged
+  });
+});
+
+describe('filters must not silently under-report', () => {
+  it('pushes actor / operation / securable INTO the Cosmos query', async () => {
+    await listUnityAccessRecords({ actor: 'Alice', operation: 'Grant', securable: 'Sales', limit: 5 });
+    const spec = cosmosQuery.mock.calls[0][0];
+    expect(spec.query).toContain('CONTAINS(LOWER(c.operation), @operation)');
+    expect(spec.query).toContain('CONTAINS(LOWER(c.securableFqn), @securable)');
+    expect(spec.query).toContain('CONTAINS(LOWER(c.actorUpn), @actor)');
+    const byName = Object.fromEntries(
+      (spec.parameters as Array<{ name: string; value: unknown }>).map((p) => [p.name, p.value]),
+    );
+    // Bound parameters, never concatenated into the query text; case-folded so
+    // the pane's free-text box matches regardless of casing.
+    expect(byName['@actor']).toBe('alice');
+    expect(byName['@operation']).toBe('grant');
+    expect(byName['@securable']).toBe('sales');
+  });
+
+  it('does NOT drop rows in JS after the TOP-N page', async () => {
+    // If the filter were still applied post-query, this row (which does not
+    // match `actor=zoe`) would be filtered out here and the caller would see 0.
+    // Pushing the predicate down means the reader returns whatever Cosmos
+    // matched — the query is the filter.
+    const row: UnityAuditRecord = {
+      id: '1', at: new Date().toISOString(), actorOid: 'oid-zoe', actorUpn: 'zoe@contoso.com',
+      operation: 'grant.update', securableType: 'table', securableFqn: 'sales.bronze.orders',
+      backend: 'oss', method: 'PATCH', path: '/p', outcome: 'denied', status: 403, durationMs: 2,
+    };
+    cosmosQuery.mockResolvedValue({ resources: [row] });
+    const rows = await listUnityAccessRecords({ actor: 'zoe' });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('marks a TOP-N truncated summary as truncated instead of claiming window totals', async () => {
+    const rows: UnityAuditRecord[] = Array.from({ length: 3 }, (_, i) => ({
+      id: String(i), at: new Date().toISOString(), actorOid: 'a', actorUpn: 'a@x',
+      operation: 'catalog.list', securableType: 'catalog', securableFqn: '*',
+      backend: 'oss', method: 'GET', path: '/p', outcome: 'success', status: 200, durationMs: 1,
+    }));
+    cosmosQuery.mockResolvedValue({ resources: rows });
+    const res = await readUnitySystemTable('summary', { limit: 3 });
+    // "2 denials in the last 7 days" is a different claim from "2 denials in the
+    // last 3 calls". The pane must not be able to state the first when it means
+    // the second.
+    expect(res.truncated).toBe(true);
+    expect(res.limit).toBe(3);
+    expect(res.rows[0].scope).toBe('most recent 3 calls');
+
+    cosmosQuery.mockResolvedValue({ resources: rows.slice(0, 2) });
+    const res2 = await readUnitySystemTable('summary', { limit: 3 });
+    expect(res2.truncated).toBe(false);
+    expect(res2.rows[0].scope).toBe('window');
   });
 });
 

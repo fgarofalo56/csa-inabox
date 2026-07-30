@@ -132,22 +132,12 @@ unauthenticated read was rejected.** Leaving `entraClientId` empty is an honest,
 loudly-reported gate — the container logs a SECURITY WARNING on every boot and the
 gate + probe both go red with this exact remediation — not a silent open door.
 
-## Audit (LU-3) — the BFF choke point
+## Audit (LU-3) — the BFF choke point and "Loom Unity system tables"
 
 Databricks Unity Catalog answers "who touched which securable, and were they
 allowed to" from `system.access.audit`. OSS Unity Catalog has no system schemas,
-so in Gov that question had no data source at all.
-
-LU-3 builds one: the **write** half of a Loom-native access trail. Every Unity
-Catalog REST call the Console makes is recorded, in both clouds, and a
-merge-blocking CI guard keeps it that way.
-
-> **Scope of this section.** The trail is **written**; the in-product **reader**
-> (`readUnitySystemTable`) and the `/catalog/unity → System tables` pane are a
-> follow-up PR, held because they have no in-browser E2E receipt and
-> `ux-baseline.md` **G1** makes that blocking. Until they land, read the trail
-> with the KQL below (Log Analytics / Sentinel) or a direct Cosmos query, and the
-> Gov gate on `/api/databricks/unity-catalog/system-tables` still stands.
+so before LU-3 that whole question returned an honest-but-dead gate in Gov:
+*"system tables are not available at this boundary."* That gate is **gone**.
 
 **Where the trail comes from.** `loom-unity` has internal ingress and (post-LU-2)
 rejects anonymous callers, so the Console BFF is its only credentialed client.
@@ -213,18 +203,8 @@ fails the build when:
    Catalog REST path** with outbound-request code (only a `'use client'`
    component is exempt from the REST-path arm — an App Router **server**
    component is not, regardless of extension);
-2. **any** exempted file — allowlisted or declared-gap — exceeds its frozen count
-   of outbound **transport sites** (`OUTBOUND_BASELINE`), or is exempted without
-   one. "Transport" means the whole `TRANSPORTS` vocabulary — `fetch`,
-   `fetchWithTimeout`, `new Request`, XHR, axios, node `http(s).request`, undici
-   dispatchers, a bare `request(`, or an `import`/`require`/`import()` of any HTTP
-   client — **the same vocabulary check 1 uses.** Round 3 shipped two separate
-   vocabularies here: check 1 knew nine shapes and this ratchet knew two
-   (`fetch` and `fetchWithTimeout`). Because check 1 *skips* every exempted file,
-   the ratchet was the only control on the allowlist and on the declared gaps, and
-   undici `request`, node `https.request` and `axios.post` each walked past it with
-   zero failures. Both consumers now derive from one exported list, and the spec
-   asserts per entry that both see it, so they cannot diverge again;
+2. **any** exempted file — allowlisted or declared-gap — exceeds its frozen
+   outbound-call count (`OUTBOUND_BASELINE`), or is exempted without one;
 3. the recorder call leaves the `finally` of **either** `ucFetch` or `dbxFetch` —
    the check brace-matches the real function body and the real `finally` block,
    with comments and string literals masked, so a decoy call elsewhere in the
@@ -245,10 +225,9 @@ assert it now fails.
 
 **What the guard is NOT.** It is a lexical scan. It turns an *accidental* bypass
 into a red build and makes a deliberate one leave a visible diff. It does not
-survive a UC path assembled from enough pieces, or a transport reached through an
-indirection it does not name (a hand-rolled `net.Socket` speaking HTTP; a helper
-in a third module that itself carries no catalog address); and it proves the
-recorder is *called*, never that the row is correct or that it reached Cosmos. The
+survive a path assembled from enough pieces, a transport reached through an
+indirection it does not name, or a dynamic `import()`; and it proves the recorder
+is *called*, never that the row is correct or that it reached Cosmos. The
 `## LIMITS` block at the top of the guard is the normative statement. Do not cite
 the guard as proof that the Databricks path is fully covered — cite the two
 transports plus the gap list below.
@@ -294,51 +273,33 @@ a trail with an undisclosed hole is worse than having none.
 - **`unity-catalog-account-client.ts`** (Databricks account-plane metastore
   assignment) never talks to Loom Unity and is not routed through the choke
   point; its account-admin mutations are unaudited (issue #2622).
-- **There is no in-product reader yet.** The `/catalog/unity → System tables`
-  pane and `readUnitySystemTable()` are split out of this change: they had no
-  in-browser E2E receipt, and `ux-baseline.md` **G1** makes that blocking.
-  Consequence today: the trail exists and is queryable (below), but an operator
-  cannot read it from inside Loom, and the Gov gate on
-  `/api/databricks/unity-catalog/system-tables` is unchanged.
+- **No in-browser E2E receipt** for the System tables pane (`ux-baseline.md` G1).
+  This surface is CI-verified only (issue #2624).
 
-### Audit (LU-3) — how you read the trail today
+**Where you read it — tenant admins only.** `/catalog/unity → System tables`
+serves three real views over the trail — `access.audit`, `access.denied`, and
+`access.summary` (calls + denials per operation and per securable) — and prints
+the equivalent KQL for Sentinel. The BFF is
+`GET /api/databricks/unity-catalog/system-tables?table=audit|denials|summary`,
+which keeps the `{ columns, rows, executionMs }` contract, so the existing UC
+audit dialog works unchanged in Gov.
 
-**Sentinel / Log Analytics** — `unityAuditKql()` in `lib/azure/unity-audit.ts`
-generates exactly this (window and limit clamped to integers, so a caller-supplied
-value cannot reach the query text):
+The route is `withTenantAdmin`, **not** a bare session check. Neither backend
+scopes its rows to the caller: `system.access.audit` is the whole metastore's
+activity, and the Loom Unity views read every `loom-unity` row across every user
+— actor UPNs, Entra oids, securable FQNs, and the denial rows, which are a map of
+what other people tried to reach and were refused. That is the same reason
+`/admin/audit-logs` is admin-gated. A non-admin gets the canonical 403
+`admin_only` envelope, and the pane renders it as a designed MessageBar.
 
-```kusto
-LoomAudit_CL
-| where TimeGenerated > ago(168h)
-| where Action startswith "unity."
-| project TimeGenerated, ActorUpn, ActorOid, Action, TargetType, TargetId, Outcome, Detail
-| order by TimeGenerated desc
-| take 200
-```
-
-Add `| where Outcome == "denied"` for the refusals — the highest-value rows.
-
-**Cosmos `_auditLog`** — the authoritative copy, independent of whether the DCR
-is provisioned:
-
-```sql
-SELECT TOP 200 * FROM c
-WHERE c.itemType = 'loom-unity' AND c.at >= '<iso>'
-ORDER BY c.at DESC
-```
-
-Note that `/admin/audit-logs` will NOT show these: it scopes its read to
-`c.tenantId = <session oid>` while these rows carry the Entra **tenant** id. The
-reader that closes that gap is the follow-up.
-
-**Authorization, for when the reader lands.** Any in-product surface over this
-trail must be `withTenantAdmin`, not a bare session check: neither backend scopes
-its rows to the caller — `system.access.audit` is the whole metastore's activity,
-and the Loom rows cover every user, including the denial rows, which are a map of
-what other people tried to reach and were refused. That gate is already applied
-to `/api/databricks/unity-catalog/system-tables` in this change (it previously
-served the Databricks `system.access.audit` to any signed-in user), and is
-attack-tested.
+Summary numbers are honest about truncation: when a read fills the row limit the
+response carries `truncated: true` and the pane says the counts describe the most
+recent *N* calls, not the whole window. Every caller filter (actor / operation /
+securable) is pushed **into** the Cosmos query, so a search cannot silently
+under-report by filtering a page that was already cut off. `billing` and
+`query-history` have no Loom Unity equivalent (there is no DBU meter and no query
+engine); those name `/admin/finops` and the engine surfaces instead of rendering
+an empty grid.
 
 ## Honest capability matrix — OSS Unity Catalog vs Databricks Unity Catalog
 
@@ -356,7 +317,7 @@ attack-tested.
 | Temporary credential vending — **Azure ADLS** (delegation SAS) | ✅ | ✅ via `adls.*` server config | ⚠️ Opt-in (`LOOM_UNITY_ADLS_*`). **Default OFF** — data access stays on Loom's existing managed-identity / ACL paths |
 | Delta Sharing (shares / recipients / providers) | ✅ | ❌ Not in the server | **Gated (501)** with the Loom-native fallback named: Loom Marketplace shares |
 | Table / column lineage (system tables + lineage-tracking) | ✅ | ❌ | **Gated (501)** — Loom unified lineage (Purview + ADX + item edges) is the equivalent |
-| **Access audit (“system tables”)** | ✅ `system.access.audit` | ❌ No system schemas in the server | ⚠️ **Trail WRITTEN Loom-native (LU-3)** — every catalog call funnels through the BFF audit choke point (`ucFetch` / `dbxFetch` → `recordUnityAccess`) into Cosmos `_auditLog` + the `LoomAudit_CL` SIEM stream. **Read it with `unityAuditKql()` in Sentinel / Log Analytics**; the in-product reader + `/catalog/unity → System tables` pane are a follow-up (no G1 E2E receipt yet). Billing / warehouse query history have no equivalent at all. |
+| **Access audit (“system tables”)** | ✅ `system.access.audit` | ❌ No system schemas in the server | ✅ **Built Loom-native (LU-3)** — every catalog call funnels through the BFF audit choke point (`ucFetch` → `recordUnityAccess`) into Cosmos `_auditLog` + the `LoomAudit_CL` SIEM stream; read at `/catalog/unity → System tables`. Billing / warehouse query history have no equivalent and name the real Loom surface instead. |
 | Connections (Lakehouse Federation) / workspace bindings / system schemas | ✅ | ❌ | **Gated (501)** with Loom-native fallbacks named |
 | Governed tags / policies / metric views (SQL-warehouse features) | ✅ | ❌ | Naturally gated (no SQL warehouse on OSS) |
 | API stability | GA | **Evolving** ("APIs should not be assumed stable" — upstream) | Pin the image tag; bump deliberately |
