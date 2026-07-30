@@ -427,4 +427,59 @@ describe('purview-client (classic Data Map)', () => {
     expect(body.entity.attributes.inputs).toContainEqual({ guid: 'g-in-1' });
     expect(body.entity.attributes.inputs).toContainEqual({ guid: 'g-in-2' });
   });
+
+  // ── ensureClassificationDefs — the ACCOUNT-GLOBAL typedef SINK ────────────
+  // Atlas classification typedefs are account-global and permanent, so the sink
+  // fails CLOSED on any name that does not carry a tenant discriminator. The
+  // branded parameter type is the primary guarantee (a bare word does not
+  // compile); this is the runtime backstop for `any`-typed / JS call paths,
+  // which is exactly how `purview-autoonboard` slipped through the class sweep.
+  describe('ensureClassificationDefs — namespace sink guard', () => {
+    it('ATTACK: REFUSES a bare tenant vocabulary word, before any network call', async () => {
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      await expect(mod.ensureClassificationDefs(['PII'] as any))
+        .rejects.toBeInstanceOf(ns.UnnamespacedTypedefError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('ATTACK: REFUSES MICROSOFT.GOVERNANCE.LABELS.<not-a-guid> (namespace squatting)', async () => {
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      await expect(mod.ensureClassificationDefs(['MICROSOFT.GOVERNANCE.LABELS.Highly Confidential'] as any))
+        .rejects.toBeInstanceOf(ns.UnnamespacedTypedefError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('ATTACK: one bad name in a batch refuses the WHOLE batch (no partial creation)', async () => {
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      await expect(mod.ensureClassificationDefs(
+        ['LOOM.CLASSIFICATION.deadbeef.PII', 'Confidential'] as any,
+      )).rejects.toBeInstanceOf(ns.UnnamespacedTypedefError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('CREATES a properly namespaced typedef (the guard is not a blanket refusal)', async () => {
+      fetchMock
+        .mockResolvedValueOnce(new Response(JSON.stringify([{ name: 'MICROSOFT.PERSONAL.EMAIL' }]), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
+      const mod = await import('../purview-client');
+      await mod.ensureClassificationDefs(['LOOM.CLASSIFICATION.deadbeef.PII'] as any);
+      const [url, init] = fetchMock.mock.calls[1];
+      expect(String(url)).toContain('/datamap/api/atlas/v2/types/typedefs');
+      expect(init.method).toBe('POST');
+      const body = JSON.parse(init.body);
+      expect(body.classificationDefs).toEqual([
+        { category: 'CLASSIFICATION', name: 'LOOM.CLASSIFICATION.deadbeef.PII', typeVersion: '1.0', superTypes: [] },
+      ]);
+    });
+
+    it('an empty list is still a cheap no-op (guard runs after the blank filter)', async () => {
+      const mod = await import('../purview-client');
+      await mod.ensureClassificationDefs([] as any);
+      await mod.ensureClassificationDefs(['', '  '] as any);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

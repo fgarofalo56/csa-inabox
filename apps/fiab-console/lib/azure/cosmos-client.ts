@@ -259,6 +259,9 @@ let _envConfig: Container | null = null;
 // reload WITHOUT a bicep flip of LOOM_DATABRICKS_HOSTNAMES. Created lazily so a
 // fresh environment needs no extra ARM/Bicep step beyond the account+database.
 let _metastoreRegistrations: Container | null = null;
+// LU-5 — Loom Unity governance overlay: one row per UC securable identity
+// (`uc:<fqn>`), PK /tenantId. Detail: lib/governance/uc-overlay/store.ts.
+let _ucGovernance: Container | null = null;
 // Tenant topology (audit-t157). One doc per tenant (id='tenant-topology') with
 // the deployed hub's coordinates (VNet/LAW/DNS/ADX/Cosmos + Console UAMI ids),
 // written by the tenant deploy's post-bootstrap. Read by the Setup Wizard "Add
@@ -1152,6 +1155,7 @@ async function ensure() {
   // list hits a single physical partition. Survives Console reloads without a
   // bicep flip of LOOM_DATABRICKS_HOSTNAMES.
   _metastoreRegistrations = await mk('metastore-registrations', '/tenantId');
+  _ucGovernance = await mk('uc-governance', '/tenantId'); // LU-5 governance overlay
   // Tenant topology — hub coordinates for the dlz-attach flow (audit-t157).
   _tenantTopology = await mk('tenant-topology', '/tenantId');
   // Durable rate-limiter store (rel-T16) — PK /key, TTL-enabled so per-doc `ttl`
@@ -1450,6 +1454,8 @@ export async function coeTemplatesContainer(): Promise<Container> { await ensure
 export async function envConfigContainer(): Promise<Container> { await ensure(); return _envConfig!; }
 /** Catalog → Metastores: persistent Databricks workspace registrations, PK /tenantId. */
 export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
+/** LU-5 — Loom Unity governance overlay rows (PK /tenantId, id = `uc:<fqn>`). */
+export async function ucGovernanceContainer(): Promise<Container> { await ensure(); return _ucGovernance!; }
 /** Tenant topology (audit-t157) — hub coordinates doc (id='tenant-topology', PK /tenantId). */
 export async function tenantTopologyContainer(): Promise<Container> { await ensure(); return _tenantTopology!; }
 /** Durable rate-limiter store (rel-T16) — fixed-window counters + dedupe markers, PK /key, TTL-enabled. */
@@ -1678,6 +1684,7 @@ const KNOWN_CONTAINER_IDS = [
   'coe-templates',
   'env-config',
   'metastore-registrations',
+  'uc-governance',
   'rate-limits',
   'item-versions',
   'loom-agent-memory',

@@ -44,10 +44,12 @@ import {
   UnityCatalogNotConfiguredError, UnityCatalogError,
   type UCSecurableType,
 } from '@/lib/azure/unity-catalog-client';
+import { assertAllowedUcHost } from '@/lib/azure/uc-host-allowlist';
 import {
   listWorkspaceUsers, addWorkspaceRoleAssignment, removeWorkspaceRoleAssignment,
   OneLakeError,
 } from '@/lib/azure/onelake-catalog-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,9 +70,7 @@ const FABRIC_ROLE: Record<LoomRole, 'Viewer' | 'Contributor' | 'Member' | 'Admin
   Owner: 'Admin',
 };
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
   const source = req.nextUrl.searchParams.get('source');
   try {
     if (source === 'unity-catalog') {
@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
     const status = e instanceof UnityCatalogError || e instanceof OneLakeError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: status || 500 });
   }
-}
+});
 
 export async function POST(req: NextRequest) {
   return mutate(req, 'add');
@@ -124,7 +124,9 @@ async function mutate(req: NextRequest, action: 'add' | 'remove') {
 
   try {
     if (source === 'unity-catalog') {
-      const host = body.host as string;
+      // A request-supplied host selects the destination of a CREDENTIALED ucFetch,
+      // so it must be one of this deployment's own workspaces rather than free text.
+      const host = await assertAllowedUcHost(body.host as string);
       const secType = body.secType as UCSecurableType;
       const securable = body.securable as string;
       if (!host || !secType || !securable) {

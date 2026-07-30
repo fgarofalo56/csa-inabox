@@ -29,6 +29,8 @@ const item = {
 };
 const replaceMock = vi.fn(async (doc: any) => ({ resource: doc }));
 const auditCreate = vi.fn(async (d: any) => ({ resource: d }));
+/** Owning tenant of ws-1 — mutable so a second tenant can be simulated. */
+let wsTenantId = 'ten-1';
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({
@@ -36,7 +38,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
     item: () => ({ replace: replaceMock }),
   }),
   workspacesContainer: async () => ({
-    item: () => ({ read: async () => ({ resource: { id: 'ws-1', tenantId: 'ten-1' } }) }),
+    item: () => ({ read: async () => ({ resource: { id: 'ws-1', tenantId: wsTenantId } }) }),
   }),
   auditLogContainer: async () => ({ items: { create: auditCreate } }),
 }));
@@ -76,6 +78,7 @@ beforeEach(() => {
   purviewConfigured = true;
   gov = false;
   item.state = { purviewAssetGuid: 'guid-asset-1' };
+  wsTenantId = 'ten-1';
   getSessionMock.mockReturnValue({ claims: { oid: 'ten-1', upn: 'u@t.com', name: 'U' }, exp: Date.now() / 1000 + 3600 } as any);
 });
 afterEach(() => { vi.clearAllMocks(); });
@@ -138,9 +141,48 @@ describe('PUT /api/items/[type]/[id]/sensitivity', () => {
     const patched = replaceMock.mock.calls.at(-1)?.[0];
     expect(patched.state.sensitivityLabel).toBe('Confidential');
     expect(patched.state.sensitivityLabelId).toBe('lab-conf');
-    expect(ensureDefs).toHaveBeenCalledWith(['MICROSOFT.GOVERNANCE.LABELS.lab-conf']);
-    expect(addClassification).toHaveBeenCalledWith('guid-asset-1', ['MICROSOFT.GOVERNANCE.LABELS.lab-conf']);
+    // S4 class: `lab-conf` is NOT a MIP GUID — it is whatever the caller put in
+    // the body. This route used to interpolate it straight into
+    // `MICROSOFT.GOVERNANCE.LABELS.`, squatting the namespace Purview's own MIP
+    // integration owns with an ACCOUNT-GLOBAL, permanent typedef. A non-GUID id
+    // now falls back to a Loom-owned, tenant-namespaced name.
+    const expected = ['LOOM.LABEL.2240a27e.CONFIDENTIAL']; // 2240a27e = fnv1a('ten-1')
+    expect(ensureDefs.mock.calls.at(-1)?.[0][0]).toMatch(/^LOOM\.LABEL\.[0-9a-f]{8}\.CONFIDENTIAL$/);
+    expect(ensureDefs).toHaveBeenCalledWith(expected);
+    expect(addClassification).toHaveBeenCalledWith('guid-asset-1', expected);
     expect(auditCreate).toHaveBeenCalledOnce();
+  });
+
+  it('ATTACK: a crafted labelId cannot create a MICROSOFT.GOVERNANCE.* typedef', async () => {
+    const { PUT } = await import('../route');
+    const r = await PUT(
+      req({ labelId: 'MICROSOFT.PERSONAL.EMAIL', labelName: 'Not A Label' }),
+      ctx('lakehouse', 'item-1'),
+    );
+    expect(r.status).toBe(200);
+    const created: string[] = ensureDefs.mock.calls.at(-1)?.[0];
+    expect(created[0].startsWith('MICROSOFT.')).toBe(false);
+    expect(created[0]).toMatch(/^LOOM\.LABEL\.[0-9a-f]{8}\.NOT_A_LABEL$/);
+  });
+
+  it('a REAL MIP label GUID still uses the genuine MICROSOFT.GOVERNANCE.LABELS typedef', async () => {
+    const guid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const { PUT } = await import('../route');
+    const r = await PUT(req({ labelId: guid, labelName: 'Confidential' }), ctx('lakehouse', 'item-1'));
+    expect(r.status).toBe(200);
+    expect(ensureDefs).toHaveBeenCalledWith([`MICROSOFT.GOVERNANCE.LABELS.${guid}`]);
+    expect(addClassification).toHaveBeenCalledWith('guid-asset-1', [`MICROSOFT.GOVERNANCE.LABELS.${guid}`]);
+  });
+
+  it('ATTACK: two tenants labelling with the same free-text label do NOT share a typedef', async () => {
+    const { PUT } = await import('../route');
+    await PUT(req({ labelId: 'lab-conf', labelName: 'Confidential' }), ctx('lakehouse', 'item-1'));
+    const first = ensureDefs.mock.calls.at(-1)?.[0][0];
+    wsTenantId = 'ten-2';
+    getSessionMock.mockReturnValue({ claims: { oid: 'ten-2', upn: 'v@t2.com', name: 'V' }, exp: Date.now() / 1000 + 3600 } as any);
+    const r = await PUT(req({ labelId: 'lab-conf', labelName: 'Confidential' }), ctx('lakehouse', 'item-1'));
+    expect(r.status).toBe(200);
+    expect(ensureDefs.mock.calls.at(-1)?.[0][0]).not.toBe(first);
   });
 
   it('writes Cosmos even when Purview is NOT configured (Azure-native / IL5 fallback)', async () => {

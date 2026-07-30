@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1657 |
+| Total routes | 1659 |
 | Public (no session) | 116 |
 | Session-only | 568 |
 | Owner-scoped | 696 |
-| Admin | 277 |
+| Admin | 279 |
 | Gated (backend config) | 530 |
 | Areas | 119 |
 
@@ -501,6 +501,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `catalog/search/route.ts` | GET | owner-scoped |  | Purview |
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Purview |
 | `catalog/unity/capabilities/route.ts` | GET | session-only | ● | Databricks |
+| `catalog/unity/governance/route.ts` | GET POST | admin |  | — |
+| `catalog/unity/governed-tags/route.ts` | GET POST | admin |  | — |
 
 ## cdc
 
