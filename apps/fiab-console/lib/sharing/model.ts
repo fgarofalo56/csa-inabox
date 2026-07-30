@@ -183,70 +183,16 @@ export function matchRecipientByPrincipal(
   return null;
 }
 
-// ── Data-plane target resolution ───────────────────────────────────────────
+// ── Data-plane target resolution — NOT IN THIS PR ────────────────────
 //
-// The data-plane path is proxied to a server that authenticates with ONE global
-// bearer and will serve any share it knows about to whoever holds it. So the
-// upstream path must never be assembled from caller-supplied strings: a segment
-// containing an encoded `../` or `/` (Next.js percent-DECODES catch-all segments
-// before the route sees them, and the WHATWG URL parser then collapses dot
-// segments) would let an authorized request for share A be proxied as a request
-// for share B.
-//
-// The fix is structural, not sanitisation: resolve the request to a table RECORD
-// inside the authorized share, then build the upstream path from that record's
-// own fields. A component that is not in the authorized share's table list
-// cannot appear in the proxied URL at all, whatever it is spelled with.
-
-/** The data-plane sub-resources this BFF is willing to proxy. A closed set. */
-export const DATA_PLANE_RESOURCES = ['version', 'metadata', 'changes', 'query'] as const;
-export type DataPlaneResource = (typeof DATA_PLANE_RESOURCES)[number];
-
-export function isDataPlaneResource(v: string): v is DataPlaneResource {
-  return (DATA_PLANE_RESOURCES as readonly string[]).includes(v);
-}
-
-/**
- * Find the table a recipient asked for INSIDE the share it is authorized on.
- * Returns null when the pair does not name a table of this share — which is
- * also the answer for every traversal attempt, because `../` is not a table.
- */
-export function findSharedTable(
-  share: LoomShare,
-  schema: string,
-  table: string,
-): SharedTable | null {
-  const wantSchema = String(schema || '');
-  const wantTable = String(table || '');
-  if (!wantSchema || !wantTable) return null;
-  return (share.tables || []).find((t) => t.schema === wantSchema && t.name === wantTable) || null;
-}
-
-/**
- * The upstream path for one data-plane call, built ONLY from the authorized
- * share record, the resolved table record, and a literal from
- * {@link DATA_PLANE_RESOURCES}. Nothing the caller typed survives into it, and
- * every component is percent-encoded so a stored name could not smuggle a
- * separator either.
- */
-export function upstreamTablePath(
-  share: LoomShare,
-  table: SharedTable,
-  resource: DataPlaneResource,
-): string {
-  const enc = (s: string) => encodeURIComponent(String(s));
-  return `/shares/${enc(share.id)}/schemas/${enc(table.schema)}/tables/${enc(table.name)}/${resource}`;
-}
-
-/**
- * Re-encode the protocol's query string. `URLSearchParams.toString()` percent-
- * encodes every reserved character, so no value can reintroduce a `/`, `?` or
- * `#` into the URL the upstream client parses.
- */
-export function safeUpstreamQuery(search: string | null | undefined): string {
-  const qs = new URLSearchParams(String(search || '').replace(/^\?/, '')).toString();
-  return qs ? `?${qs}` : '';
-}
+// `DATA_PLANE_RESOURCES` / `findSharedTable` / `upstreamTablePath` /
+// `safeUpstreamQuery` resolve a recipient request to an upstream path on the
+// reference server. They exist only for the recipient-facing proxy, which was
+// split out of this change — see the follow-up PR referenced in
+// docs/fiab/security/loom-sharing-threat-model.md. Nothing in the control plane
+// proxies anything, so they are not carried here: an unreferenced path-builder
+// for a server no caller can reach is the kind of thing that gets re-wired by
+// accident.
 
 // ── Reference-server manifest rendering ────────────────────────────────────
 

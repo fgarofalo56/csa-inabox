@@ -26,7 +26,8 @@
 # credential vended from Key Vault. Recipients authenticate to the Loom Console
 # with Microsoft Entra tokens at /api/delta-sharing/*, where the per-recipient
 # grant is resolved and enforced BEFORE anything is proxied here
-# (apps/fiab-console/lib/sharing/recipient-auth.ts). Exposing this port to a
+# (the recipient-facing proxy; split into a follow-up change, so in THIS build
+# nothing outside the CAE can reach this server at all). Exposing this port to a
 # recipient would hand them every share on the server.
 #
 # Consequently the bearer is MANDATORY: with no bearer the upstream server

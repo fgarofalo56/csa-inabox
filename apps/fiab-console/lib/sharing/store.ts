@@ -1,22 +1,24 @@
 /**
- * Loom Sharing — Cosmos store + the reference-server client (LU-9).
+ * Loom Sharing — the Cosmos store (LU-9).
  *
- * Two responsibilities, kept in one module because they are two halves of one
- * request path:
+ * The AUTHORITATIVE record of shares, recipients, and grants. Loom decides what
+ * is shared and who may see it; the OSS Delta Sharing reference server is only a
+ * data-plane engine (it reads Delta logs and signs file URLs) and has exactly one
+ * authorization primitive — a single global bearer — so it can never be the
+ * enforcement point.
  *
- *   1. The AUTHORITATIVE record of shares, recipients, and grants (Cosmos).
- *   2. The ONLY client of the `loom-sharing` Container App (the OSS Delta
- *      Sharing reference server), which is internal-ingress-only and reachable
- *      by nothing else in the estate.
+ * This module used to hold the HTTP client for that server as well. It went out
+ * with the recipient-facing proxy that was its only caller (see the SPLIT NOTICE
+ * in docs/fiab/security/loom-sharing-threat-model.md). Nothing in this build
+ * calls the sharing server, and the server has no external ingress.
  *
- * Real backends throughout (`.claude/rules/no-vaporware.md`): Cosmos queries and
- * HTTP calls to a deployed server. When the server is not deployed the caller
- * gets a typed {@link LoomSharingNotConfiguredError} naming the exact env var,
- * bicep module, and remediation — never an empty array pretending to be data.
+ * Real backends throughout (`.claude/rules/no-vaporware.md`): every function here
+ * is a Cosmos query. When the server is not deployed the caller gets a typed
+ * {@link LoomSharingNotConfiguredError} naming the exact env var, bicep module,
+ * and remediation — never an empty array pretending to be data.
  */
 
 import { sharingContainer } from '@/lib/azure/cosmos-client';
-import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { canonicalSharingName, isCanonicalSharingName } from './model';
 import type { LoomRecipient, LoomShare } from './model';
 
@@ -61,147 +63,36 @@ export function isLoomSharingConfigured(): boolean {
   return !!(process.env.LOOM_SHARING_URL || '').trim();
 }
 
-/** The protocol prefix the server answers on (must match the bicep param). */
-export function loomSharingEndpoint(): string {
-  const raw = (process.env.LOOM_SHARING_ENDPOINT || '/delta-sharing').trim();
-  const withSlash = raw.startsWith('/') ? raw : `/${raw}`;
-  return withSlash.replace(/\/+$/, '');
+/** Open Delta Sharing publishing is on by default (default-ON / opt-out); an
+ *  admin turns it off with LOOM_SHARING_ENABLED=false. The real prerequisite —
+ *  a deployed sharing server — is reported separately and honestly. */
+export function loomSharingEnabled(): boolean {
+  return process.env.LOOM_SHARING_ENABLED !== 'false';
 }
 
-/**
- * Console→server bearer. This is NOT a recipient credential: it is the single
- * global token the reference server accepts, so anything holding it sees every
- * share on the server. It exists only inside the BFF process and is never
- * echoed to a caller.
- */
-function loomSharingBearer(): string {
-  const t = (process.env.LOOM_SHARING_BEARER || '').trim();
-  if (!t) {
-    throw new LoomSharingNotConfiguredError({
-      missingEnvVar: 'LOOM_SHARING_BEARER',
-      bicepModule: 'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep',
-      bicepStatus:
-        'The sharing server is deployed but the Console has no credential for it. Set the LOOM_SHARING_BEARER secretref on the Console app to the same Key Vault secret passed as sharingBearerSecretUri.',
-      followUp:
-        'Both halves come from ONE Key Vault secret: the server renders it as its authorization.bearerToken, the Console presents it. See docs/fiab/security/loom-sharing-threat-model.md.',
-    });
-  }
-  return t;
+/** The Loom tenant that owns the shares. Recipients are EXTERNAL, so the owning
+ *  tenant can never be read off a caller's token — it is the estate's own. */
+export function sharingOwnerTenantId(): string {
+  return (
+    process.env.LOOM_ENTRA_TENANT_ID
+    || process.env.LOOM_MSAL_TENANT_ID
+    || process.env.AZURE_TENANT_ID
+    || ''
+  ).trim();
 }
 
-/**
- * The Entra audiences a RECIPIENT token may carry.
- *
- * `LOOM_SHARING_AUDIENCE` (comma or space separated) is the RIGHT answer — a
- * dedicated app registration / App ID URI exposed only to sharing recipients, so
- * that a token for the Console is not a token for the data-export endpoint. When
- * it is set it REPLACES the fallback rather than adding to it: an operator who
- * stands up a dedicated registration and still finds `api://<clientId>` accepted
- * has gained nothing. (A migration that needs both lists both.)
- *
- * With it unset, the Console's own App ID URI is the fallback — usable ONLY
- * alongside a scope/app-role pin, see {@link sharingAudiencePinned}. The BARE
- * client id is never accepted: that is the audience shape of the Console's own
- * ID tokens.
- */
-export function sharingRecipientAudiences(): string[] {
-  const explicit = splitList(process.env.LOOM_SHARING_AUDIENCE);
-  if (explicit.length) return [...new Set(explicit)];
-  const clientId = (process.env.LOOM_MSAL_CLIENT_ID || '').trim();
-  return clientId ? [`api://${clientId}`] : [];
-}
-
-function splitList(raw: string | undefined): string[] {
-  return (raw || '').split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
-}
-
-/**
- * Scope / app-role pin for recipient tokens (`LOOM_SHARING_SCOPE`, comma or
- * space separated). A token without one of these values in `scp`/`roles` is
- * refused even when its audience matches.
- */
-export function sharingRequiredScopes(): string[] {
-  return splitList(process.env.LOOM_SHARING_SCOPE);
-}
-
-/**
- * Is the recipient credential actually PINNED to the data-export API?
- *
- * Round-2 of this change closed the ID-token half of the audience problem (the
- * bare client id is rejected, and an access token is required) but left the other
- * half open: with only `api://<clientId>` accepted and no scope pinned, ANY
- * access token minted for the Console's own API satisfies the audience check.
- * The audience then isolates nothing — it is the Console's own registration —
- * and the recipient-principal lookup is the sole authorization surface. That is
- * one control, not two, on the path that moves data outside the boundary.
- *
- * The pin is adequate when EITHER holds:
- *
- *   - every accepted audience is DEDICATED — i.e. none of them is the Console's
- *     own client id / App ID URI; or
- *   - a scope or app role is pinned — `LOOM_SHARING_SCOPE`, which the operator
- *     exposes on the Console registration and consents ONLY to recipient apps.
- *
- * Setting `LOOM_SHARING_AUDIENCE=api://<the Console's own clientId>` does NOT
- * count: that is the weak configuration spelled out longhand, and a check a
- * caller can satisfy by restating the default is not a check.
- *
- * When neither holds, `authenticateRecipient` fails CLOSED with 503 rather than
- * accepting a credential it cannot distinguish from an ordinary Console API
- * token. This is an honest infra gate, not a feature flag: it costs nothing on a
- * default deployment, because a recipient must be registered by an admin before
- * this endpoint can serve anyone at all.
- */
-export function sharingAudiencePinned(): boolean {
-  if (sharingRequiredScopes().length > 0) return true;
-  const audiences = sharingRecipientAudiences().map((a) => a.toLowerCase());
-  if (!audiences.length) return false;
-  const clientId = (process.env.LOOM_MSAL_CLIENT_ID || '').trim().toLowerCase();
-  if (!clientId) return true;
-  return audiences.every((a) => a !== clientId && a !== `api://${clientId}`);
-}
-
-export class LoomSharingError extends Error {
-  status: number;
-  body?: string;
-  constructor(message: string, status: number, body?: string) {
-    super(message);
-    this.name = 'LoomSharingError';
-    this.status = status;
-    this.body = body;
-  }
-}
-
-/**
- * One call to the reference server. `path` is protocol-relative
- * (`/shares/x/schemas/y/tables/z/metadata`); the endpoint prefix and the bearer
- * are added here so no caller can forget either.
- *
- * NOTE for callers: reaching this function means authorization has ALREADY
- * happened. The server will happily serve any share it knows about to anyone
- * holding this bearer.
- */
-export async function loomSharingFetch(
-  path: string,
-  init: { method?: string; body?: string; headers?: Record<string, string> } = {},
-  timeoutMs = 20000,
-): Promise<Response> {
-  const url = `${loomSharingBase()}${loomSharingEndpoint()}${path.startsWith('/') ? path : `/${path}`}`;
-  return fetchWithTimeout(
-    url,
-    {
-      method: init.method || 'GET',
-      headers: {
-        authorization: `Bearer ${loomSharingBearer()}`,
-        ...(init.body ? { 'content-type': 'application/json' } : {}),
-        ...(init.headers || {}),
-      },
-      body: init.body,
-      cache: 'no-store',
-    },
-    timeoutMs,
-  );
-}
+// ── Recipient-facing config + the server client — NOT IN THIS PR ────────
+//
+// The protocol prefix, the Console→server bearer, the recipient audience/scope
+// pin and `loomSharingFetch` (the ONLY code that talks to the reference server)
+// belong to the recipient-facing data plane, which was split out of this change.
+// The control plane in this PR reads and writes Cosmos and renders the server's
+// config manifest; it never calls the server. Keeping an authenticated HTTP
+// client to a bearer-only backend around with no caller is exactly the loose end
+// that gets picked up by the next route, so it goes out with its caller.
+//
+// See the follow-up PR referenced in
+// docs/fiab/security/loom-sharing-threat-model.md.
 
 // ── Cosmos store ───────────────────────────────────────────────────────────
 //

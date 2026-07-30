@@ -17,7 +17,8 @@
 // share in the config. So the server can never be the recipient-facing
 // endpoint, and this module deliberately exposes no switch to make it one.
 //
-// Recipients terminate on the Loom Console at /api/delta-sharing/*, where they
+// Recipients terminate on the Loom Console at /api/delta-sharing/* (that endpoint
+// is NOT in this build - see docs/fiab/security/loom-sharing-threat-model.md), where they
 // present a Microsoft Entra token, the recipient→share grant is resolved from
 // Cosmos, and anything outside that grant is refused BEFORE a byte is proxied
 // here. The bearer below is a Console→server credential vended from Key Vault,

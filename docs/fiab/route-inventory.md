@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1659 |
-| Public (no session) | 117 |
+| Total routes | 1658 |
+| Public (no session) | 116 |
 | Session-only | 566 |
 | Owner-scoped | 696 |
 | Admin | 280 |
-| Gated (backend config) | 531 |
-| Areas | 120 |
+| Gated (backend config) | 530 |
+| Areas | 119 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -686,12 +686,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `debug/cookie/route.ts` | GET | public |  | — |
-
-## delta-sharing
-
-| Route | Methods | Auth scope | Gated | Backends |
-| --- | --- | --- | :---: | --- |
-| `delta-sharing/[...path]/route.ts` | GET POST | public | ● | Cosmos |
 
 ## demo
 

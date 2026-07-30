@@ -11,7 +11,8 @@
  *     activation URL and no long-lived bearer profile: a file that is both the
  *     identity and the credential cannot be revoked for one recipient without
  *     rotating it for all of them, and it leaves no per-caller audit trail.
- *     Recipients present an Entra token to /api/delta-sharing/* instead.
+ *     Recipients present an Entra token to /api/delta-sharing/* instead - an
+ *     endpoint that is a follow-up change, not part of this build.
  *
  *   databricks
  *     POST { name, authentication_type: 'TOKEN'|'DATABRICKS', comment?,
