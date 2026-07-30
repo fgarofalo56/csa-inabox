@@ -544,7 +544,12 @@ export function parseStorageAccountUrl(
   url: string | null | undefined,
 ): { account: string; suffix: string } | null {
   const clean = stripUriCredentials(url);
-  if (ONELAKE_HOST_RE.test(clean)) return null;
+  // isOneLakeHost, not the old ONELAKE_HOST_RE: #2609 replaced that regex with an
+  // index-based predicate because its leading alternation + unbounded negated
+  // class gave the engine several ways to divide the same prefix (polynomial
+  // ReDoS on a request-derived URI). The replacement is also STRICTER — userinfo
+  // no longer counts as the host — which is the behaviour wanted here.
+  if (isOneLakeHost(clean)) return null;
   const m = /^https?:\/\/([^./]+)\.(?:dfs|blob)\.([^/:]+)/i.exec(clean);
   if (!m) return null;
   const account = m[1].toLowerCase();
