@@ -112,7 +112,11 @@ To wire it by hand (an already-running estate, or the incremental Gov path in
 `secretref`. Optional: `LOOM_RISINGWAVE_DATABASE` (default `dev`),
 `LOOM_RISINGWAVE_USER` (default `root`).
 
-## Authentication — mandatory, and why a network rule was not enough
+## Security — one routable port, and it requires a password
+
+Two separate defects were found here, a day apart. Both are closed in the image.
+
+### Defect 1 — the wire had no credential (2026-07-29)
 
 RisingWave ships its `root` **superuser with no password**: with `AuthInfo`
 unset the frontend's `UserAuthenticator` is `None`, so anything that can open a
@@ -126,14 +130,60 @@ executing user-supplied code. It was removed from the estate the same day, and
 the `svc-loom-risingwave` gate went back to blocked, because "not shippable yet"
 was the honest status.
 
-Neither network-shaped fix closes it:
+### Defect 2 — the credential only covered 4566 (2026-07-30)
+
+`single_node` binds **five** routable ports. Measured, not assumed — read off
+`/proc/net/tcp` inside a running stock `risingwavelabs/risingwave:v2.1.3`:
+
+| Port | Bind | Service | Authentication |
+|---|---|---|---|
+| 4566 | `0.0.0.0` | Postgres-wire SQL frontend | credential (defect 1's fix) |
+| 5688 | `0.0.0.0` | compute-node gRPC — Exchange / Task / Config / Monitor | **none** |
+| 5690 | `0.0.0.0` | meta-node gRPC — Cluster / **Ddl** / HummockManager | **none** |
+| 5691 | `0.0.0.0` | meta dashboard HTTP + REST API | **none** |
+| 6660 | `0.0.0.0` | compactor gRPC | **none** |
+| 1260 | `127.0.0.1` | prometheus metrics (1222/2222 collapse here) | loopback only |
+| 6786 | `127.0.0.1` | frontend health-check gRPC | loopback only |
+
+The meta gRPC service alone can create and drop catalog objects. **"Internal" is
+not a property of a Container Apps port:** ingress publishes only `targetPort`,
+but ingress is not a firewall — a replica holds a VNet IP from the environment's
+infrastructure subnet, so a sibling app reaches any listening port on the **pod
+IP** directly, past ingress and past `ipSecurityRestrictions`.
+
+`single_node` cannot be made to bind them elsewhere. Upstream hard-codes the
+addresses in `map_single_node_opts_to_standalone_opts`
+(`src/cmd_all/src/single_node.rs`, v2.1.3):
+
+```rust
+meta_opts.listen_addr      = "0.0.0.0:5690".to_string();
+meta_opts.dashboard_host   = Some("0.0.0.0:5691".to_string());
+compute_opts.listen_addr   = "0.0.0.0:5688".to_string();
+compactor_opts.listen_addr = "0.0.0.0:6660".to_string();
+```
+
+and `single_node --help` exposes only `--listen-addr` (the *frontend*) and
+`--prometheus-listener-addr`.
+
+### Why the fix is in the image, not in the network
 
 | Candidate | Why it fails |
 |---|---|
-| ACA ingress IP rules (`ipSecurityRestrictions`, the `consoleAllowedCidrs` shape) | Every app in a Container Apps environment draws its pod IP from the **same infrastructure subnet**. Any CIDR that admits the Console also admits `loom-script-runner` and `loom-udf-runtime`. |
+| ACA ingress IP rules (`ipSecurityRestrictions`, the `consoleAllowedCidrs` shape) | Two reasons. Every app in a Container Apps environment draws its pod IP from the **same infrastructure subnet**, so any CIDR that admits the Console also admits `loom-script-runner` and `loom-udf-runtime`. And the rules only govern the *ingress* path — a direct pod-IP connect to 5690 never touches them. |
 | A dedicated Container Apps environment | Same problem one level up. Its infrastructure subnet is routable from the peer subnets in the VNet, and an NSG keyed on the Console's subnet again admits the code-execution apps, because they share it. |
+| An in-container packet filter (`iptables`/`nftables`) | Needs `NET_ADMIN`. Container Apps does not grant it. |
 
-So the fix is a **credential the code-execution apps do not hold**:
+**Removing the listener is strictly stronger than filtering it.** So the engine
+runs in `standalone` mode, which exposes per-node options, with every non-wire
+listener pinned to `127.0.0.1`. Everything else is byte-identical to what
+`single_node` derives — the engine's own parsed-opts log lines were diffed
+between the two invocations on the pinned image: meta backend `Sqlite`,
+`--sql-endpoint <store>/meta_store/single_node.db`,
+`hummock+fs://<store>/state_store`, `hummock_001`,
+`total_memory_bytes 4509715660`, `parallelism 2` and both
+`*_total_memory_bytes` all match; only the four addresses differ.
+
+### The bootstrap
 
 1. `admin-plane/main.bicep` derives an unpredictable password from
    `loomGeneratedSecretSeed` (`newGuid()`) — the same construction the Airflow
@@ -141,27 +191,50 @@ So the fix is a **credential the code-execution apps do not hold**:
 2. `admin-plane/keyvault.bicep` writes it as the KV secret
    `loom-risingwave-root-password` and grants **Key Vault Secrets User** to the
    `loom-risingwave` UAMI. The Console already holds Key Vault Secrets Officer.
-   Nothing else in the environment is granted anything on that secret.
+   Nothing else in the environment is granted anything on that secret, so the
+   code-execution apps cannot obtain it.
 3. Both apps bind it as a **Key-Vault-backed Container Apps secret** resolved by
    their own managed identity at revision start — `LOOM_RW_ROOT_PASSWORD` on the
    engine, `LOOM_RISINGWAVE_PASSWORD` on the Console. Neither is ever a plain
    env literal, and the value never enters the template, the deployment history
    or `az containerapp show`.
-4. `apps/loom-risingwave/scripts/entrypoint.sh` **fails closed**. With no
-   password it exits 1 before anything listens. With one it boots the engine
-   *sealed* — `single_node --listen-addr 127.0.0.1:4566`, so the wire port
-   exists only inside the container's own network namespace — applies
-   `ALTER USER root PASSWORD`, **verifies that an anonymous connection is now
-   rejected**, and only then re-execs bound to `0.0.0.0`. There is no window in
-   which a routable port answers without a password, not even to a pod IP.
+4. `apps/loom-risingwave/scripts/entrypoint.sh` **fails closed at every step**:
+   - no `LOOM_RW_ROOT_PASSWORD` → exit 1 before anything listens;
+   - **phase 1 (sealed)** starts the engine with *every* listener on
+     `127.0.0.1`, including the wire port, then asserts from `/proc/net/tcp` +
+     `/proc/net/tcp6` that there are **zero** routable listening sockets. That is
+     the measurement proving the per-node options took effect on this binary, and
+     it is taken while nothing at all is reachable from the pod IP;
+   - still sealed, it applies `ALTER USER root PASSWORD` and verifies that a
+     password-less connection is now **rejected** and the configured one
+     **accepted**;
+   - **phase 2 (serving)** restarts against the same store directory (the SQLite
+     meta store carries root's md5 credential across the restart) with only the
+     frontend moved to `0.0.0.0`, then asserts the surface again: **exactly one**
+     routable listener and it must be the wire port. Anything else and the
+     container dies instead of serving.
+
+   A `--selftest` mode exercises the loopback-vs-routable classifier against a
+   synthetic procfs snapshot, and the Dockerfile runs it at **build** time — a
+   broken hex comparison there would make both runtime assertions pass vacuously,
+   which is exactly the "green gate measuring nothing" failure this repo has been
+   burned by.
 
 Re-applying the `ALTER USER` on every boot makes rotation free: change the Key
 Vault secret and roll both revisions.
+
+**Side effect worth knowing:** under `single_node`, `RW_STATE_STORE` /
+`RW_DATA_DIRECTORY` were read by clap and then *silently overwritten* with the
+local-filesystem store, so the module's `stateStore` knob was inert. Under
+`standalone` they take effect.
 
 **Still open, disclosed:** ACA TCP ingress does not terminate TLS, so the
 connection itself is plaintext. The credential is not exposed by that — the
 handshake is a salted md5 challenge, not a cleartext password — but query text
 and results are. Frontend TLS plus `ssl` on the `pg` client is the follow-up.
+
+The dashboard is still there, just not routable — reach it with
+`az containerapp exec -n loom-risingwave … -- curl -s 127.0.0.1:5691`.
 
 ## Getting the image into a sovereign ACR (GCC-High / IL5)
 

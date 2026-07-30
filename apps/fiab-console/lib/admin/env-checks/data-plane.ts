@@ -320,7 +320,12 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       + 'separate environment siblings, so the fix is a credential: admin-plane/main.bicep generates an '
       + 'unpredictable password, stores it in the Loom Key Vault, and binds it on BOTH the engine and the Console '
       + 'as a Key-Vault-backed Container Apps secretRef (LOOM_RISINGWAVE_PASSWORD) — never a plain env literal. '
-      + 'The image refuses to start without it. Optional overrides: LOOM_RISINGWAVE_DATABASE (default dev), '
+      + 'The image refuses to start without it. The credential alone was not enough either: stock RisingWave '
+      + 'single-node binds FIVE routable ports and only the Postgres wire (4566) authenticates — meta gRPC 5690 '
+      + 'can create and drop catalog objects — and ACA ingress is not a firewall, because a replica is reachable '
+      + 'on its pod IP regardless of targetPort. The image now binds meta, dashboard, compute and compactor to '
+      + '127.0.0.1 only and asserts it at boot (zero routable sockets while sealed, exactly one while serving, '
+      + 'container dies otherwise). Optional overrides: LOOM_RISINGWAVE_DATABASE (default dev), '
       + 'LOOM_RISINGWAVE_USER (default root).',
     docs: 'https://docs.risingwave.com/docs/current/intro/',
     provisionedBy: 'modules/data-plane/loom-risingwave-aca.bicep — deployed DEFAULT-ON by admin-plane/main.bicep (every Container Apps boundary, Commercial + Gov) → LOOM_RISINGWAVE_URL wired onto the Console app by the same template. Also directly deployable out of band for an incremental provision (.github/workflows/gov-provision-streaming-migrate.yml does this for the live Gov estate).',

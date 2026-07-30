@@ -51,20 +51,38 @@ the engine does not hold).
 | MV status panel | `GET /api/streaming-sql/status` → `readStreamingStatus` (real `rw_catalog` reads) |
 | Add source / sink | `POST /api/streaming-sql/mv` with `{ kind, spec }` → pure DDL builders |
 
-## Wire authentication (mandatory)
+## Attack surface (one routable port, credential-gated)
 
-Upstream RisingWave's `root` superuser has **no password**, and every app in a
-Container Apps environment draws its pod IP from the **same infrastructure
-subnet** — so on the live Commercial estate (2026-07-29) the engine was
-reachable as root by `loom-script-runner` and `loom-udf-runtime`, which execute
-user-supplied code. Removed from the estate; fixed by a credential rather than a
-CIDR rule, because no CIDR rule can separate environment siblings.
+Two defects, a day apart:
+
+1. **2026-07-29 —** upstream RisingWave's `root` superuser has **no password**,
+   and every app in a Container Apps environment draws its pod IP from the
+   **same infrastructure subnet**, so on the live Commercial estate the engine
+   was reachable as root by `loom-script-runner` and `loom-udf-runtime`, which
+   execute user-supplied code. Removed from the estate.
+2. **2026-07-30 —** the credential covered only 4566. Measured on the pinned
+   image, `single_node` binds **five** routable ports; four have no
+   authentication at all: compute gRPC 5688, meta gRPC 5690 (create/drop catalog
+   objects), meta dashboard + REST 5691, compactor gRPC 6660. Ingress publishes
+   only `targetPort`, but ingress is not a firewall — a sibling app reaches any
+   listening port on the pod IP directly.
+
+Upstream hard-codes those four addresses in
+`map_single_node_opts_to_standalone_opts` and offers no flag or env var for
+them, so the engine now runs in `standalone` mode with every non-wire listener
+pinned to `127.0.0.1` (byte-identical opts otherwise). No CIDR rule or dedicated
+environment can separate environment siblings, and an in-container packet filter
+needs `NET_ADMIN`, which ACA does not grant — **removing the listener is
+strictly stronger than filtering it.**
 
 | Control | Backend |
 |---|---|
+| Routable surface | `4566` only. Meta / dashboard / compute / compactor bound `127.0.0.1` by `apps/loom-risingwave/scripts/entrypoint.sh`; `EXPOSE` narrowed to `4566` |
 | Engine root credential | KV secret `loom-risingwave-root-password` → Container Apps **Key-Vault-backed secretRef** `LOOM_RW_ROOT_PASSWORD` resolved by the engine UAMI |
 | Console credential | the SAME KV secret → `LOOM_RISINGWAVE_PASSWORD` secretRef resolved by the Console UAMI |
-| Enforcement | `apps/loom-risingwave/scripts/entrypoint.sh` — refuses to start without it; installs it against a loopback-only frontend; proves an anonymous connect is rejected before binding `0.0.0.0` |
+| Enforcement — credential | refuses to start without it; installs it against an all-loopback engine; proves an anonymous connect is rejected before any routable port exists |
+| Enforcement — ports | phase 1 asserts **zero** routable listeners from `/proc/net/tcp{,6}`; phase 2 asserts **exactly one**, and it must be the wire port. Either assertion failing kills the container |
+| Enforcement — build gate | `entrypoint.sh --selftest` checks the loopback-vs-routable classifier against a synthetic procfs snapshot, run in the Dockerfile so a broken classifier cannot ship a vacuously-green runtime assertion |
 | Who can read the secret | the engine UAMI (Key Vault Secrets User) and the Console UAMI (Key Vault Secrets Officer). Nothing else in the environment. |
 
 Residual ⚠️: ACA TCP ingress does not terminate TLS, so statements/results are

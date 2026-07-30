@@ -14,7 +14,10 @@
 // is in the path (.claude/rules/no-fabric-dependency.md).
 //
 // SECURITY POSTURE
-//   - AUTHENTICATED WIRE, MANDATORY (2026-07-29). RisingWave ships a `root`
+//   - ONE ROUTABLE PORT, AND IT REQUIRES A PASSWORD. Two separate defects, both
+//     closed in the image (apps/loom-risingwave/scripts/entrypoint.sh):
+//
+//     (a) THE WIRE HAD NO CREDENTIAL (2026-07-29). RisingWave ships a `root`
 //     SUPERUSER with NO password: with `AuthInfo` unset the frontend's
 //     `UserAuthenticator` is `None`, so anything that can open a TCP connection
 //     IS root. Deployed to the live Commercial estate this module produced a
@@ -26,22 +29,39 @@
 //     by the app's own managed identity) or the @secure() `rootPassword` param.
 //     Either renders a Container Apps SECRET and binds it as
 //     `LOOM_RW_ROOT_PASSWORD` via `secretRef` — NEVER a plain env literal. With
-//     neither, `apps/loom-risingwave/scripts/entrypoint.sh` refuses to start
-//     (fail-closed), so an unauthenticated loom-risingwave cannot exist.
-//     WHY A CREDENTIAL AND NOT A NETWORK RULE: every app in a Container Apps
-//     environment draws its pod IP from the SAME infrastructure subnet, so an
-//     ACA `ipSecurityRestrictions` allow-list that admits the Console also
-//     admits loom-script-runner and loom-udf-runtime; a dedicated environment
-//     has the identical problem one level up (its peer subnets are routable and
-//     the code-execution apps share the Console's). Only a secret the
-//     code-execution apps do not hold separates them — and they do not: the
-//     Key Vault secret is readable only by the two identities granted "Key Vault
-//     Secrets User" on it (this app's UAMI and the Console's).
+//     neither, the entrypoint refuses to start (fail-closed), so an
+//     unauthenticated loom-risingwave cannot exist.
+//
+//     (b) THE CREDENTIAL ONLY COVERED 4566 (2026-07-30, round-4 review).
+//     Measured on the pinned image with `/proc/net/tcp`, stock `single_node`
+//     binds FIVE routable ports, and four of them have NO authentication at
+//     all: compute-node gRPC 5688, meta-node gRPC 5690 (create/drop catalog
+//     objects), meta dashboard + REST 5691, compactor gRPC 6660. Upstream
+//     hard-codes those addresses in `map_single_node_opts_to_standalone_opts`
+//     and exposes no flag or env var for them, so the entrypoint runs the engine
+//     in `standalone` mode with every non-wire listener pinned to 127.0.0.1 —
+//     byte-identical opts otherwise — and ASSERTS the surface at runtime: zero
+//     routable sockets while sealed, exactly one (the wire port) while serving,
+//     container dies otherwise. FIVE routable ports became ONE.
+//
+//     WHY THE SEAL IS IN THE IMAGE AND NOT A NETWORK RULE: ACA ingress
+//     publishes only `targetPort`, but ingress is not a firewall — a replica
+//     holds a VNet IP from the environment's infrastructure subnet, so a
+//     sibling app reaches any listening port on the POD IP directly, past
+//     ingress and past `ipSecurityRestrictions`. And every app in the
+//     environment draws from that same subnet, so no CIDR can admit the Console
+//     without admitting loom-script-runner and loom-udf-runtime; a dedicated
+//     environment has the identical problem one level up. An in-container
+//     packet filter needs NET_ADMIN, which Container Apps does not grant.
+//     Removing the listener is strictly stronger than filtering it.
 //   - INTERNAL ingress only, transport 'tcp' on the Postgres-wire frontend port
-//     (4566), with an OPTIONAL `allowedCidrs` IP allow-list on top as
-//     defence-in-depth against the wider VNet. The Console BFF is the sole door;
-//     every statement goes through the audited /api/streaming-sql/* routes.
-//     There is no anonymous / public path.
+//     (4566) — the only port the container listens on off-loopback — with an
+//     OPTIONAL `allowedCidrs` IP allow-list on top as defence-in-depth against
+//     the wider VNet. The Console BFF is the sole door; every statement goes
+//     through the audited /api/streaming-sql/* routes. There is no anonymous /
+//     public path. The Key Vault secret is readable only by the two identities
+//     granted "Key Vault Secrets User" on it (this app's UAMI and the
+//     Console's), so the code-execution apps cannot obtain the credential.
 //   - IDENTITY-BASED lake auth: a user-assigned managed identity with **Storage
 //     Blob Data Contributor** on the DLZ lake (the streaming sink WRITES Delta /
 //     Iceberg). Granted here via a guarded guid() role assignment when the lake
@@ -165,13 +185,16 @@ Optional keys:
                          template, the deployment history, or `az containerapp show`. The UAMI
                          needs "Key Vault Secrets User" on that vault.
   allowedCidrs           Optional ACA ingress IP allow-list (defence-in-depth against the wider
-                         VNet). NOT a substitute for the credential: every app in a Container
-                         Apps environment draws its pod IP from the SAME infrastructure subnet,
-                         so any CIDR that admits the Console also admits the code-execution
-                         apps. Empty (default) => internal ingress is the only network control.
+                         VNet). NOT a substitute for the credential OR the in-image port seal:
+                         every app in a Container Apps environment draws its pod IP from the SAME
+                         infrastructure subnet, so any CIDR that admits the Console also admits
+                         the code-execution apps — and ingress rules only govern the ingress path,
+                         not a direct pod-IP connect. Empty (default) => internal ingress plus the
+                         image's own single-listener seal are the network controls.
   livenessInitialDelay   Seconds before the first liveness probe (default 150). The engine boots
-                         TWICE — once sealed on loopback to install the credential, once serving
-                         — so the routable port does not exist for the first ~30-60s. A short
+                         TWICE — once with every listener on loopback to install the credential
+                         and assert zero routable ports, once serving — so the routable port does
+                         not exist for the first ~15s (measured; see the probe comment). A short
                          delay would kill the container mid-bootstrap.
   readinessInitialDelay  Seconds before the first readiness probe (default 30).''')
 param risingwaveConfig object
@@ -288,7 +311,16 @@ var appSecrets = rootPasswordFromKeyVault ? [
   { name: 'risingwave-root-password', value: rootPassword }
 ] : [])
 
-var envVars = concat(lakeEnv, identityEnv, stateEnv, authEnv)
+// The frontend port has to reach the ENGINE, not just ACA's ingress. Without
+// this, setting risingwaveConfig.frontendPort to anything but 4566 pointed
+// targetPort and both probes at a port the entrypoint never bound (it defaults
+// to 4566 internally), so the revision would never become healthy. Always
+// emitted so the container and the ingress cannot disagree.
+var portEnv = [
+  { name: 'LOOM_RW_FRONTEND_PORT', value: string(frontendPort) }
+]
+
+var envVars = concat(lakeEnv, identityEnv, stateEnv, authEnv, portEnv)
 
 // INTERNAL ingress + an optional Allow-only IP rule set. ACA supports Allow-only
 // or Deny-only; anything outside the listed CIDRs is denied.
@@ -348,10 +380,17 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
             {
               // The frontend has no HTTP health on the SQL port; a TCP connect to
               // the Postgres-wire port is the honest liveness/readiness signal.
-              // The delay must clear the SEALED bootstrap: during phase 1 the
-              // frontend is bound to 127.0.0.1 only, so a probe from the pod IP
-              // correctly fails. A 20s delay would have killed the container
-              // mid-credential-install and crash-looped forever.
+              // The delay must clear the SEALED bootstrap: during phase 1 every
+              // listener including the frontend is bound to 127.0.0.1, so a probe
+              // from the pod IP correctly fails. A 20s delay would have killed the
+              // container mid-credential-install and crash-looped forever.
+              //
+              // MEASURED on the built image (2 vCPU / 6 GiB, docker, 2026-07-30):
+              // sealed engine answering SQL at +8.4s, port assertion + ALTER USER
+              // + verification done at +8.8s, serving engine's routable port up
+              // and re-asserted at +14.7s. The 150s default is ~10x headroom for a
+              // cold pull on a busier node; readiness at 30s / 10s / x30 gives a
+              // further 300s of grace before the revision is failed.
               type: 'Liveness'
               tcpSocket: { port: frontendPort }
               initialDelaySeconds: livenessInitialDelay
