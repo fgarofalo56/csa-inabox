@@ -81,6 +81,12 @@ const TOUCH_EXEMPT = new Map([
   ['apps/fiab-console/app/api/copilot/dax/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet (see data-agent chat)'],
   ['apps/fiab-console/app/api/copilot/notebook-assist/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
   ['apps/fiab-console/app/api/copilot/orchestrate/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
+  // #2657 touched this route only to build the attribute bag through
+  // safeRecordFrom (prototype-pollution fix). The codemod reports SKIPPED
+  // ("getSession() without the exact 401 guard") because it returns its own
+  // `err('Unauthorized', 401, 'unauthorized')` envelope rather than the literal
+  // shape withSession replaces — nothing for the codemod to rewrite.
+  ['apps/fiab-console/app/api/items/[type]/[id]/business-metadata/route.ts', '#2657: bespoke err() 401 envelope, codemod-resistant — migrate with the items family'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
