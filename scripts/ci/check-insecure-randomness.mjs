@@ -54,7 +54,34 @@ const STATISTICAL_EXEMPT = new Map([
 ]);
 
 /** Total permitted `Math.random()` occurrences outside the exempt files. */
-const BASELINE = 178;
+const BASELINE = 168;
+
+/**
+ * Strip `//` line comments and block comments before counting.
+ *
+ * WHY (found live): PR #2613 wrote the RIGHT code —
+ *
+ *     // CSPRNG id (never Math.random — CodeQL js/insecure-randomness, and an
+ *     // audit record id must not be guessable/forgeable).
+ *     id: `ucgov-${randomUUID()}`,
+ *
+ * …and this guard failed it, because the words "Math.random" appear in the
+ * comment EXPLAINING why Math.random was not used. Counting prose is worse than
+ * a nuisance: the cheapest way to make the build pass would have been to delete
+ * the comment that documents the decision, so the guard was actively pushing
+ * toward less-explained code.
+ *
+ * Deliberately simple — a naive scan, not a JS parser. It can mis-handle a `//`
+ * inside a string literal (e.g. a URL), which would only ever cause the guard to
+ * count LESS. That direction is safe here: this is a ratchet on a non-exploitable
+ * class, and an occasional under-count cannot turn a real vulnerability green,
+ * whereas the over-count above was already causing real harm.
+ */
+function stripComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')   // block comments
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1'); // line comments (not `https://`)
+}
 
 function walk(dir, out) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -72,7 +99,7 @@ let total = 0;
 const per = [];
 for (const f of files) {
   if (STATISTICAL_EXEMPT.has(f)) continue;
-  const m = fs.readFileSync(f, 'utf8').match(/Math\.random/g);
+  const m = stripComments(fs.readFileSync(f, 'utf8')).match(/Math\.random/g);
   if (m) {
     total += m.length;
     per.push([f, m.length]);
