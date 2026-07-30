@@ -24,6 +24,7 @@ vi.mock('../../azure/synapse-dev-client', () => ({
   getPipeline: vi.fn(),
   runPipeline: vi.fn(),
   getPipelineRun: vi.fn(),
+  queryPipelineRuns: vi.fn(),
   listActivityRuns: vi.fn(),
   upsertPipeline: vi.fn(),
 }));
@@ -113,8 +114,10 @@ describe('handlePipelineExplainError', () => {
     (synapseDev.listActivityRuns as any).mockResolvedValue([
       { activityName: 'Copy1', activityType: 'Copy', status: 'Failed', error: { errorCode: 'X', message: 'boom' } },
     ]);
-    (synapseDev.getPipelineRun as any).mockResolvedValue({ runId: 'r2', status: 'Failed', message: 'pipeline failed' });
-    const out = await handlePipelineExplainError({ runId: 'r2', backend: 'synapse' });
+    (synapseDev.queryPipelineRuns as any).mockResolvedValue({
+      value: [{ runId: 'r2', pipelineName: 'ws_pipe', status: 'Failed', message: 'pipeline failed' }],
+    });
+    const out = await handlePipelineExplainError({ runId: 'r2', backend: 'synapse', pipelineName: 'ws_pipe' });
     expect(synapseDev.listActivityRuns).toHaveBeenCalledWith('r2');
     expect(out.failedActivities[0].errorCode).toBe('X');
     expect(out.runMessage).toBe('pipeline failed');
@@ -140,15 +143,17 @@ describe('handlePipelineRun', () => {
 describe('handlePipelineGetRunStatus', () => {
   it('finds the run by id in the ADF pipeline-run window', async () => {
     (adf.listPipelineRuns as any).mockResolvedValue([
-      { runId: 'abc-123', status: 'Succeeded', durationInMs: 4200 },
+      { runId: 'abc-123', pipelineName: 'copy_orders', status: 'Succeeded', durationInMs: 4200 },
     ]);
     const out = await handlePipelineGetRunStatus({ runId: 'abc-123', backend: 'adf', pipelineName: 'copy_orders' });
     expect(out).toMatchObject({ runId: 'abc-123', status: 'Succeeded', durationMs: 4200 });
   });
 
-  it('reads the Synapse run directly', async () => {
-    (synapseDev.getPipelineRun as any).mockResolvedValue({ runId: 'syn-9', status: 'InProgress' });
-    const out = await handlePipelineGetRunStatus({ runId: 'syn-9', backend: 'synapse' });
+  it('reads the Synapse run from the pipeline-filtered query', async () => {
+    (synapseDev.queryPipelineRuns as any).mockResolvedValue({
+      value: [{ runId: 'syn-9', pipelineName: 'ws_pipe', status: 'InProgress' }],
+    });
+    const out = await handlePipelineGetRunStatus({ runId: 'syn-9', backend: 'synapse', pipelineName: 'ws_pipe' });
     expect(out.status).toBe('InProgress');
   });
 });
