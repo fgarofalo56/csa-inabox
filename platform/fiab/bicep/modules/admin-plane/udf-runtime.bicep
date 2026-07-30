@@ -61,11 +61,43 @@ param hostPort int = 8080
 @description('CORS origin allowed to call the host directly (the Loom console origin). The BFF proxy path does not require this.')
 param corsOrigin string = '*'
 
+@description('CIDR ranges allowed to reach this app on top of internal-ingress isolation — normally ONLY the Container Apps environment infrastructure subnet the Console runs in. Empty => no IP rules, meaning ANY workload on the CAE VNet can reach a host that executes caller-supplied Python (the py/code-injection finding, #2653). ACA supports Allow-only or Deny-only rule sets; these are emitted as Allow rules, so anything outside them is denied. Mirrors loom-unity-app.bicep consoleAllowedCidrs.')
+param consoleAllowedCidrs array = []
+
 // Host code delivered as base64 secrets and materialised by the init container.
 // Source of truth is udf-runtime/*.py — reviewable, testable, real (see README).
 var appPyB64 = base64(loadTextContent('udf-runtime/app.py'))
 var fabricFuncsB64 = base64(loadTextContent('udf-runtime/fabric_functions.py'))
 var defaultSrcB64 = base64(loadTextContent('udf-runtime/default_function_app.py'))
+
+// INTERNAL ingress: (a) the runtime executes caller-supplied code and must never
+// be publicly reachable; (b) on an internal ACA environment only the
+// `<app>.internal.<env-domain>` FQDN resolves from sibling apps — with
+// external:true the console's server-side fetch to the apex-form FQDN failed DNS
+// (live-caught, rel-T05). hostUrl output stays correct.
+//
+// #2653: internal ingress alone means "anything on the CAE VNet" can POST
+// arbitrary Python to this host and have it executed, because the host holds no
+// credential to check (deliberately — main.bicep records that this host executes
+// the item's own Python and must therefore never receive one, since that Python
+// could read it back out of the environment). With no secret available, the
+// boundary has to be the network. These Allow rules narrow it from the whole
+// VNet to the Console's subnet, matching loom-unity-app.bicep.
+var ingressIpRules = [for (cidr, i) in consoleAllowedCidrs: {
+  name: 'allow-loom-console-${i}'
+  description: 'Only the Loom Console subnet may reach the UDF execution host (#2653).'
+  ipAddressRange: cidr
+  action: 'Allow'
+}]
+var ingressBase = {
+  external: false
+  targetPort: hostPort
+  transport: 'auto'
+  allowInsecure: false
+}
+var ingressConfig = empty(consoleAllowedCidrs) ? ingressBase : union(ingressBase, {
+  ipSecurityRestrictions: ingressIpRules
+})
 
 resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
   name: 'loom-udf-runtime'
@@ -78,17 +110,7 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
     managedEnvironmentId: managedEnvironmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      ingress: {
-        // INTERNAL ingress: (a) the runtime executes author-owned code and must
-        // never be publicly reachable; (b) on an internal ACA environment only
-        // the `<app>.internal.<env-domain>` FQDN resolves from sibling apps —
-        // with external:true the console's server-side fetch to the apex-form
-        // FQDN failed DNS (live-caught, rel-T05). hostUrl output stays correct.
-        external: false
-        targetPort: hostPort
-        transport: 'auto'
-        allowInsecure: false
-      }
+      ingress: ingressConfig
       secrets: [
         { name: 'app-py-b64', value: appPyB64 }
         { name: 'fabric-funcs-b64', value: fabricFuncsB64 }
@@ -126,6 +148,12 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
           env: [
             { name: 'PORT', value: string(hostPort) }
             { name: 'LOOM_UDF_CORS_ORIGIN', value: corsOrigin }
+            // #2653 — tells the host whether the network control it depends on is
+            // actually in place, so an unpinned deployment logs a SECURITY WARNING
+            // on every boot instead of looking identical to a pinned one. The host
+            // cannot discover this for itself: IP rules are enforced by ACA in
+            // front of the container and are invisible from inside it.
+            { name: 'LOOM_UDF_INGRESS_IP_RESTRICTED', value: empty(consoleAllowedCidrs) ? '' : '1' }
           ]
           resources: { cpu: json('0.5'), memory: '1Gi' }
           volumeMounts: [ { volumeName: 'udf-app', mountPath: '/app' } ]
@@ -143,3 +171,6 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
 @description('Wire this into LOOM_UDF_FUNCTION_BASE on the loom-console app. Empty when udfRuntimeEnabled is false.')
 output hostUrl string = udfRuntimeEnabled ? 'https://${udf.properties.configuration.ingress.fqdn}' : ''
 output udfFqdn string = udfRuntimeEnabled ? udf.properties.configuration.ingress.fqdn : ''
+
+@description('True when ingress carries an IP allow-list on top of internal-only isolation (#2653). False means any workload on the CAE VNet can reach a host that executes caller-supplied Python.')
+output ingressIpRestricted bool = !empty(consoleAllowedCidrs)
