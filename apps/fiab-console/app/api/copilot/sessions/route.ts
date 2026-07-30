@@ -33,6 +33,7 @@ import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
 import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { buildCellFixMessages, parseCellFixResponse } from '@/lib/copilot/notebook-tools';
 import { withSession } from '@/lib/api/route-toolkit';
+import { randomId } from '@/lib/util/random-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -173,7 +174,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const sessionId =
     typeof crypto !== 'undefined' && crypto.randomUUID
       ? crypto.randomUUID()
-      : `cellfix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      : randomId('cellfix');
   const promptLabel = `Cell fix: ${ename || 'error'} in ${lang} cell`;
   try {
     const c = await copilotSessionsContainer();

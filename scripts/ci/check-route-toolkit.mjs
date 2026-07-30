@@ -72,6 +72,15 @@ const TOUCH_EXEMPT = new Map([
   // security PR would put a ~900-line refactor of the deploy path next to a
   // two-line allow-list change and make both harder to review.
   ['apps/fiab-console/app/api/setup/deploy/route.ts', '#2652: enforceCapability prologue, codemod-resistant — migrate in a dedicated setup-family PR'],
+  // #2656 touched these three only to swap a Math.random() sessionId for the
+  // crypto-backed randomId(). The codemod reports SKIPPED (streaming/SSE
+  // handler) for each — same reason the data-agent chat route above is exempt:
+  // withSession's try/catch→apiServerError wrapper would break the SSE stream.
+  // Migrating them needs the stream-safe toolkit wrapper that entry is waiting
+  // on, not a hand-roll inside a one-line randomness change.
+  ['apps/fiab-console/app/api/copilot/dax/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet (see data-agent chat)'],
+  ['apps/fiab-console/app/api/copilot/notebook-assist/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
+  ['apps/fiab-console/app/api/copilot/orchestrate/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
