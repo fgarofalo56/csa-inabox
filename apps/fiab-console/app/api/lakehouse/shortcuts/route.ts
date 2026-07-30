@@ -11,7 +11,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getAccountName } from '@/lib/azure/adls-client';
 import {
   listShortcuts,
@@ -35,6 +34,7 @@ import {
 } from '@/lib/azure/shortcut-engines';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,9 +51,7 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
@@ -64,11 +62,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const lakehouseId = (body?.lakehouseId || '').toString().trim();
@@ -333,11 +329,9 @@ export async function POST(req: NextRequest) {
     status: 'active', createdBy,
   });
   return NextResponse.json({ ok: true, data: row });
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   const id = req.nextUrl.searchParams.get('id')?.trim();
@@ -373,4 +367,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
   }
-}
+});

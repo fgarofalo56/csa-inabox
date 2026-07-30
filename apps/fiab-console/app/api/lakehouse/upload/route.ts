@@ -13,9 +13,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { KNOWN_CONTAINERS, uploadFile, type KnownContainer } from '@/lib/azure/adls-client';
 import { detectSparkFormat, renderReadSnippet } from '@/lib/azure/spark-format-detect';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,14 +25,7 @@ export const dynamic = 'force-dynamic';
 // see /api/lakehouse/upload-stream (streamed, chunked) once landed.
 const MAX_BYTES = 4 * 1024 * 1024 * 1024;
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json(
-      { ok: false, error: 'unauthenticated' },
-      { status: 401 },
-    );
-  }
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let form: FormData;
   try {
@@ -144,4 +137,4 @@ export async function POST(req: NextRequest) {
       { status: 502 },
     );
   }
-}
+});

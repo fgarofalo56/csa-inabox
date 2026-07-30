@@ -25,11 +25,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { KNOWN_CONTAINERS, downloadFile, getAccountName } from '@/lib/azure/adls-client';
 import { getLabelForAdlsPath, type MipLabelInfo } from '@/lib/azure/purview-mip-client';
 import { isMipSupportedType, stampMipLabel } from '@/lib/azure/mip-file-inject';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,9 +71,7 @@ async function resolveLabel(
   }
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const limited = await enforceRateLimit(session, 'export');
   if (limited) return limited;
 
@@ -133,4 +131,4 @@ export async function GET(req: NextRequest) {
     const status = e?.statusCode === 404 ? 404 : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), code: e?.code }, { status });
   }
-}
+});
