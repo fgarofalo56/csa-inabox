@@ -38,7 +38,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
+import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewritePath, invalidateUnityInternalToken } from '@/lib/azure/uc-backend';
 import { UnityCatalogError, ucRows, clampInt } from '@/lib/azure/uc-primitives';
 import { classifyUnityCall, recordUnityAccess, unityOutcomeForError } from '@/lib/azure/unity-audit';
 import type { UCEffectivePermissions } from '@/lib/azure/uc-effective-permissions';
@@ -276,6 +276,9 @@ async function ucFetch<T = any>(
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
     if (!res.ok) {
+      // #2679 — evict a no-longer-honoured internal token so the next call re-exchanges
+      // instead of failing identically. Rationale + why no retry: invalidateUnityInternalToken.
+      if (isOssUc() && (res.status === 401 || res.status === 403)) await invalidateUnityInternalToken();
       const msg =
         json?.message ||
         json?.error_code ||
