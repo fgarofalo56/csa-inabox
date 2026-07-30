@@ -1,89 +1,53 @@
 /**
- * N7e — Trino **Federated SQL** engine client. SERVER-ONLY (imports the Cosmos
- * audit trail + the Entra credential chain).
+ * N7e — Trino / Starburst **Federated SQL** engine client. SERVER-ONLY
+ * (imports the Cosmos audit trail + the Entra credential chain).
  *
- * ## The tier (DEFAULT-ON, opt-out)
+ * ## The tier (the single OPT-IN carve-out of the Openness program)
  *
- * Trino OSS (Apache-2.0) runs as a **single-node, scale-to-zero, INTERNAL-ingress
- * Azure Container App** in the deployment's own VNet
- * (`platform/fiab/bicep/modules/data-plane/loom-trino-aca.bicep`), deployed by
- * every push-button install in both clouds. It can register against N1's
- * **Iceberg REST Catalog** (`LOOM_ICEBERG_CATALOG_URL`) plus any external
- * connectors (PostgreSQL, MySQL, Kafka, MongoDB, …) supplied through
- * `loomBackends.trinoCatalogs` / `trinoCatalogSecrets`. It is an ADDITIVE
- * engine: one SQL statement can JOIN a Loom Iceberg table with an external
- * Postgres table, which the light default (DuckDB N2b) does not do.
+ * Trino OSS (Apache-2.0) runs as a private cluster on **AKS in the deployment's
+ * own VNet** (`platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep`),
+ * registered against N1's **Iceberg REST Catalog** (`LOOM_ICEBERG_CATALOG_URL`)
+ * plus any external connectors (PostgreSQL, MySQL, Kafka, MongoDB, …). It is a
+ * heavy-infra ADDITIVE engine: one SQL statement can JOIN a Loom Iceberg table
+ * with an external Postgres table, which the light default (DuckDB N2b) does not
+ * do.
  *
- * ## Why it is no longer the opt-in carve-out (PR #2641)
+ * ## Why this is the ONE opt-in item (loom_default_on_opt_out, round-3 decision)
  *
- * Trino used to be the ONE documented opt-in exception to
- * `loom_default_on_opt_out`, on the grounds that it needed an always-on private
- * AKS node pool. That premise no longer holds. Trino's supported single-process
- * shape (`coordinator=true` + `node-scheduler.include-coordinator=true`) runs
- * the whole engine in one container, so it deploys with `minReplicas: 0` and
- * bills NOTHING at idle — Container Apps activates a replica on the first BFF
- * request. The multi-node AKS module (`loom-trino-aks.bicep`) survives as the
- * OPT-IN scale-out upgrade for large federations. Opt out of the default with
- * `loomBackends.trino='disabled'`; SQL Lab stays fully functional on DuckDB /
- * Synapse Serverless and the Trino engine option honest-gates.
+ * Every other Loom capability is default-ON. Trino is the documented exception:
+ * it stands up a full AKS cluster (real, disclosed cost), so it is **opt-in**,
+ * selected explicitly by wiring `LOOM_TRINO_URL`. It gates NO feature — SQL Lab
+ * is fully functional without it because **DuckDB N2b is the default engine**;
+ * Trino only adds a "Federated SQL (Trino)" choice alongside it. The unset state
+ * is therefore the intended default posture, disclosed per the G2 gate registry
+ * with a Fix-it wizard that names the AKS cost at enable time. Because the light
+ * DuckDB path stays fully default-ON, the opt-in posture does not breach
+ * loom_default_on_opt_out (the operator's round-3 carve-out).
  *
- * ## Honest limits on a fresh deploy
+ * ## Never public
  *
- * The orchestrator passes `icebergCatalogUrl: ''` because the N1 Iceberg REST
- * Catalog is still an out-of-band deploy (`svc-iceberg-catalog`, a separate
- * gate). Rather than wire a URL that does not answer, the entrypoint renders NO
- * lake catalog at all — so on a from-scratch install `SHOW CATALOGS` returns
- * `jmx` + `memory` and nothing else. The engine is real and reachable; the LAKE
- * federation appears on the next revision once `LOOM_ICEBERG_CATALOG_URL` is
- * real. That is stated plainly rather than implied away.
- *
- * ## Not public — and, since round 3, not anonymous either
- *
- * The coordinator has INTERNAL ingress only, but internal ingress is a NETWORK
- * control, not an authorization one: it means "reachable by everything already
- * on the VNet". Round 1 of #2641 shipped the engine with no
- * `http-server.authentication.type`, so a sibling container, a peered host or an
- * admin on the P2S VPN could POST `/v1/statement` with an arbitrary
- * `X-Trino-User` and bypass both the session check here AND the audit row below.
- *
- * Round 3 closes that. `apps/loom-trino/docker-entrypoint.sh` enables Trino's
- * **JWT authenticator** by default against the ACTIVE cloud's Entra JWKS with
- * the accepted audience PINNED, and `loom-trino-aca.bicep` deploys it that way
- * (`authMode: 'entra'`). Three states, reported to this client as
- * `LOOM_TRINO_AUTH_MODE`:
- *
- *   * **entra** — audience pinned to the Console's app registration. This BFF
- *     mints a UAMI bearer for `LOOM_TRINO_AUDIENCE` ({@link trinoAuthHeader})
- *     and queries run. Everything else on the VNet gets 401.
- *   * **sealed** — a from-scratch deploy has no app registration to pin (ARM
- *     cannot create a Graph object), so the audience is the sentinel
- *     `api://loom-trino-sealed.invalid` that no tenant can mint. The engine is
- *     up, `minReplicas: 0` so it bills nothing, and serves NOBODY. This client
- *     refuses to fire a query that is guaranteed to 401 and returns an honest
- *     gate instead. Running the sign-in bootstrap
- *     (`csa-loom-post-deploy-bootstrap.yml`) + redeploy un-seals it.
- *   * **disabled** — the explicit, audited opt-out
- *     (`loomBackends.trinoAuthMode='disabled'`), i.e. the anonymous VNet-only
- *     posture. The container logs a SECURITY WARNING on every boot and the
- *     Console env-check reports it as failing.
- *
- * A pre-shared bearer (`LOOM_TRINO_TOKEN`, Key Vault secretRef) still takes
- * precedence for a BYO cluster configured with its own token auth.
+ * The Trino coordinator has INTERNAL ingress only (in-VNet AKS service). The
+ * only door is this Console BFF at `/api/sql/trino`, which authenticates the
+ * caller (session cookie) and forwards the principal as the Trino user so the
+ * cluster's access control + query log attribute every statement. A pre-shared
+ * bearer (`LOOM_TRINO_TOKEN`, injected via Key Vault secretRef) is used when the
+ * cluster is configured for token auth; otherwise the in-VNet perimeter is the
+ * trust boundary (identical posture to the sibling loom-duckdb / iceberg-catalog
+ * internal services).
  *
  * ## Audited data plane (ATO)
  *
- * A federated query issued THROUGH THIS CLIENT is an external data-access event,
- * so {@link logTrinoAccess} writes an `_auditLog` row (principal, statement
- * scope, catalogs, rows, outcome, ts) and fans out through `emitAuditEvent`. The
- * audit write is awaited before the response is sent. Note the scope: this
- * covers the BFF path, not a direct in-VNet caller (see above).
+ * A federated query is an external data-access event, so {@link logTrinoAccess}
+ * writes an `_auditLog` row (principal, statement scope, catalogs, rows,
+ * outcome, ts) and fans out through `emitAuditEvent`. The audit write is awaited
+ * before the response is sent — there is no unaudited path to the cluster.
  *
  * IL5 / SOVEREIGN MOAT: Trino is a self-hosted OSS container on the deployment's
- * own Container Apps environment inside the VNet, reading the deployment's own
- * ADLS Gen2 (via the N1 Iceberg catalog) and in-boundary external sources. There
- * is NO SaaS query federation (no Starburst Galaxy, no Athena) in the path, so
- * the whole capability runs disconnected in an air-gapped enclave. No Microsoft
- * Fabric / OneLake / Power BI is reachable from any path here
+ * own AKS cluster inside the VNet, reading the deployment's own ADLS Gen2 (via
+ * the N1 Iceberg catalog) and in-boundary external sources. There is NO SaaS
+ * query federation (no Starburst Galaxy, no Athena) in the path, so the whole
+ * capability runs disconnected in an air-gapped enclave. No Microsoft Fabric /
+ * OneLake / Power BI is reachable from any path here
  * (.claude/rules/no-fabric-dependency.md).
  */
 
@@ -107,47 +71,6 @@ export function trinoConfigGate(): { missing: string } | null {
 /** True when the opt-in Trino federation cluster is deployed + wired. */
 export function isTrinoConfigured(): boolean {
   return trinoConfigGate() === null;
-}
-
-/**
- * The DEPLOYED authorization posture of the engine, as reported by the module
- * that deployed it (`LOOM_TRINO_AUTH_MODE`, emitted by admin-plane/main.bicep):
- *
- *   `entra`    — Trino's JWT authenticator is enforcing and the audience is
- *                pinned to a real app registration. Queries run; the BFF mints
- *                a UAMI bearer for `LOOM_TRINO_AUDIENCE`.
- *   `sealed`   — enforcing, but pinned to the sentinel audience
- *                `api://loom-trino-sealed.invalid` because no app registration
- *                existed at deploy time. NOTHING can mint a token for it, so
- *                the engine is up and serves nobody. We do not fire a query
- *                that is guaranteed to 401 — the caller gets an honest gate.
- *   `disabled` — the explicit, audited anonymous opt-out
- *                (`loomBackends.trinoAuthMode='disabled'`).
- *
- * Unset (e.g. a pre-#2641 revision) is treated as `disabled`, which is what
- * such a revision actually is — the env-check reports it as failing.
- */
-export function trinoAuthMode(): 'entra' | 'sealed' | 'disabled' {
-  const raw = (process.env.LOOM_TRINO_AUTH_MODE || '').trim().toLowerCase();
-  return raw === 'entra' || raw === 'sealed' ? raw : 'disabled';
-}
-
-/** True when the engine is deployed SEALED — up, enforcing, reachable by nobody. */
-export function isTrinoSealed(): boolean {
-  return trinoAuthMode() === 'sealed';
-}
-
-/**
- * The Trino session user. When the engine enforces Entra bearer auth, the JWT
- * principal is mapped onto ONE Trino user (`LOOM_TRINO_SESSION_USER`, default
- * `loom-console`) — Trino's default system access control DENIES impersonation,
- * so the session user must equal the mapped principal or every statement is
- * rejected. The signed-in Loom principal is not lost: it rides
- * `X-Trino-Client-Info` + a client tag, and the Cosmos `_auditLog` row written
- * by {@link logTrinoAccess} is the record of who ran what.
- */
-export function trinoSessionUser(): string {
-  return (process.env.LOOM_TRINO_SESSION_USER || 'loom-console').trim() || 'loom-console';
 }
 
 /** Base URL of the internal Trino coordinator (no trailing slash, scheme-normalized). */
@@ -243,24 +166,6 @@ function trinoUser(upn: string | undefined): string {
   return u || 'loom-console';
 }
 
-/**
- * Per-hop budget for the Trino statement protocol.
- *
- * The default-ON deployment (data-plane/loom-trino-aca.bicep) runs the engine
- * with `minReplicas: 0` — that scale-to-zero posture is exactly what makes
- * default-ON affordable, and it means the FIRST request after an idle period
- * waits on a JVM cold start (~20-40s) while Container Apps activates the
- * replica. The shared 30s server default would abort that activation and
- * report an unreachable coordinator, so this hop gets its own, larger ceiling.
- * Subsequent pages of the same statement return in milliseconds.
- *
- * Override per-deployment with LOOM_TRINO_FETCH_TIMEOUT_MS.
- */
-export const TRINO_FETCH_TIMEOUT_MS: number = (() => {
-  const n = Number(process.env.LOOM_TRINO_FETCH_TIMEOUT_MS);
-  return Number.isFinite(n) && n > 0 ? n : 120_000;
-})();
-
 /** GET/POST one page of the statement protocol, mapping failure to TrinoError. */
 async function trinoFetch(
   url: string,
@@ -272,7 +177,7 @@ async function trinoFetch(
       method: init.method,
       headers: init.headers,
       ...(init.body === undefined ? {} : { body: init.body }),
-    }, TRINO_FETCH_TIMEOUT_MS);
+    });
   } catch (e) {
     throw new TrinoError(
       `The Trino coordinator at ${trinoBase()} was unreachable: ${(e as Error)?.message || String(e)}`,
@@ -317,34 +222,13 @@ export async function runTrinoQuery(
       'not_configured',
     );
   }
-  if (isTrinoSealed()) {
-    // Enforcing against an audience nothing can mint. Firing the statement
-    // would burn a cold start and come back 401 — say the true thing instead.
-    throw new TrinoError(
-      'The Federated SQL (Trino) engine is deployed SEALED: engine-level Entra authorization is ENFORCED, '
-      + 'but no app registration was available at deploy time, so the accepted audience is the sentinel '
-      + '"api://loom-trino-sealed.invalid" that nothing can mint a token for. The engine is up and costs '
-      + 'nothing (minReplicas 0); it accepts no caller. Fix: run the sign-in bootstrap '
-      + '(.github/workflows/csa-loom-post-deploy-bootstrap.yml) so an Entra app registration exists, then '
-      + 'redeploy with LOOM_MSAL_CLIENT_ID set (or pin a dedicated one with '
-      + "loomBackends.trinoAudienceClientId). SQL Lab keeps serving on DuckDB / Synapse Serverless meanwhile.",
-      503,
-      'sealed',
-    );
-  }
   const started = Date.now();
   const maxRows = Math.max(1, Math.min(opts.maxRows ?? 5_000, 200_000));
-  const enforcing = trinoAuthMode() === 'entra';
   const headers: Record<string, string> = {
     'content-type': 'text/plain',
     accept: 'application/json',
-    // With authorization enforced the session user MUST equal the user the JWT
-    // principal maps to (Trino's default access control denies impersonation);
-    // the signed-in principal rides client-info/tags and the audit row.
-    'x-trino-user': enforcing ? trinoSessionUser() : trinoUser(opts.actorUpn),
+    'x-trino-user': trinoUser(opts.actorUpn),
     'x-trino-source': 'csa-loom-sql-lab',
-    'x-trino-client-info': JSON.stringify({ loomUser: trinoUser(opts.actorUpn) }),
-    'x-trino-client-tags': `loom-user=${trinoUser(opts.actorUpn)}`,
     ...(opts.catalog ? { 'x-trino-catalog': opts.catalog } : {}),
     ...(opts.schema ? { 'x-trino-schema': opts.schema } : {}),
     ...(await trinoAuthHeader()),

@@ -216,13 +216,6 @@ jobs:
           # ACR before data-plane/duckdb-aca.bicep is deployed out-of-band.
           - app: loom-duckdb
             ctx: ./apps/loom-duckdb
-          # N7e — the DEFAULT-ON Federated SQL engine. Single-node Trino OSS as a
-          # scale-to-zero internal-ingress Container App
-          # (data-plane/loom-trino-aca.bicep, wired from admin-plane/main.bicep).
-          # The image MUST be in ACR before that app can start, otherwise
-          # LOOM_TRINO_URL would be wired to an endpoint that never serves.
-          - app: loom-trino
-            ctx: ./apps/loom-trino
           # V1 — the Playwright runner image the DEFAULT-ON loom-synthetic-monitor
           # scheduled job executes (`node e2e/run-synthetic.mjs`). The console
           # image is slimmed of e2e/ (.dockerignore), so this second image out of
@@ -415,7 +408,7 @@ jobs:
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           # Keep in sync with the build matrix above. Verify the :TAG refs —
           # that is exactly what the redeploy-with-apps job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-trino loom-uat)
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat)
           FAILED=()
           for APP in "${APPS[@]}"; do
             DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
@@ -521,17 +514,10 @@ jobs:
           # green but Front Door serves stale code. A unique --revision-suffix
           # forces a new revision that re-pulls :v0.1 and gets the new digest.
           SUFFIX="r${{ github.run_id }}-${{ github.run_attempt }}"
-          # loom-trino is in this list because the app EXISTS after the template
-          # pass (admin-plane/main.bicep deploys it default-ON) and, like every
-          # other app here, its :v0.1 tag is overwritten in place — without an
-          # explicit roll it would keep serving the digest it was created with.
-          # The `az containerapp show` guard below makes the entry a no-op on an
-          # estate where the app has not been templated yet, so adding it cannot
-          # fail an older deployment.
           # loom-uat is deliberately NOT here: it is a Container App JOB image
           # (loom-synthetic-monitor), not a Container App, so each scheduled
           # execution pulls :latest on its own — there is no revision to roll.
-          APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim loom-trino)
+          APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
           # Retry the update on the transient ContainerAppOperationInProgress
           # error (a prior provisioning op on the app is still settling). Up to
           # 6 attempts, 30s apart (~3 min), per app.

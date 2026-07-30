@@ -43,7 +43,6 @@ on:
     branches: [main]
     paths:
       - 'apps/fiab-*/**'
-      - 'apps/loom-trino/**'
       - '.github/workflows/build-fiab-images-acr-tasks.yml'
 
 permissions:
@@ -121,19 +120,13 @@ jobs:
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
           if [[ "$INPUT" == "all" ]]; then
-            # "all" also runs on every main push touching apps/**, so it carries
-            # the images that must track the repo — including loom-trino, the
-            # N7e Federated SQL engine that is now DEFAULT-ON
-            # (data-plane/loom-trino-aca.bicep). Without its image in ACR the app
-            # cannot come up and LOOM_TRINO_URL would point at nothing.
-            #
             # loom-uat is deliberately NOT in "all": it is a ~2 GB Playwright
             # image whose only consumers are the loom-uat job and the default-ON
             # loom-synthetic-monitor job, so rebuilding it on every console push
             # would add ~10 min to each one for no benefit. It IS in the
             # from-scratch app phase (full-app-deploy-commercial.yml), and it can
             # be built on demand here with `apps: loom-uat`.
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-trino","ctx":"./apps/loom-trino"}]'
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'

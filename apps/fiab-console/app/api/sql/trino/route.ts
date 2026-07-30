@@ -1,17 +1,14 @@
 /**
  * POST /api/sql/trino — the N7e **Federated SQL (Trino)** execution edge.
  *
- * Runs a statement on the Trino engine (Apache-2.0, INTERNAL-ingress in the
- * deployment's own VNet) registered against the N1 Iceberg REST Catalog +
- * external connectors — so ONE statement can join a Loom Iceberg table with an
- * external Postgres/MySQL/Kafka source. The engine is DEFAULT-ON: a push-button
- * deploy stands it up as a scale-to-zero Container App
- * (data-plane/loom-trino-aca.bicep) and wires `LOOM_TRINO_URL`. When that var
- * is unset anyway (explicit opt-out, a non-Container-Apps boundary, or the
- * loom-trino image missing from ACR) this route returns the honest **gate
- * envelope** with a Fix-it — never a fabricated result. SQL Lab stays fully
- * functional meanwhile because DuckDB (N2b) is the engine the picker starts on;
- * Trino only ADDS the "Federated SQL" choice.
+ * Runs a statement on the OPT-IN Trino cluster (Apache-2.0, private AKS in the
+ * deployment's VNet) registered against the N1 Iceberg REST Catalog + external
+ * connectors — so ONE statement can join a Loom Iceberg table with an external
+ * Postgres/MySQL/Kafka source. Trino is the single opt-in engine in the program:
+ * when `LOOM_TRINO_URL` is unset this route returns the honest **opt-in gate
+ * envelope** (with a Fix-it wizard that discloses the AKS cost) — never a
+ * fabricated result. SQL Lab stays fully functional meanwhile because DuckDB
+ * (N2b) is the default engine; Trino only ADDS the "Federated SQL" choice.
  *
  * AUDIT: every execution — success or failure — writes an `_auditLog`
  * data-access row (principal, statement scope, catalogs, rows, outcome, ts) and
@@ -21,18 +18,17 @@
  * 200 → { ok:true, engine:'trino', columns, rows, rowCount, totalMs, catalogs, … }
  * 400 → bad request / statement error from the coordinator
  * 401 → unauthenticated
- * 503 → honest gate envelope (LOOM_TRINO_URL unset) — Fix-it names the wiring
+ * 503 → opt-in gate envelope (LOOM_TRINO_URL unset) — Fix-it discloses AKS cost
  * 502 → cluster unreachable
  */
 import { apiError, apiOk } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
-import { apiHonestGateError, backendGateResponse } from '@/lib/api/gate-envelope';
+import { backendGateResponse } from '@/lib/api/gate-envelope';
 import { recordQueryRun } from '@/lib/finops/query-run';
 import {
   TRINO_GATE_ID,
   TrinoError,
   buildFederatedJoinSql,
-  isTrinoSealed,
   logTrinoAccess,
   runTrinoQuery,
   trinoIcebergCatalog,
@@ -62,32 +58,11 @@ interface Body {
 }
 
 export const POST = withSession(async (req, { session }) => {
-  // The engine is default-ON, but the var can still be empty (opted out, a
-  // non-Container-Apps boundary, or the image not yet in ACR). Return the
-  // normalized 503 gate envelope so the surface renders the honest Fix-it —
-  // SQL Lab keeps working on DuckDB either way.
+  // Trino is the OPT-IN carve-out: when unset, return the normalized 503 gate
+  // envelope so the surface renders the honest Fix-it (which discloses the AKS
+  // cost). This is the DEFAULT state — SQL Lab still works on DuckDB.
   const gated = backendGateResponse(TRINO_GATE_ID);
   if (gated) return gated;
-
-  // ROUND-3 (#2641): the URL can be wired while the ENGINE is SEALED —
-  // authorization enforced against a sentinel audience nothing can mint,
-  // because no Entra app registration existed at deploy time. Firing the
-  // statement would spend a JVM cold start to earn a 401. Return the SAME
-  // normalized gate envelope (so the surface renders the honest bar + the
-  // /admin/gates Fix-it) with a code that names the actual state.
-  if (isTrinoSealed()) {
-    return apiHonestGateError(TRINO_GATE_ID, {
-      code: 'sealed',
-      missing: ['LOOM_MSAL_CLIENT_ID'],
-      message:
-        'The Federated SQL (Trino) engine is deployed SEALED: engine-level Entra authorization is ENFORCED, '
-        + 'but no app registration was available at deploy time, so the accepted audience is a sentinel value '
-        + 'nothing can mint a token for. The engine is up and costs nothing (minReplicas 0); it accepts no '
-        + 'caller. Run .github/workflows/csa-loom-post-deploy-bootstrap.yml, then redeploy with '
-        + 'LOOM_MSAL_CLIENT_ID set (or pin loomBackends.trinoAudienceClientId). SQL Lab keeps serving on '
-        + 'DuckDB / Synapse Serverless meanwhile.',
-    });
-  }
 
   const body = (await req.json().catch(() => ({}))) as Body;
   let sql = typeof body.sql === 'string' ? body.sql.trim() : '';

@@ -8,8 +8,8 @@ name: gov-build-images
 # NOT prove this lane builds anything. Treat the first dispatch as the test.
 # Everything downstream of it is written to fail LOUDLY rather than assume it
 # worked: see the "Verify the pulled tag exists" step below, and the image
-# preflight in gov-provision-trino.yml that refuses to touch a LIVE Gov app
-# unless the tag its template pulls is really in the registry.
+# preflight below that refuses to declare success unless every tag a Gov
+# template pulls is really in the registry.
 #
 # TAGS — THE THING THAT MUST MATCH
 #   Every Gov .bicepparam resolves image tags with
@@ -23,8 +23,6 @@ name: gov-build-images
 #   `:latest`, and asserts every one of them resolved before it exits.
 #
 #   The per-app matrix it is matching (verified against the param files):
-#     loom-trino    neither Gov param declares a `trino` entry, so
-#                   admin-plane/main.bicep falls back to 'v0.1'  -> :v0.1
 #     loom-uat      not in appImageTags at all; synthetic-monitor-job.bicep
 #                   defaults to `${acrLoginServer}/loom-uat:latest` -> :latest
 #     loom-console  gcc-high.bicepparam -> 'v0.1'; il5.bicepparam -> 'v3.0'
@@ -42,7 +40,7 @@ name: gov-build-images
 # That gap is not cosmetic. A fresh Gov subscription deploys main.bicep with
 # gcc-high.bicepparam / il5.bicepparam, both of which set
 # containerPlatform='containerApps' + deployAppsEnabled=true, so ARM creates
-# every default-ON Container App — including loom-trino — pointing at
+# every default-ON Container App pointing at
 # `<acr>.azurecr.us/<app>:<tag>`. If nothing ever built that image, the app
 # cannot pull and the deploy fails. This repo has been bitten by exactly that
 # twice. An ACA app pointing at an image nobody builds is not "default-ON", it
@@ -55,7 +53,7 @@ name: gov-build-images
 #   Phase 3  az deployment sub create … deployAppsEnabled=true    (apps come up)
 #
 # WHAT IT DOES NOT DEPEND ON
-#   Unlike gov-provision-trino.yml, this workflow does NOT read coordinates off
+#   This workflow does NOT read coordinates off
 #   a RUNNING loom-console. It resolves the admin RG by the same deterministic
 #   convention main.bicep uses (rg-csa-loom-admin-<location>) and finds the ACR
 #   inside it, so it runs on a subscription where no app has ever started.
@@ -86,7 +84,7 @@ on:
       apps:
         description: 'Comma-separated app images to build. Default = the console plus the two images the default-ON gates need.'
         type: string
-        default: 'loom-console,loom-trino,loom-uat'
+        default: 'loom-console,loom-uat'
       tag:
         description: 'The DEPLOY-REFERENCED tag. Must match what the Gov .bicepparam pulls — v0.1 unless you export LOOM_<X>_TAG for the deployment too. Pushed alongside :<short-sha> and :latest.'
         type: string
@@ -115,7 +113,7 @@ on:
         default: gcc-high
       apps:
         type: string
-        default: 'loom-console,loom-trino,loom-uat'
+        default: 'loom-console,loom-uat'
       tag:
         type: string
         default: 'v0.1'
@@ -276,7 +274,7 @@ jobs:
           # 2026-07-16: the console compile cgroup-OOMs on the default 8 GB ACR
           # Tasks agent. A dedicated 16 GB S3 pool is the documented fix and is
           # available in USGov Arizona/Texas/Virginia. Only the console needs it;
-          # loom-trino is a COPY-only image and loom-uat is a Playwright layer.
+          # loom-uat is a thin Playwright layer over the console context.
           POOL_ARGS=""
           if [ "$APP" = "loom-console" ]; then
             az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
@@ -288,9 +286,8 @@ jobs:
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # ── Tag set: EVERY tag a Gov template could pull for this app ───────
           # gcc-high.bicepparam pins LOOM_CONSOLE_TAG default 'v0.1'; IL5 pins
-          # 'v3.0'. Neither declares a `trino` entry, so loom-trino falls back to
-          # appImageTags.?trino ?? 'v0.1' in admin-plane/main.bicep, and the
-          # synthetic-monitor job's module default is `loom-uat:latest`. Pushing
+          # 'v3.0'. The synthetic-monitor job's module default is
+          # `loom-uat:latest`. Pushing
           # only one of those would leave one boundary's template pointing at a
           # tag nobody built — the exact failure this lane exists to prevent.
           TAG_LIST="$TAG $SHA_TAG latest"

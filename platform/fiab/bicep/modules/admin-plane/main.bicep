@@ -577,12 +577,6 @@ param appImageTags object = {
   // Pinned image version; read with `?? 'v0.1'` so an operator-supplied bag
   // that predates N4 keeps deploying.
   transformRunner: 'v0.1'
-  // loom-trino — N7e Federated SQL engine (data-plane/loom-trino-aca.bicep):
-  // single-node Trino OSS (Apache-2.0) as a scale-to-zero internal-ingress ACA
-  // app. Backs LOOM_TRINO_URL / SQL Lab's "Federated SQL (Trino)" engine.
-  // Pinned image version; read with `?? 'v0.1'` so an operator-supplied bag
-  // that predates N7e keeps deploying.
-  trino: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -713,72 +707,6 @@ var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerA
 // honest-gates on LOOM_WRANGLER_ENDPOINT — the panel still renders.
 var wranglerEnabled = true
 var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && boundary != 'GCC-High' && boundary != 'IL5'
-
-// ── N7e Federated SQL engine (Trino) — DEFAULT-ON deploy toggle ───────────────
-// Deploys data-plane/loom-trino-aca.bicep: single-node Trino OSS (Apache-2.0)
-// as a scale-to-zero, INTERNAL-ingress Container App backing LOOM_TRINO_URL and
-// SQL Lab's "Federated SQL (Trino)" engine.
-//
-// DEFAULT-ON (opt-OUT) per .claude/rules — every Loom feature ships enabled.
-// Trino used to be the ONE opt-in carve-out on the grounds that it needed a
-// private AKS cluster; that premise no longer holds. Trino's supported
-// single-process mode (coordinator + include-coordinator) runs the whole engine
-// in one container, so it deploys here with `minReplicas: 0` and costs NOTHING
-// at idle. The multi-node private-AKS module (data-plane/loom-trino-aks.bicep)
-// remains as the OPT-IN SCALE-OUT path for large federations.
-//
-// The toggle rides the EXISTING loomBackends bag (`trino: 'enabled' | 'disabled'`)
-// rather than a new top-level param, because admin-plane/main.bicep is at the
-// hard ARM 256-parameter cap — the same trick as loomWarehouseBackend /
-// loomPipelineBackend. Gated on containerApps + deployAppsEnabled exactly like
-// wranglerActive / scriptRunnerActive, so it deploys on BOTH clouds (Commercial
-// and the Gov boundaries, whose params set containerPlatform='containerApps').
-// When inactive, LOOM_TRINO_URL is emitted empty and the engine picker
-// honest-gates while DuckDB / Synapse Serverless keep SQL Lab fully functional.
-var trinoEngineEnabled = (loomBackends.?trino ?? 'enabled') != 'disabled'
-var trinoEngineActive = trinoEngineEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
-
-// Federation catalogs, in-template. apps/loom-trino/docker-entrypoint.sh renders
-// one Trino catalog per LOOM_TRINO_CATALOG_<NAME> env var, so an operator adds a
-// Postgres / MySQL / SQL Server / Kafka source declaratively through the SAME
-// loomBackends bag instead of an out-of-band `az containerapp update
-// --set-env-vars` that the next deploy would silently revert.
-//   loomBackends.trinoCatalogs       — {NAME: '<connector props>'} → plain env
-//   loomBackends.trinoCatalogSecrets — {NAME: '<kv secret uri>'}   → ACA secretRef
-// Passwords therefore never land in the template or the ARM deployment history.
-var trinoExtraEnv = loomBackends.?trinoCatalogs ?? {}
-var trinoKeyVaultEnv = loomBackends.?trinoCatalogSecrets ?? {}
-
-// ── N7e engine AUTHORIZATION (round-3 of #2641) ───────────────────────────────
-// "Default-ON" is only acceptable when the thing that is on is SAFE. Round 1
-// shipped Trino with no `http-server.authentication.type`, so internal ingress
-// was the ONLY control and anything already on the CAE network could query the
-// lake as any user, bypassing the BFF session check and the audit row.
-//
-// Engine-level Entra bearer authorization is now ON by default, with the
-// accepted audience pinned to the Console's own app registration
-// (effectiveMsalClientId — an explicit loomMsalClientId, else the app reg the
-// in-bicep deploymentScript provisions). ARM cannot create a Graph object, so on
-// a from-scratch install there is nothing to pin yet: the module then deploys
-// the engine SEALED (sentinel audience nothing can mint, minReplicas 0, zero
-// cost) instead of anonymous. The sign-in bootstrap that every estate must run
-// anyway (csa-loom-post-deploy-bootstrap.yml) is what un-seals it.
-//
-// Both toggles ride the EXISTING loomBackends bag — no new top-level params:
-//   loomBackends.trinoAuthMode          'entra' (default) | 'disabled'
-//   loomBackends.trinoAudienceClientId  pin a DEDICATED app reg instead of the
-//                                       Console's own client id
-var trinoAuthMode = string(loomBackends.?trinoAuthMode ?? 'entra')
-var trinoAudienceOverride = string(loomBackends.?trinoAudienceClientId ?? '')
-var trinoAudienceClientId = !empty(trinoAudienceOverride) ? trinoAudienceOverride : effectiveMsalClientId
-// What the CONSOLE is told, so the honest gate never has to guess the posture:
-// 'entra' = enforced + reachable, 'sealed' = enforced + nobody can mint a token,
-// 'disabled' = the explicit anonymous opt-out.
-var trinoAuthPosture = trinoAuthMode == 'disabled' ? 'disabled' : (empty(trinoAudienceClientId) ? 'sealed' : 'entra')
-// The resource the Console's UAMI asks Entra for. `api://<clientId>` is the
-// audience the module pins on the engine; `/.default` is the client-credentials
-// scope form. Empty whenever the engine is not enforcing a pinnable audience.
-var trinoConsoleAudience = trinoAuthPosture == 'entra' ? 'api://${trinoAudienceClientId}/.default' : ''
 
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
@@ -1626,14 +1554,6 @@ param loomBackends object = {
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
   warehouse: 'synapse-dedicated'
   pipeline: 'synapse'
-  // N7e Federated SQL (Trino) — DEFAULT-ON, opt-OUT. Folded onto this bag (not
-  // a standalone param) to stay under the ARM 256-parameter ceiling, the same
-  // trick as `warehouse` / `pipeline` / `powerBiMcpClientId`. 'enabled' (the
-  // default) deploys data-plane/loom-trino-aca.bicep — a scale-to-zero,
-  // internal-ingress single-node Trino whose idle cost is nothing — and emits
-  // LOOM_TRINO_URL. Set 'disabled' to skip the app; SQL Lab then keeps serving
-  // on DuckDB / Synapse Serverless and the Trino engine option honest-gates.
-  trino: 'enabled'
   // Model-strategy M4 — OPT-IN APIM AI-gateway for AOAI/Foundry traffic. Folded
   // here (NOT standalone params) to stay under the ARM 256-param ceiling, the
   // same trick as powerBiMcpClientId / warehouse / pipeline. Both default OFF —
@@ -3639,24 +3559,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // files, and renders the model DAG; only the plan/apply/run calls
             // honest-gate on this var (gate svc-transform-runner, with a Fix-it).
             { name: 'LOOM_TRANSFORM_RUNNER_URL', value: transformRunnerActive ? transformRunner!.outputs.transformRunnerInternalEndpoint : '' }
-            // N7e — the Federated SQL (Trino) engine behind SQL Lab. DEFAULT-ON:
-            // data-plane/loom-trino-aca.bicep deploys a scale-to-zero,
-            // internal-ingress single-node Trino, so this URL is wired by the
-            // deploy itself and the gate svc-loom-trino clears day one. Empty
-            // only when an operator sets loomBackends.trino='disabled' — SQL Lab
-            // then keeps serving on DuckDB / Synapse Serverless and the engine
-            // picker honest-gates the Trino option with a Fix-it.
-            { name: 'LOOM_TRINO_URL', value: trinoEngineActive ? trinoEngine!.outputs.trinoInternalEndpoint : '' }
-            // ROUND-3 (#2641): the engine enforces Entra bearer authorization.
-            // LOOM_TRINO_AUDIENCE is the resource the Console's UAMI mints a
-            // token for (trino-client.ts already reads it); LOOM_TRINO_AUTH_MODE
-            // tells the BFF the DEPLOYED posture so a SEALED engine renders the
-            // honest Fix-it gate instead of firing a query that will 401.
-            //   entra    = enforced + audience pinned  -> queries run
-            //   sealed   = enforced + sentinel audience -> honest gate
-            //   disabled = explicit anonymous opt-out   -> failing env-check
-            { name: 'LOOM_TRINO_AUTH_MODE', value: trinoEngineActive ? trinoAuthPosture : '' }
-            { name: 'LOOM_TRINO_AUDIENCE', value: trinoEngineActive ? trinoConsoleAudience : '' }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
@@ -5174,76 +5076,6 @@ module transformRunner '../integration/transform-runner-aca.bicep' = if (transfo
     artifactsStorageAccountName: loomStorageAccount
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
-  }
-}
-
-// =====================================================================
-// N7e — loom-trino: the Federated SQL engine behind SQL Lab, DEFAULT-ON.
-//
-// Single-node Trino OSS (Apache-2.0) as a scale-to-zero, INTERNAL-ingress
-// Container App. Deployed on every push-button install (Commercial and Gov —
-// both set containerPlatform='containerApps'), so LOOM_TRINO_URL is wired by
-// the deploy and the svc-loom-trino gate clears day one with no operator step.
-//
-// Cost posture: `minReplicas: 0`, so the engine bills NOTHING while nobody is
-// querying and Container Apps activates it on the first BFF request. That is
-// what makes default-ON honest here — the historical opt-in carve-out existed
-// only because the AKS shape forced an always-on node pool.
-//
-// The identity is the Console UAMI (already AcrPull on the registry); the
-// module additionally grants it Storage Blob Data READER on the DLZ lake so the
-// Iceberg connector reads data files in place — read-only by construction, no
-// keys, no SAS. Opt out with loomBackends.trino='disabled'.
-// =====================================================================
-module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive) {
-  name: 'loom-trino'
-  params: {
-    location: location
-    caeId: containerPlatformModule.outputs.caeId
-    acrLoginServer: registry.outputs.acrLoginServer
-    imageTag: appImageTags.?trino ?? 'v0.1'
-    uamiId: identity.outputs.uamiConsoleId
-    uamiClientId: identity.outputs.uamiConsoleClientId
-    lakeStorageAccountName: loomStorageAccount
-    // The N1 Iceberg REST Catalog is deployed out-of-band today, so this stays
-    // empty on a push-button install: the entrypoint then renders NO lake
-    // catalog rather than pointing Trino at a URL that does not answer
-    // (no-vaporware). The engine still starts and serves; wire the IRC and the
-    // `iceberg` catalog appears on the next revision.
-    icebergCatalogUrl: ''
-    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    // Federation sources ride the loomBackends bag — no new top-level params.
-    extraEnv: trinoExtraEnv
-    keyVaultEnv: trinoKeyVaultEnv
-    // ROUND-3: default-ON must mean SAFE by default. Engine-level Entra bearer
-    // authorization is ON, with the audience pinned to the Console's own app
-    // registration. On a from-scratch deploy that registration does not exist
-    // yet (ARM cannot create a Graph object — it is provisioned by
-    // csa-loom-post-deploy-bootstrap.yml / the in-bicep deploymentScript), so
-    // effectiveMsalClientId is empty and the engine deploys SEALED: enforced,
-    // sentinel audience nothing can mint, minReplicas 0 so it bills nothing.
-    // It is never anonymous-on-the-VNet. Same shape as loom-unity in #2638.
-    // Normalized to the module's union: anything other than an explicit
-    // 'disabled' opt-out means authorization is ENFORCED.
-    authMode: trinoAuthMode == 'disabled' ? 'disabled' : 'entra'
-    entraClientId: trinoAudienceClientId
-    complianceTags: complianceTags
-  }
-}
-
-// N7e (round-2 fix) — the lake READ grant, at the LAKE's resource-group scope.
-// loom-trino-aca.bicep used to declare the `existing` storage account itself and
-// was invoked with no `scope:`, so the assignment targeted the ADMIN RG while the
-// lake actually lives in loomDlzRg — a guaranteed ResourceNotFound the moment a
-// non-empty account name is supplied (exactly what gov-provision-trino.yml does).
-// Same shape as labelRbacGrants / azureConnectionsRbac / orgVisualsRbac above.
-module trinoLakeRbac '../data-plane/loom-trino-lake-rbac.bicep' = if (trinoEngineActive && !skipRoleGrants && !empty(loomStorageAccount)) {
-  name: 'loom-trino-lake-rbac'
-  scope: resourceGroup(loomDlzRg)
-  params: {
-    lakeStorageAccountName: loomStorageAccount
-    trinoPrincipalId: identity.outputs.uamiConsolePrincipalId
-    skipRoleGrants: skipRoleGrants
   }
 }
 
