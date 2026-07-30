@@ -53,6 +53,7 @@ import { itemsContainer, workspacesContainer, auditLogContainer } from '@/lib/az
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { SessionPayload } from '@/lib/auth/session';
+import { stripTrailingSlashes } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -73,7 +74,7 @@ interface PathItem {
 }
 
 function normPath(p: string): string {
-  return p.trim().replace(/\/+$/, '').toLowerCase();
+  return stripTrailingSlashes(p.trim()).toLowerCase();
 }
 
 /** Collect the physical storage-path strings on an item's state (top level —

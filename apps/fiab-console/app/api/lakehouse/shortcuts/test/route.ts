@@ -18,6 +18,7 @@ import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { stripTrailingSlashes } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,7 +68,7 @@ export const POST = withSession(async (req: NextRequest) => {
           { code: 'bad_delta_sharing_secret' },
         );
       }
-      const sharesUrl = profile.endpoint.replace(/\/+$/, '') + '/shares';
+      const sharesUrl = stripTrailingSlashes(profile.endpoint) + '/shares';
       const testRes = await fetch(sharesUrl, { headers: { Authorization: `Bearer ${profile.bearerToken}` } });
       if (testRes.status === 401 || testRes.status === 403) {
         throw Object.assign(

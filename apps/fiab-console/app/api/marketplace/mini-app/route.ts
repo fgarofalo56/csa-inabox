@@ -11,22 +11,21 @@
  * Body: { workspaceId, apiId, apiName, gatewayUrl, apiPath, appName }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { createOwnedItem } from '../../items/_lib/item-crud';
 import { listOperations, ApimError } from '@/lib/azure/apim-client';
+import { stripTrailingSlashes } from '@/lib/util/path-strings';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({} as any));
   const workspaceId = String(body?.workspaceId || '').trim();
   const apiId = String(body?.apiId || '').trim();
   const apiName = String(body?.apiName || apiId || 'API').trim();
-  const gatewayUrl = String(body?.gatewayUrl || '').trim().replace(/\/+$/, '');
+  const gatewayUrl = stripTrailingSlashes(String(body?.gatewayUrl || '').trim());
   const apiPath = String(body?.apiPath || '').trim().replace(/^\/+|\/+$/g, '');
   const appName = String(body?.appName || `${apiName} mini-app`).trim();
 
@@ -78,4 +77,4 @@ export async function POST(req: NextRequest) {
     link: `/items/notebook/${res.item.id}`,
     linkLabel: 'Open the mini-app notebook',
   });
-}
+});
