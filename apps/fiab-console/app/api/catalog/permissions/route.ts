@@ -44,6 +44,7 @@ import {
   UnityCatalogNotConfiguredError, UnityCatalogError,
   type UCSecurableType,
 } from '@/lib/azure/unity-catalog-client';
+import { assertAllowedUcHost } from '@/lib/azure/uc-host-allowlist';
 import {
   listWorkspaceUsers, addWorkspaceRoleAssignment, removeWorkspaceRoleAssignment,
   OneLakeError,
@@ -124,7 +125,9 @@ async function mutate(req: NextRequest, action: 'add' | 'remove') {
 
   try {
     if (source === 'unity-catalog') {
-      const host = body.host as string;
+      // A request-supplied host selects the destination of a CREDENTIALED ucFetch,
+      // so it must be one of this deployment's own workspaces rather than free text.
+      const host = await assertAllowedUcHost(body.host as string);
       const secType = body.secType as UCSecurableType;
       const securable = body.securable as string;
       if (!host || !secType || !securable) {

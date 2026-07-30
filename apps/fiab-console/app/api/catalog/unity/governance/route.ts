@@ -8,7 +8,9 @@
  *          → { ok, overlays, vocabulary, attributeGroups }
  *   POST /api/catalog/unity/governance
  *          body { fullName, securableType?, column?, setTags?, removeTagKeys?,
- *                 certification?, attributes?, syncPurview?, ucHost? }
+ *                 certification?, attributes?, syncPurview? }
+ *                 (ucHost is NOT accepted — the Purview/UC host is resolved from
+ *                  config; see the note at the syncOverlayToPurview call.)
  *          → { ok, overlay, purview? }
  *
  * AUTHORIZATION — the mutation path is NOT session-only
@@ -272,9 +274,13 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
     let purview;
     let deleted = emptied;
     if (body.syncPurview) {
-      purview = await syncOverlayToPurview(next, {
-        ucHost: body.ucHost ? String(body.ucHost) : undefined,
-      });
+      // `ucHost` is deliberately NOT taken from the request body. It selected the
+      // destination for a call that carries a managed-identity bearer, so a caller
+      // could aim a credentialed request at any host — the same class as the Key
+      // Vault exfiltration closed in #2683 and the role-grant escalation in #2691.
+      // syncOverlayToPurview already falls back to firstUcHost() (config-derived),
+      // so removing the parameter loses no capability: it was pure convenience.
+      purview = await syncOverlayToPurview(next);
       await writePurviewSyncAudit({
         tenantId, who, identity: next.identity, fullName: next.fullName,
         synced: purview.synced, reason: purview.reason, guid: purview.guid,
