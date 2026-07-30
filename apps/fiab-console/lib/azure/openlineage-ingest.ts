@@ -93,7 +93,7 @@ export type MapResult =
  * ran `namespace.replace(/\/+$/, '')`. `/\/+$/` retries from every position
  * when the slash run is followed by a non-slash tail, which is quadratic:
  *
- *     namespace = 'abfss://data@st.dfs.core.windows.net/silver' + '/'*N + 'a'
+ *     namespace = 'abfss://data@st.dfs.<suffix>/silver' + '/'*N + 'a'
  *     N =  20_000 ->    219 ms
  *     N =  50_000 ->  1_357 ms
  *     N = 100_000 ->  6_362 ms
