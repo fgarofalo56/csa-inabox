@@ -15,6 +15,7 @@ Pure Python, no DuckDB import — unit-testable with zero Azure and zero engine.
 """
 from __future__ import annotations
 
+import os
 import re
 
 #: Leading keywords that can only ever read.
@@ -39,6 +40,10 @@ READ_PRAGMAS = frozenset(
 
 #: Statements that are unambiguously writes / privilege changes. Listed so the
 #: refusal message can name the verb instead of saying "unknown".
+#:
+#: `ATTACH` stays on this list. It is admitted ONLY through the deliberately
+#: narrow DuckLake carve-out below (`_ducklake_attach_ok`) — every other shape
+#: of ATTACH is still refused with the write message.
 WRITE_VERBS = frozenset(
     {
         "INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "DROP", "ALTER", "TRUNCATE",
@@ -47,6 +52,226 @@ WRITE_VERBS = frozenset(
         "GRANT", "REVOKE", "PREPARE", "EXECUTE", "DEALLOCATE", "PIVOT", "UNPIVOT",
     }
 )
+
+#: ── DuckLake read-only ATTACH carve-out ──────────────────────────────────────
+#: DuckLake keeps lakehouse table metadata in Postgres, and the ONLY way to read
+#: it is `ATTACH 'ducklake:postgres:<dsn>' AS <alias> (READ_ONLY)` followed by a
+#: SELECT. Before this carve-out the guard refused that ATTACH outright, so the
+#: whole `svc-ducklake-catalog` surface was unreachable no matter what the
+#: deployment wired — the request 400'd with `read_only` before DuckDB ever saw
+#: it. (Baking the `ducklake`/`postgres` extensions into the image was necessary
+#: but is downstream of this refusal.)
+#:
+#: The carve-out is intentionally the smallest thing that works:
+#:   1. target MUST start with `ducklake:` — no plain file/postgres/https ATTACH;
+#:   2. the `(READ_ONLY)` option MUST be present, so the attached catalog cannot
+#:      be written even by DuckDB;
+#:   3. the DSN must resolve to EXACTLY ONE host, and that host MUST end in a
+#:      known Azure PostgreSQL Flexible Server suffix, which bounds the outbound
+#:      connection an attacker-chosen DSN could open (the tier accepts SQL from
+#:      the authenticated Console BFF, so a creative caller must not be able to
+#:      point it at an arbitrary host);
+#:   4. at most ONE ATTACH per script, and the script must still contain a read.
+#: `DETACH` remains refused — the handle is connection-scoped and goes away with
+#: the cursor.
+#:
+#: ROUND-4 FIX — rule 3 was BYPASSABLE FIVE WAYS. The first implementation
+#: searched the DSN for a `host=…` substring (or the URI authority) and checked
+#: only THAT. libpq does not work that way, so every one of these was admitted
+#: while the connection went somewhere else entirely:
+#:   a. `host=ok.postgres.database.azure.com hostaddr=10.0.0.5` — libpq connects
+#:      to `hostaddr`; `host` is then only an SNI / certificate name.
+#:   b. `host=evil.example.com,ok.postgres.database.azure.com` — libpq accepts a
+#:      COMMA-SEPARATED host list and tries them left to right, so the
+#:      attacker-chosen host is contacted FIRST. `str.endswith` on the whole
+#:      value passed.
+#:   c. `host=ok.postgres.database.azure.com host=evil.example.com` — a repeated
+#:      keyword: libpq keeps the LAST, the old regex read the FIRST.
+#:   d. `postgresql://ok.postgres.database.azure.com/db?hostaddr=10.0.0.5` — URI
+#:      QUERY PARAMETERS are libpq connection keywords too, so the authority the
+#:      guard validated was not the host used.
+#:   e. `postgresql://evil.example.com,ok.postgres.database.azure.com/db` — the
+#:      multi-host list again, in URI form.
+#: The check below therefore VALIDATES THE WHOLE DSN instead of finding a host in
+#: it: `hostaddr` and `service` are refused outright (both redirect the
+#: connection past the name being checked), exactly one `host` may appear, and
+#: that value may not be a list. Anything it cannot parse with confidence is
+#: refused — fail closed. Refusals still never echo the DSN (it carries the
+#: admin password).
+_DUCKLAKE_PREFIX = "ducklake:"
+
+#: Overridable so a sovereign/air-gapped estate can name its own Postgres host
+#: suffix (e.g. a private-DNS-only zone) without patching the image.
+_DEFAULT_PG_HOST_SUFFIXES = (
+    ".postgres.database.azure.com",
+    ".postgres.database.usgovcloudapi.net",
+    ".postgres.database.chinacloudapi.cn",
+)
+
+
+def _allowed_pg_host_suffixes() -> tuple[str, ...]:
+    raw = os.environ.get("LOOM_DUCKLAKE_ALLOWED_HOST_SUFFIXES", "").strip()
+    if not raw:
+        return _DEFAULT_PG_HOST_SUFFIXES
+    parts = tuple(p.strip().lower() for p in raw.split(",") if p.strip())
+    return parts or _DEFAULT_PG_HOST_SUFFIXES
+
+
+#: `ATTACH '<single-quoted target>' AS <alias> (<options>)` — alias may be
+#: quoted or bare. Options are matched loosely and checked for READ_ONLY below.
+_ATTACH_RE = re.compile(
+    r"^\s*ATTACH\s+(?:IF\s+NOT\s+EXISTS\s+)?'((?:[^']|'')*)'\s+AS\s+"
+    r"(?:\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<opts>[^)]*)\)\s*$",
+    re.IGNORECASE,
+)
+
+#: URI form — `postgresql://[user[:pass]@]host[:port][/db][?opts]`. The password
+#: may itself contain '@' or '/', so anchor on the LAST '@' before the first
+#: '/' that follows the scheme.
+_URI_RE = re.compile(r"^\s*postgres(?:ql)?://(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+
+#: libpq connection keywords that move the connection somewhere OTHER than the
+#: `host` name being validated. None of them has a legitimate use in a DuckLake
+#: DSN Loom accepts, and each one defeats a host-suffix check:
+#:   hostaddr — a numeric address used INSTEAD of resolving `host`
+#:   service  — pulls host/hostaddr/port out of a pg_service.conf entry
+#:   passfile / sslrootcert etc. are harmless, so they are NOT listed: this set
+#:   is deliberately about connection REDIRECTION only.
+_REDIRECT_KEYWORDS = ("hostaddr", "service")
+
+#: A libpq keyword/value token: `key = value`, value unquoted (no whitespace).
+#: Quoted or backslash-escaped values are NOT parsed — see _keyword_pairs().
+_KEYWORD_PAIR_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s]*)")
+
+
+class _DsnRejected(Exception):
+    """Internal: carries the refusal reason. NEVER carries any DSN text."""
+
+
+def _keyword_pairs(dsn: str) -> list[tuple[str, str]]:
+    """Tokenize a libpq keyword/value DSN into (lowercased key, value) pairs.
+
+    Fails CLOSED on anything this simple tokenizer cannot claim to understand:
+    libpq also accepts single-quoted values with backslash escapes, and a guard
+    that half-parses those would be worse than one that refuses them. Loom's own
+    DSN is the URI form, so this path only serves a BYO connection string.
+    """
+    if "'" in dsn or "\\" in dsn:
+        raise _DsnRejected(
+            "the DuckLake DSN uses quoted or escaped libpq values, which this "
+            "read-only guard will not parse — supply the postgresql:// URI form"
+        )
+    return [(m.group(1).lower(), m.group(2)) for m in _KEYWORD_PAIR_RE.finditer(dsn)]
+
+
+def _single_host(value: str) -> str:
+    """Validate one `host` value and return it lowercased.
+
+    libpq accepts a COMMA-SEPARATED host list and tries the entries in order, so
+    a list is refused outright: allowing it would let an attacker put their own
+    host first and still satisfy a suffix check on the string as a whole.
+    """
+    host = value.strip().rstrip("/")
+    if "," in host:
+        raise _DsnRejected(
+            "the DuckLake DSN names MORE THAN ONE host (libpq tries a "
+            "comma-separated list in order); supply exactly one host"
+        )
+    if host.startswith("["):  # IPv6 literal
+        host = host[1:].split("]", 1)[0]
+    elif host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    host = host.strip().lower()
+    if not host:
+        raise _DsnRejected("the DuckLake DSN must name an explicit host")
+    return host
+
+
+def _dsn_host(target: str) -> str:
+    """Return the ONE host a `ducklake:postgres:<dsn>` target will connect to.
+
+    Raises :class:`_DsnRejected` with a precise, DSN-free reason when the DSN
+    does not resolve to exactly one host, or when it carries a keyword that would
+    redirect the connection away from that host (see `_REDIRECT_KEYWORDS`).
+    NEVER returns or reports any other part of the DSN — it carries a password.
+    """
+    dsn = target[len(_DUCKLAKE_PREFIX):]
+    # `ducklake:postgres:<dsn>` is the DuckLake form; the inner <dsn> may itself
+    # be a `postgresql://` URI or libpq keywords. Strip the `postgres:` selector
+    # ONLY when it is not already the URI scheme (`postgres://…`).
+    if dsn.lower().startswith("postgres:") and not dsn.lower().startswith("postgres://"):
+        dsn = dsn[len("postgres:"):]
+
+    uri = _URI_RE.match(dsn)
+    if uri:
+        rest = uri.group("rest")
+        before_query, _, query = rest.partition("?")
+        authority = before_query.split("/", 1)[0]
+        # Strip userinfo at the LAST '@' so a password containing '@' is safe.
+        if "@" in authority:
+            authority = authority.rsplit("@", 1)[1]
+        # A URI's query string is a libpq keyword list too: `?hostaddr=…` or a
+        # second `?host=…` silently replaces the authority we are validating.
+        if query:
+            for key, value in _keyword_pairs(query.replace("&", " ")):
+                if key in _REDIRECT_KEYWORDS:
+                    raise _DsnRejected(
+                        f"the DuckLake DSN sets '{key}' in its URI query, which redirects the "
+                        "connection away from the host name being checked"
+                    )
+                if key == "host":
+                    raise _DsnRejected(
+                        "the DuckLake DSN overrides 'host' in its URI query; put the host in "
+                        "the URI authority only"
+                    )
+        return _single_host(authority)
+
+    pairs = _keyword_pairs(dsn)
+    for key, _value in pairs:
+        if key in _REDIRECT_KEYWORDS:
+            raise _DsnRejected(
+                f"the DuckLake DSN sets '{key}', which redirects the connection away from the "
+                "host name being checked"
+            )
+    hosts = [value for key, value in pairs if key == "host"]
+    if not hosts:
+        raise _DsnRejected("the DuckLake DSN must name an explicit host")
+    if len(hosts) > 1:
+        # libpq keeps the LAST occurrence; a guard that reads the first is a
+        # bypass, so a repeated keyword is refused rather than resolved.
+        raise _DsnRejected("the DuckLake DSN repeats the 'host' keyword; supply it exactly once")
+    return _single_host(hosts[0])
+
+
+def ducklake_attach_reason(statement: str) -> str | None:
+    """Return None when `statement` is an admissible DuckLake ATTACH.
+
+    Otherwise return the precise reason it is refused, so the caller can put it
+    in the error rather than saying "ATTACH is a write".
+    """
+    match = _ATTACH_RE.match(strip_comments(statement))
+    if not match:
+        return (
+            "only the exact form ATTACH '<ducklake dsn>' AS <alias> (READ_ONLY) is admitted"
+        )
+    target = match.group(1).replace("''", "'")
+    if not target.lower().startswith(_DUCKLAKE_PREFIX):
+        return f"the attach target must start with '{_DUCKLAKE_PREFIX}'"
+    opts = [o.strip().upper() for o in match.group("opts").split(",")]
+    if "READ_ONLY" not in opts:
+        return "the (READ_ONLY) option is required"
+    try:
+        host = _dsn_host(target)
+    except _DsnRejected as rejected:
+        # Every message raised there is DSN-free by construction (see the
+        # password-leak test in tests/loom_duckdb/test_sqlguard.py).
+        return str(rejected)
+    if not any(host.endswith(suffix) for suffix in _allowed_pg_host_suffixes()):
+        return (
+            f"host '{host}' is not an Azure PostgreSQL Flexible Server endpoint "
+            "(set LOOM_DUCKLAKE_ALLOWED_HOST_SUFFIXES to widen this deliberately)"
+        )
+    return None
 
 _LINE_COMMENT = re.compile(r"--[^\n]*")
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
@@ -117,18 +342,40 @@ def assert_read_only(sql: str) -> list[str]:
     if not statements:
         raise SqlNotAllowedError("The query is empty. Type a SELECT and run it again.")
 
+    attach_seen = 0
+    read_seen = 0
     for statement in statements:
         verb = _first_token(statement)
         if verb in READ_VERBS:
+            read_seen += 1
             continue
         if verb == "PRAGMA":
             pragma = _first_token(statement[len("PRAGMA"):])
             if pragma.lower() in READ_PRAGMAS:
+                read_seen += 1
                 continue
             raise SqlNotAllowedError(
                 f"PRAGMA {pragma.lower() or '<empty>'} is not an introspection pragma. "
                 "The DuckDB serving tier admits read-only statements; run schema or "
                 "settings changes from the owning item's editor instead."
+            )
+        if verb == "ATTACH":
+            # DuckLake carve-out — see the block comment on WRITE_VERBS. Anything
+            # that is not the exact read-only DuckLake shape falls through to the
+            # write refusal below, with the precise reason attached.
+            reason = ducklake_attach_reason(statement)
+            if reason is None:
+                attach_seen += 1
+                if attach_seen > 1:
+                    raise SqlNotAllowedError(
+                        "Only one DuckLake ATTACH is admitted per script. Split the "
+                        "statements or attach a single catalog."
+                    )
+                continue
+            raise SqlNotAllowedError(
+                "ATTACH is a write/DDL statement. The DuckDB serving tier admits exactly "
+                "one narrow form — a read-only DuckLake catalog attach — and this one was "
+                f"refused because {reason}."
             )
         if verb in WRITE_VERBS:
             raise SqlNotAllowedError(
@@ -140,5 +387,11 @@ def assert_read_only(sql: str) -> list[str]:
             f"'{verb or '<empty>'}' is not a recognized read statement. The DuckDB serving "
             "tier admits SELECT / WITH / DESCRIBE / SHOW / EXPLAIN / SUMMARIZE and "
             "introspection PRAGMAs only."
+        )
+    if attach_seen and not read_seen:
+        # An ATTACH on its own mutates only connection state and returns nothing.
+        # Requiring a read keeps the carve-out a means to an end, not an end.
+        raise SqlNotAllowedError(
+            "A DuckLake ATTACH must be followed by a read statement in the same script."
         )
     return statements

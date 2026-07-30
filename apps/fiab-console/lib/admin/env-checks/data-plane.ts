@@ -223,16 +223,22 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     },
   },
   // ── N8 lab 1 — DuckLake catalog option (Postgres-backed lakehouse metadata) ──
-  //    Preview / opt-in: a forward bet on the DuckDB ecosystem ALONGSIDE N1's
-  //    Iceberg REST Catalog. Unset → the DuckLake editor honest-gates (Fix-it);
-  //    N1's IRC and every other surface are unaffected. Not a Fabric dependency.
+  //    DEFAULT-ON since 2026-07 (loom_default_on_opt_out): the Postgres store is
+  //    deployed by data-plane/ducklake-catalog-postgres.bicep and the DSN is
+  //    bound as a Key Vault secretRef, so a fresh deploy arrives wired. A
+  //    forward bet on the DuckDB ecosystem ALONGSIDE N1's Iceberg REST Catalog.
+  //    Unset only when the Azure Postgres quota gate trips → the DuckLake editor
+  //    honest-gates (Fix-it); N1's IRC and every other surface are unaffected.
+  //    Not a Fabric dependency.
+
   {
     id: 'svc-ducklake-catalog', category: 'data-plane', title: 'DuckLake catalog (Postgres-backed lakehouse metadata) — Preview', severity: 'optional',
     required: ['LOOM_DUCKLAKE_CATALOG_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_DUCKLAKE_CATALOG_URL to the connection string of the Postgres database that backs the DuckLake catalog metadata (postgresql://…/ducklake). DuckLake stores lakehouse table metadata in a SQL database instead of a metadata-file tree; the N2 DuckDB serving tier ATTACHes it (ducklake extension) and reads the Delta/Parquet data in place on your own ADLS Gen2. This is a Preview lab ALONGSIDE the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL), not a replacement — pick the catalog that matches your engine mix. Point it at an existing Azure Database for PostgreSQL flexible server (in-VNet, private endpoint). Unset → the DuckLake catalog editor renders a guided empty state and honest-gates; nothing else changes. No Microsoft Fabric.',
+      'LOOM_DUCKLAKE_CATALOG_URL is the connection string of the Postgres database that backs the DuckLake catalog metadata (postgresql://…/ducklake). DuckLake stores lakehouse table metadata in a SQL database instead of a metadata-file tree; the N2 DuckDB serving tier ATTACHes it (ducklake extension) and reads the Delta/Parquet data in place on your own ADLS Gen2. This is a lab ALONGSIDE the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL), not a replacement — pick the catalog that matches your engine mix. NOTHING TO DO on a normal deployment: platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep provisions the store by DEFAULT (private-endpoint-only Standard_B1ms flexible server) and admin-plane/main.bicep binds this var as a Key Vault secretRef, so a from-scratch COMMERCIAL deploy arrives wired. It is unset in four cases: the apps tier is off (deployAppsEnabled=false — the server is deliberately not billed before a Console exists to read it), an AKS boundary (the DuckDB engine that runs the ATTACH is Container-Apps-only), postgresQuotaAvailable=false, or you point it at your own server instead. GCC-HIGH AND IL5 SET postgresQuotaAvailable=false TODAY, so on those boundaries this gate is the expected state. PostgreSQL Flexible Server IS an Azure Government service (US Gov Virginia / Arizona / Texas), so that is not a service gap — the same flag also gates the OSS Airflow host, whose image is an unmirrored docker.io pull and whose metadata Postgres is created with public network access enabled, and both are being fixed before the sovereign flip (see the comment on postgresQuotaAvailable in params/gcc-high.bicepparam). A genuinely quota-restricted subscription requests an increase at https://aka.ms/postgres-request-quota-increase. Unset → the DuckLake catalog editor renders a guided empty state and honest-gates; nothing else changes. No Microsoft Fabric.',
     docs: 'https://ducklake.select/docs/stable/',
-    provisionedBy: 'operator-provided Azure Database for PostgreSQL flexible server (in-VNet); no new Loom app — the N2 DuckDB tier is the query engine. LOOM_DUCKLAKE_CATALOG_URL set on the Console app.',
+    provisionedBy: 'platform/fiab/bicep/modules/data-plane/ducklake-catalog-postgres.bicep — DEFAULT-ON, invoked by admin-plane/main.bicep (ducklakeCatalogActive). Private-endpoint-only Azure Database for PostgreSQL flexible server (Standard_B1ms, ~$16/mo/cloud); the assembled DSN is written to the Loom Key Vault and bound to the Console as the `loom-ducklake-catalog-url` secretRef — never a plain env value. No new Loom app: the N2 DuckDB tier is the query engine.',
+
     role: 'The N2 DuckDB tier UAMI reads the lake (Storage Blob Data Reader, already granted); the Postgres connection authenticates per the connection string (AAD token or a Key-Vault-stored credential).',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',

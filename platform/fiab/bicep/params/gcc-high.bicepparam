@@ -160,14 +160,54 @@ param appImageTags = {
   maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
   scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
   wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
+  // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
+  // deploys BY DEFAULT (duckdbTierActive). STATED EXPLICITLY rather than left to
+  // the module's `?? 'v0.1'` fallback because this is the tag the GOV TEMPLATE
+  // pulls, and it has to match what the Gov producer stamps:
+  //   producer .github/workflows/gov-provision-dataplane-images.yml
+  //            image_tag input, default v0.1  ->  az acr build --image loom-duckdb:v0.1
+  //   template <acr>/loom-duckdb:v0.1
+  // Round 2 had the producer stamp only the short SHA + `latest` while the
+  // template asked for v0.1 — a tag nothing produced, so the Gov app could never
+  // have pulled. Override BOTH sides together or neither.
+  // .github/workflows/deploy-fiab-gcch.yml image-preflights this tag against the
+  // Gov ACR before it adopts the live estate.
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
 }
 
-// Azure Database for PostgreSQL Flexible Server is quota-restricted in
-// usgovvirginia ("Subscriptions are restricted from provisioning in location
-// 'usgovvirginia'"), which blocks the OSS Airflow metadata DB. Skip the
-// Postgres-backed Airflow host so the core app-tier deploys; the airflow-job
-// editor honest-gates until the operator requests a quota increase
-// (https://aka.ms/postgres-request-quota-increase) and flips this true.
+// Azure Database for PostgreSQL Flexible Server IS available in Azure
+// Government — Microsoft Learn lists US Gov Virginia, US Gov Arizona and US Gov
+// Texas as supported regions (Intel v3/v4 compute; US Gov Virginia additionally
+// carries zone-redundant HA and geo-redundant backup):
+//   https://learn.microsoft.com/azure/postgresql/overview#azure-regions
+//   https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure#databases
+// So the `false` default below is NOT a sovereign service gap, and flipping it
+// true is the right END STATE for `loom_default_on_opt_out`.
+//
+// ROUND-4: THE FLIP IS DELIBERATELY NOT IN THIS PR. It stays `false` because
+// `postgresQuotaAvailable` gates TWO hosts, and enabling it here would drag the
+// OSS Airflow host into a sovereign boundary with two unrelated defects:
+//   1. SUPPLY CHAIN. `admin-plane/airflow.bicep` defaults `airflowImage` to
+//      `apache/airflow:2.10.5-python3.12` — an anonymous DOCKER HUB pull. No
+//      caller passes an ACR-mirrored override, and no image producer mirrors it,
+//      so a locked-egress / air-gapped GCC-High or IL5 CAE cannot pull it at all
+//      (and nothing Trivy-scans or cosign-verifies it on the way in).
+//   2. NETWORK POSTURE. `admin-plane/main.bicep` invokes airflow.bicep with
+//      `privateEndpointsEnabled: false`, which resolves to
+//      `publicNetworkAccess: 'Enabled'` plus a `0.0.0.0` firewall rule
+//      (`AllowAllAzureServicesAndResourcesWithinAzureIps`) on its metadata
+//      Postgres. That is an accepted documented carve-out in Commercial; turning
+//      it on in GCC-High / IL5 is a decision that needs its own review, not a
+//      side effect of a DuckLake PR.
+// Both belong to the same follow-up as the s3proxy ACR mirror (see the PR
+// description): mirror `apache/airflow` into each cloud's ACR, wire
+// `airflowImage`, give that Postgres a private endpoint — THEN flip this true.
+//
+// Consequence, stated plainly: on GCC-High the N8 DuckLake catalog store is
+// SKIPPED by default and the editor honest-gates with a Fix-it. That is the
+// pre-existing state (unchanged by this PR), not a new gate. The DuckDB serving
+// tier itself is NOT affected — it has no Postgres dependency and deploys by
+// default in both Gov boundaries.
 param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 
 // MSAL — Gov tenant client id+secret via env (don't commit)

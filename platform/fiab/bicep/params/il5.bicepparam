@@ -156,6 +156,18 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
+  // deploys BY DEFAULT (duckdbTierActive). STATED EXPLICITLY rather than left to
+  // the module's `?? 'v0.1'` fallback because this is the tag the IL5 TEMPLATE
+  // pulls, and it has to match what the IL5 producer stamps:
+  //   producer .github/workflows/gov-provision-dataplane-images.yml
+  //            boundary=il5, image_tag default v0.1 -> az acr build --image loom-duckdb:v0.1
+  //   template <acr>/loom-duckdb:v0.1
+  // Round 2 had the producer stamp only the short SHA + `latest` while the
+  // template asked for v0.1 — a tag nothing produced. Override BOTH or neither.
+  // .github/workflows/deploy-fiab-il5.yml image-preflights this tag before it
+  // deploys over a live estate.
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
 }
 
 // MSAL — IL5 tenant client id+secret via env (don't commit)
@@ -178,6 +190,32 @@ param aiFoundryEnabled = false
 // (prompts pass unfiltered, never a silent claim of filtering).
 param contentSafetyEnabled = false
 param apimEnabled = true
+
+// Postgres-backed day-one services (OSS Airflow metadata DB + the N8 DuckLake
+// catalog store). Azure Database for PostgreSQL Flexible Server IS an Azure
+// Government service — Microsoft Learn lists US Gov Virginia / Arizona / Texas
+// as supported regions (https://learn.microsoft.com/azure/postgresql/overview#azure-regions),
+// and the Gov comparison page records NO Flexible Server feature gaps beyond
+// Cosmos DB for PostgreSQL and Single Server extras
+// (https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure#databases).
+// So `false` is not a service gap; it is a DELIBERATE, reviewable IL5 posture
+// stated here rather than inherited.
+//
+// ROUND-4: kept OFF in this PR. `postgresQuotaAvailable` gates TWO hosts, and
+// turning it on would bring the OSS Airflow host into IL5 with (1) an anonymous
+// `apache/airflow:2.10.5-python3.12` DOCKER HUB pull that nothing mirrors into
+// the IL5 ACR (unpullable in a locked-egress boundary, unscanned on the way in),
+// and (2) a metadata Postgres created with `publicNetworkAccess: 'Enabled'` and a
+// `0.0.0.0` AllowAllAzureServices firewall rule (admin-plane passes
+// `privateEndpointsEnabled: false`). Neither belongs in an IL5 boundary as a side
+// effect of a DuckLake change. Both are handled by the follow-up that mirrors
+// upstream images into each cloud's ACR and adds the private endpoint; flip this
+// true there.
+//
+// Consequence: the N8 DuckLake catalog store is skipped in IL5 and its editor
+// honest-gates with a Fix-it (the pre-existing state). The DuckDB serving tier
+// has no Postgres dependency and still deploys by default.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 param hubFirewallEnabled = true
 param aiSearchEnabled = false
 // Azure Analysis Services is NOT available in the DoD regions — pin OFF (main.bicep

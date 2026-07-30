@@ -577,6 +577,13 @@ param appImageTags object = {
   // Pinned image version; read with `?? 'v0.1'` so an operator-supplied bag
   // that predates N4 keeps deploying.
   transformRunner: 'v0.1'
+  // loom-duckdb — N2b/N3 DuckDB serving tier + Arrow Flight SQL wire
+  // (data-plane/duckdb-aca.bicep). Backs LOOM_DUCKDB_URL / LOOM_FLIGHTSQL_URL
+  // and is the engine that runs DuckLake's `ATTACH 'ducklake:postgres:<dsn>'`.
+  // Built by full-app-deploy-commercial.yml (Commercial) and
+  // gov-provision-dataplane-images.yml (GCC-High / IL5). Read with
+  // `?? 'v0.1'` so an operator bag that predates this key keeps deploying.
+  duckdb: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -740,6 +747,82 @@ var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApp
 // AND injected to the Console as the ACA secret `loom-airflow-admin-password`.
 var airflowAdminPassword = 'Af7${uniqueString(loomGeneratedSecretSeed, 'loom-airflow-admin-v1')}!Qz'
 var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airflow-wsk-v1')
+
+// ── N8 lab 1 — DuckLake catalog metadata store (default-ON) ───────────────────
+// ducklakeCatalogEnabled (var, default true — same 256-param-cap rationale as
+// airflowHostEnabled / scriptRunnerEnabled above): deploys the DuckLake catalog
+// Postgres Flexible Server (data-plane/ducklake-catalog-postgres.bicep) and
+// binds LOOM_DUCKLAKE_CATALOG_URL on the Console via a Key Vault secretRef.
+//
+// Until 2026-07 `svc-ducklake-catalog` was documented as "operator-provided …
+// not bicep-emitted" — a day-one gate the operator had to close by hand, which
+// is precisely the opt-IN posture loom_default_on_opt_out forbids. It is now
+// deployed by default so a FRESH push-button deploy lights the gate.
+//
+// Gated on postgresQuotaAvailable for the SAME honest Azure reason as the
+// Airflow metadata DB: some sovereign subscriptions are quota-restricted from
+// provisioning Microsoft.DBforPostgreSQL/flexibleServers. That is a regional
+// quota gate, NOT a Fabric one — when it trips the DuckLake editor renders in
+// full and honest-gates with a Fix-it, and every other surface is unaffected.
+// Cost: one Standard_B1ms burstable server ≈ $16/mo/cloud (see the module).
+//
+// ROUND-3 FIX — the activation gate now matches `airflowHostActive` exactly
+// (`containerApps && deployAppsEnabled && postgresQuotaAvailable`). Round 2
+// gated only on postgresQuotaAvailable, which billed the B1ms in two states
+// where NOTHING can consume it:
+//   * the documented two-phase from-scratch PHASE 1 (`deployAppsEnabled=false`,
+//     no-vaporware.md) — the store came up, wrote its DSN to Key Vault, and
+//     billed while no Console and no DuckDB tier existed;
+//   * an AKS boundary — `duckdbTierActive` requires containerApps, so the engine
+//     that runs the `ATTACH` is never deployed and the catalog has no reader.
+// Postgres Flexible Server has no scale-to-zero tier, so an unconsumed server is
+// a permanent charge, not an idle one. Default-ON must be free-at-idle; this is
+// how it becomes free BEFORE the app tier exists too.
+var ducklakeCatalogEnabled = true
+var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
+
+// DuckLake Postgres administrator password. UNPREDICTABLE — derived from
+// loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
+// Character set [A-Za-z0-9!] keeps it URL-safe inside the libpq DSN. It is
+// passed @secure() to the module, which assembles the DSN and writes it to Key
+// Vault; the Console binds it as a secretRef and NEVER as a plain env value.
+var ducklakePgPassword = 'Dl7${uniqueString(loomGeneratedSecretSeed, 'loom-ducklake-pg-v1')}!Qz'
+var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
+
+// ── N8 lab 3 — S3-compatible ADLS gateway: NOT DEPLOYED FROM HERE ────────────
+// ROUND-4 SPLIT (PR #2640). The default-ON s3proxy gateway was pulled out of
+// this PR and moved to a follow-up. It is NOT a "we ran out of time" deferral —
+// the surface had two unfixed supply-chain/documentation defects that could not
+// be closed at template level:
+//   1. The only shipped lane on which the gateway could ever deploy is the
+//      dlz-attach pass (this module's branch needed a lake bound at admin-plane
+//      time, which no shipped bicepparam produces), and on that lane the image
+//      resolved to an anonymous `docker.io/andrewgaul/s3proxy:3.3.0` pull: the
+//      hub-ACR coordinate arrives only in `hubCoordinates`, and NO producer of
+//      dlz-attach parameters passes that object (deploy-fiab-*.yml pass flat
+//      `hub*` params; the orchestrator's `_HUB_COORDINATE_FIELDS` and the BFF's
+//      `HUB_COORD_PARAM` have no acrLoginServer key; write-tenant-topology.sh
+//      never captures one). A third-party image pulled from the internet is not
+//      acceptable in a federal estate and is unpullable in an air-gapped one.
+//   2. On that same lane `keyVaultId` was empty, so the two Key Vault secrets
+//      the tutorial/editor tell an operator to read (loom-s3-gateway-access-key
+//      / -secret-key) were never created — a documented step that cannot be
+//      performed.
+// The follow-up closes both together: mirror the image into every cloud's ACR,
+// thread the ACR + Key Vault coordinates through the hub-coordinate chain end to
+// end, and only then re-enable. Until then `LOOM_S3_GATEWAY_URL` stays on the
+// check-env-sync allowlist and the editor honest-gates, exactly as before.
+
+// ── N2b/N3 — loom-duckdb serving tier (default-ON) ────────────────────────────
+// The engine that runs DuckLake's `ATTACH 'ducklake:postgres:<dsn>'` and every
+// other DuckDB-backed surface. Nothing invoked data-plane/duckdb-aca.bicep
+// before this change, so LOOM_DUCKDB_URL was emitted by NO bicep and the
+// DuckLake catalog gate above was cosmetic — the Postgres store deployed and
+// billed while the editor still honest-gated on `duckdb_tier_required`.
+// Scale-to-zero + 1 vCPU / 2 GiB overrides are applied at the module call so
+// default-ON is ~$0 at idle (see the block there).
+var duckdbTierEnabled = true
+var duckdbTierActive = duckdbTierEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
 param postgresQuotaAvailable bool = true
@@ -4770,6 +4853,25 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomPipelineCiEnabled ? [
             { name: 'LOOM_CI_TOKEN', secretRef: 'loom-ci-token' }
           ] : [],
+          // N8 lab 1 — DuckLake catalog metadata store (gate svc-ducklake-catalog).
+          // The DSN carries a password, so it is bound as a Key Vault secretRef
+          // and NEVER as a plain env value. Present whenever the Postgres store
+          // deployed; when the sovereign Postgres quota gate trips
+          // (postgresQuotaAvailable=false) the var is simply absent and the
+          // DuckLake editor renders in full with its honest Fix-it.
+          ducklakeCatalogActive ? [
+            { name: 'LOOM_DUCKLAKE_CATALOG_URL', secretRef: 'loom-ducklake-catalog-url' }
+          ] : [],
+          // N2b/N3 — loom-duckdb serving tier (gate svc-loom-duckdb). The engine
+          // that runs DuckLake's ATTACH and every other DuckDB-backed surface.
+          // Round 2: these two vars were emitted by NO bicep before this change,
+          // which is what made svc-ducklake-catalog cosmetic on a fresh deploy.
+          // LOOM_FLIGHTSQL_URL is empty when the Flight wire is off — the module
+          // returns '' and the ADBC/JDBC panel honest-gates on it.
+          duckdbTierActive ? [
+            { name: 'LOOM_DUCKDB_URL', value: 'https://${duckdbTier!.outputs.fqdn}' }
+            { name: 'LOOM_FLIGHTSQL_URL', value: duckdbTier!.outputs.flightEndpoint }
+          ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
           // the other Loom apps; the External-MCP panel reads this to offer the
           // bridged npx/uvx servers for one-click registration. Empty when the
@@ -4855,6 +4957,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // reuse the loom-msal-client-secret confidential client above.
           !empty(loomGithubMcpPatKvSecret) ? [
             { name: 'loom-github-mcp-pat', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomGithubMcpPatKvSecret}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // N8 lab 1 — the DuckLake catalog DSN. KV-backed, NEVER a literal:
+          // data-plane/ducklake-catalog-postgres.bicep assembles the
+          // postgresql:// string (with its @secure() seed-derived password) and
+          // writes it to the Loom Key Vault; this reads it back at deploy time
+          // through the Console UAMI's Key Vault Secrets User grant. Referencing
+          // the module's own output name (not the local var) makes the ACA app
+          // wait for the secret to exist before it binds it.
+          ducklakeCatalogActive ? [
+            { name: 'loom-ducklake-catalog-url', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${ducklakeCatalog!.outputs.catalogUrlSecretName}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }
@@ -5128,6 +5240,98 @@ module airflow 'airflow.bicep' = if (airflowHostActive) {
     // (Entra is off on this control-plane metadata DB; the seed-derived password +
     // TLS gate it). Compliance carve-out per docs/best-practices/security-compliance.md.
     privateEndpointsEnabled: false
+  }
+}
+
+// =====================================================================
+// N8 lab 1 — DuckLake catalog metadata store (DEFAULT-ON, gate svc-ducklake-catalog).
+//
+// DuckLake keeps lakehouse table metadata in a SQL database instead of a
+// metadata-file tree; the N2 DuckDB serving tier ATTACHes it and reads the
+// Delta/Parquet data in place on the deployment's own ADLS Gen2. This is that
+// SQL database: a private-endpoint-only Azure Database for PostgreSQL Flexible
+// Server (Standard_B1ms — the smallest SKU Azure sells) whose connection string
+// is written to the Loom Key Vault and bound to the Console as a secretRef.
+//
+// A DEDICATED server, not a second database on the Airflow metadata server:
+// that one is single-admin password auth (bicep cannot create a scoped Postgres
+// role), so sharing it would hand the DuckLake DSN full rights over Airflow's
+// control plane — and both are burstable, so a catalog scan storm could burn
+// the credit balance the scheduler heartbeat depends on. Full rationale + cost
+// in the module header.
+// =====================================================================
+module ducklakeCatalog '../data-plane/ducklake-catalog-postgres.bicep' = if (ducklakeCatalogActive) {
+  name: 'ducklake-catalog-postgres'
+  params: {
+    location: location
+    administratorPassword: ducklakePgPassword
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    // The hub has no privatelink.postgres zone, so the module creates it and
+    // links the hub VNet (which owns both the PE subnet and the Container Apps
+    // subnet) — a from-scratch deploy resolves the server privately with no
+    // hub prerequisite.
+    //
+    // ZONE-COLLISION CONTRACT (round-2). Azure rejects a second
+    // virtualNetworkLink to a DIFFERENT zone of the same name on the same VNet.
+    // Any other Loom module that stands up a Postgres Flexible Server behind a
+    // private endpoint on this VNet — notably LU-1's
+    // data-plane/loom-unity-postgres.bicep, which is a standalone out-of-band
+    // entrypoint — MUST consume the zone this module creates rather than create
+    // its own. It is surfaced as the `ducklakePrivateDnsZoneId` output below;
+    // pass it as that module's `privateDnsZoneId`. Deploying both into the SAME
+    // resource group is also fine (identical resource, idempotent); it is only
+    // a cross-RG second zone of the same name that conflicts.
+    entraAdminPrincipalId: identity.outputs.uamiConsolePrincipalId
+    entraAdminPrincipalName: identity.outputs.uamiConsoleName
+    keyVaultId: keyvault.outputs.keyVaultId
+    catalogUrlSecretName: ducklakeCatalogUrlSecretName
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// N2b/N3 — loom-duckdb serving tier (DEFAULT-ON, gate svc-loom-duckdb).
+//
+// Round-2 fix. LOOM_DUCKDB_URL was emitted by NO bicep anywhere: duckdb-aca.bicep
+// existed but nothing invoked it, and the var stayed on the check-env-sync
+// allowlist as "deployed out-of-band". That made svc-ducklake-catalog cosmetic —
+// the Postgres store deployed and billed, while listDucklakeTables() threw 503
+// `duckdb_tier_required` before it ever reached it, because the DuckDB engine
+// that runs the `ATTACH 'ducklake:postgres:…'` did not exist. The tier is now
+// deployed by default and both vars are bound on the Console.
+//
+// SCALE-TO-ZERO (loom_default_on_opt_out): the module's own default is
+// minReplicas 1 / 2 vCPU / 4 GiB (~$120-240/mo/cloud), which is the right shape
+// for an operator who explicitly wants an always-warm interactive tier but the
+// WRONG shape for a default-ON service. The orchestrator overrides to
+// minReplicas 0 / 1 vCPU / 2 GiB so "on by default" is also ~$0 at idle; the
+// trade is a container cold start (~5-15 s) on the first query after an idle
+// window, which is disclosed on the runtime-flag description. Admins get the
+// DISABLE toggle, never an enablement gate.
+//
+// LAKE ROLE: `assignLakeRole: false`. The lake lives in the DLZ RG (and on a
+// dlz-attach estate a different SUBSCRIPTION), so the module's own in-RG role
+// assignment cannot resolve it; the Console UAMI this app runs as already holds
+// Storage Blob Data Contributor on the lake via console-azure-connections-rbac.
+// =====================================================================
+module duckdbTier '../data-plane/duckdb-aca.bicep' = if (duckdbTierActive) {
+  name: 'loom-duckdb'
+  params: {
+    location: location
+    duckdbConfig: {
+      environmentId: containerPlatformModule.outputs.caeId
+      uamiId: identity.outputs.uamiConsoleId
+      uamiPrincipalId: identity.outputs.uamiConsolePrincipalId
+      acrLoginServer: registry.outputs.acrLoginServer
+      image: '${registry.outputs.acrLoginServer}/loom-duckdb:${appImageTags.?duckdb ?? 'v0.1'}'
+      lakeStorageAccountName: loomStorageAccount
+      assignLakeRole: false
+      minReplicas: 0
+      cpu: '1.0'
+      memory: '2Gi'
+    }
+    complianceTags: complianceTags
   }
 }
 
@@ -5940,6 +6144,12 @@ output catalogEndpoint string = catalogPrimary == 'purview'
 output keyVaultUri string = keyvault.outputs.keyVaultUri
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output acrLoginServer string = registry.outputs.acrLoginServer
+
+@description('Container Apps managed-environment resource id (empty on an AKS boundary). Surfaced into topologyManifest.hub.caeId so a future dlz-attach pass can deploy a hub-resident data-plane app into the SAME environment instead of guessing the name. NOTE: nothing consumes it yet — no dlz-attach parameter producer passes a hubCoordinates object, so threading it through that chain is a prerequisite for any such workload (see the comment on this field in the root main.bicep topologyManifest output).')
+output caeId string = containerPlatformModule.outputs.caeId
+
+@description('Resource id of the privatelink.postgres.<sovereign-suffix> private DNS zone the DuckLake catalog store created (empty when the Postgres quota gate skipped it). ZONE-COLLISION CONTRACT: any other module standing up a Postgres Flexible Server behind a private endpoint on the hub VNet — notably LU-1\'s data-plane/loom-unity-postgres.bicep — must pass THIS id as its `privateDnsZoneId` instead of creating a second same-named zone, which Azure rejects when both link the same VNet.')
+output ducklakePrivateDnsZoneId string = ducklakeCatalogActive ? ducklakeCatalog!.outputs.privateDnsZoneId : ''
 output uamiConsoleId string = identity.outputs.uamiConsoleId
 output uamiConsolePrincipalId string = identity.outputs.uamiConsolePrincipalId
 output uamiConsoleName string = identity.outputs.uamiConsoleName

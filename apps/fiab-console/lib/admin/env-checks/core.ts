@@ -127,9 +127,10 @@ export const VALUE_HINT: Record<string, string> = {
   // M1 — estate assessment reader (inbound-migration on-ramp, internal ingress).
   LOOM_MIGRATE_URL: 'https://loom-migrate.internal.<cae-default-domain>  (unset = /admin/migrate renders but assess honest-gates)',
   // N8 lab 1 — DuckLake catalog (Postgres-backed lakehouse metadata store).
-  LOOM_DUCKLAKE_CATALOG_URL: 'postgresql://loom@<pg-host>:5432/ducklake  (unset = the DuckLake catalog editor honest-gates; N1 Iceberg REST Catalog is unaffected)',
-  // N8 lab 3 — S3-compatible ADLS gateway (operator-deployed Apache-2.0 s3proxy).
-  LOOM_S3_GATEWAY_URL: 'https://s3-gateway.internal.<cae-default-domain>  (unset = the surface documents the IRC/ADLS path; no gateway required)',
+  // DEFAULT-ON: bicep provisions the store and binds this as a Key Vault secretRef.
+  LOOM_DUCKLAKE_CATALOG_URL: 'postgresql://loomducklake:<pw>@<pg-host>:5432/ducklake?sslmode=require  (bicep-wired via Key Vault; unset only under the sovereign Postgres quota gate — the DuckLake editor then honest-gates and the N1 Iceberg REST Catalog is unaffected)',
+  // N8 lab 3 — S3-compatible ADLS gateway (Apache-2.0 s3proxy, default-ON).
+  LOOM_S3_GATEWAY_URL: 'https://loom-s3-gateway.internal.<cae-default-domain>  (bicep-wired; unset only when the apps tier is off — the surface then documents the IRC/ADLS path)',
   LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',

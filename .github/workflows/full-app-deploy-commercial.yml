@@ -211,9 +211,11 @@ jobs:
           - app: loom-transform-runner
             ctx: ./apps/loom-transform-runner
           # N2b/N3 — the DuckDB serving tier + Arrow Flight SQL wire. The image
-          # bakes the azure/httpfs/delta/iceberg extensions in at build time, so
-          # the running container needs no extension repository (IL5). Must be in
-          # ACR before data-plane/duckdb-aca.bicep is deployed out-of-band.
+          # bakes the azure/httpfs/delta/iceberg extensions in at build time (plus
+          # `postgres`/`ducklake`, which the DuckLake catalog ATTACH needs), so the
+          # running container needs no extension repository (IL5). admin-plane/
+          # main.bicep now deploys this tier BY DEFAULT (duckdbTierActive) and binds
+          # LOOM_DUCKDB_URL, so the image MUST be in ACR before the app phase.
           - app: loom-duckdb
             ctx: ./apps/loom-duckdb
     steps:
