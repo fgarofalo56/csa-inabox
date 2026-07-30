@@ -17,6 +17,8 @@ export const OBSERVABILITY_GATE_META: Record<string, GateMeta> = {
     // deployed by synthetic-monitor-job.bicep (default-ON via observabilityConfig).
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_UAT_RESULTS_ACCOUNT: L.storage },
+    autoResolveNote:
+      'Wired by a push-button deploy, in EVERY topology and BOTH clouds: admin-plane/main.bicep emits LOOM_SYNTHETIC_MONITOR_ENABLED / LOOM_UAT_RESULTS_ACCOUNT / LOOM_UAT_RESULTS_CONTAINER from admin-plane/uat-results-storage.bicep, which CREATES the account, the uat-results container and its 30-day lifecycle rule and grants the Console UAMI Storage Blob Data Contributor on it. The account is reached over a blob private endpoint (public network access disabled, shared keys disabled — managed identity only). The runner image (loom-uat) is built by the Commercial app-deploy image matrix and, in Gov, by .github/workflows/gov-build-images.yml. Round-2 fix (#2641): this used to point at the DLZ lake account, which is EMPTY on every shipped parameter file (all pin topology=tenant), so the gate was red on every from-scratch install and the container did not exist either. HONEST LIMIT — results still only appear once the runner can actually sign in. The J1 MSAL login probe signs in as the standing automation account svc-loom-synthetic@limitlessdata.ai, whose sign-in is blocked by tenant Conditional Access until a TENANT ADMIN scopes a CA exclusion for it. Nothing in this repo can automate that. Until that exclusion exists the Journeys tab lists the minted-session journeys only, and stays EMPTY in a tenant where CA also blocks the minted path. See docs/fiab/runbooks/synthetic-journeys.md.',
   },
   'svc-synthetic-login': {
     surfaces: [

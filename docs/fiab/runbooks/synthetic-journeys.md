@@ -15,6 +15,68 @@ Six real end-to-end journeys run against the LIVE deployment every 15 minutes, i
 
 Exit-code semantics: **realFails only** (honest infra gates exit 0). A `Failed` execution ⇒ a code or sign-in regression.
 
+## What a push-button deploy wires — and the one thing it cannot
+
+Everything the `svc-synthetic-monitor` gate needs is deployed, with no operator step:
+
+| Piece | Deployed by |
+|---|---|
+| `LOOM_SYNTHETIC_MONITOR_ENABLED` / `LOOM_UAT_RESULTS_ACCOUNT` / `LOOM_UAT_RESULTS_CONTAINER` on the Console | `admin-plane/main.bicep` (`observabilityConfig`, default ON) |
+| The results **storage account**, the `uat-results` **container**, and its 30-day lifecycle rule on `uat-runs/` | `admin-plane/uat-results-storage.bicep` — a dedicated admin-plane account, `publicNetworkAccess: Disabled` behind a blob private endpoint, `allowSharedKeyAccess: false` (managed identity only) |
+| Storage Blob Data Contributor for the Console UAMI on that account | `admin-plane/uat-results-storage.bicep` (same module, same RG — no cross-RG assignment to get wrong) |
+| The scheduled `loom-synthetic-monitor` job | `admin-plane/synthetic-monitor-job.bicep` |
+| The `loom-uat` runner image the job executes | **Commercial:** the build matrix in `full-app-deploy-commercial.yml` (the from-scratch app phase); on demand, dispatch `build-fiab-images-acr-tasks.yml` with `apps: loom-uat`. **Gov (GCC-High + IL5):** `gov-build-images.yml` (the fresh-deploy image producer — resolves the admin RG/ACR by convention, so it works before any app is running). It is deliberately out of the push-triggered `all` list — a ~2 GB Playwright image is not worth rebuilding on every console push. The console image is slimmed of `e2e/`, so this second image out of the console context is the only one carrying the journeys, and the build un-ignores `e2e/` + `tests/` for that context. |
+
+> **Round-2 correction (PR #2641).** The three env vars used to be sourced from
+> the DLZ lake account, and the container from `landing-zone/storage.bicep`.
+> Neither exists on the canonical path: every shipped parameter file — including
+> `gcc-high.bicepparam` and `il5.bicepparam` — pins `topology = 'tenant'`, and
+> `main.bicep` only derives a DLZ account name when `topology = 'single-sub'`.
+> So `LOOM_UAT_RESULTS_ACCOUNT` was empty and the container did not exist on
+> **every** from-scratch install in **both** clouds. The dedicated admin-plane
+> account above removes the topology dependence entirely.
+>
+> The runner's uploader also hard-coded `blob.core.windows.net`. Because the
+> upload is best-effort (wrapped in a `try`/`catch`), a Gov run reported success
+> while writing nothing. The job now receives `LOOM_STORAGE_BLOB_SUFFIX` derived
+> from `environment().suffixes.storage`, so GCC-High / IL5 write to
+> `blob.core.usgovcloudapi.net`.
+
+**The thing no deploy can do: the Entra Conditional Access exclusion.** The
+runner signs in as a standing automation account
+(`svc-loom-synthetic@<your-tenant-domain>` — the UPN in
+`observabilityConfig.syntheticLoginUpn`). Until a **tenant admin**
+scopes a Conditional Access exclusion for it, that sign-in is blocked, the run
+produces no verdicts, and **the Journeys tab stays empty** — the wiring above
+makes the surface honest, it does not make results appear. This is a one-time
+human action in Entra; nothing in the repo can automate it. Scope it to the
+monitor's egress (a named location), never as a blanket MFA carve-out, and pair
+it with the unexpected-use sign-in alert in the J1 section below.
+
+**The results store is created by the deploy, not merely named.**
+`admin-plane/uat-results-storage.bicep` deploys the storage account, its
+`blobServices/default`, the **`uat-results` container itself**, the 30-day
+lifecycle rule on `uat-runs/`, the blob private endpoint and the Console UAMI's
+Storage Blob Data Contributor grant — with `publicNetworkAccess: 'Disabled'` and
+`allowSharedKeyAccess: false`, so there is no key to leak. It is gated on
+`syntheticMonitorEnabled` **only** (not `deployAppsEnabled`), so the container
+already exists when phase 2 of the two-phase image path brings the apps up, and
+`LOOM_UAT_RESULTS_ACCOUNT` / `_CONTAINER` are read from that module's outputs —
+they cannot be populated by a deployment that did not create the container.
+
+**Cost, honestly:** the blob **private endpoint** is a per-hour charge of roughly
+**$7-8/month per cloud** whether or not the runner ever writes, plus cents of
+Standard_LRS storage. It bills while the Conditional Access exclusion above is
+still missing and the Journeys tab is still empty. Set
+`privateEndpointSubnetId=''` on the module if an estate would rather not pay it.
+
+**Gov image supply:** the `loom-uat` runner image is built by
+`.github/workflows/gov-build-images.yml` (Gov) and
+`full-app-deploy-commercial.yml` (Commercial). The Gov lane is new and — as of
+this writing — **has never been executed**; the first dispatch is its test. It
+pushes `:latest`, which is the tag `synthetic-monitor-job.bicep` pulls, and it
+fails loudly if that tag is not in the registry afterwards.
+
 ## Triage a red run
 
 1. Open the **Journeys tab** — the failing journey's note names the endpoint + status.

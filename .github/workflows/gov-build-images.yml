@@ -1,0 +1,423 @@
+name: gov-build-images
+
+# CSA Loom — the Azure Government IMAGE PRODUCER.
+#
+# ⚠️ THIS WORKFLOW HAS NEVER BEEN EXECUTED. It is new in PR #2641 and, as of
+# this commit, `gh run list --workflow gov-build-images.yml` returns NOTHING.
+# A green CI run on this PR proves the YAML parses and the repo lints — it does
+# NOT prove this lane builds anything. Treat the first dispatch as the test.
+# Everything downstream of it is written to fail LOUDLY rather than assume it
+# worked: see the "Verify the pulled tag exists" step below, and the image
+# preflight below that refuses to declare success unless every tag a Gov
+# template pulls is really in the registry.
+#
+# TAGS — THE THING THAT MUST MATCH
+#   Every Gov .bicepparam resolves image tags with
+#   `readEnvironmentVariable('LOOM_<X>_TAG', 'v0.1')`, and admin-plane/main.bicep
+#   falls back to `appImageTags.?<app> ?? 'v0.1'`. So the template pulls
+#   `<acr>.azurecr.us/<app>:v0.1` unless the deployer exports an override. A
+#   build lane that pushed only `:<sha>` / `:latest` would leave ARM pointing at
+#   a tag that does not exist — the app cannot pull and, on an app that is
+#   already LIVE, the new revision fails while the old one is superseded. This
+#   lane therefore pushes `:v0.1` (default, overridable) AND `:<short-sha>` AND
+#   `:latest`, and asserts every one of them resolved before it exits.
+#
+#   The per-app matrix it is matching (verified against the param files):
+#     loom-uat      not in appImageTags at all; synthetic-monitor-job.bicep
+#                   defaults to `${acrLoginServer}/loom-uat:latest` -> :latest
+#     loom-console  gcc-high.bicepparam -> 'v0.1'; il5.bicepparam -> 'v3.0'
+#                   (LOOM_CONSOLE_TAG). The IL5 build therefore ALSO pushes
+#                   :v3.0, or an IL5 deploy would reference a missing image.
+#
+# WHY THIS EXISTS (round-2 fix, PR #2641)
+# ---------------------------------------
+# Commercial has a real from-scratch app phase: full-app-deploy-commercial.yml
+# `az acr build`s EVERY app image into the deployment's own ACR, scans + signs
+# them, then rolls the Container Apps. Azure Government had NO equivalent —
+# deploy-fiab-gcch.yml / deploy-fiab-il5.yml contain no `az acr build` at all,
+# and gov-console-roll.yml builds ONLY loom-console.
+#
+# That gap is not cosmetic. A fresh Gov subscription deploys main.bicep with
+# gcc-high.bicepparam / il5.bicepparam, both of which set
+# containerPlatform='containerApps' + deployAppsEnabled=true, so ARM creates
+# every default-ON Container App pointing at
+# `<acr>.azurecr.us/<app>:<tag>`. If nothing ever built that image, the app
+# cannot pull and the deploy fails. This repo has been bitten by exactly that
+# twice. An ACA app pointing at an image nobody builds is not "default-ON", it
+# is a broken deploy.
+#
+# So: this workflow is the Gov half of the documented two-phase image path.
+#
+#   Phase 1  az deployment sub create … deployAppsEnabled=false   (infra only)
+#   Phase 2  THIS WORKFLOW                                        (build images)
+#   Phase 3  az deployment sub create … deployAppsEnabled=true    (apps come up)
+#
+# WHAT IT DOES NOT DEPEND ON
+#   This workflow does NOT read coordinates off
+#   a RUNNING loom-console. It resolves the admin RG by the same deterministic
+#   convention main.bicep uses (rg-csa-loom-admin-<location>) and finds the ACR
+#   inside it, so it runs on a subscription where no app has ever started.
+#
+# BOUNDARIES
+#   Both GCC-High and IL5 run in AzureUSGovernment on the same deploy SP, and
+#   both param files pin usgovvirginia. The `boundary` input selects which one
+#   is being built for; `location` / `resource_group` / `acr` override the
+#   convention for an estate that named things differently.
+#
+# SUPPLY CHAIN (SC1)
+#   Same gate as the Commercial matrix and gov-console-roll: Trivy CRITICAL
+#   (fail-closed) then keyless cosign sign + verify, both against the pushed
+#   digest, BEFORE anything is rolled. Sigstore is reached from the
+#   GitHub-hosted runner, not from inside the Gov boundary, so this is
+#   cloud-invariant. `skip_supply_chain` is the loud emergency valve.
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Sovereign boundary to build for.'
+        type: choice
+        default: gcc-high
+        options:
+          - gcc-high
+          - il5
+      apps:
+        description: 'Comma-separated app images to build. Default = the console plus the two images the default-ON gates need.'
+        type: string
+        default: 'loom-console,loom-uat'
+      tag:
+        description: 'The DEPLOY-REFERENCED tag. Must match what the Gov .bicepparam pulls — v0.1 unless you export LOOM_<X>_TAG for the deployment too. Pushed alongside :<short-sha> and :latest.'
+        type: string
+        default: 'v0.1'
+      location:
+        description: 'Override the region (default usgovvirginia — what both Gov param files pin).'
+        type: string
+        default: ''
+      resource_group:
+        description: 'Override the admin RG (default rg-csa-loom-admin-<location>).'
+        type: string
+        default: ''
+      acr:
+        description: 'Override the ACR NAME (default: the single registry found in the admin RG).'
+        type: string
+        default: ''
+      skip_supply_chain:
+        description: 'EMERGENCY VALVE — skip the Trivy CRITICAL gate + cosign sign/verify. Images ship UNVERIFIED.'
+        type: boolean
+        default: false
+  # Callable from a Gov deploy pipeline so phase 2 can be chained.
+  workflow_call:
+    inputs:
+      boundary:
+        type: string
+        default: gcc-high
+      apps:
+        type: string
+        default: 'loom-console,loom-uat'
+      tag:
+        type: string
+        default: 'v0.1'
+      location:
+        type: string
+        default: ''
+      resource_group:
+        type: string
+        default: ''
+      acr:
+        type: string
+        default: ''
+      skip_supply_chain:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  # SC1: keyless cosign signing exchanges the Actions OIDC token for a
+  # short-lived Fulcio certificate.
+  id-token: write
+
+# One image build at a time per boundary: `az acr build` needs the registry
+# firewall open, and the lease in acr-firewall-lease.sh is per-registry.
+concurrency:
+  group: gov-build-images-${{ inputs.boundary }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve Gov RG + ACR (no running app required)
+    runs-on: ubuntu-latest
+    outputs:
+      rg: ${{ steps.r.outputs.rg }}
+      acr: ${{ steps.r.outputs.acr }}
+      acr_login: ${{ steps.r.outputs.acr_login }}
+      tag: ${{ steps.r.outputs.tag }}
+      sha_tag: ${{ steps.r.outputs.sha_tag }}
+      matrix: ${{ steps.r.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+      - id: r
+        name: Resolve coordinates
+        run: |
+          set -euo pipefail
+          LOC="${{ inputs.location }}"
+          [ -n "$LOC" ] || LOC=usgovvirginia
+          RG="${{ inputs.resource_group }}"
+          # Same deterministic name main.bicep computes:
+          #   var adminPlaneRgName = 'rg-csa-loom-admin-${location}'
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${LOC}"
+          if ! az group show -n "$RG" -o none 2>/dev/null; then
+            echo "::error::admin resource group '$RG' not found in this Gov subscription. Run phase 1 (az deployment sub create … deployAppsEnabled=false) first, or pass resource_group."
+            exit 1
+          fi
+          ACR="${{ inputs.acr }}"
+          if [ -z "$ACR" ]; then
+            COUNT=$(az acr list -g "$RG" --query 'length(@)' -o tsv | tr -d '\r')
+            if [ "${COUNT:-0}" != "1" ]; then
+              echo "::error::expected exactly ONE container registry in $RG, found ${COUNT:-0}. Pass the acr input explicitly."
+              exit 1
+            fi
+            ACR=$(az acr list -g "$RG" --query '[0].name' -o tsv | tr -d '\r')
+          fi
+          ACR_LOGIN=$(az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv | tr -d '\r')
+          [ -n "$ACR_LOGIN" ] || { echo "::error::could not resolve the login server for $ACR"; exit 1; }
+          # The DEPLOY-REFERENCED tag. Defaults to v0.1 because that is what
+          # every Gov .bicepparam resolves to (readEnvironmentVariable(
+          # 'LOOM_<X>_TAG','v0.1')) and what admin-plane/main.bicep falls back to
+          # (appImageTags.?<app> ?? 'v0.1'). If this and the template disagree,
+          # ARM points at an image that does not exist.
+          TAG="${{ inputs.tag }}"
+          [ -n "$TAG" ] || TAG=v0.1
+          SHA_TAG=$(git rev-parse --short=8 HEAD)
+          echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
+          # Comma list -> JSON array for the build matrix.
+          MATRIX=$(printf '%s' "${{ inputs.apps }}" | tr -d ' ' | tr ',' '\n' | grep -v '^$' | \
+            python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          {
+            echo "rg=$RG"; echo "acr=$ACR"; echo "acr_login=$ACR_LOGIN"; echo "tag=$TAG"; echo "matrix=$MATRIX";
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::boundary=${{ inputs.boundary }} rg=$RG acr=$ACR login=$ACR_LOGIN tag=$TAG apps=$MATRIX"
+          # Every requested app must have a build context in the tree — a build
+          # lane that silently skips is how an unbuildable image reaches ARM.
+          for a in $(printf '%s' "${{ inputs.apps }}" | tr -d ' ' | tr ',' ' '); do
+            case "$a" in
+              loom-uat) [ -f apps/fiab-console/Dockerfile.uat ] || { echo "::error::apps/fiab-console/Dockerfile.uat missing"; exit 1; } ;;
+              loom-console) [ -f apps/fiab-console/Dockerfile ] || { echo "::error::apps/fiab-console/Dockerfile missing"; exit 1; } ;;
+              *) [ -f "apps/$a/Dockerfile" ] || { echo "::error::apps/$a/Dockerfile missing — no build context for '$a'"; exit 1; } ;;
+            esac
+          done
+
+  build:
+    name: Build ${{ matrix.app }} on the Gov ACR
+    needs: resolve
+    runs-on: ubuntu-latest
+    # Serialized: each build takes the ACR firewall lease, and the lease is
+    # per-registry. max-parallel 1 keeps the open/close window minimal.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        app: ${{ fromJson(needs.resolve.outputs.matrix) }}
+    env:
+      RG: ${{ needs.resolve.outputs.rg }}
+      ACR: ${{ needs.resolve.outputs.acr }}
+      ACR_LOGIN: ${{ needs.resolve.outputs.acr_login }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SHA_TAG: ${{ needs.resolve.outputs.sha_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Build + push ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          APP='${{ matrix.app }}'
+          # #2603: take the OWNED firewall lease, never a bare toggle — a
+          # cancelled sibling's cleanup must not re-lock under this push.
+          LOOM_ACR_LEASE_TTL_MINUTES=120 \
+            bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # 2026-07-16: the console compile cgroup-OOMs on the default 8 GB ACR
+          # Tasks agent. A dedicated 16 GB S3 pool is the documented fix and is
+          # available in USGov Arizona/Texas/Virginia. Only the console needs it;
+          # loom-uat is a thin Playwright layer over the console context.
+          POOL_ARGS=""
+          if [ "$APP" = "loom-console" ]; then
+            az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
+              || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
+            CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
+            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
+            POOL_ARGS="--agent-pool loombuild"
+          fi
+          STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # ── Tag set: EVERY tag a Gov template could pull for this app ───────
+          # gcc-high.bicepparam pins LOOM_CONSOLE_TAG default 'v0.1'; IL5 pins
+          # 'v3.0'. The synthetic-monitor job's module default is
+          # `loom-uat:latest`. Pushing
+          # only one of those would leave one boundary's template pointing at a
+          # tag nobody built — the exact failure this lane exists to prevent.
+          TAG_LIST="$TAG $SHA_TAG latest"
+          if [ "$APP" = "loom-console" ] && [ "${{ inputs.boundary }}" = "il5" ]; then
+            TAG_LIST="$TAG_LIST v3.0"
+          fi
+          TAG_LIST=$(printf '%s\n' $TAG_LIST | awk 'NF && !seen[$0]++' | tr '\n' ' ')
+          IMG_ARGS=""
+          for t in $TAG_LIST; do IMG_ARGS="$IMG_ARGS --image $APP:$t"; done
+          echo "TAG_LIST=$TAG_LIST" >> "$GITHUB_ENV"
+          echo "::notice::$APP will be pushed as: $TAG_LIST"
+          case "$APP" in
+            loom-console)
+              # shellcheck disable=SC2086
+              az acr build --registry "$ACR" --no-logs $POOL_ARGS $IMG_ARGS \
+                --file apps/fiab-console/Dockerfile \
+                --build-arg "LOOM_BUILD_SHA=$SHA_TAG" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+                apps/fiab-console
+              ;;
+            loom-uat)
+              # The console .dockerignore excludes e2e/ + tests/ to keep the
+              # CONSOLE image lean, and ACR Tasks does not honour a
+              # per-Dockerfile <Dockerfile>.dockerignore — so un-ignore them for
+              # THIS build or the runner image ships without the journeys it is
+              # supposed to run.
+              cp apps/fiab-console/.dockerignore /tmp/di.bak
+              grep -vxE 'e2e|tests' /tmp/di.bak > apps/fiab-console/.dockerignore
+              # shellcheck disable=SC2086
+              az acr build --registry "$ACR" --no-logs $IMG_ARGS \
+                --file apps/fiab-console/Dockerfile.uat apps/fiab-console
+              cp /tmp/di.bak apps/fiab-console/.dockerignore
+              ;;
+            *)
+              # shellcheck disable=SC2086
+              az acr build --registry "$ACR" --no-logs $IMG_ARGS "apps/$APP"
+              ;;
+          esac
+          if [ "$APP" = "loom-console" ]; then
+            q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
+          fi
+          # The lease is released by the dedicated always() step below, AFTER
+          # the supply-chain steps have pulled the image + pushed the signature.
+
+      # The whole point of this lane. `az acr build` exiting 0 is not proof the
+      # tag ARM will pull actually resolves (a tag typo, an --image flag that
+      # never ran, a task that pushed to a different repository). Assert it, and
+      # fail LOUDLY here rather than at `az deployment` time on a live estate.
+      - name: Verify the DEPLOY-REFERENCED tag exists in the Gov ACR
+        run: |
+          set -euo pipefail
+          az acr login -n "$ACR" >/dev/null
+          for T in ${TAG_LIST:-$TAG $SHA_TAG latest}; do
+            D=$(az acr repository show --name "$ACR" --image "${{ matrix.app }}:$T" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [ -z "$D" ]; then
+              echo "::error::${{ matrix.app }}:$T is NOT in $ACR after the build. Gov templates pull :$TAG (readEnvironmentVariable('LOOM_<X>_TAG','v0.1') / appImageTags.?<app> ?? 'v0.1'; IL5 pins the console at v3.0; the synthetic-monitor job pulls loom-uat:latest), so a deploy would reference an image that does not exist and the Container App could not pull it."
+              exit 1
+            fi
+            echo "::notice::${{ matrix.app }}:$T -> $D"
+          done
+
+      - name: Supply-chain — resolve pushed digest
+        id: sc
+        if: ${{ !inputs.skip_supply_chain }}
+        run: |
+          set -euo pipefail
+          az acr login -n "$ACR" >/dev/null
+          DIGEST=$(az acr repository show --name "$ACR" --image "${{ matrix.app }}:$TAG" --query digest -o tsv | tr -d '\r')
+          [ -n "$DIGEST" ] || { echo "::error::could not resolve the manifest digest for ${{ matrix.app }}:$TAG"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "::notice::${{ matrix.app }}:$TAG -> $DIGEST"
+
+      - name: Supply-chain — Trivy gate (fail on CRITICAL CVEs)
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ needs.resolve.outputs.acr_login }}/${{ matrix.app }}:${{ needs.resolve.outputs.tag }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          # Vuln gating only + the reviewed baseline — identical posture to
+          # build-fiab-images-acr-tasks and gov-console-roll. Secret-scan FPs on
+          # minified bundles are excluded; source secret hygiene has its own lane.
+          scanners: vuln
+          trivyignores: .trivyignore
+          format: table
+
+      - name: Supply-chain — install cosign
+        if: ${{ !inputs.skip_supply_chain }}
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Supply-chain — sign + verify the digest
+        if: ${{ !inputs.skip_supply_chain }}
+        run: |
+          set -euo pipefail
+          REF="${ACR_LOGIN}/${{ matrix.app }}@${{ steps.sc.outputs.digest }}"
+          cosign sign --yes "$REF"
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/gov-build-images\.yml@" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$REF" > /dev/null
+          echo "::notice::signed + verified $REF"
+
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+  summary:
+    name: Image summary
+    needs: [resolve, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: |
+          {
+            echo "### Gov image build — ${{ inputs.boundary }}"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| resource group | \`${{ needs.resolve.outputs.rg }}\` |"
+            echo "| registry | \`${{ needs.resolve.outputs.acr_login }}\` |"
+            echo "| tag | \`${{ needs.resolve.outputs.tag }}\` (also \`:latest\`) |"
+            echo "| apps | \`${{ inputs.apps }}\` |"
+            echo "| build result | \`${{ needs.build.result }}\` |"
+            echo ""
+            echo "Next: re-run the subscription deployment with \`deployAppsEnabled=true\` so the Container Apps pull these images."
+            echo ""
+            echo "> **loom-uat / svc-synthetic-monitor:** building the image does NOT make the Journeys tab populate."
+            echo "> The scheduled runner signs in as \`svc-loom-synthetic@limitlessdata.ai\`, whose sign-in is blocked by"
+            echo "> tenant Conditional Access until a TENANT ADMIN scopes a CA exclusion for it. Nothing in this repo can"
+            echo "> automate that. See docs/fiab/runbooks/synthetic-journeys.md."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -218,6 +218,15 @@ jobs:
           # LOOM_DUCKDB_URL, so the image MUST be in ACR before the app phase.
           - app: loom-duckdb
             ctx: ./apps/loom-duckdb
+          # V1 — the Playwright runner image the DEFAULT-ON loom-synthetic-monitor
+          # scheduled job executes (`node e2e/run-synthetic.mjs`). The console
+          # image is slimmed of e2e/ (.dockerignore), so this second image out of
+          # the console context is the only one carrying the journeys. Without it
+          # every scheduled execution fails on an unresolvable image and the
+          # Health hub's Journeys tab has nothing to list.
+          - app: loom-uat
+            ctx: ./apps/fiab-console
+            file: ./apps/fiab-console/Dockerfile.uat
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
@@ -254,6 +263,18 @@ jobs:
         run: |
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
           APP="${{ matrix.app }}"; CTX="${{ matrix.ctx }}"; TAG="${{ inputs.tag || 'v0.1' }}"
+          # Most apps build ./<ctx>/Dockerfile; loom-uat is a second image out of
+          # the console context (Dockerfile.uat), so the matrix may override it.
+          FILE="${{ matrix.file || '' }}"; [ -n "$FILE" ] || FILE="$CTX/Dockerfile"
+          # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
+          # excludes e2e/ + tests/ to keep the CONSOLE image lean — and ACR Tasks
+          # does not honour a per-Dockerfile <Dockerfile>.dockerignore. Drop those
+          # two exclusions for this build only. Each matrix job has its own
+          # disposable checkout, so this cannot leak into the console image.
+          if [ "$APP" = "loom-uat" ]; then
+            grep -vxE 'e2e|tests' apps/fiab-console/.dockerignore > /tmp/di && mv /tmp/di apps/fiab-console/.dockerignore
+            echo "::notice::loom-uat build — e2e/ + tests/ un-ignored for this context"
+          fi
           # 2026-07-16: the console compile outgrew the DEFAULT ACR Task agent
           # (8 GB) — consecutive builds were cgroup-OOM-SIGKILLed (runs
           # cjdq..cjdv) with no code change. loom-console builds on the
@@ -277,7 +298,7 @@ jobs:
               --image "$APP:$TAG" --image "$APP:${{ github.sha }}" --image "$APP:latest" \
               --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
               --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
-              --file "$CTX/Dockerfile" "$CTX"
+              --file "$FILE" "$CTX"
           }
           for attempt in 1 2 3; do
             if build; then echo "✓ $APP built+pushed by ACR Tasks on attempt $attempt"; scale_down_pool; exit 0; fi
@@ -389,7 +410,7 @@ jobs:
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
           # Keep in sync with the build matrix above. Verify the :TAG refs —
           # that is exactly what the redeploy-with-apps job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb)
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat)
           FAILED=()
           for APP in "${APPS[@]}"; do
             DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
@@ -495,6 +516,9 @@ jobs:
           # green but Front Door serves stale code. A unique --revision-suffix
           # forces a new revision that re-pulls :v0.1 and gets the new digest.
           SUFFIX="r${{ github.run_id }}-${{ github.run_attempt }}"
+          # loom-uat is deliberately NOT here: it is a Container App JOB image
+          # (loom-synthetic-monitor), not a Container App, so each scheduled
+          # execution pulls :latest on its own — there is no revision to roll.
           APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
           # Retry the update on the transient ContainerAppOperationInProgress
           # error (a prior provisioning op on the app is still settling). Up to

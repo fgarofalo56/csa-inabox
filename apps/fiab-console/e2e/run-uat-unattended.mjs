@@ -302,7 +302,18 @@ async function uploadResults(runTag) {
       const { DefaultAzureCredential } = await import('@azure/identity');
       credential = new DefaultAzureCredential();
     }
-    const serviceUrl = `https://${accountName}.blob.core.windows.net`;
+    // Sovereign-cloud blob host. LOOM_STORAGE_BLOB_SUFFIX is emitted per-cloud by
+    // admin-plane/synthetic-monitor-job.bicep from environment().suffixes.storage
+    // (blob.core.windows.net in Commercial/GCC, blob.core.usgovcloudapi.net in
+    // GCC-High/IL5). This used to be a hard-coded commercial literal, so in Gov
+    // the upload resolved a host that does not exist there and silently no-op'd
+    // through the catch below — the Journeys tab could never populate in Gov.
+    const blobSuffix = (process.env.LOOM_STORAGE_BLOB_SUFFIX || '').trim()
+      || (/usgov|AzureUSGovernment|AzureDOD|GCC-High|IL5|DoD/i.test(
+            `${process.env.AZURE_CLOUD || ''} ${process.env.LOOM_CLOUD || ''}`)
+          ? 'blob.core.usgovcloudapi.net'
+          : 'blob.core.windows.net');
+    const serviceUrl = `https://${accountName}.${blobSuffix}`;
     const blobService = new BlobServiceClient(serviceUrl, credential);
     const containerClient = blobService.getContainerClient(containerName);
 
