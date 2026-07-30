@@ -39,6 +39,7 @@ import {
   createIndexer, deleteIndexer,
   getIndexerStatus,
 } from '@/lib/azure/search-index-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
   const preset: ContentPreset = body?.preset === 'structured' ? 'structured' : 'documents';
   const chunkSize = Number.isFinite(body?.chunkSize) ? Number(body.chunkSize) : 2000;
   const chunkOverlap = Number.isFinite(body?.chunkOverlap) ? Number(body.chunkOverlap) : 500;
-  const subPath = typeof body?.subPath === 'string' ? body.subPath.replace(/^\/+|\/+$/g, '') : '';
+  const subPath = typeof body?.subPath === 'string' ? trimSlashes(body.subPath) : '';
   const scheduleInterval = typeof body?.scheduleInterval === 'string' && body.scheduleInterval.trim() ? body.scheduleInterval.trim() : undefined;
 
   if (!sourceType || !SOURCE_TYPES.includes(sourceType)) return apiError(`sourceType must be one of ${SOURCE_TYPES.join(', ')}`, 400);

@@ -36,6 +36,7 @@ import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { listContainerRoleAssignments, revokeContainerRoleAssignment, removePrincipalFromPathAcl } from '@/lib/azure/adls-client';
 import { revokeStructuredGrant, denySchemaAccess, type PrincipalType } from '@/lib/azure/access-policy-client';
 import { loadDlpMeta, saveDlpMeta, type DlpRestriction } from '../_lib/meta';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const scopeType = String(body?.scopeType || '') as ScopeType;
   const scopeRef = String(body?.scopeRef || '').trim();
-  const subPath = body?.subPath ? String(body.subPath).trim().replace(/^\/+|\/+$/g, '') : '';
+  const subPath = body?.subPath ? trimSlashes(String(body.subPath).trim()) : '';
   const schema = body?.schema ? String(body.schema).trim() : '';
   const principalId = String(body?.principalId || '').trim();
   const principalName = body?.principalName ? String(body.principalName) : undefined;

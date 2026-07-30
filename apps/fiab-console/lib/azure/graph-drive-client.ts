@@ -349,7 +349,7 @@ export async function headDriveItem(driveId: string, itemPath: string): Promise<
   assertEnabled();
   if (!driveId) throw new GraphDriveError(400, 'driveId is required', 'bad_request');
   const select = 'id,name,size,folder,file,lastModifiedDateTime,webUrl,parentReference';
-  const clean = (itemPath || '').replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes((itemPath || ''));
   const path = clean
     ? `/drives/${encodeURIComponent(driveId)}/root:/${encodePath(clean)}?$select=${select}`
     : `/drives/${encodeURIComponent(driveId)}/root?$select=${select}`;
@@ -411,7 +411,7 @@ function encodePath(p: string): string {
  * Fabric, no abfss — Graph is the data plane (exactly as Fabric resolves these).
  */
 export function sharepointTargetUri(driveId: string, path: string): string {
-  const clean = (path || '').replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes((path || ''));
   return `sharepoint://${driveId}/${clean}`;
 }
 
@@ -419,5 +419,5 @@ export function sharepointTargetUri(driveId: string, path: string): string {
 export function parseSharepointUri(uri: string): { driveId: string; path: string } | null {
   const m = (uri || '').trim().match(/^sharepoint:\/\/([^/]+)\/?(.*)$/i);
   if (!m) return null;
-  return { driveId: m[1], path: (m[2] || '').replace(/^\/+|\/+$/g, '') };
+  return { driveId: m[1], path: trimSlashes((m[2] || '')) };
 }

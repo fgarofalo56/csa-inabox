@@ -16,6 +16,7 @@
  * provisioner gates honestly if it (e.g. on the opt-in Fabric path) is absent.
  */
 import type { ProvisionResult, ProvisionerInput } from '@/lib/install/provisioners/types';
+import { trimEdges } from '@/lib/util/trim';
 
 export interface PairedItemDef {
   /** Item-type slug of the auto-created sibling. */
@@ -90,7 +91,7 @@ export const ITEM_PAIRING_RULES: Record<string, PairedItemDef[]> = {
           })
           .filter((t): t is { schema: string; table: string } => !!t && !!t.table && !t.table.endsWith('*'));
         const sanitized =
-          String(input.displayName || 'mirror').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'mirror';
+          trimEdges(String(input.displayName || 'mirror').replace(/[^A-Za-z0-9_]/g, '_'), '_') || 'mirror';
         return {
           adlsRoot,
           mirrorItemId: input.cosmosItemId,

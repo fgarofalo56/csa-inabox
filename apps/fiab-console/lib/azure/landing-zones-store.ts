@@ -20,6 +20,7 @@ import crypto from 'node:crypto';
 import { landingZonesContainer } from './cosmos-client';
 import type { SessionPayload } from '@/lib/auth/session';
 import { tenantScopeId } from '@/lib/auth/session';
+import { trimEdges } from '@/lib/util/trim';
 
 /** Network posture the logical LZ inherits / requests (Azure-native only). */
 export interface LandingZoneNetwork {
@@ -87,11 +88,7 @@ export function landingZoneTenantId(session: SessionPayload): string {
 
 /** Slugify a landing-zone name into a stable, url-safe id. */
 export function slugifyLandingZoneName(name: string): string {
-  const slug = (name || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const slug = trimEdges((name || '').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-'), '-')
     .replace(/-{2,}/g, '-')
     .slice(0, 60);
   return slug || `lz-${crypto.randomUUID().slice(0, 8)}`;

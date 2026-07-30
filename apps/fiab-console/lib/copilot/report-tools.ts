@@ -19,6 +19,7 @@
 import type { ToolDef } from '@/lib/azure/copilot-orchestrator';
 import { executeQuery, dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 const S_STRING = { type: 'string' } as const;
 
@@ -41,7 +42,7 @@ export function assertReadonly(sql: string): void {
 
 /** Cap an un-bounded SELECT to TOP n rows so a narrative query can't pull a huge table. */
 export function capSql(sql: string, n = 500): string {
-  const t = String(sql || '').trim().replace(/;+\s*$/, '');
+  const t = stripTrailingSemicolons(String(sql || ''));
   // Leave queries that already constrain their row count alone.
   if (/\b(top|offset|fetch|count|sum|avg|min|max|group\s+by)\b/i.test(t)) return t;
   return t.replace(/^(select)\b/i, `SELECT TOP ${n}`);

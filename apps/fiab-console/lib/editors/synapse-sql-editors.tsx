@@ -54,6 +54,7 @@ import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-script
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { useSharedEditorStyles } from './shared-styles';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -803,7 +804,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     if (!ctasName.trim()) { setCtasError('table name required'); return; }
     if (ctasDist === 'HASH' && !ctasDistCol.trim()) { setCtasError('HASH distribution requires a column'); return; }
     if (ctasIndex === 'CLUSTERED INDEX' && !ctasIndexCol.trim()) { setCtasError('CLUSTERED INDEX requires a column'); return; }
-    const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+    const cleaned = stripTrailingSemicolons(sqlText);
     if (!/^select\b/i.test(cleaned)) {
       setCtasError('CTAS requires the editor to contain a SELECT statement.');
       return;

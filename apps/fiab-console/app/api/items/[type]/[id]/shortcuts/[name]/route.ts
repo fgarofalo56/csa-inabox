@@ -28,6 +28,7 @@ import {
   type ShortcutKind,
 } from '@/lib/azure/shortcut-client';
 import { shortcutId } from '@/lib/azure/lakehouse-shortcuts';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -105,7 +106,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     return NextResponse.json({ ok: false, error: `format must be one of ${FORMATS.join(', ')}` }, { status: 400 });
   }
 
-  const cleanParent = (newParentPath || '').replace(/^\/+|\/+$/g, '');
+  const cleanParent = trimSlashes((newParentPath || ''));
   const newId = shortcutId(id, newKind, cleanParent, newName);
 
   try {

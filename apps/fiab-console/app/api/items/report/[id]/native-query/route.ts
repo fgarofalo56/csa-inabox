@@ -71,6 +71,7 @@ import {
   loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,7 +81,7 @@ const DIALECT: SqlDialect = 'synapse';
 
 /** Strip a trailing `;` so a base SELECT splices cleanly as a derived relation. */
 function stripSemicolons(sql: string): string {
-  return sql.trim().replace(/;+\s*$/, '');
+  return stripTrailingSemicolons(sql);
 }
 
 /** Map a resolved Fields table's columns onto the compiler's column whitelist. */

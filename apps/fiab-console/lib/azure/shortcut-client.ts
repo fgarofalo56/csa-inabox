@@ -606,7 +606,7 @@ export interface AdlsBrowseArgs {
 }
 
 function pathEntriesToRemote(rows: PathEntry[], prefix: string): RemoteEntry[] {
-  const clean = prefix.replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes(prefix);
   return rows.map((r) => {
     const full = r.name;
     const rel = clean && full.startsWith(clean + '/') ? full.slice(clean.length + 1) : full;
@@ -743,7 +743,7 @@ export function buildAdlsSasListUrl(
     recursive: 'false',
     maxResults: String(Math.min(Math.max(maxResults, 1), 5000)),
   });
-  const dir = (directory || '').replace(/^\/+|\/+$/g, '');
+  const dir = trimSlashes((directory || ''));
   if (dir) qs.set('directory', dir);
   const url = `https://${acct}.${getDfsSuffix()}/${fs}?${qs.toString()}`;
   return appendSasToken(url, sasToken);
@@ -766,7 +766,7 @@ export async function listAdlsWithSas(args: AdlsSasBrowseArgs): Promise<BrowseRe
       'A SAS token (or storage-key SAS) is required for a SAS-authenticated ADLS Gen2 shortcut.',
       'adls_sas_missing', 400);
   }
-  const prefix = (args.path || '').replace(/^\/+|\/+$/g, '');
+  const prefix = trimSlashes((args.path || ''));
   const maxResults = Math.min(Math.max(args.maxResults ?? 200, 1), 5000);
   const url = buildAdlsSasListUrl(account, container, prefix, sas, maxResults);
 
@@ -834,6 +834,6 @@ export async function probeAdlsSas(targetUri: string, sasToken: string): Promise
     sasToken,
     maxResults: 1,
   });
-  const clean = parts.path.replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes(parts.path);
   return { abfssUri: `abfss://${parts.container}@${parts.account}.${getDfsSuffix()}/${clean}` };
 }

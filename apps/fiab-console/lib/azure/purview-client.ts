@@ -95,6 +95,7 @@ export type {
   DatasetColumnMapping,
   PurviewColumnEdge,
 } from './purview-column-lineage';
+import { trimEdges } from '@/lib/util/trim';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -1471,7 +1472,7 @@ export const LOOM_BUSINESS_METADATA_NAME = 'LoomCustomTags';
 
 /** Normalize a free-form key into a valid Atlas attribute name (letters/digits/_). */
 function businessMetadataAttrName(key: string): string {
-  return (key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tag';
+  return trimEdges((key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_'), '_') || 'tag';
 }
 
 function buildBmAttributeDef(name: string): Record<string, unknown> {

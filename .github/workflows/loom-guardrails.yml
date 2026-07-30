@@ -42,6 +42,8 @@ jobs:
         run: node scripts/ci/check-sql-quoting.mjs
       - name: bff-errors (raw exception text on 500 + raw-envelope helpers)
         run: node scripts/ci/check-bff-errors.mjs
+      - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
+        run: node scripts/ci/check-quadratic-trims.mjs
       - name: no-raw-px (raw-px inline styles vs Loom tokens, ratchet)
         run: node scripts/ci/check-no-raw-px.mjs
       - name: learn-doc-registry (Learning Hub slug sets vs authored guides/captures — loom-apex D1)

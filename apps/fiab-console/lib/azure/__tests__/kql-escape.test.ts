@@ -105,12 +105,29 @@ describe('kqlVerbatimSingle / kqlVerbatimDouble — @-literal rules (quote DOUBL
     expect(kqlVerbatimSingle("a\r\nb'c")).toBe("ab''c");
   });
 
-  it('REGRESSION: the old quote-only backslash escape breaks a verbatim literal', () => {
-    // What data-quality-client used to do to `@"${pat}"` — proves the scanner
-    // catches the bug class this module fixes.
-    const oldEscape = (s: string) => s.replace(/"/g, '\\"');
-    const broken = `"${oldEscape('x" | evil')}"`;
-    // Scanner exits EARLY (at the live quote), i.e. the literal was escaped from.
+  /**
+   * HARNESS SELF-CHECK (not a fix assertion — it passes with or without the
+   * fix, on purpose). The other tests in this file prove safety by asserting
+   * the scanner reaches the END of the literal; that assertion is only
+   * meaningful if the scanner can actually FAIL. So feed it the exact byte
+   * sequence the old code emitted and prove it exits early.
+   *
+   * The bad sequence is written as DATA, not produced by a live
+   * `.replace(/"/g, '\\"')` call — a deliberately-broken escaper in source is
+   * itself reported as js/incomplete-sanitization (alert #721 on the first
+   * revision of this PR), and suppressing that with a dismissal would be
+   * silencing a scanner instead of removing the pattern.
+   */
+  it('HARNESS: the scanner exits early on a live quote (backslash-escaped `"`)', () => {
+    // data-quality-client used to render `@"${pat}"` with pat = 'x" | evil' as:
+    //   "x\" | evil"        <- `\` is a PLAIN char in a verbatim literal, so
+    //                          the quote at index 3 terminates the string and
+    //                          ` | evil"` parsed as raw KQL.
+    const broken = '"x\\" | evil"';
+    expect(scanVerbatimLiteral(broken, '"')).toBe(4);
     expect(scanVerbatimLiteral(broken, '"')).toBeLessThan(broken.length);
+    // …and the fixed escaper on the same input terminates at the very end.
+    const fixed = `"${kqlVerbatimDouble('x" | evil')}"`;
+    expect(scanVerbatimLiteral(fixed, '"')).toBe(fixed.length);
   });
 });

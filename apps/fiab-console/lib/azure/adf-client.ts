@@ -26,6 +26,7 @@ import { executeQuery, serverlessTarget } from './synapse-sql-client';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 import { currentFactoryOverride } from './adf-factory-context';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { trimSlashes } from '@/lib/util/trim';
 
 const API = '2018-06-01';
 
@@ -1607,7 +1608,7 @@ function cdcTargetEntities(c: AdfCdc): AdfCdcTargetEntity[] {
       const folderPath = dslValue(e.dslConnectorProperties, 'folderPath');
       const format = (dslValue(e.dslConnectorProperties, 'format') || 'delta').toLowerCase();
       if (!container || !folderPath || format !== 'delta') continue;
-      out.push({ name: e.name, container, folderPath: folderPath.replace(/^\/+|\/+$/g, '') });
+      out.push({ name: e.name, container, folderPath: trimSlashes(folderPath) });
     }
   }
   return out;

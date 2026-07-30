@@ -27,6 +27,7 @@ import {
 } from '@/lib/azure/adf-client';
 import { parseSharedQueries, type DataflowSink } from '@/lib/components/pipeline/dataflow/m-script';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { trimSlashes } from '@/lib/util/trim';
 
 export type RunResult =
   | { ok: true; backend: 'adf'; runId: string; pipelineName: string; dataFlowName: string; outputQuery: string }
@@ -99,7 +100,7 @@ async function buildSink(
       },
     });
     const container = sink.container || ('container' in adls && adls.container) || 'silver';
-    const folderPath = (sink.path || `dataflows/${itemId}`).replace(/^\/+|\/+$/g, '');
+    const folderPath = trimSlashes(sink.path || `dataflows/${itemId}`);
     const format = sink.format || 'parquet';
     await upsertDataset(datasetName, {
       name: datasetName,

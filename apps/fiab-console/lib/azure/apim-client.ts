@@ -25,6 +25,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, stripArmBase } from './cloud-endpoints';
+import { trimEdges } from '@/lib/util/trim';
 
 const ARM_SCOPE = armScope();
 const APIM_API = '2024-06-01-preview';
@@ -869,7 +870,7 @@ export function subscriptionScope(target: { product?: string; api?: string; allA
 }
 
 export function slugSid(s: string): string {
-  const base = s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200);
+  const base = trimEdges(s.toLowerCase().replace(/[^a-z0-9-]+/g, '-'), '-').slice(0, 200);
   return base ? `sub-${base}` : `sub-${Date.now()}`;
 }
 
@@ -1172,7 +1173,7 @@ export async function testApiCall(args: {
 
   // Compose: gateway + path + urlTemplate. Strip a leading slash on the
   // template; replace {path-params} with empty (caller bakes them into query).
-  const cleanPath = args.apiPath.replace(/^\/+|\/+$/g, '');
+  const cleanPath = trimEdges(args.apiPath, '/');
   const cleanTpl = args.urlTemplate.replace(/^\/+/, '');
   const qs = args.query && Object.keys(args.query).length ? `?${new URLSearchParams(args.query).toString()}` : '';
   const url = `${gatewayUrl.replace(/\/+$/, '')}/${cleanPath}/${cleanTpl}${qs}`.replace(/([^:])\/{2,}/g, '$1/');

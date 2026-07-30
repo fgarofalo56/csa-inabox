@@ -27,6 +27,7 @@ import type {
 import { planCdfRange, type CdfFileRef } from './cdf-planner';
 import type { DataverseSinkResult, DataverseWriteRow } from './dataverse-sink';
 import type { ActivationOutRow, DestinationResult } from './destinations';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** A source row read from the lake (column name → value), plus its CDF change type. */
 export interface EngineRow {
@@ -86,7 +87,7 @@ export function rowsToObjects(res: { columns: { name: string }[]; rows: unknown[
 
 /** Build an abfss URI for a table-relative file (or the table root when file is ''). */
 export function buildAbfssUri(account: string, suffix: string, container: string, tablePath: string, file = ''): string {
-  const path = `${tablePath.replace(/^\/+|\/+$/g, '')}${file ? `/${file.replace(/^\/+/, '')}` : ''}`;
+  const path = `${trimSlashes(tablePath)}${file ? `/${file.replace(/^\/+/, '')}` : ''}`;
   return `abfss://${container}@${account}.${suffix}/${path}`;
 }
 

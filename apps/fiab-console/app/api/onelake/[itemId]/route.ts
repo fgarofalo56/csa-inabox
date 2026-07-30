@@ -23,6 +23,7 @@ import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { ONELAKE_TYPES, isOneLakeType } from '@/lib/catalog/onelake-types';
 import { softDeleteOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { listRoles } from '@/lib/azure/onelake-security-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,7 +32,7 @@ export const dynamic = 'force-dynamic';
  *  directory. Returns '' for the container root ('*' / empty). */
 function normPath(raw: string): string {
   if (!raw || raw === '*') return '';
-  return raw.replace(/^\/+|\/+$/g, '');
+  return trimSlashes(raw);
 }
 
 /**

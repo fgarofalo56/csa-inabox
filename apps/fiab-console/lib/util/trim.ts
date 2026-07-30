@@ -47,6 +47,26 @@ export function trimSlashes(s: string): string {
   return trimChar(s, '/');
 }
 
+/**
+ * Strip the trailing `;` run from a SQL/KQL/DAX statement — linear.
+ *
+ * Replaces `sql.trim().replace(/;+\s*$/, '')`, which was pasted into 20 places
+ * (query editors, `/assist`, the CTAS route, the report/dataflow compilers, the
+ * data-agent executor, the DAX measure store). `/;+\s*$/` is the SAME shape
+ * that pinned a worker for 2m46s in `lib/thread/sql-guard.ts`: the engine
+ * retries `;+` from every offset of the run, so an editor body of
+ * `';'.repeat(N)` is O(N²) — 64KB of semicolons is seconds of blocked event
+ * loop, and `app/api/items/databricks-sql-warehouse/[id]/ctas` ran it BEFORE
+ * its 64KB length check, i.e. unbounded.
+ *
+ * Behaviour-identical to the old regex for every `.trim()`-ed input (the
+ * `\s*$` arm only ever mattered when the caller had NOT trimmed first, so the
+ * leading/trailing trim is done here).
+ */
+export function stripTrailingSemicolons(sql: string): string {
+  return trimCharEnd(String(sql ?? '').trim(), ';');
+}
+
 /** Strip leading AND trailing runs of ANY character in `chars` — linear. */
 export function trimEdges(s: string, chars: string): string {
   const set = new Set([...chars]);

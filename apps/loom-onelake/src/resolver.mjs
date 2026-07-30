@@ -130,9 +130,22 @@ export function buildLoomUri(c) {
  * @property {string=} tokenScope      AAD scope for the passthrough token.
  */
 
-/** Strip leading/trailing slashes. */
+/**
+ * Strip leading/trailing slashes — linear index scan.
+ *
+ * `replace(/^\/+|\/+$/g, '')` is quadratic in the `\/+$` arm (the engine retries
+ * the run from every offset), and this service resolves paths taken from the
+ * request line. Same class as `apps/fiab-console/lib/util/trim.ts`
+ * (CodeQL js/polynomial-redos); this app has no import path into that module,
+ * so the two-line scan is inlined.
+ */
 function trimSlashes(s) {
-  return String(s || '').replace(/^\/+|\/+$/g, '');
+  const str = String(s || '');
+  let start = 0;
+  let end = str.length;
+  while (start < end && str.charCodeAt(start) === 47) start++;
+  while (end > start && str.charCodeAt(end - 1) === 47) end--;
+  return start === 0 && end === str.length ? str : str.slice(start, end);
 }
 
 /** Join a root + optional sub-path into one clean, traversal-safe path. */

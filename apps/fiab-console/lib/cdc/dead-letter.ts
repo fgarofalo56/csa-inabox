@@ -14,6 +14,7 @@
  * returns an empty, honest result rather than throwing.
  */
 import { listPaths, downloadFile } from '@/lib/azure/adls-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** ADLS Gen2 container the mirror + its `_rejected` tree live in. */
 const BRONZE = 'bronze';
@@ -165,7 +166,7 @@ export function toRelativePrefix(basePathOrUrl: string): string {
   if (httpsMatch) {
     v = httpsMatch[2];
   }
-  v = v.replace(/^\/+|\/+$/g, '');
+  v = trimSlashes(v);
   // If the caller already pointed at `_rejected`, step back up one level.
   v = v.replace(/\/_rejected$/i, '');
   return v;

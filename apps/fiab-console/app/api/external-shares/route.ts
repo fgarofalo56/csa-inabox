@@ -26,6 +26,7 @@ import {
   ExternalSharingNotConfiguredError,
   GraphIdentityError,
 } from '@/lib/azure/external-share-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -108,7 +109,7 @@ export async function POST(req: NextRequest) {
       );
     }
     // The shared subset must sit under the item's storage root (defense in depth).
-    const cleanRoot = (root || '').replace(/^\/+|\/+$/g, '');
+    const cleanRoot = trimSlashes((root || ''));
     const cleanShared = sharedPath.replace(/^\/+/, '');
     if (cleanRoot && !(cleanShared === cleanRoot || cleanShared.startsWith(`${cleanRoot}/`))) {
       return apiError(`The shared path must be within the item's storage root "${cleanRoot}".`, 400);

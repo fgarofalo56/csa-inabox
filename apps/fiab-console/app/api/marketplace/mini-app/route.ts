@@ -15,6 +15,7 @@ import { createOwnedItem } from '../../items/_lib/item-crud';
 import { listOperations, ApimError } from '@/lib/azure/apim-client';
 import { stripTrailingSlashes } from '@/lib/util/path-strings';
 import { withSession } from '@/lib/api/route-toolkit';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,8 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   const apiId = String(body?.apiId || '').trim();
   const apiName = String(body?.apiName || apiId || 'API').trim();
   const gatewayUrl = stripTrailingSlashes(String(body?.gatewayUrl || '').trim());
-  const apiPath = String(body?.apiPath || '').trim().replace(/^\/+|\/+$/g, '');
+  // apiPath also needed it — main fixed only gatewayUrl, this PR only apiPath.
+  const apiPath = trimSlashes(String(body?.apiPath || '').trim());
   const appName = String(body?.appName || `${apiName} mini-app`).trim();
 
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'pick a workspace' }, { status: 400 });

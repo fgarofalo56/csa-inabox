@@ -46,13 +46,14 @@ import {
   type PropertyConditionType,
   type TriggerModelInput,
 } from './activator-trigger-model';
+import { trimEdges } from '@/lib/util/trim';
 
 // Re-export so the BFF route imports its activator surface from one module.
 export type { AlertHistoryEvent };
 
 // ── pure helpers (mirror of provisioners/activator.ts) ──────────────────────
 export function safeRuleName(displayName: string, suffix: string): string {
-  const base = (displayName || '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'loom-activator';
+  const base = trimEdges((displayName || '').replace(/[^A-Za-z0-9_-]+/g, '-'), '-').slice(0, 70) || 'loom-activator';
   return `${base}-${suffix}`.slice(0, 90);
 }
 

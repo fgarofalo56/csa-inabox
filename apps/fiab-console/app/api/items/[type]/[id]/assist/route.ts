@@ -61,6 +61,7 @@ import {
 } from '@/lib/azure/synapse-sql-client';
 import { executeStatement } from '@/lib/azure/databricks-client';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 type AssistMode = 'generate' | 'explain' | 'fix' | 'comments' | 'optimize';
 type Engine =
@@ -172,7 +173,7 @@ async function databricksSchemaContext(
 // a paused pool / cold warehouse / parse error just yields '' and /optimize
 // still rewrites the SQL from the schema alone.
 async function synapseExplainPlan(serverless: boolean, db: string, sqlText: string): Promise<string> {
-  const stmt = sqlText.trim().replace(/;+\s*$/, '');
+  const stmt = stripTrailingSemicolons(sqlText);
   if (!stmt) return '';
   try {
     const target = serverless ? serverlessTarget(db || 'master') : dedicatedTarget();
@@ -199,7 +200,7 @@ async function databricksExplainPlan(
   schema: string,
   sqlText: string,
 ): Promise<string> {
-  const stmt = sqlText.trim().replace(/;+\s*$/, '');
+  const stmt = stripTrailingSemicolons(sqlText);
   if (!warehouseId || !stmt) return '';
   try {
     const res = await executeStatement(warehouseId, `EXPLAIN ${stmt}`, catalog || undefined, schema || undefined);

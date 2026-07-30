@@ -46,13 +46,14 @@ import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipe
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { whitelist, isAggregateVisual, objectRows } from './query-projection';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 /** The Loom-native report path folds + compiles over the Synapse SQL family. */
 export const TRANSFORM_DIALECT: SqlDialect = 'synapse';
 
 /** Strip a trailing `;` so a base SELECT splices cleanly as a derived relation. */
 export function stripSemicolons(sql: string): string {
-  return sql.trim().replace(/;+\s*$/, '');
+  return stripTrailingSemicolons(sql);
 }
 
 /** The base SELECT a transform folds onto, from a resolved FROM relation: a

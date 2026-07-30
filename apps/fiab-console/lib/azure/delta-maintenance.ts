@@ -26,6 +26,7 @@
  * (delta-maintenance.test.ts).
  */
 import { buildIcebergEmitPySpark, buildIcebergDisablePySpark } from './iceberg-metadata';
+import { trimSlashes } from '@/lib/util/trim';
 
 /** Vacuum retention options surfaced in the UI (hours). Fixed allowlist —
  * never a free-form number, per the no-freeform-config rule. */
@@ -68,7 +69,7 @@ export type ValidationResult =
  */
 export function validateMaintenanceRequest(body: any): ValidationResult {
   const container = String(body?.container ?? '').trim();
-  const tableName = String(body?.tableName ?? '').trim().replace(/^\/+|\/+$/g, '');
+  const tableName = trimSlashes(String(body?.tableName ?? '').trim());
   const pool = String(body?.pool ?? '').trim();
   const compaction = body?.compaction === true;
   const vacuumRetentionHours = Number(body?.vacuumRetentionHours ?? 0);
@@ -130,7 +131,7 @@ export function validateMaintenanceRequest(body: any): ValidationResult {
 
 /** Build the abfss URI for a Delta table stored under `<container>/Tables/<name>`. */
 export function buildAbfssUri(container: string, account: string, tableName: string): string {
-  const clean = tableName.replace(/^\/+|\/+$/g, '');
+  const clean = trimSlashes(tableName);
   return `abfss://${container}@${account}.dfs.core.windows.net/Tables/${clean}`;
 }
 

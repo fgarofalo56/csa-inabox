@@ -34,11 +34,12 @@ import {
 } from '@/lib/azure/adf-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
+import { trimEdges } from '@/lib/util/trim';
 
 /** ADF pipeline names: letters/digits/_/- only, ≤ 140 chars (matches the
  * editor's bind NAME_RE). */
 function safePipelineName(displayName: string): string {
-  const cleaned = displayName.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 140);
+  const cleaned = trimEdges(displayName.replace(/[^A-Za-z0-9_-]+/g, '-'), '-').slice(0, 140);
   return cleaned || 'loom-adf-pipeline';
 }
 

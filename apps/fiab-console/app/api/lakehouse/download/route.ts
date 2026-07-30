@@ -31,6 +31,7 @@ import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { KNOWN_CONTAINERS, downloadFile, getAccountName } from '@/lib/azure/adls-client';
 import { getLabelForAdlsPath, type MipLabelInfo } from '@/lib/azure/purview-mip-client';
 import { isMipSupportedType, stampMipLabel } from '@/lib/azure/mip-file-inject';
+import { contentDisposition } from '@/lib/api/content-disposition';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -123,7 +124,7 @@ export async function GET(req: NextRequest) {
     const headers: Record<string, string> = {
       'content-type': contentType || 'application/octet-stream',
       'content-length': String(finalBody.length),
-      'content-disposition': `attachment; filename="${filename.replace(/"/g, '')}"`,
+      'content-disposition': contentDisposition('attachment', filename, 'download.bin'),
       'cache-control': 'no-store',
       'x-loom-mip-status': mipStatus,
     };

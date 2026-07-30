@@ -38,6 +38,7 @@ import {
   KNOWN_CONTAINERS,
   type PrefixUsage,
 } from '@/lib/azure/adls-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -83,7 +84,7 @@ function resolveItemPrefix(state: any): ResolvedPrefix | null {
     if (!c) return null;
     const container = String(c).trim();
     if (!KNOWN.has(container)) return null;
-    return { container, prefix: String(p ?? '').replace(/^\/+|\/+$/g, '') };
+    return { container, prefix: trimSlashes(String(p ?? '')) };
   };
 
   // 1. secondaryIds.container + rootPath

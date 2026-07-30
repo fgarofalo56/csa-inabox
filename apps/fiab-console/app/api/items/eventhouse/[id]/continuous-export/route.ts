@@ -58,6 +58,7 @@ import {
 } from '@/lib/azure/kusto-client';
 import { listContainers } from '@/lib/azure/adls-client';
 import { getDfsSuffix } from '@/lib/azure/cloud-endpoints';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -228,7 +229,7 @@ async function continuousExport(body: any) {
   const sourceTable = String(body?.sourceTable || '').trim();
   const exportName  = String(body?.exportName  || '').trim();
   const container   = String(body?.container   || '').trim();
-  const path        = String(body?.path        || '').trim().replace(/^\/+|\/+$/g, '');
+  const path        = trimSlashes(String(body?.path        || '').trim());
   const interval    = String(body?.interval    || '1h').trim();
   // adlsAccount: body wins; fall back to the configured env var
   const adlsAccount = (String(body?.adlsAccount || '').trim()) || (process.env.LOOM_RTI_EXPORT_ADLS || '');

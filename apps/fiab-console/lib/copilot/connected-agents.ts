@@ -16,6 +16,7 @@
  *
  * Pure module (no JSX / SDK) so it is unit-tested without the Fluent bundle.
  */
+import { trimEdges } from '@/lib/util/trim';
 
 /** Agent item types that can be composed as sub-agents. */
 export const SUB_AGENT_ITEM_TYPES = ['data-agent', 'operations-agent'] as const;
@@ -110,6 +111,6 @@ export function subAgentsToFoundryTools(
 export function foundryAgentNameFor(itemId: string, itemType: SubAgentItemType): string {
   const prefix = itemType === 'operations-agent' ? 'loom-ops' : 'loom-data';
   const base = `${prefix}-${itemId}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  const trimmed = base.replace(/^-+|-+$/g, '').slice(0, 63);
-  return trimmed.replace(/^-+|-+$/g, '') || `${prefix}-${itemId.slice(0, 8)}`;
+  const trimmed = trimEdges(base, '-').slice(0, 63);
+  return trimEdges(trimmed, '-') || `${prefix}-${itemId.slice(0, 8)}`;
 }

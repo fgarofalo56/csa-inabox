@@ -31,6 +31,7 @@ import {
   pathToHttpsUrl,
 } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
+import { trimSlashes } from '@/lib/util/trim';
 
 export type TableFormat = 'delta' | 'parquet' | 'unknown';
 export type TableStatus = 'ok' | 'empty' | 'broken';
@@ -78,7 +79,7 @@ export interface ScanOptions {
 
 /** Normalize a root prefix: strip leading/trailing slashes; '' when absent. */
 function cleanPrefix(p?: string): string {
-  return String(p ?? '').replace(/^\/+|\/+$/g, '');
+  return trimSlashes(String(p ?? ''));
 }
 
 function leaf(path: string): string {

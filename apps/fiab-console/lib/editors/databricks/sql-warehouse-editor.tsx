@@ -81,6 +81,7 @@ import {
   MarketplaceDialog, CleanRoomsDialog,
 } from './uc-dialogs';
 import type { UcSecurable } from './uc-dialogs';
+import { stripTrailingSemicolons } from '@/lib/util/trim';
 
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -822,7 +823,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!ctasName.trim()) { setCtasError('table name required'); return; }
     if (!ctasCatalog.trim()) { setCtasError('catalog required'); return; }
     if (!ctasSchema.trim()) { setCtasError('schema required'); return; }
-    const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+    const cleaned = stripTrailingSemicolons(sqlText);
     if (!/^select\b/i.test(cleaned)) {
       setCtasError('CTAS requires the editor to contain a SELECT statement.');
       return;

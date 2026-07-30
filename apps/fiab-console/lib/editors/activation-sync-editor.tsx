@@ -46,6 +46,7 @@ import {
   type ActivationSyncSpec, type ActivationSourceKind, type ActivationDestinationKind,
   type ActivationDestination, type FieldMapping, type ActivationMode, type ActivationRun,
 } from '@/lib/activation/types';
+import { trimSlashes } from '@/lib/util/trim';
 
 export const ACTIVATION_SYNC_FLAG_ID = 'n7c-activation-sync';
 
@@ -200,7 +201,7 @@ function SourcePicker({ spec, onChange }: { spec: ActivationSyncSpec; onChange: 
             {entries.length === 0 && !busy && <Caption1 className={styles.label}>No folders here.</Caption1>}
             {entries.filter((e) => e.isDirectory).map((e) => {
               const seg = e.name.split('/').filter(Boolean).pop() || e.name;
-              const full = e.name.replace(/^\/+|\/+$/g, '');
+              const full = trimSlashes(e.name);
               return (
                 <div key={e.name} className={styles.mapRow}>
                   <Button size="small" appearance="subtle" className={styles.folderBtn} icon={<Table20Regular />} onClick={() => setPrefix(full)}>{seg}</Button>

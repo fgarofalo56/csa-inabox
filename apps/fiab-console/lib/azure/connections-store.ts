@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import { connectionsContainer, itemsContainer } from './cosmos-client';
 import { putKeyVaultSecret, deleteKeyVaultSecret, kvSecretsConfigGate } from './kv-secrets-client';
 import type { SessionPayload } from '@/lib/auth/session';
+import { trimEdges } from '@/lib/util/trim';
 
 export type ConnectionType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'databricks-sql'
@@ -169,10 +170,7 @@ export interface ConnectionPurviewResult {
 
 /** Purview source name for a connection (letters/digits/-/_; ≤ 63 chars). */
 function connectionSourceName(conn: { name: string; id: string }): string {
-  const slug = (conn.name || conn.id || 'connection')
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const slug = trimEdges((conn.name || conn.id || 'connection').trim().replace(/[^A-Za-z0-9_-]+/g, '-'), '-')
     .slice(0, 52) || 'connection';
   return `loom-conn-${slug}`;
 }
