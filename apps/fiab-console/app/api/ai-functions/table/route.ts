@@ -27,8 +27,8 @@
  *     → 4xx/502 on validation / upstream errors
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { safeGet, safeRecord } from '@/lib/security/safe-object';
 import {
   callAiFnBatch,
   callCustomPromptBatch,
@@ -45,6 +45,7 @@ import {
   type AiSchemaField,
 } from '@/lib/azure/ai-functions-registry';
 import { tierPolicyFromConfig, selectTier, type ModelTier } from '@/lib/foundry/model-tier-router';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -125,18 +126,32 @@ function parseSchema(v: unknown): AiSchemaField[] {
   return out;
 }
 
-/** Best-effort JSON parse of a model row into a field→value map. */
+/**
+ * Best-effort JSON parse of a model row into a field→value map.
+ *
+ * js/remote-property-injection, BOTH sides:
+ *   • WRITE — `fields` are caller-authored schema field names. On an object
+ *     literal, `values.__proto__ = str` is swallowed by the prototype setter
+ *     (the column silently vanishes from the response) and `values.toString` /
+ *     `valueOf` / `hasOwnProperty` shadow the inherited methods with a string,
+ *     so any later `String(values)` throws. `safeRecord()` (null prototype) has
+ *     nothing to shadow and no accessor to hit.
+ *   • READ — `obj` is JSON.parse'd MODEL output, and a plain `obj[f]` for
+ *     `f === 'constructor'` returns `Object` itself, which `cellStr` would
+ *     stringify into the cell. `safeGet` only ever returns an OWN data property.
+ */
 function parseRowJson(text: string, fields: string[]): Record<string, string> {
-  const values: Record<string, string> = {};
+  const values = safeRecord<string>();
   let obj: any = null;
   try { obj = JSON.parse(text); } catch { /* handled below */ }
-  for (const f of fields) values[f] = obj && typeof obj === 'object' && obj[f] != null ? cellStr(obj[f]) : '';
+  for (const f of fields) {
+    const cell = obj && typeof obj === 'object' ? safeGet<unknown>(obj, f) : undefined;
+    values[f] = cell != null ? cellStr(cell) : '';
+  }
   return values;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
@@ -261,4 +276,4 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, engine: 'aoai', error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

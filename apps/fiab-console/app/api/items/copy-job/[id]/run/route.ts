@@ -42,6 +42,7 @@ import {
 import { executeQuery } from '@/lib/azure/azure-sql-client';
 import {
   CopyJobSqlError,
+  assertUserLinkedService,
   buildBoundedSelectSql,
   buildCdcNetChangesSql,
   buildFullSelectSql,
@@ -49,6 +50,8 @@ import {
   buildTruncateSql,
   buildWatermarkLookupSql,
   copyJobCaptureInstance,
+  copyJobMergeKeys,
+  copyJobTableParts,
 } from '@/lib/azure/copy-job-sql';
 import { jerr, loadOwnedItem } from '../../../_lib/item-crud';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -112,10 +115,14 @@ async function ensureControlTable(server: string, database: string): Promise<voi
     'WHEN NOT MATCHED THEN INSERT (source, table_name, last_value) VALUES (@source, @table_name, @last_value); END;');
 }
 
+/**
+ * `schema` / `table` for a SQL dataset's typeProperties. ADF composes
+ * `[schema].[table]` from these service-side, so they are validated against the
+ * same closed identifier grammar as the SQL this route builds itself — a name
+ * that cannot be a catalog object never leaves Loom, whichever side quotes it.
+ */
 function splitTable(t: string): { schema: string; table: string } {
-  const i = t.indexOf('.');
-  if (i < 0) return { schema: 'dbo', table: t };
-  return { schema: t.slice(0, i), table: t.slice(i + 1) };
+  return copyJobTableParts(t, 'table');
 }
 
 /** Dataset `type` for a Copy activity source/sink type. */
@@ -181,7 +188,10 @@ function sinkProps(spec: CopySpec): Record<string, unknown> {
       // terminator into the sink's pre-copy script.
       props.preCopyScript = buildTruncateSql(sinkTable);
     } else if (spec.writeMode === 'Merge') {
-      const keys = (spec.mergeKeys || '').split(',').map((k) => k.trim()).filter(Boolean);
+      // Validated as column identifiers: ADF composes the `MERGE … ON`
+      // predicate from these service-side, so this is defence in depth on the
+      // same caller-authored spec (throws CopyJobSqlError → 400).
+      const keys = copyJobMergeKeys(spec.mergeKeys);
       props.writeBehavior = 'upsert';
       props.upsertSettings = { useTempDB: true, keys };
       props.sqlWriterUseTableLock = false;
@@ -391,20 +401,38 @@ export const POST = withSession<{ id: string }>(async (_req: NextRequest, { sess
   try {
     const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
-    // The pipeline is built STRICTLY from the PERSISTED spec. The route used to
-    // spread the request body over `item.state`, which let any caller who owns a
-    // copy-job replace `sourceName` / `sourceTable` / `watermarkCol` /
-    // `cdcCaptureInstance` / `sink.table` per request — values that land inside
-    // SQL that ADF runs against the SHARED control DB and the linked sources.
-    // Rebuilding from the authorised record means the shipped statement cannot
-    // diverge from the saved configuration by construction. (The only production
-    // caller — copy-job-editor.tsx `run()` — already POSTs `{}`; it saves via
-    // `saveItem` first.)
-    const spec = { ...((item.state as any) as CopySpec) } as CopySpec;
+    // The pipeline is built from the PERSISTED spec only; the route used to
+    // spread the request body over `item.state` as well. Dropping that spread
+    // removes a second source of truth — it is NOT the security control, and
+    // must not be described as one. `PUT /api/items/copy-job/[id]` stores
+    // `state` verbatim, so every field below is still fully caller-authored;
+    // going through Cosmos is what makes this a SECOND-ORDER injection, not
+    // what stops it. The security boundary is `lib/azure/copy-job-sql.ts`
+    // (closed-grammar identifiers + escaped literals + reserved linked
+    // services) and nothing else. (The only production caller —
+    // copy-job-editor.tsx `run()` — already POSTs `{}` after `saveItem`.)
+    const persisted = (item.state as any) as CopySpec;
 
-    if (!spec?.source?.linkedService || !spec?.sink?.linkedService) {
-      return jerr('source.linkedService and sink.linkedService are required — configure the copy job in the wizard first', 400);
-    }
+    // The control linked service is RESERVED: a copy job may not name it as its
+    // own source or sink. `source.query` is free-form by design and
+    // `sink.preCopyScript` is a TRUNCATE, so either would otherwise reach the
+    // SHARED watermark DB with caller-authored SQL as the factory MI — the same
+    // impact as the interpolation the builders close, via a field they cannot
+    // see. Throws CopyJobSqlError → mapped to 400 below. Rebuilt (not mutated in
+    // place) so the loaded item is never edited and the validated names are the
+    // ONLY ones the pipeline builders can read.
+    const spec: CopySpec = {
+      ...persisted,
+      source: {
+        ...(persisted?.source as SideSpec),
+        linkedService: assertUserLinkedService(persisted?.source?.linkedService, 'source.linkedService'),
+      },
+      sink: {
+        ...(persisted?.sink as SideSpec),
+        linkedService: assertUserLinkedService(persisted?.sink?.linkedService, 'sink.linkedService'),
+      },
+    };
+
     if (!spec.source.type || !spec.sink.type) {
       return jerr('source.type and sink.type are required', 400);
     }

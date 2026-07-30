@@ -5,9 +5,16 @@
  * `__proto__` / `constructor` / `prototype` key and asserts the outcome the
  * plain-object-literal version could not give: an OWN key that survives
  * `Object.keys` + `JSON.stringify`, and a lookup that never inherits.
+ *
+ * The class is NOT just `__proto__`. Round 2 of the review pointed out that the
+ * original "the value is a string, so it is inert" argument only ever held for
+ * `__proto__` (whose setter ignores a non-object operand) and said nothing about
+ * `toString` / `valueOf` / `hasOwnProperty` / `constructor`, which a string
+ * shadows perfectly well. Those tests are below, and the four previously
+ * dismissed string-valued sites now use the null-prototype record too.
  */
 import { describe, it, expect } from 'vitest';
-import { safeRecord, safeGet, safeSet, isUnsafeKey } from '../safe-object';
+import { safeRecord, safeGet, safeSet, isUnsafeKey, toSafeStringMap } from '../safe-object';
 import { sanitizePageConfig, sanitizeBookmarks } from '@/lib/report/report-definition-sanitizer';
 import { serialiseRule, type LifecycleRule } from '@/lib/azure/lifecycle-policy-shapes';
 
@@ -48,27 +55,80 @@ describe('safe-object primitives', () => {
   });
 
   /**
-   * The DISMISSAL evidence for the four string-valued CodeQL sites (alerts 619,
-   * 577, 504, 503 — ai-functions/table `values[f]`, business-metadata
-   * `attributes[key]`, and the two Unity-Catalog `toStringMap` bags). Those
-   * write a STRING, and `Object.prototype.__proto__`'s setter ignores a
-   * non-object operand: no prototype swap, no own key, no pollution — the write
-   * is a silent no-op, so the only consequence is a tag/field literally named
-   * `__proto__` rendering blank. Left unfixed on purpose; this test pins the
-   * language behaviour the dismissal rests on so a future runtime change is
-   * caught rather than assumed.
+   * WITHDRAWN DISMISSAL (was: alerts 619 / 577 / 504 / 503 are inert because the
+   * value is a string).
+   *
+   * The original argument — `Object.prototype.__proto__`'s setter ignores a
+   * non-object operand, so assigning a string swaps no prototype — is true, and
+   * covers exactly ONE key. It says nothing about the rest of
+   * `Object.prototype`. This test proves the hazard the argument missed: on a
+   * plain object literal, a STRING at `toString` / `valueOf` / `hasOwnProperty`
+   * shadows the inherited method, and the next consumer that calls it throws.
+   * That is a 500 reachable from a caller-chosen map key, not a blank field.
    */
-  it('a STRING assigned at __proto__ is a no-op (basis for the string-valued dismissals)', () => {
+  it('a STRING at toString/valueOf/hasOwnProperty on a LITERAL breaks the object (the hazard the string dismissal missed)', () => {
     const bag: Record<string, string> = {};
-    bag['__proto__'] = 'attacker';
-    expect(Object.keys(bag)).toHaveLength(0);
-    expect(Object.getPrototypeOf(bag)).toBe(Object.prototype);
-    expect(Object.getPrototypeOf({})).toBe(Object.prototype); // nothing global moved
-    // …whereas an OBJECT value at the same key DOES swap the prototype — which
-    // is why the object/array-valued sites in this PR were fixed and these were not.
-    const bag2: Record<string, unknown> = {};
-    bag2['__proto__'] = { attacker: true };
-    expect(Object.getPrototypeOf(bag2)).not.toBe(Object.prototype);
+    bag['toString'] = 'attacker';
+    bag['valueOf'] = 'attacker';
+    bag['hasOwnProperty'] = 'attacker';
+    // The write is NOT a no-op: these are own keys shadowing real methods.
+    expect(Object.keys(bag).sort()).toEqual(['hasOwnProperty', 'toString', 'valueOf']);
+    expect(() => String(bag)).toThrow(TypeError);
+    expect(() => `${bag}`).toThrow(TypeError);
+    // eslint-disable-next-line no-prototype-builtins
+    expect(() => (bag as any).hasOwnProperty('toString')).toThrow(TypeError);
+    // `constructor` shadowing turns a normal reflection read into a throw too.
+    const bag2: Record<string, string> = {};
+    bag2['constructor'] = 'attacker';
+    expect(() => new (bag2 as any).constructor()).toThrow(TypeError);
+  });
+
+  it('the same keys on a null-prototype record are inert data (the structural fix)', () => {
+    const safe = safeRecord<string>();
+    safe['toString'] = 'attacker';
+    safe['valueOf'] = 'attacker';
+    safe['hasOwnProperty'] = 'attacker';
+    safe['constructor'] = 'attacker';
+    safe['__proto__'] = 'attacker';
+    // Every key is present as plain data, and nothing was shadowed because there
+    // was nothing to shadow.
+    expect(Object.keys(safe).sort()).toEqual([
+      '__proto__', 'constructor', 'hasOwnProperty', 'toString', 'valueOf',
+    ]);
+    expect(Object.getPrototypeOf(safe)).toBeNull();
+    // The payload round-trips through JSON with every key intact. (The expected
+    // value must itself be built with JSON.parse: an object LITERAL containing
+    // `__proto__:` sets the prototype at parse time and has no such own key —
+    // the same footgun this module exists to remove.)
+    expect(JSON.parse(JSON.stringify(safe))).toEqual(
+      JSON.parse(
+        '{"__proto__":"attacker","constructor":"attacker","hasOwnProperty":"attacker",'
+        + '"toString":"attacker","valueOf":"attacker"}',
+      ),
+    );
+  });
+
+  /**
+   * Drives the SHARED coercion now used by the three string-map sites that were
+   * previously dismissed: Unity-Catalog catalog `properties`/`options`
+   * (#504/#503 → app/api/databricks/unity-catalog/{catalogs,schemas}/route.ts
+   * `toStringMap`) and Purview business-metadata custom tags (#577 →
+   * app/api/items/[type]/[id]/business-metadata/route.ts `attributes`).
+   */
+  it('toSafeStringMap keeps every caller key as data and stays callable', () => {
+    const map = toSafeStringMap(
+      JSON.parse('{"__proto__":"a","toString":"b","constructor":"c"," ok ":"d","":"dropped"}'),
+    )!;
+    expect(Object.getPrototypeOf(map)).toBeNull();
+    expect(Object.keys(map).sort()).toEqual(['__proto__', 'constructor', 'ok', 'toString']);
+    expect(map['ok']).toBe('d');
+    // Blank keys are dropped; an all-blank bag becomes undefined so the caller
+    // can omit the field entirely.
+    expect(toSafeStringMap({ '  ': 'x' })).toBeUndefined();
+    expect(toSafeStringMap('not an object')).toBeUndefined();
+    // A consumer can still stringify the outgoing body — the literal version of
+    // this map could not (see the previous test).
+    expect(() => JSON.stringify({ properties: map })).not.toThrow();
   });
 });
 

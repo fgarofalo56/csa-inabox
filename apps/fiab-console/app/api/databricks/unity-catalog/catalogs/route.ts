@@ -19,7 +19,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   databricksConfigGate, listUcCatalogs, createUcCatalog, deleteUcCatalog, patchUcCatalog,
 } from '@/lib/azure/databricks-client';
@@ -29,19 +28,21 @@ import {
   listCatalogs as listCatalogsUc, createCatalog as createCatalogUc,
   updateCatalog as updateCatalogUc, deleteCatalog as deleteCatalogUc,
 } from '@/lib/azure/unity-catalog-client';
+import { toSafeStringMap } from '@/lib/security/safe-object';
+import { withSession } from '@/lib/api/route-toolkit';
 
 const CATALOG_TYPES = new Set(['MANAGED_CATALOG', 'FOREIGN_CATALOG', 'DELTASHARING_CATALOG']);
 
 // Coerce a free-form object into a Record<string,string> (drops empty keys).
-function toStringMap(v: any): Record<string, string> | undefined {
-  if (!v || typeof v !== 'object') return undefined;
-  const out: Record<string, string> = {};
-  for (const [k, val] of Object.entries(v)) {
-    const key = String(k).trim();
-    if (key) out[key] = String(val ?? '');
-  }
-  return Object.keys(out).length ? out : undefined;
-}
+// Delegates to the audited `toSafeStringMap`, which builds a NULL-PROTOTYPE
+// record (js/remote-property-injection): the keys are caller-supplied, and on an
+// object literal `out.__proto__ = 'x'` is silently dropped by the prototype
+// setter while `out.toString = 'x'` / `out.valueOf` / `out.hasOwnProperty`
+// SHADOW inherited methods — so a later `String(out)` or `out.hasOwnProperty(k)`
+// throws "is not a function". `Object.create(null)` has nothing to shadow and no
+// `__proto__` accessor, so every key round-trips as plain data. JSON.stringify
+// serialises it identically.
+const toStringMap = toSafeStringMap;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,9 +62,7 @@ function gate() {
   return null;
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
   const g = gate(); if (g) return g;
   try {
     const catalogs = isOssUc()
@@ -73,11 +72,9 @@ export async function GET() {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -123,11 +120,9 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function PATCH(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -150,11 +145,9 @@ export async function PATCH(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const name = req.nextUrl.searchParams.get('name')?.trim();
   const force = req.nextUrl.searchParams.get('force') === 'true';
@@ -166,4 +159,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

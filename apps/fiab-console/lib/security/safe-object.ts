@@ -23,10 +23,32 @@
  *   rather than `undefined` and downstream `.map` / `.filter` throws (a 500 any
  *   authenticated caller can trigger).
  *
- *   The rule now lives in ONE audited place. Prefer {@link safeRecord} (which
- *   makes the bug impossible to express — a null-prototype object has no
- *   `__proto__` setter and no inherited members to shadow) over
- *   {@link isUnsafeKey} filtering.
+ *   `__proto__` IS NOT THE WHOLE CLASS, AND "THE VALUE IS A STRING" IS NOT A
+ *   DISMISSAL (corrected 2026-07-29). It is true that the
+ *   `Object.prototype.__proto__` setter ignores a non-object operand, so
+ *   `out['__proto__'] = 'x'` swaps no prototype. That argument covers exactly
+ *   ONE key. Every OTHER inherited member is shadowed by a string just fine:
+ *
+ *     out['toString']       = 'x'  →  String(out) / `${out}` throws TypeError
+ *     out['valueOf']        = 'x'  →  out + '' / Number(out) throws TypeError
+ *     out['hasOwnProperty'] = 'x'  →  out.hasOwnProperty(k) throws TypeError
+ *     out['constructor']    = 'x'  →  out.constructor.name / new out.constructor
+ *                                     throws; `x.constructor === Object` false
+ *     also: isPrototypeOf, propertyIsEnumerable, toLocaleString,
+ *           __defineGetter__, __lookupGetter__ …
+ *
+ *   So a string-valued write at a caller-supplied key is NOT inert: it is an
+ *   unauthenticated-shaped 500 for any consumer that calls an inherited method
+ *   on the map. Blocklisting that set by name would also reject a legitimate
+ *   field literally called `toString`.
+ *
+ *   The rule therefore lives in ONE audited place, and the primary API is
+ *   {@link safeRecord}, which makes the whole class — prototype swap, silent
+ *   drop, AND method shadowing — impossible to express: a null-prototype object
+ *   has no `__proto__` accessor and no inherited members to shadow, so every
+ *   key, including those above, round-trips as plain data.
+ *   {@link safeSet} / {@link isUnsafeKey} are the fallback for targets you do
+ *   not construct; they close the prototype-slot keys only.
  *
  * Grounded in: https://cheatsheetseries.owasp.org/cheatsheets/Prototype_Pollution_Prevention_Cheat_Sheet.html
  */
@@ -63,6 +85,27 @@ export function safeRecord<V = unknown>(): Record<string, V> {
 }
 
 /**
+ * Coerce a free-form request object into a `{ key: string }` bag on a
+ * null-prototype record, dropping blank keys. This is the shared shape behind
+ * every "caller-supplied properties / tags / options" payload (Unity-Catalog
+ * catalog + schema `properties`/`options`, Purview business-metadata custom
+ * tags). Centralised so the null-prototype guarantee is stated once instead of
+ * being re-derived per route.
+ *
+ * Returns `undefined` when there is nothing to send, so callers can omit the
+ * field from the outgoing body rather than sending an empty object.
+ */
+export function toSafeStringMap(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const out = safeRecord<string>();
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    const key = String(k).trim();
+    if (key) out[key] = val == null ? '' : String(val);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
  * Read a map entry by a user-supplied key WITHOUT inheriting through the
  * prototype chain. Returns `undefined` for `__proto__` / `constructor` /
  * `prototype` and for any key the map does not OWN — never `Object.prototype`'s
@@ -80,7 +123,11 @@ export function safeGet<V>(map: Record<string, V> | null | undefined, key: unkno
  * that must report an honest failure (rather than silently dropping) branch on
  * the result.
  *
- * Prefer {@link safeRecord} when you own the target's construction.
+ * LIMITATION, stated so this is not mistaken for a full defence: on a target
+ * that still has `Object.prototype`, this blocks the three prototype-slot keys
+ * but NOT shadowing of the other inherited members (`toString`, `valueOf`,
+ * `hasOwnProperty`, …). Prefer {@link safeRecord} whenever you own the target's
+ * construction — that closes the whole class.
  */
 export function safeSet<V>(target: Record<string, V>, key: unknown, value: V): boolean {
   if (isUnsafeKey(key)) return false;

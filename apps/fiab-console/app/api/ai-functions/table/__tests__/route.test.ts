@@ -119,6 +119,52 @@ describe('POST /api/ai-functions/table', () => {
     expect((callCustomPromptBatch as any)).toHaveBeenCalled();
   });
 
+  /**
+   * js/remote-property-injection #619 (WITHDRAWN DISMISSAL, review round 2).
+   *
+   * The row value map is keyed by CALLER-AUTHORED schema field names. The
+   * original dismissal argued the write is inert because the value is a string
+   * — true only for `__proto__`. A string at `toString` / `valueOf` /
+   * `hasOwnProperty` shadows the inherited method on a plain object literal, so
+   * the next consumer that stringifies the map throws. And a READ of
+   * `obj['constructor']` on the model's parsed JSON returns `Object` itself,
+   * which `cellStr` would render into the cell.
+   */
+  it('keeps prototype-named schema fields as plain data and never leaks Object into a cell', async () => {
+    (callCustomPromptBatch as any).mockImplementation(async (_p: string, inputs: string[]) =>
+      // The model echoes only `ok`; the other fields are absent, so the READ path
+      // must resolve them to '' rather than inheriting from Object.prototype.
+      batchResult(inputs, () => JSON.stringify({ ok: 'yes' })),
+    );
+    const res = await POST(req({
+      fn: 'extract',
+      rows: [{ text: 'anything' }],
+      inputColumns: ['text'],
+      schema: [
+        { field: 'ok', type: 'string', prompt: 'p' },
+        { field: 'toString', type: 'string', prompt: 'p' },
+        { field: 'valueOf', type: 'string', prompt: 'p' },
+        { field: 'hasOwnProperty', type: 'string', prompt: 'p' },
+        { field: 'constructor', type: 'string', prompt: 'p' },
+        { field: '__proto__', type: 'string', prompt: 'p' },
+      ],
+    }));
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    const values = j.rows[0].values;
+    // Every requested column is present (a literal target silently loses
+    // `__proto__`), and the un-echoed ones are empty strings — NOT `Object`.
+    expect(Object.keys(values).sort()).toEqual(
+      ['__proto__', 'constructor', 'hasOwnProperty', 'ok', 'toString', 'valueOf'],
+    );
+    expect(values.ok).toBe('yes');
+    expect(values.constructor).toBe('');
+    expect(values.toString).toBe('');
+    // The map survived JSON serialisation on the way out, which a literal whose
+    // `toString` had been shadowed would not be guaranteed to.
+    expect(() => JSON.stringify(values)).not.toThrow();
+  });
+
   it('surfaces the honest gate when no AOAI is deployed', async () => {
     (callAiFnBatch as any).mockImplementation(async () => {
       throw new NoAoaiDeploymentError('no model');

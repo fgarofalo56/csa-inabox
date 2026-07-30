@@ -23,6 +23,16 @@
  * {@link CopyJobSqlError} rather than emitting anything it could not prove safe
  * — so the route cannot construct a divergent statement by construction.
  *
+ * WHAT IS *NOT* A DEFENCE HERE (corrected 2026-07-29):
+ *   "The pipeline is rebuilt from the persisted item, not the request body" is
+ *   NOT a safety property. `PUT /api/items/copy-job/[id]` stores `state`
+ *   verbatim (`item-crud.updateOwnedItem` keeps `patch.state` as-is once it is
+ *   an object — no schema, no allow-list), so every field this module receives
+ *   is still 100% caller-authored; it merely takes one hop through Cosmos.
+ *   That hop is the definition of a SECOND-ORDER injection, not a mitigation.
+ *   Dropping the request-body spread removes a confusing second source of
+ *   truth — the *security* boundary is the validation below, and nothing else.
+ *
  * Grounded in:
  *   T-SQL delimited identifiers — https://learn.microsoft.com/sql/relational-databases/databases/database-identifiers
  *   ADF Script activity          — https://learn.microsoft.com/azure/data-factory/transform-data-using-script
@@ -56,8 +66,13 @@ const IDENT_PART_RE = /^[A-Za-z_][A-Za-z0-9_$#@ -]{0,127}$/;
  */
 const CAPTURE_INSTANCE_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
-/** Validate + bracket ONE identifier part. Throws on anything unproven. */
-export function copyJobIdent(raw: unknown, label: string): string {
+/**
+ * Validate ONE identifier part and return it UNBRACKETED. Use when the consumer
+ * does its own quoting (an ADF dataset's `schema` / `table` typeProperties,
+ * which the service composes into `[schema].[table]` on our behalf) — the point
+ * is still that a name which cannot be a catalog object never leaves Loom.
+ */
+export function assertCopyJobIdent(raw: unknown, label: string): string {
   const v = typeof raw === 'string' ? raw.trim() : '';
   if (!v) throw new CopyJobSqlError(`${label} is required`);
   if (!IDENT_PART_RE.test(v)) {
@@ -65,15 +80,20 @@ export function copyJobIdent(raw: unknown, label: string): string {
       `${label} "${v}" is not a valid SQL identifier — use letters, digits, spaces, _ - $ # @ (max 128, starting with a letter or underscore).`,
     );
   }
-  return bracket(v);
+  return v;
+}
+
+/** Validate + bracket ONE identifier part. Throws on anything unproven. */
+export function copyJobIdent(raw: unknown, label: string): string {
+  return bracket(assertCopyJobIdent(raw, label));
 }
 
 /**
- * Validate + bracket a (optionally schema-qualified) table reference into
- * `[schema].[table]`. An unqualified name defaults to the `dbo` schema, which is
- * what `splitTable()` in the route already assumed.
+ * Validate + split a (optionally schema-qualified) table reference into its raw
+ * parts, for consumers that quote for themselves (ADF datasets). Same grammar
+ * and same failures as {@link copyJobTable}.
  */
-export function copyJobTable(raw: unknown, label: string): string {
+export function copyJobTableParts(raw: unknown, label: string): { schema: string; table: string } {
   const v = typeof raw === 'string' ? raw.trim() : '';
   if (!v) throw new CopyJobSqlError(`${label} is required`);
   const i = v.indexOf('.');
@@ -82,7 +102,20 @@ export function copyJobTable(raw: unknown, label: string): string {
   if (table.includes('.')) {
     throw new CopyJobSqlError(`${label} "${v}" must be "table" or "schema.table" (at most one dot).`);
   }
-  return `${copyJobIdent(schema, `${label} schema`)}.${copyJobIdent(table, `${label} table`)}`;
+  return {
+    schema: assertCopyJobIdent(schema, `${label} schema`),
+    table: assertCopyJobIdent(table, `${label} table`),
+  };
+}
+
+/**
+ * Validate + bracket a (optionally schema-qualified) table reference into
+ * `[schema].[table]`. An unqualified name defaults to the `dbo` schema, which is
+ * what `splitTable()` in the route already assumed.
+ */
+export function copyJobTable(raw: unknown, label: string): string {
+  const { schema, table } = copyJobTableParts(raw, label);
+  return `${bracket(schema)}.${bracket(table)}`;
 }
 
 /**
@@ -92,6 +125,57 @@ export function copyJobTable(raw: unknown, label: string): string {
  */
 export function copyJobLiteral(raw: unknown): string {
   return `N'${escapeSqlLiteral(String(raw ?? ''))}'`;
+}
+
+/**
+ * The linked service(s) THIS ROUTE drives itself, against the SHARED control
+ * database (`dbo.copy_watermark` — every tenant's watermark / CDC LSN
+ * checkpoint), as the FACTORY'S system-assigned managed identity.
+ *
+ * A copy job may never name one as its OWN source or sink. Escaping the
+ * identifiers and literals in the generated statements is not enough on its
+ * own, because two copy-spec fields carry SQL that this module never sees:
+ *
+ *   • `source.query` — a documented free-form product feature ("Source query
+ *     (optional override)" in the wizard) that ADF ships verbatim as the Copy
+ *     activity's `sqlReaderQuery`.
+ *   • `sink.table` + `writeMode: 'Overwrite'` — becomes `TRUNCATE TABLE
+ *     [schema].[table]` in the sink's `preCopyScript`. `copy_watermark` is a
+ *     perfectly valid identifier, so validation cannot reject it.
+ *
+ * Both run against whatever linked service the spec names. Pointing either at
+ * the control linked service therefore reaches the shared control DB with
+ * caller-authored SQL — the same impact as the injection the builders close,
+ * through a field the builders do not touch. Reserving the name makes that
+ * state unrepresentable instead of trying to sanitise the SQL.
+ *
+ * ADF artifact names are case-insensitive for uniqueness, so the comparison is
+ * case-folded and trimmed.
+ */
+export const RESERVED_LINKED_SERVICES: readonly string[] = Object.freeze([
+  'loom-copy-control-sql',
+]);
+
+const RESERVED_LS = new Set(RESERVED_LINKED_SERVICES.map((n) => n.toLowerCase()));
+
+/**
+ * Validate a caller-chosen linked-service reference for a copy job's source or
+ * sink. Throws on a blank name and on any {@link RESERVED_LINKED_SERVICES}
+ * entry. Returns the trimmed name to use as the ADF `referenceName`.
+ */
+export function assertUserLinkedService(raw: unknown, label: string): string {
+  const v = typeof raw === 'string' ? raw.trim() : '';
+  if (!v) {
+    throw new CopyJobSqlError(
+      `${label} is required — configure the copy job in the wizard first`,
+    );
+  }
+  if (RESERVED_LS.has(v.toLowerCase())) {
+    throw new CopyJobSqlError(
+      `"${v}" is reserved for Loom's copy-job watermark / CDC checkpoint control database and cannot be used as a copy ${label.replace(/\.linkedService$/, '')}. Pick the linked service that points at your own data.`,
+    );
+  }
+  return v;
 }
 
 /** Validate a CDC capture-instance name (spliced into an object name). */
@@ -104,6 +188,35 @@ export function copyJobCaptureInstance(raw: unknown): string {
     );
   }
   return v;
+}
+
+/**
+ * Merge (upsert) key columns. These are not interpolated by this module — ADF
+ * composes the `MERGE … ON` predicate from them service-side — so this is
+ * defence in depth rather than a proven sink. It is here because the column
+ * names come from the same caller-authored spec as everything else, and an
+ * identifier that cannot be a column name has no legitimate reason to reach
+ * the service. Returns the trimmed, de-duplicated list.
+ */
+export function copyJobMergeKeys(raw: unknown): string[] {
+  const parts = String(raw ?? '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const k of parts) {
+    if (!IDENT_PART_RE.test(k)) {
+      throw new CopyJobSqlError(
+        `merge key "${k}" is not a valid column name — use letters, digits, spaces, _ - $ # @ (max 128, starting with a letter or underscore).`,
+      );
+    }
+    const lower = k.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(k);
+  }
+  return out;
 }
 
 // ── Statement builders (the only SQL the route ships) ────────────────────────

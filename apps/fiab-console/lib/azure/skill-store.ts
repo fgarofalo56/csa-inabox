@@ -49,6 +49,7 @@ import {
   resolveActiveSkills,
   type SkillDescriptor,
 } from '@/lib/copilot/skill-registry-core';
+import { safeRecord } from '@/lib/security/safe-object';
 
 // ---------------------------------------------------------------------------
 // Doc shapes + scope helpers
@@ -242,14 +243,14 @@ function normalizeInput(input: Partial<CustomSkillInput>): CustomSkillInput {
  * or {} when none. Applied on top of each skill's own `enabled` in listSkills.
  */
 async function getTenantSkillDefaults(tenantId?: string): Promise<Record<string, boolean>> {
-  if (!tenantId) return {};
+  if (!tenantId) return skillStateRecord();
   const c = await copilotSkillStatesContainer();
   const key = tenantKeyFor(tenantId);
   try {
     const { resource } = await c.item(key, key).read<SkillStateDoc>();
-    return resource?.states ?? {};
+    return skillStateRecord(resource?.states);
   } catch {
-    return {};
+    return skillStateRecord();
   }
 }
 
@@ -438,15 +439,36 @@ export async function duplicateSkill(
 // Per-user toggle state (+ tenant default overlay)
 // ---------------------------------------------------------------------------
 
+/**
+ * Rehydrate a persisted `{ skillId: enabled }` map onto a NULL-PROTOTYPE record.
+ *
+ * js/remote-property-injection — the skill id is the `[id]` PATH SEGMENT of
+ * `PATCH /api/copilot/skills/[id]/state`, i.e. entirely caller-chosen. (An
+ * earlier triage of this file claimed the ids were in-repo constants; they are
+ * not, and the route serves custom skills too.) The value is a boolean, so
+ * `states['__proto__'] = false` swaps no prototype — it is swallowed by the
+ * setter, the write is LOST, and the route still answers
+ * `{ ok: true, enabled: false }`: a false receipt, the same defect class as the
+ * MDM crosswalk map. Rebuilding on `Object.create(null)` makes every id, and
+ * every `Object.prototype` member name, a plain own key that persists.
+ */
+function skillStateRecord(persisted?: Record<string, boolean> | null): Record<string, boolean> {
+  const out = safeRecord<boolean>();
+  if (persisted && typeof persisted === 'object') {
+    for (const [k, v] of Object.entries(persisted)) out[k] = !!v;
+  }
+  return out;
+}
+
 /** Read a user's { skillId: enabled } override map ({} when none / on error). */
 export async function getUserSkillState(userOid: string): Promise<Record<string, boolean>> {
   const c = await copilotSkillStatesContainer();
   const key = userKeyFor(userOid);
   try {
     const { resource } = await c.item(key, key).read<SkillStateDoc>();
-    return resource?.states ?? {};
+    return skillStateRecord(resource?.states);
   } catch {
-    return {};
+    return skillStateRecord();
   }
 }
 
@@ -458,13 +480,16 @@ export async function setUserSkillState(
 ): Promise<Record<string, boolean>> {
   const c = await copilotSkillStatesContainer();
   const key = userKeyFor(userOid);
-  let states: Record<string, boolean> = {};
+  let states: Record<string, boolean>;
   try {
     const { resource } = await c.item(key, key).read<SkillStateDoc>();
-    states = resource?.states ?? {};
+    states = skillStateRecord(resource?.states);
   } catch {
-    states = {};
+    states = skillStateRecord();
   }
+  // Null-prototype target — see skillStateRecord(): `skillId` is a caller-chosen
+  // path segment, so on an object literal `__proto__` would be swallowed and the
+  // route would report success for a write that never happened.
   states[skillId] = enabled;
   const doc: SkillStateDoc = { id: key, userKey: key, kind: 'user', states, updatedAt: new Date().toISOString() };
   await c.items.upsert(doc);
@@ -483,13 +508,16 @@ export async function setTenantSkillDefault(
 ): Promise<Record<string, boolean>> {
   const c = await copilotSkillStatesContainer();
   const key = tenantKeyFor(tenantId);
-  let states: Record<string, boolean> = {};
+  let states: Record<string, boolean>;
   try {
     const { resource } = await c.item(key, key).read<SkillStateDoc>();
-    states = resource?.states ?? {};
+    states = skillStateRecord(resource?.states);
   } catch {
-    states = {};
+    states = skillStateRecord();
   }
+  // Null-prototype target — see skillStateRecord(): `skillId` is a caller-chosen
+  // path segment, so on an object literal `__proto__` would be swallowed and the
+  // route would report success for a write that never happened.
   states[skillId] = enabled;
   const doc: SkillStateDoc = { id: key, userKey: key, kind: 'tenant', states, updatedAt: new Date().toISOString() };
   await c.items.upsert(doc);

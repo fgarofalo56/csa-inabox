@@ -9,6 +9,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   CopyJobSqlError,
+  RESERVED_LINKED_SERVICES,
+  assertUserLinkedService,
   buildBoundedSelectSql,
   buildCdcNetChangesSql,
   buildFullSelectSql,
@@ -16,6 +18,8 @@ import {
   buildTruncateSql,
   buildWatermarkLookupSql,
   copyJobCaptureInstance,
+  copyJobMergeKeys,
+  copyJobTableParts,
 } from '../copy-job-sql';
 
 const OLD_EXPR = "@{activity('LookupOldWatermark').output.resultSets[0].rows[0].last_value}";
@@ -98,5 +102,57 @@ describe('copy-job SQL builders — CDC capture instance', () => {
 
   it('rejects a hyphen/space, which brackets would have hidden elsewhere', () => {
     expect(() => copyJobCaptureInstance('dbo orders')).toThrow(CopyJobSqlError);
+  });
+});
+
+/**
+ * ROUND 2 — the sibling the identifier/literal builders could not reach.
+ *
+ * Escaping what this module builds is not sufficient on its own, because two
+ * copy-spec fields carry SQL past it:
+ *   • `source.query` is a free-form product feature shipped verbatim as the Copy
+ *     activity's `sqlReaderQuery`;
+ *   • `sink.table` + `writeMode: 'Overwrite'` becomes `TRUNCATE TABLE …`, and
+ *     `copy_watermark` is a perfectly valid identifier.
+ * Either one, pointed at the control linked service, reaches the SHARED
+ * watermark DB as the factory MI. Reserving the name is what closes it.
+ */
+describe('copy-job SQL builders — reserved control linked service', () => {
+  it('refuses the control linked service as a copy source or sink', () => {
+    for (const name of RESERVED_LINKED_SERVICES) {
+      expect(() => assertUserLinkedService(name, 'source.linkedService')).toThrow(CopyJobSqlError);
+      expect(() => assertUserLinkedService(name, 'sink.linkedService')).toThrow(/reserved/i);
+    }
+  });
+
+  it('matches the reserved name case-insensitively and ignoring surrounding space', () => {
+    // ADF artifact names are case-insensitive for uniqueness, so a case flip
+    // resolves to the SAME linked service.
+    expect(() => assertUserLinkedService('LOOM-Copy-Control-SQL', 'source.linkedService')).toThrow(CopyJobSqlError);
+    expect(() => assertUserLinkedService('  loom-copy-control-sql  ', 'source.linkedService')).toThrow(CopyJobSqlError);
+  });
+
+  it('requires a linked service and returns a legitimate one trimmed', () => {
+    expect(() => assertUserLinkedService('', 'source.linkedService')).toThrow(/required/);
+    expect(() => assertUserLinkedService(undefined, 'sink.linkedService')).toThrow(/required/);
+    expect(assertUserLinkedService('  ls-contoso-sql  ', 'source.linkedService')).toBe('ls-contoso-sql');
+  });
+});
+
+describe('copy-job SQL builders — merge keys + dataset identifiers', () => {
+  it('rejects a merge key that is not a column name', () => {
+    expect(() => copyJobMergeKeys('id, x] ON 1=1 --')).toThrow(CopyJobSqlError);
+  });
+
+  it('splits, trims and de-duplicates legitimate merge keys', () => {
+    expect(copyJobMergeKeys(' id , Region ,id ')).toEqual(['id', 'Region']);
+    expect(copyJobMergeKeys(undefined)).toEqual([]);
+  });
+
+  it('validates a dataset schema/table pair without bracketing it (ADF quotes those)', () => {
+    expect(copyJobTableParts('sales.orders', 'table')).toEqual({ schema: 'sales', table: 'orders' });
+    expect(copyJobTableParts('orders', 'table')).toEqual({ schema: 'dbo', table: 'orders' });
+    // A `]` here would break out of the `[schema].[table]` ADF composes itself.
+    expect(() => copyJobTableParts('dbo.orders] FROM sys.tables --', 'table')).toThrow(CopyJobSqlError);
   });
 });
