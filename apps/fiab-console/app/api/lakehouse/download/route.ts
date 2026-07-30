@@ -25,19 +25,20 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { KNOWN_CONTAINERS, downloadFile, getAccountName } from '@/lib/azure/adls-client';
 import { getLabelForAdlsPath, type MipLabelInfo } from '@/lib/azure/purview-mip-client';
 import { isMipSupportedType, stampMipLabel } from '@/lib/azure/mip-file-inject';
+import { withSession } from '@/lib/api/route-toolkit';
+import { lastSegment } from '@/lib/util/path-strings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function leaf(path: string): string {
-  const t = path.replace(/\/+$/, '');
-  const i = t.lastIndexOf('/');
-  return i >= 0 ? t.slice(i + 1) : t;
+  // #2655 — `path` is request-derived and `/\/+$/` is O(n^2) on a long slash
+  // run that does not end the string. lastSegment is an index walk.
+  return lastSegment(path);
 }
 
 /**
@@ -71,9 +72,7 @@ async function resolveLabel(
   }
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const limited = await enforceRateLimit(session, 'export');
   if (limited) return limited;
 
@@ -133,4 +132,4 @@ export async function GET(req: NextRequest) {
     const status = e?.statusCode === 404 ? 404 : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), code: e?.code }, { status });
   }
-}
+});

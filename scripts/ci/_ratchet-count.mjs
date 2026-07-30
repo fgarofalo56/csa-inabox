@@ -1,7 +1,14 @@
-#!/usr/bin/env node
 /**
  * _ratchet-count — the SHARED "count-a-forbidden-pattern" ratchet mechanic
  * (loom-next-level WS-R R3; consistency 5b / round-3 F6).
+ * ---------------------------------------------------------------------------
+ * NO SHEBANG — DO NOT RE-ADD ONE. This module is `import`ed by
+ * `apps/fiab-console/lib/api/__tests__/ratchet-count-helper.test.ts`, and
+ * vite-node evaluates an out-of-root `.mjs` through `vm.Script`, which does NOT
+ * strip `#!` — so with the shebang that spec died at COLLECTION
+ * (`SyntaxError: Invalid or unexpected token`) and had never actually run.
+ * Found 2026-07-28 while fixing the identical breakage in
+ * check-unity-audit-chokepoint.mjs; same class, sibling file.
  * ---------------------------------------------------------------------------
  * One tested helper for every "baseline + shrink-only + `--update-baseline`"
  * guard so the mechanic exists ONCE instead of N copies. Consumers: R3

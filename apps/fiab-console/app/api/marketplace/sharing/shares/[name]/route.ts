@@ -4,42 +4,55 @@
  * DELETE /api/marketplace/sharing/shares/[name]   → delete the share
  *
  * PATCH body (any subset):
- *   { addObjects?: UCDataObject[], removeObjects?: [{name}], grant?: string[], revoke?: string[] }
- *   - addObjects/removeObjects → UC PATCH /shares/{name} updates
- *   - grant/revoke (recipient names) → UC PATCH /shares/{name}/permissions
+ *   { addObjects?, removeObjects?: [{name}|{schema,name}], grant?: string[], revoke?: string[] }
+ *
+ * Backend-dependent object shape (LU-9):
+ *   loom       addObjects: [{ schema, name, location: 'abfss://…', historyShared? }]
+ *              — the Loom backend serves Delta tables from the estate's own
+ *                ADLS lake, so a bare Unity Catalog three-part name has no
+ *                meaning without a Databricks metastore.
+ *   databricks addObjects: UCDataObject[] → UC PATCH /shares/{name}
+ *
+ * Grants: on the Loom backend a grant lives on the RECIPIENT, because the OSS
+ * sharing server has no per-recipient authorization at all — see
+ * lib/sharing/model.ts. On Databricks it is a UC share permission.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession, withTenantAdmin } from '@/lib/api/route-toolkit';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   getShare, updateShareObjects, deleteShare, getSharePermissions, updateSharePermissions,
 } from '@/lib/azure/unity-catalog-client';
 import { resolveShareHost, sharingErrorResponse } from '../../_lib';
+import {
+  isLoomSharingBackend, loomGetShare, loomPatchShare, loomDeleteShare, loomSharingErrorResponse,
+} from '../../_loom-backend';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ name: string }>(async (req, { params, session }) => {
   try {
-    const name = decodeURIComponent((await ctx.params).name);
+    const name = decodeURIComponent(params.name);
+    if (isLoomSharingBackend()) return await loomGetShare(name, { full: isTenantAdmin(session) });
     const host = await resolveShareHost(req.nextUrl.searchParams.get('host'));
     const [share, permissions] = await Promise.all([
       getShare(host, name, true),
       getSharePermissions(host, name).catch(() => ({ privilege_assignments: [] })),
     ]);
-    return NextResponse.json({ ok: true, host, share, permissions });
+    return NextResponse.json({ ok: true, backend: 'databricks', host, share, permissions });
   } catch (e) {
-    return sharingErrorResponse(e);
+    return loomSharingErrorResponse(e) || sharingErrorResponse(e);
   }
-}
+});
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// Adding a table to a share, or granting a recipient, changes who OUTSIDE the
+// boundary can read estate data — tenant admin on the Loom backend.
+export const PATCH = withTenantAdmin<{ name: string }>(async (req, { params }) => {
   try {
-    const name = decodeURIComponent((await ctx.params).name);
+    const name = decodeURIComponent(params.name);
     const body = await req.json().catch(() => ({}));
+    if (isLoomSharingBackend()) return await loomPatchShare(name, body);
     const host = await resolveShareHost(body?.host);
     if (Array.isArray(body?.addObjects) || Array.isArray(body?.removeObjects)) {
       await updateShareObjects(host, name, { add: body.addObjects, remove: body.removeObjects });
@@ -51,21 +64,20 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ name: str
       getShare(host, name, true),
       getSharePermissions(host, name).catch(() => ({ privilege_assignments: [] })),
     ]);
-    return NextResponse.json({ ok: true, host, share, permissions });
+    return NextResponse.json({ ok: true, backend: 'databricks', host, share, permissions });
   } catch (e) {
-    return sharingErrorResponse(e);
+    return loomSharingErrorResponse(e) || sharingErrorResponse(e);
   }
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withTenantAdmin<{ name: string }>(async (req, { params }) => {
   try {
-    const name = decodeURIComponent((await ctx.params).name);
+    const name = decodeURIComponent(params.name);
+    if (isLoomSharingBackend()) return await loomDeleteShare(name);
     const host = await resolveShareHost(req.nextUrl.searchParams.get('host'));
     await deleteShare(host, name);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, backend: 'databricks' });
   } catch (e) {
-    return sharingErrorResponse(e);
+    return loomSharingErrorResponse(e) || sharingErrorResponse(e);
   }
-}
+});

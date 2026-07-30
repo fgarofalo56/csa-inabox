@@ -45,6 +45,7 @@ import {
 import {
   getTable, UnityCatalogError, UnityCatalogNotConfiguredError,
 } from '@/lib/azure/unity-catalog-client';
+import { assertAllowedUcHost } from '@/lib/azure/uc-host-allowlist';
 import { getFabricItem, FabricError } from '@/lib/azure/fabric-client';
 // Loom-native item resolve (DEFAULT path, no-fabric). Same helper the federated
 // catalog SEARCH uses to list the caller's OWN Cosmos-backed Loom items.
@@ -94,7 +95,9 @@ export async function POST(req: NextRequest) {
     const owner = body.owner as string | undefined;
 
     if (source === 'unity-catalog') {
-      const host = body.host as string;
+      // A request-supplied host selects the destination of a CREDENTIALED ucFetch,
+      // so it must be one of this deployment's own workspaces rather than free text.
+      const host = await assertAllowedUcHost(body.host as string);
       const fullName = body.fullName as string;
       if (!host || !fullName) {
         return NextResponse.json({ ok: false, error: 'host and fullName required' }, { status: 400 });

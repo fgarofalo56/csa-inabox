@@ -162,7 +162,10 @@ export function buildPipelineRegistry(
   r.register({
     name: 'pipeline_get_run_status',
     service: 'Pipeline',
-    description: 'Get the status (Queued/InProgress/Succeeded/Failed/Cancelled) of a pipeline run by its runId.',
+    description:
+      `Get the status (Queued/InProgress/Succeeded/Failed/Cancelled) of a run of the bound pipeline "${pipelineName}" `
+      + 'by its runId. Scoped to THIS pipeline: a runId belonging to any other pipeline is refused, so only pass a '
+      + 'runId that came from pipeline_run or from this pipeline\'s Runs list.',
     parameters: {
       type: 'object',
       properties: { runId: { type: 'string', description: 'The runId from pipeline_run.' } },
@@ -184,11 +187,14 @@ export function buildPipelineRegistry(
     name: 'pipeline_explain_error',
     service: 'Pipeline',
     description:
-      'Read the REAL error details from a failed pipeline run and return them so you can explain the failure in plain ' +
-      'English. Pass the runId of a failed run.',
+      `Read the REAL error details from a failed run of the bound pipeline "${pipelineName}" and return them so you `
+      + 'can explain the failure in plain English. Scoped to THIS pipeline: a runId belonging to any other pipeline is '
+      + 'refused (its error text can contain another team\'s connection strings and storage paths), so only pass a '
+      + 'runId that came from pipeline_run or from this pipeline\'s Runs list. If it is refused, tell the user to pick '
+      + 'a run from the Runs list rather than retrying with a different id.',
     parameters: {
       type: 'object',
-      properties: { runId: { type: 'string', description: 'runId of the failed run.' } },
+      properties: { runId: { type: 'string', description: `runId of a failed run of "${pipelineName}".` } },
       required: ['runId'],
       additionalProperties: false,
     },

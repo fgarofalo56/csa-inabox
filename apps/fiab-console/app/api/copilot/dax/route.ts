@@ -20,6 +20,7 @@ import {
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { DAX_PERSONA } from '@/lib/azure/copilot-personas-dax';
+import { randomId } from '@/lib/util/random-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
   if (!prompt) {
     return NextResponse.json({ ok: false, error: 'prompt is required' }, { status: 400 });
   }
-  const sessionId = body.sessionId || `dax-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = body.sessionId || randomId('dax');
 
   // Tenant admin-selected Copilot config (account + chat deployment); falls back
   // to env / Foundry-hub discovery inside resolveAoaiTarget.

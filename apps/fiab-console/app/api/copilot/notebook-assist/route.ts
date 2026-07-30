@@ -55,6 +55,7 @@ import {
 } from '@/lib/copilot/notebook-persona-tools';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { assistRuntimeDirective } from '@/lib/copilot/notebook-tools';
+import { randomId } from '@/lib/util/random-id';
 
 // The supported slash commands — a FIXED server-validated allowlist (no
 // arbitrary free-form command injected into the model prompt). The first four
@@ -266,7 +267,7 @@ export async function POST(req: NextRequest) {
   const errorText = String(body.errorText || '');
   const runtimeKind = String(body.runtime || '');
   const sessionId =
-    body.sessionId || `nbcopilot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    body.sessionId || randomId('nbcopilot');
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
 
   // Resolve AOAI — tenant admin pick → env → Foundry discovery.

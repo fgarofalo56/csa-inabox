@@ -106,6 +106,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/governance/catalog', label: 'Unified catalog (Purview mirror)' },
       { path: '/governance/scans', label: 'Scans & sources' },
+      { path: '/catalog/unity', label: 'Loom Unity → Governance (overlay fold-in)' },
       { path: '/admin/security', label: 'Security & governance' },
     ],
     fixit: { kind: 'resource-picker' },

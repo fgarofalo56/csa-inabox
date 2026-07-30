@@ -10,21 +10,16 @@
  * Returns { ok, reachable, tableCount?, detail } or { ok:false, error, hint }.
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { loadConnection, authNeedsSecret } from '@/lib/azure/connections-store';
 import { getKeyVaultSecretValue } from '@/lib/azure/kv-secrets-client';
 import { probeConnection } from '@/lib/azure/connection-probe';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
 
   try {
     const conn = await loadConnection(session.claims.oid, params.id);
@@ -33,7 +28,7 @@ export async function POST(
     // Resolve the stored KV secret only when the auth method requires one.
     let secret: string | undefined;
     if (authNeedsSecret(conn.authMethod) && conn.secretRef) {
-      secret = await getKeyVaultSecretValue(conn.secretRef);
+      secret = await getKeyVaultSecretValue(conn.secretRef, 'connection-secret');
     }
 
     const result = await probeConnection({
@@ -50,4 +45,4 @@ export async function POST(
   } catch (e) {
     return apiServerError(e);
   }
-}
+});

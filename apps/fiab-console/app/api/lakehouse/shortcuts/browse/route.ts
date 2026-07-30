@@ -25,7 +25,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getShortcutSecretValue, shortcutKeyVaultConfigGate } from '@/lib/azure/kv-secrets-client';
 import {
   listS3Objects,
@@ -36,6 +35,7 @@ import {
   type BrowseResult,
   type GcsServiceAccount,
 } from '@/lib/azure/shortcut-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,9 +47,7 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest) => {
 
   const sp = req.nextUrl.searchParams;
   const sourceType = (sp.get('sourceType') || '').trim() as SourceType;
@@ -137,4 +135,4 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, code: e?.code || 'browse_failed', error: sanitize(e) }, { status: 502 });
   }
-}
+});

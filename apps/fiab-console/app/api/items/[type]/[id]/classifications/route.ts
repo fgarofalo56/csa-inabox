@@ -50,17 +50,23 @@ import {
   ensureClassificationDefs,
   addAssetClassification,
 } from '@/lib/azure/purview-client';
+import { loomClassificationTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Atlas classification typedef name for a Loom taxonomy label (valid, stable). */
-const CLASSIFICATION_TYPEDEF_PREFIX = 'LOOM.CLASSIFICATION.';
-export function classificationTypedefName(name: string): string {
-  return CLASSIFICATION_TYPEDEF_PREFIX + name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-}
+/**
+ * Atlas classification typedef name for a Loom taxonomy label.
+ *
+ * TENANT-NAMESPACED (`LOOM.CLASSIFICATION.<t8>.<SLUG>`). It used to be the bare
+ * `LOOM.CLASSIFICATION.<SLUG>`, which is ACCOUNT-GLOBAL in the classic Data Map
+ * while a Loom tenant is only a Cosmos partition — so tenant A's `PII` and
+ * tenant B's `PII` were the SAME permanent typedef. Delegates to the single
+ * namespace authority so `purview-autoonboard` stamps the identical name.
+ */
+export const classificationTypedefName = loomClassificationTypedefName;
 
 interface TaxonomyEntry { name: string; sensitivity?: string; color?: string; description?: string; }
 interface TypesDoc { items?: Array<{ name: string; sensitivity?: string; color?: string; description?: string }>; }
@@ -204,7 +210,9 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ type: str
     } else if (!assetGuid) {
       purviewStatus = 'skipped:no-asset';
     } else {
-      const typedefs = normalized.map(classificationTypedefName);
+      // Namespaced on the SAME tenant scope this route partitions the taxonomy
+      // and the item lookup on, so the typedef cannot outlive its vocabulary.
+      const typedefs = normalized.map((n) => classificationTypedefName(session.claims.oid, n));
       try {
         await ensureClassificationDefs(typedefs);
         await addAssetClassification(assetGuid, typedefs);

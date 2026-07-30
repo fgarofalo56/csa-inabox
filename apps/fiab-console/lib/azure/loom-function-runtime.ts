@@ -18,6 +18,7 @@
  * action does not require validation). No mocks, ever.
  */
 import { getKeyVaultSecretValue, vaultUrl } from '@/lib/azure/kv-secrets-client';
+import { resolveUdfEndpoint } from '@/lib/azure/udf-endpoint-policy';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import type { RegisteredFunction } from '@/lib/foundry/function-registry-model';
 
@@ -38,8 +39,20 @@ export interface FunctionRuntimeGate {
  * else a structured gate the route surfaces verbatim.
  */
 export function functionRuntimeGate(fn?: Pick<RegisteredFunction, 'baseUrlOverride'>): FunctionRuntimeGate | null {
-  if (fn?.baseUrlOverride) return null;
-  if (functionRuntimeBase()) return null;
+  // A `baseUrlOverride` no longer satisfies the gate on its own: an override that
+  // the deployment has not approved is exactly the endpoint we refuse to invoke.
+  const resolved = resolveUdfEndpoint(fn?.baseUrlOverride);
+  if ('endpoint' in resolved) return null;
+  if (fn?.baseUrlOverride) {
+    return {
+      missing: resolved.gate.missing,
+      detail: resolved.gate.detail,
+      remediation:
+        'Approve this Azure Function App by adding it to LOOM_UDF_ALLOWED_FUNCTION_BASES on the Console ' +
+        'Container App (entry form: https://my-fn.azurewebsites.net=<key-vault-secret-name>), or clear the ' +
+        "function's base-URL override to use the deployment's shared runtime.",
+    };
+  }
   return {
     missing: 'LOOM_UDF_FUNCTION_BASE',
     detail:
@@ -73,22 +86,29 @@ export async function invokeFunction(
   fn: RegisteredFunction,
   payload: unknown,
 ): Promise<FunctionInvokeResult> {
-  const base = (fn.baseUrlOverride || functionRuntimeBase()).replace(/\/+$/, '');
-  if (!base) {
-    return { ok: false, status: 503, value: null, body: '', error: 'function runtime not configured' };
+  // SECURITY (same defect as the user-data-function invoke route): a registry
+  // row's `baseUrlOverride` / `functionKeySecret` are tenant-writable config, and
+  // this call reads a named Key Vault secret with the Console's managed identity.
+  // Both the destination and the key are therefore resolved from DEPLOYMENT
+  // configuration — the row may only select/agree. See udf-endpoint-policy.ts.
+  const resolved = resolveUdfEndpoint(fn.baseUrlOverride, fn.functionKeySecret);
+  if ('gate' in resolved) {
+    return { ok: false, status: 409, value: null, body: '', error: resolved.gate.detail };
   }
+  const endpoint = resolved.endpoint;
+  const base = endpoint.base.replace(/\/+$/, '');
   const path = fn.functionPath || fn.name;
   const url = `${base}/api/${encodeURIComponent(path)}`;
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (fn.functionKeySecret) {
+  if (endpoint.keySecretName) {
     if (!vaultUrl()) {
       return {
         ok: false, status: 409, value: null, body: '',
-        error: 'Function key secret configured but no Key Vault is available (set LOOM_KEY_VAULT_URI).',
+        error: 'A function key is configured for this endpoint but no Key Vault is available (set LOOM_KEY_VAULT_URI).',
       };
     }
     try {
-      headers['x-functions-key'] = await getKeyVaultSecretValue(fn.functionKeySecret);
+      headers['x-functions-key'] = await getKeyVaultSecretValue(endpoint.keySecretName, 'udf-function-key');
     } catch (e) {
       return { ok: false, status: 502, value: null, body: '', error: `key vault: ${e instanceof Error ? e.message : String(e)}` };
     }

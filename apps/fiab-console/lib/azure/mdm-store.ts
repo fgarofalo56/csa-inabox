@@ -13,6 +13,7 @@ import {
   type MdmModel, type MatchAttribute, type SurvivorshipRule, type SurvivorshipStrategy, type MatchType,
   type CrosswalkPair,
 } from '@/lib/azure/mdm-match-merge';
+import { assertSafeKey } from '@/lib/util/safe-keys';
 
 // --------------------------- Models ---------------------------
 interface MdmModelsDoc { id: string; tenantId: string; kind: 'mdm-models'; items: MdmModel[]; updatedAt: string }
@@ -267,8 +268,11 @@ export async function removeCrosswalkPair(tenantId: string, modelId: string, idA
   const c = await tenantSettingsContainer();
   const doc = await readCrosswalkDoc(tenantId);
   const k = pairKey(idA, idB);
-  doc.byModel[modelId] = (doc.byModel[modelId] || []).filter((p) => pairKey(p.idA, p.idB) !== k);
+  // #2657 — modelId is request-derived; `doc.byModel['__proto__'] = ...` would
+  // replace the prototype rather than write a model entry.
+  const safeModelId = assertSafeKey(modelId);
+  doc.byModel[safeModelId] = (doc.byModel[safeModelId] || []).filter((p) => pairKey(p.idA, p.idB) !== k);
   doc.updatedAt = new Date().toISOString();
   await c.items.upsert<CrosswalkDoc>(doc);
-  return doc.byModel[modelId];
+  return doc.byModel[safeModelId];
 }

@@ -22,6 +22,7 @@ import {
   DLZ_TEMPLATE_ENV,
 } from '@/lib/setup/user-arm-deploy';
 import { fetchWithTimeout, withDeadline } from '@/lib/azure/fetch-with-timeout';
+import { deployWorkflowForBoundary } from '@/lib/setup/deploy-workflows';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -810,13 +811,10 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
     IL5: 'platform/fiab/bicep/params/il5.bicepparam',
   };
   if (shouldDispatchWorkflow()) {
-    const workflowByBoundary: Record<string, string> = {
-      Commercial: 'deploy-fiab-commercial.yml',
-      GCC: 'deploy-fiab-gcc.yml',
-      'GCC-High': 'deploy-fiab-gcch.yml',
-      IL5: 'deploy-fiab-gcch.yml',
-    };
-    const workflowFile = workflowByBoundary[body.boundary!] || 'deploy-fiab-commercial.yml';
+    // #2652 — the map moved to lib/setup/deploy-workflows so the status route can
+    // allow-list against the SAME source of truth. Two copies would let that
+    // route drift back open the moment a boundary is added here.
+    const workflowFile = deployWorkflowForBoundary(body.boundary);
     const dispatchInputs: Record<string, string> = {
       run_mode: 'full',
       topology,

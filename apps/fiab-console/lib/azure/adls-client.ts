@@ -956,11 +956,31 @@ export async function grantContainerRole(
   roleNameOrId: string,
   principalType: 'User' | 'Group' | 'ServicePrincipal' = 'User',
 ): Promise<ContainerRoleAssignment> {
+  // ALLOW-LIST ONLY. This used to be `BLOB_DATA_ROLES[x] || x`, so an
+  // unrecognised name fell through and was used as a RAW role-definition GUID.
+  // Combined with the session-only POST on /api/lakehouse/permissions (where
+  // `role` came straight off the request body and was never validated, unlike
+  // `principalType` which was), any authenticated user could name ANY Azure
+  // role — Owner, User Access Administrator — and have it assigned at the lake
+  // storage scope. It executes because the Console UAMI holds Role Based Access
+  // Control Administrator there, so this was a durable privilege escalation to
+  // Azure resource ownership, not merely a data read.
+  //
+  // Only the three blob data-plane roles this function exists to grant are
+  // accepted. A GUID is accepted only if it is one of those three.
+  const roleGuid = BLOB_DATA_ROLES[roleNameOrId]
+    || (Object.values(BLOB_DATA_ROLES).includes(roleNameOrId) ? roleNameOrId : undefined);
+  if (!roleGuid) {
+    throw new Error(
+      `Refusing to assign role ${JSON.stringify(roleNameOrId)}: only `
+        + `${Object.keys(BLOB_DATA_ROLES).join(', ')} may be granted through this path.`,
+    );
+  }
+
   // Self-heal coords (see resolveStorageCoords): the role-definition id must be
   // scoped to the SAME subscription the account lives in, not the env default.
   const { sub } = await resolveStorageCoords();
   const scope = await resolveStorageScope(container);
-  const roleGuid = BLOB_DATA_ROLES[roleNameOrId] || roleNameOrId;
   const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so
   // re-grants get distinct ids; the principalId+role pair would 409 anyway

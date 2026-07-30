@@ -29,8 +29,6 @@
  * "Succeeded" unless the underlying write returned without error.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { listSensitivityLabels, MipNotConfiguredError } from '@/lib/azure/mip-graph-client';
 import {
@@ -45,7 +43,9 @@ import {
   ensureClassificationDefs,
   addAssetClassification,
 } from '@/lib/azure/purview-client';
+import { loomSensitivityLabelTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { apiServerError } from '@/lib/api/respond';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -88,11 +88,7 @@ function extractPbiArtifact(item: any): { pbiArtifactId?: string; pbiArtifactTyp
 // GET — render data
 // ============================================================
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
+export const GET = withTenantAdmin(async (_req, { session: s }) => {
   const tenantId = s.claims.oid;
 
   try {
@@ -161,7 +157,7 @@ export async function GET() {
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});
 
 // ============================================================
 // POST — apply label
@@ -177,11 +173,7 @@ interface ResultRow {
   pbiStatus?: PbiLabelChangeStatus | 'Skipped';
 }
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
+export const POST = withTenantAdmin(async (req: NextRequest, { session: s }) => {
 
   const body = await req.json().catch(() => ({}));
   const rawItems: Array<{ id: string; workspaceId: string }> = Array.isArray(body?.items) ? body.items : [];
@@ -208,8 +200,16 @@ export async function POST(req: NextRequest) {
 
   // Ensure the classification typedef exists once (best-effort) before we stamp
   // it onto assets. If this fails, per-item Purview writes report the error.
+  //
+  // TENANT-NAMESPACED: `labelName` is a RAW request-body string and Atlas
+  // classification typedefs are ACCOUNT-GLOBAL + permanent, so passing it
+  // verbatim (as this route used to) let any tenant admin mint arbitrary global
+  // typedefs and collide with another tenant's identically-named label. The
+  // authority emits `MICROSOFT.GOVERNANCE.LABELS.<guid>` for a real MIP label
+  // and a Loom-owned `LOOM.LABEL.<t8>.<SLUG>` otherwise.
+  const labelTypedefName = loomSensitivityLabelTypedefName(s.claims.oid, { labelId, labelName });
   if (purviewOn) {
-    try { await ensureClassificationDefs([labelName]); } catch { /* surfaced per item below */ }
+    try { await ensureClassificationDefs([labelTypedefName]); } catch { /* surfaced per item below */ }
   }
 
   // ----- Phase A: Cosmos (always) + Phase B: Purview (opt-in) -----
@@ -247,7 +247,9 @@ export async function POST(req: NextRequest) {
         if (!match || !match.id) {
           row.purviewStatus = 'NotFound';
         } else {
-          await addAssetClassification(match.id, [labelName]);
+          // The SAME namespaced typedef we ensured above — attaching the raw
+          // `labelName` would reference a typedef that no longer exists.
+          await addAssetClassification(match.id, [labelTypedefName]);
           row.purviewStatus = 'Succeeded';
         }
       } catch (e: any) {
@@ -313,4 +315,4 @@ export async function POST(req: NextRequest) {
     applied: { cosmos: true, purview: purviewOn, powerBi: pbiOn },
     labelName,
   });
-}
+});

@@ -160,6 +160,81 @@ describe('autoOnboardToPurview', () => {
     h.registerAtlasEntity.mockRejectedValue(new Error('403 Forbidden'));
     await expect(autoOnboardToPurview(item, 'tenant-1')).resolves.toBeUndefined();
   });
+
+  // ── S4 class sweep: ACCOUNT-GLOBAL Atlas typedefs from TENANT-AUTHORED text.
+  // Atlas classification typedefs are account-global and permanent, while a
+  // Loom tenant is only a Cosmos partition. This hook used to pass
+  // `state.classifications` / `state.sensitivityLabel` VERBATIM.
+  describe('ATTACK: tenant-authored classification names must never reach Atlas raw', () => {
+    const TA = '11111111-2222-3333-4444-555555555555';
+    const TB = '99999999-8888-7777-6666-555555555555';
+
+    it('namespaces state.classifications instead of creating a global `PII` typedef', async () => {
+      process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+      h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+      const tagged = { ...item, state: { classifications: ['PII', 'Confidential'] } };
+      await autoOnboardToPurview(tagged as any, TA);
+
+      const names: string[] = h.ensureClassificationDefs.mock.calls[0][0];
+      expect(names).not.toContain('PII');
+      expect(names).not.toContain('Confidential');
+      for (const n of names) expect(n).toMatch(/^LOOM\.CLASSIFICATION\.[0-9a-f]{8}\./);
+      // …and the entity is tagged with the SAME namespaced names, not the raw ones.
+      expect(h.registerAtlasEntity).toHaveBeenCalledWith(
+        expect.objectContaining({ classifications: names }),
+      );
+    });
+
+    it('two tenants with the SAME vocabulary word get DIFFERENT global typedefs', async () => {
+      process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+      h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+      const tagged = { ...item, state: { classifications: ['PII'] } };
+      await autoOnboardToPurview(tagged as any, TA);
+      const a = h.ensureClassificationDefs.mock.calls[0][0][0];
+      h.ensureClassificationDefs.mockClear();
+      await autoOnboardToPurview(tagged as any, TB);
+      const b = h.ensureClassificationDefs.mock.calls[0][0][0];
+      expect(a).not.toBe(b);
+    });
+
+    it('a free-text sensitivityLabel becomes LOOM.LABEL.<t8>.*, never the raw label', async () => {
+      process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+      h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+      const labelled = { ...item, state: { sensitivityLabel: 'Highly Confidential' } };
+      await autoOnboardToPurview(labelled as any, TA);
+      const names: string[] = h.ensureClassificationDefs.mock.calls[0][0];
+      expect(names).not.toContain('Highly Confidential');
+      expect(names[0]).toMatch(/^LOOM\.LABEL\.[0-9a-f]{8}\.HIGHLY_CONFIDENTIAL$/);
+    });
+
+    it('a MIP-GUID sensitivityLabelId uses the REAL MIP typedef the sensitivity route writes', async () => {
+      process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+      h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+      const guid = 'defb2ab7-1b58-4e1e-9e88-0dd0a0ab8bbb';
+      const labelled = { ...item, state: { sensitivityLabel: 'Secret', sensitivityLabelId: guid } };
+      await autoOnboardToPurview(labelled as any, TA);
+      expect(h.ensureClassificationDefs.mock.calls[0][0])
+        .toEqual([`MICROSOFT.GOVERNANCE.LABELS.${guid}`]);
+    });
+
+    it('still onboards WITHOUT tags when the typedef create fails (unchanged contract)', async () => {
+      process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+      h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+      h.ensureClassificationDefs.mockRejectedValue(new Error('403 Forbidden'));
+      const tagged = { ...item, state: { classifications: ['PII'] } };
+      await autoOnboardToPurview(tagged as any, TA);
+      expect(h.registerAtlasEntity).toHaveBeenCalledWith(
+        expect.objectContaining({ classifications: undefined }),
+      );
+    });
+
+    it('does not call the typedef API at all when the item carries no classifications', async () => {
+      process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+      h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+      await autoOnboardToPurview(item, TA);
+      expect(h.ensureClassificationDefs).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ── offboardFromPurview ──────────────────────────────────────────────────────

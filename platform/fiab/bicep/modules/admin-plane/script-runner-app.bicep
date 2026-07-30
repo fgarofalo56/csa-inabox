@@ -88,6 +88,32 @@ param image string
 @description('Internal ingress target port the executor listens on (matches PORT env / app.py).')
 param targetPort int = 8080
 
+@description('CIDR ranges allowed to reach this app on top of internal-ingress isolation — normally ONLY the Container Apps environment infrastructure subnet the Console runs in. Empty => no IP rules, meaning ANY workload on the CAE VNet can reach a host that executes user-supplied Python/R (#2653 class sweep). Emitted as Allow rules, so anything outside them is denied. Mirrors udf-runtime.bicep and loom-unity-app.bicep.')
+param consoleAllowedCidrs array = []
+
+// INTERNAL only — reached by the Console BFF over the CAE network, never public.
+//
+// #2653 (class sweep): this host executes user Python/R for the Power BI-parity
+// script visual, so internal ingress alone means "anything on the CAE VNet" can
+// drive code execution here. It is the sibling of udf-runtime — found by the
+// sweep test, NOT by CodeQL, which only reported the udf-runtime instance. Like
+// that host it holds no credential to authenticate callers with, so the boundary
+// is the network.
+var ingressIpRules = [for (cidr, i) in consoleAllowedCidrs: {
+  name: 'allow-loom-console-${i}'
+  description: 'Only the Loom Console subnet may reach the script-runner (#2653).'
+  ipAddressRange: cidr
+  action: 'Allow'
+}]
+var ingressBase = {
+  external: false
+  targetPort: targetPort
+  transport: 'auto'
+}
+var ingressConfig = empty(consoleAllowedCidrs) ? ingressBase : union(ingressBase, {
+  ipSecurityRestrictions: ingressIpRules
+})
+
 @description('Compliance/cost tags.')
 param complianceTags object = {}
 
@@ -107,12 +133,7 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
     environmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      ingress: {
-        // INTERNAL only — reached by the Console BFF over the CAE network, never public.
-        external: false
-        targetPort: targetPort
-        transport: 'auto'
-      }
+      ingress: ingressConfig
       // ACR pull via the UAMI. (mcp-catalog-app.bicep omitted this because its
       // image was a public ghcr image; ours is a private ACR image, so the
       // registries block resolving by the UAMI is REQUIRED.)

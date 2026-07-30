@@ -100,13 +100,24 @@ HTTP client — so every embed here is license-reviewed and permissive.
 
 ## Container-baked engines & extensions (not a package manifest — deployed images)
 
-| Component | License | Deployed by | Notes |
-|---|---|---|---|
-| Unity Catalog OSS (Iceberg REST catalog, N1) | Apache-2.0 | `iceberg-catalog-aca.bicep` | bridges Delta+Iceberg; Loom already runs UC-OSS in Gov |
-| DuckDB embedded binary (N2b) | MIT | `duckdb-aca.bicep` | single embedded engine |
-| DuckDB `azure` / `httpfs` / `delta` / `iceberg` extensions | MIT | baked into `apps/loom-duckdb` image | in-boundary/air-gap-safe (no extension repo at runtime) |
-| Apache XTable / delta-rs (dual-metadata emit path, N1) | Apache-2.0 | Synapse Spark job (N1) | Delta↔Iceberg metadata |
-| RisingWave (streaming-SQL tier, N7a) | Apache-2.0 | `loom-risingwave-aca.bicep` | single-node stateful streaming engine; consumes Event Hubs (Kafka endpoint), sinks Delta/Iceberg; runs in-boundary/air-gap-safe |
+Every row whose "Image" column is populated is enforced by
+`check-license-inventory.mjs`: the `FROM` line of an `apps/*/Dockerfile` must resolve to a
+repository listed in `REVIEWED_IMAGES` **and** appear here, or CI fails. Language/OS base
+images (`node`, `python`, `debian`, `golang`, `rust`, `amazoncorretto`, `mcr.microsoft.com/*`,
+`gcr.io/distroless/*`) are the runtime rather than a shipped OSS product and are governed by
+the base-image CVE gate instead.
+
+| Component | Image | License | Deployed by | Notes |
+|---|---|---|---|---|
+| Unity Catalog OSS ("Loom Unity" metastore + Iceberg REST catalog, N1/LU-1) | `unitycatalog/unitycatalog` | Apache-2.0 | `loom-unity-app.bicep`, `iceberg-catalog-aca.bicep` | bridges Delta+Iceberg; the Gov default UC backend |
+| **Delta Sharing reference server ("loom-sharing", LU-9)** | `deltaio/delta-sharing-server` | Apache-2.0 | `loom-sharing-app.bicep` | open Delta Sharing protocol over the SAME ADLS Gen2 Delta tables the lakehouse writes. Image published by the upstream build itself (`build.sbt` `dockerUsername := "deltaio"`), so it is the same Apache-2.0 codebase — not a third-party redistribution. INTERNAL ingress only: the server has a single global bearer and cannot scope a caller to a subset of shares, so per-recipient authorization is enforced in the Console BFF (`/api/delta-sharing/*`). |
+| RisingWave (streaming-SQL tier, N7a) | `risingwavelabs/risingwave` | Apache-2.0 | `loom-risingwave-aca.bicep` | single-node stateful streaming engine; consumes Event Hubs (Kafka endpoint), sinks Delta/Iceberg; runs in-boundary/air-gap-safe |
+| Debezium Connect (CDC runtime) | `quay.io/debezium/connect` | Apache-2.0 | `apps/fiab-mirroring-engine` | source-database change capture into the bronze layer |
+| tileserver-gl (sovereign OSS maps tier) | `maptiler/tileserver-gl` | BSD-2-Clause | `loom-maps-app.bicep` | self-hosted vector tiles; replaces Azure Maps where unavailable |
+| DuckDB embedded binary (N2b) | — | MIT | `duckdb-aca.bicep` | single embedded engine |
+| DuckDB `azure` / `httpfs` / `delta` / `iceberg` extensions | — | MIT | baked into `apps/loom-duckdb` image | in-boundary/air-gap-safe (no extension repo at runtime) |
+| Apache XTable / delta-rs (dual-metadata emit path, N1) | — | Apache-2.0 | Synapse Spark job (N1) | Delta↔Iceberg metadata |
+| PostgreSQL JDBC driver (`org.postgresql:postgresql`, LU-1) | — | BSD-2-Clause | baked into `apps/loom-unity` image | Entra-only Postgres persistence for Loom Unity; pinned + SHA256-verified at build |
 
 ## Client SDKs — `sdk/` (B-N19b; NOT baked into any deployed image)
 

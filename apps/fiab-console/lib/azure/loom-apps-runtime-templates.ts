@@ -18,6 +18,7 @@
  *    inject an arbitrary variable through the structured deploy options.
  *  - no-fabric-dependency.md: pure Azure Container Apps — no Fabric anywhere.
  */
+import { assertSecretReadAllowed } from '@/lib/azure/kv-secret-purpose';
 
 /** A structured env var — a literal value OR a reference to a Key Vault-backed ACA secret. */
 export interface LoomAppEnvVar {
@@ -1182,6 +1183,19 @@ export function buildAcaAppBody(opts: BuildAcaBodyOptions): Record<string, unkno
   const env = (opts.env || []).map((e) => {
     if (e.secretRef === undefined) return { name: e.name, value: e.value ?? '' };
     const kvName = e.secretRef.trim();
+    // SECURITY: `env[].secretRef` is user-writable app config (the deploy body /
+    // an imported `.loomapp` bundle) and it makes the platform Key Vault resolve
+    // that secret INTO a container whose image the same user built from their own
+    // source. Without this check `secretRef: 'loom-msal-client-secret'` printed
+    // the MSAL client secret into an attacker-authored app. The name-space policy
+    // refuses every platform credential and every other feature's minted secret.
+    try {
+      assertSecretReadAllowed(kvName, 'app-env-binding');
+    } catch (err) {
+      throw new LoomAppSpecError(
+        `env "${e.name}" cannot bind Key Vault secret "${kvName}": ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     if (!opts.keyVaultUri) {
       throw new LoomAppSpecError(
         `env "${e.name}" references Key Vault secret "${kvName}" but no vault is configured — ` +

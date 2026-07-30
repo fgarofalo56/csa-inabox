@@ -13,10 +13,20 @@
  * `[id]` is the Loom item GUID; the real pipeline name comes from the item's
  * state.pipelineName binding. Unbound / not-found items return an empty run
  * list (the editor shows the bind picker) — run history is a passive panel.
+ *
+ * OWNERSHIP (round-3 remediation of the LU-8 review's S2 CLASS). ADF run ids
+ * are FACTORY-scoped, not item-scoped: `?runId=` used to go straight into
+ * `listActivityRuns`, so an authenticated owner of any Loom pipeline item could
+ * read another pipeline's per-activity `input`/`output` payloads — the source
+ * and sink connection details, storage paths and row counts of a run they have
+ * no claim to. `getPipelineRun` under the SAME factory override now proves
+ * `run.pipelineName === pipelineName` first (the override matters: the oracle
+ * must be evaluated in the factory the activities will be read from, or it
+ * proves nothing about them).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { listPipelineRuns, listActivityRuns } from '@/lib/azure/adf-client';
+import { listPipelineRuns, listActivityRuns, getPipelineRun } from '@/lib/azure/adf-client';
 import { withFactoryOverride } from '@/lib/azure/adf-factory-context';
 import { resolveBinding, UnboundPipelineError, ItemNotFoundError, bindingFactoryOverride } from '@/lib/azure/pipeline-binding';
 import { withSession } from '@/lib/api/route-toolkit';
@@ -61,7 +71,17 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
 
   if (runId) {
     try {
-      const acts = await withFactoryOverride(bindingFactoryOverride(binding), () => listActivityRuns(runId));
+      // OWNERSHIP FIRST — inside the binding's factory override, so the run we
+      // authorize is the run whose activities we then read. 404 (not 403) so
+      // the response cannot enumerate run ids. `getPipelineRun` returns null
+      // ONLY on a real ARM 404; a transient 429/5xx throws and surfaces as 502
+      // rather than telling the owner their run vanished.
+      const acts = await withFactoryOverride(bindingFactoryOverride(binding), async () => {
+        const run = await getPipelineRun(runId);
+        if (!run || run.pipelineName !== pipelineName) return null;
+        return listActivityRuns(runId);
+      });
+      if (!acts) return NextResponse.json({ ok: false, error: 'run not found' }, { status: 404 });
       return NextResponse.json({
         ok: true,
         runId,

@@ -260,29 +260,97 @@ export async function handlePipelineRun(
 }
 
 // ============================================================
-// 5. Run status (poll a runId)
+// 5. Run ownership — the ONE oracle for a model-supplied runId
+// ============================================================
+//
+// SECURITY. A `runId` reaching these tools is MODEL-supplied, which means it is
+// user-supplied: "explain the error on run <guid>" puts an arbitrary guid into
+// the tool call. A factory / Synapse workspace is SHARED across Loom workspaces,
+// and `listActivityRuns(runId)` / `getPipelineRun(runId)` are run-scoped, not
+// pipeline-scoped — so with no ownership proof the Pipeline Copilot would read
+// and narrate ANOTHER team's run. `pipeline_explain_error` in particular returns
+// per-activity `error.errorCode` / `error.message`, and ADF failure messages
+// routinely quote connection strings, `abfss://` paths and SQL text.
+//
+// The gate is the same one the item routes use, but the oracle here is chosen so
+// this fix needs NO new client surface: the pipeline-run LIST is already
+// pipeline-FILTERED on both backends (`adf.listPipelineRuns(pipelineName, …)` and
+// `synapseDev.queryPipelineRuns({ filters: [PipelineName Equals …] })`). A run
+// that is not in that set is not decidably this pipeline's, so it is refused.
+//
+// `pipelineName` is the registry-BOUND name (closed over in
+// `buildPipelineRegistry`, never a tool parameter), so the model cannot widen its
+// own scope by naming a different pipeline. It is a REQUIRED argument here — that
+// is the structural half of the fix: a caller cannot forget to pass it, and
+// `resolveOwnedPipelineRun` is the only way any of these handlers obtains a run.
+//
+// Fail-closed, and honest about the edge: one page (the pipeline's most recent
+// runs, `RunStart DESC`) inside `RUN_OWNERSHIP_WINDOW_DAYS`. A run older than
+// that, or beyond the page, is REFUSED rather than read — a false refusal, never
+// a false allow — and the message says so instead of claiming the run does not
+// exist. Deliberately ONE bounded call, not a continuation-token walk: unbounded
+// ARM fan-out driven by a model-supplied id is its own problem.
+
+/** ADF's monitoring API caps run retention at 45 days; Synapse matches it. */
+export const RUN_OWNERSHIP_WINDOW_DAYS = 45;
+
+/** A model-supplied `runId` that this pipeline does not demonstrably own. */
+export class PipelineRunNotOwnedError extends Error {
+  readonly code = 'run_not_owned';
+  constructor(pipelineName: string) {
+    super(
+      `That run is not one of "${pipelineName}"'s runs in the last ${RUN_OWNERSHIP_WINDOW_DAYS} days, `
+      + 'so I will not read it. Open the Runs list for this pipeline and pick a run from there.',
+    );
+    this.name = 'PipelineRunNotOwnedError';
+  }
+}
+
+/**
+ * Resolve a model-supplied `runId` to a run PROVEN to belong to `pipelineName`.
+ * Throws {@link PipelineRunNotOwnedError} otherwise. A transport failure
+ * (throttling, 5xx) PROPAGATES — it must never be reported as "not your run",
+ * or a transient ARM hiccup makes the owner's own run undecidable.
+ */
+export async function resolveOwnedPipelineRun(
+  runId: string,
+  backend: PipelineBackend,
+  pipelineName: string,
+): Promise<adf.AdfPipelineRun | synapseDev.PipelineRun> {
+  if (!runId) throw new Error('runId is required.');
+  if (!pipelineName) throw new PipelineRunNotOwnedError('(no bound pipeline)');
+  let runs: Array<{ runId: string }>;
+  if (backend === 'adf') {
+    runs = await adf.listPipelineRuns(pipelineName, RUN_OWNERSHIP_WINDOW_DAYS);
+  } else {
+    const now = new Date();
+    const res = await synapseDev.queryPipelineRuns({
+      lastUpdatedAfter: new Date(now.getTime() - RUN_OWNERSHIP_WINDOW_DAYS * 86_400_000).toISOString(),
+      lastUpdatedBefore: now.toISOString(),
+      filters: [{ operand: 'PipelineName', operator: 'Equals', values: [pipelineName] }],
+      orderBy: [{ orderBy: 'RunStart', order: 'DESC' }],
+    });
+    runs = res.value || [];
+  }
+  const found = runs.find((r) => r.runId === runId);
+  if (!found) throw new PipelineRunNotOwnedError(pipelineName);
+  return found as adf.AdfPipelineRun | synapseDev.PipelineRun;
+}
+
+// ============================================================
+// 5b. Run status (poll a runId)
 // ============================================================
 export async function handlePipelineGetRunStatus(
-  args: { runId: string; backend: PipelineBackend; pipelineName?: string },
+  args: { runId: string; backend: PipelineBackend; pipelineName: string },
 ): Promise<{ runId: string; status: string; message?: string; durationMs?: number }> {
   const { runId, backend, pipelineName } = args;
-  if (!runId) throw new Error('runId is required.');
-  if (backend === 'synapse') {
-    const run = await synapseDev.getPipelineRun(runId);
-    return { runId, status: run.status || 'Unknown', message: run.message, durationMs: run.durationInMs };
-  }
-  // ADF: find the run in the recent window for the pipeline.
-  const runs = await adf.listPipelineRuns(pipelineName, 1);
-  const found = runs.find((r) => r.runId === runId);
-  if (found) {
-    return { runId, status: found.status || 'Unknown', message: found.message, durationMs: found.durationInMs };
-  }
-  // Fall back to activity-run rollup when the run isn't in the pipeline window.
-  const acts = await adf.listActivityRuns(runId);
-  const anyFailed = acts.some((a) => a.status === 'Failed');
-  const allDone = acts.length > 0 && acts.every((a) => ['Succeeded', 'Failed', 'Cancelled', 'Skipped'].includes(a.status || ''));
-  const status = acts.length === 0 ? 'Unknown' : anyFailed ? 'Failed' : allDone ? 'Succeeded' : 'InProgress';
-  return { runId, status };
+  // The ownership probe IS the read: the pipeline-filtered run row carries
+  // status/message/duration, so there is no second call to make and no
+  // activity-run rollup fallback. That fallback was the hole — it called
+  // `listActivityRuns(runId)` for exactly the runs the pipeline filter had just
+  // failed to vouch for.
+  const run = await resolveOwnedPipelineRun(runId, backend, pipelineName);
+  return { runId, status: run.status || 'Unknown', message: run.message, durationMs: run.durationInMs };
 }
 
 // ============================================================
@@ -323,37 +391,32 @@ export interface FailedActivityInfo {
 }
 
 export async function handlePipelineExplainError(
-  args: { runId: string; backend: PipelineBackend; pipelineName?: string },
+  args: { runId: string; backend: PipelineBackend; pipelineName: string },
 ): Promise<{ runId: string; status?: string; failedActivities: FailedActivityInfo[]; runMessage?: string }> {
   const { runId, backend, pipelineName } = args;
-  if (!runId) throw new Error('runId is required to explain an error.');
 
-  if (backend === 'adf') {
-    const acts = await adf.listActivityRuns(runId);
-    const failed = acts.filter((a) => a.status === 'Failed').map((a) => ({
+  // OWNERSHIP FIRST — before any activity read. `error.message` on an ADF/Synapse
+  // activity is the most disclosive field either data plane returns (connection
+  // strings, `abfss://` paths, SQL text), so the gate has to be upstream of the
+  // read, not a filter on the result. `resolveOwnedPipelineRun` throws unless the
+  // pipeline-filtered run list vouches for this runId.
+  const run = await resolveOwnedPipelineRun(runId, backend, pipelineName);
+
+  const acts = backend === 'adf'
+    ? await adf.listActivityRuns(runId)
+    : await synapseDev.listActivityRuns(runId);
+  const failed = acts
+    .filter((a: { status?: string }) => a.status === 'Failed')
+    .map((a: { activityName: string; activityType: string; error?: { errorCode?: string; message?: string; failureType?: string } }) => ({
       name: a.activityName,
       type: a.activityType,
       errorCode: a.error?.errorCode,
       message: a.error?.message,
       failureType: a.error?.failureType,
     }));
-    // Pipeline-level message for the run as a fallback / extra context.
-    const runs = await adf.listPipelineRuns(pipelineName, 2).catch(() => []);
-    const run = runs.find((r) => r.runId === runId);
-    return { runId, status: run?.status, failedActivities: failed, runMessage: run?.message };
-  }
-
-  // Synapse: per-activity query (added to synapse-dev-client) + run-level message.
-  const acts = await synapseDev.listActivityRuns(runId).catch(() => [] as synapseDev.SynapseActivityRun[]);
-  const failed = acts.filter((a) => a.status === 'Failed').map((a) => ({
-    name: a.activityName,
-    type: a.activityType,
-    errorCode: a.error?.errorCode,
-    message: a.error?.message,
-    failureType: a.error?.failureType,
-  }));
-  const run = await synapseDev.getPipelineRun(runId).catch(() => null);
-  return { runId, status: run?.status, failedActivities: failed, runMessage: run?.message };
+  // The run-level message comes from the run the ownership probe already
+  // resolved — no second lookup, and nothing read outside the proven run.
+  return { runId, status: run.status, failedActivities: failed, runMessage: run.message };
 }
 
 // ============================================================
