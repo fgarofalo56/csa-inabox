@@ -127,11 +127,29 @@ describe('unityAuthorizationPosture', () => {
     expect(p.remediation).toMatch(/LOOM_UNITY_CLIENT_ID/);
   });
 
-  it('reports entra hardening with the audience in play', () => {
+  // svc-loom-unity-authz round 4: `entra` used to be reported as hardened. It is
+  // not. Upstream unitycatalog v0.5.0 (the pinned image) and v0.5.1 both reject
+  // any bearer whose `iss` is not their own `internal` issuer, so the Entra token
+  // this mode mints is answered 403 on /api/2.1/unity-catalog/* even with an
+  // exact audience match — proven by running the image
+  // (docs/fiab/security/loom-unity-authz-proof.md). Reporting it as hardened told
+  // an operator the catalog hop was secured when in fact it was broken.
+  it('reports entra as NOT hardened — upstream rejects a directly-presented Entra bearer', () => {
     process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';
     const p = unityAuthorizationPosture();
-    expect(p.hardened).toBe(true);
+    expect(p.mode).toBe('entra');
+    expect(p.hardened).toBe(false);
     expect(p.audience).toBe('api://unity-app-id/.default');
+    expect(p.detail).toMatch(/REJECTS/);
+    expect(p.remediation).toMatch(/LOOM_UNITY_TOKEN/);
+    expect(p.remediation).toMatch(/unity-control\/auth\/tokens/);
+  });
+
+  it('reports token mode as the one currently-working hardened posture', () => {
+    process.env.LOOM_UNITY_TOKEN = 'server-minted';
+    const p = unityAuthorizationPosture();
+    expect(p.mode).toBe('token');
+    expect(p.hardened).toBe(true);
     expect(p.remediation).toBeUndefined();
   });
 });

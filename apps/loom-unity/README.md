@@ -19,6 +19,17 @@ the Postgres JDBC driver and a small Entra authentication plugin (LU-1).
 > still `v0.5.0`. The pin therefore stays at v0.5.0. Move as soon as the image
 > appears: 0.5.1 fixes permission **GET** routes returning HTTP 500 when
 > server-side authorization is enabled, which is precisely the LU-2 posture.
+>
+> **That bug is not latent — enabling authorization is what triggers it.**
+> Measured on this image (`apps/loom-unity/tests/authz/authz-e2e.sh`, transcript
+> in `docs/fiab/security/loom-unity-authz-proof.md`):
+> `GET /api/2.1/unity-catalog/permissions/{securable}/{name}` returns **500**
+> `"No authorization expression found."` while `server.authorization=enable`, and
+> **200** while it is disabled. `PATCH` on the same path returns 200 in both
+> states — so on an authorization-enabled v0.5.0 catalog you can grant and revoke
+> privileges but **cannot read them**. That takes out the Console's Grants pane
+> and the LU-4 effective-permissions resolver (which reads that route for the
+> target and every ancestor in the containment chain) on the OSS backend.
 
 ## What it exposes
 
@@ -117,9 +128,54 @@ CrashLoopBackOff-ing. Deploy phase 3 (`scripts/csa-loom/bootstrap-msal-app-reg.s
 stamps the real client id and unseals it. See
 `docs/fiab/unity-gov.md` § "The SEALED state".
 
-The Console presents `LOOM_UNITY_TOKEN` (a pre-shared, server-minted token delivered
-as a Key Vault secretref) or an Entra bearer minted by its managed identity for the
-audience above. Threat model: `docs/fiab/security/loom-unity-threat-model.md`.
+### How a client authenticates — it is an EXCHANGE, not a bearer pass-through
+
+**A Microsoft Entra access token is not accepted on `/api/2.1/unity-catalog/*`,
+however correctly it is audienced.** Upstream `AuthDecorator` — line 79, identical
+in `v0.5.0` and `v0.5.1` — rejects any token whose `iss` is not the server's own
+`internal` issuer:
+
+```java
+if (!issuer.equals(INTERNAL)) {
+  throw new AuthorizationException(ErrorCode.PERMISSION_DENIED, "Invalid access token.");
+}
+```
+
+Measured: a valid RS256 token from the pinned issuer with an exact
+`server.audiences` match is answered **403 PERMISSION_DENIED**
+(`docs/fiab/security/loom-unity-authz-proof.md`, case 4). `server.allowed-issuers`
+and `server.audiences` govern the **token-exchange endpoint**, not the data API:
+
+```
+POST /api/1.0/unity-control/auth/tokens
+  grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+  requested_token_type=urn:ietf:params:oauth:token-type:access_token
+  subject_token_type=urn:ietf:params:oauth:token-type:id_token
+  subject_token=<the Entra token>
+->  { "access_token": "<internal token>", "tokenType": "BEARER" }
+```
+
+…and the `internal` token that comes back is what the catalog API accepts.
+`AuthService.verifyPrincipal` additionally requires the subject (`email`, else
+`sub`) to be `admin` or an **enabled Unity Catalog user**, so a managed-identity
+token also needs its principal registered in the catalog.
+
+| Credential | Result on the catalog API |
+| --- | --- |
+| none / malformed | 401 ✅ rejected |
+| Entra bearer, exact audience, presented directly | **403 ✗ rejected** |
+| internal token from the exchange above | 200 ✅ |
+| `LOOM_UNITY_TOKEN` — the server-minted token in `etc/conf/token.txt`, delivered as a Key Vault secretref | 200 ✅ |
+
+**So `LOOM_UNITY_TOKEN` is currently the only working Console credential.**
+`apps/fiab-console/lib/azure/uc-backend.ts` `ossUcAuthHeader()` sends the Entra
+token directly and therefore does not authenticate; `unityAuthorizationPosture()`
+reports `entra` as **not hardened** for that reason. The durable fix is a
+token-exchange client in the BFF plus registration of the Console principal as a
+Unity Catalog user — tracked as a follow-up, and the prerequisite for turning
+`authMode=entra` on for a live estate.
+
+Threat model: `docs/fiab/security/loom-unity-threat-model.md`.
 
 ## ADLS credential vending (optional)
 
@@ -159,10 +215,18 @@ paths. See the honest capability matrix in `docs/fiab/unity-gov.md`.
 
 ```bash
 docker build -t loom-unity apps/loom-unity
+
+# BEHAVIOUR CHANGE (svc-loom-unity-authz): a bare run now EXITS 1. The bare
+# invocation used to come up anonymous, which is the finding this fixed.
 docker run -p 8080:8080 loom-unity                    # FAILS CLOSED: no issuer/audience pinned
+
+# Local dev / the audited open posture — ask for it explicitly:
+docker run -p 8080:8080 -e LOOM_UNITY_AUTH=disable loom-unity
+
+# Authorization enforced:
 docker run -p 8080:8080 \
   -e LOOM_UNITY_ENTRA_TENANT_ID=<tenant> \
-  -e LOOM_UNITY_ENTRA_CLIENT_ID=<app-client-id> loom-unity   # Entra bearer enforced
+  -e LOOM_UNITY_ENTRA_CLIENT_ID=<app-client-id> loom-unity
 ```
 
 Deploy to Azure: `platform/fiab/bicep/modules/compute/loom-unity-app.bicep`
@@ -204,3 +268,17 @@ Runs the entrypoint in dry-run mode (15 tests) and asserts the persistence
 boot paths),
 Entra-authorization (including both fail-closed boot paths and the sovereign
 authority host), and ADLS-vending config-rendering branches.
+
+Those are config-rendering tests — they prove what the entrypoint *writes*, not
+what the server *does* with it. For that:
+
+```bash
+bash apps/loom-unity/tests/authz/authz-e2e.sh
+```
+
+12 assertions against the real image, in Docker, with a throwaway OIDC issuer and
+no Azure dependency: the fail-closed boot, anonymous/malformed/wrong-issuer
+rejection, the token exchange, an **authenticated 200 with real catalog JSON**,
+the sealed posture, and the v0.5.0 permission-GET-500 regression with its
+authorization-disabled control. Receipt:
+`docs/fiab/security/loom-unity-authz-proof.md`.

@@ -24,16 +24,30 @@
 // single-writer it pins the app to exactly ONE replica. With Postgres the app
 // scales past one replica (maxReplicas below).
 //
-// DEPLOYED BY DEFAULT (svc-loom-unity-authz): admin-plane/main.bicep invokes this
-// module on every boundary (`loomUnityActive` — Container Apps + deployAppsEnabled)
-// and emits LOOM_UNITY_URL / LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE /
-// LOOM_UNITY_AUTH_MODE on the Console, so a FRESH deploy gets an Entra-secured,
-// IP-pinned catalog with no manual step. It previously deployed only out-of-band,
-// and every caller omitted entraClientId — which silently produced an anonymous,
-// VNet-readable-AND-writable catalog. It is still deployable standalone (below)
-// for a targeted redeploy; entraClientId is effectively REQUIRED, because
-// authMode=entra with nothing pinnable now fails CLOSED at boot instead of
-// downgrading.
+// STANDALONE ENTRYPOINT: admin-plane/main.bicep is at the ARM 256-parameter
+// ceiling, so this deploys out-of-band (like the Hyperscale-band modules), then
+// LOOM_UNITY_URL + LOOM_UC_BACKEND=oss are set on the Console app. Until wired,
+// the UC client honest-gates (OssUcNotConfiguredError) and Commercial keeps
+// using Databricks UC. Orphan-allowlisted in scripts/ci/check-bicep-sync.mjs.
+//
+// svc-loom-unity-authz FIXED HERE: every caller omitted entraClientId, and this
+// module then SILENTLY rendered `server.authorization=disable` — so the module
+// that documented itself as "Entra ON by default" produced an anonymous,
+// VNet-readable-AND-writable catalog. `authMode` alone now decides, and an
+// unpinnable audience produces the SEALED posture (below), never an open door.
+//
+// AUTHENTICATING TO THIS SERVER IS A TWO-STEP EXCHANGE, NOT A BEARER PASS-THROUGH.
+// Upstream `AuthDecorator` (v0.5.0 AND v0.5.1) rejects any token whose `iss` is
+// not the server's own `internal` issuer, so a Microsoft Entra access token
+// presented directly on /api/2.1/unity-catalog/* is answered 403
+// PERMISSION_DENIED even when its audience matches `server.audiences` exactly.
+// A client must POST the Entra token to /api/1.0/unity-control/auth/tokens
+// (OAuth token exchange) and use the `internal` token that comes back. The
+// Console does NOT do that yet (lib/azure/uc-backend.ts sends the Entra bearer
+// directly), so pinning a real audience here makes the catalog reject the
+// Console too. Live proof of both directions:
+// docs/fiab/security/loom-unity-authz-proof.md. Tracked follow-up: the Console
+// token-exchange client.
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
@@ -546,5 +560,5 @@ output authorizationSealed bool = authSealed
 @description('LU-2 — TRUE when ingress is pinned to an IP allow-list on top of internal-ingress isolation.')
 output ingressIpRestricted bool = !empty(consoleAllowedCidrs)
 
-@description('LU-2 — the Entra audiences Loom Unity accepts. On the SEALED path this is the sentinel `.invalid` audience nothing can mint (the catalog is up but accepts nobody); empty only when authMode=disabled. Set the Console app LOOM_UNITY_CLIENT_ID to the same app registration so it mints a matching bearer.')
+@description('LU-2 — the Entra audiences Loom Unity accepts. On the SEALED path this is the sentinel `.invalid` audience nothing can mint (the catalog is up but accepts nobody); empty only when authMode=disabled. NOTE: matching this audience is necessary but NOT sufficient — upstream only accepts tokens it issued itself, so a client must exchange its Entra token at /api/1.0/unity-control/auth/tokens first (docs/fiab/security/loom-unity-authz-proof.md).')
 output acceptedAudiences string = authEnabled ? (!empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : 'api://${entraClientId},${entraClientId}')) : ''

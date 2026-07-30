@@ -27,9 +27,31 @@
 #   Note also (carried from LU-2): `server.access-token-timeout` exists on
 #   upstream main but NOT in v0.5.0/v0.5.1, so the entrypoint does not render it.
 #
+#   CONSEQUENCE OF STAYING ON v0.5.0, MEASURED (svc-loom-unity-authz round 4):
+#   the #1603 bug above is not latent — it fires the moment authorization is
+#   enabled. On this pinned image,
+#     GET /api/2.1/unity-catalog/permissions/{securable}/{name}
+#   returns HTTP 500 "No authorization expression found." while
+#   server.authorization=enable, and 200 while it is disabled. PATCH on the same
+#   path returns 200 in both states, so grant/revoke works and READS do not.
+#   That breaks the Console's Grants pane and the LU-4 effective-permissions
+#   resolver (which reads that route for the target and every ancestor) on any
+#   catalog running with authorization on. Transcript + control case:
+#   docs/fiab/security/loom-unity-authz-proof.md.
+#
+#   ALSO MEASURED: upstream `AuthDecorator` (v0.5.0 AND v0.5.1) rejects any
+#   bearer whose `iss` is not the server's own `internal` issuer, so a Microsoft
+#   Entra access token presented directly on /api/2.1/unity-catalog/* is answered
+#   403 even with an exact `server.audiences` match. Clients must exchange it at
+#   POST /api/1.0/unity-control/auth/tokens first. Bumping to v0.5.1 does NOT
+#   change this — it is the upstream design, not a bug.
+#
 # Build: docker build -t loom-unity .
-# Run (local, ephemeral H2 file DB, auth disabled — dev only):
-#   docker run -p 8080:8080 loom-unity
+# Run (local dev, ephemeral H2 file DB). NOTE: since svc-loom-unity-authz,
+# LOOM_UNITY_AUTH defaults to `enable` and the entrypoint REFUSES TO BOOT with no
+# issuer/audience pinned, so a bare `docker run -p 8080:8080 loom-unity` now exits
+# 1 by design. Ask for the open posture explicitly:
+#   docker run -p 8080:8080 -e LOOM_UNITY_AUTH=disable loom-unity
 # Run (the LU-1 default posture — Entra-only Postgres, no password anywhere):
 #   docker run -p 8080:8080 \
 #     -e LOOM_UNITY_DB_URL='jdbc:postgresql://psql-loom-unity-x.postgres.database.usgovcloudapi.net:5432/unitycatalog' \

@@ -10,15 +10,15 @@ name: gov-uc-purview-wire
 #      App into the Gov CAE, then sets LOOM_UC_BACKEND=oss + LOOM_UNITY_URL on
 #      the Gov console so uc-backend.ts routes to it.
 #
-#      OWNERSHIP (svc-loom-unity-authz round 2): admin-plane/main.bicep now
-#      deploys this SAME app (`loom-unity` in the same admin RG) as part of the
-#      push-button deploy, so the orchestrator is the long-term owner and the next
-#      Gov infra deploy ADOPTS the app this workflow created. That adoption is
-#      deliberate and convergent — this workflow now publishes the :v0.1 tag the
-#      Gov bicepparams pull and prefers the same dedicated UAMI the orchestrator
-#      creates — so re-running either one is idempotent. This workflow remains the
-#      targeted path for re-wiring an existing Gov estate without a full infra
-#      deploy. See docs/fiab/unity-gov.md § "Ownership".
+#      OWNERSHIP: this workflow is the ONLY producer/owner of the live Gov
+#      `loom-unity` Container App today — admin-plane/main.bicep does NOT deploy
+#      it (loom-unity-app.bicep is still a standalone entrypoint, orphan-
+#      allowlisted in scripts/ci/check-bicep-sync.mjs). Making the orchestrator
+#      deploy + adopt it is a separate, follow-up change; it is deliberately not
+#      part of the svc-loom-unity-authz fix, because adoption would flip this
+#      LIVE federal app's authorization mode. This workflow publishes :v0.1 (the
+#      tag the Gov bicepparams pull) so that future adoption cannot repoint the
+#      app at a missing image. See docs/fiab/unity-gov.md § "Ownership".
 #
 #   2. Purview — a Purview account is ALREADY deployed in the Gov sub but the
 #      console never had LOOM_PURVIEW_ACCOUNT set, so every governance surface
@@ -101,22 +101,22 @@ jobs:
           # step's re-lock cannot deny another run's in-flight push.
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
-          # svc-loom-unity-authz (round 2) — ALSO tag :v0.1. admin-plane/main.bicep
-          # now deploys this same app on every boundary and pulls
-          # `loom-unity:${appImageTags.unity}` (v0.1 in gcc-high/il5.bicepparam).
-          # If this workflow only published :<sha> + :latest, the first orchestrator
-          # deploy over this estate would repoint the LIVE app at a tag that does
-          # not exist and the revision would fail its image pull.
+          # ALSO tag :v0.1 — the tag the Gov .bicepparam files pull for every
+          # orchestrator-deployed app. If this workflow only published :<sha> +
+          # :latest, the FIRST orchestrator deploy that ever adopts this app
+          # would repoint the LIVE Gov catalog at a tag that does not exist and
+          # the revision would fail its image pull. Publishing it now makes that
+          # follow-up change safe before it is written.
           # gov-build-images.yml is the from-scratch producer for the same tag.
           az acr build --registry "$ACR" --no-logs \
             --image "loom-unity:$SHA" --image "loom-unity:latest" --image "loom-unity:v0.1" \
             --file apps/loom-unity/Dockerfile \
             apps/loom-unity
-          # svc-loom-unity-authz (round 3) — PROVE the :v0.1 tag landed while the
-          # data plane is still open. The deploy step below, and every future
-          # admin-plane deploy that ADOPTS this app, reference exactly that tag;
-          # a silent tagging failure here would leave the live Gov catalog
-          # pointing at an image that does not exist.
+          # PROVE the :v0.1 tag landed while the data plane is still open.
+          # "`az acr build` exited 0" is not "the tag is in the registry"; the
+          # deploy step below, and any future orchestrator deploy that adopts
+          # this app, reference exactly that tag, so a silent tagging failure
+          # here would leave the live Gov catalog pointing at a missing image.
           DIGEST=$(az acr repository show -n "$ACR" --image "loom-unity:v0.1" --query digest -o tsv | tr -d '\r')
           if [ -z "${DIGEST:-}" ]; then
             echo "::error::loom-unity:v0.1 is NOT resolvable in $ACR after the build. That is the exact tag gcc-high/il5.bicepparam pull, so deploying now would point this estate at a missing image. Refusing."
@@ -137,39 +137,51 @@ jobs:
           # svc-loom-unity-authz — this workflow used to deploy the catalog with
           # NO entraClientId, and the module silently downgraded to
           # server.authorization=disable: anything on the Gov CAE VNet could read
-          # AND mutate catalog metadata anonymously. Pin the audience to the app
-          # registration the Console already signs in with, and pin ingress to the
-          # Container Apps infrastructure subnet so "on the VNet" is no longer
-          # sufficient to open a connection.
+          # AND mutate catalog metadata anonymously.
+          #
+          # WHY THIS STILL DEPLOYS authMode=disabled, EXPLICITLY.
+          # Turning authorization ON here would take the LIVE Gov catalog down
+          # rather than secure it. Proven in a local container run of this exact
+          # image (docs/fiab/security/loom-unity-authz-proof.md): upstream
+          # AuthDecorator — identical in v0.5.0 and v0.5.1 — rejects every token
+          # whose `iss` is not the server's own `internal` issuer, so the Entra
+          # bearer the Console mints (lib/azure/uc-backend.ts ossUcAuthHeader)
+          # gets 403 PERMISSION_DENIED even with a byte-exact audience match. A
+          # caller must first exchange its Entra token at
+          # /api/1.0/unity-control/auth/tokens; the Console does not do that yet.
+          # Flipping authMode=entra today therefore converts "anonymous but
+          # working" into "authenticated and unusable" on a federal estate.
+          #
+          # So this step ships the two things that ARE safe now:
+          #   * the mode is DECLARED, not inferred — `disabled` is the module's
+          #     audited opt-out, the container logs a SECURITY WARNING on every
+          #     boot, and the svc-loom-unity-authz gate reports the finding OPEN
+          #     instead of a silent stderr line nobody reads;
+          #   * ingress is IP-pinned to the Container Apps infrastructure subnet,
+          #     so "anything on the Gov VNet" narrows to "anything in the CAE
+          #     infrastructure subnet" at the network layer.
+          # Set UNITY_AUTH_MODE=entra here (and update the console-env step
+          # below) in the SAME change that lands the Console token-exchange
+          # client — not before.
+          UNITY_AUTH_MODE=disabled
           UNITY_CLIENT_ID=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv | tr -d '\r')
-          if [ -z "${UNITY_CLIENT_ID:-}" ]; then
-            echo "::error::LOOM_MSAL_CLIENT_ID is not set on $APP, so no Entra audience can be pinned for Loom Unity. Run csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) first. Refusing to deploy an anonymously-readable catalog (svc-loom-unity-authz)."
-            exit 1
-          fi
           CAE_SUBNET_ID=$(az containerapp env show --ids "$CAE_ID" --query properties.vnetConfiguration.infrastructureSubnetId -o tsv | tr -d '\r')
           CAE_CIDR=$(az network vnet subnet show --ids "$CAE_SUBNET_ID" --query addressPrefix -o tsv | tr -d '\r')
           if [ -z "${CAE_CIDR:-}" ]; then
             echo "::error::Could not resolve the CAE infrastructure subnet CIDR from $CAE_SUBNET_ID — refusing to deploy without the ingress IP pin."
             exit 1
           fi
-          echo "::notice::pinning Loom Unity audience to api://$UNITY_CLIENT_ID and ingress to $CAE_CIDR"
-          # svc-loom-unity-authz (round 2) — CONVERGE WITH THE ORCHESTRATOR.
-          # admin-plane/main.bicep now deploys a Container App with this exact
-          # name into this exact RG, so the next Gov infra deploy ADOPTS whatever
-          # this step leaves behind. Adoption is only safe if the two agree, so:
-          #   * identity — prefer the dedicated least-privilege UAMI the
-          #     orchestrator creates (uami-loom-unity-<location>); fall back to the
-          #     Console UAMI only on estates the orchestrator has not reached yet
-          #     (its ONLY grants there are AcrPull + its own Postgres, so the
-          #     broadly-permissioned Console identity is not the right long-term
-          #     home for an app that exposes IMDS to in-container code);
-          #   * image — :v0.1, the tag the Gov bicepparams pull.
-          # See docs/fiab/unity-gov.md § "Ownership".
+          echo "::notice::Loom Unity authMode=$UNITY_AUTH_MODE, ingress pinned to $CAE_CIDR"
+          # Identity — prefer a dedicated least-privilege UAMI if one exists
+          # (uami-loom-unity-<location>); fall back to the Console UAMI. The
+          # Console identity is broadly permissioned and ACA exposes the app
+          # identity over IMDS to in-container code, so the dedicated identity is
+          # the right long-term home for this app.
           UNITY_UAMI_ID=$(az identity show -n "uami-loom-unity-${LOCATION}" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r' || true)
           if [ -z "${UNITY_UAMI_ID:-}" ]; then
             UNITY_UAMI_ID="$UAMI_ID"
-            echo "::notice::dedicated uami-loom-unity-${LOCATION} not present yet — using the Console UAMI; the next admin-plane deploy switches it to the dedicated identity."
+            echo "::notice::dedicated uami-loom-unity-${LOCATION} not present — using the Console UAMI."
           fi
           UNITY_UAMI_CLIENT_ID=$(az identity show --ids "$UNITY_UAMI_ID" --query clientId -o tsv 2>/dev/null | tr -d '\r' || true)
           az deployment group create -g "$RG" \
@@ -182,12 +194,13 @@ jobs:
                acrLoginServer="$ACR_LOGIN" \
                image="$ACR_LOGIN/loom-unity:v0.1" \
                dbEphemeral=true \
-               authMode=entra \
+               authMode="$UNITY_AUTH_MODE" \
                entraClientId="$UNITY_CLIENT_ID" \
                consoleAllowedCidrs="[\"$CAE_CIDR\"]" \
                complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
             -o none
           echo "UNITY_CLIENT_ID=$UNITY_CLIENT_ID" >> "$GITHUB_ENV"
+          echo "UNITY_AUTH_MODE=$UNITY_AUTH_MODE" >> "$GITHUB_ENV"
           # Gov posture: H2 on an Azure Files SMB mount fails to ATTACH on this
           # boundary — the mount blocks container start (CrashLoopBackOff, restarts:0,
           # never logs) before the app runs, so an app-level LOOM_UNITY_DB_LOCAL
@@ -222,15 +235,23 @@ jobs:
           set -euo pipefail
           VARS=""
           if [ "${{ inputs.skip_unity }}" != "true" ] && [ -n "${UNITY_FQDN:-}" ]; then
-            # svc-loom-unity-authz — the CONSOLE half. The catalog now enforces
-            # Entra bearer authorization, so the BFF must mint a matching token on
-            # every /api/databricks/unity-catalog/* call or it will 401. All three
-            # vars are set explicitly; uc-backend.ts then fails CLOSED instead of
-            # silently retrying anonymously.
+            # svc-loom-unity-authz — the CONSOLE half, kept in lockstep with the
+            # authorization mode the deploy step actually applied. While the
+            # catalog is authMode=disabled the Console must stay in `anonymous`
+            # mode: setting LOOM_UNITY_AUTH_MODE=entra would make uc-backend.ts
+            # mint an Entra bearer that this server answers 403 to (proof:
+            # docs/fiab/security/loom-unity-authz-proof.md), turning every live
+            # Gov Unity surface into an error. LOOM_UNITY_AUTH_MODE=anonymous is
+            # DECLARED rather than inferred so the svc-loom-unity-authz gate and
+            # /api/catalog/unity/capabilities report the open posture explicitly.
             VARS="$VARS LOOM_UC_BACKEND=oss LOOM_UNITY_URL=https://$UNITY_FQDN"
-            VARS="$VARS LOOM_UNITY_CLIENT_ID=$UNITY_CLIENT_ID"
-            VARS="$VARS LOOM_UNITY_AUDIENCE=api://$UNITY_CLIENT_ID/.default"
-            VARS="$VARS LOOM_UNITY_AUTH_MODE=entra"
+            if [ "${UNITY_AUTH_MODE:-disabled}" = "entra" ]; then
+              VARS="$VARS LOOM_UNITY_CLIENT_ID=$UNITY_CLIENT_ID"
+              VARS="$VARS LOOM_UNITY_AUDIENCE=api://$UNITY_CLIENT_ID/.default"
+              VARS="$VARS LOOM_UNITY_AUTH_MODE=entra"
+            else
+              VARS="$VARS LOOM_UNITY_AUTH_MODE=anonymous"
+            fi
           fi
           if [ "${{ inputs.skip_purview }}" != "true" ] && [ -n "${PVW:-}" ]; then
             VARS="$VARS LOOM_PURVIEW_ACCOUNT=$PVW"
@@ -270,16 +291,25 @@ jobs:
             OUT=$(az containerapp exec -n "$APP" -g "$RG" --replica "$REP" --container "$APP" \
               --command "node -e \"fetch('https://$UNITY_FQDN/api/2.1/unity-catalog/catalogs').then(r=>r.text().then(t=>console.log('UC',r.status,t.slice(0,200)))).catch(e=>console.log('UC ERR',e.message))\"" 2>/dev/null || true)
             echo "$OUT"
-            # svc-loom-unity-authz — this is an UNAUTHENTICATED read. With
-            # authorization enforced it MUST be rejected. A 200 here is the exact
-            # finding this workflow change closes, so treat it as a failure, not
-            # a success: it means the catalog is answering anonymous callers.
+            # svc-loom-unity-authz — this is an UNAUTHENTICATED read, and the
+            # assertion is keyed to the authorization mode THIS RUN deployed
+            # (UNITY_AUTH_MODE), never to an assumption. Before this change the
+            # probe treated an anonymous HTTP 200 as SUCCESS, which is why the
+            # finding survived in Gov for months: the gate was measuring
+            # reachability, not authorization.
+            AUTHZ="${UNITY_AUTH_MODE:-disabled}"
             if echo "$OUT" | grep -q "UC 200"; then
-              echo "::error::Loom Unity answered an UNAUTHENTICATED read with 200 — authorization is NOT being enforced (svc-loom-unity-authz). Check the loom-unity container logs for the LOOM_UNITY_AUTH value it booted with."
-              exit 1
-            fi
-            if echo "$OUT" | grep -qE "UC (401|403)"; then
-              echo "::notice::Loom Unity rejected the unauthenticated read — Entra bearer authorization is enforced."
+              if [ "$AUTHZ" = "entra" ]; then
+                echo "::error::Loom Unity answered an UNAUTHENTICATED read with 200 while it was deployed authMode=entra — authorization is NOT being enforced (svc-loom-unity-authz). Check the loom-unity container logs for the LOOM_UNITY_AUTH value it booted with."
+                exit 1
+              fi
+              echo "::warning::svc-loom-unity-authz is OPEN on this estate: Loom Unity answered an UNAUTHENTICATED read with 200 because it is deployed with the audited authMode=disabled opt-out. Ingress is IP-pinned to the CAE infrastructure subnet, so the exposure is bounded to that subnet — but any workload there can read AND mutate catalog metadata. Closing it needs the Console token-exchange client (upstream only accepts tokens it issued itself; see docs/fiab/security/loom-unity-authz-proof.md), after which this workflow flips UNITY_AUTH_MODE to entra."
+            elif echo "$OUT" | grep -qE "UC (401|403)"; then
+              if [ "$AUTHZ" = "entra" ]; then
+                echo "::notice::Loom Unity rejected the unauthenticated read — Entra bearer authorization is enforced."
+              else
+                echo "::warning::Loom Unity rejected an unauthenticated read although it was deployed authMode=disabled — the running container disagrees with the template. Check its LOOM_UNITY_AUTH env value."
+              fi
             else
               echo "::warning::Unexpected Loom Unity probe result (first boot can take ~1 min, and a fail-closed boot returns a connection error). Check the loom-unity container logs."
             fi

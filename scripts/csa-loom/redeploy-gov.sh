@@ -127,21 +127,20 @@ if [[ "$WHAT_IF" == "true" ]]; then
   exit 0
 fi
 
-# svc-loom-unity-authz (round 3) — ADOPTED-IMAGE PREFLIGHT, reconcile path only.
-# admin-plane/main.bicep deploys `loom-unity` BY NAME into rg-csa-loom-admin-<loc>,
-# and Azure Government already runs one there (created out-of-band by
-# .github/workflows/gov-uc-purview-wire.yml). With --skip-teardown this deploy
-# therefore ADOPTS the running app and rewrites its image to
-# `<gov-acr>/loom-unity:v0.1` — the tag the Gov .bicepparam pulls. Its producer,
-# .github/workflows/gov-build-images.yml, has never been executed, so verify the
-# tag exists BEFORE a live federal catalog is repointed at it; otherwise the ARM
-# PUT succeeds and the new revision dies on the image pull.
+# ADOPTED-IMAGE PREFLIGHT, reconcile path only.
+# With --skip-teardown this deploy ADOPTS the Container Apps already running in
+# rg-csa-loom-admin-<loc> and rewrites their image references to the tags the Gov
+# .bicepparam pulls. An ARM PUT naming a tag that is not in the registry SUCCEEDS
+# and the new revision then dies on the image pull — a live federal app goes down.
+# Verify the tags exist first.
 # Skipped after a teardown: there is nothing live to adopt (and no registry).
+# `loom-unity` is deliberately NOT required here — admin-plane/main.bicep does not
+# deploy it, so nothing about it is adopted; add it in the same change that makes
+# the orchestrator own it.
 if [[ "$SKIP_TEARDOWN" == "true" ]]; then
   echo -e "${BLUE}[2/4] Image preflight (adoption path)${NC}"
   bash "${SCRIPT_DIR}/preflight-image-tags.sh" \
     --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
-    --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}" \
     --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" || {
       echo -e "${RED}Image preflight FAILED — refusing to repoint a live Container App at a tag that is not in the registry. Run .github/workflows/gov-build-images.yml first.${NC}"
       exit 1

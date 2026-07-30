@@ -168,12 +168,6 @@ param appImageTags = {
   // .github/workflows/deploy-fiab-il5.yml image-preflights this tag before it
   // deploys over a live estate.
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
-  // loom-unity - Loom Unity, the Unity-Catalog-compatible OSS metastore. Now
-  // deployed by the orchestrator on EVERY boundary (svc-loom-unity-authz wired
-  // authMode=entra + the LU-1 Postgres store into admin-plane/main.bicep), so
-  // the image must be in ACR. Built by build-fiab-images-acr-tasks.yml /
-  // full-app-deploy-commercial.yml.
-  unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
 }
 
 // MSAL — IL5 tenant client id+secret via env (don't commit)

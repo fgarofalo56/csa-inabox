@@ -34,6 +34,18 @@
  * single audited choke point, and {@link unityAuthorizationPosture} reports —
  * honestly — when nothing is configured and the catalog is therefore reachable
  * anonymously by anything on the VNet.
+ *
+ * KNOWN GAP — the `entra` mode does not authenticate against the OSS server.
+ * Upstream `AuthDecorator` (unitycatalog v0.5.0, the pinned image, and v0.5.1)
+ * rejects any bearer whose `iss` is not the server's own `internal` issuer, so a
+ * Microsoft Entra access token presented directly on /api/2.1/unity-catalog/* is
+ * answered 403 PERMISSION_DENIED even with an exact `server.audiences` match. A
+ * client must first exchange it at POST /api/1.0/unity-control/auth/tokens and
+ * present the returned internal token — a client this module does not implement
+ * yet. Until it does, `LOOM_UNITY_TOKEN` (a server-minted token via Key Vault)
+ * is the only working credential, and {@link unityAuthorizationPosture} reports
+ * `entra` as NOT hardened. Both directions were verified by running the image;
+ * transcript in docs/fiab/security/loom-unity-authz-proof.md.
  */
 
 export type UcBackend = 'databricks' | 'oss';
@@ -205,11 +217,22 @@ export function unityAuthorizationPosture(): UnityAuthorizationPosture {
     };
   }
   if (mode === 'entra') {
+    // NOT hardened, and saying otherwise was wrong. Upstream unitycatalog
+    // rejects any bearer whose `iss` is not its own `internal` issuer —
+    // identical in v0.5.0 (the pinned image) and v0.5.1 — so the Entra token
+    // this mode mints is answered 403 PERMISSION_DENIED on
+    // /api/2.1/unity-catalog/* even when its audience matches
+    // `server.audiences` byte for byte. Verified by running the image:
+    // docs/fiab/security/loom-unity-authz-proof.md. A client has to exchange
+    // the Entra token at POST /api/1.0/unity-control/auth/tokens first and use
+    // the `internal` token that comes back; that client does not exist yet.
     return {
       mode,
-      hardened: true,
+      hardened: false,
       audience: unityAudience(),
-      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${unityAudience()}. The server pins the issuer + audience, so a token for any other app or tenant is rejected.`,
+      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${unityAudience()} — and the upstream OSS Unity Catalog server REJECTS it (HTTP 403), because it only accepts tokens issued by its own internal issuer. This mode does not authenticate today; catalog calls fail.`,
+      remediation:
+        'Set LOOM_UNITY_TOKEN (a server-minted token, delivered as a Key Vault secretref) — that is the only credential upstream v0.5.0/v0.5.1 accepts on the catalog API. The durable fix is the OAuth token-exchange client: POST the Entra token to /api/1.0/unity-control/auth/tokens (grant_type=urn:ietf:params:oauth:grant-type:token-exchange) and present the returned internal token, which additionally needs the Console principal registered as an enabled Unity Catalog user. Evidence for both directions: docs/fiab/security/loom-unity-authz-proof.md.',
     };
   }
   return {
@@ -424,8 +447,8 @@ export const UC_CAPABILITIES: UcCapability[] = [
   { id: 'volumes', label: 'Volumes (CRUD)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Explore' },
   { id: 'functions', label: 'Functions (list/get/create/delete)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Explore' },
   { id: 'models', label: 'Registered models + versions', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Explore', note: 'Databricks governs models through the FUNCTION permissions path; OSS UC has a first-class registered_model securable.' },
-  { id: 'grants', label: 'Grants / privileges (securable ACLs)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Grants', note: 'Both backends implement GET/PATCH /permissions/{securable}/{name}.' },
-  { id: 'effective-permissions', label: 'Effective (inherited) permissions', databricks: 'full', oss: 'partial', loomSurface: '/catalog/unity — Grants → "Effective (inherited)"', note: 'Databricks answers with its native /effective-permissions endpoint. The OSS Unity Catalog server has no such endpoint, so on that backend the Loom BFF composes the answer itself (LU-4) from the direct grants + owners of the containment chain, following the Unity Catalog permissions model on Learn: downward privilege inheritance filtered by what the child type accepts, ALL PRIVILEGES expanded (minus MANAGE / EXTERNAL USE *), ownership NON-inheriting (the owner of an ancestor gets MANAGE on the descendant and nothing more), USE CATALOG / USE SCHEMA prerequisites evaluated and reported, and — when you scope to one principal — its transitive group memberships unioned in. It is NOT byte-identical to the Databricks endpoint: the OSS privilege vocabulary has no MANAGE / BROWSE / APPLY TAG, so ancestor ownership confers nothing there, and a partially-qualified name yields direct grants only. Every such narrowing comes back as a warning. Optional: the group expansion needs Microsoft Graph Group.Read.All on the Console UAMI; without it the answer covers direct + inherited + ownership and says so.' },
+  { id: 'grants', label: 'Grants / privileges (securable ACLs)', databricks: 'full', oss: 'partial', loomSurface: '/catalog/unity — Grants', note: 'Both backends implement GET/PATCH /permissions/{securable}/{name}, but on the pinned OSS image (unitycatalog v0.5.0) the GET routes return HTTP 500 "No authorization expression found." whenever server.authorization=enable — upstream issue #1603, fixed in v0.5.1, whose container image Docker Hub has not published. Reproduced live: docs/fiab/security/loom-unity-authz-proof.md. Reads therefore work only while that catalog runs with authorization disabled; PATCH (granting/revoking) is unaffected in both states.' },
+  { id: 'effective-permissions', label: 'Effective (inherited) permissions', databricks: 'full', oss: 'partial', loomSurface: '/catalog/unity — Grants → "Effective (inherited)"', note: 'Databricks answers with its native /effective-permissions endpoint. The OSS Unity Catalog server has no such endpoint, so on that backend the Loom BFF composes the answer itself (LU-4) from the direct grants + owners of the containment chain, following the Unity Catalog permissions model on Learn: downward privilege inheritance filtered by what the child type accepts, ALL PRIVILEGES expanded (minus MANAGE / EXTERNAL USE *), ownership NON-inheriting (the owner of an ancestor gets MANAGE on the descendant and nothing more), USE CATALOG / USE SCHEMA prerequisites evaluated and reported, and — when you scope to one principal — its transitive group memberships unioned in. It is NOT byte-identical to the Databricks endpoint: the OSS privilege vocabulary has no MANAGE / BROWSE / APPLY TAG, so ancestor ownership confers nothing there, and a partially-qualified name yields direct grants only. Every such narrowing comes back as a warning. Optional: the group expansion needs Microsoft Graph Group.Read.All on the Console UAMI; without it the answer covers direct + inherited + ownership and says so. ALSO inherits the `grants` limitation above: the resolver reads GET /permissions/{type}/{name} for the target and every ancestor, and on unitycatalog v0.5.0 those GETs return HTTP 500 while server.authorization=enable (upstream #1603), so on such a catalog every chain node comes back as a warning and the answer is empty. Pinned-image constraint, not a resolver defect.' },
   { id: 'external-locations', label: 'External locations (CRUD)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Storage' },
   { id: 'storage-credentials', label: 'Storage credentials (CRUD)', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Storage', note: 'OSS UC names the same family "credentials" (purpose=STORAGE); Loom rewrites the path transparently.' },
   { id: 'temporary-credentials', label: 'Temporary credential vending', databricks: 'full', oss: 'full', loomSurface: '/catalog/unity — Storage', note: 'On OSS, ADLS vending needs the LOOM_UNITY_ADLS_* service principal on loom-unity; unset, data access stays on Loom managed-identity/ACL paths.' },

@@ -140,16 +140,16 @@ jobs:
             fi
           fi
 
-      # svc-loom-unity-authz (round 2) — DURABILITY. An Entra app registration is
-      # a Microsoft Graph object ARM cannot create, so the bicepparam reads it
-      # from LOOM_MSAL_CLIENT_ID. GCC-High previously passed nothing at all, so
-      # every re-run of this deploy re-rendered an EMPTY client id: sign-in went
-      # dark and the Loom Unity catalog was re-SEALED (sentinel audience, zero
-      # replicas), undoing whatever the post-deploy bootstrap had wired. Resolve
-      # the estate's existing registration first — Key Vault record, then the live
-      # Console app, then the repo secret. Empty is the correct answer on a truly
-      # fresh subscription (the catalog then deploys sealed, never anonymous).
-      - name: Resolve the existing MSAL client id (Loom Unity audience durability)
+      # SIGN-IN DURABILITY (found while tracing svc-loom-unity-authz's phase-3
+      # dependency). An Entra app registration is a Microsoft Graph object ARM
+      # cannot create, so the bicepparam reads it from LOOM_MSAL_CLIENT_ID —
+      # and GCC-High passed NOTHING at all. An ACA template rewrite drops every
+      # env var it does not declare, so each re-run of this deploy re-rendered an
+      # EMPTY client id and took sign-in dark, undoing what the post-deploy
+      # bootstrap had wired. Resolve the estate's existing registration first —
+      # Key Vault record, then the live Console app, then the repo secret. Empty
+      # is the correct answer on a genuinely fresh subscription.
+      - name: Resolve the existing MSAL client id (sign-in durability)
         env:
           LOOM_GOV_MSAL_CLIENT_ID: ${{ secrets.LOOM_GOV_MSAL_CLIENT_ID }}
         run: |
@@ -158,36 +158,35 @@ jobs:
           if [ -z "${CID:-}" ]; then CID="${LOOM_GOV_MSAL_CLIENT_ID:-}"; fi
           echo "LOOM_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
           if [ -n "${CID:-}" ]; then
-            echo "::notice::Loom Unity audience will be pinned to api://${CID} (Entra authorization ENFORCED and usable)."
+            echo "::notice::MSAL client id resolved for this estate — sign-in stays wired across this deploy."
           else
-            echo "::warning::No Entra app registration for this estate yet — Loom Unity deploys SEALED (up, Entra enforced, sentinel audience, scaled to zero, every caller rejected). Run csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) to unseal it; it also records the client id in Key Vault so later deploys stay pinned."
+            echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
           fi
 
-      # svc-loom-unity-authz (round 3) — ADOPTED-IMAGE PREFLIGHT.
-      # `loom-unity` is ALREADY LIVE in this estate (gov-uc-purview-wire.yml
-      # created it out-of-band), and admin-plane/main.bicep now deploys a
-      # Container App with that exact name into that exact RG — so this deploy
-      # ADOPTS the running app and rewrites its image reference to
-      # `<gov-acr>/loom-unity:v0.1` (the tag gcc-high.bicepparam pulls).
-      # gov-build-images.yml is the producer for that tag AND IT HAS NEVER RUN,
-      # so the tag's existence is an assumption, not a fact. If it is absent the
-      # ARM PUT still succeeds and the new revision then fails its image pull —
-      # i.e. the deploy takes the LIVE Gov catalog down. Refuse instead.
+      # ADOPTED-IMAGE PREFLIGHT. This deploy ADOPTS the Container Apps that are
+      # already running in rg-csa-loom-admin-<loc> and rewrites their image
+      # references to the tags the .bicepparam pulls. An ARM PUT naming a tag that
+      # is not in the registry SUCCEEDS, and the new revision then fails its image
+      # pull — i.e. the deploy takes a live federal app down. Verify first.
       # Greenfield (no such Container App yet) passes: a missing tag is the
       # expected state of the documented two-phase image path.
+      #
+      # `loom-unity` is deliberately NOT in the require list: admin-plane/main.bicep
+      # does not deploy it (loom-unity-app.bicep is still a standalone entrypoint),
+      # so this deploy adopts nothing there and requiring its tag would be a false
+      # stop. Add it in the SAME change that makes the orchestrator deploy it.
       - name: Image preflight — never adopt a live app onto a missing tag
         run: |
           set -euo pipefail
           # dlz-attach deploys only a landing zone into a DIFFERENT subscription
-          # and never touches the hub's admin-plane apps, so the hub's live
-          # loom-unity is not being adopted — checking it would be a false stop.
+          # and never touches the hub's admin-plane apps, so nothing is adopted —
+          # checking the hub's registry would be a false stop.
           if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
             echo "::notice::topology=dlz-attach — no admin-plane Container App is adopted; skipping the image preflight."
             exit 0
           fi
           bash scripts/csa-loom/preflight-image-tags.sh \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
-            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}" \
             --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}"
 
       - name: Bicep what-if

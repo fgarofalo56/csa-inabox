@@ -584,12 +584,6 @@ param appImageTags object = {
   // gov-provision-dataplane-images.yml (GCC-High / IL5). Read with
   // `?? 'v0.1'` so an operator bag that predates this key keeps deploying.
   duckdb: 'v0.1'
-  // loom-unity — Loom Unity, the Unity-Catalog-COMPATIBLE OSS metastore
-  // (compute/loom-unity-app.bicep). Deployed by default now that
-  // svc-loom-unity-authz wired Entra bearer authorization + the LU-1 Postgres
-  // store into this orchestrator. Read with `?? 'v0.1'` so an operator-supplied
-  // bag that predates the wiring keeps deploying.
-  unity: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -745,65 +739,6 @@ var mapsTileServerActive = mapsTileServerEnabled && containerPlatform == 'contai
 // URL remains an opt-in override regardless.
 var airflowHostEnabled = true
 var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
-
-// ── Loom Unity — the Unity-Catalog-compatible OSS metastore (svc-loom-unity-authz) ─
-// loomUnityEnabled (var, default TRUE — same 256-param-cap rationale as
-// airflowHostEnabled / wranglerEnabled above): deploys the loom-unity Container
-// App (compute/loom-unity-app.bicep) + its Entra-only, private-endpoint-only
-// PostgreSQL metastore (data-plane/loom-unity-postgres.bicep) as part of the
-// push-button deploy, and emits LOOM_UNITY_URL / LOOM_UNITY_CLIENT_ID /
-// LOOM_UNITY_AUDIENCE / LOOM_UNITY_AUTH_MODE on the Console below.
-//
-// WHY IT IS NOW IN-ORCHESTRATOR (this was the whole svc-loom-unity-authz finding):
-// both modules used to be standalone, out-of-band entrypoints. Every deploy path
-// that actually ran them (gov-uc-purview-wire.yml, the docs' `az deployment group
-// create` line) omitted entraClientId, and the module SILENTLY downgraded to
-// `server.authorization=disable` — a catalog that anything on the CAE VNet could
-// read AND mutate, with no credential at all. Wiring it here means the deploy
-// itself pins the Entra audience, pins ingress to the Console subnet, and sets
-// the Console-side vars, so the secured posture is what a FRESH deploy produces
-// with zero manual steps.
-//
-// LU-1/LU-2 pair: Loom Unity does NOT hard-require Postgres (there is an H2
-// fallback), but Postgres is the only durable, multi-writer, Gov-safe store, so
-// both are default-ON together. Where Postgres cannot be provisioned
-// (postgresQuotaAvailable=false — some sovereign subscriptions are quota-blocked
-// from Microsoft.DBforPostgreSQL/flexibleServers) the catalog still deploys, on
-// the EPHEMERAL H2 store: dbEphemeral=true, never the Azure Files/SMB H2 path,
-// which CrashLoopBackOffs on Azure Government. That degradation is reported by
-// the module's `persistenceBackend` output, not hidden.
-// ADMIN OPT-OUT, never an enablement gate (loom_default_on_opt_out): the
-// catalog deploys unless an admin sets loomBackends.unity='disabled'.
-var loomUnityEnabled = string(loomBackends.?unity ?? 'enabled') != 'disabled'
-var loomUnityActive = loomUnityEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
-var loomUnityPostgresActive = loomUnityActive && postgresQuotaAvailable
-// The PostgreSQL role Loom Unity authenticates as MUST equal the Entra principal
-// NAME of its UAMI (the flexible server maps the token to a role by name), so the
-// name is computed once and used by BOTH modules.
-var loomUnityUamiName = 'uami-loom-unity-${location}'
-// The Entra app registration whose token audience the catalog accepts. A
-// DEDICATED registration (loomBackends.unityClientId) wins; otherwise the
-// Console's own MSAL app is reused. Both can be empty on a bare
-// `az deployment sub create` — an app registration is a Microsoft Graph object
-// ARM cannot create — and the module then deploys the catalog SEALED (up, Entra
-// enforced, sentinel audience nobody can mint, scaled to zero) instead of
-// anonymous or crash-looping. Deploy phase 3 (bootstrap-msal-app-reg.sh) and the
-// deploy workflows' "resolve existing MSAL client id" step both supply it.
-var loomUnityClientIdOverride = string(loomBackends.?unityClientId ?? '')
-var loomUnityAudienceClientId = !empty(loomUnityClientIdOverride) ? loomUnityClientIdOverride : effectiveMsalClientId
-// Which Unity Catalog implementation the Console CALLS (lib/azure/uc-backend.ts).
-// Emitted DECLARATIVELY by the template so a reconcile deploy cannot silently
-// drop an `az containerapp update --set-env-vars LOOM_UC_BACKEND=oss` that the
-// Gov wiring workflow applied out-of-band (an ACA template rewrite removes every
-// env var it does not declare — that is exactly how the live Gov catalog would
-// have been un-wired). GCC-High / IL5 pin 'oss': Databricks Unity Catalog has NO
-// Azure Government endpoint, so Loom Unity IS the catalog there. Commercial
-// leaves it EMPTY = auto-select in uc-backend.ts (Databricks when a workspace is
-// bound, Loom Unity when there is none but the catalog is deployed), so a
-// Commercial estate with Databricks is byte-identical to today.
-// loomBackends.uc overrides both ('oss' | 'databricks').
-var loomUcBackendOverride = string(loomBackends.?uc ?? '')
-var loomUcBackend = !empty(loomUcBackendOverride) ? loomUcBackendOverride : ((loomUnityActive && (boundary == 'GCC-High' || boundary == 'IL5')) ? 'oss' : '')
 
 // Airflow admin (+ Postgres + REST Basic-auth) password. UNPREDICTABLE — derived
 // from loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>),
@@ -1697,28 +1632,6 @@ param loomBackends object = {
   domains: 'cosmos'
   dataproducts: ''
   orgVisuals: 'enabled'
-  // svc-loom-unity-authz — Loom Unity (the Unity-Catalog-compatible OSS
-  // metastore) is DEFAULT-ON (loom_default_on_opt_out). These two keys live in
-  // this bag, not as standalone params, because main.bicep is at the ARM
-  // 256-parameter ceiling (scripts/ci/check-bicep-param-cap.mjs).
-  //   unity          'enabled' (default) | 'disabled' — the ADMIN OPT-OUT. It is
-  //                  a DISABLE toggle, never an enablement gate: leaving it unset
-  //                  deploys the catalog. Set 'disabled' to skip the Container
-  //                  App + its PostgreSQL metastore entirely (the Console's Unity
-  //                  surfaces then honest-gate on LOOM_UNITY_URL).
-  //   unityClientId  Entra app (client) id whose token audience Loom Unity
-  //                  accepts. Empty (default) => reuse the Console's own MSAL app
-  //                  registration (effectiveMsalClientId). Set this to pin a
-  //                  DEDICATED app registration for the catalog instead of
-  //                  sharing the sign-in app. An app registration is a Microsoft
-  //                  Graph object that ARM cannot create, so on a bare
-  //                  `az deployment sub create` with neither this nor
-  //                  LOOM_MSAL_CLIENT_ID the catalog deploys SEALED — up, Entra
-  //                  authorization enforced, a sentinel audience nothing can
-  //                  mint, scaled to zero — and deploy phase 3
-  //                  (bootstrap-msal-app-reg.sh) unseals it.
-  unity: 'enabled'
-  unityClientId: ''
   // Folded out of standalone params (data-eng deploy-readiness sweep) to stay
   // under the ARM 256-parameter ceiling; consumed via same-named vars above so
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
@@ -3778,30 +3691,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DIRECTLAKE_URL', value: '' }
             { name: 'LOOM_BROKER_URL', value: '' }
             { name: 'LOOM_BROKER_REDIS', value: '' }
-            // ── Loom Unity — Unity-Catalog-compatible OSS metastore (svc-loom-unity-authz) ──
-            // The catalog itself is the `loomUnity` module below (default-ON,
-            // internal ingress, IP-pinned to the CAE subnet, Entra bearer
-            // authorization enforced). These three vars are the CONSOLE half:
-            // uc-backend.ts mints an Entra token for LOOM_UNITY_AUDIENCE on every
-            // /api/databricks/unity-catalog/* call so the BFF is the single audited
-            // choke point and the server can reject anything else.
-            //
-            // LOOM_UNITY_AUTH_MODE is emitted whenever the catalog is deployed —
-            // NOT conditioned on the client id — because the catalog enforces Entra
-            // authorization in BOTH of its states (audience pinned, or SEALED with a
-            // sentinel audience nothing can mint). Declaring it is therefore always
-            // TRUE, it is what closes the svc-loom-unity-authz gate on a fresh
-            // deploy, and it makes uc-backend.ts fail CLOSED (structured gate naming
-            // LOOM_UNITY_CLIENT_ID) instead of silently retrying anonymously while
-            // the audience is still unpinned. CLIENT_ID / AUDIENCE follow only once
-            // a real app registration exists — supplied at template time by
-            // loomBackends.unityClientId / LOOM_MSAL_CLIENT_ID, or stamped in deploy
-            // phase 3 by scripts/csa-loom/bootstrap-msal-app-reg.sh.
-            { name: 'LOOM_UNITY_URL', value: loomUnityActive ? 'https://${loomUnity!.outputs.fqdn}' : '' }
-            { name: 'LOOM_UNITY_CLIENT_ID', value: loomUnityActive ? loomUnityAudienceClientId : '' }
-            { name: 'LOOM_UNITY_AUDIENCE', value: (loomUnityActive && !empty(loomUnityAudienceClientId)) ? 'api://${loomUnityAudienceClientId}/.default' : '' }
-            { name: 'LOOM_UNITY_AUTH_MODE', value: loomUnityActive ? 'entra' : '' }
-            { name: 'LOOM_UC_BACKEND', value: loomUcBackend }
             // Governance → Data quality (run/results/monitors) and Master data
             // management (match/merge → golden records) REUSE the Databricks /
             // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
@@ -5620,156 +5509,6 @@ module wrangler '../integration/wrangler.bicep' = if (wranglerActive) {
     targetPort: 8080
     complianceTags: complianceTags
   }
-}
-
-// =====================================================================
-// Loom Unity — the Unity-Catalog-compatible OSS metastore (svc-loom-unity-authz).
-//
-// Backs LOOM_UNITY_URL for the Console's Unity Catalog client (lib/azure/
-// uc-backend.ts). Azure-native/OSS: it IS the Unity Catalog backend on any
-// boundary where Databricks Unity Catalog has no endpoint (all of Azure
-// Government), and no Fabric / Power BI / OneLake is involved anywhere
-// (.claude/rules/no-fabric-dependency.md).
-//
-// SECURITY (the finding this wiring closes): the catalog used to deploy only
-// out-of-band, and every real invocation omitted entraClientId, so the module
-// silently rendered `server.authorization=disable` — anonymous READ AND WRITE of
-// catalog metadata (and ADLS delegation-SAS vending, where wired) for anything
-// that could reach the Container Apps environment. Deploying it here pins:
-//   * authMode=entra (module default) + entraClientId, so bearer authorization is
-//     enforced and the container fails CLOSED if it ever cannot be pinned;
-//   * consoleAllowedCidrs = the CAE infrastructure subnet, so ingress is
-//     IP-restricted on top of internal-ingress isolation;
-//   * a dedicated least-privilege UAMI (AcrPull on the Loom ACR + Entra admin on
-//     its OWN Postgres, nothing else — never the broadly-permissioned Console
-//     UAMI, because an ACA app exposes its identity to in-container code via IMDS).
-// The Console-side half (LOOM_UNITY_CLIENT_ID / _AUDIENCE / _AUTH_MODE) is emitted
-// in the Console env above so the BFF mints a matching Entra bearer on every call.
-//
-// entraClientId is the Console's own app registration (effectiveMsalClientId).
-// On the DEFAULT push-button path that value is empty at template time — the app
-// registration is created in deploy phase 3 (csa-loom-post-deploy-bootstrap.yml →
-// scripts/csa-loom/bootstrap-msal-app-reg.sh), which now also stamps
-// LOOM_UNITY_ENTRA_CLIENT_ID onto this app and LOOM_UNITY_CLIENT_ID onto the
-// Console. Between phase 2 and phase 3 the catalog fails closed (it refuses to
-// boot without a pinned audience) rather than coming up anonymous — that is the
-// intended posture, and the `authorizationMisconfigured` output says so.
-// =====================================================================
-
-// Dedicated least-privilege identity for Loom Unity. Kept OUT of identity.bicep
-// (which holds the broadly-permissioned app UAMIs) for the same reason as
-// scriptRunnerUami / wranglerUami: this identity's ONLY grants are AcrPull on the
-// Loom ACR and Entra administrator on its own metastore. It is also the
-// PostgreSQL role name (loomUnityUamiName) the server maps the Entra token to.
-resource loomUnityUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (loomUnityActive) {
-  name: loomUnityUamiName
-  location: location
-  tags: complianceTags
-}
-
-// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR. Same
-// existing-ref convention as scriptRunnerAcrPull/wranglerAcrPull: the registry
-// module's deterministic name is recomputed so the roleAssignment scope is
-// calculable at deployment START (a module output is a runtime value → BCP120).
-// guid()-named ⇒ idempotent; gated on !skipRoleGrants for reconcile redeploys.
-resource loomUnityAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (loomUnityActive && !skipRoleGrants) {
-  scope: acrForScriptRunner
-  name: guid(acrForScriptRunner.id, loomUnityUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-    principalId: loomUnityUami!.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-  dependsOn: [
-    registry
-  ]
-}
-
-// LU-1 metastore: Entra-ONLY (passwordAuth Disabled — there is no DB credential
-// anywhere), publicNetworkAccess Disabled, reachable only over a private endpoint
-// in the hub PE subnet with a privatelink.postgres.<sovereign-suffix> zone the
-// module creates + links. Burstable B2s / 32 GB — a Unity metastore is a low-QPS,
-// small-row metadata workload.
-module loomUnityPostgres '../data-plane/loom-unity-postgres.bicep' = if (loomUnityPostgresActive) {
-  name: 'loom-unity-postgres'
-  params: {
-    location: location
-    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
-    // The Container Apps environment lives in the SAME hub VNet as the private
-    // endpoint (snet-container-platform / snet-private-endpoints), so the single
-    // VNet link the module creates already resolves the server privately.
-    unityPrincipalId: loomUnityUami!.properties.principalId
-    unityPrincipalName: loomUnityUamiName
-    workspaceId: monitoring.outputs.lawId
-    complianceTags: complianceTags
-  }
-}
-
-module loomUnity '../compute/loom-unity-app.bicep' = if (loomUnityActive) {
-  name: 'loom-unity'
-  params: {
-    // ── GOV APP-NAME COLLISION — DELIBERATE ADOPTION, not a race ──────────
-    // `loom-unity` in rg-csa-loom-admin-<region> is ALREADY LIVE in Azure
-    // Government: .github/workflows/gov-uc-purview-wire.yml created it with a
-    // standalone `az deployment group create` against this same module. Naming
-    // the app `loom-unity` here means the next Gov infra deploy ADOPTS that
-    // resource (ARM PUT on the same name/RG is an idempotent update) rather than
-    // creating a second catalog. That is the intended outcome — one catalog, one
-    // owner, the orchestrator — and it is only SAFE because the adoption is
-    // convergent:
-    //   * image — gov-uc-purview-wire.yml now also tags `loom-unity:v0.1` on the
-    //     Gov ACR (the tag every Gov .bicepparam pulls), and gov-build-images.yml
-    //     is the from-scratch Gov producer for it, so adoption cannot point the
-    //     live app at a tag nobody built;
-    //   * identity — the workflow prefers the same dedicated
-    //     `uami-loom-unity-<location>` UAMI this template creates, falling back
-    //     to the Console UAMI only until the first orchestrator deploy;
-    //   * audience — the workflow reads LOOM_MSAL_CLIENT_ID off the live Console
-    //     and refuses to deploy without it; this template passes the same value
-    //     (loomUnityAudienceClientId), and the deploy workflows resolve an
-    //     EXISTING client id out of Key Vault before running, so a reconcile
-    //     cannot blank it back to the sealed state;
-    //   * persistence — GCC-High/IL5 set postgresQuotaAvailable=false, so
-    //     dbEphemeral=true here matches exactly what the live app runs.
-    // Documented for operators in docs/fiab/unity-gov.md § "Ownership".
-    name: 'loom-unity'
-    location: location
-    environmentId: containerPlatformModule.outputs.caeId
-    unityUamiId: loomUnityUami.id
-    // The Java Entra plugin resolves the user-assigned identity by CLIENT id —
-    // an ACA container with more than one identity cannot infer which to use.
-    unityUamiClientId: loomUnityUami.properties.clientId
-    acrLoginServer: registry.outputs.acrLoginServer
-    image: '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
-    // LU-1 persistence. When the subscription cannot provision Postgres the
-    // catalog falls back to the EPHEMERAL H2 store (never the Azure Files/SMB
-    // one, which blocks container start on Azure Government) and reports it.
-    unityPostgresFqdn: loomUnityPostgresActive ? loomUnityPostgres!.outputs.fqdn : ''
-    unityPostgresDatabase: loomUnityPostgresActive ? loomUnityPostgres!.outputs.databaseName : 'unitycatalog'
-    unityDbAadUser: loomUnityPostgresActive ? loomUnityPostgres!.outputs.aadUser : ''
-    dbEphemeral: !loomUnityPostgresActive
-    // svc-loom-unity-authz — Entra bearer authorization, enforced. When no app
-    // registration exists yet the module deploys the catalog SEALED (sentinel
-    // audience, scaled to zero) — never anonymous, never crash-looping.
-    authMode: 'entra'
-    entraClientId: loomUnityAudienceClientId
-    // Ingress pinned to the Container Apps infrastructure subnet: internal
-    // ingress alone only means "on the VNet", which is exactly what the threat
-    // model says is not sufficient for a catalog with write + vending surface.
-    consoleAllowedCidrs: [
-      network.outputs.containerPlatformSubnetPrefix
-    ]
-    workspaceId: monitoring.outputs.lawId
-    complianceTags: complianceTags
-  }
-  // Explicit: the app pulls a PRIVATE image from an ACR with
-  // publicNetworkAccess=Disabled, so the first revision cannot start until the
-  // UAMI actually holds AcrPull. Nothing in the params above references the role
-  // assignment, so without this the two race on a from-scratch deploy and the
-  // first revision fails its image pull.
-  dependsOn: [
-    loomUnityAcrPull
-  ]
 }
 
 // =====================================================================

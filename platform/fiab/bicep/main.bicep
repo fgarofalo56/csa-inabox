@@ -1352,23 +1352,6 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       dataflow: 'adf'
       dataproducts: ''
       orgVisuals: loomOrgVisualsEnabled ? 'enabled' : 'disabled'
-      // svc-loom-unity-authz — Loom Unity (the Unity-Catalog-compatible OSS
-      // metastore) is DEFAULT-ON. `unity` is the admin DISABLE toggle
-      // ('disabled' skips the Container App + its PostgreSQL metastore); it is
-      // deliberately NOT a new top-level scalar param — this template is at
-      // 251/256 ARM params, so the knob rides this bag (set it in a
-      // .bicepparam via a loomBackends override, or at the admin-plane layer).
-      // `unityClientId` pins the Entra audience the catalog accepts; empty =>
-      // reuse the Console's own MSAL app registration. Passing loomMsalClientId
-      // through here means a BYO-app-registration deploy pins the catalog
-      // audience at TEMPLATE time, so the catalog is usable the moment it comes
-      // up instead of waiting for deploy phase 3.
-      unity: 'enabled'
-      unityClientId: loomMsalClientId
-      // Empty => admin-plane auto-selects: 'oss' on GCC-High / IL5 (Databricks
-      // Unity Catalog has no Azure Government endpoint), auto in the Console
-      // elsewhere (Databricks when a workspace is bound, Loom Unity when not).
-      uc: ''
     }
   }
 }

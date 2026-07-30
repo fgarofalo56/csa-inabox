@@ -97,16 +97,6 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
   // both halves so an operator cannot set the Console var and believe the catalog
   // is secured when the server still answers anonymous callers — the live
   // probe-loom-unity-authz check is the proof either way.
-  //
-  // As of svc-loom-unity-authz a FRESH deploy no longer reaches this gate: the
-  // push-button path deploys loom-unity from admin-plane/main.bicep with
-  // authMode=entra + the CAE-subnet ingress pin and ALWAYS emits
-  // LOOM_UNITY_AUTH_MODE=entra, because the catalog enforces Entra authorization
-  // in both of its states. The gate now fires only on an estate that predates
-  // that wiring. The related-but-different state to watch is SEALED: the catalog
-  // is up and rejecting everything because no Entra app registration existed at
-  // deploy time (ARM cannot create one) — the Console's Unity surfaces then show
-  // the structured LOOM_UNITY_CLIENT_ID gate, and phase 3 unseals it.
   'svc-loom-unity-authz': {
     surfaces: [
       { path: '/catalog/unity', label: 'Loom Unity — Explore / Grants / Storage' },
@@ -116,7 +106,7 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: {
       kind: 'wizard',
-      grantNote: 'A fresh push-button deploy wires this automatically (admin-plane/main.bicep deploys loom-unity with authMode=entra + a CAE-subnet ingress pin and emits LOOM_UNITY_AUTH_MODE=entra; the post-deploy bootstrap stamps the audience on both halves once the Entra app registration exists, and records the client id in Key Vault so later redeploys stay pinned). To repair an estate that predates it, both halves are required. (1) SERVER: redeploy modules/compute/loom-unity-app.bicep with authMode=entra (default) + entraClientId=<Entra app registration fronting Loom Unity, normally the same as LOOM_MSAL_CLIENT_ID>, consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR> to pin ingress, and entraClientSecretUri/adlsClientSecretUri as Key Vault secret URIs (never inline). The loom-unity UAMI needs "Key Vault Secrets User" on that vault. (2) CONSOLE: set LOOM_UNITY_CLIENT_ID (or LOOM_UNITY_AUDIENCE) here so the BFF mints an Entra bearer on every catalog call. Verify with the live probe-loom-unity-authz health check: it must report that an unauthenticated read is rejected.',
+      grantNote: 'Two halves, both required. (1) SERVER: redeploy modules/compute/loom-unity-app.bicep with authMode=entra (default) + entraClientId=<Entra app registration fronting Loom Unity, normally the same as LOOM_MSAL_CLIENT_ID>, consoleAllowedCidrs=<Container Apps infrastructure subnet CIDR> to pin ingress, and entraClientSecretUri/adlsClientSecretUri as Key Vault secret URIs (never inline). The loom-unity UAMI needs "Key Vault Secrets User" on that vault. authMode=entra with no pinnable audience now deploys SEALED (up, sentinel .invalid audience nothing can mint, scaled to zero, every caller rejected) instead of silently downgrading to an anonymous catalog. (2) CONSOLE: set LOOM_UNITY_TOKEN (a server-minted token as a Key Vault secretref). That is the only credential upstream unitycatalog v0.5.0/v0.5.1 accepts on /api/2.1/unity-catalog/*: it rejects any bearer whose issuer is not its own internal issuer, so LOOM_UNITY_CLIENT_ID alone makes the BFF mint an Entra token the server answers 403 to (docs/fiab/security/loom-unity-authz-proof.md). The OAuth token-exchange client that makes the Entra path work is tracked as a follow-up. Verify with the live probe-loom-unity-authz health check: it must report that an unauthenticated read is rejected.',
     },
     legacyCodes: ['unity_authz_not_configured'],
   },

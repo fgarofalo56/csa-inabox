@@ -6,16 +6,14 @@
 # svc-loom-unity-authz (round 2). An Entra app registration is a Microsoft Graph
 # object; ARM/bicep cannot create one. Deploy phase 3
 # (scripts/csa-loom/bootstrap-msal-app-reg.sh) creates it and stamps
-# LOOM_MSAL_CLIENT_ID + the Loom Unity audience onto the running Container Apps.
+# LOOM_MSAL_CLIENT_ID onto the running Console Container App.
 #
 # The problem this script fixes: every LATER `az deployment sub create` re-renders
 # the whole ACA template from `readEnvironmentVariable('LOOM_MSAL_CLIENT_ID','')`.
 # With that env unset the template renders an EMPTY client id, which
-#   * blanks the Console's LOOM_MSAL_CLIENT_ID (sign-in breaks), and
-#   * re-SEALS the Loom Unity catalog (authMode=entra with no pinnable audience
-#     ⇒ sentinel `.invalid` audience, zero replicas, every caller rejected),
-# silently undoing phase 3. A declarative ACA template removes any env var it does
-# not declare, so this is not hypothetical.
+# blanking the Console's LOOM_MSAL_CLIENT_ID and taking sign-in dark — silently
+# undoing phase 3. A declarative ACA template removes any env var it does not
+# declare, so this is not hypothetical.
 #
 # Resolution order (first non-empty wins), all READ-ONLY:
 #   1. $LOOM_MSAL_CLIENT_ID already in the environment (explicit operator/CI value)
@@ -91,6 +89,6 @@ if [ -n "${CID:-}" ] && [ "${CID}" != "None" ]; then
   exit 0
 fi
 
-log "no existing app registration found in ${RG} — the deploy will render an empty client id (Loom Unity deploys SEALED until deploy phase 3 runs)"
+log "no existing app registration found in ${RG} — the deploy will render an empty client id (sign-in stays unconfigured until deploy phase 3 runs)"
 printf ''
 exit 0
