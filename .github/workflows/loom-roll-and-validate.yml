@@ -126,10 +126,27 @@ jobs:
             # newest main SHA whose image build actually CONCLUDED success, and
             # roll that immutable SHA tag instead.
             if [[ "$TAG" == "latest" ]]; then
-              BUILT_SHA=$(gh api "repos/${{ github.repository }}/actions/workflows/build-fiab-images-acr-tasks.yml/runs?branch=main&status=success&per_page=1" \
-                --jq '.workflow_runs[0].head_sha' 2>/dev/null || echo "")
+              # A successful build RUN does not imply THIS app was built: the
+              # workflow takes an `apps:` input, so a subset dispatch (e.g.
+              # apps=loom-risingwave,loom-unity) concludes success at a SHA for
+              # which no loom-console image exists. Taking runs[0] blind then
+              # resolved a tag that is not in ACR and the roll died at the digest
+              # lookup (observed live on 02481198, issue #2646). Walk back through
+              # recent successful runs and pick the newest whose image ACTUALLY
+              # EXISTS in the registry.
+              BUILT_SHA=""
+              for CAND in $(gh api "repos/${{ github.repository }}/actions/workflows/build-fiab-images-acr-tasks.yml/runs?branch=main&status=success&per_page=20" \
+                --jq '.workflow_runs[].head_sha' 2>/dev/null); do
+                [[ "$CAND" =~ ^[0-9a-f]{40}$ ]] || continue
+                if az acr repository show --name "${{ env.ACR_NAME }}" \
+                     --image "${{ env.APP_NAME }}:$CAND" --query digest -o tsv >/dev/null 2>&1; then
+                  BUILT_SHA="$CAND"
+                  break
+                fi
+                echo "::notice::skipping $CAND - no ${{ env.APP_NAME }} image at that tag (subset build)."
+              done
               if ! [[ "$BUILT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "::error::Could not resolve a completed image build on main — refusing to roll ':latest' blind. Pass an explicit SHA image_tag."
+                echo "::error::No recent main commit has a ${{ env.APP_NAME }} image in ${{ env.ACR_NAME }} - refusing to roll ':latest' blind. Build the image, or pass an explicit SHA image_tag."
                 exit 1
               fi
               if [[ "$BUILT_SHA" != "${{ github.sha }}" ]]; then
