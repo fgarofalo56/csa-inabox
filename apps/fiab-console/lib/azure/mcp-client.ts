@@ -40,6 +40,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { assertSecretReadAllowed } from '@/lib/azure/kv-secret-purpose';
 import { kvScope, kvSuffix } from './cloud-endpoints';
 import type { McpToolsListResponse } from '../types/mcp-config';
 
@@ -74,12 +75,31 @@ export async function resolveAuthHeader(
   if (authMethod === 'key-vault') {
     const parts = authValue.split('/');
     const secretName = parts.pop() || authValue;
+    // SECURITY: both halves of this ref are tenant-admin-writable config
+    // (PUT /api/admin/mcp-servers/ms-remote/config → { endpoint, secretName }),
+    // and the resolved secret is sent to that endpoint as a Bearer credential.
+    // Without the name policy a tenant admin could name a PLATFORM credential
+    // here and have Loom deliver it to a host they chose — a tenant→platform
+    // escalation in a multi-tenant deployment.
+    assertSecretReadAllowed(secretName, 'mcp-server-credential');
     // Vault URL: explicit "https://..." prefix in the ref, else the named vault
     // (sovereign-cloud-aware suffix), else LOOM_KEY_VAULT_URL / LOOM_KEY_VAULT_URI.
     let vaultUrl = process.env.LOOM_KEY_VAULT_URL || process.env.LOOM_KEY_VAULT_URI || '';
     if (parts.length) {
       const head = parts.join('/');
       vaultUrl = head.startsWith('http') ? head : `https://${head}.${kvSuffix()}`;
+      // A Key Vault-scoped managed-identity token goes on this request, so the
+      // host must actually be a Key Vault in THIS cloud — an arbitrary https head
+      // in the ref would otherwise hand that token to whatever host it named.
+      const suffix = kvSuffix().toLowerCase();
+      let hostname = '';
+      try { hostname = new URL(vaultUrl).hostname.toLowerCase(); } catch { hostname = ''; }
+      if (!hostname || !hostname.endsWith(`.${suffix}`)) {
+        throw new Error(
+          `MCP Key Vault ref "${authValue}" does not name a Key Vault in this cloud (expected a *.${suffix} host). ` +
+          'Use a bare vault name or a vault URL under that suffix.',
+        );
+      }
     }
     if (!vaultUrl) throw new Error('LOOM_KEY_VAULT_URL not set for MCP Key Vault auth');
     try {
