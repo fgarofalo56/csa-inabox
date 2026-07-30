@@ -2485,10 +2485,20 @@ output topologyManifest object = {
     activatorPrincipalId: hub.activatorPrincipalId
     catalogEndpoint: hub.catalogEndpoint
     aiServicesAccountName: hub.aiServicesAccountName
-    // N8 lab 3 — coordinates the dlz-attach pass needs to stand the S3 gateway
-    // up in the hub CAE with an ACR-mirrored (no-docker.io-egress) image. Empty
-    // on a dlz-attach echo; the gateway then falls back to the pinned public
-    // upstream tag and the deterministic `cae-csa-loom-<location>` name.
+    // The hub's ACR login server + Container Apps environment id. Emitted so a
+    // later dlz-attach pass can deploy a workload INTO THE HUB pulling from the
+    // hub's own registry instead of a public one.
+    //
+    // NOTHING CONSUMES THESE YET, and that is the point of recording it here:
+    // the round-4 review of PR #2640 found that the (now-withdrawn) dlz-attach
+    // S3 gateway read `hubCoordinates.acrLoginServer`, which is EMPTY on every
+    // shipped lane — no dlz-attach parameter producer passes a `hubCoordinates`
+    // object at all (deploy-fiab-*.yml pass flat hub* params; the Setup
+    // Orchestrator's `_HUB_COORDINATE_FIELDS`, the BFF's `HUB_COORD_PARAM` and
+    // scripts/csa-loom/write-tenant-topology.sh have no such key) — so the image
+    // silently fell back to docker.io. Any future hub-side dlz-attach workload
+    // MUST first thread these two through that chain end to end; emitting them
+    // in the manifest is step one, not the whole chain.
     acrLoginServer: deployAdminPlane ? adminPlane!.outputs.acrLoginServer : string(hubCoordinates.?acrLoginServer ?? '')
     caeId: deployAdminPlane ? adminPlane!.outputs.caeId : string(hubCoordinates.?caeId ?? '')
   }

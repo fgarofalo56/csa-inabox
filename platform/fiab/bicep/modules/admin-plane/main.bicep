@@ -6145,7 +6145,7 @@ output keyVaultUri string = keyvault.outputs.keyVaultUri
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output acrLoginServer string = registry.outputs.acrLoginServer
 
-@description('Container Apps managed-environment resource id (empty on an AKS boundary). Surfaced into topologyManifest.hub.caeId so a later dlz-attach pass can deploy hub-resident data-plane apps (the N8 S3 gateway) into the SAME environment instead of guessing the name.')
+@description('Container Apps managed-environment resource id (empty on an AKS boundary). Surfaced into topologyManifest.hub.caeId so a future dlz-attach pass can deploy a hub-resident data-plane app into the SAME environment instead of guessing the name. NOTE: nothing consumes it yet — no dlz-attach parameter producer passes a hubCoordinates object, so threading it through that chain is a prerequisite for any such workload (see the comment on this field in the root main.bicep topologyManifest output).')
 output caeId string = containerPlatformModule.outputs.caeId
 
 @description('Resource id of the privatelink.postgres.<sovereign-suffix> private DNS zone the DuckLake catalog store created (empty when the Postgres quota gate skipped it). ZONE-COLLISION CONTRACT: any other module standing up a Postgres Flexible Server behind a private endpoint on the hub VNet — notably LU-1\'s data-plane/loom-unity-postgres.bicep — must pass THIS id as its `privateDnsZoneId` instead of creating a second same-named zone, which Azure rejects when both link the same VNet.')
