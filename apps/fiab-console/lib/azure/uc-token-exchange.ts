@@ -11,7 +11,9 @@
  * So a Microsoft Entra access token presented DIRECTLY on
  * `/api/2.1/unity-catalog/*` is answered **403 PERMISSION_DENIED** even when its
  * `aud` matches `server.audiences` byte for byte. Measured, not inferred —
- * receipt in `docs/fiab/security/loom-unity-authz-proof.md`:
+ * receipt in `docs/fiab/security/loom-unity-authz-proof.md` — which lands with
+ * #2638 and is NOT on main yet, so do not expect that path to resolve until it
+ * merges. The measured table:
  *
  *   | none / malformed                        | 401 |
  *   | Entra bearer, exact audience, direct    | 403 |
@@ -32,7 +34,16 @@
  */
 import { ossUcBase } from '@/lib/azure/uc-backend';
 
-/** Upstream's token-exchange endpoint (unity-control, NOT unity-catalog). */
+/**
+ * Upstream's token-exchange endpoint (unity-CONTROL, not unity-catalog) and the
+ * three form params it expects.
+ *
+ * These four values are byte-identical to the ones the live harness uses against
+ * the real image (`apps/loom-unity/tests/authz/authz-e2e.sh`, cases 5 and 7, also
+ * landing with #2638) — the harness that produced the measured table above. That
+ * is the independent check that this client talks to the right endpoint with the
+ * right grant, rather than a plausible-looking guess at the upstream contract.
+ */
 const EXCHANGE_PATH = '/api/1.0/unity-control/auth/tokens';
 
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
