@@ -435,7 +435,7 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     id: 'n8-ducklake-catalog',
     label: 'DuckLake catalog option (Preview)',
     description:
-      'The N8 DuckLake catalog item + editor: a Postgres-backed lakehouse-metadata catalog option ALONGSIDE the N1 Iceberg REST Catalog (a forward bet on the DuckDB ecosystem). OFF replaces the editor body with a guided notice on the next render — the /api/ducklake/** routes and every other surface are unaffected. LOOM_DUCKLAKE_CATALOG_URL is wired by the deploy itself (data-plane/ducklake-catalog-postgres.bicep provisions the private-endpoint-only store and the Console binds the DSN as a Key Vault secretRef), so the honest gate only appears under the sovereign Azure Postgres quota gate — never fabricated catalog contents.',
+      'The N8 DuckLake catalog item + editor: a Postgres-backed lakehouse-metadata catalog option ALONGSIDE the N1 Iceberg REST Catalog (a forward bet on the DuckDB ecosystem). OFF replaces the editor body with a guided notice on the next render — the /api/ducklake/** routes and every other surface are unaffected. On Commercial, LOOM_DUCKLAKE_CATALOG_URL is wired by the deploy itself (data-plane/ducklake-catalog-postgres.bicep provisions the private-endpoint-only store and the Console binds the DSN as a Key Vault secretRef); the honest gate then appears only when the apps tier is off, on an AKS boundary, or with postgresQuotaAvailable=false — which is the CURRENT default in GCC-High and IL5, so the gate is the expected state there. Never fabricated catalog contents.',
     ownerItem: 'N8',
     surface: 'DuckLake catalog editor (/items/ducklake-catalog/[id])',
   },
