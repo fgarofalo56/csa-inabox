@@ -31,10 +31,10 @@
  * no-fabric-dependency.md); no mock suggestions (per no-vaporware.md).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { aoaiChatJson } from '@/lib/azure/aoai-chat-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -129,9 +129,7 @@ function sanitizeCode(raw: unknown, dfVar: string): string {
   return code;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
@@ -223,4 +221,4 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, engine: 'aoai', error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

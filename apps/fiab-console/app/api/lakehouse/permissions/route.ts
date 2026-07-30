@@ -33,7 +33,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   listContainerRoleAssignments,
   grantContainerRole,
@@ -62,6 +62,7 @@ import {
   type SynapseTarget,
 } from '@/lib/azure/synapse-permissions-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -140,9 +141,7 @@ async function enrichUpns(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const sp = req.nextUrl.searchParams;
   const tab = parseTab(sp.get('tab'));
 
@@ -190,11 +189,27 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
+  // Granting data-plane access to the SHARED lake is a tenant-admin action.
+  // This POST was session-only, so ANY authenticated user could assign
+  // themselves a blob data role on any container — and, before the allow-list
+  // added to adls-client.grantContainerRole, ANY Azure role at all (the role
+  // name fell through as a raw role-definition GUID, and the Console UAMI holds
+  // Role Based Access Control Administrator at that scope). Note `principalType`
+  // was validated here while `role` and `principalId` were not, which is what
+  // made the gap easy to miss on review.
+  if (!isTenantAdmin(session)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'forbidden',
+        hint: 'Granting lakehouse permissions requires tenant-admin. Ask an administrator, or grant the role in the Azure portal.',
+      },
+      { status: 403 },
+    );
+  }
   const body = await req.json().catch(() => ({}));
   const tab = parseTab(body?.tab ?? req.nextUrl.searchParams.get('tab'));
 
@@ -286,11 +301,9 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const sp = req.nextUrl.searchParams;
   const tab = parseTab(sp.get('tab'));
 
@@ -341,4 +354,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

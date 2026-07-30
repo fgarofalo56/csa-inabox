@@ -23,7 +23,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listSchemas,
   createSchemaDoc,
@@ -34,6 +33,7 @@ import {
   DEFAULT_SCHEMA,
 } from '@/lib/azure/lakehouse-schemas';
 import { runSparkSqlAndWait } from '@/lib/azure/synapse-dev-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,9 +58,7 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   if (!lakehouseId) return NextResponse.json({ ok: false, error: 'lakehouseId is required' }, { status: 400 });
@@ -71,11 +69,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: sanitize(e), code: e?.code }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const lakehouseId = (body?.lakehouseId || '').toString().trim();
@@ -136,11 +132,9 @@ export async function POST(req: NextRequest) {
       '(CREATE SCHEMA on the Spark pool via Livy) — it can take a minute or two while the Spark session warms up, ' +
       'then the schema shows as active. Tables can be addressed under it as soon as it materializes.',
   });
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest, { session }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim();
   const name = req.nextUrl.searchParams.get('name')?.trim();
@@ -172,11 +166,9 @@ export async function DELETE(req: NextRequest) {
     const status = e?.code === 'reserved_schema' ? 400 : 502;
     return NextResponse.json({ ok: false, code, error: sanitize(e) }, { status });
   }
-}
+});
 
-export async function PATCH(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: NextRequest) => {
 
   const body = await req.json().catch(() => ({}));
   const lakehouseId = (body?.lakehouseId || '').toString().trim();
@@ -212,4 +204,4 @@ export async function PATCH(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, code: 'spark_error', error: sanitize(e) }, { status: 502 });
   }
-}
+});

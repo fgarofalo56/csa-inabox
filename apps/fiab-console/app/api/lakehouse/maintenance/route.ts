@@ -24,7 +24,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { maintenanceJobsContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -37,6 +36,7 @@ import {
   validateMaintenanceRequest,
   buildMaintenancePySpark,
 } from '@/lib/azure/delta-maintenance';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,9 +68,7 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   const body = await req.json().catch(() => ({}));
   const v = validateMaintenanceRequest(body);
@@ -154,7 +152,7 @@ export async function POST(req: NextRequest) {
     sessionState,
     ops,
   });
-}
+});
 
 /**
  * Lazily advance a single job's state by polling its Livy session/statement.
@@ -218,9 +216,7 @@ async function refreshJob(doc: MaintenanceJobDoc, container: Awaited<ReturnType<
   return doc;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
 
   const tenantId = session.claims.oid;
   const containerFilter = req.nextUrl.searchParams.get('container')?.trim() || '';
@@ -251,4 +247,4 @@ export async function GET(req: NextRequest) {
   // Never leak the full code blob to the list view.
   const safe = jobs.map(({ code, ...rest }) => rest);
   return NextResponse.json({ ok: true, jobs: safe });
-}
+});

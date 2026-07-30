@@ -11,13 +11,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getAccountName } from '@/lib/azure/adls-client';
 import { getShortcut, updateShortcutStatus } from '@/lib/azure/lakehouse-shortcuts';
 import { resolveAndTestAdls, testEngineObject, refreshDeltaSharingCredential } from '@/lib/azure/shortcut-engines';
 import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';
 import { parseAbfss as parseExternalAbfss, listAdlsWithSas, ShortcutSourceError } from '@/lib/azure/shortcut-client';
 import { headDriveItem, parseSharepointUri, graphDriveConfigGate } from '@/lib/azure/graph-drive-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,9 +26,7 @@ function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
 
   const body = await req.json().catch(() => ({}));
   const lakehouseId = (body?.lakehouseId || '').toString().trim();
@@ -192,4 +190,4 @@ export async function POST(req: NextRequest) {
     const updated = await updateShortcutStatus(lakehouseId, id, 'error', msg);
     return NextResponse.json({ ok: false, error: msg, code: e?.code || 'unreachable', data: updated }, { status: 502 });
   }
-}
+});
