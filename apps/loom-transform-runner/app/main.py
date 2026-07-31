@@ -141,9 +141,40 @@ def _materialize(req: TransformRequest | DiffRequest, tmp: str) -> Path | dict[s
     return project_dir
 
 
-def _fail(exc: Exception, action: str) -> dict[str, Any]:
-    """Honest failure envelope — the engine's real message, never a fake plan."""
-    return {"ok": False, "exitCode": 1, "error": f"{action} failed: {exc}", "log": str(exc)}
+def _redact(text: str, env: dict[str, str] | None) -> str:
+    """Blank out per-run env VALUES that appear verbatim in an engine message.
+
+    `TransformRequest.env` is "per-run env the runner injects before invoking the
+    engine" — in practice warehouse credentials and DSNs. dbt and SQLMesh quote
+    the connection they failed on, so a connection error can echo one straight
+    back through the failure envelope (CodeQL py/stack-trace-exposure).
+
+    Redacting the VALUE, not the whole message, keeps `no-vaporware.md`'s
+    requirement that the real engine error reaches the user — an opaque
+    "transform failed" is exactly the dishonest error that rule forbids.
+
+    Short values are skipped: a 1-3 char env value (`db`, `1`, `s`) occurs inside
+    ordinary words, and blanking every occurrence would shred the message while
+    protecting nothing that is secret at that length.
+    """
+    if not env:
+        return text
+    out = text
+    for value in env.values():
+        v = (value or "").strip()
+        if len(v) > 3 and v in out:
+            out = out.replace(v, "[redacted]")
+    return out
+
+
+def _fail(exc: Exception, action: str, env: dict[str, str] | None = None) -> dict[str, Any]:
+    """Honest failure envelope — the engine's real message, never a fake plan.
+
+    The message is redacted against the caller-supplied env first: it is the
+    engine's real text, minus any credential the caller handed us to inject.
+    """
+    msg = _redact(str(exc), env)
+    return {"ok": False, "exitCode": 1, "error": f"{action} failed: {msg}", "log": msg}
 
 
 @app.post("/plan")
@@ -157,7 +188,7 @@ def plan(req: TransformRequest) -> dict[str, Any]:
                 return sqlmesh_engine.plan(project_dir, req.environment, req.gateway, req.env)
             return dbt_engine.plan(project_dir, req.env, req.previousManifest, req.previousCatalog)
         except Exception as exc:  # noqa: BLE001
-            return _fail(exc, f"{req.backend} plan")
+            return _fail(exc, f"{req.backend} plan", req.env)
 
 
 @app.post("/apply")
@@ -174,7 +205,7 @@ def apply(req: TransformRequest) -> dict[str, Any]:
             commands = req.commands or ["dbt deps", "dbt build"]
             return dbt_engine.execute(project_dir, commands, req.env)
         except Exception as exc:  # noqa: BLE001
-            return _fail(exc, f"{req.backend} apply")
+            return _fail(exc, f"{req.backend} apply", req.env)
 
 
 @app.post("/run")
@@ -189,7 +220,7 @@ def run(req: TransformRequest) -> dict[str, Any]:
             commands = req.commands or ["dbt deps", "dbt build"]
             return dbt_engine.execute(project_dir, commands, req.env)
         except Exception as exc:  # noqa: BLE001
-            return _fail(exc, f"{req.backend} run")
+            return _fail(exc, f"{req.backend} run", req.env)
 
 
 @app.post("/environments")
@@ -207,7 +238,7 @@ def environments(req: TransformRequest) -> dict[str, Any]:
         try:
             return sqlmesh_engine.environments(project_dir, req.gateway, req.env)
         except Exception as exc:  # noqa: BLE001
-            return _fail(exc, "sqlmesh environments")
+            return _fail(exc, "sqlmesh environments", req.env)
 
 
 @app.post("/diff")
@@ -222,4 +253,4 @@ def diff(req: DiffRequest) -> dict[str, Any]:
                 req.gateway, req.env,
             )
         except Exception as exc:  # noqa: BLE001
-            return _fail(exc, "sqlmesh table diff")
+            return _fail(exc, "sqlmesh table diff", req.env)
