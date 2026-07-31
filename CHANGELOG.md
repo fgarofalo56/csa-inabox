@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.4...csa-inabox-v0.80.5) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** redact caller-supplied env values from the transform-runner error envelope ([#2732](https://github.com/fgarofalo56/csa-inabox/issues/2732)) ([f38fe5a](https://github.com/fgarofalo56/csa-inabox/commit/f38fe5a761acd39106484c2ab58f5bcca3c0275c))
+
+
+### Tests
+
+* **security:** pin the secret-property predicate + prove the CodeQL [#501](https://github.com/fgarofalo56/csa-inabox/issues/501) regrouping is inert ([#2734](https://github.com/fgarofalo56/csa-inabox/issues/2734)) ([711ca49](https://github.com/fgarofalo56/csa-inabox/commit/711ca490074c06aa2c62a7f38c0b9bede8632c64))
+
 ## [0.80.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.3...csa-inabox-v0.80.4) (2026-07-31)
 
 
