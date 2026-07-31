@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   eventhubsConfigGate, listEventHubKeys, listNamespaceKeys,
   getNamespaceProperties,
@@ -37,6 +38,12 @@ function gate() {
 export async function POST(req: NextRequest, ctx: { params: Promise<{ rule: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // SAS keys for the SHARED, env-pinned Event Hubs namespace are tenant-admin /
+  // domain-admin only — the same gate /api/ai-search/service uses, and for the
+  // same stated reason: a getSession-only check lets ANY authenticated user read
+  // live credentials for infrastructure the whole tenant sits on.
+  const denied = await denyIfNoDlzAccess(session, 'scaling');
+  if (denied) return denied;
   const g = gate(); if (g) return g;
   const { rule } = await ctx.params;
   const ruleName = decodeURIComponent(rule || '').trim();

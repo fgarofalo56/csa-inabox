@@ -16,6 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   eventhubsConfigGate, regenerateEventHubAuthRuleKeys,
   regenerateNamespaceAuthRuleKeys, getNamespaceProperties,
@@ -39,6 +40,11 @@ function gate() {
 export async function POST(req: NextRequest, ctx: { params: Promise<{ rule: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // Rotating a SAS key on the SHARED namespace is DESTRUCTIVE — it invalidates
+  // every client still using the old key, tenant-wide. Tenant-admin /
+  // domain-admin only, matching /api/ai-search/service.
+  const denied = await denyIfNoDlzAccess(session, 'scaling');
+  if (denied) return denied;
   const g = gate(); if (g) return g;
   const { rule } = await ctx.params;
   const ruleName = decodeURIComponent(rule || '').trim();

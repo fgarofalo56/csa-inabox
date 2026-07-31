@@ -33,6 +33,8 @@ import {
   type CosmosKeyKind,
 } from '@/lib/azure/cosmos-account-client';
 import { requireSession, gateResponse, errorResponse, readBody } from '../../../../cosmos/_shared';
+import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,8 +64,30 @@ function keysPermissionGate(): NextResponse {
   );
 }
 
+/**
+ * Authenticate AND authorize a key-bearing request.
+ *
+ * `requireSession()` from cosmos/_shared is AUTHENTICATION only — it 401s an
+ * anonymous caller and returns null for every signed-in one. That is not enough
+ * here: this route returns live master keys + connection strings for the
+ * env-pinned navigator account (LOOM_COSMOS_ACCOUNT), which is SHARED
+ * deployment infrastructure, not a per-user resource. `[id]` is decorative and
+ * is NOT used to resolve the account, so there is no ownership to scope against.
+ *
+ * Gated at the same tier as /api/ai-search/service, whose comment states the
+ * rule: a getSession-only gate would let any authenticated user read admin keys
+ * for shared infrastructure.
+ */
+async function requireKeyAdmin(): Promise<NextResponse | null> {
+  const unauth = requireSession();
+  if (unauth) return unauth;
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  return denyIfNoDlzAccess(session, 'scaling');
+}
+
 export async function GET(_req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const unauth = requireSession(); if (unauth) return unauth;
+  const denied = await requireKeyAdmin(); if (denied) return denied;
   const gated = gateResponse(); if (gated) return gated;
   try {
     const [account, keys, connectionStrings] = await Promise.all([
@@ -88,7 +112,7 @@ export async function GET(_req: NextRequest, _ctx: { params: Promise<{ id: strin
 const VALID_KINDS: CosmosKeyKind[] = ['primary', 'secondary', 'primaryReadonly', 'secondaryReadonly'];
 
 export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const unauth = requireSession(); if (unauth) return unauth;
+  const denied = await requireKeyAdmin(); if (denied) return denied;
   const gated = gateResponse(); if (gated) return gated;
   const body = await readBody<{ keyKind?: string }>(req);
   const keyKind = body.keyKind as CosmosKeyKind | undefined;
