@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.2...csa-inabox-v0.80.3) (2026-07-31)
+
+
+### Tests
+
+* **security:** pin that BOTH listOwnedItems branches authorize (CodeQL js/user-controlled-bypass [#625](https://github.com/fgarofalo56/csa-inabox/issues/625)) ([#2724](https://github.com/fgarofalo56/csa-inabox/issues/2724)) ([0170fe3](https://github.com/fgarofalo56/csa-inabox/commit/0170fe3cd0216c1fbbc64879151fecdf60c3b41a))
+
 ## [0.80.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.1...csa-inabox-v0.80.2) (2026-07-31)
 
 
