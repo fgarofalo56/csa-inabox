@@ -108,6 +108,9 @@ const ALLOWLIST = new Set([
   'LOOM_EVAL_MONITOR_ACTION_GROUP_ID', // WS-1.5 opt-in Azure Monitor action group ARM resource ID for the eval-regression alert; unset = alert fires silently (Azure Monitor still captures it) with no email/webhook routing
   'LOOM_EVAL_SEARCH_PRINCIPAL_OID',  // SRCH1 opt-in eval principal oid for /api/internal/copilot/search-probe (the demo/admin oid whose accessible workspaces hold the golden search items); unset = federated-search evals honest-gate (no fabricated results)
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
+  'LOOM_ONBOARDING_ENTRA_GROUP_ID', // #2758 opt-in: the Entra group an onboarded access requester is added to. Unset => falls back to LOOM_TENANT_ADMIN_GROUP_ID (already bicep-wired); the access-gov wizards still invite/create without it (workspace roles grant access). Never a deploy dependency.
+  'LOOM_PUBLIC_URL',                // #2758 ambient opt-in override for the guest-invite redeem redirect. The request Origin header is the primary source; this is only a fallback for that one link. Never a deploy dependency.
+  'LOOM_APP_URL',                   // #2758 ambient alias of LOOM_PUBLIC_URL (same redeem-redirect fallback) — never a deploy dependency.
   'LOOM_SEMANTIC_LINK',             // opt-out kill switch for injecting the Semantic Link notebook helper preamble (default on in code; FGC-17) — Azure-native, no Fabric
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_DATABRICKS_UC_STORAGE_ROOT', // opt-in managed-location base (abfss://…) for domain→UC-catalog sync when the metastore has no default storage_root; unset = send no storage_root (metastores with a default root work as-is)

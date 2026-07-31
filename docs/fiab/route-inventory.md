@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1661 |
+| Total routes | 1664 |
 | Public (no session) | 100 |
 | Session-only | 576 |
 | Owner-scoped | 698 |
-| Admin | 287 |
+| Admin | 290 |
 | Gated (backend config) | 531 |
 | Areas | 120 |
 
@@ -99,6 +99,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `admin/access-requests/[id]/create-user/route.ts` | POST | admin |  | — |
+| `admin/access-requests/[id]/invite-guest/route.ts` | POST | admin |  | — |
 | `admin/access-requests/[id]/route.ts` | PATCH | admin |  | Cosmos |
 | `admin/access-requests/route.ts` | GET | admin |  | Cosmos |
 | `admin/agent-quality/eval-alert/route.ts` | GET POST DELETE | admin | ● | Azure Monitor |
@@ -142,6 +144,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/developer/tokens/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/developer/tokens/route.ts` | GET | admin |  | — |
 | `admin/diagnostics/bundle/route.ts` | GET | admin |  | Cosmos |
+| `admin/directory-users/[id]/lifecycle/route.ts` | POST | admin |  | Cosmos |
 | `admin/domains/[id]/inventory/route.ts` | GET | admin |  | — |
 | `admin/domains/assign-workspaces/route.ts` | POST | admin |  | Cosmos |
 | `admin/domains/images/route.ts` | GET | admin |  | ADLS |
