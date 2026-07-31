@@ -58,6 +58,24 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2656 touched this route only to swap a Math.random() suffix for the
+  // crypto-backed randomSuffix() — the suffix flows into a Key Vault secret NAME
+  // (CodeQL #513/#527/#531), so it is a two-line security fix.
+  //
+  // THE CODEMOD ITSELF DECLINES THIS HANDLER: it reports
+  //   "POST: getSession() without the exact 401 guard"
+  // (it migrates the GET in the same file fine). The POST hands `session` to
+  // deployCatalogServer(session, body) as a value, and its prologue is not the
+  // exact shape withSession replaces — so there is nothing for the codemod to
+  // rewrite and a hand-migration is a real refactor, not a mechanical one.
+  //
+  // Doing that refactor here would put a rewrite of the MCP deploy path — which
+  // creates Container Apps, writes Key Vault secrets, and wires ACA secretRefs —
+  // next to a two-line randomness change, and make both harder to review. This
+  // repo has already been burned by exactly that: a toolkit migration of
+  // catalog/register turned an honest 501 into a 500 and was caught only by an
+  // existing test.
+  ['apps/fiab-console/app/api/admin/mcp-servers/deploy/route.ts', '#2656: codemod reports "POST: getSession() without the exact 401 guard" — migrate in a dedicated admin-family PR'],
   // N9 wired semantic-contract (VQR-first + refuse) evaluation into this streaming
   // data-agent chat hot-path; it returns a custom SSE stream + bespoke NextResponse
   // error envelopes, so withSession's try/catch→apiServerError wrapper would break
