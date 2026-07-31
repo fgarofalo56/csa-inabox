@@ -37,3 +37,30 @@ azure-storage-blob>=12.20.0,<13.0.0
 # upgrades are not blocked. Remove when a parent package requires >= 1.2.1 on
 # its own.
 msgpack>=1.2.1
+
+# ── Imported by portal/shared but ABSENT until 2026-07-31 ────────────────────
+# The image built green and passed Trivy while unable to import its own
+# entrypoint: `python -c "import portal.shared.api.main"` died on
+# ModuleNotFoundError. Neither this file nor pyproject's [portal] extra listed
+# these, and nothing in CI ever imported the app inside the image. Floors match
+# the versions the smoke build resolved; ceilings follow the file's convention.
+sqlalchemy>=2.0.0,<3.0.0
+alembic>=1.13.0,<2.0.0
+structlog>=24.0.0,<26.0.0
+tenacity>=8.2.0,<10.0.0
+msal>=1.28.0,<2.0.0
+itsdangerous>=2.1.0,<3.0.0
+# Lazily imported (inside functions), so a top-level-import scan misses them.
+# aiosqlite is BOOT-REQUIRED: the lifespan's SQLite persistence path imports it
+# on startup and all 4 uvicorn workers died on ModuleNotFoundError without it.
+aiosqlite>=0.20.0,<1.0.0
+# Declared in pyproject's [portal] extra but absent here; imported lazily by the
+# middleware/metrics paths. redis backs the otel redis instrumentation + cache.
+prometheus-client>=0.20.0,<1.0.0
+slowapi>=0.1.9,<1.0.0
+redis>=5.0.0,<8.0.0
+PyYAML>=6.0.0,<7.0.0
+# NOT added, deliberately: asyncpg/psycopg (Postgres persistence is opt-in),
+# openai/docx/pypdf (RAG document parsing is opt-in), opentelemetry-* (the
+# instrumentation imports are guarded). Each is lazy behind a feature flag; the
+# boot receipt below proves the default path needs none of them.

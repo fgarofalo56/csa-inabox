@@ -66,20 +66,35 @@ RUN apt-get update && apt-get dist-upgrade -y && \
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Upgrade pip + setuptools in the runtime stage too. Stage 1 upgrades them in
-# the *builder's* /usr/local, but the only thing we copy into the runtime image
-# is /install (the requirements, not pip/setuptools themselves). Without this
-# the runtime image still ships the base image's pip 25.0.1 (CVE-2026-6357) and
-# setuptools 70.3.0 (CVE-2025-47273).
+# The runtime image needs NO installer: it only runs uvicorn. Removing pip and
+# setuptools here (after the COPY, so nothing reinstalls them) does two things:
 #
-# ORDER MATTERS: this runs AFTER the COPY above, not before. `/install` carries
-# no setuptools today (verified by a `pip install --dry-run --report` resolve of
-# requirements.txt), but if a future requirement pulled one in, a COPY landing
-# after this line would silently overwrite the patched version and reintroduce
-# the CVE with no signal.
-RUN pip install --no-cache-dir --upgrade 'pip>=26.1' 'setuptools>=83.0.0'
+# 1. Clears the three findings that NO version bump can fix: pip's own
+#    `pip/_vendor/vendor.txt` declares vendored copies of msgpack 1.1.2 and
+#    setuptools 70.3.0, and Trivy parses that file as a package manifest (the
+#    aggregate "Python" target). Those pins live inside pip 26.2 — the NEWEST
+#    pip — so upgrading can never clear them; only removing pip does. Verified
+#    by building this image and finding the flagged versions nowhere on disk
+#    except vendor.txt, while the real site-packages carried setuptools 83.0.0
+#    and msgpack 1.2.1.
+# 2. Ships no package manager in the production image, so a compromised
+#    container cannot pip-install tooling.
+#
+# The builder stage keeps pip + a patched setuptools; only the runtime sheds them.
+RUN python -m pip uninstall -y pip setuptools
 
-# Copy the shared API application
+# Copy the shared API application AND the csa_platform package it imports.
+# csa_platform was NEVER copied in: every build since this Dockerfile existed
+# produced an image whose entrypoint dies on
+#   ModuleNotFoundError: No module named 'csa_platform'
+# (portal/shared/api/main.py line 36 imports csa_platform.governance.common.
+# logging before the app object is even constructed). It built green and passed
+# Trivy because nothing ever imported the app inside the image. The whole
+# package is copied (7.4MB of source); only the submodules portal/shared
+# actually imports (common, governance.common, ai_integration.rag) have their
+# dependencies installed — Python resolves imports lazily, so the heavy
+# geo/pandas subtrees stay dormant and their deps are deliberately NOT added.
+COPY csa_platform/ ./csa_platform/
 COPY portal/shared/ ./portal/shared/
 
 # Create non-root user
