@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.1...csa-inabox-v0.80.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** wire consoleAllowedCidrs into the two code-execution hosts ([#2720](https://github.com/fgarofalo56/csa-inabox/issues/2720)) ([#2721](https://github.com/fgarofalo56/csa-inabox/issues/2721)) ([db79f1a](https://github.com/fgarofalo56/csa-inabox/commit/db79f1add2790cfa6216df6c71150e5d2a740e49))
+
 ## [0.80.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.0...csa-inabox-v0.80.1) (2026-07-31)
 
 
