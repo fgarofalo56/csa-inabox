@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.5...csa-inabox-v0.80.6) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** crypto sessionIds for the last three copilot routes — codemod verdict now verified ([#2737](https://github.com/fgarofalo56/csa-inabox/issues/2737)) ([daf24c0](https://github.com/fgarofalo56/csa-inabox/commit/daf24c08bf1c642613bf8d950ee85c6b6a9df190))
+* **security:** crypto sessionIds for three copilot routes (CodeQL js/insecure-randomness) ([#2735](https://github.com/fgarofalo56/csa-inabox/issues/2735)) ([0f57b3a](https://github.com/fgarofalo56/csa-inabox/commit/0f57b3abf4972f05a600ce5a0e4a620e273fbdb1))
+
 ## [0.80.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.4...csa-inabox-v0.80.5) (2026-07-31)
 
 
