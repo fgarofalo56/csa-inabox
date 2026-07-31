@@ -42,10 +42,22 @@ const CREDENTIAL_SINKS = [
   'regeneratePrimaryKey', 'regenerateSecondaryKey',
 ];
 
-/** A real authorization decision — tier, ownership, or policy. */
+/**
+ * A real authorization decision — tier, ownership, or policy.
+ *
+ * Includes the route-toolkit WRAPPERS, not just the bare helpers. This guard
+ * originally listed only the helpers and immediately reported three false
+ * FAILures when the route-toolkit codemod rewrote `denyIfNoDlzAccess(...)` into
+ * `withDlzAccess('scaling', ...)` — the same authorization, expressed the
+ * canonical way. A guard that fails the codebase for adopting its own preferred
+ * primitive trains people to ignore it.
+ *
+ * `withSession` is deliberately ABSENT: it is authentication only.
+ */
 const AUTHZ_GUARDS = [
   'denyIfNoDlzAccess', 'requireTenantAdmin', 'isTenantAdmin', 'canAccessDlzPanes',
   'requireAuthorize', 'requireWorkspace', 'assertOwner', 'assertUserLinkedServiceTarget',
+  'withDlzAccess', 'withTenantAdmin', 'withWorkspaceOwner',
 ];
 
 /**

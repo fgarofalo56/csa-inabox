@@ -32,9 +32,8 @@ import {
   CosmosArmError,
   type CosmosKeyKind,
 } from '@/lib/azure/cosmos-account-client';
-import { requireSession, gateResponse, errorResponse, readBody } from '../../../../cosmos/_shared';
-import { getSession } from '@/lib/auth/session';
-import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
+import { gateResponse, errorResponse, readBody } from '../../../../cosmos/_shared';
+import { withDlzAccess } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,29 +64,17 @@ function keysPermissionGate(): NextResponse {
 }
 
 /**
- * Authenticate AND authorize a key-bearing request.
+ * BOTH handlers return credential material for the env-pinned navigator account
+ * (LOOM_COSMOS_ACCOUNT) — SHARED deployment infrastructure. `[id]` is decorative
+ * and is documented above as NOT resolving the account, so there is no ownership
+ * to scope against; the whole route is therefore tenant-admin / domain-admin,
+ * the same tier /api/ai-search/service uses for the equivalent surface.
  *
- * `requireSession()` from cosmos/_shared is AUTHENTICATION only — it 401s an
- * anonymous caller and returns null for every signed-in one. That is not enough
- * here: this route returns live master keys + connection strings for the
- * env-pinned navigator account (LOOM_COSMOS_ACCOUNT), which is SHARED
- * deployment infrastructure, not a per-user resource. `[id]` is decorative and
- * is NOT used to resolve the account, so there is no ownership to scope against.
- *
- * Gated at the same tier as /api/ai-search/service, whose comment states the
- * rule: a getSession-only gate would let any authenticated user read admin keys
- * for shared infrastructure.
+ * `withDlzAccess` (not a hand-rolled prologue) also satisfies the route-toolkit
+ * ratchet: `requireSession()` from cosmos/_shared is AUTHENTICATION only — it
+ * 401s an anonymous caller and returns null for every signed-in one.
  */
-async function requireKeyAdmin(): Promise<NextResponse | null> {
-  const unauth = requireSession();
-  if (unauth) return unauth;
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return denyIfNoDlzAccess(session, 'scaling');
-}
-
-export async function GET(_req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const denied = await requireKeyAdmin(); if (denied) return denied;
+export const GET = withDlzAccess<{ id: string }>('scaling', async () => {
   const gated = gateResponse(); if (gated) return gated;
   try {
     const [account, keys, connectionStrings] = await Promise.all([
@@ -107,12 +94,11 @@ export async function GET(_req: NextRequest, _ctx: { params: Promise<{ id: strin
     if (e instanceof CosmosArmError && e.status === 403) return keysPermissionGate();
     return errorResponse(e);
   }
-}
+});
 
 const VALID_KINDS: CosmosKeyKind[] = ['primary', 'secondary', 'primaryReadonly', 'secondaryReadonly'];
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const denied = await requireKeyAdmin(); if (denied) return denied;
+export const POST = withDlzAccess<{ id: string }>('scaling', async (req: NextRequest) => {
   const gated = gateResponse(); if (gated) return gated;
   const body = await readBody<{ keyKind?: string }>(req);
   const keyKind = body.keyKind as CosmosKeyKind | undefined;
@@ -131,4 +117,4 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
     if (e instanceof CosmosArmError && e.status === 403) return keysPermissionGate();
     return errorResponse(e);
   }
-}
+});
