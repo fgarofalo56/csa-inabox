@@ -43,6 +43,7 @@
  *       https://learn.microsoft.com/purview/data-map-classification-custom
  */
 import { capAtlasTypedefName, tenantTypedefPrefix } from '@/lib/governance/uc-overlay/model';
+import { trimChar } from '@/lib/util/trim';
 
 export { tenantTypedefPrefix };
 
@@ -136,9 +137,38 @@ export function assertNamespacedTypedefNames(names: readonly string[]): void {
   if (rejected.length) throw new UnnamespacedTypedefError(rejected);
 }
 
-/** Uppercase A–Z/0–9/underscore slug for one Atlas typedef path segment. */
+/**
+ * Uppercase A–Z/0–9/underscore slug for one Atlas typedef path segment.
+ *
+ * CodeQL js/polynomial-redos HIGH, alert #728 — the last open instance of the
+ * class #2677 closed. The edge-trim was `.replace(/^_+|_+$/g, '')`.
+ *
+ * The regex IS quadratic in isolation. Measured, on `'A' + '_'.repeat(N) + 'B'`
+ * (a non-`_` head, so `^_+` does not consume the run, then a tail so `_+$`
+ * fails and retries from every offset):
+ *
+ *     N =  10_000 ->      58 ms
+ *     N =  50_000 ->   1_421 ms
+ *     N = 200_000 ->  23_948 ms
+ *
+ * But it is NOT reachable here, and the honest reason matters more than the
+ * fix: `[^A-Z0-9]+ -> '_'` runs FIRST and collapses each run of non-alphanumerics
+ * to a SINGLE underscore, so the trim never sees a run longer than 1. Verified —
+ * 200_000 chars of `_`, of spaces, and of mixed punctuation all reduce to `A_B`,
+ * longest underscore run 1. (My first draft of this comment claimed the opposite;
+ * the measurement corrected it.)
+ *
+ * So this is defence-in-depth, not an incident fix. It is still worth doing: the
+ * safety of the old form depended on the ORDER of two operations chained in one
+ * expression — reorder them, or drop the collapse, and the quadratic blowup above
+ * becomes reachable with tenant-authored input. `trimChar` is linear regardless,
+ * so the property no longer depends on a neighbouring call.
+ *
+ * `trimChar` is the sanctioned linear primitive (index scan, no backtracking);
+ * `check-quadratic-trims.mjs` forbids reintroducing the regex form.
+ */
 function typedefSlug(s: string): string {
-  return (s || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return trimChar((s || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_'), '_');
 }
 
 /**
