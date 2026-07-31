@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.9...csa-inabox-v0.80.10) (2026-07-31)
+
+
+### Documentation
+
+* **security:** re-cut the scorecard after the burn-down ([#2745](https://github.com/fgarofalo56/csa-inabox/issues/2745)) ([2b1b1d4](https://github.com/fgarofalo56/csa-inabox/commit/2b1b1d4a6f1c332b0b0ce93466e352818afdb6ac))
+
 ## [0.80.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.8...csa-inabox-v0.80.9) (2026-07-31)
 
 
