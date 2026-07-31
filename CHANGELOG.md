@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.7...csa-inabox-v0.80.8) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** DNS label boundary for App Config suffix matching (CodeQL [#540](https://github.com/fgarofalo56/csa-inabox/issues/540)) ([#2740](https://github.com/fgarofalo56/csa-inabox/issues/2740)) ([6bae1f1](https://github.com/fgarofalo56/csa-inabox/commit/6bae1f19fbc9610ffbce00bcecd1635de48298e6))
+
 ## [0.80.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.6...csa-inabox-v0.80.7) (2026-07-31)
 
 
