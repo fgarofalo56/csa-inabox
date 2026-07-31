@@ -24,7 +24,7 @@ whole engine stack and is not installed in the default test env.
 
 from __future__ import annotations
 
-import io
+import importlib.util
 import pathlib
 from typing import Any, Callable
 
@@ -35,17 +35,25 @@ _SRC = (
     / "apps"
     / "loom-transform-runner"
     / "app"
-    / "main.py"
+    / "redact.py"
 )
 
 
 def _load_redact() -> Callable[[str, dict[str, str] | None], str]:
-    src = io.open(_SRC, encoding="utf-8").read()
-    start = src.index("def _redact(")
-    end = src.index("def _fail(")
-    ns: dict[str, Any] = {}
-    exec(compile(src[start:end], "<redact>", "exec"), ns)  # noqa: S102
-    return ns["_redact"]  # type: ignore[no-any-return]
+    """Load the module by path — NOT via exec.
+
+    The first version of this file used an exec/compile pair to pull the function
+    out of main.py, and the repo's py/code-injection guard rejected it. That
+    guard was right: adding a dynamic-execution call to dodge an import is the pattern it exists
+    to stop. `redact.py` is dependency-free precisely so importlib works here,
+    while main.py (FastAPI + the dbt/SQLMesh stack) stays unimportable in the
+    default test env.
+    """
+    spec = importlib.util.spec_from_file_location("loom_transform_redact", _SRC)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.redact  # type: ignore[no-any-return]
 
 
 redact = _load_redact()
