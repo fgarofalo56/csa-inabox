@@ -40,3 +40,7 @@ overrides:
   uuid: '>=11.1.1'
   '@opentelemetry/core': '>=2.8.0'
   '@opentelemetry/propagator-jaeger': '>=2.9.0'
+  # Advisory <0.35.0. Transitive here (Next.js image optimisation pulls it);
+  # the same floor was applied to portal/react-webapp in #2730, which is a
+  # separate npm manifest with its own overrides block.
+  sharp: '>=0.35.0'
