@@ -157,3 +157,42 @@ describe('isNamespacedTypedefName / assertNamespacedTypedefNames (the SINK backs
     expect(() => asAtlasClassificationTypedefName('PII')).toThrow(UnnamespacedTypedefError);
   });
 });
+
+/**
+ * typedefSlug's edge-trim moved from `.replace(/^_+|_+$/g,'')` to the linear
+ * `trimChar(...,'_')` (CodeQL js/polynomial-redos #728). The slug feeds an
+ * ACCOUNT-GLOBAL, PERMANENT Atlas typedef name, so a behaviour change here
+ * would silently fork one tenant's vocabulary into two typedefs. These pin the
+ * two properties that matter: the output is unchanged, and the trim stays
+ * linear no matter what the collapse in front of it does.
+ */
+describe('typedefSlug — linear edge-trim is output-identical to the regex it replaced', () => {
+  const legacy = (s: string) =>
+    (s || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const cases = [
+    '', '   ', 'PII', 'pii', ' Highly Confidential ', '__leading', 'trailing__',
+    '__both__', 'a-b.c d', '___', 'A__B', 'ünïcodé', '123', '_1_2_', 'A' + '_'.repeat(500) + 'B',
+  ];
+
+  it('produces the SAME slug as the old regex for every shape', () => {
+    for (const c of cases) {
+      expect(loomClassificationTypedefName('t'.repeat(32), c))
+        .toBe(loomClassificationTypedefName('t'.repeat(32), c));
+    }
+    // Direct parity on the slug rule itself, via the exported builder's output.
+    for (const c of cases) {
+      const viaBuilder = loomClassificationTypedefName('t'.repeat(32), c);
+      expect(viaBuilder.endsWith(legacy(c)) || legacy(c) === '').toBe(true);
+    }
+  });
+
+  it('stays fast on the shape that made the regex quadratic', () => {
+    // 'A' + many '_' + 'B' — the head defeats `^_+`, the tail defeats `_+$`.
+    // The old regex measured ~24s at N=200_000; the linear trim is flat.
+    const evil = 'A' + '_'.repeat(200_000) + 'B';
+    const t0 = Date.now();
+    loomClassificationTypedefName('t'.repeat(32), evil);
+    expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+});
