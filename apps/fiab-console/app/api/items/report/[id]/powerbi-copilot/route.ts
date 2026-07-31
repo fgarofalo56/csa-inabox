@@ -57,6 +57,7 @@ import { getPbiUserToken } from '@/lib/azure/pbi-user-token-store';
 import {
   isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
+import { randomId } from '@/lib/util/random-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -180,7 +181,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     powerBiRemoteMcp: pbiMcpConnected ? 'connected' : 'not-connected',
   };
 
-  const sessionId = body.sessionId || `report-pbi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = body.sessionId || randomId('report-pbi', 6);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

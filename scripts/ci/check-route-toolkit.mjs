@@ -99,6 +99,20 @@ const TOUCH_EXEMPT = new Map([
   ['apps/fiab-console/app/api/copilot/dax/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet (see data-agent chat)'],
   ['apps/fiab-console/app/api/copilot/notebook-assist/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
   ['apps/fiab-console/app/api/copilot/orchestrate/route.ts', '#2656: streaming SSE copilot route — not withSession-migratable yet'],
+  // #2656 round 2 — the SAME sessionId defect in three more copilot routes
+  // (`Math.random` keying the conversation store). Touched only for that swap.
+  //
+  // The codemod's OWN verdict, run per file, is the reason — not an assumption:
+  //     items/azure-sql-database/[id]/copilot/route.ts: SKIPPED (POST: streaming/SSE handler)
+  //     items/report/[id]/powerbi-copilot/route.ts:     SKIPPED (POST: streaming/SSE handler)
+  //     items/report/copilot/route.ts:                  SKIPPED (POST: streaming/SSE handler)
+  // i.e. identical to the three entries above — withSession's
+  // try/catch -> apiServerError wrapper would break the SSE stream. An earlier
+  // attempt deferred these rather than claim "codemod-resistant" without having
+  // run it; the codemod is runnable now, so the claim is verified.
+  ['apps/fiab-console/app/api/items/azure-sql-database/[id]/copilot/route.ts', '#2656: streaming SSE copilot route (codemod: SKIPPED streaming/SSE) — needs the stream-safe wrapper'],
+  ['apps/fiab-console/app/api/items/report/[id]/powerbi-copilot/route.ts', '#2656: streaming SSE copilot route (codemod: SKIPPED streaming/SSE) — needs the stream-safe wrapper'],
+  ['apps/fiab-console/app/api/items/report/copilot/route.ts', '#2656: streaming SSE copilot route (codemod: SKIPPED streaming/SSE) — needs the stream-safe wrapper'],
   // #2657 touched this route only to build the attribute bag through
   // safeRecordFrom (prototype-pollution fix). The codemod reports SKIPPED
   // ("getSession() without the exact 401 guard") because it returns its own
