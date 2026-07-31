@@ -1791,6 +1791,79 @@ jobs:
               || echo "::warning::Could not set LOOM_POSTURE_FUNCTION_URL on loom-console — set it manually (admin-plane param loomPostureFunctionUrl)."
           fi
 
+      - name: Deploy + wire Iceberg REST Catalog (external-engine federation, day-one)
+        if: always()
+        continue-on-error: true
+        run: |
+          # Day-one gap closure (#2757): the Iceberg REST Catalog container
+          # (Unity Catalog OSS serving the Apache Iceberg REST spec) lets external
+          # engines — Trino / Spark / DuckDB / Snowflake — DISCOVER + browse Loom
+          # lakehouse tables (namespaces, table listing, credential vending)
+          # instead of being handed raw ADLS paths. The bicep module exists
+          # (data-plane/iceberg-catalog-aca.bicep) but was orphaned from every
+          # deploy path by the ARM 256-param ceiling, so LOOM_ICEBERG_CATALOG_URL
+          # was never set and /admin/catalog showed "not configured".
+          #
+          # Provision it END-TO-END here, following the posture-refresh pattern:
+          # (1) resolve the CAE / Console UAMI / ACR / loom-unity image / DLZ lake,
+          # (2) DEPLOY the module into the admin RG if the app is absent,
+          # (3) set LOOM_ICEBERG_CATALOG_URL on the Console. Every sub-step is
+          # best-effort — the svc-iceberg-catalog gate is optionalDefault (the
+          # Delta↔Iceberg dual-metadata path already works unset), so a failure
+          # here degrades honestly to that fallback and NEVER breaks the deploy.
+          set +e
+          ICEBERG_APP=$(az containerapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "[?name=='iceberg-catalog'].name | [0]" -o tsv 2>/dev/null)
+          if [ -z "$ICEBERG_APP" ]; then
+            # Container Apps managed environment (in-VNet) hosting the console.
+            CAE_ID=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --query "[0].id" -o tsv 2>/dev/null)
+            # Console UAMI — resource id + principal (object) id (ACR pull + lake read).
+            UAMI_NAME=$(az identity list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --query "[?starts_with(name,'uami-loom-console')].name | [0]" -o tsv 2>/dev/null)
+            UAMI_ID=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query id -o tsv 2>/dev/null)
+            UAMI_PRINCIPAL=$(az identity show -n "$UAMI_NAME" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query principalId -o tsv 2>/dev/null)
+            # ACR + the loom-unity image tag the console release already runs (the
+            # catalog runs the SAME Unity Catalog OSS image, so no new build).
+            ACR_LOGIN=$(az acr list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].loginServer" -o tsv 2>/dev/null)
+            CONSOLE_IMG=$(az containerapp show -n loom-console -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --query "properties.template.containers[0].image" -o tsv 2>/dev/null)
+            IMG_TAG="${CONSOLE_IMG##*:}"; [ -z "$IMG_TAG" ] && IMG_TAG=latest
+            UNITY_IMG="${ACR_LOGIN}/loom-unity:${IMG_TAG}"
+            # DLZ ADLS Gen2 lake account the catalog reads table metadata from.
+            LAKE_ACCT=$(az storage account list --subscription "$DLZ_SUB" -g "$DLZ_RG" \
+              --query "[?kind=='StorageV2' && isHnsEnabled].name | [0]" -o tsv 2>/dev/null)
+            if [ -z "$CAE_ID" ] || [ -z "$UAMI_ID" ] || [ -z "$ACR_LOGIN" ] || [ -z "$LAKE_ACCT" ]; then
+              echo "::warning::Iceberg REST Catalog not deployed — could not resolve CAE/UAMI/ACR/lake (CAE=$CAE_ID UAMI=$UAMI_ID ACR=$ACR_LOGIN LAKE=$LAKE_ACCT). /admin/catalog stays on the dual-metadata fallback (honest gate). Re-run after those exist."
+            else
+              # entraClientId = the Console's own MSAL app so the catalog accepts
+              # Loom-issued bearers (else it deploys SEALED — up but every caller
+              # rejected — per the module's auth-by-default posture).
+              CFG=$(printf '{"environmentId":"%s","uamiId":"%s","uamiPrincipalId":"%s","acrLoginServer":"%s","image":"%s","lakeStorageAccountName":"%s","authMode":"entra","entraClientId":"%s"}' \
+                "$CAE_ID" "$UAMI_ID" "$UAMI_PRINCIPAL" "$ACR_LOGIN" "$UNITY_IMG" "$LAKE_ACCT" "${LOOM_MSAL_CLIENT_ID:-}")
+              echo "Deploying Iceberg REST Catalog into $ADMIN_RG (image=$UNITY_IMG lake=$LAKE_ACCT)…"
+              az deployment group create --subscription "$ADMIN_SUB" -g "$ADMIN_RG" \
+                --name iceberg-catalog-$(date +%s) \
+                -f platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep \
+                -p location="${{ inputs.region }}" catalogConfig="$CFG" \
+                -o none \
+                && echo "  Iceberg REST Catalog deployed." \
+                || echo "::warning::Iceberg catalog bicep deploy failed (deploy SP rights on $ADMIN_RG? cross-RG lake RBAC? image tag $IMG_TAG present in ACR?) — re-run; /admin/catalog stays on the dual-metadata fallback."
+              ICEBERG_APP=iceberg-catalog
+            fi
+          fi
+          # Wire LOOM_ICEBERG_CATALOG_URL on the Console once the app exists.
+          if [ -n "$ICEBERG_APP" ]; then
+            IB_FQDN=$(az containerapp show -n iceberg-catalog -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null)
+            if [ -n "$IB_FQDN" ]; then
+              az containerapp update -g "$ADMIN_RG" -n loom-console \
+                --set-env-vars "LOOM_ICEBERG_CATALOG_URL=https://$IB_FQDN" -o none 2>/dev/null \
+                && echo "  Wired LOOM_ICEBERG_CATALOG_URL=https://$IB_FQDN on loom-console." \
+                || echo "::warning::Could not set LOOM_ICEBERG_CATALOG_URL on loom-console — set it manually to https://$IB_FQDN."
+            fi
+          fi
+
       - name: Publish report-subscriptions Function code + wire delivery (WS-C2)
         continue-on-error: true
         run: |
