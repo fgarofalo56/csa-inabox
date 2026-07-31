@@ -28,6 +28,8 @@ from typing import Any
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from .redact import redact  # dependency-free; see redact.py
+
 app = FastAPI(title="loom-dbt-runner", version="1.0.0")
 
 ALLOWED_ADAPTERS = {"synapse", "fabric"}
@@ -107,7 +109,12 @@ def _run_dbt(command: str, project_dir: Path, env: dict[str, str]) -> tuple[int,
     # dbt streams to stdout/logs; surface a concise status line per command.
     summary = f"$ dbt {' '.join(args)}\n -> {'OK' if code == 0 else 'FAILED'}"
     if getattr(res, "exception", None):
-        summary += f"\n{res.exception}"
+        # dbt quotes the connection it failed on, and `env` (just written into
+        # os.environ so env_var() resolves) is warehouse credentials + DSNs.
+        # Without this the caller's own secret comes straight back in `log`.
+        # CodeQL did NOT flag this line - it flagged the path-validation
+        # ValueError below, which carries no credential.
+        summary += f"\n{redact(str(res.exception), env)}"
     return code, summary
 
 
