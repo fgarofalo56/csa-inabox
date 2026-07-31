@@ -19,8 +19,7 @@
  */
 import { NextRequest } from 'next/server';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { accessAssignmentsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import type { AccessAssignment } from '@/lib/types/access-assignment';
@@ -57,12 +56,8 @@ function userWriteRoleHint(): string {
   return `the Console identity lacks the ${role?.name} Graph permission (appRole ${role?.appRoleId}) — grant it + admin-consent, then retry.`;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-
-  const { id: principalId } = await ctx.params;
+export const POST = withTenantAdmin<{ id: string }>(async (req, { session, params }) => {
+  const { id: principalId } = params;
   if (!principalId) return apiError('id (user object id) required', 400);
 
   const body = await req.json().catch(() => ({} as any));
@@ -70,7 +65,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (action !== 'pause' && action !== 'resume' && action !== 'delete') {
     return apiError('action must be "pause", "resume", or "delete"', 400);
   }
-  const actor = s!.claims.upn || s!.claims.oid;
+  const actor = session.claims.upn || session.claims.oid;
   const now = new Date().toISOString();
 
   try {
@@ -141,4 +136,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e);
   }
-}
+});

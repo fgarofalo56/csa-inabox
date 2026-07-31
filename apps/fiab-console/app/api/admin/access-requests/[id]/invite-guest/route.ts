@@ -15,8 +15,7 @@
  * exact consent step when User.Invite.All is not granted (no-vaporware.md).
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import {
   inviteExternalGuest, findGuestByEmail, addPrincipalToGroup,
@@ -27,12 +26,8 @@ import { loadPendingRequest, finalizeApproval, onboardingGroupId, loomRedirectUr
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-
-  const { id } = await ctx.params;
+export const POST = withTenantAdmin<{ id: string }>(async (req, { session, params }) => {
+  const { id } = params;
   if (!id) return apiError('id required', 400);
 
   try {
@@ -89,8 +84,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const provisioned = `invited as B2B guest${reused ? ' (existing guest reused)' : ''}${groupAdded ? ' + added to onboarding group' : ''}`;
     const updated = await finalizeApproval({
       doc, tenantId,
-      actorUpn: s!.claims.upn || s!.claims.oid,
-      actorOid: s!.claims.oid,
+      actorUpn: session.claims.upn || session.claims.oid,
+      actorOid: session.claims.oid,
       provisioned,
     });
 
@@ -102,4 +97,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e);
   }
-}
+});
