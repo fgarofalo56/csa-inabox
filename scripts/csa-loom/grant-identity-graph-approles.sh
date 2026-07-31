@@ -55,6 +55,24 @@ if [[ "${LOOM_DOMAIN_GROUP_PROVISIONING:-false}" == "true" || "${LOOM_WORKSPACE_
   ROLES+=("Group.ReadWrite.All:62a82d76-70ea-41e2-9197-370581804d09")
 fi
 
+# Access-governance directory WRITE (#2758) — the onboarding wizards that create
+# a member user / invite a guest / pause / delete a directory user for an access
+# request. HIGH PRIVILEGE: User.ReadWrite.All lets the Console identity create
+# AND DELETE any user in the tenant; GroupMember.ReadWrite.All modifies group
+# membership. Default-ON (the feature ships working) but opt-OUT via
+# LOOM_ACCESS_GOV_DIRECTORY_WRITE=false. Nothing can actually write until a
+# Global Admin grants admin consent (below), so this only pre-stages the
+# assignment; until then the wizards honest-gate with the exact role to grant.
+#   User.ReadWrite.All        -> create member users, disable (pause) / delete users
+#   GroupMember.ReadWrite.All -> add an onboarded principal to the onboarding group
+#   User.Invite.All           -> invite an access requester as a B2B guest
+if [[ "${LOOM_ACCESS_GOV_DIRECTORY_WRITE:-true}" == "true" ]]; then
+  echo "Access-gov directory-write roles requested (LOOM_ACCESS_GOV_DIRECTORY_WRITE, default true) — adding to grant set."
+  ROLES+=("User.ReadWrite.All:741f803b-c850-494e-b5df-cde7c675a1ca")
+  ROLES+=("GroupMember.ReadWrite.All:dbaae8cf-10b5-4b86-a4a1-f871c94c6695")
+  ROLES+=("User.Invite.All:09850681-111b-4a89-9bed-3f2cae46d706")
+fi
+
 TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
 
 for ROLE in "${ROLES[@]}"; do
