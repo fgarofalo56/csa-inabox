@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.0...csa-inabox-v0.80.1) (2026-07-31)
+
+
+### Miscellaneous
+
+* **deps:** bump @radix-ui/react-tabs to 1.1.21 (supersedes [#2599](https://github.com/fgarofalo56/csa-inabox/issues/2599)) ([#2718](https://github.com/fgarofalo56/csa-inabox/issues/2718)) ([d610eee](https://github.com/fgarofalo56/csa-inabox/commit/d610eee38ad6255a71bac674493fdc79d9de246a))
+
 ## [0.80.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.79.0...csa-inabox-v0.80.0) (2026-07-31)
 
 
