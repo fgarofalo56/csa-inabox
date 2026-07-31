@@ -43,6 +43,12 @@ on:
     branches: [main]
     paths:
       - 'apps/fiab-*/**'
+      # loom-unity lives at ./apps/<name> (not the ./apps/fiab-* convention) and
+      # is now in the default "all" build matrix, because admin-plane/main.bicep
+      # deploys it on every boundary (svc-loom-unity-authz). Its entrypoint owns
+      # the fail-closed authorization posture, so a change there must produce a
+      # new image.
+      - 'apps/loom-unity/**'
       - '.github/workflows/build-fiab-images-acr-tasks.yml'
 
 permissions:
@@ -126,7 +132,7 @@ jobs:
             # would add ~10 min to each one for no benefit. It IS in the
             # from-scratch app phase (full-app-deploy-commercial.yml), and it can
             # be built on demand here with `apps: loom-uat`.
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"loom-unity","ctx":"./apps/loom-unity"}]'
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'

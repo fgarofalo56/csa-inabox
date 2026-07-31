@@ -87,8 +87,22 @@ describe('resolveUcBackend', () => {
     expect(resolveUcBackend()).toBe('databricks');
   });
 
-  it('does NOT auto-select oss in Commercial even with a loom-unity URL (explicit opt-in only)', () => {
+  it('does NOT auto-select oss in Commercial when a Databricks workspace IS bound', () => {
     process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.7.azuredatabricks.net';
+    expect(resolveUcBackend()).toBe('databricks');
+  });
+
+  // svc-loom-unity-authz round 2: the auto-select no longer requires Gov. A
+  // Commercial estate with NO Databricks used to honest-gate every Unity surface
+  // on Databricks while a deployed, paid-for Loom Unity sat unused beside it.
+  it('auto-selects oss in COMMERCIAL when no Databricks workspace is bound', () => {
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    expect(resolveUcBackend()).toBe('oss');
+    expect(isOssUc()).toBe(true);
+  });
+
+  it('stays on databricks when no loom-unity URL is wired at all', () => {
     expect(resolveUcBackend()).toBe('databricks');
   });
 });

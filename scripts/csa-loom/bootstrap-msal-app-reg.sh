@@ -27,6 +27,11 @@
 #   EXISTING_CLIENT_ID  use-existing override (skip create; reconcile if owned)
 #   KEYVAULT_NAME       Key Vault to write secrets into (required)
 #   MSAL_SECRET_NAME    default loom-msal-client-secret
+#   MSAL_CLIENT_ID_SECRET_NAME  default loom-msal-client-id — the app registration's
+#                       (non-secret) CLIENT ID, persisted so a later
+#                       `az deployment sub create` can resolve it back into
+#                       LOOM_MSAL_CLIENT_ID instead of re-rendering an empty one
+#                       (which would blank sign-in)
 #   SESSION_SECRET_NAME default session-secret
 #   CONSOLE_APP_NAME    Container App name to wire (optional; e.g. loom-console)
 #   CONSOLE_RG          resource group of the Container App (optional)
@@ -189,6 +194,21 @@ SECRET="$(az ad app credential reset --id "${APP_ID}" --years 2 --query password
 az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${MSAL_SECRET_NAME}" --value "${SECRET}" -o none
 echo "    wrote ${MSAL_SECRET_NAME}"
 
+# SIGN-IN DURABILITY — persist the app registration's CLIENT ID too.
+# It is not a secret; it is the DURABLE record of which app registration this
+# estate uses. Without it, every later `az deployment sub create` re-renders
+# effectiveMsalClientId from an unset LOOM_MSAL_CLIENT_ID, blanks the Console's
+# LOOM_MSAL_CLIENT_ID and takes sign-in dark on the very next reconcile
+# (an ACA template rewrite drops every env var it does not declare). The deploy
+# workflows now read this secret back
+# into LOOM_MSAL_CLIENT_ID before running the template (see the "Resolve the
+# existing MSAL client id" steps in deploy-fiab-gcch / deploy-fiab-il5 /
+# csa-loom-post-deploy-bootstrap), which makes the reconcile idempotent.
+MSAL_CLIENT_ID_SECRET_NAME="${MSAL_CLIENT_ID_SECRET_NAME:-loom-msal-client-id}"
+az keyvault secret set --vault-name "${KEYVAULT_NAME}" --name "${MSAL_CLIENT_ID_SECRET_NAME}" --value "${APP_ID}" -o none \
+  && echo "    wrote ${MSAL_CLIENT_ID_SECRET_NAME}=${APP_ID} (redeploys resolve it from here)" \
+  || echo "    WARN: could not persist ${MSAL_CLIENT_ID_SECRET_NAME} — a later redeploy may blank sign-in until LOOM_MSAL_CLIENT_ID is supplied"
+
 EXISTING_SS="$(az keyvault secret show --vault-name "${KEYVAULT_NAME}" --name "${SESSION_SECRET_NAME}" --query value -o tsv 2>/dev/null || true)"
 if [ -z "${EXISTING_SS:-}" ]; then
   SS="$(openssl rand -hex 32)"
@@ -233,6 +253,49 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
   az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
     --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" -o none || echo "    WARN: env-var update failed"
   echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} (kvref=${KVREF_OK})"
+fi
+
+# ---------------------------------------------------------------------
+# svc-loom-unity-authz — Application ID URI only. DELIBERATELY NOT the
+# authorization flip.
+#
+# Loom Unity's `authMode=entra` needs an audience, and the Console's managed
+# identity cannot request `api://<app-id>/.default` at all unless the app
+# registration exposes that Application ID URI. Ensuring it here is free,
+# idempotent, and a prerequisite for the follow-up work, so it stays.
+#
+# What this script MUST NOT do yet is stamp LOOM_UNITY_AUTH=enable +
+# LOOM_UNITY_ENTRA_CLIENT_ID onto a running catalog and LOOM_UNITY_AUTH_MODE=entra
+# onto the Console. Measured against the pinned image
+# (docs/fiab/security/loom-unity-authz-proof.md): upstream unitycatalog — v0.5.0
+# AND v0.5.1 — rejects any bearer whose `iss` is not its own `internal` issuer, so
+# the Entra token the Console mints is answered 403 PERMISSION_DENIED on
+# /api/2.1/unity-catalog/* even with a byte-exact audience match. Flipping those
+# vars would therefore not secure the catalog; it would take every live Unity
+# surface down (and on v0.5.0 also 500 every grants READ — upstream #1603).
+#
+# The flip belongs in the same change as the BFF token-exchange client
+# (POST /api/1.0/unity-control/auth/tokens) plus registration of the Console
+# principal as an enabled Unity Catalog user. Until then the catalog is deployed
+# with the explicit, audited authMode=disabled opt-out by
+# .github/workflows/gov-uc-purview-wire.yml and the finding is reported OPEN.
+# ---------------------------------------------------------------------
+if [ -n "${CONSOLE_RG:-}" ]; then
+  echo "==> Ensuring the Application ID URI (prerequisite for Loom Unity authorization)"
+  CURRENT_URIS="$(az ad app show --id "${APP_ID}" --query "identifierUris" -o tsv 2>/dev/null || true)"
+  if ! printf '%s' "${CURRENT_URIS}" | grep -qx "api://${APP_ID}"; then
+    az ad app update --id "${APP_ID}" --identifier-uris "api://${APP_ID}" -o none \
+      && echo "    set Application ID URI api://${APP_ID}" \
+      || echo "    WARN: could not set the Application ID URI (app owned elsewhere?) — a client will not be able to mint api://${APP_ID}/.default"
+  else
+    echo "    Application ID URI api://${APP_ID} already present"
+  fi
+  UNITY_APP_NAME="${UNITY_APP_NAME:-loom-unity}"
+  if az containerapp show -n "${UNITY_APP_NAME}" -g "${CONSOLE_RG}" -o none 2>/dev/null; then
+    echo "    NOTE: ${UNITY_APP_NAME} is deployed here and is NOT being switched to Entra authorization by this script."
+    echo "          Upstream only accepts tokens it issued itself, so enabling it today would reject the Console too."
+    echo "          Tracked: the BFF token-exchange client. See docs/fiab/security/loom-unity-authz-proof.md."
+  fi
 fi
 
 # ---------------------------------------------------------------------

@@ -28,6 +28,61 @@ Container Apps VNet was the **only** control. Consequences, all real:
 | F-4 | The vending service-principal secret was documented as an inline `az containerapp update --set-env-vars …CLIENT_SECRET=<value>` — landing a live secret in ARM deployment history and shell history. | MEDIUM |
 | F-5 | Nothing distinguished "the catalog is secured" from "the catalog answers anyone": no gate, no probe, no signal. | MEDIUM |
 
+### 1.1 The residual finding `svc-loom-unity-authz` closes
+
+LU-2 made `authMode='entra'` the module default, but it was only *honored* when an
+audience could be pinned:
+
+```bicep
+var authEnabled = authMode == 'entra' && audiencePinned   // pre-fix
+```
+
+and `loom-entrypoint.sh` mirrored the same inference (`auth=disable` whenever no
+`LOOM_UNITY_ENTRA_TENANT_ID` happened to be set). So the "secure default" only
+applied to callers who already passed `entraClientId` — and **no caller did**: the
+catalog was deployable only out-of-band, and both real invocations
+(`.github/workflows/gov-uc-purview-wire.yml`, the `az deployment group create`
+line in `docs/fiab/unity-gov.md`) omitted it. The shipped default therefore still
+produced F-1/F-2/F-3, with the only signal being a stderr line.
+
+| # | Consequence | Severity | Closed by |
+|---|---|---|---|
+| F-6 | A deployment that omitted one parameter got the full anonymous posture while the module documented itself as "Entra ON by default". | HIGH | `authEnabled = authMode == 'entra'` — no silent downgrade; `authorizationMisconfigured` output. |
+| F-7 | The container inferred `authorization=disable` from an unset env var, so the image itself had an anonymous default. | HIGH | `auth="${LOOM_UNITY_AUTH:-enable}"` — the image **fails closed** and refuses to boot when nothing can be pinned. The bicep modules never hand it that state: an Entra app registration is a Microsoft Graph object ARM cannot create, so when none exists they deploy the catalog **SEALED** — authorization on, issuer pinned, audience pinned to a per-deployment `api://…invalid` sentinel no tenant can mint, `minReplicas: 0`. Up, probes green, every caller rejected; `authorizationSealed` / `authorizationMisconfigured` report it and deploy phase 3 unseals it. See docs/fiab/unity-gov.md § "The SEALED state". |
+| F-8 | The catalog is not in the push-button deploy at all, so the secured posture depends on an operator running a documented command correctly. | HIGH | **STILL OPEN.** Deploying `loom-unity` from `admin-plane/main.bicep` by default is deliberately deferred — see § 1.2; it would flip the live Gov catalog's authorization mode, which today means breaking it. |
+| F-9 | `data-plane/iceberg-catalog-aca.bicep` runs the SAME image for the Iceberg REST Catalog surface and set no auth env at all. | HIGH | The same `authMode`/`entraClientId` config-bag keys, defaulting to `entra`, **plus the same SEALED fallback** so the module's own documented standalone deploy comes up rejecting rather than crash-looping. |
+| F-10 | The Gov wiring workflow's own probe treated an **unauthenticated HTTP 200** as success. | MEDIUM | `gov-uc-purview-wire.yml` no longer does. The assertion is keyed to the authorization mode that run actually deployed: a 200 under `authMode=entra` FAILS the workflow; a 200 under the audited `authMode=disabled` opt-out emits a loud warning naming this finding as OPEN. Previously it was measuring reachability and calling it authorization. |
+
+### 1.2 What is NOT closed, and why — upstream accepts only tokens it issued itself
+
+Measured against the pinned image, both directions, transcript in
+[`loom-unity-authz-proof.md`](loom-unity-authz-proof.md) (re-runnable:
+`apps/loom-unity/tests/authz/authz-e2e.sh`):
+
+* `server.authorization=enable` **is** honoured — anonymous and malformed bearers
+  get 401, a valid credential gets 200 with real catalog JSON. The sealed posture
+  is real: a token that is valid in every respect except the sentinel audience is
+  rejected. So the fail-closed design is not theatre.
+* **But** upstream `AuthDecorator` (v0.5.0 *and* v0.5.1) rejects any bearer whose
+  `iss` is not the server's own `internal` issuer. A Microsoft Entra access token
+  presented directly on `/api/2.1/unity-catalog/*` is answered **403
+  PERMISSION_DENIED** even with a byte-exact `server.audiences` match. Clients must
+  exchange it at `POST /api/1.0/unity-control/auth/tokens` and present the returned
+  internal token; `AuthService.verifyPrincipal` also requires the subject to be an
+  enabled Unity Catalog user.
+
+`uc-backend.ts` `ossUcAuthHeader()` sends the Entra token directly, so **the
+Console cannot authenticate to an authorization-enabled catalog today**. Turning
+`authMode=entra` on for the live Gov estate would therefore not secure it — it
+would convert "anonymous but working" into "authenticated and unusable" on a
+federal deployment. Consequences recorded honestly rather than papered over:
+
+| # | State | Disposition |
+|---|---|---|
+| F-11 | `unityAuthorizationPosture()` reported the `entra` mode as `hardened: true`. It is not — the credential it describes is rejected. | Fixed: reported as **not hardened**, with the remediation naming `LOOM_UNITY_TOKEN` and the exchange endpoint. |
+| F-12 | The live Gov catalog answers unauthenticated reads. | **OPEN**, and now DECLARED rather than inferred: `gov-uc-purview-wire.yml` deploys the audited `authMode=disabled` opt-out (SECURITY WARNING on every boot), pins ACA ingress to the CAE infrastructure subnet so the exposure narrows from "the Gov VNet" to that subnet, and its probe reports the finding as open. Closing it requires the token-exchange client. |
+| F-13 | On v0.5.0, `GET /permissions/{securable}/{name}` returns **500** whenever `server.authorization=enable` (200 when disabled; `PATCH` unaffected) — upstream #1603, fixed in a v0.5.1 image Docker Hub has not published. | **OPEN** and disclosed: enabling authorization on this pinned image breaks grants **reads** — the Grants pane and the LU-4 effective-permissions resolver. The capability matrix records `grants` as `partial` on the OSS backend for this reason. |
+
 ## 2. Surface inventory (post-LU-2)
 
 | # | Surface | Ingress | Identity model | Primary controls |

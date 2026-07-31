@@ -92,7 +92,18 @@ describe('both clouds — the loom-uat runner image has a producer', () => {
     expect(full).toMatch(/- app: loom-uat/);
     expect(full).toMatch(/file: \.\/apps\/fiab-console\/Dockerfile\.uat/);
     // ...and its tag is verified before the roll, like every sibling image.
-    expect(full).toMatch(/APPS=\(loom-console[^)]*loom-uat\)/);
+    //
+    // MEMBERSHIP, not position. The original spelling was
+    //   /APPS=\(loom-console[^)]*loom-uat\)/
+    // which pins loom-uat as the LAST element, because `loom-uat\)` requires the
+    // closing paren right after it. That is not the property under test — the
+    // tag-verification loop iterates the array, so order is irrelevant — and it
+    // fails any PR that appends a NEW app, which is what every gate PR does by
+    // construction. It broke #2638 (appending loom-unity) and would next have
+    // broken #2639 (loom-migrate, loom-risingwave) and #2678/#2681 after that.
+    const appsLine = full.match(/APPS=\(([^)]*)\)/)?.[1] ?? '';
+    expect(appsLine.split(/\s+/)).toContain('loom-uat');
+    expect(appsLine.split(/\s+/)).toContain('loom-console');
   });
 
   it('un-ignores e2e/ + tests/ for that build, or the image ships without the journeys', () => {

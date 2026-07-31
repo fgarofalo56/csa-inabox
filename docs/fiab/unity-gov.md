@@ -86,10 +86,108 @@ catalog access attributable (and is what LU-3 hangs the audit rows on).
   structured `OssUcNotConfiguredError` naming the env var + this bicep module — the
   BFF surfaces it as a MessageBar rather than failing opaquely.
 
-## Authorization (LU-2)
+## Authorization (LU-2) — and what `svc-loom-unity-authz` changed
 
 > **Naming.** The platform is **Loom Unity** — Loom's Unity-Catalog-**compatible**
 > catalog. It is not a Databricks product and is never presented as one.
+
+> ### READ THIS FIRST — three measured facts
+>
+> All three come from running the image, not from reading it. Harness:
+> `apps/loom-unity/tests/authz/authz-e2e.sh` (Docker only, no Azure). Transcript:
+> [`security/loom-unity-authz-proof.md`](security/loom-unity-authz-proof.md).
+>
+> **1. No more silent downgrade.** `authMode == 'entra'` alone now decides, and
+> `LOOM_UNITY_AUTH` defaults to `enable` in the container. Previously *both* layers
+> inferred `disable` when no audience/tenant happened to be wired — and **no real
+> caller wired one** — so the module documented as "Entra ON by default" shipped an
+> anonymous, VNet-readable-**and-writable** catalog. An unpinnable audience now
+> produces the **SEALED** state (below) or a refused boot, never an open door.
+>
+> **2. The Console's credential does not work against this server, and won't until
+> it exchanges tokens.** Upstream `AuthDecorator` (identical in v0.5.0 and v0.5.1)
+> rejects any bearer whose `iss` is not the server's own `internal` issuer, so a
+> Microsoft Entra access token presented directly on `/api/2.1/unity-catalog/*` is
+> answered **403** even with an exact `server.audiences` match. A client must
+> `POST` it to `/api/1.0/unity-control/auth/tokens` and use the returned internal
+> token (and its principal must be an enabled Unity Catalog user).
+> `LOOM_UNITY_TOKEN` — the server-minted token, delivered as a Key Vault
+> secretref — is currently the **only** working Console credential.
+>
+> **3. On v0.5.0, enabling authorization breaks grants READS.**
+> `GET /api/2.1/unity-catalog/permissions/{securable}/{name}` returns **500** with
+> `server.authorization=enable` and **200** with it disabled; `PATCH` works in both
+> (upstream #1603, fixed in a v0.5.1 image Docker Hub has not published). That takes
+> out the Grants pane and the LU-4 effective-permissions resolver on the OSS
+> backend.
+>
+> **Therefore:** every *new* deployment of `loom-unity-app.bicep` defaults to
+> `authMode=entra` and comes up **SEALED** — up, authorization enforced, zero
+> replicas, every caller rejected — which is safe and free. But the **live Gov
+> catalog** is deliberately left on the explicit, audited `authMode=disabled`
+> opt-out by `gov-uc-purview-wire.yml`, with ACA ingress IP-pinned to the Container
+> Apps infrastructure subnet and its probe reporting the finding as **OPEN**.
+> Flipping it to `entra` today would not secure it; per fact 2 it would take it
+> down. That flip belongs in the same change as the token-exchange client.
+>
+> Deploying `loom-unity` from `admin-plane/main.bicep` (the push-button path) is
+> likewise deferred to a follow-up: the orchestrator would adopt the live Gov app
+> and change its authorization mode. `loom-unity-app.bicep` remains a standalone
+> entrypoint, orphan-allowlisted in `scripts/ci/check-bicep-sync.mjs`.
+
+### The SEALED state
+
+An Entra app registration is a Microsoft Graph object ARM/bicep cannot create, and
+a managed identity cannot *be* an audience — Microsoft's guidance is to register a
+service principal to represent the target. So on a fresh estate there is no
+audience to pin at template time. Rather than crash-loop (round 1) or open the
+door (the original bug), `loom-unity-app.bicep` pins a per-deployment sentinel:
+
+```
+server.authorization = enable
+server.allowed-issuers = https://<authority>/<tenant>/v2.0
+server.audiences       = api://loom-unity-sealed-<uniqueString>.invalid
+scale.minReplicas      = 0
+```
+
+`.invalid` is an RFC 2606 reserved TLD, and an `api://` identifier URI containing a
+dot is treated as a host requiring domain verification — so **no** Entra tenant can
+ever mint a token with that `aud`. Measured (case 8b): a token valid in every other
+respect is rejected `The Claim 'aud' value doesn't contain the required audience`.
+The app is up, answers its TCP probes, serves nobody, and bills nothing.
+`authorizationSealed` / `authorizationMisconfigured` / `acceptedAudiences` report
+the state in the deployment output. `scripts/csa-loom/bootstrap-msal-app-reg.sh`
+(deploy phase 3) stamps the real client id and records it in Key Vault, and
+`scripts/csa-loom/resolve-msal-client-id.sh` reads it back before a later template
+run so a reconcile deploy cannot re-seal a working catalog.
+
+### Image preflight — never point a live app at a tag nobody built
+
+`scripts/csa-loom/preflight-image-tags.sh` resolves the manifest for the tag a
+deploy is about to reference and **fails** if the Container App is live and the tag
+is missing (an ARM PUT with a bad image succeeds and then the revision cannot
+pull — the app goes down). Greenfield states pass, because a missing tag is the
+expected state of the two-phase image path.
+
+| State | Behaviour |
+|---|---|
+| Resource group absent, or the Container App not deployed yet | **pass** — greenfield |
+| App LIVE + tag resolves | **pass**, manifest digest logged |
+| App LIVE + tag missing | **FAIL** — names the tag, lists the tags that do exist, prints the exact `gov-build-images.yml` dispatch |
+| App LIVE + registry unreadable | **FAIL** — never deploy blind onto a running federal app |
+
+`LOOM_SKIP_IMAGE_PREFLIGHT=true` is a loud emergency valve. The ACR is
+`publicNetworkAccess=Disabled`, so the check takes the same owned firewall lease
+every push path uses and always releases it via a trap. Behaviour tests (with `az`
+stubbed, zero Azure calls): `scripts/csa-loom/tests/preflight-image-tags.test.mjs`.
+
+`.github/workflows/gov-build-images.yml` is the Gov twin of
+`build-fiab-images-acr-tasks.yml` — Gov previously had **no** from-scratch image
+producer for these nine images. It publishes `:v0.1` (the tag every Gov
+`.bicepparam` pulls) plus `:<sha>` and `:latest`, per-image tag overrides,
+post-build manifest assertions, and a Trivy CRITICAL gate on the tag that actually
+shipped. **It has never been executed** — that is stated in the workflow header
+too, and nothing depends on it having run.
 
 **The finding.** Before LU-2 the server ran `server.authorization=disable` and the
 Container Apps VNet was the *only* control: any workload that could reach the

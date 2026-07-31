@@ -225,14 +225,14 @@ render_server() {
   client_id="${LOOM_UNITY_ENTRA_CLIENT_ID:-}"
   authority="$(unity_authority_host)"
 
-  # DEFAULT-ON: with an Entra tenant wired, authorization is ENABLED unless the
-  # operator explicitly sets LOOM_UNITY_AUTH=disable (an audited opt-out, not a
-  # silent default). With no tenant wired at all we cannot fabricate a validator,
-  # so the server stays open — and says so, loudly, on every boot.
-  auth="${LOOM_UNITY_AUTH:-}"
-  if [ -z "${auth}" ]; then
-    if [ -n "${tenant}" ]; then auth=enable; else auth=disable; fi
-  fi
+  # DEFAULT-ON, FAIL-CLOSED. Authorization is ENABLED unless the operator
+  # explicitly sets LOOM_UNITY_AUTH=disable (an audited opt-out, not a silent
+  # default). Until the svc-loom-unity-authz fix this block inferred `disable`
+  # whenever no tenant happened to be wired — so ANY caller that forgot one env
+  # var got a catalog that anything on the VNet could read AND mutate, and the
+  # only signal was a stderr line nobody reads. An unconfigured server now
+  # refuses to boot (see the issuer/audience checks below) instead of opening.
+  auth="${LOOM_UNITY_AUTH:-enable}"
 
   authz_url="${LOOM_UNITY_AUTHORIZATION_URL:-}"
   token_url="${LOOM_UNITY_TOKEN_URL:-}"
@@ -326,7 +326,7 @@ fi
 # Resolve a writable DB dir BEFORE rendering hibernate.properties (which bakes
 # the path into the JDBC URL) — this is what makes the H2/SMB fallback take.
 resolve_db_dir
-echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres/${LOOM_UNITY_DB_AUTH:-entra}}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-${LOOM_UNITY_ENTRA_TENANT_ID:+enable}${LOOM_UNITY_ENTRA_TENANT_ID:-disable}} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
+echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres/${LOOM_UNITY_DB_AUTH:-entra}}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-enable} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
 if [ -z "${LOOM_UNITY_DB_URL:-}" ]; then
   # LU-1: the H2 fallback is not the recommended posture anywhere it can be
   # avoided. Say so on every boot rather than letting a deployment quietly sit on
