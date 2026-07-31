@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.10...csa-inabox-v0.80.11) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** DS-0017 — my own dist-upgrade layer had update without install ([#2749](https://github.com/fgarofalo56/csa-inabox/issues/2749)) ([a39e068](https://github.com/fgarofalo56/csa-inabox/commit/a39e068468ef156e5cf6fdc267cc77ec731b655e))
+* **security:** patch the portal-backend image — 62 of 66 Trivy findings ([#2747](https://github.com/fgarofalo56/csa-inabox/issues/2747)) ([cee9094](https://github.com/fgarofalo56/csa-inabox/commit/cee9094df0ee2d93fd577757255aa3864a993db4))
+* **security:** raise the setuptools floor to the HIGHER of two advisories ([#2750](https://github.com/fgarofalo56/csa-inabox/issues/2750)) ([3079b5f](https://github.com/fgarofalo56/csa-inabox/commit/3079b5f9d94c159312c8c69bbd3622b01aee1fef))
+
 ## [0.80.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.9...csa-inabox-v0.80.10) (2026-07-31)
 
 
