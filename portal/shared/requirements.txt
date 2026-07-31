@@ -13,7 +13,11 @@ pydantic-settings>=2.3.0,<3.0.0
 
 # ── Authentication (Azure AD / Entra ID JWT) ────────────────────────────────
 PyJWT>=2.8.0,<3.0.0
-cryptography>=41.0.0,<47.0.0
+# GHSA-537c-gmf6-5ccf (HIGH) — the cryptography WHEELS bundle a vulnerable
+# OpenSSL for every version < 48.0.1. The previous ceiling was <47.0.0, so the
+# constraint itself made the advisory unfixable: no version in the allowed range
+# is patched. Raised the floor AND the ceiling together.
+cryptography>=48.0.1,<49.0.0
 
 # ── Caching (JWKS TTL cache) ────────────────────────────────────────────────
 cachetools>=5.3.0,<8.0.0
@@ -26,3 +30,10 @@ azure-identity>=1.17.0,<2.0.0
 azure-mgmt-resource>=23.1.0,<26.0.0
 azure-mgmt-datafactory>=7.0.0,<10.0.0
 azure-storage-blob>=12.20.0,<13.0.0
+
+# ── Transitive floors (no direct import; pinned only to clear an advisory) ───
+# msgpack is pulled in transitively; GHSA-6v7p-g79w-8964 (HIGH, out-of-bounds
+# read on Unpacker reuse) affects <= 1.2.0. Floor rather than pin, so ordinary
+# upgrades are not blocked. Remove when a parent package requires >= 1.2.1 on
+# its own.
+msgpack>=1.2.1

@@ -7,7 +7,11 @@ FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da87
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && \
+# `dist-upgrade` pulls the distro's security patches ahead of the pinned base
+# digest — the loom-onelake / fiab-mcp-bridge pattern. The digest below is from
+# 2026-04-25; without this line the image ships that day's openssl, libcap2 and
+# liblzma5, which is where most of this image's Trivy findings came from.
+RUN apt-get update && apt-get dist-upgrade -y && \
     apt-get install -y --no-install-recommends gcc && \
     rm -rf /var/lib/apt/lists/*
 
@@ -15,7 +19,9 @@ RUN apt-get update && \
 COPY portal/shared/requirements.txt ./requirements.txt
 
 # Pin pip >= 26.0 to clear CVE-2025-8869 + CVE-2026-1703 in the base image's pip 25.0.1.
-RUN pip install --no-cache-dir --upgrade 'pip>=26.0'
+# setuptools ships in the base image at 70.3.0; CVE-2025-47273 (HIGH, path
+# traversal in PackageIndex) is fixed in 78.1.1.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=78.1.1'
 
 # If requirements.txt doesn't exist yet, install core deps directly
 RUN if [ -f requirements.txt ] && [ -s requirements.txt ]; then \
@@ -39,15 +45,26 @@ FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da87
 
 WORKDIR /app
 
-# Upgrade pip in the runtime stage too. Stage 1 upgrades pip in the
-# *builder's* /usr/local, but the only thing we copy into the runtime
-# image is /install (which holds the requirements, not pip itself).
-# Without this line the runtime image still ships the base image's
-# pip 25.0.1 — flagged by Trivy as CVE-2026-6357.
-RUN pip install --no-cache-dir --upgrade 'pip>=26.1'
+# Runtime stage needs the SAME distro security patches. It has no apt layer of
+# its own, so without this it ships the pinned digest's OS packages untouched
+# even though the builder was patched — /install carries Python packages only.
+RUN apt-get update && apt-get dist-upgrade -y && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
+
+# Upgrade pip + setuptools in the runtime stage too. Stage 1 upgrades them in
+# the *builder's* /usr/local, but the only thing we copy into the runtime image
+# is /install (the requirements, not pip/setuptools themselves). Without this
+# the runtime image still ships the base image's pip 25.0.1 (CVE-2026-6357) and
+# setuptools 70.3.0 (CVE-2025-47273).
+#
+# ORDER MATTERS: this runs AFTER the COPY above, not before. `/install` carries
+# no setuptools today (verified by a `pip install --dry-run --report` resolve of
+# requirements.txt), but if a future requirement pulled one in, a COPY landing
+# after this line would silently overwrite the patched version and reintroduce
+# the CVE with no signal.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.1' 'setuptools>=78.1.1'
 
 # Copy the shared API application
 COPY portal/shared/ ./portal/shared/
