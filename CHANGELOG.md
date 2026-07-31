@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.81.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.12...csa-inabox-v0.81.0) (2026-07-31)
+
+
+### Features
+
+* **access-gov:** guest-invite + user-create wizards + pause/revoke/delete lifecycle ([#2758](https://github.com/fgarofalo56/csa-inabox/issues/2758)) ([#2767](https://github.com/fgarofalo56/csa-inabox/issues/2767)) ([67d4c26](https://github.com/fgarofalo56/csa-inabox/commit/67d4c2640f9f925eb5319b403442c41deba0053d))
+
+
+### Bug Fixes
+
+* **admin:** day-one-honest state for the 3 "unconfigured" env gaps ([#2755](https://github.com/fgarofalo56/csa-inabox/issues/2755), [#2756](https://github.com/fgarofalo56/csa-inabox/issues/2756)) ([#2761](https://github.com/fgarofalo56/csa-inabox/issues/2761)) ([77bff28](https://github.com/fgarofalo56/csa-inabox/commit/77bff288bb5936d65d54ad9859a38193178a4944))
+* **admin:** make the capability graph readable + fit its tile ([#2754](https://github.com/fgarofalo56/csa-inabox/issues/2754)) ([#2763](https://github.com/fgarofalo56/csa-inabox/issues/2763)) ([13caaa0](https://github.com/fgarofalo56/csa-inabox/commit/13caaa01b811a21048c379e30cd6504ae5e0c63b))
+* **admin:** opt-in gates render neutral, not red "blocked" ([#2753](https://github.com/fgarofalo56/csa-inabox/issues/2753), [#2756](https://github.com/fgarofalo56/csa-inabox/issues/2756)) ([#2759](https://github.com/fgarofalo56/csa-inabox/issues/2759)) ([13ad7aa](https://github.com/fgarofalo56/csa-inabox/commit/13ad7aaf166026bd0ab1c3129e81aa4ae71efa2c))
+* **deploy:** deploy the Iceberg REST Catalog day-one ([#2757](https://github.com/fgarofalo56/csa-inabox/issues/2757)) ([#2762](https://github.com/fgarofalo56/csa-inabox/issues/2762)) ([a5112f4](https://github.com/fgarofalo56/csa-inabox/commit/a5112f4f1feea7cc712567a05f72929bb762b6c7))
+
 ## [0.80.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.11...csa-inabox-v0.80.12) (2026-07-31)
 
 
