@@ -2696,6 +2696,16 @@ module udfRuntime 'udf-runtime.bicep' = if (udfRuntimeEnabled) {
     managedEnvironmentId: containerPlatformModule.outputs.caeId
     uamiResourceId: identity.outputs.uamiConsoleId
     udfRuntimeEnabled: true
+    // #2720 — THE second half of this host's security boundary. udf-runtime
+    // execs caller-supplied Python (py/code-injection #729) and deliberately
+    // holds no credential, because a shared key in its environment could be read
+    // back out by the very code it runs. Internal ingress alone leaves it
+    // reachable from anything on the CAE VNet; this pins it to the Console's own
+    // subnet. The param existed and was passed by NOBODY until now — the
+    // orchestrator had only `containerSubnetId` (a resource id), never a prefix.
+    consoleAllowedCidrs: empty(containerPlatformModule.outputs.infrastructureSubnetPrefix)
+      ? []
+      : [ containerPlatformModule.outputs.infrastructureSubnetPrefix ]
   }
 }
 
@@ -5573,6 +5583,13 @@ module scriptRunner 'script-runner-app.bicep' = if (scriptRunnerActive) {
     image: '${registry.outputs.acrLoginServer}/loom-script-runner:${appImageTags.scriptRunner}'
     targetPort: 8080
     complianceTags: complianceTags
+    // #2720 — same unwired-pin defect as udf-runtime above. This host RUNS USER
+    // SCRIPTS, so internal ingress alone means any workload on the CAE VNet can
+    // drive it. The dedicated AcrPull-only UAMI limits what a script can mint;
+    // it does not limit WHO can submit one. Pin the socket to the Console subnet.
+    consoleAllowedCidrs: empty(containerPlatformModule.outputs.infrastructureSubnetPrefix)
+      ? []
+      : [ containerPlatformModule.outputs.infrastructureSubnetPrefix ]
   }
 }
 

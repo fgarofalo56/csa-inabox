@@ -203,6 +203,37 @@ output caeName string = containerPlatform == 'containerApps' ? cae!.name : ''
 output caeDefaultDomain string = containerPlatform == 'containerApps' ? cae!.properties.defaultDomain : ''
 output caeStaticIp string = containerPlatform == 'containerApps' ? cae!.properties.staticIp : ''
 
+/**
+ * The CIDR of the subnet this Container Apps environment injects into.
+ *
+ * WHY (#2720, and the compensating control for py/code-injection #729): two
+ * DEFAULT-ON hosts execute caller-supplied code — `udf-runtime` (execs the
+ * item's Python from the `X-Udf-Source-B64` header) and `script-runner`. Neither
+ * can hold a credential to authenticate callers: a shared key in their
+ * environment could simply be read back out by the very code they run, which
+ * moves the secret INTO the blast radius. Their boundary is therefore the
+ * NETWORK — internal ingress PLUS an `ipSecurityRestrictions` pin to the
+ * Console's own subnet.
+ *
+ * Both modules already accept `consoleAllowedCidrs`, and until this output
+ * existed NO orchestrator could pass it: the caller holds `containerSubnetId`
+ * (a resource id), not an address prefix. So the pin was defined, documented,
+ * and never applied — internal ingress alone means anything on the CAE VNet
+ * reaches an RCE surface.
+ *
+ * An OUTPUT rather than a new param on admin-plane/main.bicep deliberately:
+ * that orchestrator is at the 256-param ARM ceiling, and outputs do not count
+ * against it.
+ */
+resource caeSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-11-01' existing = if (containerPlatform == 'containerApps' && !empty(containerSubnetId)) {
+  name: '${split(containerSubnetId, '/')[8]}/${split(containerSubnetId, '/')[10]}'
+  scope: resourceGroup(split(containerSubnetId, '/')[2], split(containerSubnetId, '/')[4])
+}
+
+output infrastructureSubnetPrefix string = (containerPlatform == 'containerApps' && !empty(containerSubnetId))
+  ? caeSubnet!.properties.addressPrefix
+  : ''
+
 output aksId string = containerPlatform == 'aks' ? aks!.id : ''
 output aksName string = containerPlatform == 'aks' ? aks!.name : ''
 output aksOidcIssuer string = containerPlatform == 'aks' ? aks!.properties.oidcIssuerProfile.issuerURL : ''
