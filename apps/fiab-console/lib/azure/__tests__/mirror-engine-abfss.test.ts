@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { httpsToAbfss } from '../cloud-endpoints';
+import { httpsToAbfss, appConfigSuffixFromEndpoint } from '../cloud-endpoints';
 
 const ORIG_LOOM = process.env.LOOM_CLOUD;
 const ORIG_AZURE = process.env.AZURE_CLOUD;
@@ -116,5 +116,54 @@ describe('httpsToAbfss — the dfs suffix is regex-ESCAPED, so `.` is not a wild
     // …and absent in ours (returned unchanged === no match):
     expect(httpsToAbfss('https://acct.dfsXcoreYwindowsZnet/c/p'))
       .toBe('https://acct.dfsXcoreYwindowsZnet/c/p');
+  });
+});
+
+/**
+ * appConfigSuffixFromEndpoint decides whether an App Configuration host is
+ * Commercial or Gov, and that suffix feeds endpoint + token-audience
+ * construction. It matched with `host.endsWith('azconfig.io')`, which CodeQL
+ * flagged (js/incomplete-url-substring-sanitization #540): "'azconfig.io' may be
+ * preceded by an arbitrary host name."
+ *
+ * It is right — `endsWith` has no notion of a DNS label boundary, so
+ * `evilazconfig.io` (a different registrable domain) matched. Now via
+ * `hostHasSuffix`, which requires `=== suffix` or a separating dot.
+ *
+ * Legitimate hosts are unaffected: they always carry the dot. The confusable is
+ * asserted explicitly so the boundary cannot be lost in a later edit.
+ */
+describe('appConfigSuffixFromEndpoint — DNS label boundary, not bare endsWith (CodeQL #540)', () => {
+  it.each([
+    ['https://store.azconfig.io', 'azconfig.io'],
+    ['https://store.azconfig.azure.us', 'azconfig.azure.us'],
+    ['store.azconfig.io/some/path', 'azconfig.io'],
+  ])('classifies %s as %s', (endpoint, expected) => {
+    expect(appConfigSuffixFromEndpoint(endpoint)).toBe(expected);
+  });
+
+  it('does NOT accept a confusable GOV host that merely ENDS with the suffix', () => {
+    // `notazconfig.azure.us` is a different registrable domain, and the old
+    // `host.endsWith('azconfig.azure.us')` matched it:
+    expect('notazconfig.azure.us'.endsWith('azconfig.azure.us')).toBe(true);
+    // With the label boundary it no longer classifies as the Gov suffix — it
+    // falls through to the cloud default instead.
+    expect(appConfigSuffixFromEndpoint('https://notazconfig.azure.us')).not.toBe('azconfig.azure.us');
+  });
+
+  it('the COMMERCIAL confusable is rejected but not observable here — documented, not asserted', () => {
+    // `evilazconfig.io` no longer MATCHES 'azconfig.io'… but the function's
+    // documented contract is to fall back to the cloud-derived suffix when
+    // nothing matches, and in Commercial that fallback IS 'azconfig.io'. So the
+    // return value is identical either way and cannot distinguish "matched" from
+    // "fell through".
+    //
+    // Asserting `.not.toBe('azconfig.io')` here FAILED for exactly that reason —
+    // the test was wrong, not the fix. Recorded rather than deleted, because the
+    // next person will otherwise write the same assertion.
+    expect('evilazconfig.io'.endsWith('azconfig.io')).toBe(true);           // old form matched
+    expect(appConfigSuffixFromEndpoint('https://evilazconfig.io')).toBe('azconfig.io'); // == fallback
+    // The boundary itself is proven by the Gov case above, where the fallback
+    // differs from the suffix under test.
   });
 });

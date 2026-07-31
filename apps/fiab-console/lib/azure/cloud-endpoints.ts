@@ -1264,6 +1264,23 @@ export function getAppConfigScope(endpoint?: string): string {
  * we fall back to the cloud-derived suffix — an honest best-effort that keeps
  * the no-Fabric / no-vaporware contract (no fabricated host).
  */
+/**
+ * True when `host` IS `suffix` or sits under it as a real DNS label boundary.
+ *
+ * `host.endsWith('azconfig.io')` is not that check — it also matches
+ * `evilazconfig.io`, which is a different registrable domain entirely. CodeQL
+ * js/incomplete-url-substring-sanitization #540 flagged exactly that: "'azconfig.io'
+ * may be preceded by an arbitrary host name."
+ *
+ * Requiring `=== suffix` OR `.endsWith('.' + suffix)` makes the boundary a dot,
+ * so `store.azconfig.io` matches and `evilazconfig.io` does not. Legitimate
+ * hosts are unaffected — they always carry the separating dot.
+ */
+function hostHasSuffix(host: string, suffix: string): boolean {
+  if (!host || !suffix) return false;
+  return host === suffix || host.endsWith(`.${suffix}`);
+}
+
 export function appConfigSuffixFromEndpoint(endpoint: string): string {
   const host = (endpoint || '')
     .replace(/^https?:\/\//i, '')
@@ -1273,12 +1290,12 @@ export function appConfigSuffixFromEndpoint(endpoint: string): string {
   const override = process.env.LOOM_APPCONFIG_SUFFIX;
   if (override) {
     const o = override.replace(/^\.+/, '').replace(/\/+$/, '').toLowerCase();
-    if (o && host.endsWith(o)) return o;
+    if (o && hostHasSuffix(host, o)) return o;
   }
   // Gov suffix is the more specific match — test it first so a Gov host is not
   // mis-read as Commercial.
-  if (host.endsWith('azconfig.azure.us')) return 'azconfig.azure.us';
-  if (host.endsWith('azconfig.io')) return 'azconfig.io';
+  if (hostHasSuffix(host, 'azconfig.azure.us')) return 'azconfig.azure.us';
+  if (hostHasSuffix(host, 'azconfig.io')) return 'azconfig.io';
   return getAppConfigSuffix();
 }
 
