@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.11...csa-inabox-v0.80.12) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security+boot:** portal-backend — remove pip from runtime; make the image actually bootable ([#2751](https://github.com/fgarofalo56/csa-inabox/issues/2751)) ([443b338](https://github.com/fgarofalo56/csa-inabox/commit/443b338d3bf71b9606d4af65f35378d272d0ecbd))
+
 ## [0.80.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.10...csa-inabox-v0.80.11) (2026-07-31)
 
 
