@@ -938,6 +938,9 @@ param loomAmlRg string = ''
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Defaults to the Console UAMI name (loom-console) — the name the post-deploy bootstrap registers as a PG principal for Weave + the relational-store editors. Override only if the UAMI is named differently.')
 param loomPostgresAadUser string = 'loom-console'
 
+@description('Lakebase PostgreSQL Flexible Server FQDN wired into the Console as LOOM_POSTGRES_HOST when postgres is deployed (postgresEnabled). Empty when postgres is not deployed — the gate then reads opt-in, not blocked (#2755). The orchestrator reconstructs the deterministic name of modules/deploy-planner/postgres.bicep (psql-loom-<uniqueString(dlzRg)>) + the sovereign host suffix, mirroring loomWeavePgFqdn.')
+param loomPostgresHost string = ''
+
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
@@ -3409,6 +3412,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // in synapse-sql-client.ts; gov clouds set azuresynapse.us here.
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
+            // Lakebase Postgres FQDN — set when postgres is deployed (empty →
+            // the svc-postgres gate reads opt-in, and the vector store falls back
+            // to Azure AI Search). #2755: this was previously never wired, so
+            // even a deployed Lakebase server left LOOM_POSTGRES_HOST unset.
+            { name: 'LOOM_POSTGRES_HOST', value: loomPostgresHost }
             // PostgreSQL Entra-auth cloud portability (read by postgres-flex-client.ts).
             // Commercial / GCC use the Microsoft-documented OSS RDBMS scope
             // (ossrdbms-aad.database.windows.net — the .azure.com variant is not a

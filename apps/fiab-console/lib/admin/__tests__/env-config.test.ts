@@ -373,6 +373,10 @@ describe('admin/env-config registry', () => {
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CAPACITY_LCU',
       'LOOM_CONTENT_SAFETY_ENDPOINT',
+      // #2755 svc-cosmos-vcore — Mongo vCore is an OPTIONAL alternate vector
+      // backend selected by a customer connection string (no deployment default);
+      // Azure AI Search serves every vector workload by default, zero function lost.
+      'LOOM_COSMOS_VCORE_CONNECTION_STRING',
       // C3 svc-cost-anomaly-monitor — the scheduled cost-anomaly monitor is
       // default-ON (opt-out): unset LOOM_COST_ANOMALY_ENABLED = enabled, the
       // bicep-provisioned ACA Job seeds a whole-estate 3σ watch and alerts via
@@ -392,6 +396,10 @@ describe('admin/env-config registry', () => {
       // answered. The DuckDB tier changes latency, never results.
       'LOOM_DUCKDB_URL',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
+      // #2755 svc-feedback-forwarding — GitHub issue forwarding needs a customer
+      // fine-grained PAT (no deployment default); the in-store Cosmos feedback
+      // inbox captures every submission by default, zero function lost.
+      'LOOM_FEEDBACK_GITHUB_TOKEN',
       // N3 svc-flight-sql — unset is fully functional: the Connect tab renders
       // and Loom still streams the same Arrow batches over the audited HTTP
       // tier past the Arrow threshold; only the external ADBC/JDBC hop is absent.
