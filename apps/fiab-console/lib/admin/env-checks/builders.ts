@@ -137,8 +137,15 @@ export const BUILDERS_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-feedback-forwarding', category: 'builders', title: 'Feedback forwarding (GitHub issues)', severity: 'optional',
     required: ['LOOM_FEEDBACK_GITHUB_TOKEN'], warnOnMiss: true,
-    remediation: 'Set LOOM_FEEDBACK_GITHUB_TOKEN (fine-grained PAT, Key Vault-sourced) so in-product feedback forwards to GitHub issues. The in-store feedback inbox works without it.',
-    provisionedBy: 'ACA secret loom-feedback-github-token → apps[] env',
+    // Feedback capture is ON by default via the in-store Cosmos inbox
+    // (app/api/admin/feedback-forwarding). GitHub forwarding is an optional
+    // upgrade requiring a customer-supplied fine-grained PAT — which cannot have
+    // a deployment default. Absence loses ZERO function, so this is a
+    // configured default-on substrate, not a red blocker.
+    optionalDefault: true,
+    optionalDefaultDetail: 'The in-store feedback inbox (Cosmos) captures every submission out of the box. GitHub forwarding is optional — set LOOM_FEEDBACK_GITHUB_TOKEN (a fine-grained PAT with issues:write, Key Vault-sourced) only to also open GitHub issues.',
+    remediation: 'Optional. Set LOOM_FEEDBACK_GITHUB_TOKEN (fine-grained PAT with issues:write, Key Vault-sourced) to ALSO forward in-product feedback to GitHub issues. The in-store inbox captures everything without it.',
+    provisionedBy: 'Customer-supplied GitHub PAT (Key Vault secretRef loom-feedback-github-token → apps[] env); no deployment default — the in-store inbox is the default.',
     role: 'GitHub fine-grained PAT (issues:write on the target repo)',
   },
   {

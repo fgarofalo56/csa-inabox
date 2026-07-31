@@ -1255,6 +1255,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // Multi-sub can't be wired from a single admin-plane — operators run
     // scripts/csa-loom/patch-navigator-env.sh (same as the Cosmos endpoints).
     loomWeavePgFqdn: (useSingleDlz && weaveOntologyEnabled) ? '${take('psql-loom-weave-default-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
+    // Lakebase Postgres FQDN — reconstructs the deterministic name of
+    // modules/deploy-planner/postgres.bicep (psql-loom-<uniqueString(dlzRg)>,
+    // the ONLY postgres module the single-DLZ path deploys) + the sovereign
+    // suffix, exactly as loomWeavePgFqdn does for Weave. Empty when postgres is
+    // not deployed → the console's LOOM_POSTGRES_HOST stays unset and
+    // svc-postgres reads opt-in (#2755). Avoids a module-output cycle (adminPlane
+    // deploys before dpPostgres, which needs adminPlane's console principal).
+    loomPostgresHost: (useSingleDlz && postgresEnabled) ? '${take('psql-loom-${uniqueString(singleDlzRg.id)}', 63)}.${pgHostSuffix}' : ''
     loomWeavePgDatabase: (useSingleDlz && weaveOntologyEnabled) ? 'loom-weave' : ''
     loomWeaveGraph: (useSingleDlz && weaveOntologyEnabled) ? 'loom_ontology' : ''
     // DAB preview runtime (loom-dab-preview) — default-on. SQL target defaults to

@@ -349,8 +349,14 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-cosmos-vcore', category: 'azure-services', title: 'Cosmos DB for MongoDB vCore (vector search)', severity: 'optional',
     required: ['LOOM_COSMOS_VCORE_CONNECTION_STRING'], warnOnMiss: true,
-    remediation: 'Set LOOM_COSMOS_VCORE_CONNECTION_STRING (Key Vault-sourced) to enable the Mongo vCore vector-search backend (cosmos_vcore_not_configured). AI Search covers vector workloads without it.',
-    provisionedBy: 'modules/deploy-planner/cosmos-vcore.bicep → ACA secret → apps[] env',
+    // Vector search is ON by default via Azure AI Search; Mongo vCore is an
+    // ALTERNATE backend selected by a customer-supplied connection string (which
+    // by definition has no deployment default). Absence loses ZERO function, so
+    // this reads as a configured default-on substrate, not a red blocker.
+    optionalDefault: true,
+    optionalDefaultDetail: 'Azure AI Search serves every vector workload out of the box. Cosmos DB for MongoDB vCore is an optional alternate backend — set LOOM_COSMOS_VCORE_CONNECTION_STRING (Key Vault-sourced) only to route vectors through Mongo vCore instead.',
+    remediation: 'Optional. Set LOOM_COSMOS_VCORE_CONNECTION_STRING (Key Vault-sourced) to enable the Mongo vCore vector-search backend. AI Search covers vector workloads without it — this is an opt-in alternate.',
+    provisionedBy: 'Customer-supplied connection string (Key Vault secretRef → apps[] env); no deployment default — AI Search is the default vector backend.',
     role: 'none (connection-string auth)',
   },
   {
@@ -575,8 +581,16 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-postgres', category: 'azure-services', title: 'PostgreSQL Flexible Server (Lakebase / pgvector)', severity: 'optional',
     anyOf: [['LOOM_POSTGRES_HOST', 'LOOM_PGVECTOR_HOST']], warnOnMiss: true,
-    remediation: 'Set LOOM_POSTGRES_HOST (Lakebase Postgres) and/or LOOM_PGVECTOR_HOST (vector store) with LOOM_POSTGRES_AAD_USER so lakebase-postgres items and the pgvector backend connect. AAD token auth — no password.',
-    provisionedBy: 'modules/landing-zone/postgres-flex.bicep (postgresEnabled) → apps[] env LOOM_POSTGRES_HOST / LOOM_POSTGRES_AAD_USER',
+    // OPT-IN infra: a Postgres Flexible Server is off by default (postgresEnabled
+    // defaults false in the orchestrator) and carries real standing cost. Its
+    // absence removes no capability — the vector store is served by Azure AI
+    // Search, and lakebase-postgres items honest-gate until you deploy it. So an
+    // unset host reads the neutral 'opt-in' state, NOT a red misconfiguration.
+    // When you DO enable postgres (postgresEnabled=true), the deploy wires
+    // LOOM_POSTGRES_HOST from the server FQDN (see #2755 follow-up).
+    optIn: true,
+    remediation: 'Optional / opt-in. Deploy a Postgres Flexible Server (set postgresEnabled=true in the bicepparam) for lakebase-postgres items and a pgvector store; the deploy then wires LOOM_POSTGRES_HOST + LOOM_POSTGRES_AAD_USER. Vector search works without it via Azure AI Search.',
+    provisionedBy: 'modules/landing-zone/postgres-flexible.bicep (postgresEnabled=true; off by default — real standing cost) → apps[] env LOOM_POSTGRES_HOST / LOOM_POSTGRES_AAD_USER',
     role: 'AAD administrator-created role for the Console UAMI on the server (azure_ad_user)',
   },
   {
