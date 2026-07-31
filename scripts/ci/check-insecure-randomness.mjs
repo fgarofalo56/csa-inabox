@@ -56,12 +56,17 @@ const STATISTICAL_EXEMPT = new Map([
 /**
  * Total permitted `Math.random()` occurrences outside the exempt files.
  *
- * RATCHET — only ever goes DOWN. 168 -> 166: `admin/mcp-servers/deploy` moved its
+ * RATCHET — only ever goes DOWN. 166 -> 163: THREE copilot routes moved their
+ * sessionId to randomId (a guessable session id keys the conversation store).
+ * The two siblings with the same defect — azure-sql-database/[id]/copilot and
+ * report/[id]/powerbi-copilot — are in the route-toolkit baseline, so touching
+ * them demands a toolkit migration; deferred to a pass with a working codemod.
+ * 168 -> 166: `admin/mcp-servers/deploy` moved its
  * Container-App name suffix and its audit-row id to the crypto-backed
  * `lib/util/random-id` helpers. That suffix flowed into a Key Vault secret NAME,
  * which is what CodeQL flagged as a "security context" (#513/#527/#531).
  */
-const BASELINE = 166;
+const BASELINE = 163;
 
 /**
  * Strip `//` line comments and block comments before counting.
