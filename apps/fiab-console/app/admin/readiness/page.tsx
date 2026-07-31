@@ -106,7 +106,11 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS,
   },
   graphShell: {
-    height: '560px', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    // Responsive height (was a hard 560px that clipped ~68 orphan nodes into a
+    // fixed scroller). Grows with the viewport; the SplitPane inside is still
+    // user-resizable + persisted. #2754.
+    height: 'clamp(560px, 72vh, 960px)',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground1,
   },
@@ -122,7 +126,10 @@ const useStyles = makeStyles({
   nodeWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
   node: {
     display: 'flex', flexDirection: 'column', gap: '2px',
-    width: '184px', minWidth: 0, boxSizing: 'border-box',
+    // Was a FIXED 184px that truncated long titles to "Federated SQL en…". Now a
+    // bounded flex box so a 2-line title fits without a tooltip (#2754); the max
+    // keeps the wrap grid tidy, minWidth:0 lets it shrink before clipping.
+    flex: '1 1 190px', minWidth: '170px', maxWidth: '250px', boxSizing: 'border-box',
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -132,11 +139,12 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow8, backgroundColor: tokens.colorNeutralBackground1Hover },
   },
   nodeActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px' },
-  nodeTop: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
-  nodeDot: { flexShrink: 0, width: '8px', height: '8px', borderRadius: tokens.borderRadiusCircular },
+  nodeTop: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  nodeDot: { flexShrink: 0, width: '8px', height: '8px', borderRadius: tokens.borderRadiusCircular, marginTop: '5px' },
   nodeName: {
-    flexGrow: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap', fontSize: tokens.fontSizeBase300,
+    // Two-line clamp (was whiteSpace:'nowrap' + ellipsis → unreadable truncation).
+    flexGrow: 1, minWidth: 0, fontSize: tokens.fontSizeBase300, lineHeight: tokens.lineHeightBase200,
+    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
   },
   nodeSub: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   // inspector
@@ -199,6 +207,10 @@ export default function AdminReadinessPage() {
     const out: WorkloadGroup[] = [];
     for (const def of WORKLOADS) {
       const wl = wlById.get(def.id);
+      // A capability may belong to >1 workload (e.g. svc-synapse in both Data
+      // Integration and Data Engineering) — shown under EACH so the per-workload
+      // filter is complete. Node cards use a workload-scoped React key so the
+      // duplicates never collide.
       const nodes = def.capabilityIds.map((id) => nodeById.get(id)).filter((n): n is CapabilityNode => !!n);
       nodes.forEach((n) => assigned.add(n.id));
       out.push({ key: def.id, title: def.title, glyph: def.glyph, nodes, state: wl?.state });
