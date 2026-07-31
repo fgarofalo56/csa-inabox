@@ -1,0 +1,42 @@
+# pnpm settings for apps/fiab-console.
+#
+# This file exists ONLY to carry `overrides`. pnpm 11 stopped reading
+# `pnpm.overrides` from package.json — it warns
+#   "The 'pnpm' field in package.json is no longer read by pnpm.
+#    The following keys were ignored: 'pnpm.overrides'"
+# and pnpm-workspace.yaml is the documented new home for those settings.
+#
+# `packages: ['.']` — the SINGLE member is this project itself. I first wrote
+# this file with no `packages:` field at all, reasoning that fiab-console is not
+# a workspace root and globs would change install semantics. pnpm rejects that
+# outright: creating the file makes the directory a workspace root, and the
+# field is mandatory. CI caught it in 17 seconds —
+#     ERROR  packages field missing or empty
+# on both `pnpm install` steps. Declaring exactly one member ('.') keeps the
+# resolution graph identical to the pre-workspace layout while giving pnpm the
+# field it requires. Do NOT widen this to 'apps/*' or similar: that would pull
+# sibling apps into one resolution graph, which is a real behaviour change.
+packages:
+  - '.'
+#
+# WHY OVERRIDES AND NOT DEPENDENCY BUMPS. Every package below is a TRANSITIVE
+# dependency — none appears in package.json. Dependabot reports each as a
+# runtime-scope advisory, so they DO ship in the console image, but there is no
+# direct-dependency version to raise; the fix is to floor the resolved version
+# for every consumer at once.
+#
+# Each entry is the `first_patched_version` from the corresponding advisory, and
+# each is a `>=` floor rather than a pin so ordinary upgrades are not blocked.
+# Remove an entry once the parent package's own release pulls in a patched
+# version by itself — the floor is a stopgap, not a permanent pin.
+overrides:
+  # 8 advisories against 8.0.0-8.5.0 (highest patched: 8.6.0), plus one against
+  # the 7.x line patched in 7.6.5. The 8.x floor covers both, since nothing here
+  # resolves protobufjs 7.
+  protobufjs: '>=8.6.0'
+  # <8.5.10 and <=8.5.11 advisories in this lockfile; portal/react-webapp has a
+  # separate <=8.5.17 advisory handled in its own manifest.
+  postcss: '>=8.5.12'
+  uuid: '>=11.1.1'
+  '@opentelemetry/core': '>=2.8.0'
+  '@opentelemetry/propagator-jaeger': '>=2.9.0'
