@@ -48,6 +48,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { cogScope, getOpenAiSuffix } from '@/lib/azure/cloud-endpoints';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
 import { iterateAoaiDeltas } from '@/lib/api/aoai-sse';
+import { randomId } from '@/lib/util/random-id';
 
 // ---------- Command allowlist ----------
 const COMMANDS = ['fix', 'explain', 'nl2sql'] as const;
@@ -212,7 +213,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const sessionId =
-    body.sessionId || `sqlcopilot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    body.sessionId || randomId('sqlcopilot', 6);
 
   // Resolve AOAI — honest gate when nothing is wired.
   let target: ResolvedTarget;

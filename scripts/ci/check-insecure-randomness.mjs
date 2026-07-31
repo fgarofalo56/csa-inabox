@@ -56,7 +56,10 @@ const STATISTICAL_EXEMPT = new Map([
 /**
  * Total permitted `Math.random()` occurrences outside the exempt files.
  *
- * RATCHET — only ever goes DOWN. 166 -> 163: THREE copilot routes moved their
+ * RATCHET — only ever goes DOWN. 163 -> 160: the three copilot routes deferred
+ * in the first pass (they are route-toolkit-baselined; the codemod confirms all
+ * three are streaming/SSE, so they are now TOUCH_EXEMPT with a verified reason).
+ * 166 -> 163: THREE copilot routes moved their
  * sessionId to randomId (a guessable session id keys the conversation store).
  * The two siblings with the same defect — azure-sql-database/[id]/copilot and
  * report/[id]/powerbi-copilot — are in the route-toolkit baseline, so touching
@@ -66,7 +69,7 @@ const STATISTICAL_EXEMPT = new Map([
  * `lib/util/random-id` helpers. That suffix flowed into a Key Vault secret NAME,
  * which is what CodeQL flagged as a "security context" (#513/#527/#531).
  */
-const BASELINE = 163;
+const BASELINE = 160;
 
 /**
  * Strip `//` line comments and block comments before counting.

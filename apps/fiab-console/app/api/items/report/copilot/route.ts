@@ -30,6 +30,7 @@ import { REPORT_COPILOT_PERSONA } from '@/lib/azure/copilot-personas';
 import {
   isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem,
 } from '../../_lib/pbi-content-fallback';
+import { randomId } from '@/lib/util/random-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,7 +70,7 @@ export async function POST(req: NextRequest) {
   const reg = new LoomToolRegistry();
   for (const t of buildReportTools(boundItem)) reg.register(t);
 
-  const sessionId = body.sessionId || `report-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = body.sessionId || randomId('report', 6);
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
 
   const encoder = new TextEncoder();
