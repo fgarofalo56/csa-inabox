@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.8...csa-inabox-v0.80.9) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** build the button-state map on a null prototype ([#2742](https://github.com/fgarofalo56/csa-inabox/issues/2742)) ([3d528a8](https://github.com/fgarofalo56/csa-inabox/commit/3d528a8bfc6b591a030d44ce89710d61c4e75c12))
+* **security:** credential-returning routes must authorize, not just authenticate ([#2744](https://github.com/fgarofalo56/csa-inabox/issues/2744)) ([f41b7ba](https://github.com/fgarofalo56/csa-inabox/commit/f41b7ba0ec6937882f69a3331b0c6575bc068b0e))
+
 ## [0.80.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.7...csa-inabox-v0.80.8) (2026-07-31)
 
 
