@@ -22,11 +22,26 @@
 //   - Its user-assigned managed identity is used ONLY for ACR pull. It needs no
 //     data-plane role on the lake (it never touches the lake).
 //
-// R0 PARAM-CAP RULE: admin-plane/main.bicep is at the ARM 256-parameter
-// ceiling, so this module takes a single typed CONFIG-OBJECT bag and deploys
-// OUT OF BAND (standalone entrypoint, orphan-allowlisted in
-// scripts/ci/check-bicep-sync.mjs) exactly like the sibling
-// data-plane/duckdb-aca.bicep.
+// DEFAULT-ON (loom_default_on_opt_out.md, 2026-07-28). This module is INVOKED BY
+// THE ORCHESTRATOR — admin-plane/main.bicep deploys it whenever the deployment is
+// on Container Apps with deployAppsEnabled, in EVERY boundary (Commercial, GCC,
+// GCC-High, IL5), and wires LOOM_MIGRATE_URL onto the Console app from this
+// module's `fqdn` output. There is no operator step: a fresh push-button deploy
+// brings the reader up and sets the var.
+//
+// Admin opt-out (the rule requires a disable toggle, not an enable wizard):
+//   -p loomBackends='{ "loomMigrate": "disabled" }'  → the module is skipped,
+//   LOOM_MIGRATE_URL is emitted empty and /admin/migrate renders with its honest
+//   Fix-it gate.
+//
+// COST — minReplicas 0. The reader is only hit during a manual, non-interactive
+// assessment, so scale-to-zero costs nothing at idle (~$0/mo) and a cold start
+// adds seconds to an action that already takes minutes.
+//
+// R0 PARAM-CAP RULE: admin-plane/main.bicep is near the ARM 256-parameter
+// ceiling, so this module takes a single typed CONFIG-OBJECT bag (no new
+// top-level params anywhere). It remains directly deployable out of band for an
+// incremental/sovereign provision:
 //
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep \

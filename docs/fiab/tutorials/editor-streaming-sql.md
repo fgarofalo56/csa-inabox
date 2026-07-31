@@ -89,8 +89,11 @@ Three tabs, all backed by real routes:
 | `LOOM_EVENTHUB_NAMESPACE` unset | The source builder notes no namespace is configured; you can still author a source against an explicit hub | Set `LOOM_EVENTHUB_NAMESPACE` to your Event Hubs namespace |
 | `n7a-streaming-sql` flag off | Whole surface reverts to a guided notice; the tier, its routes and every other editor keep working | Re-enable the flag in **Admin → Runtime flags** |
 
-The stateful tier is an **opt-in accelerator, never a blocker** — a fresh item
-opens clean, with no red banner.
+The stateful tier ships **deployed and wired by default** (`admin-plane/main.bicep`
+stands up the `loom-risingwave` Container App and sets `LOOM_RISINGWAVE_URL` on
+every apps-enabled deploy, in Commercial and Gov alike), so the gate row above is
+the exception, not the norm. Even when it is open the surface is **never
+blocked** — a fresh item opens clean, with no red banner.
 
 ## No Fabric required
 

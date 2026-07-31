@@ -265,45 +265,71 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     },
   },
   // ── M1 — estate assessment reader (the inbound-migration on-ramp) ──
-  //    Opt-in by nature: assessment only runs when you point Loom at a source
-  //    estate to migrate FROM. Unset → /admin/migrate fully renders (guided
-  //    empty state) and the assess route honest-gates with a Fix-it; a Fabric /
-  //    Power BI estate is only ever a migration SOURCE (Loom needs no Fabric).
+  //    DEFAULT-ON since 2026-07-28: admin-plane/main.bicep deploys the reader on
+  //    every apps-enabled deploy (all boundaries) and wires LOOM_MIGRATE_URL, so
+  //    a fresh push-button deploy closes this gate. Scale-to-zero (~$0 idle).
+  //    Unset → /admin/migrate fully renders (guided empty state) and the assess
+  //    route honest-gates with a Fix-it; a Fabric / Power BI estate is only ever
+  //    a migration SOURCE (Loom needs no Fabric).
   {
     id: 'svc-loom-migrate', category: 'data-plane', title: 'Estate assessment reader (inbound migration on-ramp)', severity: 'optional',
     required: ['LOOM_MIGRATE_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_MIGRATE_URL to the internal-ingress FQDN of the loom-migrate Container App (connects to a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI source estate and enumerates its inventory for the /admin/migrate readiness report). Deploy platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep, then set the var on the Console app. The reader is NEVER public — every enumeration goes through the audited BFF at /api/migrate/assess. Each SaaS source still needs its own connection (account/workspace URL + a Key-Vault-stored token) supplied in the surface; until then that connector is honestly gated (never a fabricated count).',
+      'LOOM_MIGRATE_URL is set by the deployment itself — admin-plane/main.bicep deploys data-plane/loom-migrate-aca.bicep by default and wires the reader\'s internal FQDN. If it is unset, this estate predates that wiring (redeploy), the apps tier has not deployed yet, or an admin opted out with loomBackends.loomMigrate=\'disabled\'. To set it manually, point it at the internal-ingress FQDN of the loom-migrate Container App (connects to a Snowflake / Databricks Unity Catalog / Microsoft Fabric / Power BI source estate and enumerates its inventory for the /admin/migrate readiness report). The reader is NEVER public — every enumeration goes through the audited BFF at /api/migrate/assess, and it scales to zero so it costs nothing when no assessment is running. Each SaaS source still needs its own connection (account/workspace URL + a Key-Vault-stored token) supplied in the surface; until then that connector is honestly gated (never a fabricated count).',
     docs: 'https://learn.microsoft.com/azure/container-apps/',
-    provisionedBy: 'modules/data-plane/loom-migrate-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_MIGRATE_URL on the Console app',
-    role: 'No new Azure role on the Console UAMI — the BFF proxies to the reader (internal ingress). The reader carries its own UAMI; SaaS-source credentials are Key Vault secrets supplied per connection.',
+    provisionedBy: 'modules/data-plane/loom-migrate-aca.bicep — deployed DEFAULT-ON by admin-plane/main.bicep (every Container Apps boundary, Commercial + Gov) → LOOM_MIGRATE_URL wired onto the Console app by the same template. Also directly deployable out of band for an incremental provision (.github/workflows/gov-provision-streaming-migrate.yml does this for the live Gov estate).',
+    role: 'No new Azure role on the Console UAMI — the BFF proxies to the reader (internal ingress). The reader carries its own dedicated uami-loom-migrate-<region> holding AcrPull ONLY (zero data-plane roles); SaaS-source credentials are Key Vault secrets supplied per connection.',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'The reader runs IN-BOUNDARY on the deployment\'s own Container Apps environment — no SaaS assessment service is in the path, so the on-ramp itself runs disconnected in an IL5 / air-gapped enclave. Individual SaaS-source connectors (Snowflake / Databricks / Fabric / Power BI) reach their own estates and stay honestly gated until their connection prerequisite is provided.',
     },
   },
   // ── N7a — RisingWave stateful streaming-SQL tier (Openness Tier-2 T2-A) ──
-  //    Opt-in stateful-streaming BACKEND (~$150-300/mo/cloud); the streaming-sql
-  //    ITEM TYPE + editor are default-ON and render fully with LOOM_RISINGWAVE_URL
-  //    unset (guided empty state + Fix-it). Azure Stream Analytics stays the LIGHT
-  //    default for simple jobs (the stream-analytics-job item) — this is the
-  //    stateful class (windowed joins, incremental aggregations) ASA can't express.
+  //    DEFAULT-ON since 2026-07-28: admin-plane/main.bicep deploys the tier on
+  //    every apps-enabled deploy (all boundaries) and wires LOOM_RISINGWAVE_URL.
+  //    It is the ONE runtime here that cannot scale to zero (single-node MV +
+  //    meta state lives in process), so it runs 1 replica at the smallest
+  //    ACA-legal size. PLAN AGAINST THE ACTIVE RATE, ~$150/mo/cloud: ACA only
+  //    bills idle rates while a replica stays under 0.01 vCPU and 1 KB/s, and a
+  //    single-node engine running meta heartbeats, barriers and compaction does
+  //    not. Admin opt-OUT is
+  //    loomBackends.risingwave='disabled'. Unset → the streaming-sql editor
+  //    renders fully (guided empty state + Fix-it) and Azure Stream Analytics
+  //    (the stream-analytics-job item) still covers simple jobs.
   {
     id: 'svc-loom-risingwave', category: 'data-plane', title: 'Streaming SQL tier (RisingWave Container App)', severity: 'optional',
     required: ['LOOM_RISINGWAVE_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_RISINGWAVE_URL to the internal-ingress FQDN (optionally host:port) of the loom-risingwave '
-      + 'Container App (single-node RisingWave, Apache-2.0 — authors streaming materialized views in SQL over '
-      + 'Azure Event Hubs via its Kafka endpoint, sinking to Delta/Iceberg on the DLZ lake or the Postgres wire). '
-      + 'Deploy platform/fiab/bicep/modules/data-plane/loom-risingwave-aca.bicep, then set the var on the Console '
-      + 'app. The tier is NEVER public — every statement goes through the audited BFF at /api/streaming-sql/*. It '
-      + 'is an opt-in STATEFUL-streaming tier (~$150-300/mo/cloud); the streaming-sql editor renders fully with '
-      + 'the var unset (Azure Stream Analytics still covers simple jobs). Optional: LOOM_RISINGWAVE_DATABASE '
-      + '(default dev), LOOM_RISINGWAVE_USER (default root), LOOM_RISINGWAVE_PASSWORD (KV secret; single-node '
-      + 'default is in-VNet trust).',
+      'LOOM_RISINGWAVE_URL is set by the deployment itself — admin-plane/main.bicep deploys '
+      + 'data-plane/loom-risingwave-aca.bicep by default and wires <fqdn>:4566. If it is unset, this estate '
+      + 'predates that wiring (redeploy), the apps tier has not deployed yet, or an admin opted out with '
+      + 'loomBackends.risingwave=\'disabled\'. To set it manually, point it at the internal-ingress FQDN '
+      + '(optionally host:port) of the loom-risingwave Container App (single-node RisingWave, Apache-2.0 — '
+      + 'authors streaming materialized views in SQL over Azure Event Hubs via its Kafka endpoint, sinking to '
+      + 'Delta/Iceberg on the DLZ lake or the Postgres wire). The tier is NEVER public — every statement goes '
+      + 'through the audited BFF at /api/streaming-sql/*. COST: a streaming engine cannot scale to zero without '
+      + 'losing its materialized-view state, so this runs 1 replica at 2.0 vCPU / 4.0Gi. Budget the ACTIVE rate, '
+      + 'about $150/mo per cloud: ACA charges idle rates only while a replica stays below 0.01 vCPU and 1 KB/s, '
+      + 'and a single-node engine running meta heartbeats, barriers and compaction does not. Note the replica '
+      + 'filesystem is EPHEMERAL unless RW_STATE_STORE is pointed at durable object storage — a revision roll or '
+      + 'a platform replica replacement drops the materialized views either way. AUTHENTICATION IS MANDATORY and '
+      + 'the deployment sets it up: RisingWave ships its `root` superuser with NO password, and every app in a '
+      + 'Container Apps environment draws its pod IP from the SAME infrastructure subnet — so an unauthenticated '
+      + 'engine is reachable as root by loom-script-runner and loom-udf-runtime, two services that execute '
+      + 'user-supplied code (found live on 2026-07-29 and removed from the estate). No ACA ingress IP rule can '
+      + 'separate environment siblings, so the fix is a credential: admin-plane/main.bicep generates an '
+      + 'unpredictable password, stores it in the Loom Key Vault, and binds it on BOTH the engine and the Console '
+      + 'as a Key-Vault-backed Container Apps secretRef (LOOM_RISINGWAVE_PASSWORD) — never a plain env literal. '
+      + 'The image refuses to start without it. The credential alone was not enough either: stock RisingWave '
+      + 'single-node binds FIVE routable ports and only the Postgres wire (4566) authenticates — meta gRPC 5690 '
+      + 'can create and drop catalog objects — and ACA ingress is not a firewall, because a replica is reachable '
+      + 'on its pod IP regardless of targetPort. The image now binds meta, dashboard, compute and compactor to '
+      + '127.0.0.1 only and asserts it at boot (zero routable sockets while sealed, exactly one while serving, '
+      + 'container dies otherwise). Optional overrides: LOOM_RISINGWAVE_DATABASE (default dev), '
+      + 'LOOM_RISINGWAVE_USER (default root).',
     docs: 'https://docs.risingwave.com/docs/current/intro/',
-    provisionedBy: 'modules/data-plane/loom-risingwave-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_RISINGWAVE_URL on the Console app',
-    role: 'Storage Blob Data Contributor (uami-loom-risingwave) on the DLZ lake — declared in the module (the streaming sink WRITES Delta/Iceberg). The Console UAMI needs no new role (the BFF proxies over the Postgres wire).',
+    provisionedBy: 'modules/data-plane/loom-risingwave-aca.bicep — deployed DEFAULT-ON by admin-plane/main.bicep (every Container Apps boundary, Commercial + Gov) → LOOM_RISINGWAVE_URL wired onto the Console app by the same template. Also directly deployable out of band for an incremental provision (.github/workflows/gov-provision-streaming-migrate.yml does this for the live Gov estate).',
+    role: 'Storage Blob Data Contributor on the DLZ lake for the dedicated uami-loom-risingwave-<region> (the streaming sink WRITES Delta/Iceberg) — granted by admin-plane/main.bicep at the DLZ resource-group scope, plus AcrPull on the Loom ACR and Key Vault Secrets User on the Loom vault (it resolves its own mandatory root credential at revision start). The Console UAMI needs no new Azure role — it already holds Key Vault Secrets Officer, which covers reading the same secret. Nothing else in the Container Apps environment is granted read on that secret; that grant IS the boundary between the streaming database and the code-execution apps it shares an environment with.',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'RisingWave is a self-contained Rust binary with no external control plane; the Event Hubs Kafka endpoint and ADLS Gen2 are both in-boundary and reachable in Azure Government through IL5, so the whole streaming tier runs disconnected in an air-gapped enclave. No SaaS streaming service, no Microsoft Fabric / OneLake is in the path.',

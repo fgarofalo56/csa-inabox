@@ -88,9 +88,22 @@ translation works in a disconnected enclave.
 | Translate | `POST /api/migrate/translate` -> the in-boundary transpilers |
 | Audit | Every enumeration is an audited BFF call; the reader is never public |
 
-## Honest gates
+## Deployment (default ON) and honest gates
 
-- **`LOOM_MIGRATE_URL` unset.** `/admin/migrate` still renders; Assess
+**`LOOM_MIGRATE_URL` is set by the deployment itself.** Since 2026-07-28
+`admin-plane/main.bicep` deploys
+`platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep` on every
+apps-enabled deploy, in **every Container Apps boundary — Commercial, GCC,
+GCC-High and IL5** — and wires `https://<fqdn>` onto the Console, so a fresh
+push-button deploy closes the `svc-loom-migrate` gate with no operator step. The
+reader runs `minReplicas: 0`, so default-ON costs approximately **$0 at idle**:
+it only spins up during an assessment, where a cold start is seconds against an
+action that already takes minutes. Admins opt OUT with
+`observabilityConfig.backendOverrides.loomMigrate = 'disabled'`.
+
+- **`LOOM_MIGRATE_URL` unset.** Only possible on a pre-2026-07-28 estate that
+  has not been redeployed, before the apps tier deploys, or after an explicit
+  opt-out. `/admin/migrate` still renders; Assess
   honest-gates with a Fix-it naming the variable and the bicep module
   (`platform/fiab/bicep/modules/data-plane/loom-migrate-aca.bicep`). No
   fabricated counts, ever.
@@ -100,6 +113,25 @@ translation works in a disconnected enclave.
 - **In an IL5 boundary** the reader itself runs in-boundary and the on-ramp works
   disconnected; individual SaaS-source connectors stay honestly gated until their
   connection prerequisite is provided.
+
+### Getting the image into a sovereign ACR (GCC-High / IL5)
+
+The template deploys the reader in Gov exactly as it does in Commercial, so the
+only Gov prerequisite is the one `loom-console` already has: the `loom-migrate`
+image must be in that boundary's registry at the tag `appImageTags.loomMigrate`
+resolves to (`v0.1` by default in `params/gcc-high.bicepparam` and
+`params/il5.bicepparam`). A missing manifest fails the Container App PUT with
+`MANIFEST_UNKNOWN`.
+
+Build it **server-side** — the only mechanism that reaches a
+`publicNetworkAccess=Disabled` registry — with either
+`.github/workflows/build-fiab-images-acr-tasks.yml` (`boundary=GCC-High` /
+`IL5`, full image set) or `.github/workflows/gov-provision-streaming-migrate.yml`
+(`mode=build-only` for just `loom-migrate` + `loom-risingwave`;
+`mode=build-and-deploy` also stands both Container Apps up and wires the vars on
+an estate that is already running). **Not** `build-fiab-images.yml`: it uses the
+Commercial service principal and pushes client-side, so it cannot produce a Gov
+image, and it now hard-fails when dispatched with a Gov boundary.
 
 ## Kill-switches
 

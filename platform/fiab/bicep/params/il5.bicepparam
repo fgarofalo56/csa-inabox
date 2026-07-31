@@ -168,6 +168,24 @@ param appImageTags = {
   // .github/workflows/deploy-fiab-il5.yml image-preflights this tag before it
   // deploys over a live estate.
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
+  // loom-migrate (M1 estate-assessment reader) + loom-risingwave (N7a stateful
+  // streaming-SQL tier) are DEFAULT-ON in EVERY Container Apps boundary as of
+  // 2026-07-28. IL5 sets containerPlatform='containerApps' (L76) and
+  // deployAppsEnabled=true (below), so admin-plane/main.bicep DOES deploy both
+  // here and DOES pull these tags. A .bicepparam assignment REPLACES the object
+  // (it does not merge with the template default), so omitting these keys left
+  // the tag pinned to the `?? 'v0.1'` fallback with no operator lever at all.
+  //
+  // Both images MUST be in the IL5 ACR before an apps-enabled deploy — same
+  // precondition as loom-console. Build them SERVER-SIDE with
+  // .github/workflows/build-fiab-images-acr-tasks.yml (boundary=IL5) or, for
+  // just these two, gov-provision-streaming-migrate.yml (boundary=IL5,
+  // mode=build-only). NOT build-fiab-images.yml — that workflow authenticates
+  // with the Commercial SP and pushes client-side, so it cannot reach a
+  // sovereign publicNetworkAccess=Disabled registry (it now hard-fails if
+  // dispatched with a Gov boundary rather than silently no-op'ing).
+  loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
+  risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
 }
 
 // MSAL — IL5 tenant client id+secret via env (don't commit)

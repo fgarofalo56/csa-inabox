@@ -81,15 +81,30 @@ export interface RisingWaveTarget {
   port: number;
   database: string;
   user: string;
-  /** Optional password (KV secret). RisingWave single-node default has none. */
+  /**
+   * Root credential, delivered as a Key-Vault-backed Container Apps secretRef.
+   * Upstream RisingWave leaves `root` password-less; a Loom-deployed engine
+   * never does (its entrypoint fails closed), so this is populated in practice.
+   * Typed optional for BYO endpoints only.
+   */
   password?: string;
 }
 
 /**
  * Resolve the RisingWave connection from env. `LOOM_RISINGWAVE_URL` accepts a
  * bare host, `host:port`, or a `postgres://user@host:port/db` URL. Database /
- * user default to RisingWave's single-node defaults (`dev` / `root`); a password
- * is used only when `LOOM_RISINGWAVE_PASSWORD` is set (in-VNet trust otherwise).
+ * user default to RisingWave's single-node defaults (`dev` / `root`).
+ *
+ * `LOOM_RISINGWAVE_PASSWORD` is the ROOT CREDENTIAL and is set by the deployment
+ * as a Key-Vault-backed Container Apps secretRef — never a plain env literal.
+ * The engine's entrypoint refuses to start without the matching secret, so on a
+ * Loom-deployed tier this is always present. It stays optional in this signature
+ * only so a BYO/legacy endpoint still connects; against a Loom-deployed engine an
+ * absent password now yields an authentication failure rather than a silent
+ * anonymous root session. "In-VNet trust" is explicitly NOT the posture: every
+ * app in a Container Apps environment draws its pod IP from the same
+ * infrastructure subnet, which put loom-script-runner and loom-udf-runtime — two
+ * services that execute user-supplied code — one TCP connect from root.
  * Throws the honest 503 when the URL is unset.
  */
 export function resolveRisingWaveTarget(): RisingWaveTarget {
@@ -231,6 +246,25 @@ async function connect(target: RisingWaveTarget, statementTimeoutMs: number) {
   return client;
 }
 
+/**
+ * HTTP status for a driver error: 401 when the engine rejected the credential,
+ * 502 otherwise.
+ *
+ * RisingWave does NOT use the Postgres SQLSTATEs for this. Measured against the
+ * pinned v2.1.3 image with the real `pg` driver, a wrong/absent password comes
+ * back as `XX000` ("Invalid password"), not `28P01` / `28000`. Mapping only the
+ * standard codes therefore reported every authentication failure as a generic
+ * 502 "backend error", which is exactly the wrong remediation to put in front of
+ * an operator whose Key Vault secret has drifted. The standard codes stay in the
+ * list for a BYO Postgres-compatible endpoint that does use them.
+ */
+function driverErrorStatus(e: any): number {
+  const code = String(e?.code || '');
+  if (code === '28000' || code === '28P01') return 401;
+  if (/invalid password|password authentication|authentication failed/i.test(String(e?.message || ''))) return 401;
+  return 502;
+}
+
 function shape(res: any, startedMs: number): StreamingSqlResult {
   const fields = (res as any)?.fields || [];
   const columns: StreamingSqlColumn[] = fields.map((f: any) => ({ name: f.name }));
@@ -263,11 +297,7 @@ export async function runStreamingQuery(sql: string, opts: { maxRows?: number } 
     const res: any = await client.query(text);
     return shape(res, started);
   } catch (e: any) {
-    throw new RisingWaveError(
-      e?.message || String(e),
-      e?.code === '28000' || e?.code === '28P01' ? 401 : 502,
-      e?.code,
-    );
+    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code);
   } finally {
     if (client) await client.end().catch(() => { /* already closed */ });
   }
@@ -287,11 +317,7 @@ export async function executeStreamingDdl(sql: string): Promise<StreamingSqlResu
     const res: any = await client.query(statement);
     return shape(res, started);
   } catch (e: any) {
-    throw new RisingWaveError(
-      e?.message || String(e),
-      e?.code === '28000' || e?.code === '28P01' ? 401 : 502,
-      e?.code,
-    );
+    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code);
   } finally {
     if (client) await client.end().catch(() => { /* already closed */ });
   }
@@ -325,10 +351,25 @@ export interface StreamingStatus {
 /**
  * Read the live streaming status off RisingWave's own catalog. Every field is a
  * REAL query against the `rw_catalog` system schema — no fabricated metrics:
- *   - rw_materialized_views → the MV list + definitions
- *   - rw_ddl_progress       → in-flight backfill progress per creating object
- *   - rw_sources / rw_sinks → connected source / sink counts
+ *   - rw_materialized_views ⋈ rw_schemas → the MV list + definitions + schema
+ *   - rw_ddl_progress                    → in-flight backfill progress
+ *   - rw_sources / rw_sinks              → connected source / sink counts
  * Per-MV row counts are a best-effort `SELECT count(*)` (capped), skipped on error.
+ *
+ * COLUMN NAMES ARE VERIFIED AGAINST THE PINNED ENGINE (v2.1.3), not assumed.
+ * The first version of this function shipped two wrong ones, both found on
+ * 2026-07-30 by running the real image and reading `information_schema.columns`:
+ *   - `rw_materialized_views.schema_name` DOES NOT EXIST — the relation carries
+ *     `schema_id` (id, name, schema_id, owner, definition, append_only, acl,
+ *     initialized_at, created_at, …). The old SELECT therefore threw, and since
+ *     that query was NOT wrapped in a catch, the whole /api/streaming-sql/status
+ *     route 502'd on every call. Fixed with a LEFT JOIN to `rw_schemas`.
+ *   - `rw_ddl_progress.ddl_desc` DOES NOT EXIST — the relation carries
+ *     `ddl_statement` (ddl_id, ddl_statement, progress, initialized_at). That
+ *     query WAS wrapped in a catch, so backfill progress silently never
+ *     appeared rather than erroring.
+ * If the engine pin is bumped, re-check both against
+ * `SELECT column_name FROM information_schema.columns WHERE table_name = …`.
  */
 export async function readStreamingStatus(): Promise<StreamingStatus> {
   const target = resolveRisingWaveTarget();
@@ -343,14 +384,17 @@ export async function readStreamingStatus(): Promise<StreamingStatus> {
     } catch { /* version is decorative */ }
 
     const mvRes: any = await client.query(
-      'SELECT name, schema_name, definition FROM rw_catalog.rw_materialized_views ORDER BY name',
+      'SELECT mv.name AS name, s.name AS schema_name, mv.definition AS definition '
+      + 'FROM rw_catalog.rw_materialized_views mv '
+      + 'LEFT JOIN rw_catalog.rw_schemas s ON s.id = mv.schema_id '
+      + 'ORDER BY mv.name',
     );
     const progressRes: any = await client.query(
-      'SELECT ddl_desc, progress FROM rw_catalog.rw_ddl_progress',
+      'SELECT ddl_statement, progress FROM rw_catalog.rw_ddl_progress',
     ).catch(() => ({ rows: [] }));
     const progressByName = new Map<string, string>();
     for (const r of progressRes.rows || []) {
-      const desc = String(r.ddl_desc || '');
+      const desc = String(r.ddl_statement || '');
       const m = /MATERIALIZED VIEW\s+(?:[\w."]+\.)?"?(\w+)"?/i.exec(desc);
       if (m) progressByName.set(m[1], String(r.progress ?? ''));
     }
@@ -385,7 +429,7 @@ export async function readStreamingStatus(): Promise<StreamingStatus> {
 
     return { engine: 'risingwave', version, materializedViews, sourceCount, sinkCount };
   } catch (e: any) {
-    throw new RisingWaveError(e?.message || String(e), e?.code === '28000' ? 401 : 502, e?.code);
+    throw new RisingWaveError(e?.message || String(e), driverErrorStatus(e), e?.code);
   } finally {
     if (client) await client.end().catch(() => { /* already closed */ });
   }

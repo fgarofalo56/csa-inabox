@@ -208,6 +208,13 @@ param appImageTags = {
   //            `tag` input, default v0.1 -> build matrix stamps loom-duckdb:v0.1
   //   template <acr>/loom-duckdb:v0.1
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
+  // DEFAULT-ON data-plane tier (2026-07-28). Explicit rather than relying on the
+  // template's `?? 'v0.1'` fallback, so the tag is operator-settable here the
+  // same way it is in gcc-high / il5. v0.1 matches what
+  // full-app-deploy-commercial.yml and build-fiab-images-acr-tasks.yml push by
+  // default; both images must exist in ACR before an apps-enabled deploy.
+  loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
+  risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
 }
 
 // MSAL — the app registration + client secret are now PROVISIONED by default

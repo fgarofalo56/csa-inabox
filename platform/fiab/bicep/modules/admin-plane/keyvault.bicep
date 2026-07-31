@@ -69,6 +69,16 @@ param builtinMcpApiKeySecretName string = ''
 @secure()
 param builtinMcpApiKey string = ''
 
+@description('loom-risingwave UAMI principalId — granted "Key Vault Secrets User" so the streaming engine can resolve its MANDATORY Postgres-wire root password via an ACA keyVaultUrl secretRef at revision start. Empty skips the grant. This grant is what keeps the credential OUT of reach of the code-execution apps (loom-script-runner / loom-udf-runtime) that share the Container Apps environment: they hold no role on this vault, and a Container Apps environment gives every app a pod IP in the SAME infrastructure subnet, so no CIDR rule could have separated them.')
+param risingwavePrincipalId string = ''
+
+@description('KV secret name holding the loom-risingwave Postgres-wire root password. Empty skips the secret (the streaming tier is then either not deployed, or deployed with the @secure() inline parameter instead).')
+param risingwaveRootPasswordSecretName string = ''
+
+@description('The loom-risingwave root password (UNPREDICTABLE, derived by the orchestrator from loomGeneratedSecretSeed = newGuid()). @secure() so ARM redacts it from deployment history, outputs and logs. Written here so BOTH the engine and the Console resolve the same value through a Key-Vault-backed Container Apps secretRef instead of a plain env literal.')
+@secure()
+param risingwaveRootPassword string = ''
+
 var kvName = take('kv-loom-${uniqueString(resourceGroup().id)}', 24)
 
 resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
@@ -281,6 +291,37 @@ resource builtinMcpKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if
   name: empty(builtinMcpApiKeySecretName) ? 'placeholder' : builtinMcpApiKeySecretName
   properties: {
     value: builtinMcpApiKey
+  }
+}
+
+// loom-risingwave streaming engine — MANDATORY Postgres-wire root password.
+// RisingWave's built-in `root` superuser has NO password upstream, so the engine
+// image now refuses to start without one (apps/loom-risingwave/scripts/entrypoint.sh).
+// The secret is written here, and BOTH the engine and the Console bind it as a
+// Key-Vault-backed Container Apps secretRef — the value never becomes an env
+// literal on either app.
+resource risingwaveRootPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = if (!empty(risingwaveRootPasswordSecretName)) {
+  parent: keyVault
+  name: empty(risingwaveRootPasswordSecretName) ? 'placeholder-risingwave' : risingwaveRootPasswordSecretName
+  properties: {
+    value: risingwaveRootPassword
+  }
+}
+
+// loom-risingwave UAMI gets "Key Vault Secrets User" (read secret values) so the
+// engine's revision can resolve the password above. Role 4633458b-… is built-in
+// and a global GUID (all clouds). Deliberately NOT granted to any other
+// workload identity: this is the boundary that keeps loom-script-runner and
+// loom-udf-runtime — which share the Container Apps environment and execute
+// user-supplied code — out of the streaming database.
+resource risingwaveKvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(risingwavePrincipalId) && !skipRoleGrants) {
+  scope: keyVault
+  name: guid(keyVault.id, risingwavePrincipalId, '4633458b-17de-408a-b874-0445c86b69e6')
+  properties: {
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: risingwavePrincipalId
+    principalType: 'ServicePrincipal'
+    description: 'loom-risingwave UAMI: read its own Postgres-wire root password at revision start.'
   }
 }
 
