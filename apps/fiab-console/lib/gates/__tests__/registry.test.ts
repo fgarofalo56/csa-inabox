@@ -99,11 +99,34 @@ describe('gate registry completeness', () => {
 });
 
 describe('gate live status (evalEnv-backed)', () => {
-  it('reports blocked with the preferred missing var when env is unset', () => {
-    delete process.env.LOOM_AIRFLOW_ENDPOINT;
-    const st = gateStatus('svc-airflow')!;
+  it('reports blocked with the preferred missing var when a RECOMMENDED gate is unset', () => {
+    // svc-synapse is severity:'recommended' — NOT the opt-in class (optional +
+    // warnOnMiss), so an unset required var is still a real 'blocked'.
+    delete process.env.LOOM_SYNAPSE_WORKSPACE;
+    const st = gateStatus('svc-synapse')!;
     expect(st.status).toBe('blocked');
-    expect(st.missing).toContain('LOOM_AIRFLOW_ENDPOINT');
+    expect(st.missing).toContain('LOOM_SYNAPSE_WORKSPACE');
+  });
+
+  it('reports OPT-IN (not blocked) for a spec.optIn=true gate when unset', () => {
+    // issue #2753: svc-loom-trino carries the explicit optIn flag (the AKS
+    // carve-out). Unset, it must NOT read as a red misconfiguration — its
+    // absence removes no capability (SQL Lab stays on the DuckDB default).
+    delete process.env.LOOM_TRINO_URL;
+    const st = gateStatus('svc-loom-trino')!;
+    expect(st.status).toBe('opt-in');
+    expect(st.status).not.toBe('blocked');
+    expect(st.missing).toContain('LOOM_TRINO_URL');
+  });
+
+  it('an opt-in gate flips to configured once its var is set', () => {
+    process.env.LOOM_TRINO_URL = 'https://trino.internal.example';
+    try {
+      const st = gateStatus('svc-loom-trino')!;
+      expect(st.status).toBe('configured');
+    } finally {
+      delete process.env.LOOM_TRINO_URL;
+    }
   });
 
   it('flips to configured when the required env is present', () => {
@@ -159,6 +182,8 @@ describe('gate live status (evalEnv-backed)', () => {
   it('evaluates the whole registry in one pass', () => {
     const all = allGateStatuses();
     expect(all.length).toBe(GATES.length);
-    for (const st of all) expect(['configured', 'blocked']).toContain(st.status);
+    for (const st of all) {
+      expect(['configured', 'blocked', 'opt-in', 'cloud-unavailable']).toContain(st.status);
+    }
   });
 });

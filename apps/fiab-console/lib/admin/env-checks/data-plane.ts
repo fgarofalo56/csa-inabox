@@ -101,7 +101,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    it must not count as configured.
   {
     id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine — Trino on AKS (opt-in)', severity: 'optional',
-    required: ['LOOM_TRINO_URL'], warnOnMiss: true,
+    required: ['LOOM_TRINO_URL'], warnOnMiss: true, optIn: true,
     remediation:
       'Set LOOM_TRINO_URL to the INTERNAL-ingress coordinator URL of the opt-in loom-trino AKS cluster (Trino OSS, Apache-2.0, registered against the N1 Iceberg REST Catalog + external connectors). Deploy platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep, then set the var on the Console app. This is the ONE opt-in engine in the program: it stands up a full private AKS cluster (real, disclosed cost ~AKS node pool/mo) so it is NOT default-ON — SQL Lab keeps working on DuckDB / Synapse Serverless meanwhile, and Trino only ADDS the "Federated SQL (Trino)" engine choice that can join a Loom Iceberg table with an external Postgres table in one statement. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), LOOM_TRINO_AUDIENCE (Entra audience), LOOM_TRINO_TOKEN (Key-Vault secretRef bearer). The cluster is NEVER public — every query goes through the audited BFF at /api/sql/trino.',
     docs: 'https://trino.io/docs/current/connector/iceberg.html',
@@ -253,7 +253,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   //    covers most external-engine access without a gateway.
   {
     id: 'svc-s3-gateway', category: 'data-plane', title: 'S3-compatible ADLS gateway (Apache-2.0 s3proxy) — Preview', severity: 'optional',
-    required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true,
+    required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true, optIn: true,
     remediation:
       'Set LOOM_S3_GATEWAY_URL to the internal-ingress endpoint of an S3-compatible gateway placed in front of your ADLS Gen2 (an operator-deployed Apache-2.0 s3proxy — the AGPL-licensed MinIO gateway path is NOT used). This lets s3://-native OSS clients (Trino, Spark, DuckDB with the s3 extension) address the lake with an S3 API. In most cases you do NOT need a gateway: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data — deploy the gateway only for clients that speak S3 exclusively. Unset → the S3 gateway editor renders a guided empty state documenting the IRC/ADLS path and honest-gates the connection panel; nothing else changes. No Microsoft Fabric.',
     docs: 'https://github.com/gaul/s3proxy',

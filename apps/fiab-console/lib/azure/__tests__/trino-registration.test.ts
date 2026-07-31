@@ -39,8 +39,11 @@ describe('N7e G2 gate — svc-loom-trino (opt-in; gates no feature)', () => {
     expect(gate!.requiredSettings.map((r) => r.envVar)).toContain('LOOM_TRINO_URL');
   });
 
-  it('is BLOCKED (opt-in default) when unset and CONFIGURED once wired — DuckDB stays the default engine either way', () => {
-    expect(gateStatus('svc-loom-trino')?.status).toBe('blocked');
+  it('is OPT-IN when unset and CONFIGURED once wired — DuckDB stays the default engine either way', () => {
+    // #2753: svc-loom-trino carries spec.optIn — an opt-in-by-design carve-out
+    // (private AKS cluster, real cost) whose absence removes no capability. Unset
+    // it reads the neutral 'opt-in' state, NOT a red 'blocked' misconfiguration.
+    expect(gateStatus('svc-loom-trino')?.status).toBe('opt-in');
     process.env.LOOM_TRINO_URL = 'https://trino.internal';
     expect(gateStatus('svc-loom-trino')?.status).toBe('configured');
   });

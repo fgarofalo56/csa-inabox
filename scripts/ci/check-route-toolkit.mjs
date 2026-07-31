@@ -58,6 +58,14 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2759 touched this route only to split the gate summary counts (opt-in and
+  // cloud-unavailable are no longer counted as 'blocked'). It gates on
+  // enforceCapability(session,'admin.env-config','Admin') — a capability check,
+  // NOT the getSession()+401 shape withSession replaces — so the codemod reports
+  // SKIPPED ("getSession() without the exact 401 guard") and there is nothing to
+  // rewrite. Hand-migrating a capability-gated admin route inside a display-count
+  // fix would be unrelated churn.
+  ['apps/fiab-console/app/api/admin/gates/route.ts', '#2759: enforceCapability prologue, not withSession-shaped; counts-only change'],
   // #2744 gated the CREDENTIAL-BEARING ACTIONS on these two action-dispatch
   // routes (list-keys / regenerate-keys; topic keys + regenerate-key) behind
   // denyIfNoDlzAccess, because they return live SAS/access keys for SHARED,

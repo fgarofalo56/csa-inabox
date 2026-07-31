@@ -403,6 +403,15 @@ export interface EnvSpec {
   docs?: string;
   /** When true a miss is a 'warn' (optional feature) instead of 'fail'. */
   warnOnMiss?: boolean;
+  /** When true, an unsatisfied gate reports the neutral 'opt-in' status instead
+   * of 'blocked' — for a feature that is opt-in BY DESIGN (stands up real extra
+   * cost / is a non-default engine) whose absence removes NO capability, so it
+   * must never read as a red misconfiguration (issue #2753). Deliberately
+   * explicit, NOT inferred from severity:'optional' — most optional gates are
+   * "not deployed yet", a real blocker to fix; only a handful (the Trino AKS
+   * carve-out, the s3proxy gateway) are opt-in-by-design. cloud-unavailable
+   * still outranks it. */
+  optIn?: boolean;
   /** The bicep module (+ the param / line that emits it) that wires every var in
    * this spec on a push-button deploy. Surfaced on /admin/env-config so an unset
    * var names the exact IaC to provision it. */

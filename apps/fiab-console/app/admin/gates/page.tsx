@@ -55,7 +55,7 @@ const useStyles = makeStyles({
 });
 
 interface GateRow extends GateDef {
-  status: 'configured' | 'blocked' | 'cloud-unavailable';
+  status: 'configured' | 'blocked' | 'opt-in' | 'cloud-unavailable';
   missing: string[];
   detail?: string;
   /** X2 — the backing service's availability in the ACTIVE cloud. */
@@ -69,7 +69,7 @@ export default function AdminGatesPage() {
   const [rows, setRows] = useState<GateRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'blocked' | 'configured' | 'cloud-unavailable'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'blocked' | 'configured' | 'opt-in' | 'cloud-unavailable'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [fixGateId, setFixGateId] = useState<string | null>(null);
@@ -113,10 +113,10 @@ export default function AdminGatesPage() {
         r.requiredSettings.some((rs) => rs.envVar.toLowerCase().includes(q)) ||
         r.surfaces.some((sf) => sf.label.toLowerCase().includes(q) || sf.path.toLowerCase().includes(q)));
     }
-    // Blocked first (actionable), then cloud-unavailable, then configured;
-    // within a band: severity, then id.
+    // Blocked first (actionable), then cloud-unavailable, then opt-in, then
+    // configured; within a band: severity, then id.
     const sevRank = { critical: 0, recommended: 1, optional: 2 } as Record<string, number>;
-    const stRank = { blocked: 0, 'cloud-unavailable': 1, configured: 2 } as Record<string, number>;
+    const stRank = { blocked: 0, 'cloud-unavailable': 1, 'opt-in': 2, configured: 3 } as Record<string, number>;
     return [...out].sort((a, b) =>
       (stRank[a.status] - stRank[b.status]) ||
       (sevRank[a.severity] - sevRank[b.severity]) ||
@@ -125,6 +125,8 @@ export default function AdminGatesPage() {
 
   const configured = (rows || []).filter((r) => r.status === 'configured').length;
   const cloudUnavailable = (rows || []).filter((r) => r.status === 'cloud-unavailable').length;
+  const optIn = (rows || []).filter((r) => r.status === 'opt-in').length;
+  const blocked = (rows || []).filter((r) => r.status === 'blocked').length;
   const fixGate = fixGateId ? getGate(fixGateId) : undefined;
 
   return (
@@ -160,7 +162,8 @@ export default function AdminGatesPage() {
           <ShieldCheckmark20Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
           <Subtitle2>{configured} configured</Subtitle2>
           <Warning20Regular style={{ color: tokens.colorPaletteYellowForeground1 }} />
-          <Subtitle2>{rows.length - configured - cloudUnavailable} blocked</Subtitle2>
+          <Subtitle2>{blocked} blocked</Subtitle2>
+          {optIn > 0 && <Subtitle2>{optIn} opt-in</Subtitle2>}
           {cloudUnavailable > 0 && <Subtitle2>{cloudUnavailable} cloud-unavailable</Subtitle2>}
           <Caption1>of {rows.length} registered gates</Caption1>
           <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={reload}>
@@ -177,6 +180,7 @@ export default function AdminGatesPage() {
         >
           <Option value="all">All statuses</Option>
           <Option value="blocked">blocked</Option>
+          <Option value="opt-in">opt-in</Option>
           <Option value="configured">configured</Option>
           <Option value="cloud-unavailable">cloud-unavailable</Option>
         </Dropdown>
@@ -217,7 +221,12 @@ export default function AdminGatesPage() {
                   <TableCell>
                     <Badge
                       appearance="tint"
-                      color={g.status === 'configured' ? 'success' : g.status === 'cloud-unavailable' ? 'informative' : 'warning'}
+                      color={
+                        g.status === 'configured' ? 'success'
+                          : g.status === 'cloud-unavailable' ? 'informative'
+                            : g.status === 'opt-in' ? 'informative'
+                              : 'warning'
+                      }
                       size="small"
                     >
                       {g.status}

@@ -117,6 +117,40 @@ describe('buildCapabilityNodes — H1', () => {
     const n = nodes.find((x) => x.id === autoGate!.id)!;
     expect(n.state).toBe('ready');
   });
+
+  it('an opt-in gate renders state=opt-in (not blocked) when its var is unset', () => {
+    // issue #2753: an additive, non-default feature (severity:'optional' +
+    // warnOnMiss, e.g. svc-loom-trino) must NOT read as a red misconfiguration.
+    // Its GateStatus is 'opt-in'; buildCapabilityNodes must preserve that.
+    const target = GATES[0].id;
+    const statuses = statusesWith([]).map((st) =>
+      st.id === target
+        ? ({ ...st, status: 'opt-in' as const, missing: ['LOOM_SOME_OPT_IN_URL'] })
+        : st,
+    );
+    const nodes = buildCapabilityNodes({ gates: GATES, statuses, probes: [] });
+    const n = nodes.find((x) => x.id === target)!;
+    expect(n.state).toBe('opt-in');
+    expect(n.gateStatus).toBe('opt-in');
+    // Scores as healthy (1), so it never drags a workload verdict down.
+    const others = nodes.filter((x) => x.id !== target && x.state === 'blocked');
+    expect(others.length).toBeGreaterThan(0); // sanity: blocked still exists and differs
+  });
+
+  it('an opt-in gate with a PASSING live probe upgrades to ready', () => {
+    // If the operator DID opt in and the backend answers, show ready.
+    const target = GATES.find((g) => GATE_PROBE_MAP[g.id])?.id ?? GATES[0].id;
+    const probeId = GATE_PROBE_MAP[target];
+    const statuses = statusesWith([]).map((st) =>
+      st.id === target ? ({ ...st, status: 'opt-in' as const }) : st,
+    );
+    const probes: ProbeLite[] = probeId
+      ? [{ id: probeId, status: 'pass', detail: 'live', remediation: '' }]
+      : [];
+    const nodes = buildCapabilityNodes({ gates: GATES, statuses, probes });
+    const n = nodes.find((x) => x.id === target)!;
+    expect(n.state).toBe(probeId ? 'ready' : 'opt-in');
+  });
 });
 
 describe('scoreWorkload / computeWorkloads — H2', () => {

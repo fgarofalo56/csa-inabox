@@ -46,13 +46,21 @@ export async function GET() {
     };
   });
   const configured = gates.filter((g) => g.status === 'configured').length;
+  // opt-in (additive feature, not deployed) and cloud-unavailable (no such
+  // backend in this cloud) are NOT blockers — counting them as blocked was what
+  // made "5 blocked" alarm on deliberately-optional features (#2756).
+  const optIn = gates.filter((g) => g.status === 'opt-in').length;
+  const cloudUnavailable = gates.filter((g) => g.status === 'cloud-unavailable').length;
+  const blocked = gates.filter((g) => g.status === 'blocked').length;
   const { platform, writeConfigured, writeError } = envWriteAvailability();
 
   return NextResponse.json({
     ok: true,
     count: gates.length,
     configured,
-    blocked: gates.length - configured,
+    optIn,
+    cloudUnavailable,
+    blocked,
     gates,
     platform,
     writeConfigured,

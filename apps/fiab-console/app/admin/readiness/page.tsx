@@ -21,7 +21,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync16Regular, ArrowDownload16Regular, Wrench16Regular,
-  CheckmarkCircle20Filled, Warning20Filled, DismissCircle20Filled,
+  CheckmarkCircle20Filled, Warning20Filled, DismissCircle20Filled, Circle20Regular,
   Flash16Regular, DatabaseLink20Regular, Key16Regular, Flowchart16Regular,
   Server16Regular,
 } from '@fluentui/react-icons';
@@ -38,16 +38,18 @@ import {
 
 // ── state visuals ────────────────────────────────────────────────────────────
 
-const STATE_COLOR: Record<ReadinessState, 'success' | 'warning' | 'danger'> = {
-  ready: 'success', partial: 'warning', blocked: 'danger',
+const STATE_COLOR: Record<ReadinessState, 'success' | 'warning' | 'danger' | 'informative'> = {
+  ready: 'success', partial: 'warning', blocked: 'danger', 'opt-in': 'informative',
 };
 const STATE_LABEL: Record<ReadinessState, string> = {
-  ready: 'Ready', partial: 'Partial', blocked: 'Blocked',
+  ready: 'Ready', partial: 'Partial', blocked: 'Blocked', 'opt-in': 'Opt-in',
 };
 
 function StateIcon({ state }: { state: ReadinessState }) {
   if (state === 'ready') return <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />;
   if (state === 'partial') return <Warning20Filled style={{ color: tokens.colorPaletteYellowForeground1 }} />;
+  // Opt-in: an additive feature deliberately not deployed — neutral, not an error.
+  if (state === 'opt-in') return <Circle20Regular style={{ color: tokens.colorNeutralForeground3 }} />;
   return <DismissCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />;
 }
 
@@ -55,6 +57,7 @@ const ACCENT: Record<ReadinessState, string> = {
   ready: tokens.colorPaletteGreenBackground3,
   partial: tokens.colorPaletteYellowBackground3,
   blocked: tokens.colorPaletteRedBackground3,
+  'opt-in': tokens.colorNeutralStroke1,
 };
 
 const useStyles = makeStyles({
@@ -425,7 +428,8 @@ function CapabilityNodeCard({ n, active, onClick, styles }: { n: CapabilityNode;
   const badgeText = n.state === 'blocked'
     ? (n.missing.length ? `${n.missing.length} missing` : 'blocked')
     : n.state === 'partial' ? 'partial'
-      : n.verified === 'live-probe' ? 'live' : 'config';
+      : n.state === 'opt-in' ? 'opt-in'
+        : n.verified === 'live-probe' ? 'live' : 'config';
   const badgeColor = STATE_COLOR[n.state];
   return (
     <Tooltip content={n.title} relationship="label">
@@ -461,7 +465,18 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
       </div>
       <Caption1><code>{node.id}</code> · {node.category} · {node.severity}</Caption1>
 
-      {node.state !== 'ready' && (
+      {node.state === 'opt-in' && (
+        <MessageBar intent="info" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Opt-in — not deployed</MessageBarTitle>
+            This is an additive feature that is off by default; its absence removes no capability
+            (the default path is fully functional). Deploy it only if you want it.
+            {node.remediation ? ` ${node.remediation}` : ''}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {node.state !== 'ready' && node.state !== 'opt-in' && (
         <MessageBar intent={node.state === 'blocked' ? 'error' : 'warning'} layout="multiline">
           <MessageBarBody>
             <MessageBarTitle>{node.state === 'blocked' ? 'Unmet prerequisites' : 'Degraded'}</MessageBarTitle>
@@ -473,6 +488,12 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
       {(node.state === 'blocked' || node.state === 'partial') && (
         <div>
           <Button appearance="primary" size="small" icon={<Wrench16Regular />} onClick={onFix}>Fix it</Button>
+        </div>
+      )}
+
+      {node.state === 'opt-in' && (
+        <div>
+          <Button appearance="secondary" size="small" icon={<Wrench16Regular />} onClick={onFix}>Deploy this (opt-in)</Button>
         </div>
       )}
 

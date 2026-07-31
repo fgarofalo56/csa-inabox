@@ -187,9 +187,24 @@ export function gateStatus(id: string): GateStatus | undefined {
   // non-blocking info note.
   const avail = spec.availability ? availabilityInActiveCloud(id) : 'ga';
   const fallbackNote = avail !== 'ga' ? spec.availability?.fallbackNote : undefined;
+  // A feature that is opt-in BY DESIGN (spec.optIn) whose absence removes NO
+  // capability — e.g. svc-loom-trino (private AKS cluster, real cost; SQL Lab
+  // keeps working on DuckDB). evalEnv returns status:'warn' for these; without
+  // this branch the flatten below turned that warn into 'blocked', so a
+  // deliberately-unset opt-in read identically to a real misconfiguration
+  // (issue #2753). This is an EXPLICIT flag, NOT inferred from severity —
+  // most optional gates are "not deployed yet" (a real blocker to fix).
+  //
+  // PRECEDENCE: cloud-unavailable OUTRANKS opt-in. When the backing service is
+  // structurally absent in the active cloud (X2), the honest state is
+  // 'cloud-unavailable' (names the fallback, no Fix-it) — NOT "opt-in", which
+  // would wrongly imply you could deploy it here.
+  const isOptIn = check.status !== 'pass' && spec.optIn === true && avail !== 'unavailable';
   const status: GateStatus['status'] = check.status === 'pass'
     ? 'configured'
-    : avail === 'unavailable' ? 'cloud-unavailable' : 'blocked';
+    : avail === 'unavailable' ? 'cloud-unavailable'
+      : isOptIn ? 'opt-in'
+        : 'blocked';
   return {
     id,
     status,
