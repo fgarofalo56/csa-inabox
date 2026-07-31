@@ -96,10 +96,24 @@ describe('httpsToAbfss — the dfs suffix is regex-ESCAPED, so `.` is not a wild
   });
 
   it('the counter-factual: WITHOUT the escape the wildcard host would match', () => {
-    // Proves the escape is load-bearing rather than incidental — i.e. the bug
-    // CodeQL describes is real in the un-escaped form, and absent in ours.
-    const unescaped = new RegExp('^https://([^.]+)\.dfs.core.windows.net/([^/]+)/(.*)$', 'i');
+    // Models the PRODUCTION regex with ONE thing removed — the suffix escape —
+    // so the comparison isolates exactly the property under test. The account
+    // separator stays escaped (`\\.` in source => `\.` in the pattern), which is
+    // what cloud-endpoints.ts:381 emits.
+    //
+    // Written with a RegExp literal rather than a string: an earlier draft used
+    // `new RegExp('…\\.dfs…')` and lost a backslash level, so the separator dot
+    // silently became a wildcard too — a weaker counter-factual that still went
+    // green. CodeQL js/useless-regexp-character-escape caught it. In a JS string
+    // `\.` is not an escape sequence and collapses to `.`; in a regex literal it
+    // is unambiguous.
+    const unescaped = /^https:\/\/([^.]+)\.dfs.core.windows.net\/([^/]+)\/(.*)$/i;
+    expect(unescaped.source).toContain('\\.dfs'); // separator escaped…
+    expect(unescaped.source).toContain('dfs.core.windows.net'); // …suffix NOT
+
+    // The bug CodeQL alleges is real in that form:
     expect(unescaped.test('https://acct.dfsXcoreYwindowsZnet/c/p')).toBe(true);
+    // …and absent in ours (returned unchanged === no match):
     expect(httpsToAbfss('https://acct.dfsXcoreYwindowsZnet/c/p'))
       .toBe('https://acct.dfsXcoreYwindowsZnet/c/p');
   });
