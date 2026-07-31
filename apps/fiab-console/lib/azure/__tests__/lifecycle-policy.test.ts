@@ -89,3 +89,60 @@ describe('lifecycle policy (de)serialisation — OneLake Lifecycle Management', 
     expect(deserialiseRule(arm)).toBeNull();
   });
 });
+
+/**
+ * CodeQL js/remote-property-injection flags `baseBlob[a] = …` in
+ * `serialiseRule` (lifecycle-policy-shapes.ts:114) because `a` and
+ * `conditionField` originate in the `PUT /api/onelake/lifecycle` body.
+ *
+ * The query does not model `Set.has()` as a sanitiser, so it cannot see that
+ * both key sources are constrained to CLOSED, file-local literal allowlists
+ * before the write:
+ *
+ *   ACTION_KEYS    = TIER_ACTIONS (4 literals) + 'enableAutoTierToHotFromCool'
+ *   CONDITION_KEYS = CONDITION_FIELDS (3 literals)
+ *
+ * …and the target is `Object.create(null)`, which has no prototype to pollute.
+ * These tests are the evidence for that dismissal: they attack the exact sink
+ * the alert names. If a future edit widens either allowlist, drops the
+ * `Set.has` guard, or swaps the null-prototype bag for `{}`, they go red — so
+ * the dismissal cannot silently outlive the reasoning behind it.
+ */
+describe('serialiseRule — hostile keys cannot reach the ARM object (CodeQL js/remote-property-injection)', () => {
+  const hostile = (over: Partial<LifecycleRule>): LifecycleRule => ({
+    name: 'r', enabled: true,
+    conditionField: 'daysAfterModificationGreaterThan',
+    conditionDays: 1, actions: ['tierToCool'],
+    ...over,
+  });
+
+  it('drops a __proto__ action instead of writing it', () => {
+    const arm = serialiseRule(hostile({ actions: ['__proto__' as any] }));
+    const bag = arm.definition.actions.baseBlob;
+    expect(Object.keys(bag)).toEqual([]);
+    expect(Object.getPrototypeOf(bag)).toBeNull();
+    // The global prototype is untouched.
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
+  it('drops constructor / prototype actions too, and keeps the legitimate one', () => {
+    const arm = serialiseRule(hostile({ actions: ['constructor' as any, 'prototype' as any, 'delete'] }));
+    expect(Object.keys(arm.definition.actions.baseBlob)).toEqual(['delete']);
+  });
+
+  it('falls back to the default condition when conditionField is __proto__', () => {
+    const arm = serialiseRule(hostile({ conditionField: '__proto__' as any }));
+    const inner = arm.definition.actions.baseBlob.tierToCool;
+    expect(Object.keys(inner)).toEqual(['daysAfterModificationGreaterThan']);
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
+  it('does not pollute Object.prototype even when every field is hostile', () => {
+    serialiseRule(hostile({
+      actions: ['__proto__' as any, 'constructor' as any],
+      conditionField: 'constructor' as any,
+    }));
+    expect(({} as any).daysAfterModificationGreaterThan).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty('tierToCool')).toBe(false);
+  });
+});

@@ -84,12 +84,34 @@ export function deserialiseRule(raw: any): LifecycleRule | null {
   };
 }
 
-/** Flat Loom rule → ARM ManagementPolicyRule. */
+/** Every action name this module will ever emit as an ARM baseBlob key. */
+const ACTION_KEYS: ReadonlySet<string> = new Set<LifecycleAction>([
+  ...TIER_ACTIONS,
+  'enableAutoTierToHotFromCool',
+]);
+/** Every condition name this module will ever emit as an ARM condition key. */
+const CONDITION_KEYS: ReadonlySet<string> = new Set<string>(CONDITION_FIELDS);
+
+/**
+ * Flat Loom rule → ARM ManagementPolicyRule.
+ *
+ * `rule.actions[]` and `rule.conditionField` become OBJECT KEYS, and both arrive
+ * from the `PUT /api/onelake/lifecycle` body. The route validates them, but a
+ * guarantee that lives only in one caller is one refactor away from being lost —
+ * and this is an exported shape helper. The allowlists are therefore enforced
+ * HERE: an unknown action / condition is dropped rather than written, so no
+ * caller can make this function emit a `__proto__` (or any other unexpected)
+ * key. The two allowlists are the same closed unions the types declare.
+ */
 export function serialiseRule(rule: LifecycleRule): any {
-  const baseBlob: Record<string, any> = {};
+  const baseBlob: Record<string, any> = Object.create(null);
+  const conditionField = CONDITION_KEYS.has(rule.conditionField as string)
+    ? rule.conditionField
+    : 'daysAfterModificationGreaterThan';
   for (const a of rule.actions) {
+    if (!ACTION_KEYS.has(a as string)) continue;
     if (a === 'enableAutoTierToHotFromCool') { baseBlob.enableAutoTierToHotFromCool = true; continue; }
-    baseBlob[a] = { [rule.conditionField]: rule.conditionDays };
+    baseBlob[a] = { [conditionField]: rule.conditionDays };
   }
   const filters: Record<string, any> = { blobTypes: ['blockBlob'] };
   if (rule.prefixMatch && rule.prefixMatch.length) {

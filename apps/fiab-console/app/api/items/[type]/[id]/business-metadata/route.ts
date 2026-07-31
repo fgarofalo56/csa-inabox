@@ -32,7 +32,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
+import type { SessionPayload } from '@/lib/auth/session';
 import {
   itemsContainer,
   workspacesContainer,
@@ -46,6 +46,8 @@ import {
   LOOM_BUSINESS_METADATA_NAME,
 } from '@/lib/azure/purview-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { safeRecord, toSafeStringMap } from '@/lib/security/safe-object';
+import { withSession } from '@/lib/api/route-toolkit';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { safeRecordFrom, UnsafeKeyError } from '@/lib/util/safe-keys';
 
@@ -96,25 +98,18 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
   return item;
 }
 
-/** Pull the custom-tag bag out of an Atlas entity's businessAttributes map. */
+/**
+ * Pull the custom-tag bag out of an Atlas entity's businessAttributes map.
+ * Same null-prototype coercion as the write side: these keys are the tag names a
+ * caller previously wrote, echoed back by Purview, so they are caller-authored
+ * too and must not be able to shadow an inherited member of the returned map.
+ */
 function tagsFromDetail(detail: any): Record<string, string> {
   const bag = detail?.entity?.businessAttributes?.[LOOM_BUSINESS_METADATA_NAME];
-  const out: Record<string, string> = {};
-  if (bag && typeof bag === 'object') {
-    for (const [k, v] of Object.entries(bag)) {
-      if (k) out[k] = v == null ? '' : String(v);
-    }
-  }
-  return out;
+  return toSafeStringMap(bag) ?? safeRecord<string>();
 }
 
-export async function GET(
-  _req: NextRequest,
-  props: { params: Promise<{ type: string; id: string }> },
-) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const GET = withSession<{ type: string; id: string }>(async (_req, { session, params }) => {
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
@@ -175,13 +170,9 @@ export async function GET(
   } catch (e: any) {
     return err(e?.message || 'Failed to load custom tags', 500, 'cosmos_error');
   }
-}
+});
 
-export async function POST(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
-  const params = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
-
+export const POST = withSession<{ type: string; id: string }>(async (req, { session, params }) => {
   let body: any;
   try {
     body = await req.json();
@@ -273,12 +264,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   } catch (e: any) {
     return err(e?.message || 'Failed to save custom tags', 500, 'purview_error');
   }
-}
+});
 
 async function writeAudit(
   params: { type: string; id: string },
   item: WorkspaceItem,
-  session: NonNullable<ReturnType<typeof getSession>>,
+  session: SessionPayload,
   action: string,
   summary: string,
 ) {

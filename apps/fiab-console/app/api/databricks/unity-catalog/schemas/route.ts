@@ -17,7 +17,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   databricksConfigGate, listUcSchemas, createUcSchema, deleteUcSchema, patchUcSchema,
 } from '@/lib/azure/databricks-client';
@@ -27,17 +26,15 @@ import {
   listSchemas as listSchemasUc, createSchema as createSchemaUc,
   updateSchema as updateSchemaUc, deleteSchema as deleteSchemaUc,
 } from '@/lib/azure/unity-catalog-client';
+import { toSafeStringMap } from '@/lib/security/safe-object';
+import { withSession } from '@/lib/api/route-toolkit';
 
 // Coerce a free-form object into a Record<string,string> (drops empty keys).
-function toStringMap(v: any): Record<string, string> | undefined {
-  if (!v || typeof v !== 'object') return undefined;
-  const out: Record<string, string> = {};
-  for (const [k, val] of Object.entries(v)) {
-    const key = String(k).trim();
-    if (key) out[key] = String(val ?? '');
-  }
-  return Object.keys(out).length ? out : undefined;
-}
+// NULL-PROTOTYPE record via the audited `toSafeStringMap` — see the sibling in
+// ../catalogs/route.ts: the keys are caller-supplied, so an object literal here
+// lets `toString` / `valueOf` / `hasOwnProperty` be shadowed by a string and
+// lets `__proto__` be silently dropped. `Object.create(null)` has neither hazard.
+const toStringMap = toSafeStringMap;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,9 +53,7 @@ function gate() {
   return null;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   const catalog = req.nextUrl.searchParams.get('catalog')?.trim();
   if (!catalog) return NextResponse.json({ ok: false, error: 'catalog is required' }, { status: 400 });
@@ -70,11 +65,9 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -101,11 +94,9 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function PATCH(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: NextRequest, { session }) => {
   const g = gate(); if (g) return g;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -129,11 +120,9 @@ export async function PATCH(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const fullName = req.nextUrl.searchParams.get('full_name')?.trim();
   const force = req.nextUrl.searchParams.get('force') === 'true';
@@ -147,4 +136,4 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
-}
+});

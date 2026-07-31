@@ -27,6 +27,37 @@
  *      (keep any surrounding `'…'` / `N'…'` wrap), or use quoteLiteral().
  *   B) `.replace(/]/g, ']]')`      — inline T-SQL bracket-identifier doubling.
  *      Fix: import { bracket } (or quoteIdent) from '@/lib/sql/quoting'.
+ *   C) SQL assembled inline and handed to a REMOTE executor via an ADF /
+ *      Synapse pipeline payload key (`preCopyScript`, `sqlReaderQuery`,
+ *      `sqlReaderStoredProcedureName`, `sqlWriterStoredProcedureName`,
+ *      `sqlWriterCleanupScript`, or a Script activity's `text`).
+ *      WHY: rules A and B only see inline copies of the escaping. They are
+ *      blind to a site with NO escaping at all — and CodeQL's js/sql-injection
+ *      is blind to these too, because the sink is a JSON body POSTed to ARM,
+ *      not a local `query()` call. That blind spot was real: until this rule
+ *      landed, `app/api/items/copy-job/[id]/run/route.ts` interpolated the
+ *      caller-supplied sourceName / sourceTable / watermark column straight
+ *      into T-SQL that ADF then ran against the SHARED `loom-control` watermark
+ *      database as the factory's managed identity.
+ *      Fix: build the statement in an audited module that validates identifiers
+ *      and escapes literals (see lib/azure/copy-job-sql.ts) and assign the
+ *      result, so no assembly appears at the payload key.
+ *
+ *      SCOPE OF RULE C — stated precisely, because a guard that matches one
+ *      spelling of a shape while claiming to close the shape is worse than no
+ *      guard. It matches, at any of those keys, written as `key:`, `key =`,
+ *      `"key":`, or `obj['key'] =`:
+ *        `…${x}…`                     template-literal interpolation
+ *        'SELECT ' + x   /  x + ' …'  concatenation with a quoted fragment
+ *        cond ? `…${x}…` : '…'        ternary — both branches are scanned
+ *      It does NOT match VARIABLE INDIRECTION —
+ *        `const q = `…${x}…`; props.preCopyScript = q;`
+ *      A single-line regex cannot follow a value across statements, and this
+ *      guard does not pretend to. What closes the class for the copy-job
+ *      payload is that every statement it ships is produced by ONE audited
+ *      module (`lib/azure/copy-job-sql.ts`) whose exports validate identifiers
+ *      against a closed grammar and throw rather than emit. RULE C's job is to
+ *      stop the cheap regression, not to prove the class closed.
  *
  * HOW TO ADD AN ALLOWLIST ENTRY (ratchet):
  *   Only if a call site genuinely cannot delegate (e.g. a validating quoter
@@ -73,6 +104,47 @@ const ALLOWLIST_BRACKET = new Map([
   ['apps/fiab-console/app/api/items/synapse-dedicated-sql-pool/[id]/clone/route.ts', 'bare "]"-doubler; caller adds the brackets'],
   ['apps/fiab-console/app/api/items/warehouse/[id]/query-acceleration/route.ts', 'bare "]"-doubler; caller adds the brackets'],
 ]);
+
+// RULE C — SQL shipped to a REMOTE executor inside an ADF/Synapse pipeline
+// payload. See the header for the exact matched/unmatched spellings.
+//
+// The payload keys that carry raw SQL to the service. `text` is narrowed by
+// requiring a Script-activity `type: 'Query'` marker in the same file so
+// unrelated `text:` props don't trip the rule.
+const REMOTE_SQL_KEYS = [
+  'preCopyScript',
+  'sqlReaderQuery',
+  'sqlReaderStoredProcedureName',
+  'sqlWriterStoredProcedureName',
+  'sqlWriterCleanupScript',
+  'text',
+];
+// Key spellings: bare (`preCopyScript:`), quoted (`'preCopyScript':`), and
+// bracket-notation assignment (`props['preCopyScript'] =`). The trailing `]?`
+// consumes the closing bracket of the latter.
+const REMOTE_SQL_KEY_RE = new RegExp(
+  String.raw`(?:^|[\s.{(\[,])['"\x60]?(${REMOTE_SQL_KEYS.join('|')})['"\x60]?\s*\]?\s*[:=](?!=)([^\n]*)`,
+  'gm',
+);
+// Value shapes that mean "assembled here" rather than "produced by a builder".
+const ASSEMBLED_SQL_SHAPES = [
+  // `…${x}…` — template-literal interpolation.
+  { re: /`[^`]*\$\{/, what: 'template interpolation' },
+  // `'…' + x` / `x + '…'` — concatenation with a quoted fragment. The
+  // "+ literal" side requires a non-quote character before the `+` so that
+  // `'a' + 'b'` (two constants, no injection) does not trip on its second half.
+  { re: /['"\x60][^'"\x60\n]*['"\x60]\s*\+\s*[^'"\x60\s]/, what: 'string concatenation' },
+  { re: /[^'"\x60\s+]\s*\+\s*['"\x60][^'"\x60\n]*['"\x60]/, what: 'string concatenation' },
+];
+// The value expression does not have to start on the key's line. It continues
+// when the key's line is EMPTY after the `:` (`text:` then a wrapped literal on
+// the following lines — the exact pre-fix copy-job spelling) or ends on `+` /
+// `(`. A trailing `,` or `}` means the value ENDED, so no look-ahead happens and
+// a neighbouring property can never be misattributed. Bounded to a few lines.
+const CONTINUES_RE = /(?:^\s*$|[+(]\s*$)/;
+const CONTINUATION_LINES = 3;
+const SCRIPT_ACTIVITY_MARKER = /type:\s*'Query'/;
+const ALLOWLIST_REMOTE_SQL = new Map([]);
 
 function walk(dir, out = []) {
   let entries;
@@ -129,10 +201,38 @@ function main() {
         violations.push({ file: r, line: lineOf(src, m.index), rule: "B: inline ']]' bracket-ident doubling", fix: "import { bracket } from '@/lib/sql/quoting'" });
       }
     }
+    if (!ALLOWLIST_REMOTE_SQL.has(r)) {
+      REMOTE_SQL_KEY_RE.lastIndex = 0;
+      let m;
+      while ((m = REMOTE_SQL_KEY_RE.exec(src)) !== null) {
+        // `text:` only counts inside a Script-activity payload.
+        if (m[1] === 'text' && !SCRIPT_ACTIVITY_MARKER.test(src)) continue;
+        let value = m[2];
+        let shape = ASSEMBLED_SQL_SHAPES.find((s) => s.re.test(value));
+        if (!shape && CONTINUES_RE.test(value)) {
+          // Wrapped value expression — look ahead a bounded number of lines.
+          const after = src.slice(m.index + m[0].length + 1).split('\n');
+          for (let i = 0; i < CONTINUATION_LINES && !shape; i++) {
+            const nextLine = after[i];
+            if (nextLine === undefined) break;
+            value = nextLine;
+            shape = ASSEMBLED_SQL_SHAPES.find((s) => s.re.test(value));
+            if (!shape && !CONTINUES_RE.test(nextLine) && !/['"\x60]\s*$/.test(nextLine.trimEnd())) break;
+          }
+        }
+        if (!shape) continue;
+        violations.push({
+          file: r,
+          line: lineOf(src, m.index),
+          rule: `C: assembled SQL (${shape.what}) at remote-executor key "${m[1]}"`,
+          fix: 'build it in an audited builder that validates identifiers + escapes literals (e.g. lib/azure/copy-job-sql.ts) and assign the result',
+        });
+      }
+    }
   }
 
   console.log(`[sql-quoting] scanned ${scanned} server .ts files under lib/ + app/api/`);
-  console.log(`[sql-quoting] allowlisted: literal=${ALLOWLIST_LITERAL.size}, bracket=${ALLOWLIST_BRACKET.size}`);
+  console.log(`[sql-quoting] allowlisted: literal=${ALLOWLIST_LITERAL.size}, bracket=${ALLOWLIST_BRACKET.size}, remote-sql=${ALLOWLIST_REMOTE_SQL.size}`);
   if (violations.length) {
     console.error('\n[sql-quoting] FAIL — inline SQL quoting found (centralise in lib/sql/quoting.ts):');
     for (const v of violations) console.error(`  - ${v.file}:${v.line}  [${v.rule}]  → ${v.fix}`);
