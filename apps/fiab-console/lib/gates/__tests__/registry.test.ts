@@ -108,9 +108,9 @@ describe('gate live status (evalEnv-backed)', () => {
     expect(st.missing).toContain('LOOM_SYNAPSE_WORKSPACE');
   });
 
-  it('reports OPT-IN (not blocked) for an additive optional+warnOnMiss gate when unset', () => {
-    // issue #2753: svc-loom-trino is the one opt-in carve-out (severity:'optional'
-    // + warnOnMiss). Unset, it must NOT read as a red misconfiguration — its
+  it('reports OPT-IN (not blocked) for a spec.optIn=true gate when unset', () => {
+    // issue #2753: svc-loom-trino carries the explicit optIn flag (the AKS
+    // carve-out). Unset, it must NOT read as a red misconfiguration — its
     // absence removes no capability (SQL Lab stays on the DuckDB default).
     delete process.env.LOOM_TRINO_URL;
     const st = gateStatus('svc-loom-trino')!;
@@ -166,10 +166,8 @@ describe('gate live status (evalEnv-backed)', () => {
     // backend, gated on LOOM_KUSTO_CLUSTER_URI (emitted whenever adxEnabled).
     delete process.env.LOOM_ADT_ENDPOINT;
     delete process.env.LOOM_KUSTO_CLUSTER_URI;
-    // Optional additive capability with neither backend wired → opt-in, NOT a
-    // red blocker (issue #2753): its absence removes no core capability.
-    const optIn = gateStatus('svc-digital-twins')!;
-    expect(optIn.status).toBe('opt-in');
+    const blocked = gateStatus('svc-digital-twins')!;
+    expect(blocked.status).toBe('blocked');
 
     process.env.LOOM_KUSTO_CLUSTER_URI = 'https://adx-csa-loom.eastus2.kusto.usgovcloudapi.net';
     try {
