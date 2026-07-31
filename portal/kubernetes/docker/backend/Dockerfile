@@ -19,9 +19,13 @@ RUN apt-get update && apt-get dist-upgrade -y && \
 COPY portal/shared/requirements.txt ./requirements.txt
 
 # Pin pip >= 26.0 to clear CVE-2025-8869 + CVE-2026-1703 in the base image's pip 25.0.1.
-# setuptools ships in the base image at 70.3.0; CVE-2025-47273 (HIGH, path
-# traversal in PackageIndex) is fixed in 78.1.1.
-RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=78.1.1'
+# setuptools ships in the base image at 70.3.0. Two advisories apply and they
+# have DIFFERENT fix versions: CVE-2025-47273 (HIGH, path traversal in
+# PackageIndex) is fixed in 78.1.1, CVE-2026-59890 (MEDIUM) not until 83.0.0.
+# The floor is the HIGHER of the two. A >=78.1.1 floor resolved to 83.0.0 in
+# practice only because pip takes the newest match — it would have silently
+# reintroduced CVE-2026-59890 the moment anything pinned 78.1.1 exactly.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.0' 'setuptools>=83.0.0'
 
 # If requirements.txt doesn't exist yet, install core deps directly
 RUN if [ -f requirements.txt ] && [ -s requirements.txt ]; then \
@@ -73,7 +77,7 @@ COPY --from=builder /install /usr/local
 # requirements.txt), but if a future requirement pulled one in, a COPY landing
 # after this line would silently overwrite the patched version and reintroduce
 # the CVE with no signal.
-RUN pip install --no-cache-dir --upgrade 'pip>=26.1' 'setuptools>=78.1.1'
+RUN pip install --no-cache-dir --upgrade 'pip>=26.1' 'setuptools>=83.0.0'
 
 # Copy the shared API application
 COPY portal/shared/ ./portal/shared/
