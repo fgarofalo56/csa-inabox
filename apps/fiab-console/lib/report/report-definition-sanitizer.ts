@@ -1968,7 +1968,12 @@ function sanitizeButtonAction(raw: unknown): PersistedButtonAction | undefined {
 /** Sanitize the per-state button style map (keys ∈ BUTTON_STATES; colors clamped). */
 function sanitizeButtonStates(raw: unknown): Partial<Record<ButtonState, PersistedButtonStateStyle>> | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const out: Partial<Record<ButtonState, PersistedButtonStateStyle>> = {};
+  // safeRecord() — a null-prototype target, matching every sibling sanitizer in
+  // this file. The BUTTON_STATES allowlist on the next line already makes
+  // `__proto__` unreachable, so this is defence in depth: it makes the guarantee
+  // structural instead of contingent on that allowlist staying closed. This was
+  // the one map builder here still using a plain `{}`.
+  const out = safeRecord<PersistedButtonStateStyle>();
   for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
     if (!BUTTON_STATES.has(k as ButtonState) || !val || typeof val !== 'object') continue;
     const s = val as Record<string, unknown>;
@@ -1979,9 +1984,12 @@ function sanitizeButtonStates(raw: unknown): Partial<Record<ButtonState, Persist
     if (textColor) style.textColor = textColor;
     const border = clampColor(s.border);
     if (border) style.border = border;
-    if (Object.keys(style).length) out[k as ButtonState] = style;
+    if (Object.keys(style).length) out[k] = style;
   }
-  return Object.keys(out).length ? out : undefined;
+  // The cast is honest: every surviving key passed BUTTON_STATES.has() above.
+  return Object.keys(out).length
+    ? (out as Partial<Record<ButtonState, PersistedButtonStateStyle>>)
+    : undefined;
 }
 
 /** Sanitize an element's absolute layout — the SAME x/y/w/h clamp as a visual,
