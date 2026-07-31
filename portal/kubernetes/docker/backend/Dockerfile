@@ -48,7 +48,16 @@ WORKDIR /app
 # Runtime stage needs the SAME distro security patches. It has no apt layer of
 # its own, so without this it ships the pinned digest's OS packages untouched
 # even though the builder was patched — /install carries Python packages only.
-RUN apt-get update && apt-get dist-upgrade -y && rm -rf /var/lib/apt/lists/*
+#
+# `ca-certificates` is installed explicitly rather than relied on from the base
+# image: this service fetches Entra JWKS and calls Azure Key Vault / Storage over
+# TLS, so a stale CA bundle is a real failure mode, not decoration. It also keeps
+# `update` and an `install` in the SAME layer, which is what Trivy DS-0017 asks
+# for — the first version of this line was update + dist-upgrade with no install
+# and tripped that rule.
+RUN apt-get update && apt-get dist-upgrade -y && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
