@@ -11,6 +11,7 @@
  *                       user's oid). No MSAL session — this app is internal-only.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { orchestrateMaf } from './agent-loop.js';
 import { runAgentInspectMaf } from './agent-run.js';
 import { isGovCloud } from './cloud-scope.js';
@@ -48,7 +49,11 @@ async function handleOrchestrate(req: IncomingMessage, res: ServerResponse): Pro
     return;
   }
   const sessionId =
-    body?.sessionId || `sess-maf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // CSPRNG, not Math.random: sessionId keys the MAF conversation, so a
+    // guessable value is the handle another caller needs to resume it.
+    // `randomUUID` rather than the console's lib/util/random-id — copilot-maf
+    // is a SEPARATE package with no path alias into apps/fiab-console.
+    body?.sessionId || `sess-maf-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const maxIterations =
     typeof body?.maxIterations === 'number' ? body.maxIterations : undefined;
 

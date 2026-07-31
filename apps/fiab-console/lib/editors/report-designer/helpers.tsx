@@ -11,6 +11,7 @@ import {
 import { tokens } from '@fluentui/react-components';
 import { SCRIPT_TYPES } from './constants';
 import type { VisualType, WellField, Wells, DVisual, FieldTable, WellName } from './types';
+import { randomSuffix } from '@/lib/util/random-id';
 
 // ── Field-well helpers ────────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ export function wellsFor(type: VisualType): { name: WellName; label: string }[] 
 export function uid(prefix = 'v'): string {
   const r = (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID().slice(0, 8)
-    : Math.random().toString(16).slice(2, 10);
+    : randomSuffix(8);
   return `${prefix}_${r}`;
 }
 
