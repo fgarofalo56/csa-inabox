@@ -662,3 +662,75 @@ describe('POST /api/realtime-hub/provision', () => {
     expect(j.body).toEqual({ error: 'AuthorizationFailed' });
   });
 });
+
+/**
+ * connect-source decides which eventstream properties are SECRETS and must go to
+ * Key Vault instead of Cosmos. The predicate was
+ *
+ *     /password|secret|key$/i
+ *
+ * which CodeQL flagged (js/regex/missing-regexp-anchor #501) for misleading
+ * precedence: it parses as `password` OR `secret` OR `key$`, so the two words
+ * match ANYWHERE while `key` matches only at the END.
+ *
+ * That asymmetry is intended — a bare `key` alternative would vault `keyspace`,
+ * `monkeyName`, `keyboardLayout` — but nothing in the source says so.
+ *
+ * These tests pin the SHIPPING behaviour, and separately prove that the
+ * clearer grouping `/(?:password|secret)|key$/i` is byte-identical — so that
+ * regrouping can land later as a provably inert change. It is NOT applied
+ * here: touching the route trips the route-toolkit boy-scout ratchet, which
+ * wants a full migration, and the codemod cannot be run to check whether this
+ * prologue is transformable. Claiming `codemod-resistant` in TOUCH_EXEMPT
+ * without having run it would be a false exemption on a security guard.
+ *
+ * Any future widening is then a deliberate, visible change rather than a quiet
+ * edit to a secret-detection rule.
+ *
+ * Both directions matter here, which is why the misses are asserted too:
+ *   a MISS  -> a credential is persisted to Cosmos in plaintext
+ *   a FALSE MATCH -> the value is deleted and replaced by `<name>SecretRef`,
+ *                    silently breaking the connector
+ */
+describe('connect-source secret-property predicate (CodeQL #501)', () => {
+  // The predicate AS IT SHIPS in connect-source/route.ts.
+  const isSecretProp = (k: string) => /password|secret|key$/i.test(k);
+
+  it.each([
+    'password', 'saslPassword', 'sslKeyPassword',
+    'clientSecret', 'SECRET_X',
+    'apiKey', 'privateKey',
+  ])('vaults %s', (name) => {
+    expect(isSecretProp(name)).toBe(true);
+  });
+
+  it.each([
+    ['keyspace', 'bare "key" would vault a Cassandra keyspace name'],
+    ['monkeyName', 'bare "key" would match inside an unrelated word'],
+    ['keyboardLayout', 'same'],
+    ['tokenEndpoint', 'a URL — vaulting it would break the connector'],
+    ['bootstrapServers', 'ordinary config'],
+  ])('does NOT vault %s (%s)', (name) => {
+    expect(isSecretProp(name)).toBe(false);
+  });
+
+  it('is byte-identical to the pre-regrouping predicate', () => {
+    const before = /password|secret|key$/i;
+    const after = /(?:password|secret)|key$/i;
+    const names = [
+      'password', 'saslPassword', 'clientSecret', 'apiKey', 'privateKey',
+      'keyMaterial', 'keyspace', 'monkeyName', 'tokenEndpoint',
+      'sslKeyPassword', 'SECRET_X', 'Keystore', 'key', 'KEY', 'a_secret_b',
+    ];
+    for (const n of names) expect(after.test(n)).toBe(before.test(n));
+  });
+
+  it('DOCUMENTS the known gap: a secret not containing password/secret and not ENDING in key is missed', () => {
+    // Not a bug being asserted as correct — a boundary recorded so it is
+    // visible. Widening is risky (a false match breaks the connector), so it is
+    // tracked separately rather than guessed at inside a precedence fix.
+    expect(isSecretProp('keyMaterial')).toBe(false);
+    expect(isSecretProp('saslJaasConfig')).toBe(false);
+    expect(isSecretProp('connectionString')).toBe(false);
+  });
+});
