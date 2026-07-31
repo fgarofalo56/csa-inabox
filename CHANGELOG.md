@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.6...csa-inabox-v0.80.7) (2026-07-31)
+
+
+### Bug Fixes
+
+* **security:** last Math.random sites — and TWO of them were sessionIds, not element ids ([#2738](https://github.com/fgarofalo56/csa-inabox/issues/2738)) ([5f83af7](https://github.com/fgarofalo56/csa-inabox/commit/5f83af76878a7b01fae3b43f4aa31bfa7ebc0190))
+
 ## [0.80.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.5...csa-inabox-v0.80.6) (2026-07-31)
 
 
