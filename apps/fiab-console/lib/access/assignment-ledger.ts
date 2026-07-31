@@ -116,6 +116,50 @@ export async function expireAssignment(id: string, principalId: string): Promise
   }
 }
 
+/**
+ * Pause an ACTIVE assignment (#2758) — the ledger half of a temporary suspend.
+ * Reversible (resumeAssignment restores it), unlike revoke/expire. The tenant
+ * side (accountEnabled:false on the user) is done by the caller via
+ * setUserAccountEnabled; this records the ledger transition. Best-effort.
+ */
+export async function pauseAssignment(id: string, principalId: string, pausedBy?: string): Promise<boolean> {
+  try {
+    const c = await accessAssignmentsContainer();
+    const { resource } = await c.item(id, principalId).read<AccessAssignment>();
+    if (!resource || resource.state !== 'active') return false;
+    const now = new Date().toISOString();
+    resource.state = 'paused';
+    resource.pausedAt = now;
+    resource.pausedBy = pausedBy;
+    resource.updatedAt = now;
+    await c.item(id, principalId).replace(resource);
+    return true;
+  } catch (e: any) {
+    console.warn('[access-ledger] pauseAssignment failed:', e?.message || String(e));
+    return false;
+  }
+}
+
+/** Resume a PAUSED assignment back to active (#2758). Best-effort. */
+export async function resumeAssignment(id: string, principalId: string, resumedBy?: string): Promise<boolean> {
+  try {
+    const c = await accessAssignmentsContainer();
+    const { resource } = await c.item(id, principalId).read<AccessAssignment>();
+    if (!resource || resource.state !== 'paused') return false;
+    const now = new Date().toISOString();
+    resource.state = 'active';
+    resource.pausedAt = undefined;
+    resource.pausedBy = undefined;
+    resource.grantedBy = resumedBy || resource.grantedBy;
+    resource.updatedAt = now;
+    await c.item(id, principalId).replace(resource);
+    return true;
+  } catch (e: any) {
+    console.warn('[access-ledger] resumeAssignment failed:', e?.message || String(e));
+    return false;
+  }
+}
+
 export async function revokeAssignmentLedger(
   principalId: string,
   resourceType: string,

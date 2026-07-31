@@ -726,6 +726,150 @@ export async function findGuestByEmail(email: string): Promise<IdentityHit | nul
   return { id: u.id, type: 'user', displayName: u.displayName || email, upn: u.userPrincipalName, mail: u.mail };
 }
 
+// ----------------------------------------------------------------------------
+// Directory WRITE surface (access-governance onboarding lifecycle).
+//
+// Everything above this line is READ-ONLY (search / expand / invite). The
+// helpers below MUTATE the tenant directory — creating members, adding group
+// membership, pausing (disabling) and deleting users. They exist so the
+// access-governance Requests tab can fulfil a request end-to-end instead of
+// printing an instruction string for the admin to run by hand in Entra.
+//
+// Each needs a WRITE app-role the read path does not: User.ReadWrite.All (create
+// / disable / delete users) and GroupMember.ReadWrite.All (add to onboarding
+// group). They are admin-consented exactly like the read roles; until consented
+// every call 403s and the caller MUST surface that honestly (no-vaporware.md).
+// ----------------------------------------------------------------------------
+
+/** Graph AppRoles required for the directory WRITE surface below. Separate from
+ *  IDENTITY_APP_ROLES (read-only) so an operator can grant onboarding writes as a
+ *  deliberate, higher-privilege step. */
+export const LIFECYCLE_APP_ROLES = [
+  {
+    name: 'User.ReadWrite.All',
+    appRoleId: '741f803b-c850-494e-b5df-cde7c675a1ca',
+    scope: 'Microsoft Graph (app permission, admin-consented)',
+    reason: 'Create a member user, disable (pause) or delete a user for an access request.',
+  },
+  {
+    name: 'GroupMember.ReadWrite.All',
+    appRoleId: 'dbaae8cf-10b5-4b86-a4a1-f871c94c6695',
+    scope: 'Microsoft Graph (app permission, admin-consented)',
+    reason: 'Add the onboarded principal to the access-request onboarding group.',
+  },
+] as const;
+
+export interface CreatedTenantUser {
+  id: string;
+  userPrincipalName: string;
+  displayName: string;
+  /** The one-time password the admin hands the user (mustChangePassword=true). */
+  temporaryPassword: string;
+}
+
+/**
+ * Create a NEW MEMBER user in this tenant (Graph POST /users). For the
+ * access-governance flow where the requester has no account at all and should
+ * be a full member (not a guest).
+ *
+ * The password is generated here, set with `forceChangePasswordNextSignIn`, and
+ * returned ONCE so the admin can hand it over — Loom never stores it. The caller
+ * is responsible for surfacing it exactly once and not logging it.
+ *
+ * Throws GraphIdentityError(403) when User.ReadWrite.All is not consented.
+ */
+export async function createTenantUser(opts: {
+  displayName: string;
+  userPrincipalName: string;
+  mailNickname: string;
+  temporaryPassword: string;
+}): Promise<CreatedTenantUser> {
+  const endpoint = '/users';
+  const res = await graphFetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      accountEnabled: true,
+      displayName: opts.displayName,
+      userPrincipalName: opts.userPrincipalName,
+      mailNickname: opts.mailNickname,
+      passwordProfile: {
+        forceChangePasswordNextSignIn: true,
+        password: opts.temporaryPassword,
+      },
+    }),
+  });
+  const j = await readJson<any>(res, endpoint);
+  return {
+    id: j?.id,
+    userPrincipalName: j?.userPrincipalName || opts.userPrincipalName,
+    displayName: j?.displayName || opts.displayName,
+    temporaryPassword: opts.temporaryPassword,
+  };
+}
+
+/**
+ * Add a principal (member or redeemed guest) to an Entra group by object id
+ * (Graph POST /groups/{id}/members/$ref). Idempotent: a caller re-adding an
+ * existing member gets a 400 "already exist" from Graph, which we swallow.
+ *
+ * NOTE this is a deliberate reversal of the prior "Loom never mutates tenant
+ * groups" posture — it is now an explicit, audited, admin-gated onboarding
+ * action, not a silent reconcile. Throws GraphIdentityError(403) when
+ * GroupMember.ReadWrite.All is not consented.
+ */
+export async function addPrincipalToGroup(groupId: string, principalId: string): Promise<void> {
+  if (!groupId) throw new GraphIdentityError(400, null, 'groupId is required');
+  if (!principalId) throw new GraphIdentityError(400, null, 'principalId is required');
+  const endpoint = `/groups/${encodeURIComponent(groupId)}/members/$ref`;
+  const res = await graphFetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ '@odata.id': `${GRAPH_V1}/directoryObjects/${principalId}` }),
+  });
+  if (res.ok || res.status === 204) return;
+  // Already a member → Graph 400 with code "Request_BadRequest" / "One or more
+  // added object references already exist". Treat as success (idempotent add).
+  const body = await res.text().catch(() => '');
+  if (res.status === 400 && /already exist/i.test(body)) return;
+  throw new GraphIdentityError(res.status, body || null, `Failed to add member to group ${groupId}`, endpoint);
+}
+
+/**
+ * Pause (disable) a user — Graph PATCH /users/{id} { accountEnabled:false } — or
+ * resume with `enabled:true`. The tenant-side half of an access pause: the user
+ * object survives and can be re-enabled, unlike delete. Throws
+ * GraphIdentityError(403) when User.ReadWrite.All is not consented.
+ */
+export async function setUserAccountEnabled(userId: string, enabled: boolean): Promise<void> {
+  if (!userId) throw new GraphIdentityError(400, null, 'userId is required');
+  const endpoint = `/users/${encodeURIComponent(userId)}`;
+  const res = await graphFetch(endpoint, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accountEnabled: enabled }),
+  });
+  if (res.ok || res.status === 204) return;
+  const body = await res.text().catch(() => '');
+  throw new GraphIdentityError(res.status, body || null, `Failed to ${enabled ? 'enable' : 'disable'} user ${userId}`, endpoint);
+}
+
+/**
+ * Delete a user object from the tenant (Graph DELETE /users/{id}). Terminal and
+ * irreversible from Loom's side (Entra keeps a 30-day soft-delete). The caller
+ * MUST tear down entitlements first (revokeAssignment / revoke-all) so a
+ * dangling grant never outlives the object. Throws GraphIdentityError(403) when
+ * User.ReadWrite.All is not consented, 404 when the user is already gone.
+ */
+export async function deleteTenantUser(userId: string): Promise<void> {
+  if (!userId) throw new GraphIdentityError(400, null, 'userId is required');
+  const endpoint = `/users/${encodeURIComponent(userId)}`;
+  const res = await graphFetch(endpoint, { method: 'DELETE' });
+  if (res.ok || res.status === 204 || res.status === 404) return;
+  const body = await res.text().catch(() => '');
+  throw new GraphIdentityError(res.status, body || null, `Failed to delete user ${userId}`, endpoint);
+}
+
 // Test-only: expose internal helpers for unit tests.
 export const __testing = {
   notConfiguredHint,

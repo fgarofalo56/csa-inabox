@@ -30,8 +30,11 @@ export type AssignmentSource =
  *            activate it to receive a time-bounded grant (W3).
  * expired  — was active, past its expiresAt; swept + revoked.
  * revoked  — explicitly revoked.
+ * paused   — temporarily suspended (the tenant-side half is the user's
+ *            accountEnabled:false); reversible back to 'active' via resume,
+ *            unlike revoked/expired which are terminal (#2758).
  */
-export type AssignmentState = 'active' | 'eligible' | 'expired' | 'revoked';
+export type AssignmentState = 'active' | 'eligible' | 'expired' | 'revoked' | 'paused';
 
 export type AssignmentPrincipalType = 'User' | 'Group' | 'ServicePrincipal';
 
@@ -68,6 +71,9 @@ export interface AccessAssignment {
   state: AssignmentState;
   revokedAt?: string;
   revokedBy?: string;
+  /** When the assignment was paused (state==='paused'); cleared on resume (#2758). */
+  pausedAt?: string;
+  pausedBy?: string;
   updatedAt: string;
 }
 
