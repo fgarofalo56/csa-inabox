@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { AasError } from '@/lib/azure/aas-client';
 import { modelBindingGate, introspectModel } from '@/lib/azure/rayfin-model-binding';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,7 +44,7 @@ export async function GET(req: NextRequest) {
     const out = { ok: true as const, backend: 'analysis-services' as const, ...meta };
     try {
       console.info(
-        `[rayfin-app/model-objects.GET] receipt: model=${model} tables=${meta.tables.length} measures=${meta.measures.length} columns=${meta.columns.length}`,
+        `[rayfin-app/model-objects.GET] receipt: model=${logSafe(model)} tables=${meta.tables.length} measures=${meta.measures.length} columns=${meta.columns.length}`,
       );
     } catch { /* noop */ }
     return NextResponse.json(out);

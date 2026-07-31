@@ -24,6 +24,7 @@ import { saveUserOboToken } from '@/lib/azure/mcp-obo-token-store';
 import { REMOTE_BUILTIN_MCP_CATALOG, msRemoteMcpScopeUris, effectiveRemoteState } from '@/lib/mcp/catalog';
 import { armBase, getSqlSuffix, getPbiScope } from '@/lib/azure/cloud-endpoints';
 import type { UserClaims } from '@/lib/auth/msal';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -271,7 +272,9 @@ export async function GET(req: NextRequest) {
   // (success or failure) so a consumed / stale login-CSRF token can't be replayed.
   const clearAuthflow = [clearAuthFlowCookieHeader()];
   if (aadError) {
-    console.error('[auth/callback] AAD error', aadError, url.searchParams.get('error_description'));
+    // Both are RAW query params: logSafe strips CR/LF so a crafted error value
+    // cannot inject a fabricated log record.
+    console.error('[auth/callback] AAD error', logSafe(aadError), logSafe(url.searchParams.get('error_description')));
     return htmlRedirect(`/?auth_error=aad_${aadError}`, undefined, clearAuthflow);
   }
   if (!code) return htmlRedirect(`/?auth_error=missing_code`, undefined, clearAuthflow);
