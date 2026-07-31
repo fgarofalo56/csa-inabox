@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.80.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.3...csa-inabox-v0.80.4) (2026-07-31)
+
+
+### Bug Fixes
+
+* **deps:** clear the remaining portal runtime CVEs — sharp 0.35.3, postcss 8.5.25 ([#2730](https://github.com/fgarofalo56/csa-inabox/issues/2730)) ([bb46979](https://github.com/fgarofalo56/csa-inabox/commit/bb469792464c10fa5031cba2490b5428426fa1ea))
+* **deps:** floor sharp in the console lockfile too — 0.34.5 -&gt; 0.35.3 ([#2731](https://github.com/fgarofalo56/csa-inabox/issues/2731)) ([81eb90a](https://github.com/fgarofalo56/csa-inabox/commit/81eb90ad386a3e75e08b8e9e73fb986934af8b58))
+* **deps:** floor the runtime-scoped CVE transitives via pnpm overrides ([#2729](https://github.com/fgarofalo56/csa-inabox/issues/2729)) ([260c6ff](https://github.com/fgarofalo56/csa-inabox/commit/260c6ffc36b92d05fe7cf4f38d0d8f2057630e19))
+
+
+### Documentation
+
+* **security:** scorecard graded against the repo's own rubric — A- / 8.5, not 10 ([#2727](https://github.com/fgarofalo56/csa-inabox/issues/2727)) ([ba3fa38](https://github.com/fgarofalo56/csa-inabox/commit/ba3fa38f8cbfc779d44709e623f9b9f35b26f4ea))
+
 ## [0.80.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.2...csa-inabox-v0.80.3) (2026-07-31)
 
 
