@@ -15,12 +15,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   makeStyles, tokens, TabList, Tab, Card, CardHeader, Badge, Button, Body1, Caption1,
-  Subtitle2, Spinner, MessageBar, MessageBarBody, MessageBarTitle, Field, Textarea,
+  Subtitle2, Spinner, MessageBar, MessageBarBody, MessageBarTitle, Field, Textarea, Input,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Persona,
 } from '@fluentui/react-components';
 import {
-  CheckmarkCircleRegular, DismissCircleRegular, MailRegular, BuildingRegular,
+  CheckmarkCircleRegular, DismissCircleRegular, MailRegular, BuildingRegular, PersonAddRegular,
   ClockRegular, InfoRegular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -75,6 +75,13 @@ export function AccessRequestsPanel() {
   // Deny dialog state.
   const [denyTarget, setDenyTarget] = useState<SigninAccessRequest | null>(null);
   const [denyNote, setDenyNote] = useState('');
+  // Create-tenant-user dialog (needs the verified UPN domain) + provisioning result.
+  const [createTarget, setCreateTarget] = useState<SigninAccessRequest | null>(null);
+  const [createDomain, setCreateDomain] = useState('');
+  const [provResult, setProvResult] = useState<
+    | { reqId: string; kind: 'guest' | 'user'; upn?: string; tempPassword?: string; redeemUrl?: string; warning?: string }
+    | null
+  >(null);
 
   const load = useCallback(async (status: SigninAccessRequestStatus) => {
     setLoading(true);
@@ -127,6 +134,46 @@ export function AccessRequestsPanel() {
     await decide(target, 'denied', denyNote.trim());
     setDenyNote('');
   }, [denyTarget, denyNote, decide]);
+
+  // Provision the requester in the tenant directory (#2758) — invite as a B2B
+  // guest, or create a member user — then the request is approved server-side.
+  const provision = useCallback(async (req: SigninAccessRequest, kind: 'guest' | 'user', upnDomain?: string) => {
+    setBusyId(req.id);
+    setError(null);
+    try {
+      const path = kind === 'guest'
+        ? `/api/admin/access-requests/${req.id}/invite-guest`
+        : `/api/admin/access-requests/${req.id}/create-user`;
+      const r = await clientFetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(kind === 'user' ? { upnDomain } : {}),
+      });
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
+      setProvResult({
+        reqId: req.id, kind,
+        upn: j.user?.userPrincipalName,
+        tempPassword: j.temporaryPassword,
+        redeemUrl: j.guest?.inviteRedeemUrl,
+        warning: j.warning,
+      });
+      await load(tab);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }, [tab, load]);
+
+  const confirmCreateUser = useCallback(async () => {
+    if (!createTarget) return;
+    const target = createTarget;
+    const domain = createDomain.trim();
+    setCreateTarget(null);
+    await provision(target, 'user', domain || undefined);
+    setCreateDomain('');
+  }, [createTarget, createDomain, provision]);
 
   return (
     <div>
@@ -197,14 +244,30 @@ export function AccessRequestsPanel() {
                 <div className={styles.actions}>
                   <Button
                     appearance="primary"
-                    icon={busyId === req.id ? <Spinner size="tiny" /> : <CheckmarkCircleRegular />}
+                    icon={busyId === req.id ? <Spinner size="tiny" /> : <PersonAddRegular />}
                     disabled={busyId === req.id}
-                    onClick={() => decide(req, 'approved')}
+                    onClick={() => provision(req, 'guest')}
                   >
-                    Approve &amp; onboard
+                    Invite as guest
                   </Button>
                   <Button
                     appearance="secondary"
+                    icon={<PersonAddRegular />}
+                    disabled={busyId === req.id}
+                    onClick={() => { setCreateTarget(req); setCreateDomain(req.email.split('@')[1] || ''); }}
+                  >
+                    Create tenant user
+                  </Button>
+                  <Button
+                    appearance="subtle"
+                    icon={<CheckmarkCircleRegular />}
+                    disabled={busyId === req.id}
+                    onClick={() => decide(req, 'approved')}
+                  >
+                    Approve only
+                  </Button>
+                  <Button
+                    appearance="subtle"
                     icon={<DismissCircleRegular />}
                     disabled={busyId === req.id}
                     onClick={() => { setDenyTarget(req); setDenyNote(''); }}
@@ -258,6 +321,77 @@ export function AccessRequestsPanel() {
             <DialogActions>
               <Button appearance="primary" disabled={!denyNote.trim()} onClick={confirmDeny}>Deny request</Button>
               <Button appearance="secondary" onClick={() => setDenyTarget(null)}>Cancel</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Create tenant user — capture the verified UPN domain for the new member. */}
+      <Dialog open={!!createTarget} onOpenChange={(_, d) => { if (!d.open) setCreateTarget(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Create a tenant member for {createTarget?.displayName}</DialogTitle>
+            <DialogContent>
+              <Body1 as="p" style={{ marginBottom: tokens.spacingVerticalM }}>
+                Creates a new Entra <strong>member</strong> user for {createTarget?.email} and approves
+                the request. A one-time password is generated and shown once — hand it to the user.
+                Prefer <em>Invite as guest</em> for external collaborators.
+              </Body1>
+              <Field label="Verified tenant domain (UPN suffix)" required
+                hint="The new sign-in name is <mailNickname>@<this domain>. Must be a domain verified in your tenant.">
+                <Input
+                  value={createDomain}
+                  onChange={(_, d) => setCreateDomain(d.value.trim())}
+                  placeholder="contoso.onmicrosoft.com"
+                />
+              </Field>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="primary" disabled={!createDomain.trim()} onClick={confirmCreateUser}>Create user</Button>
+              <Button appearance="secondary" onClick={() => setCreateTarget(null)}>Cancel</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Provisioning result — show the guest redeem URL or the one-time password ONCE. */}
+      <Dialog open={!!provResult} onOpenChange={(_, d) => { if (!d.open) setProvResult(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{provResult?.kind === 'guest' ? 'Guest invited' : 'Member created'}</DialogTitle>
+            <DialogContent>
+              {provResult?.warning && (
+                <MessageBar intent="warning" layout="multiline" style={{ marginBottom: tokens.spacingVerticalM }}>
+                  <MessageBarBody>{provResult.warning}</MessageBarBody>
+                </MessageBar>
+              )}
+              {provResult?.kind === 'user' && (
+                <>
+                  <Body1 as="p" style={{ marginBottom: tokens.spacingVerticalS }}>
+                    Sign-in name: <strong>{provResult.upn}</strong>
+                  </Body1>
+                  <Field label="One-time password (shown once — Loom does not store it)">
+                    <Input readOnly value={provResult.tempPassword || ''} />
+                  </Field>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS }}>
+                    The user must change this at first sign-in.
+                  </Caption1>
+                </>
+              )}
+              {provResult?.kind === 'guest' && (
+                provResult.redeemUrl
+                  ? (
+                    <Field label="Invitation redeem URL — send this to the guest">
+                      <Input readOnly value={provResult.redeemUrl} />
+                    </Field>
+                  )
+                  : (
+                    <Body1 as="p">The guest already existed in the tenant and was reused. No new invitation was sent.</Body1>
+                  )
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setProvResult(null)}>Done</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
