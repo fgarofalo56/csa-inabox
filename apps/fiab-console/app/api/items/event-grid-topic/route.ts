@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   eventgridTopicsConfigGate,
   listEventGridTopics,
@@ -59,12 +60,20 @@ export async function GET(req: NextRequest) {
   const detail = req.nextUrl.searchParams.get('detail');
   try {
     if (topic && detail) {
+      // Topic metadata + subscriptions are readable by any signed-in user; the
+      // ACCESS KEYS are not. Gate only the key fetch so the detail pane still
+      // renders for everyone, minus live credentials.
+      const s2 = getSession();
+      const keysDenied = s2 ? await denyIfNoDlzAccess(s2, 'scaling') : null;
       const [t, subscriptions, keys] = await Promise.all([
         getEventGridTopic(topic).catch(() => null),
         listTopicEventSubscriptions(topic).catch(() => []),
-        listTopicKeys(topic).catch(() => null),
+        keysDenied ? Promise.resolve(null) : listTopicKeys(topic).catch(() => null),
       ]);
-      return NextResponse.json({ ok: true, topic: t, subscriptions, keys });
+      return NextResponse.json({
+        ok: true, topic: t, subscriptions, keys,
+        ...(keysDenied ? { keysWithheld: 'tenant-admin or domain-admin only' } : {}),
+      });
     }
     const topics = await listEventGridTopics();
     return NextResponse.json({ ok: true, topics });
@@ -87,6 +96,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, subscription });
     }
     if (action === 'regenerate-key') {
+      // Destructive + credential-bearing: invalidates every publisher using the
+      // old key. Tenant-admin / domain-admin only.
+      const s2 = getSession();
+      if (!s2) return unauth();
+      const denied = await denyIfNoDlzAccess(s2, 'scaling');
+      if (denied) return denied;
       const topic = String(body?.topic || '').trim();
       if (!topic) return NextResponse.json({ ok: false, error: 'topic is required' }, { status: 400 });
       const keyName = body?.keyName === 'key2' ? 'key2' : 'key1';

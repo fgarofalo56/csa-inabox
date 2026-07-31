@@ -20,6 +20,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   servicebusConfigGate,
   getNamespaceProperties,
@@ -201,6 +202,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'list-keys') {
+      // SAS keys for the SHARED, env-pinned namespace: tenant-admin /
+      // domain-admin only (same gate as /api/ai-search/service).
+      const s2 = getSession();
+      if (!s2) return unauth();
+      const denied = await denyIfNoDlzAccess(s2, 'scaling');
+      if (denied) return denied;
       const rule = String(body?.rule || '').trim();
       if (!rule) return NextResponse.json({ ok: false, error: 'rule is required' }, { status: 400 });
       const keys = await listNamespaceKeys(rule);
@@ -208,6 +215,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'regenerate-keys') {
+      // SAS keys for the SHARED, env-pinned namespace: tenant-admin /
+      // domain-admin only (same gate as /api/ai-search/service).
+      const s2 = getSession();
+      if (!s2) return unauth();
+      const denied = await denyIfNoDlzAccess(s2, 'scaling');
+      if (denied) return denied;
       const rule = String(body?.rule || '').trim();
       const keyType = (body?.keyType === 'SecondaryKey' ? 'SecondaryKey' : 'PrimaryKey') as RegenerateKeyType;
       if (!rule) return NextResponse.json({ ok: false, error: 'rule is required' }, { status: 400 });

@@ -58,6 +58,25 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2744 gated the CREDENTIAL-BEARING ACTIONS on these two action-dispatch
+  // routes (list-keys / regenerate-keys; topic keys + regenerate-key) behind
+  // denyIfNoDlzAccess, because they return live SAS/access keys for SHARED,
+  // env-pinned infrastructure to any signed-in caller.
+  //
+  // THE CODEMOD DECLINES BOTH: "no hand-rolled getSession() prologue" — they use
+  // `if (!getSession()) return unauth();`, not the exact shape withSession
+  // replaces.
+  //
+  // AND A WHOLE-HANDLER WRAPPER WOULD BE WRONG HERE, which is the substantive
+  // point. `withDlzAccess` gates the ENTIRE handler; on these routes only SOME
+  // actions are privileged. Applying it would 403 create-queue, create-topic,
+  // list-rules and the Event Grid topic/subscription reads for every non-admin —
+  // breaking both navigators for ordinary users to fix a key leak. The
+  // authorization here is deliberately PER-ACTION and mixed, so the toolkit's
+  // per-handler model does not fit until a per-action wrapper exists.
+  // keys-authz.test.ts pins that split in both directions.
+  ['apps/fiab-console/app/api/items/service-bus-namespace/route.ts', '#2744: per-ACTION credential gating; withDlzAccess wraps the whole handler and would 403 non-credential actions'],
+  ['apps/fiab-console/app/api/items/event-grid-topic/route.ts', '#2744: per-ACTION credential gating; withDlzAccess wraps the whole handler and would 403 topic/subscription reads'],
   // #2656 touched this route only to swap a Math.random() suffix for the
   // crypto-backed randomSuffix() — the suffix flows into a Key Vault secret NAME
   // (CodeQL #513/#527/#531), so it is a two-line security fix.

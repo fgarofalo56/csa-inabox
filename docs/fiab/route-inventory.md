@@ -14,10 +14,10 @@ same classic + WS-D1 toolkit export styles).
 | Metric | Count |
 | --- | ---: |
 | Total routes | 1661 |
-| Public (no session) | 101 |
-| Session-only | 580 |
-| Owner-scoped | 696 |
-| Admin | 284 |
+| Public (no session) | 100 |
+| Session-only | 576 |
+| Owner-scoped | 698 |
+| Admin | 287 |
 | Gated (backend config) | 531 |
 | Areas | 120 |
 
@@ -792,8 +792,8 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `eventhubs/authrules/[rule]/keys/regenerate/route.ts` | POST | session-only | ● | Event Hubs |
-| `eventhubs/authrules/[rule]/keys/route.ts` | POST | session-only | ● | Event Hubs |
+| `eventhubs/authrules/[rule]/keys/regenerate/route.ts` | POST | admin | ● | Event Hubs |
+| `eventhubs/authrules/[rule]/keys/route.ts` | POST | admin | ● | Event Hubs |
 | `eventhubs/authrules/route.ts` | GET | session-only | ● | Event Hubs |
 | `eventhubs/capture/route.ts` | GET PUT | session-only | ● | Event Hubs |
 | `eventhubs/consumergroups/route.ts` | GET POST DELETE | session-only | ● | Event Hubs |
@@ -1177,7 +1177,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/copy-job/[id]/watermark/route.ts` | GET | owner-scoped |  | — |
 | `items/copy-job/route.ts` | GET POST | owner-scoped |  | — |
 | `items/cosmos-db/[id]/gremlin/route.ts` | POST | session-only | ● | Cosmos |
-| `items/cosmos-db/[id]/keys/route.ts` | GET POST | public | ● | Cosmos |
+| `items/cosmos-db/[id]/keys/route.ts` | GET POST | admin | ● | Cosmos |
 | `items/cosmos-db/[id]/metrics/route.ts` | GET | session-only | ● | Azure Monitor, Cosmos |
 | `items/cosmos-gremlin-graph/[id]/query/route.ts` | POST | session-only |  | — |
 | `items/cosmos-gremlin-graph/route.ts` | GET POST | owner-scoped |  | — |
@@ -1315,7 +1315,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/environment/route.ts` | GET POST | owner-scoped |  | — |
 | `items/evaluation/[id]/route.ts` | GET | owner-scoped |  | — |
 | `items/evaluation/route.ts` | GET POST | session-only |  | — |
-| `items/event-grid-topic/route.ts` | GET POST DELETE | session-only | ● | — |
+| `items/event-grid-topic/route.ts` | GET POST DELETE | owner-scoped | ● | — |
 | `items/event-hubs-namespace/route.ts` | GET POST DELETE | session-only | ● | Event Hubs |
 | `items/event-schema-set/[id]/check-compat/route.ts` | POST | owner-scoped | ● | Cosmos, Event Hubs |
 | `items/event-schema-set/[id]/route.ts` | GET PATCH DELETE | owner-scoped | ● | Cosmos, Event Hubs |
@@ -1623,7 +1623,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/semantic-model/scaffold/route.ts` | POST | owner-scoped | ● | Synapse SQL |
 | `items/semantic-model/workspace-pane/route.ts` | GET POST | owner-scoped | ● | AAS |
 | `items/service-bus-namespace/data-explorer/route.ts` | POST | session-only | ● | — |
-| `items/service-bus-namespace/route.ts` | GET POST DELETE | session-only | ● | Service Bus |
+| `items/service-bus-namespace/route.ts` | GET POST DELETE | owner-scoped | ● | Service Bus |
 | `items/slate-app/[id]/generate/route.ts` | POST | owner-scoped |  | — |
 | `items/slate-app/[id]/publish/route.ts` | POST | owner-scoped |  | — |
 | `items/slate-app/[id]/query/run/route.ts` | POST | owner-scoped | ● | ADX, Synapse SQL |

@@ -39,6 +39,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .connectors import CONNECTORS, ConnectorError, ConnectorGateError
+from .redact import redact  # dependency-free; see redact.py
 
 logging.basicConfig(level=os.environ.get("LOOM_MIGRATE_LOG_LEVEL", "INFO"))
 log = logging.getLogger("loom-migrate")
@@ -89,8 +90,15 @@ def enumerate_estate(body: EnumerateRequest) -> JSONResponse:
             status_code=200,
         )
     except ConnectorError as err:
-        return JSONResponse({"ok": False, "error": str(err)}, status_code=err.status)
+        # The source's own error body is forwarded here; redact the connection
+        # values (bearer token) in case the source echoed the auth header back.
+        return JSONResponse(
+            {"ok": False, "error": redact(str(err), body.connection or {})}, status_code=err.status
+        )
     except Exception as exc:  # pragma: no cover - defensive
         log.exception("enumerate failed")
-        return JSONResponse({"ok": False, "error": f"Enumeration failed: {exc}"}, status_code=502)
+        return JSONResponse(
+            {"ok": False, "error": f"Enumeration failed: {redact(str(exc), body.connection or {})}"},
+            status_code=502,
+        )
     return JSONResponse({"ok": True, "inventory": inventory.to_json()})
