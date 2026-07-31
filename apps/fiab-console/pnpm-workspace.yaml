@@ -5,8 +5,19 @@
 #   "The 'pnpm' field in package.json is no longer read by pnpm.
 #    The following keys were ignored: 'pnpm.overrides'"
 # and pnpm-workspace.yaml is the documented new home for those settings.
-# There are no `packages:` globs here: fiab-console is a single project, not a
-# workspace root, and adding globs would change install semantics.
+#
+# `packages: ['.']` — the SINGLE member is this project itself. I first wrote
+# this file with no `packages:` field at all, reasoning that fiab-console is not
+# a workspace root and globs would change install semantics. pnpm rejects that
+# outright: creating the file makes the directory a workspace root, and the
+# field is mandatory. CI caught it in 17 seconds —
+#     ERROR  packages field missing or empty
+# on both `pnpm install` steps. Declaring exactly one member ('.') keeps the
+# resolution graph identical to the pre-workspace layout while giving pnpm the
+# field it requires. Do NOT widen this to 'apps/*' or similar: that would pull
+# sibling apps into one resolution graph, which is a real behaviour change.
+packages:
+  - '.'
 #
 # WHY OVERRIDES AND NOT DEPENDENCY BUMPS. Every package below is a TRANSITIVE
 # dependency — none appears in package.json. Dependabot reports each as a
