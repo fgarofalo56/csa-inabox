@@ -66,6 +66,7 @@ import {
   ArrowUndo20Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import type { FieldOpt } from './filters-pane';
+import { randomSuffix } from '@/lib/util/random-id';
 
 // ── Model (structural — a designer DVisual/Wells satisfies these) ─────────────
 
@@ -163,7 +164,7 @@ export function compatibleTypesFor(type: VisualType): VisualType[] {
 function uid(prefix = 'pz'): string {
   const r = (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID().slice(0, 8)
-    : Math.random().toString(16).slice(2, 10);
+    : randomSuffix(8);
   return `${prefix}_${r}`;
 }
 

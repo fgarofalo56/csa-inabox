@@ -38,6 +38,7 @@ import type { CopilotContext } from '@/lib/azure/copilot-personas';
 import type { SessionConfig } from '@/lib/components/notebook/session-config';
 import { CopilotDiff, type ProposedChange } from '@/lib/components/copilot-diff';
 import { isSlashMenuOpen } from '@/lib/copilot/slash-commands';
+import { randomId } from '@/lib/util/random-id';
 
 interface AttachedSource {
   kind: 'lakehouse' | 'warehouse' | 'kql-database';
@@ -190,7 +191,7 @@ export function CopilotChatPane({
   const sessionIdRef = useRef<string>(
     typeof crypto !== 'undefined' && crypto.randomUUID
       ? `nbcopilot-${crypto.randomUUID()}`
-      : `nbcopilot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      : randomId('nbcopilot', 6),
   );
   const abortRef = useRef<AbortController | null>(null);
   const historyEndRef = useRef<HTMLDivElement | null>(null);
