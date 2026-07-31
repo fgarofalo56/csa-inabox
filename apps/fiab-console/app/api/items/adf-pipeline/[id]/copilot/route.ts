@@ -34,6 +34,7 @@ import {
 } from '@/lib/azure/copilot-personas-pipeline';
 import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { randomId } from '@/lib/util/random-id';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,7 +61,7 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
   try { body = (await req.json()) as typeof body; } catch { /* validated below */ }
   const prompt = String(body.prompt || '').trim();
   if (!prompt) return NextResponse.json({ ok: false, error: 'prompt required' }, { status: 400 });
-  const sessionId = body.sessionId || `pip-${BACKEND}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const sessionId = body.sessionId || randomId(`pip-${BACKEND}`, 6);
 
   // Resolve Azure OpenAI — honest 503 gate when nothing is wired.
   const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
