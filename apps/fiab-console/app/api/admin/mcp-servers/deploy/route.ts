@@ -51,6 +51,7 @@ import {
   type AcaSecretRef,
 } from '@/lib/azure/container-apps-arm-client';
 import { putKeyVaultSecret, deleteKeyVaultSecret, vaultUrl, sanitizeSecretName } from '@/lib/azure/kv-secrets-client';
+import { randomSuffix, randomId } from '@/lib/util/random-id';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import { getCatalogEntry, validateConfigValues, type McpCatalogEntry } from '@/lib/mcp/catalog';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
@@ -168,7 +169,16 @@ async function deployCatalogServer(
   }
 
   // Derive a DNS-label-safe, unique Container App name (<= 32 chars).
-  const rand = Math.random().toString(36).slice(2, 8);
+  // CRYPTO, not Math.random (CodeQL js/insecure-randomness #513/#527/#531).
+  // This suffix is the uniqueness half of a Container App DNS label, and it
+  // then flows into the Key Vault SECRET NAME below (`mcp-${appName}-${f.key}`),
+  // which is what earned CodeQL's "security context" label. The secret VALUE is
+  // operator-supplied, so this was never a credential-strength defect — but 6
+  // base36 chars of Math.random is ~31 bits AND process-correlated, so two
+  // deploys in one process are predictable from each other. `randomSuffix` is
+  // the crypto-backed, rejection-sampled helper over the SAME base36 alphabet,
+  // so the label shape is unchanged.
+  const rand = randomSuffix(6);
   const appName = `loom-mcp-${entry.id}-${rand}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 32).replace(/-+$/g, '');
 
   // ── Honest infra gates ───────────────────────────────────────────────────
@@ -298,7 +308,7 @@ async function deployCatalogServer(
     try {
       const audit = await auditLogContainer();
       await audit.items.create({
-        id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: randomId('audit', 6),
         itemId: `mcp-server:${doc.serverId}`,
         tenantId,
         who,

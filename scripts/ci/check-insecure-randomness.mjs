@@ -53,8 +53,15 @@ const STATISTICAL_EXEMPT = new Map([
   ['apps/fiab-console/lib/clients/cost-client.ts', 'Retry-backoff jitter — spreads load. Predictability is harmless; a CSPRNG buys nothing.'],
 ]);
 
-/** Total permitted `Math.random()` occurrences outside the exempt files. */
-const BASELINE = 168;
+/**
+ * Total permitted `Math.random()` occurrences outside the exempt files.
+ *
+ * RATCHET — only ever goes DOWN. 168 -> 166: `admin/mcp-servers/deploy` moved its
+ * Container-App name suffix and its audit-row id to the crypto-backed
+ * `lib/util/random-id` helpers. That suffix flowed into a Key Vault secret NAME,
+ * which is what CodeQL flagged as a "security context" (#513/#527/#531).
+ */
+const BASELINE = 166;
 
 /**
  * Strip `//` line comments and block comments before counting.
