@@ -28,8 +28,7 @@
  *
  * Usage: node scripts/ci/check-credential-route-authz.mjs
  */
-import { readFileSync } from 'node:fs';
-import { globSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = 'apps/fiab-console/app/api';
@@ -68,9 +67,20 @@ const NOT_EXPOSURE = new Map([
    'Returns the endpoint hostname only; the connection string is consumed server-side.'],
 ]);
 
-function walk(dir) {
+/**
+ * Recursive readdir rather than fs.globSync: globSync landed in Node 22 and CI
+ * runs Node 20, where the import is a hard SyntaxError. (It failed loudly there,
+ * which is the right failure mode for a guard — a scanner that silently matched
+ * zero files would have "passed".)
+ * Returns POSIX-style paths relative to `dir` so keys compare equal on Windows.
+ */
+function walk(dir, prefix = '') {
   const out = [];
-  for (const e of globSync('**/route.ts', { cwd: dir, withFileTypes: false })) out.push(e);
+  for (const e of readdirSync(join(dir, prefix), { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...walk(dir, rel));
+    else if (e.name === 'route.ts') out.push(rel);
+  }
   return out;
 }
 
