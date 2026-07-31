@@ -187,9 +187,16 @@ export function gateStatus(id: string): GateStatus | undefined {
   // non-blocking info note.
   const avail = spec.availability ? availabilityInActiveCloud(id) : 'ga';
   const fallbackNote = avail !== 'ga' ? spec.availability?.fallbackNote : undefined;
+  // An additive, non-default feature (severity:'optional' + warnOnMiss) whose
+  // absence removes NO capability — the one opt-in carve-out shape, e.g.
+  // svc-loom-trino. evalEnv returns status:'warn' for these; without this branch
+  // the flatten below turned that warn into 'blocked', so a deliberately-unset
+  // opt-in read identically to a real misconfiguration (issue #2753).
+  const isOptIn = check.status === 'warn' && spec.severity === 'optional' && spec.warnOnMiss === true;
   const status: GateStatus['status'] = check.status === 'pass'
     ? 'configured'
-    : avail === 'unavailable' ? 'cloud-unavailable' : 'blocked';
+    : isOptIn ? 'opt-in'
+      : avail === 'unavailable' ? 'cloud-unavailable' : 'blocked';
   return {
     id,
     status,

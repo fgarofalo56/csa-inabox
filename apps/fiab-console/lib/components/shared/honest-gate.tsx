@@ -102,6 +102,18 @@ export function GateFixitDialog({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadOptions = useCallback(async () => {
+    // Skip the ARM discovery call entirely when NO required setting has a live
+    // loader (an env-picker-only / free-text gate, e.g. svc-loom-trino). The
+    // route can only 503 (no LOOM_SUBSCRIPTION_ID), 502 (ARM token), or return
+    // an empty {} for these — so the fetch surfaces a spurious "Live discovery
+    // unavailable" error on a gate that never needed discovery (issue #2753).
+    const anyLoader = gate.requiredSettings.some((s) => !!s.loader);
+    if (!anyLoader) {
+      setOptions({});
+      setOptionsError(null);
+      setLoadingOptions(false);
+      return;
+    }
     setLoadingOptions(true);
     setOptionsError(null);
     try {
@@ -114,7 +126,7 @@ export function GateFixitDialog({
     } finally {
       setLoadingOptions(false);
     }
-  }, [gate.id]);
+  }, [gate.id, gate.requiredSettings]);
 
   useEffect(() => {
     if (open) {

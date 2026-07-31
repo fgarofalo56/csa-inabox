@@ -32,7 +32,7 @@ import type { FixitKind, GateDef, GateStatus } from '@/lib/gates/registry';
 // ── public types ─────────────────────────────────────────────────────────────
 
 /** Go/no-go readiness of a single capability or a whole workload. */
-export type ReadinessState = 'ready' | 'partial' | 'blocked';
+export type ReadinessState = 'ready' | 'partial' | 'blocked' | 'opt-in';
 
 /** How a 'ready' capability was verified. */
 export type VerifiedBy = 'live-probe' | 'config-only';
@@ -70,7 +70,7 @@ export interface CapabilityNode {
   /** For a 'ready' node: whether a live probe confirmed it or only config presence. */
   verified: VerifiedBy;
   /** The raw env-presence gate status the feature actually gates on. */
-  gateStatus: 'configured' | 'blocked';
+  gateStatus: 'configured' | 'blocked' | 'opt-in';
   /** Missing env vars (the exact unmet prerequisites). */
   missing: string[];
   /** Every env var / alias that satisfies the gate, with live presence. */
@@ -282,7 +282,9 @@ export const GATE_PROBE_MAP: Record<string, string> = {
 // ── weighting ────────────────────────────────────────────────────────────────
 
 const SEVERITY_WEIGHT: Record<AuditSeverity, number> = { critical: 3, recommended: 2, optional: 1 };
-const STATE_VALUE: Record<ReadinessState, number> = { ready: 1, partial: 0.5, blocked: 0 };
+// 'opt-in' scores as 1 (a healthy, deliberately-not-deployed additive feature is
+// NOT a deduction against the deployment — its absence removes no capability).
+const STATE_VALUE: Record<ReadinessState, number> = { ready: 1, partial: 0.5, blocked: 0, 'opt-in': 1 };
 
 // ── H1: capability nodes ─────────────────────────────────────────────────────
 
@@ -298,7 +300,12 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
     const st = statusById.get(g.id);
     // X2: 'cloud-unavailable' folds into 'blocked' for readiness purposes — the
     // node's remediation (the gate remediation / fallbackNote) stays honest.
-    const gateStatus: 'configured' | 'blocked' = st?.status === 'configured' ? 'configured' : 'blocked';
+    // 'opt-in' is preserved distinctly (issue #2753): an additive non-default
+    // feature whose absence removes no capability must render neutral, not red.
+    const gateStatus: 'configured' | 'blocked' | 'opt-in' =
+      st?.status === 'configured' ? 'configured'
+        : st?.status === 'opt-in' ? 'opt-in'
+          : 'blocked';
     const missing = st?.missing ?? [];
 
     const requiredEnv: RequiredEnv[] = g.requiredSettings.map((rs) => ({
@@ -315,7 +322,13 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
 
     let state: ReadinessState;
     let verified: VerifiedBy = 'config-only';
-    if (gateStatus === 'blocked') {
+    if (gateStatus === 'opt-in') {
+      // Additive opt-in feature, not deployed. Never blocked (its absence costs
+      // no capability); a live probe can still upgrade it to ready if the
+      // operator did opt in and the backend answers.
+      if (probe?.status === 'pass') { state = 'ready'; verified = 'live-probe'; }
+      else { state = 'opt-in'; }
+    } else if (gateStatus === 'blocked') {
       // Missing required configuration is a hard blocker — unless the gate is a
       // fully-functional default when unset (canAutoResolve): those are ready.
       state = g.canAutoResolve ? 'ready' : 'blocked';
@@ -494,6 +507,7 @@ const STATE_LABEL: Record<ReadinessState, string> = {
   ready: 'Ready',
   partial: 'Partial',
   blocked: 'Blocked',
+  'opt-in': 'Opt-in',
 };
 
 /** Render a readable markdown report of the tenant profile (H3). */

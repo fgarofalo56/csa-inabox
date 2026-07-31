@@ -115,12 +115,18 @@ export interface GateStatus {
   id: string;
   /** 'configured'         — every required value present (or auto-resolved default);
    *  'blocked'            — missing values; the surfaces honest-gate with a Fix-it.
+   *  'opt-in'             — the values are missing BUT the spec is `severity:'optional'`
+   *                         + `warnOnMiss` (an additive, non-default feature whose
+   *                         absence removes NO capability — e.g. the Trino AKS
+   *                         carve-out). NOT a misconfiguration: the surface shows a
+   *                         neutral "opt-in / not deployed" state, never a red alarm.
+   *                         Distinct from 'blocked' (a real missing prerequisite).
    *  'cloud-unavailable'  — X2: the values are missing AND the backing service is
    *                         structurally unavailable in the active cloud — the
    *                         honest bar names the Azure-native/OSS fallback
    *                         (`fallbackNote`) with NO Fix-it (you cannot provision
    *                         the impossible). Distinct from 'blocked'. */
-  status: 'configured' | 'blocked' | 'cloud-unavailable';
+  status: 'configured' | 'blocked' | 'opt-in' | 'cloud-unavailable';
   /** The underlying audit result (detail, portalSteps, fixScript). */
   check: CheckResult;
   /** Missing env vars (preferred member of each unsatisfied group). */
