@@ -29,6 +29,7 @@ import {
 import { auditObjectSecurity } from '@/lib/azure/object-security-audit';
 import { weaveGate, createObject, listObjects } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,7 +42,10 @@ function err(error: string, status: number, code?: string, gate?: Record<string,
 
 /** Only scalar property values are accepted (string/number/boolean). */
 function sanitizeProps(raw: unknown): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+  // The /^[A-Za-z_][\w]{0,62}$/ filter below reads like a strict identifier
+  // check but passes __proto__, constructor, prototype, toString and valueOf
+  // (underscores are \w). The record itself has to be prototype-less.
+  const out = safeRecord<unknown>();
   if (raw && typeof raw === 'object') {
     for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
       if (!/^[A-Za-z_][\w]{0,62}$/.test(k)) continue;

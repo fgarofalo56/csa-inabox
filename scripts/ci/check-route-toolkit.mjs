@@ -58,6 +58,17 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2657 round 2 touched these four ONLY to build one map with safeRecord()
+  // instead of `{}`. The ontology pair is the point of the round: their
+  // /^[A-Za-z_][\w]{0,62}$/ key filter reads as a strict identifier check and
+  // accepts __proto__, constructor, prototype, toString and valueOf, because
+  // `_` is `\w`. One declaration per file, no auth change.
+  //
+  // THE CODEMOD DECLINES ALL FOUR — `--file=` reports "0 handlers" for each.
+  ['apps/fiab-console/app/api/items/ontology/[id]/objects/route.ts', '#2657r2: one-line safeRecord fix; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/items/ontology/[id]/links/route.ts', '#2657r2: one-line safeRecord fix; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/admin/mcp-servers/route.ts', '#2657r2: one-line safeRecord fix; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/eventhubs/data-explorer/route.ts', '#2657r2: one-line safeRecord fix; codemod reports 0 handlers'],
   // #2657 touched these three ONLY to build one map with safeRecord()
   // (Object.create(null)) instead of `{}`, so a request-derived key like
   // `__proto__` becomes an ordinary own property. One declaration per file,
