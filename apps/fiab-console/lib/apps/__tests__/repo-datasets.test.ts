@@ -53,4 +53,12 @@ describe('readRepoDataset', () => {
   it('returns null for a missing file under the prefix', () => {
     expect(readRepoDataset('does-not-exist/nope.csv')).toBeNull();
   });
+  it('returns null for a DIRECTORY under the prefix (no throw)', () => {
+    // Pins the equivalence the TOCTOU fix relies on: readRepoDataset dropped the
+    // existsSync/statSync().isFile() pre-checks (two race windows) and now calls
+    // readFileSync directly. A directory must still return null — it does,
+    // because readFileSync throws EISDIR straight into the catch. Without this
+    // test, removing those checks was an unverified claim.
+    expect(readRepoDataset('lakehouse-inspector')).toBeNull();
+  });
 });

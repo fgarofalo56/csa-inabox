@@ -121,7 +121,12 @@ export function readRepoDataset(input: string): RepoDataset | null {
   if (!absPath.startsWith(prefixAbs + path.sep) && absPath !== prefixAbs) return null;
   let bytes: Buffer;
   try {
-    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) return null;
+    // ONE syscall, no TOCTOU. The previous existsSync → statSync → readFileSync
+    // sequence had two race windows (CodeQL js/file-system-race): the path could
+    // be swapped for a symlink between the checks and the read. readFileSync
+    // alone is equivalent because every case the checks rejected still throws
+    // here and lands in the catch — ENOENT (missing) / EISDIR (a directory) —
+    // so the null return is unchanged.
     bytes = fs.readFileSync(absPath);
   } catch {
     return null;
