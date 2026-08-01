@@ -416,8 +416,15 @@ describe('TRANSPORT VOCABULARY — one definition, two consumers', () => {
   });
 
   it('every transport, combined with a UC REST path, fails the guard in a NEW file', () => {
+    // realSources() re-reads the WHOLE source tree. Calling it inside the loop
+    // did that once per transport and then scanned the result each time, which
+    // is fine uninstrumented and times out at 30s under v8 coverage — the CI
+    // failure that blocked the vitest-3 bump. The base map is identical every
+    // iteration, so read it ONCE and clone (a Map copy, not a disk walk) for the
+    // per-transport mutation. Same assertions, same coverage, no rescan.
+    const base = realSources();
     for (const t of TRANSPORTS) {
-      const s = realSources();
+      const s = new Map(base);
       s.set('lib/azure/rogue-transport.ts', [
         "const P = '/api/2.1/unity-catalog/permissions/table/a.b.c';",
         'export async function go(url: string, body: unknown) {',
@@ -427,7 +434,16 @@ describe('TRANSPORT VOCABULARY — one definition, two consumers', () => {
       expect(analyzeUnityChokepoint(s).join('\n'), `${t.id} walked past the scan`)
         .toMatch(/rogue-transport\.ts: references a Unity Catalog/);
     }
-  });
+    // Explicit budget, not the 30s global default. This test scans the ENTIRE
+    // source tree once per transport — genuinely large work, ~50s even
+    // uninstrumented and ~3x that under v8 coverage. The global default was
+    // calibrated for ordinary unit tests and timed out here in CI, blocking the
+    // vitest-3 upgrade.
+    //
+    // This does NOT weaken the assertion: every transport is still checked
+    // against the real tree and must be caught. It only stops a slow-but-correct
+    // test being reported as a failure because a default did not anticipate it.
+  }, 180_000);
 
   it('does NOT count transport-shaped PROSE or a doc comment as a call', () => {
     // env-checks/data-plane.ts really says "present a valid LOOM_INTERNAL_TOKEN
