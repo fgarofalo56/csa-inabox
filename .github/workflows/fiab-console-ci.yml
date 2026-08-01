@@ -232,12 +232,43 @@ jobs:
           # The console's specs cold-transform a large TS dependency graph; the
           # 6144 heap matches the build job and prevents OOM under parallel forks.
           NODE_OPTIONS: --max-old-space-size=6144
-        # --coverage runs the suite ONCE with v8 instrumentation and enforces the
-        # ratcheting floor in vitest.config.ts (rel-T28) — the job fails if
-        # coverage drops below the floor. This step only runs when the console
-        # actually changed (the change-detection above), so bicep-/workflow-only
-        # PRs never pay the instrumentation cost.
-        run: pnpm vitest run --coverage
+        # SHARDED, and deliberately WITHIN one job rather than a matrix.
+        #
+        # WHY SHARDED. vitest 3 fails a run on an unhandled error that vitest 2
+        # tolerated, and with v8 coverage this suite reliably produced
+        #     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
+        # — the worker->main RPC missing its deadline while REPORTING. Every one
+        # of the 1302 files passed; only the reporting channel timed out. vitest 3
+        # made v8 coverage AST-aware, which puts far more work on the single main
+        # thread that must answer every task update, and 1302 files of that
+        # traffic outruns it. Measured, same commit, same machine:
+        #     --coverage              -> 1 failed | 13319 passed, Errors 1
+        #     --coverage --shard=1/2  -> 651 files / 6533 passed, NO Errors
+        # There is no config escape: `experimentalAstAwareRemapping` is not
+        # exposed in vitest 3.2.7's types.
+        #
+        # WHY NOT A MATRIX. `vitest (node 20)` is the ROLL GATE — see the header
+        # of this file and loom-roll-and-validate.yml, which reads a check-run of
+        # exactly that name. A matrix would rename it to `vitest (node 20) (1/2)`
+        # and silently break every deploy. Sharding inside the job keeps the
+        # check name, and the per-process file count is what matters anyway.
+        #
+        # WHY --merge-reports FOR THE FLOOR. Each shard sees only half the files,
+        # so its coverage is PARTIAL. Enforcing --cov-fail-under per shard would
+        # compare half a numerator against a whole-suite floor and fail
+        # spuriously — or, worse, pass while measuring less than it claims. The
+        # blob reports are merged first and the ratcheting floor (rel-T28) is
+        # enforced ONCE, on the whole.
+        run: |
+          set -euo pipefail
+          rm -rf .vitest-reports
+          for shard in 1 2; do
+            echo "::group::vitest shard $shard/2"
+            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json --coverage.thresholds.100=false
+            echo "::endgroup::"
+          done
+          # Single enforcement point: merged reports + the real floor.
+          pnpm vitest --merge-reports --coverage
 
   tutorial-coverage:
     # Audits visual-tutorial coverage across ALL THREE dimensions (B-9):
