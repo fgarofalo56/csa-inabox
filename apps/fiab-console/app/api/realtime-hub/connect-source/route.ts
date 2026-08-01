@@ -25,6 +25,7 @@ import {
 } from '@/lib/azure/fabric-client';
 import { putKeyVaultSecret, vaultUrl, KeyVaultError } from '@/lib/azure/kv-secrets-client';
 import { apiServerError } from '@/lib/api/respond';
+import { isSecretPropName } from '@/lib/util/secret-prop-name';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -100,7 +101,7 @@ export async function POST(req: NextRequest) {
   const safeProps: Record<string, unknown> = { ...properties };
   try {
     for (const key of Object.keys(safeProps)) {
-      if (/password|secret|key$/i.test(key) && typeof safeProps[key] === 'string' && (safeProps[key] as string).trim()) {
+      if (isSecretPropName(key) && typeof safeProps[key] === 'string' && (safeProps[key] as string).trim()) {
         if (!vaultUrl()) {
           return NextResponse.json({
             ok: false,
