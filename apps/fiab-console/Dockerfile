@@ -15,7 +15,9 @@ FROM node:22-alpine AS deps
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
+# pnpm-workspace.yaml carries the CVE-floor overrides for pnpm 10+. It was
+# never copied, so even a future pnpm bump would silently drop the floors.
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
 # Use --no-frozen-lockfile until pnpm-lock.yaml is committed
 # (pnpm install --lockfile-only generates it).
 RUN npm install -g pnpm@9 && \

@@ -74,6 +74,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci/check-prp-freshness.mjs
+      - name: pnpm-overrides (CVE floors declared for BOTH pnpm majors — #2729 regression)
+        run: node scripts/ci/check-pnpm-overrides.mjs
       - name: duplicate-env (env name emitted more than once per app)
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)
