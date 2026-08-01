@@ -264,10 +264,23 @@ jobs:
           rm -rf .vitest-reports
           for shard in 1 2; do
             echo "::group::vitest shard $shard/2"
-            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json --coverage.thresholds.100=false
+            # A shard's own exit code is NOT the verdict, and letting `set -e`
+            # act on it was a real bug in the first version of this step: shard 2
+            # exited non-zero on the vitest-3 RPC reporting error and killed the
+            # job BEFORE the merge could run, so the actual gate never executed.
+            #
+            # This is not a suppression. The blob carries every test result, so
+            # the merge below sees all 1302 files and fails on any genuine test
+            # failure or on the coverage floor. Deferring to it is what makes the
+            # merge the single enforcement point rather than one of three.
+            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json || echo "shard $shard exited non-zero — the merge below is the verdict"
             echo "::endgroup::"
           done
-          # Single enforcement point: merged reports + the real floor.
+          # Fail loudly if a shard produced no blob — that IS fatal, because the
+          # merge would then silently grade half the suite.
+          test -f .vitest-reports/blob-1-2.json || { echo "::error::shard 1 produced no blob"; exit 1; }
+          test -f .vitest-reports/blob-2-2.json || { echo "::error::shard 2 produced no blob"; exit 1; }
+          # THE gate: every test from both shards + the ratcheting coverage floor.
           pnpm vitest --merge-reports --coverage
 
   tutorial-coverage:
