@@ -1021,7 +1021,7 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
             <Input value={value.bucket || ''} onChange={(_, d) => set({ bucket: d.value })} placeholder="my-gcs-bucket" />
           </Field>
           <Field label="Service-account JSON" required hint="Paste the service-account key file (.json) — stored in Key Vault, never echoed.">
-            <Textarea value={saJson} onChange={(_, d) => setSaJson(d.value)} rows={5} placeholder={'{ "type": "service_account", "client_email": "…", "private_key": "-----BEGIN PRIVATE KEY-----…" }'} disabled={!!value.secretName} resize="vertical" />
+            <Textarea value={saJson} onChange={(_, d) => setSaJson(d.value)} rows={5} placeholder="Paste the full contents of the .json key file" disabled={!!value.secretName} resize="vertical" />
           </Field>
         </>
       )}
