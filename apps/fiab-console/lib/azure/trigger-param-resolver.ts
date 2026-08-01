@@ -57,10 +57,10 @@ export class ParamResolveError extends Error {
 /** Derive the Key Vault AAD scope from a vault URI (commercial vs gov).
  *
  *  Matches the parsed HOSTNAME at a label boundary. The previous
- *  `vaultUri.includes('.usgovcloudapi.net')` searched the whole URI, so a path
- *  or query carrying that string (`https://kv.vault.azure.net/x?p=.usgovcloudapi.net`)
- *  selected the Gov audience for a Commercial vault — the token is then minted
- *  for the wrong audience and the call fails opaquely.
+ *  `vaultUri.includes('.usgovcloudapi.net')` searched the whole URI, so a
+ *  Commercial vault whose PATH or QUERY happened to carry that string selected
+ *  the Gov audience — the token is then minted for the wrong audience and the
+ *  call fails opaquely.
  *
  *  Commercial remains the fallback for an unparseable or unrecognised URI,
  *  matching the previous behaviour. */
