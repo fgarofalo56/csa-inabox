@@ -1,0 +1,44 @@
+name: deploy-staleness
+
+# "merged ≠ deployed" watchdog (#2775).
+#
+# The #2643 Gov authorization fix merged 2026-07-31 while the dispatch-only
+# workflow that APPLIES it last ran 2026-07-15 — so the exposure stayed live
+# behind an all-green wall: code on main, tests passing, guardrails passing, PR
+# closed, issue closed. Nothing asserted that a deploy workflow had actually run
+# since its own code changed.
+#
+# This lane asserts exactly that, weekly. It is READ-ONLY — it never dispatches
+# a deploy, because deciding to start a multi-hour Gov production deploy is an
+# operator call, not a CI side effect. It only makes the drift visible.
+#
+# Deliberately NOT a required PR check: staleness is a property of the ESTATE,
+# not of a pull request, and blocking unrelated PRs on it would train people to
+# ignore it (the failure mode this whole class is about).
+
+on:
+  schedule:
+    # Mondays 13:47 UTC — off the hour so it does not pile onto the top-of-hour
+    # scheduler surge.
+    - cron: '47 13 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read     # required: the check reads workflow RUN history via gh.
+
+jobs:
+  staleness:
+    name: Deploy staleness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history — the check compares commit dates)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check that every watched deploy path has run since its code changed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/check-deploy-staleness.mjs
