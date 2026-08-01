@@ -280,7 +280,12 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Run extra Playwright projects
         if: inputs.extra_projects != ''
-        continue-on-error: true
+        # NO continue-on-error. It hid every result this step produced — a real
+        # /admin/tenant-settings mount failure was reported as a green run
+        # (#2787). route-smoke now carries retries: 2, so an intermittent
+        # first-paint timeout is reported FLAKY and exits 0, while a route that
+        # fails every attempt fails this step — the behaviour the sweep exists
+        # for.
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           IFS=',' read -ra PROJS <<< "${{ inputs.extra_projects }}"
