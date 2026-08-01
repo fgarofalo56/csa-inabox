@@ -41,6 +41,7 @@ import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit, enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
 import { seenRecently } from '@/lib/azure/rate-limit-store';
 import { getAutoErrorForwarding } from '@/lib/feedback/forwarding-config';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -151,7 +152,8 @@ export async function POST(req: NextRequest) {
   const token = process.env.LOOM_FEEDBACK_GITHUB_TOKEN;
   if (!token) {
     // Air-gapped / unconfigured: log a short summary and accept.
-    console.log(`[feedback] kind=${body.kind} tenant=${tenantHash()} title=${issueTitle}`);
+    // kind + title come from the request body — logSafe prevents log forging.
+    console.log(`[feedback] kind=${logSafe(body.kind)} tenant=${tenantHash()} title=${logSafe(issueTitle)}`);
     return NextResponse.json({ status: 'accepted-local', forwarded: false });
   }
 

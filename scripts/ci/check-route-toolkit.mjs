@@ -58,6 +58,17 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2768 touched these two ONLY to wrap request-derived values in logSafe()
+  // (js/log-injection: a newline in ?model= / body.title forged a second log
+  // record). One expression per file, no auth change.
+  //
+  // THE CODEMOD DECLINES BOTH — `--file=` reports "0 handlers": feedback calls
+  // getSession() mid-handler for an OPTIONAL session (anonymous feedback is
+  // allowed), and rayfin's guard is not the exact getSession()+401 shape
+  // withSession replaces. Hand-migrating an auth prologue inside a logging-
+  // sanitization PR is unrelated churn with real 401/403 regression risk.
+  ['apps/fiab-console/app/api/feedback/route.ts', '#2768: logSafe() one-liner; optional-session prologue, codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/items/rayfin-app/model-objects/route.ts', '#2768: logSafe() one-liner; codemod reports 0 handlers'],
   // #2759 touched this route only to split the gate summary counts (opt-in and
   // cloud-unavailable are no longer counted as 'blocked'). It gates on
   // enforceCapability(session,'admin.env-config','Admin') — a capability check,
