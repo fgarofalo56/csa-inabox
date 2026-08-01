@@ -27,6 +27,7 @@ import { runSpindleEvalSuite, normalizeEvalSuite } from '../_spindle-eval';
 import { appendVersion } from '../versions/route';
 import { buildLogicOpenApi, slugifyApi } from '../_publish-openapi';
 import { apiError } from '@/lib/api/respond';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -146,7 +147,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 /** A representative inputs object for the generated curl (typed defaults). */
 function sampleInputs(state: Record<string, unknown>): Record<string, unknown> {
   const inputs = Array.isArray(state.inputs) ? (state.inputs as Record<string, unknown>[]) : [];
-  const out: Record<string, unknown> = {};
+  // Input names come from author-supplied item state.
+  const out = safeRecord<unknown>();
   for (const i of inputs) {
     const name = String(i.name || '');
     if (!name) continue;

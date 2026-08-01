@@ -101,6 +101,7 @@ import {
   loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -169,7 +170,8 @@ type TableStorageMap = Record<string, TableStorage>;
  */
 function validateTableStorage(raw: unknown): TableStorageMap | null {
   if (!raw || typeof raw !== 'object') return null;
-  const out: TableStorageMap = {};
+  // Table names are request-derived (CodeQL #578).
+  const out = safeRecord<TableStorageMap[string]>() as TableStorageMap;
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const table = key.trim();
     if (!table) continue;

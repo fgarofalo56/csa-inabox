@@ -43,6 +43,7 @@ import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-
 import { teardownWorkspaceBackends, type TeardownItem, type TeardownOutcome } from '@/lib/azure/resource-teardown';
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -149,7 +150,8 @@ export async function POST(req: NextRequest) {
   const deleted: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
   // Per-workspace teardown receipts (only populated when cascade is set).
-  const teardown: Record<string, TeardownOutcome[]> = {};
+  // Workspace ids are request-derived (CodeQL #627).
+  const teardown = safeRecord<TeardownOutcome[]>();
 
   for (const id of ids) {
     try {

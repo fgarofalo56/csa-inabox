@@ -18,6 +18,7 @@ import { createOwnedItem } from '../../_lib/item-crud';
 import { getLoomAppTemplate } from '@/lib/azure/loom-apps-runtime-templates';
 import { isAllowedGitSource } from '@/lib/azure/loom-apps-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,7 +56,10 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
 
     // Sanitize userFiles: path-safe, count/size-bounded, never a Dockerfile.
     const rawFiles = (bundle.userFiles && typeof bundle.userFiles === 'object') ? bundle.userFiles : {};
-    const userFiles: Record<string, string> = {};
+    // Paths come from an UPLOADED bundle. The `/^[\w.\-/]+$/` filter below
+    // does not exclude `__proto__` (underscores are \w), so the record itself
+    // must be prototype-less.
+    const userFiles = safeRecord<string>();
     let n = 0;
     for (const [path, content] of Object.entries(rawFiles)) {
       const p = String(path).replace(/^\.?\/+/, '').trim();
