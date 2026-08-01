@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.0...csa-inabox-v0.82.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **security:** Trivy never scanned the Loom Console image ([#2671](https://github.com/fgarofalo56/csa-inabox/issues/2671)) ([#2784](https://github.com/fgarofalo56/csa-inabox/issues/2784)) ([584121e](https://github.com/fgarofalo56/csa-inabox/commit/584121e461c6e921d9eec4650a0b3a94fcb274ae))
+
 ## [0.82.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.81.2...csa-inabox-v0.82.0) (2026-08-01)
 
 
