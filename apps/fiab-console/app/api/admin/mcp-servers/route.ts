@@ -21,6 +21,7 @@ import { listMcpTools } from '@/lib/azure/mcp-client';
 import { assertMcpEgressAllowed, McpEgressError } from '@/lib/azure/mcp-egress-guard';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,7 +45,7 @@ const KEYS: (keyof McpServerConfig)[] = ['name', 'endpoint', 'authMethod', 'auth
 /** Copy a plain Record<string,string> (drops non-string members). */
 function strMap(v: any): Record<string, string> | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const out: Record<string, string> = {};
+  const out = safeRecord<string>();
   for (const [k, val] of Object.entries(v)) {
     if (typeof val === 'string') out[k] = val;
   }

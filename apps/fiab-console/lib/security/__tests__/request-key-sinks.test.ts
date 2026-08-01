@@ -96,3 +96,44 @@ describe('safeRecord — the structural fix', () => {
     expect(PATH_OK.test('constructor')).toBe(true);
   });
 });
+
+describe('round 2 — the identifier filter that looks strict and is not', () => {
+  // The ontology routes gate keys on /^[A-Za-z_][\w]{0,62}$/ before writing
+  // them. That reads as "a safe identifier". It is not: `_` is `\w`, so every
+  // prototype-slot key matches, and so do the inherited-member names a 3-key
+  // denylist would also miss.
+  const ONTOLOGY_KEY_FILTER = /^[A-Za-z_][\w]{0,62}$/;
+
+  it.each(['__proto__', 'constructor', 'prototype', 'toString', 'valueOf', 'hasOwnProperty'])(
+    'the filter ACCEPTS %s — so the record itself must be prototype-less',
+    (key) => {
+      expect(ONTOLOGY_KEY_FILTER.test(key)).toBe(true);
+    },
+  );
+
+  // JSON.parse — not an object literal — is how a request body actually arrives,
+  // and it is the only one of the two that produces a real OWN `__proto__` key.
+  // In a literal, `__proto__:` sets the prototype at construction time, so
+  // Object.entries never yields it and the attack is not even modelled.
+  const BODY = () => JSON.parse('{"__proto__":{"injected":true},"ok":1}');
+
+  it('a filtered write into a plain literal still corrupts the object', () => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(BODY())) {
+      if (!ONTOLOGY_KEY_FILTER.test(k)) continue;
+      out[k] = v;
+    }
+    expect(Object.keys(out)).toEqual(['ok']);                      // the key vanished
+    expect((out as Record<string, unknown>).injected).toBe(true);  // and polluted
+  });
+
+  it('the same write into safeRecord() is inert', () => {
+    const out = safeRecord<unknown>();
+    for (const [k, v] of Object.entries(BODY())) {
+      if (!ONTOLOGY_KEY_FILTER.test(k)) continue;
+      out[k] = v;
+    }
+    expect(Object.keys(out).sort()).toEqual(['__proto__', 'ok']);
+    expect((out as Record<string, unknown>).injected).toBeUndefined();
+  });
+});

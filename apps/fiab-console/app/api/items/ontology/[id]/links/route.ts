@@ -25,6 +25,7 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { objectTypeNames, normalizeLinkTypes } from '@/lib/editors/ontology-model';
 import { weaveGate, createLink, listLinks, deleteLink } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,9 @@ function err(error: string, status: number, code?: string, gate?: Record<string,
 }
 
 function sanitizeProps(raw: unknown): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+  // Same identifier filter as objects/route.ts — it passes every
+  // prototype-slot key, so the record must be prototype-less.
+  const out = safeRecord<unknown>();
   if (raw && typeof raw === 'object') {
     for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
       if (!/^[A-Za-z_][\w]{0,62}$/.test(k)) continue;

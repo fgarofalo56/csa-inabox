@@ -23,6 +23,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { safeRecord } from '@/lib/security/safe-object';
 import {
   eventhubsConfigGate,
   sendEvents,
@@ -79,7 +80,7 @@ function toSendEvent(raw: any): SendEvent | null {
   if (body === undefined || body === null || body === '') return null;
   const ev: SendEvent = { body };
   if (hasShape && raw.properties && typeof raw.properties === 'object') {
-    const props: Record<string, string | number | boolean> = {};
+    const props = safeRecord<string | number | boolean>();
     for (const [k, v] of Object.entries(raw.properties)) {
       if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') props[k] = v;
     }

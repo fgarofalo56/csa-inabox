@@ -13,6 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { withIrcCaller, auditedIrc } from '../_lib/irc-proxy';
+import { safeRecord } from '@/lib/security/safe-object';
 import {
   createNamespace,
   listNamespaces,
@@ -51,7 +52,8 @@ export const POST = withIrcCaller(async (req, ctx) => {
   if (!namespace) {
     return NextResponse.json({ ok: false, error: 'namespace is required' }, { status: 400 });
   }
-  const properties: Record<string, string> = {};
+  // Keys come from body.properties and are forwarded to createNamespace.
+  const properties = safeRecord<string>();
   for (const [k, v] of Object.entries(body?.properties || {})) {
     if (typeof v === 'string') properties[String(k)] = v;
   }
