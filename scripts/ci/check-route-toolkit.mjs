@@ -58,6 +58,16 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2772 touched this route ONLY to swap a broken secret-name regex
+  // (/password|secret|key$/i — the anchor bound to the last alternative, so
+  // sslKeyPem/privateKeyPem leaked to Cosmos in plaintext) for the tested
+  // isSecretPropName helper. One expression, no auth change.
+  //
+  // THE CODEMOD DECLINES IT — `--file=` reports "0 handlers": the prologue is
+  // getSession() followed by bespoke validation, not the exact getSession()+401
+  // shape withSession replaces. Migrating an auth prologue inside a secret-leak
+  // fix is unrelated churn on a route that writes Key Vault secrets.
+  ['apps/fiab-console/app/api/realtime-hub/connect-source/route.ts', '#2772: one-expression secret-regex fix; codemod reports 0 handlers'],
   // #2768 touched these two ONLY to wrap request-derived values in logSafe()
   // (js/log-injection: a newline in ?model= / body.title forged a second log
   // record). One expression per file, no auth change.
