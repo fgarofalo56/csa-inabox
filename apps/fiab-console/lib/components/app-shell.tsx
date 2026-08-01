@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
+import { useNavCollapse } from './use-nav-collapse';
 import { CommandPalette } from './command-palette';
 import { CopilotPane, openCopilot } from './copilot-pane';
 import { CopilotIcon } from './icons/copilot-icon';
@@ -136,22 +137,11 @@ const useStyles = makeStyles({
   },
 });
 
-const NAV_COLLAPSE_KEY = 'loom.navCollapsed';
-
 export function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
   const [me, setMe] = useState<MeResponse | null>(null);
-  const [navCollapsed, setNavCollapsed] = useState(false);
-
-  // Restore the operator's nav preference.
-  useEffect(() => {
-    try { setNavCollapsed(localStorage.getItem(NAV_COLLAPSE_KEY) === '1'); } catch { /* SSR / no storage */ }
-  }, []);
-  const toggleNav = () => setNavCollapsed((v) => {
-    const next = !v;
-    try { localStorage.setItem(NAV_COLLAPSE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-    return next;
-  });
+  // Viewport-driven collapse + the operator's pin (#2673) — see use-nav-collapse.
+  const { collapsed: navCollapsed, toggle: toggleNav } = useNavCollapse();
 
   useEffect(() => {
     let cancelled = false;
