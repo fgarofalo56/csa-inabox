@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.81.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.81.0...csa-inabox-v0.81.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **security:** remove the TOCTOU in readRepoDataset (js/file-system-race) ([#2770](https://github.com/fgarofalo56/csa-inabox/issues/2770)) ([c140aa7](https://github.com/fgarofalo56/csa-inabox/commit/c140aa797c60a11ccc8c60a92da03c9f6c81640d))
+* **security:** stop log forging on the request-derived log sites (js/log-injection) ([#2768](https://github.com/fgarofalo56/csa-inabox/issues/2768)) ([c027d9c](https://github.com/fgarofalo56/csa-inabox/commit/c027d9c9aa5f4da3b2b3e024bee29bc814754f1f))
+
 ## [0.81.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.80.12...csa-inabox-v0.81.0) (2026-07-31)
 
 
