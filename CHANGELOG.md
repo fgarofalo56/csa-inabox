@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.81.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.81.1...csa-inabox-v0.81.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **security:** guard setPath against prototype pollution (js/prototype-pollution-utility) ([#2773](https://github.com/fgarofalo56/csa-inabox/issues/2773)) ([804abab](https://github.com/fgarofalo56/csa-inabox/commit/804ababef05e16e39b41556d80fedbc8742d5727))
+* **security:** reflected XSS in the auth-callback redirect interstitial ([#2771](https://github.com/fgarofalo56/csa-inabox/issues/2771)) ([5e093e4](https://github.com/fgarofalo56/csa-inabox/commit/5e093e41d81b60d5e9e02b65bb76ca02b4c1dbed))
+* **security:** secret-name regex leaked private keys into Cosmos (operator precedence) ([#2772](https://github.com/fgarofalo56/csa-inabox/issues/2772)) ([be91362](https://github.com/fgarofalo56/csa-inabox/commit/be913626660b21d5dea2a15803329356b284cbdd))
+
 ## [0.81.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.81.0...csa-inabox-v0.81.1) (2026-08-01)
 
 
