@@ -35,6 +35,7 @@ import {
 } from './activity-catalog';
 import { branchesOf, totalInnerCount } from './drill-path';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
+import { isDangerousKey } from '@/lib/util/safe-keys';
 
 type FieldKind = 'text' | 'number' | 'bool' | 'select' | 'multiselect' | 'expr' | 'expr-multiline';
 
@@ -358,6 +359,13 @@ function getPath(obj: any, path: string): any {
 }
 function setPath(obj: any, path: string, value: any): any {
   const toks = tokenize(path);
+  // Prototype-pollution guard (js/prototype-pollution-utility): this walks a
+  // dotted path and assigns into each segment, so a token of `__proto__` /
+  // `constructor` / `prototype` would write onto Object.prototype and affect
+  // every object in the page. Field paths are component-defined today, but a
+  // generic path-writer must not depend on every present and future caller
+  // passing a safe literal. Refuse the whole write rather than partially apply.
+  if (toks.some((t) => typeof t === 'string' && isDangerousKey(t))) return obj;
   const root = Array.isArray(obj) ? [...obj] : { ...(obj || {}) };
   let cur: any = root;
   for (let i = 0; i < toks.length - 1; i++) {
