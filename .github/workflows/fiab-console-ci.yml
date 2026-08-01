@@ -229,9 +229,19 @@ jobs:
       - name: Run vitest (with v8 coverage floor)
         if: steps.changed.outputs.console == 'true'
         env:
-          # The console's specs cold-transform a large TS dependency graph; the
-          # 6144 heap matches the build job and prevents OOM under parallel forks.
-          NODE_OPTIONS: --max-old-space-size=6144
+          # 3072, NOT the build job's 6144 — and the reduction is the point.
+          #
+          # A GitHub runner has ~16 GB. At 6144 per fork, 3 forks plus the main
+          # process can ask for ~24 GB, and the kernel kills a fork; its IPC
+          # channel then closes and vitest reports
+          #     Serialized Error: { code: 'ERR_IPC_CHANNEL_CLOSED' }
+          # with NO blob written for that shard. That is what the missing-blob
+          # guard below caught — before it, the merge would have graded half the
+          # suite and called the job green.
+          #
+          # Each shard now transforms ~651 files rather than 1302, so it does not
+          # need the whole-suite heap. 3072 x 3 forks + main fits with headroom.
+          NODE_OPTIONS: --max-old-space-size=3072
         # SHARDED, and deliberately WITHIN one job rather than a matrix.
         #
         # WHY SHARDED. vitest 3 fails a run on an unhandled error that vitest 2
