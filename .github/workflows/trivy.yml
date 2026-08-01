@@ -180,7 +180,9 @@ jobs:
   trivy-image:
     name: Trivy Image (${{ matrix.component }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Per-component: the console image is a full Next.js build (6.5 GB heap,
+    # ~30 min) and does not fit the portal images' 25-minute budget.
+    timeout-minutes: ${{ matrix.timeout || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -197,6 +199,20 @@ jobs:
             # COPY paths resolve to portal/react-webapp/portal/react-webapp/... and
             # the build failed before Trivy could scan the image.
             context: .
+          # THE PRODUCT. Everything shipped to customers runs in this image, and
+          # until now it was the ONE image the recurring scan did not cover —
+          # only the two portal images were. That is why the #2729 CVE floors
+          # going inert (they were declared where the pnpm-9 builder cannot read
+          # them, #2781) could not have been caught here: nothing ever scanned
+          # the artifact those floors were meant to protect.
+          #
+          # Build context MUST be apps/fiab-console — its Dockerfile COPYs
+          # `package.json pnpm-lock.yaml* pnpm-workspace.yaml*` relative to the
+          # project dir, not the repo root.
+          - component: loom-console
+            dockerfile: apps/fiab-console/Dockerfile
+            context: apps/fiab-console
+            timeout: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
