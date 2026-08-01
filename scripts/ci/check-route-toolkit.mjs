@@ -58,6 +58,18 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2657 touched these three ONLY to build one map with safeRecord()
+  // (Object.create(null)) instead of `{}`, so a request-derived key like
+  // `__proto__` becomes an ordinary own property. One declaration per file,
+  // no auth change.
+  //
+  // THE CODEMOD DECLINES ALL THREE — it reports "getSession() without the
+  // exact 401 guard" for every handler in them. Running it repo-wide to reach
+  // these three rewrites 516 handlers across 349 files, which is not a blast
+  // radius a prototype-pollution fix gets to carry.
+  ['apps/fiab-console/app/api/items/aip-logic/[id]/publish/route.ts', '#2657: one-line safeRecord fix; codemod skips (no exact-401 prologue)'],
+  ['apps/fiab-console/app/api/items/report/[id]/data-source/route.ts', '#2657: one-line safeRecord fix; codemod skips (no exact-401 prologue)'],
+  ['apps/fiab-console/app/api/workspaces/bulk-delete/route.ts', '#2657: one-line safeRecord fix; codemod skips (no exact-401 prologue)'],
   // #2772 touched this route ONLY to swap a broken secret-name regex
   // (/password|secret|key$/i — the anchor bound to the last alternative, so
   // sslKeyPem/privateKeyPem leaked to Cosmos in plaintext) for the tested
