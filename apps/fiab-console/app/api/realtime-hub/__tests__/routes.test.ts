@@ -118,6 +118,7 @@ import { GET as ENDPOINTS } from '../endpoints/route';
 import { GET as CERTS } from '../keyvault-certificates/route';
 import { GET as OPTIONS } from '../options/route';
 import { POST as PROVISION } from '../provision/route';
+import { isSecretPropName, propNameWords } from '@/lib/util/secret-prop-name';
 
 const AUTH = { claims: { oid: 'tenant-1', upn: 'u@x' } };
 
@@ -693,44 +694,48 @@ describe('POST /api/realtime-hub/provision', () => {
  *                    silently breaking the connector
  */
 describe('connect-source secret-property predicate (CodeQL #501)', () => {
-  // The predicate AS IT SHIPS in connect-source/route.ts.
-  const isSecretProp = (k: string) => /password|secret|key$/i.test(k);
+  // Exercises the SHIPPED helper. This block previously declared a private copy
+  // of the predicate — `const isSecretProp = (k) => /password|secret|key$/i.test(k)`
+  // — under a comment claiming it was "the predicate AS IT SHIPS". When #2772
+  // replaced that regex, the copy stayed behind: the suite went on passing while
+  // the shipped behaviour inverted on four of the names asserted right here.
+  // A test that re-implements its subject cannot fail when the subject changes.
 
   it.each([
     'password', 'saslPassword', 'sslKeyPassword',
     'clientSecret', 'SECRET_X',
     'apiKey', 'privateKey',
+    // The #2772 leak: the old `key$` anchor bound to the last alternative only,
+    // so these skipped Key Vault and landed in Cosmos in plaintext.
+    'sslKeyPem', 'privateKeyPem', 'keyData', 'keyMaterial',
+    'accessToken', 'sasToken',
   ])('vaults %s', (name) => {
-    expect(isSecretProp(name)).toBe(true);
+    expect(isSecretPropName(name)).toBe(true);
   });
 
   it.each([
-    ['keyspace', 'bare "key" would vault a Cassandra keyspace name'],
-    ['monkeyName', 'bare "key" would match inside an unrelated word'],
+    ['keyspace', 'a Cassandra namespace, not key material'],
+    ['monkeyName', '"key" inside an unrelated word'],
     ['keyboardLayout', 'same'],
+    ['turkeyMode', 'same — substring matching called this a secret'],
     ['tokenEndpoint', 'a URL — vaulting it would break the connector'],
+    ['tokenUrl', 'same'],
+    ['tokenAudience', 'describes a token, does not contain one'],
+    ['tokenExpiry', 'same'],
+    ['keyVaultUri', 'a locator for the secret, not the secret'],
+    ['partitionKey', 'a shape, not material'],
+    ['primaryKey', 'same'],
+    ['keyColumn', 'same'],
+    ['keyName', 'names a key, is not one'],
     ['bootstrapServers', 'ordinary config'],
   ])('does NOT vault %s (%s)', (name) => {
-    expect(isSecretProp(name)).toBe(false);
+    expect(isSecretPropName(name)).toBe(false);
   });
 
-  it('is byte-identical to the pre-regrouping predicate', () => {
-    const before = /password|secret|key$/i;
-    const after = /(?:password|secret)|key$/i;
-    const names = [
-      'password', 'saslPassword', 'clientSecret', 'apiKey', 'privateKey',
-      'keyMaterial', 'keyspace', 'monkeyName', 'tokenEndpoint',
-      'sslKeyPassword', 'SECRET_X', 'Keystore', 'key', 'KEY', 'a_secret_b',
-    ];
-    for (const n of names) expect(after.test(n)).toBe(before.test(n));
-  });
-
-  it('DOCUMENTS the known gap: a secret not containing password/secret and not ENDING in key is missed', () => {
-    // Not a bug being asserted as correct — a boundary recorded so it is
-    // visible. Widening is risky (a false match breaks the connector), so it is
-    // tracked separately rather than guessed at inside a precedence fix.
-    expect(isSecretProp('keyMaterial')).toBe(false);
-    expect(isSecretProp('saslJaasConfig')).toBe(false);
-    expect(isSecretProp('connectionString')).toBe(false);
+  it('splits names into words rather than substring-matching', () => {
+    // The property that makes both directions work: a real word boundary.
+    expect(propNameWords('sslKeyPem')).toEqual(['ssl', 'key', 'pem']);
+    expect(propNameWords('turkeyMode')).toEqual(['turkey', 'mode']);
+    expect(propNameWords('SASL_PLAIN_PASSWORD')).toEqual(['sasl', 'plain', 'password']);
   });
 });
