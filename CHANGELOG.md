@@ -25,6 +25,30 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.81.2...csa-inabox-v0.82.0) (2026-08-01)
+
+
+### Features
+
+* **ci:** watchdog for "merged ≠ deployed" ([#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775)) ([#2776](https://github.com/fgarofalo56/csa-inabox/issues/2776)) ([e197be4](https://github.com/fgarofalo56/csa-inabox/commit/e197be432d62b34f81e8f6a03ef7fd073f1525c1))
+
+
+### Bug Fixes
+
+* **security:** close the remaining request-key sinks ([#2657](https://github.com/fgarofalo56/csa-inabox/issues/2657) round 2) ([#2783](https://github.com/fgarofalo56/csa-inabox/issues/2783)) ([76fe87f](https://github.com/fgarofalo56/csa-inabox/commit/76fe87fd66ea68dfe8c2065f5666e7c443d071db))
+* **security:** CVE overrides were inert in the shipped image ([#2729](https://github.com/fgarofalo56/csa-inabox/issues/2729)) ([#2781](https://github.com/fgarofalo56/csa-inabox/issues/2781)) ([9091ce5](https://github.com/fgarofalo56/csa-inabox/commit/9091ce5d6d6d7f1174b6bbd6128054cd93e11b0e))
+* **security:** request-derived keys land on prototype-less records ([#2657](https://github.com/fgarofalo56/csa-inabox/issues/2657)) ([#2780](https://github.com/fgarofalo56/csa-inabox/issues/2780)) ([0f36969](https://github.com/fgarofalo56/csa-inabox/commit/0f3696987b0d75e5dab5bb06d07dde734563475f))
+* **security:** secret-name matching vaulted URLs and broke connectors ([#2772](https://github.com/fgarofalo56/csa-inabox/issues/2772) follow-up) ([#2782](https://github.com/fgarofalo56/csa-inabox/issues/2782)) ([4dff91f](https://github.com/fgarofalo56/csa-inabox/commit/4dff91f2cd15db5d69a2bc59d10a9d4caa84f6c4))
+* **security:** validate URLs by parsed host, not substring ([#2663](https://github.com/fgarofalo56/csa-inabox/issues/2663), [#2665](https://github.com/fgarofalo56/csa-inabox/issues/2665)) ([#2779](https://github.com/fgarofalo56/csa-inabox/issues/2779)) ([7139417](https://github.com/fgarofalo56/csa-inabox/commit/7139417fdcd331a2ff159064f75f27b23e1575c2))
+* **ui:** nav rail never collapsed on narrow viewports ([#2673](https://github.com/fgarofalo56/csa-inabox/issues/2673)) ([#2778](https://github.com/fgarofalo56/csa-inabox/issues/2778)) ([e48104b](https://github.com/fgarofalo56/csa-inabox/commit/e48104bbeb8716556b047e8203a7ecb9576c6082))
+
+
+### Miscellaneous
+
+* **deps-dev:** bump eslint-config-next in /portal/react-webapp ([#2766](https://github.com/fgarofalo56/csa-inabox/issues/2766)) ([aa84d9d](https://github.com/fgarofalo56/csa-inabox/commit/aa84d9d02fc46561f6b31354adf3797bcaa5857b))
+* **deps:** bump @radix-ui/react-toast in /portal/react-webapp ([#2764](https://github.com/fgarofalo56/csa-inabox/issues/2764)) ([be1056e](https://github.com/fgarofalo56/csa-inabox/commit/be1056efcb4b0da8c995dc8843a870ef38ee63b8))
+* **deps:** bump pydantic from 2.10.3 to 2.13.4 in /apps/loom-duckdb ([#2765](https://github.com/fgarofalo56/csa-inabox/issues/2765)) ([ef12098](https://github.com/fgarofalo56/csa-inabox/commit/ef12098c98b39168708afe155910e5e9c9983edc))
+
 ## [0.81.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.81.1...csa-inabox-v0.81.2) (2026-08-01)
 
 
