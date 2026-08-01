@@ -43,6 +43,37 @@ export default defineConfig({
     setupFiles: ['./vitest.setup.ts'],
     globals: false,
     pool: 'forks',
+    poolOptions: {
+      forks: {
+        // ROOT CAUSE of the vitest-3 upgrade blocker (#2671 / PR #2785).
+        //
+        // vitest 3 FAILS a run on an unhandled error that vitest 2 tolerated.
+        // On this suite the unhandled error was always:
+        //     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
+        // — the worker->main RPC missing its deadline while REPORTING results.
+        // Every one of the 1302 files and 13320 tests passed; only the
+        // reporting channel timed out.
+        //
+        // It is a main-thread contention problem, not a bad spec. Left
+        // uncapped, vitest spawns one fork per core — ~31 on a 32-core box —
+        // and their combined task-update traffic outruns the single main
+        // thread that must answer every call. Capping the forks fixes it:
+        //   uncapped  -> 1 unhandled error, every run (Windows AND Linux CI)
+        //   maxForks 4 -> clean, twice in a row
+        //
+        // Three other explanations were tested and disproved first, recorded
+        // here so nobody re-walks them: a specific spec leaking hanging
+        // promises (agents-route.test.ts is clean alone, 14/14), the teardown
+        // budget (raising teardownTimeout changed nothing), and worker console
+        // volume saturating the same channel (--silent changed nothing).
+        //
+        // COST, stated plainly: ~253s -> ~716s locally on 32 cores. CI runners
+        // have far fewer cores, so the cap binds much less there. That is a
+        // real price for a suite that reports honestly rather than one that
+        // needs dangerouslyIgnoreUnhandledErrors to look green.
+        maxForks: 4,
+      },
+    },
     // The first `await import('../route')` in a heavy BFF spec triggers an
     // on-demand TS transform of the route AND its whole dependency graph. Under
     // full-suite parallel forks that cold transform can exceed the default 5s
