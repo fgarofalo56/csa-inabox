@@ -9,11 +9,12 @@
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
+import { ensureArtifactDir } from './_artifact-dir.mjs';
 
 const CONSOLE_URL = process.argv[2] || process.env.LOOM_CONSOLE_URL ||
   'https://loom-console.internal.delightfulmoss-96202bfd.eastus2.azurecontainerapps.io';
 const SCREENSHOT_DIR = '/tmp/loom-uat';
-fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+ensureArtifactDir(SCREENSHOT_DIR);
 
 const results = { url: CONSOLE_URL, started: new Date().toISOString(), panes: [] };
 

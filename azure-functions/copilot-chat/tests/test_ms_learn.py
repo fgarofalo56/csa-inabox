@@ -10,6 +10,7 @@ verify here.
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import patch
 
@@ -166,3 +167,59 @@ def test_extract_skips_hits_without_title_or_url() -> None:
 def test_search_empty_query_returns_empty_list() -> None:
     assert ms_learn.search("") == []
     assert ms_learn.search("   ") == []
+
+
+class TestLearnUrlBoundary:
+    """The grounding allowlist must match the HOST, not a string prefix.
+
+    ``url.startswith("https://learn.microsoft.com")`` accepts
+    ``https://learn.microsoft.com.evil.test/x`` — the boundary is missing at the
+    right-hand end of the host, so any attacker-registered domain whose leftmost
+    labels are ``learn.microsoft.com`` passes. These URLs come from a search-API
+    response, are fed to the model as grounding, and are surfaced to the user as
+    official Microsoft Learn citations, so a poisoned result could launder an
+    attacker page through Loom's own citation UI.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://learn.microsoft.com/en-us/azure/",
+            "https://learn.microsoft.com",
+            "https://docs.learn.microsoft.com/x",
+            "https://learn.microsoft.com./x",      # root-label trailing dot
+            "https://LEARN.MICROSOFT.COM/x",       # host is case-insensitive
+        ],
+    )
+    def test_accepts_real_learn_urls(self, url: str) -> None:
+        assert ms_learn._is_learn_url(url) is True
+
+    @pytest.mark.parametrize(
+        ("url", "why"),
+        [
+            ("https://learn.microsoft.com.evil.test/x", "suffix appended on the right"),
+            ("https://xlearn.microsoft.com/x", "no label boundary on the left"),
+            ("https://notlearn.microsoft.com/x", "different registrable domain"),
+            ("https://evil.test/?u=https://learn.microsoft.com", "in the query string"),
+            ("https://evil.test/learn.microsoft.com", "in the path"),
+            ("https://learn.microsoft.com@evil.test/", "userinfo confusion"),
+            ("http://learn.microsoft.com/x", "http downgrade"),
+            ("not a url", "unparseable"),
+            ("", "empty"),
+        ],
+    )
+    def test_rejects_impostors(self, url: str, why: str) -> None:
+        assert ms_learn._is_learn_url(url) is False, why
+
+    def test_extract_grounding_drops_the_impostor(self) -> None:
+        """End-to-end through the real extractor, not just the predicate."""
+        hits = {
+            "results": [
+                {"title": "Real", "contentUrl": "https://learn.microsoft.com/a"},
+                {"title": "Fake", "contentUrl": "https://learn.microsoft.com.evil.test/b"},
+            ]
+        }
+        out = ms_learn._extract_grounding(_wrap(json.dumps(hits)), top_k=5)
+        urls = [g["url"] for g in out]
+        assert "https://learn.microsoft.com/a" in urls
+        assert not any("evil.test" in u for u in urls)

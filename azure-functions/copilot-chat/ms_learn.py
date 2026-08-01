@@ -40,6 +40,7 @@ import logging
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 _log = logging.getLogger(__name__)
 
@@ -128,6 +129,35 @@ async def _async_search(query: str, top_k: int) -> list[dict[str, str]]:
 _URL_CRUFT_RE = re.compile(r"[?#].*$")
 
 
+
+_LEARN_HOST = "learn.microsoft.com"
+
+
+def _is_learn_url(url: str) -> bool:
+    """True only when ``url`` is an https URL whose HOST is learn.microsoft.com
+    (or a subdomain of it).
+
+    The previous check was ``url.startswith("https://learn.microsoft.com")``,
+    which accepts ``https://learn.microsoft.com.evil.test/x`` — the boundary is
+    missing at the RIGHT-hand end of the host, so any attacker-registered domain
+    with ``learn.microsoft.com`` as its leftmost labels passes. These URLs come
+    from a search-API response and are surfaced to the user as official Microsoft
+    Learn citations and fed to the model as grounding, so a poisoned result could
+    launder an attacker page through Loom's own citation UI.
+
+    Parsing and comparing the host makes the boundary explicit at both ends.
+    Fails CLOSED: anything unparseable is not a Learn URL.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme != "https":
+        return False
+    host = (parts.hostname or "").lower().rstrip(".")
+    return host == _LEARN_HOST or host.endswith("." + _LEARN_HOST)
+
+
 def _extract_grounding(mcp_result: Any, *, top_k: int) -> list[dict[str, str]]:
     """Best-effort extraction of {title, url, external} dicts."""
     content = getattr(mcp_result, "content", None)
@@ -168,7 +198,7 @@ def _extract_grounding(mcp_result: Any, *, top_k: int) -> list[dict[str, str]]:
         canonical = _URL_CRUFT_RE.sub("", url)
         if canonical in seen_urls:
             continue
-        if not canonical.startswith("https://learn.microsoft.com"):
+        if not _is_learn_url(canonical):
             continue
         seen_urls.add(canonical)
         grounding.append({"title": title[:200], "url": canonical[:500], "external": "true"})

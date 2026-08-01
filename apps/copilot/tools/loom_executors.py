@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -208,6 +209,53 @@ class PowerBIRestXMLAExecutor(XMLAExecutor):
         return columns, row_values
 
 
+
+# Sovereign Kusto host suffixes. A bare cluster name is resolved against the
+# first (Commercial); a fully-qualified name must sit under one of these.
+_KUSTO_SUFFIXES = ("kusto.windows.net", "kusto.usgovcloudapi.net")
+
+# A single DNS label: what ADX actually permits for a cluster name.
+_KUSTO_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$")
+
+
+def _resolve_kusto_host(cluster: str) -> str:
+    """Resolve an ADX cluster identifier to a validated hostname.
+
+    Accepts either a bare cluster name (``mycluster`` -> Commercial) or a
+    fully-qualified host already under a known Kusto suffix (``mycluster.
+    usgovvirginia.kusto.usgovcloudapi.net``), and returns the host to use for
+    BOTH the token audience and the request URL.
+
+    Two bugs motivate the validation. The value reaches here from a data-agent
+    configuration and was interpolated straight into
+    ``f"https://{cluster}.kusto.windows.net/v1/rest/query"``, so a value like
+    ``evil.test/x?a=`` produced ``https://evil.test/x?a=.kusto.windows.net/...``
+    — an SSRF that carries a user on-behalf-of token to an attacker host. And
+    the sovereign check was ``".usgovcloudapi.net" in cluster``, a substring of
+    the whole identifier rather than a DNS-label match.
+
+    Raises ValueError on anything not clearly an ADX cluster — failing closed,
+    because a host we cannot classify must not receive an OBO token.
+    """
+    c = (cluster or "").strip().lower().rstrip(".")
+    if not c or "/" in c or "\\" in c or ":" in c or "?" in c or "#" in c or "@" in c:
+        raise ValueError(f"invalid ADX cluster identifier: {cluster!r}")
+
+    for suffix in _KUSTO_SUFFIXES:
+        if c == suffix:
+            break  # the bare suffix is not a cluster
+        if c.endswith("." + suffix):
+            labels = c[: -(len(suffix) + 1)].split(".")
+            if labels and all(_KUSTO_NAME_RE.match(l) for l in labels):
+                return c
+            raise ValueError(f"invalid ADX cluster identifier: {cluster!r}")
+
+    # Bare name -> Commercial, matching the historical default.
+    if _KUSTO_NAME_RE.match(c):
+        return f"{c}.{_KUSTO_SUFFIXES[0]}"
+    raise ValueError(f"invalid ADX cluster identifier: {cluster!r}")
+
+
 # =====================================================================
 # ADX (Kusto) executor
 # =====================================================================
@@ -231,14 +279,19 @@ class KustoADXExecutor(ADXExecutor):
         user_obo_assertion: str,
         max_rows: int,
     ) -> tuple[list[str], list[list[Any]]]:
-        scope = f"https://{cluster}.kusto.windows.net/.default"
-        if ".usgovcloudapi.net" in cluster or "kusto.usgov" in cluster:
-            scope = f"https://{cluster}/.default"
+        # Resolve the cluster to ONE host and derive both the token audience and
+        # the request URL from it. Previously these were derived independently:
+        # the Gov branch rewrote `scope` but `url` stayed
+        # f"https://{cluster}.kusto.windows.net/..." — so a Gov cluster produced
+        # `mycluster.<...>.usgovcloudapi.net.kusto.windows.net`, a host that does
+        # not exist. The Gov path could never have worked.
+        host = _resolve_kusto_host(cluster)
+        scope = f"https://{host}/.default"
         token = await self.msal(user_obo_assertion, [scope])
 
         # Use the v1/rest/query REST endpoint (cleaner than ingesting
         # the azure-kusto-data SDK as a hard dep here).
-        url = f"https://{cluster}.kusto.windows.net/v1/rest/query"
+        url = f"https://{host}/v1/rest/query"
         # Append `| take N` if caller didn't include a limit
         if "| take " not in kql and "| limit " not in kql and "| top " not in kql:
             kql = f"{kql.rstrip(';')} | take {max_rows}"

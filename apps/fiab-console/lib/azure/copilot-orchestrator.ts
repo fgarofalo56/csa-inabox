@@ -141,6 +141,7 @@ import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/to
 // counts, sources, tier, cost, verdict) and persists it to loom-answer-receipts;
 // the persisted doc id is threaded back onto the final step as `receiptId`.
 import { assembleAndPersistReceipt } from '@/lib/azure/answer-receipts-store';
+import { hostOfUrl, hostHasSuffix } from '@/lib/util/host-match';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -222,12 +223,15 @@ let _aoaiTarget: AoaiTarget | null = null;
  * boundary's suffix.
  */
 function validateEndpointCloud(endpoint: string): void {
-  const host = endpoint.toLowerCase();
   const expectedSuffix = getOpenAiSuffix(); // openai.azure.us | openai.azure.com
   const gov = isGovCloud();
   const cloud = detectLoomCloud();
-  const govHost = host.includes('openai.azure.us');
-  const comHost = host.includes('openai.azure.com');
+  // Match the parsed HOSTNAME at a DNS label boundary — `endpoint.includes(...)`
+  // also matched an attacker-controlled query string (see lib/util/host-match).
+  // The fail-open for an unrecognised host (above) is deliberate and unchanged.
+  const host = hostOfUrl(endpoint);
+  const govHost = hostHasSuffix(host, 'openai.azure.us');
+  const comHost = hostHasSuffix(host, 'openai.azure.com');
   if (gov && comHost && !govHost) {
     throw new NoAoaiDeploymentError(
       `LOOM_AOAI_ENDPOINT points to a Commercial Azure OpenAI host (openai.azure.com) ` +
