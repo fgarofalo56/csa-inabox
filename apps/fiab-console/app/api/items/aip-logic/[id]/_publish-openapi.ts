@@ -1,4 +1,5 @@
 import { slugify } from '@/lib/util/trim';
+import { safeRecord } from '@/lib/security/safe-object';
 /**
  * OpenAPI generation for publishing a Spindle (AIP-Logic) function as REST.
  *
@@ -49,7 +50,8 @@ export interface BuildLogicOpenApiInput {
 
 /** Build the OpenAPI 3.0.1 document for the function's `POST /invoke` operation. */
 export function buildLogicOpenApi(input: BuildLogicOpenApiInput): Record<string, unknown> {
-  const properties: Record<string, unknown> = {};
+  // Property names come from author-supplied item state.
+  const properties = safeRecord<unknown>();
   const required: string[] = [];
   for (const i of input.inputs || []) {
     const name = String(i?.name || '').trim();

@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
+import { safeRecord } from '@/lib/security/safe-object';
 import {
   adfConfigGate, getGlobalParameters, updateGlobalParameters,
   type AdfGlobalParameterSpec, type AdfGlobalParameterType,
@@ -56,7 +57,9 @@ function validateParams(input: unknown): { params?: Record<string, AdfGlobalPara
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return { error: 'parameters must be an object of { name: { type, value } }' };
   }
-  const out: Record<string, AdfGlobalParameterSpec> = {};
+  // Keys are caller-supplied parameter names — a null-prototype record so
+  // `__proto__` (and toString/valueOf) become ordinary own properties.
+  const out = safeRecord<AdfGlobalParameterSpec>();
   for (const [name, rawSpec] of Object.entries(input as Record<string, unknown>)) {
     if (!PARAM_NAME_RE.test(name)) {
       return { error: `invalid parameter name "${name}" — use 1-260 letters, digits or _ (no '-')` };
