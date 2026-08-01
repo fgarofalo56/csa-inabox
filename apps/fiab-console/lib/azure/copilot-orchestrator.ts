@@ -226,12 +226,9 @@ function validateEndpointCloud(endpoint: string): void {
   const expectedSuffix = getOpenAiSuffix(); // openai.azure.us | openai.azure.com
   const gov = isGovCloud();
   const cloud = detectLoomCloud();
-  // Match the parsed HOSTNAME at a DNS label boundary, not a substring of the
-  // whole endpoint. `endpoint.includes('openai.azure.us')` also matched
-  // `https://evil.example/?x=openai.azure.us` — the attacker-controlled query
-  // string satisfying a cloud-boundary check. The fail-open for an unrecognised
-  // host (above) is deliberate and unchanged; only the positive detection of
-  // "carries the OTHER cloud's suffix" is now accurate.
+  // Match the parsed HOSTNAME at a DNS label boundary — `endpoint.includes(...)`
+  // also matched an attacker-controlled query string (see lib/util/host-match).
+  // The fail-open for an unrecognised host (above) is deliberate and unchanged.
   const host = hostOfUrl(endpoint);
   const govHost = hostHasSuffix(host, 'openai.azure.us');
   const comHost = hostHasSuffix(host, 'openai.azure.com');
