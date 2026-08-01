@@ -148,6 +148,19 @@ export default defineConfig({
       testDir: './e2e',
       testMatch: /route-smoke\.spec\.ts/,
       dependencies: ['mint'],
+      // This project mounts ~129 pages in one pass against a live in-VNet
+      // console, and roughly one per run times out on first paint — a DIFFERENT
+      // route each time (/admin/tenant-settings on one run, /browse on the next,
+      // 13s and 30s). With the global `retries: 0` that intermittent timeout is
+      // indistinguishable from a real regression, which is why the workflow step
+      // wrapped the whole sweep in continue-on-error and stopped reporting
+      // anything at all (#2787).
+      //
+      // Retries restore the distinction Playwright already models: a test that
+      // fails then passes is reported FLAKY, while one that fails every attempt
+      // stays FAILED. That lets the workflow drop continue-on-error and fail
+      // honestly on a genuine break.
+      retries: 2,
       use: {
         storageState: 'e2e/.auth/loom-state.json',
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
