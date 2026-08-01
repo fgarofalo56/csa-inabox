@@ -29,6 +29,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import { withSession } from '@/lib/api/route-toolkit';
 import { trimSlashes } from '@/lib/util/trim';
+import { hostHasSuffix } from '@/lib/util/host-match';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -91,8 +92,14 @@ function docId(container: string) { return `lakehouse-${container}`; }
  * (e.g. GCC has no Fabric F-SKU capacities). No network call — just env.
  */
 function cloudEnv(): 'commercial' | 'gcc' | 'gcch' | 'il5' {
-  const host = (process.env.AZURE_AUTHORITY_HOST || '').toLowerCase();
-  if (host.includes('.us')) {
+  // AZURE_AUTHORITY_HOST is a bare host (login.microsoftonline.us /
+  // login.microsoftonline.com), so match the TLD as a DNS label.
+  // `host.includes('.us')` also matched any host with `.us` anywhere in it —
+  // `login.contoso.com.usercontent.net`, `login.microsoftonline.com/.usX` —
+  // and would have reported a Commercial deployment as Gov, hiding the Fabric
+  // capacity disclosures this function exists to render.
+  const host = (process.env.AZURE_AUTHORITY_HOST || '').toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  if (hostHasSuffix(host, 'us')) {
     if (process.env.LOOM_IL5 === 'true') return 'il5';
     if (process.env.LOOM_GCCH === 'true') return 'gcch';
     return 'gcc';

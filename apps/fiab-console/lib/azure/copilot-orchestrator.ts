@@ -141,6 +141,7 @@ import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/to
 // counts, sources, tier, cost, verdict) and persists it to loom-answer-receipts;
 // the persisted doc id is threaded back onto the final step as `receiptId`.
 import { assembleAndPersistReceipt } from '@/lib/azure/answer-receipts-store';
+import { hostOfUrl, hostHasSuffix } from '@/lib/util/host-match';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -222,12 +223,18 @@ let _aoaiTarget: AoaiTarget | null = null;
  * boundary's suffix.
  */
 function validateEndpointCloud(endpoint: string): void {
-  const host = endpoint.toLowerCase();
   const expectedSuffix = getOpenAiSuffix(); // openai.azure.us | openai.azure.com
   const gov = isGovCloud();
   const cloud = detectLoomCloud();
-  const govHost = host.includes('openai.azure.us');
-  const comHost = host.includes('openai.azure.com');
+  // Match the parsed HOSTNAME at a DNS label boundary, not a substring of the
+  // whole endpoint. `endpoint.includes('openai.azure.us')` also matched
+  // `https://evil.example/?x=openai.azure.us` — the attacker-controlled query
+  // string satisfying a cloud-boundary check. The fail-open for an unrecognised
+  // host (above) is deliberate and unchanged; only the positive detection of
+  // "carries the OTHER cloud's suffix" is now accurate.
+  const host = hostOfUrl(endpoint);
+  const govHost = hostHasSuffix(host, 'openai.azure.us');
+  const comHost = hostHasSuffix(host, 'openai.azure.com');
   if (gov && comHost && !govHost) {
     throw new NoAoaiDeploymentError(
       `LOOM_AOAI_ENDPOINT points to a Commercial Azure OpenAI host (openai.azure.com) ` +

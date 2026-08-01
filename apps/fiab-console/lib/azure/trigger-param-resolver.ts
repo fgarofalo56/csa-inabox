@@ -25,6 +25,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { getAppConfigScope } from './cloud-endpoints';
+import { urlHostHasSuffix } from '@/lib/util/host-match';
 
 export type ParamSource = 'direct' | 'keyvault' | 'appconfig';
 
@@ -53,9 +54,18 @@ export class ParamResolveError extends Error {
   }
 }
 
-/** Derive the Key Vault AAD scope from a vault URI (commercial vs gov). */
+/** Derive the Key Vault AAD scope from a vault URI (commercial vs gov).
+ *
+ *  Matches the parsed HOSTNAME at a label boundary. The previous
+ *  `vaultUri.includes('.usgovcloudapi.net')` searched the whole URI, so a path
+ *  or query carrying that string (`https://kv.vault.azure.net/x?p=.usgovcloudapi.net`)
+ *  selected the Gov audience for a Commercial vault — the token is then minted
+ *  for the wrong audience and the call fails opaquely.
+ *
+ *  Commercial remains the fallback for an unparseable or unrecognised URI,
+ *  matching the previous behaviour. */
 function kvScope(vaultUri: string): string {
-  return vaultUri.includes('.usgovcloudapi.net')
+  return urlHostHasSuffix(vaultUri, 'usgovcloudapi.net')
     ? 'https://vault.usgovcloudapi.net/.default'
     : 'https://vault.azure.net/.default';
 }
