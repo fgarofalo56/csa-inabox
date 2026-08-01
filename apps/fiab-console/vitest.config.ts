@@ -1,3 +1,4 @@
+import { cpus } from 'node:os';
 /**
  * Vitest config for fiab-console.
  *
@@ -71,7 +72,16 @@ export default defineConfig({
         // have far fewer cores, so the cap binds much less there. That is a
         // real price for a suite that reports honestly rather than one that
         // needs dangerouslyIgnoreUnhandledErrors to look green.
-        maxForks: 4,
+        // A CEILING, never a floor. `maxForks: 4` as a flat number was WRONG:
+        // vitest's own default is roughly (cores - 1), so on a 4-core CI runner
+        // a literal 4 RAISED parallelism from 3 to 4 and starved a CPU-heavy
+        // guard spec into `Test timed out in 30000ms` x3 — a failure my 32-core
+        // box could never reproduce, because there the same literal was a large
+        // reduction. Same config, opposite effect, decided by core count.
+        //
+        // min(4, cores - 1) caps the big machines where the RPC saturates and
+        // leaves small CI runners exactly at their default.
+        maxForks: Math.max(1, Math.min(4, (cpus().length || 2) - 1)),
       },
     },
     // The first `await import('../route')` in a heavy BFF spec triggers an
