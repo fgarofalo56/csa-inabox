@@ -25,6 +25,7 @@ import { REMOTE_BUILTIN_MCP_CATALOG, msRemoteMcpScopeUris, effectiveRemoteState 
 import { armBase, getSqlSuffix, getPbiScope } from '@/lib/azure/cloud-endpoints';
 import type { UserClaims } from '@/lib/auth/msal';
 import { logSafe } from '@/lib/util/log-safe';
+import { htmlAttrEscape, jsStringLiteral } from '@/lib/util/html-escape';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -227,16 +228,17 @@ function origin(req: NextRequest): string {
 }
 
 function htmlBody(url: string): string {
+  const attr = htmlAttrEscape(url);
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="0;url=${url}">
+<meta http-equiv="refresh" content="0;url=${attr}">
 <title>Signing you in…</title>
 <style>html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;background:#0f2a4a;color:#fff;font-family:Segoe UI,system-ui,sans-serif}</style>
 </head><body>
-<noscript>Click <a href="${url}" style="color:#fff;">here</a> to continue.</noscript>
+<noscript>Click <a href="${attr}" style="color:#fff;">here</a> to continue.</noscript>
 <div>Signing you in…</div>
-<script>window.location.replace(${JSON.stringify(url)});</script>
+<script>window.location.replace(${jsStringLiteral(url)});</script>
 </body></html>`;
 }
 
@@ -275,7 +277,12 @@ export async function GET(req: NextRequest) {
     // Both are RAW query params: logSafe strips CR/LF so a crafted error value
     // cannot inject a fabricated log record.
     console.error('[auth/callback] AAD error', logSafe(aadError), logSafe(url.searchParams.get('error_description')));
-    return htmlRedirect(`/?auth_error=aad_${aadError}`, undefined, clearAuthflow);
+    // Constrain the reflected code to a safe token. Defence in depth: htmlBody
+    // already escapes every attribute, but a bounded charset means the value can
+    // never carry markup at all — and it keeps the ?auth_error= contract stable
+    // for the sign-in page that reads it.
+    const safeCode = (aadError.match(/^[A-Za-z0-9_.-]{1,64}/)?.[0]) || 'unknown';
+    return htmlRedirect(`/?auth_error=aad_${safeCode}`, undefined, clearAuthflow);
   }
   if (!code) return htmlRedirect(`/?auth_error=missing_code`, undefined, clearAuthflow);
   const msalClientId = process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
