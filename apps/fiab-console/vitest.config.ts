@@ -79,9 +79,28 @@ export default defineConfig({
         // box could never reproduce, because there the same literal was a large
         // reduction. Same config, opposite effect, decided by core count.
         //
-        // min(4, cores - 1) caps the big machines where the RPC saturates and
-        // leaves small CI runners exactly at their default.
-        maxForks: Math.max(1, Math.min(4, (cpus().length || 2) - 1)),
+        // min(cap, cores - 1) caps the big machines where the RPC saturates and
+        // never RAISES parallelism on a small one.
+        //
+        // THE CAP IS 2 UNDER CI (2026-08-01, #2671). The main thread is single
+        // and serves BOTH every worker's vite transform AND every worker's
+        // `onTaskUpdate` reporting RPC — and that RPC has a 60s deadline
+        // hardcoded in vitest's bundled birpc (see the coverage note below).
+        // With 3 forks on a 4-core runner a task update could sit behind their
+        // transform queue for over a minute, which is the unhandled error that
+        // has blocked this upgrade all along.
+        //
+        // Two pieces of evidence that it is CONTENTION and not a deterministic
+        // end-of-run flush: (a) both shards do IDENTICAL end-of-run coverage
+        // work and only ONE of the two tripped; (b) sharding never fixed it,
+        // which follows, because each shard still imports nearly the whole
+        // console dependency graph — so sharding barely reduces main-thread
+        // transform work. Only lowering the concurrent demand on it does.
+        //
+        // COST, stated plainly: fewer forks means a longer wall clock. That is
+        // the trade. A slower run that reports honestly beats a fast one that
+        // needs dangerouslyIgnoreUnhandledErrors to look green.
+        maxForks: Math.max(1, Math.min(process.env.CI ? 2 : 4, (cpus().length || 2) - 1)),
       },
     },
     // The first `await import('../route')` in a heavy BFF spec triggers an

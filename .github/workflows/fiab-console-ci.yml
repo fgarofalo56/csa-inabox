@@ -165,16 +165,18 @@ jobs:
   vitest:
     name: vitest (node 20)
     runs-on: ubuntu-latest
-    # 40m (was 25m): the coverage provider is now istanbul (see vitest.config.ts
-    # for why), and Babel instrumentation costs real wall clock that v8's
-    # runtime-derived coverage did not. MEASURED on this runner, per-blob:
-    #     v8        534.52s + 562.76s = ~1097s
-    #     istanbul  728.94s + 751.68s = ~1481s   (+35%)
-    # The first istanbul run took 25m43s end to end — it would have been KILLED
-    # by the old 25m wall and misreported as a hang. This is headroom for a
-    # slower-but-honest provider, NOT a masked hang: the job still fails on any
-    # test failure or coverage miss, and 40m still bounds a genuine deadlock.
-    timeout-minutes: 40
+    # 55m (was 25m, then 40m): the coverage provider is now istanbul (Babel
+    # instrumentation costs wall clock v8's runtime-derived coverage did not),
+    # AND maxForks is capped at 2 under CI to keep the main thread responsive
+    # to the 60s reporting-RPC deadline. Both trade time for correctness.
+    # MEASURED per-blob on this runner:
+    #     v8,       3 forks   534.52s + 562.76s = ~1097s  (25m43s end to end)
+    #     istanbul, 3 forks   728.94s + 751.68s = ~1481s
+    # 2 forks is slower again. A TIMEOUT HERE WOULD BE A FALSE RED — do not read
+    # it as the RPC bug; it means this budget is too small. This is not a masked
+    # hang: the job still fails on any test failure or coverage miss, and 55m
+    # still bounds a genuine deadlock.
+    timeout-minutes: 55
     defaults:
       run:
         working-directory: apps/fiab-console
