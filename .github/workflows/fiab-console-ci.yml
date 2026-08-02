@@ -167,13 +167,13 @@ jobs:
     runs-on: ubuntu-latest
     # 40m (was 25m): the coverage provider is now istanbul (see vitest.config.ts
     # for why), and Babel instrumentation costs real wall clock that v8's
-    # runtime-derived coverage did not. Measured on a 32-core box, whole suite:
-    # a single `all: true` coverage pass over the ~3.9k-file surface took 37s
-    # under v8 and 169s under istanbul, and each shard pays it. CI's v8 run was
-    # already ~1097s of test time inside a 25m budget, so istanbul would land
-    # near or over the edge. This is headroom for a slower-but-honest provider,
-    # NOT a masked hang: the job still fails on any test failure or coverage
-    # miss, and 40m still bounds a genuine deadlock.
+    # runtime-derived coverage did not. MEASURED on this runner, per-blob:
+    #     v8        534.52s + 562.76s = ~1097s
+    #     istanbul  728.94s + 751.68s = ~1481s   (+35%)
+    # The first istanbul run took 25m43s end to end — it would have been KILLED
+    # by the old 25m wall and misreported as a hang. This is headroom for a
+    # slower-but-honest provider, NOT a masked hang: the job still fails on any
+    # test failure or coverage miss, and 40m still bounds a genuine deadlock.
     timeout-minutes: 40
     defaults:
       run:
@@ -251,26 +251,24 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=3072
         # SHARDED, and deliberately WITHIN one job rather than a matrix.
         #
-        # WHY SHARDED — and the reason CHANGED on 2026-08-01, so read this
-        # rather than assuming. Sharding was introduced because vitest 3 fails a
-        # run on unhandled errors that vitest 2 tolerated, and with the v8
-        # provider this suite reliably produced
+        # WHY SHARDED. vitest 3 fails a run on an unhandled error that vitest 2
+        # tolerated, and this suite produces
         #     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
         # — the worker->main RPC missing its deadline while REPORTING, while
-        # every test passed. THAT REASON IS GONE: the provider is now istanbul
-        # (see vitest.config.ts for the full argument), and the unhandled error
-        # disappears with it — measured, whole suite, exit codes read directly
-        # rather than through a pipe:
-        #     v8:       merge exit 1, Errors 1
-        #     istanbul: shard1 exit 0, shard2 exit 0, MERGE EXIT 0, 0 Errors,
-        #               1302 files / 13324 tests, coverage identical to the
-        #               unsharded run (29.88/23.09/24.22/32.51).
+        # every test passes. Halving the per-run file count reduces the window
+        # in which that can happen. It does NOT eliminate it: this job still
+        # trips the error on a 4-core runner, and switching the coverage
+        # provider to istanbul did not change that (it is a main-thread
+        # starvation problem against a 60s deadline hardcoded in vitest's
+        # bundled birpc — no config option, no VITEST_* env var. See the long
+        # note in vitest.config.ts before forming a theory about it, and DO NOT
+        # conclude anything from a local run: on 32 cores this suite is clean
+        # under istanbul and still fails here).
         #
-        # Sharding is KEPT for the second reason it turned out to serve: memory.
-        # At 6144 per fork the whole suite OOM-killed a fork on a ~16 GB runner
-        # and closed its IPC channel (ERR_IPC_CHANNEL_CLOSED) with no blob
-        # written. Half-suite shards at 3072 fit with headroom. Do not un-shard
-        # without re-testing that, and do not re-attribute this to the RPC error.
+        # Sharding also earns its keep on memory, which is the reason to KEEP it
+        # regardless: at 6144 per fork the whole suite OOM-killed a fork on a
+        # ~16 GB runner and closed its IPC channel (ERR_IPC_CHANNEL_CLOSED) with
+        # no blob written. Half-suite shards at 3072 fit with headroom.
         #
         # WHY NOT A MATRIX. `vitest (node 20)` is the ROLL GATE — see the header
         # of this file and loom-roll-and-validate.yml, which reads a check-run of

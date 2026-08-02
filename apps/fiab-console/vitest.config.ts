@@ -127,30 +127,37 @@ export default defineConfig({
     //
     // ── WHY istanbul AND NOT v8 (#2671 / PR #2785, 2026-08-01) ────────────
     //
-    // TWO reasons, and the second is the one that matters for the gate.
+    // THE REASON IS MEASUREMENT QUALITY. It is NOT that istanbul fixes the
+    // vitest-3 blocker — it does not, and that was checked the hard way.
     //
-    // 1. v8 coverage is what BLOCKED the vitest 2 -> 3 upgrade. vitest 3 fails
-    //    a run on unhandled errors that vitest 2 tolerated, and this suite
-    //    reliably produced `[vitest-worker]: Timeout calling "onTaskUpdate"` —
-    //    the worker->main reporting RPC missing its deadline while every one of
-    //    the 1302 files and 13320 tests PASSED. vitest 3 made v8 coverage
-    //    AST-aware, which loads the single main thread that must answer every
-    //    task update. Measured, same commit, same machine:
-    //        vitest run                  -> exit 0, no Errors line
-    //        vitest run --coverage (v8)  -> Errors 1, exit 1
-    //        vitest run --coverage (ist) -> 1302 files / 13320 tests, 0 Errors
-    //    Six hypotheses were tested; five are disproved and recorded in PR
-    //    #2785 so nobody re-walks them (a leaking spec, teardownTimeout,
-    //    --silent, coverage.all=false, and pool:'threads' — which is WORSE,
-    //    3 failed). `experimentalAstAwareRemapping` is not exposed in 3.2.7's
-    //    types, so there is no config escape on the v8 side.
+    // 1. WHAT DOES NOT WORK, recorded so nobody re-runs it. vitest 3 fails a
+    //    run on unhandled errors that vitest 2 tolerated, and this suite
+    //    produces `[vitest-worker]: Timeout calling "onTaskUpdate"` — the
+    //    worker->main reporting RPC missing its deadline while every test
+    //    passes. Switching to istanbul makes that error disappear on a 32-core
+    //    box (full suite: exit 0, 1302 files, 0 unhandled errors) and it STILL
+    //    HAPPENS on a 4-core CI runner. Same error, same shape as v8.
     //
-    // 2. The BRANCH FLOOR FELL 58 -> 21 IN THIS SWITCH, AND THAT IS THE GATE
-    //    GETTING STRICTER, NOT WEAKER. Do not "fix" it back. v8 cannot see
-    //    branch structure in a file it never executed: its coverage is derived
-    //    from the runtime, so an untested file is reported as one opaque
-    //    uncovered range. Measured over the IDENTICAL include/exclude surface
-    //    with ONE test file executed (3,882 files):
+    //    The provider was never the root cause. The deadline is birpc's
+    //    DEFAULT_TIMEOUT — 60s, hardcoded in vitest's bundled copy, passed no
+    //    override by `createForksRpcOptions`, and reachable from neither the
+    //    config types nor any VITEST_* env var. So a worker waited over a
+    //    MINUTE for the main thread. Both providers add main-thread work
+    //    (istanbul's Babel pass runs inside the vite transform the main thread
+    //    serves), which is why istanbul is if anything worse for it: CI per-blob
+    //    went 534s/562s under v8 to 729s/752s under istanbul. On 32 cores with
+    //    maxForks 4 the main thread has headroom and never trips the deadline;
+    //    on 4 cores with 3 forks it does. THAT is the local-vs-CI divergence
+    //    that has misled this investigation repeatedly — do not conclude
+    //    anything about this error from a local run alone.
+    //
+    // 2. THE ACTUAL REASON TO BE HERE: THE BRANCH FLOOR FELL 58 -> 21 IN THIS
+    //    SWITCH, AND THAT IS THE GATE GETTING STRICTER, NOT WEAKER. Do not
+    //    "fix" it back. v8 cannot see branch structure in a file it never
+    //    executed: its coverage is derived from the runtime, so an untested
+    //    file is reported as one opaque uncovered range. Measured over the
+    //    IDENTICAL include/exclude surface with ONE test file executed
+    //    (3,882 files), provider as the only variable:
     //        provider   branches seen      functions seen
     //        v8              3,899              3,885     (~1 per file)
     //        istanbul      290,495             64,485     (74.5x / 16.6x)
