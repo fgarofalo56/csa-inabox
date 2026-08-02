@@ -77,12 +77,16 @@ export const GET = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   // query estate-wide governance / app telemetry via the Console UAMI's
   // app-level roles). A bare session check would let ANY authenticated user read
   // org-wide audit, so the whole surface stays tenant-admin only.
-  // Cosmos scope. Writers are NOT consistent about `tenantId`: the admin-plane
-  // audit stream records `ev.tenantId || actorOid`, while the object-security
-  // and uc-access-review writers record the Entra TENANT id (`claims.tid`).
-  // Reading on the viewer's oid ALONE — the previous behaviour — meant a tid
-  // scoped row could never be returned to anybody (tid never equals oid), so
-  // every `object-security` and `uc-access-review` row was written into a hole.
+  // Cosmos scope. Every Loom writer now stamps `tenantId` with the SAME rule —
+  // `tenantScopeId(session)`, i.e. `claims.tid ?? claims.oid` (the admin-plane
+  // audit stream's long-standing `ev.tenantId || actorOid`, adopted by the
+  // object-security / uc-access-review / action-justification writers in
+  // #2650). So this read has to accept BOTH halves:
+  //   - oid alone — the previous behaviour — never returned a `tid`-scoped row
+  //     (tid never equals oid), so those rows were written into a hole;
+  //   - a writer that recorded `tenantId` only when `tid` was present produced
+  //     documents with NO `tenantId` property, which `ARRAY_CONTAINS` can never
+  //     match (that was #2650, fixed at the writers).
   // The whole surface is already tenant-admin gated (above), so widening the
   // read to the viewer's tenant grants no new visibility to anyone.
   const tenantId = s.claims.oid; // cache/partition scope (existing design)

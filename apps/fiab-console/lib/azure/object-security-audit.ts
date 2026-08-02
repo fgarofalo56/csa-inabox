@@ -7,10 +7,17 @@
  * the existing Admin → Audit Logs reader alongside the action-justification and
  * PDP-shadow rows. Best-effort: a write miss NEVER fails the guarded request.
  *
+ * `tenantId` is the read scope the Admin reader selects on
+ * (`ARRAY_CONTAINS(@tenants, c.tenantId)`) and is therefore REQUIRED, sourced
+ * from {@link tenantScopeId} (`claims.tid ?? claims.oid`). Writing it only when
+ * `tid` was present meant a `tid`-less session (minted / automation / PAT) wrote
+ * rows with no `tenantId` property at all, which that predicate can never match
+ * — invisible forever (#2650).
+ *
  * Azure-native (Cosmos), Gov-safe — no Fabric.
  */
 import { auditLogContainer } from './cosmos-client';
-import type { SessionPayload } from '@/lib/auth/session';
+import { tenantScopeId, type SessionPayload } from '@/lib/auth/session';
 
 export const OBJECT_SECURITY_KIND = 'object-security';
 
@@ -38,7 +45,8 @@ export interface ObjectSecurityEvent {
   actorUpn?: string;
   /** The caller's Entra group object-ids at decision time (the ACL input). */
   actorGroups?: string[];
-  tenantId?: string;
+  /** Read scope — REQUIRED. `tenantScopeId(session)` = `tid ?? oid` (#2650). */
+  tenantId: string;
   at: string; // ISO timestamp
   timestamp: string;
   who: string;
@@ -82,7 +90,7 @@ export async function recordObjectSecurityEvent(
     ...(c.name ? { actorName: c.name } : {}),
     ...(c.upn ? { actorUpn: c.upn } : {}),
     ...(input.callerGroups && input.callerGroups.length ? { actorGroups: [...input.callerGroups] } : {}),
-    ...(c.tid ? { tenantId: c.tid } : {}),
+    tenantId: tenantScopeId(session),
     at,
     timestamp: at,
     who: c.oid,

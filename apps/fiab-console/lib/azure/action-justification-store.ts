@@ -10,7 +10,7 @@
  * chain with actor + outcome, reviewable. Azure-native (Cosmos) — no Fabric.
  */
 import { auditLogContainer } from './cosmos-client';
-import type { SessionPayload } from '@/lib/auth/session';
+import { tenantScopeId, type SessionPayload } from '@/lib/auth/session';
 
 export const ACTION_JUSTIFICATION_KIND = 'action-justification';
 
@@ -29,6 +29,13 @@ export interface ActionJustification {
   actorOid: string;
   actorName?: string;
   actorUpn?: string;
+  /**
+   * Read scope for Admin → Audit Logs, which selects with
+   * `ARRAY_CONTAINS(@tenants, c.tenantId)` — so a stored row MUST carry it or
+   * it is unreachable (#2650). Optional on this interface only because
+   * {@link listActionJustifications} returns a narrower projection that does
+   * not select it; the write below is typed to require it.
+   */
   tenantId?: string;
   at: string;              // ISO timestamp
 }
@@ -60,7 +67,10 @@ export async function recordActionJustification(
     nowIso: string;
   },
 ): Promise<ActionJustification> {
-  const rec: ActionJustification = {
+  // `tenantId` is REQUIRED on the written record (not merely optional on the
+  // interface): the Admin → Audit Logs predicate cannot match a document that
+  // lacks the property, so a `tid`-less session used to write invisible rows.
+  const rec: ActionJustification & { tenantId: string } = {
     id: `action-justification:${input.ontologyId}:${input.action}:${input.nowIso}`,
     itemId: input.ontologyId,
     kind: ACTION_JUSTIFICATION_KIND,
@@ -75,7 +85,7 @@ export async function recordActionJustification(
     actorOid: session.claims.oid,
     ...(session.claims.name ? { actorName: session.claims.name } : {}),
     ...(session.claims.upn ? { actorUpn: session.claims.upn } : {}),
-    ...(session.claims.tid ? { tenantId: session.claims.tid } : {}),
+    tenantId: tenantScopeId(session),
     at: input.nowIso,
   };
   const c = await auditLogContainer();
