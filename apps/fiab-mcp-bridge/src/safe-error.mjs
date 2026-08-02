@@ -39,7 +39,27 @@ const LOG_PREFIX = '[mcp-bridge]';
  * the class silently becomes something else while the code still compiles and
  * the sanitizer still returns a string. This form cannot be mangled unseen.
  */
-const CONTROL_CHARS = /[\u0000-\u001F\u007F]+/g;
+/**
+ * The log-forging vector, spelled out: a CR or LF inside a request-derived
+ * value starts what looks like a new, attacker-authored record.
+ *
+ * Kept as its own literal rather than folded into the C0 range below. The
+ * range DOES cover CR and LF, but CodeQL js/log-injection could not see that:
+ * it does not resolve backslash-u escapes inside a character RANGE, so the
+ * alert survived a sanitizer that demonstrably strips (mutation-proved: neuter
+ * it and four tests go red). Naming the vector explicitly is both the clearer
+ * source and the form the analyser reads.
+ */
+const LINE_BREAKS = /[\r\n]+/g;
+
+/**
+ * Defence in depth: the remaining C0 controls plus DEL. Written with
+ * backslash-u ESCAPES, never literal control characters -- the console
+ * original (lib/util/log-safe.ts) uses literals, which are invisible in every
+ * editor and diff, and they were silently mangled twice while being copied
+ * here. The mangled form still compiles and still returns a string.
+ */
+const OTHER_CONTROLS = /[\u0000-\u001F\u007F]+/g;
 
 /** Max characters kept from the logged detail (a stack, so larger than a field). */
 const MAX_LOG_DETAIL = 2000;
@@ -62,7 +82,7 @@ const MAX_LOG_DETAIL = 2000;
 export function logSafe(value, max = MAX_LOG_DETAIL) {
   if (value === null || value === undefined) return '';
   const raw = typeof value === 'string' ? value : String(value);
-  const flat = raw.replace(CONTROL_CHARS, ' ').trim();
+  const flat = raw.replace(LINE_BREAKS, ' ').replace(OTHER_CONTROLS, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max)}...` : flat;
 }
 
