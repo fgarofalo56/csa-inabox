@@ -65,12 +65,16 @@ def parse_pins(text: str) -> dict[str, str]:
     parsed: dict[str, str] = _pins.parse_pins(text)
     return parsed
 
-#: `name`, `name[extra]`, optionally followed by a version specifier.
+#: `name`, `name[extra]`, and whatever follows. Only the NAME is needed; the
+#: version specifier is validated by its leading character rather than by a
+#: nested-quantifier pattern, which CodeQL correctly flagged as exponential
+#: backtracking (py/redos) when the inner class overlapped the separator.
 _REQ_SPEC = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"
     r"(?:\[[^\]]*\])?"
-    r"(?P<spec>(?:[<>=!~]=?[^,]+)(?:,[<>=!~]=?[^,]+)*)?$"
+    r"(?P<rest>.*)$"
 )
+_SPECIFIER_START = "<>=!~"
 
 
 @dataclass
@@ -113,6 +117,9 @@ def _constraints_from_specs(specs: list[str]) -> dict[str, str]:
             continue
         match = _REQ_SPEC.match(spec.split(";", 1)[0].strip())
         if match is None:
+            continue
+        rest = match.group("rest")
+        if rest and rest[0] not in _SPECIFIER_START:
             continue
         out[match.group("name")] = spec
     return out
@@ -349,6 +356,47 @@ def test_workflow_asserts_resolved_versions_at_runtime() -> None:
 # ---------------------------------------------------------------------------
 # Unit tests for the asserter itself — a checker that cannot fail is not a check.
 # ---------------------------------------------------------------------------
+
+
+class TestSpecParsing:
+    """`_constraints_from_specs` after the py/redos rewrite (CodeQL, PR #2806).
+
+    The original pattern validated the version specifier with
+    ``(?:[<>=!~]=?[^,]+)(?:,[<>=!~]=?[^,]+)*``; ``[^,]+`` overlapped the
+    separator, so an adversarial spec backtracked exponentially. Only the
+    distribution NAME is ever used, so the specifier is now checked by its
+    leading character. These cases pin the behaviour that rewrite must keep.
+    """
+
+    def test_bare_names_and_specifiers_are_accepted(self) -> None:
+        parsed = _constraints_from_specs(
+            ["pip", "'pathspec>=0.12.1'", "starlette>=0.40,<0.42", "uvicorn[standard]==0.51.0"]
+        )
+        assert parsed == {
+            "pip": "pip",
+            "pathspec": "pathspec>=0.12.1",
+            "starlette": "starlette>=0.40,<0.42",
+            "uvicorn": "uvicorn[standard]==0.51.0",
+        }
+
+    def test_flags_and_shell_variables_are_not_constraints(self) -> None:
+        assert _constraints_from_specs(["-U", "--upgrade", "$duckdb_pins", ""]) == {}
+
+    def test_a_trailing_specifier_must_start_with_a_specifier_character(self) -> None:
+        """`name` followed by junk is not a requirement and must be dropped."""
+        assert _constraints_from_specs(["fastapi/0.140.13", "apps/loom-duckdb"]) == {}
+
+    def test_the_codeql_backtracking_input_terminates(self) -> None:
+        """The py/redos witness must parse in linear time.
+
+        It is still *accepted* (as a constraint on a package literally named
+        "0") — this parser reads workflow-authored argv, not untrusted input, so
+        the property that matters is that it terminates rather than that it
+        rejects. Under the old nested-quantifier pattern this input backtracked
+        exponentially; if that regex ever comes back, this test hangs.
+        """
+        adversarial = "0!+,!" + "=+,!" * 64
+        assert set(_constraints_from_specs([adversarial])) == {"0"}
 
 
 class TestPinParsing:
