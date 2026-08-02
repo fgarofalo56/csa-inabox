@@ -116,7 +116,7 @@ export const GET = withSession<{ id: string }>(async (req: NextRequest, { sessio
       // failed run must not stamp lineage.
       const limited = await enforceRateLimitForKey(`adf-harvest:${s.claims.oid}`, 'adf-lineage-harvest', HARVEST_RATE_LIMITS);
       const lineage = limited
-        ? { ok: false as const, events: 0, written: 0, skipped: 0, denied: 0, reason: 'rate limited — lineage harvest skipped for this poll' }
+        ? { ok: false as const, events: 0, written: 0, skipped: 0, denied: 0, code: 'harvest_rate_limited' as const, reason: 'rate limited — lineage harvest skipped for this poll' }
         : await harvestPipelineRunLineage(s, {
             workspaceId,
             adfPipelineName: adfName,

@@ -13,10 +13,10 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1664 |
+| Total routes | 1665 |
 | Public (no session) | 100 |
 | Session-only | 576 |
-| Owner-scoped | 698 |
+| Owner-scoped | 699 |
 | Admin | 290 |
 | Gated (backend config) | 531 |
 | Areas | 120 |
@@ -1635,6 +1635,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/spark-environment/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
 | `items/spark-environment/route.ts` | GET POST | owner-scoped |  | — |
 | `items/spark-job-definition/[id]/files/route.ts` | POST | owner-scoped | ● | ADLS |
+| `items/spark-job-definition/[id]/lineage-targets/route.ts` | GET | owner-scoped |  | — |
 | `items/spark-job-definition/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
 | `items/spark-job-definition/[id]/runs/[runId]/cancel/route.ts` | POST | owner-scoped | ● | Synapse |
 | `items/spark-job-definition/[id]/runs/[runId]/route.ts` | GET | owner-scoped | ● | Synapse |

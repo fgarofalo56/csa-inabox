@@ -10,7 +10,7 @@ Azure-native backend (NO Fabric dependency, per `no-fabric-dependency.md`):
 `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
 Editor: `apps/fiab-console/lib/editors/spark-job-definition-editor.tsx`
-Routes: `apps/fiab-console/app/api/items/spark-job-definition/[id]/{submit,runs,runs/[runId],runs/[runId]/cancel,files}/route.ts`
+Routes: `apps/fiab-console/app/api/items/spark-job-definition/[id]/{submit,runs,runs/[runId],runs/[runId]/cancel,files,lineage-targets}/route.ts`
 
 ## Fabric/Azure feature inventory → Loom coverage
 
@@ -32,6 +32,8 @@ Routes: `apps/fiab-console/app/api/items/spark-job-definition/[id]/{submit,runs,
 | Run state live transition → Succeeded/Failed | ✅ Polled while active | Livy batch `state`/`result` |
 | Cancel active run | ✅ Ribbon "Cancel active run" + per-row Cancel | `POST .../runs/[runId]/cancel` → `cancelSparkBatchJob()` (Livy DELETE) |
 | Driver log viewer | ✅ Per-run Accordion → fetches log tail + errorInfo | `GET .../runs/[runId]` → `getSparkBatchJob()` `log[]` |
+| Run lineage receipt (Loom beyond Fabric) | ✅ `LineageHarvestBar` on the Runs tab renders the LU-8 harvest receipt for the newest settled run (and per-run in the log accordion): edges recorded, or the honest reason it recorded none. Issue #2625 — before this the receipt was returned and rendered by nothing. | `GET .../runs/[runId]` → `harvestSparkBatchLineage()` `lineage.{code,reason,written}` |
+| Declare lineage datasets (G2 inline **Fix it**) | ✅ Picker wizard over the workspace's real storage roots; writes `spark.loom.lineage.inputs/outputs` onto `state.spec.conf`. Dropdowns only (`loom_no_freeform_config`). Column-level lineage stays the opt-in `svc-openlineage` listener gate. | `GET .../runs/[runId]/../lineage-targets` → `loadWorkspacePathItems()` (Cosmos); `PUT /api/items/spark-job-definition/[id]` |
 | Save / Saved indicator + Ctrl+S | ✅ | `PUT /api/items/spark-job-definition/[id]` (Cosmos) |
 | Settings → Schedule | ❌ deferred (parity-spec gap 9) — separate task; not in F17 scope |
 | Per-run snapshot (View snapshot / Restore) | ❌ deferred (parity-spec gap 10) |

@@ -168,6 +168,48 @@ async function writerSession(session: SessionPayload, workspaceId: string): Prom
   }
 }
 
+/**
+ * LU-8 / issue #2625 — the STABLE, machine-readable discriminator for why a
+ * harvest produced no lineage.
+ *
+ * `reason` is prose written for a human; the front end must not pattern-match
+ * it (a copy edit would silently un-render the gate). `code` is the contract:
+ * exactly one of these ships with every non-writing receipt, and the renderer
+ * (`lib/components/lineage/lineage-harvest-bar.tsx`) switches on it to decide
+ * warning-with-Fix-it vs neutral-info vs silent.
+ *
+ * `spark_lineage_not_declared` is the only one that is a CONFIGURATION gate —
+ * the operator can resolve it — so it is the one registered as a legacy code
+ * against `svc-openlineage` in the gate registry (G2). The rest are facts
+ * about the run, not something to fix.
+ */
+export type HarvestReasonCode =
+  /** Nothing to harvest — the caller passed no run / pipeline name. */
+  | 'no_run'
+  /** The run did not succeed; lineage is only stamped on success. */
+  | 'run_not_succeeded'
+  /** A pool-scoped Livy batch this Loom item did not submit. */
+  | 'batch_unattributed'
+  /** Already harvested in this replica (a repeat poll) — not a defect. */
+  | 'already_harvested'
+  /** The pipeline definition has no activities at all. */
+  | 'pipeline_no_activities'
+  /** No Copy activity with a resolvable source + sink. */
+  | 'pipeline_no_copy_activity'
+  /** The wall-clock budget ran out; the next poll resumes at the cursor. */
+  | 'harvest_budget_exhausted'
+  /** The per-principal harvest rate limit skipped this poll. */
+  | 'harvest_rate_limited'
+  /**
+   * THE configuration gate: the batch declared neither `spark.loom.lineage.
+   * inputs/outputs` in its conf nor `--input`/`--output` paths in argv, so
+   * there is no dataset pair to stamp. Resolvable from the SJD editor's
+   * Runs tab via the inline Fix-it wizard.
+   */
+  | 'spark_lineage_not_declared'
+  /** The harvest threw (ARM/Cosmos transient) — see `error`. */
+  | 'harvest_error';
+
 export interface HarvestReceipt {
   ok: boolean;
   /** RunEvents built from the real run. */
@@ -179,6 +221,8 @@ export interface HarvestReceipt {
   denied: number;
   /** Set when nothing was harvested and why (honest, never a silent no-op). */
   reason?: string;
+  /** Stable discriminator for `reason` — the UI switches on THIS, not prose. */
+  code?: HarvestReasonCode;
   error?: string;
 }
 
@@ -374,7 +418,7 @@ export async function harvestPipelineRunLineage(
   session: SessionPayload,
   input: HarvestPipelineInput,
 ): Promise<HarvestReceipt> {
-  if (!input.runId || !input.adfPipelineName) return { ...EMPTY, reason: 'no pipeline run to harvest' };
+  if (!input.runId || !input.adfPipelineName) return { ...EMPTY, code: 'no_run', reason: 'no pipeline run to harvest' };
   const status = (input.runStatus || '').toLowerCase();
   // Succeeded-only, and NEVER on an unknown status: the caller must tell us
   // what the run did. An absent status used to skip this gate entirely, so the
@@ -382,19 +426,20 @@ export async function harvestPipelineRunLineage(
   if (status !== 'succeeded') {
     return {
       ...EMPTY,
+      code: 'run_not_succeeded',
       reason: `run status ${input.runStatus || 'unknown'} — lineage is only stamped for a succeeded run`,
     };
   }
   const key = `adf:${input.workspaceId}:${input.runId}`;
   if (alreadyHarvested(key)) {
-    return { ...EMPTY, reason: 'already harvested in this replica' };
+    return { ...EMPTY, code: 'already_harvested', reason: 'already harvested in this replica' };
   }
   inFlight.add(key);
   const deadline = Date.now() + HARVEST_BUDGET_MS;
   try {
     const pipeline = await getPipeline(input.adfPipelineName);
     const defs = ((pipeline.properties?.activities || []) as Array<Record<string, any>>).slice(0, MAX_ACTIVITIES);
-    if (!defs.length) { markHarvested(key); return { ...EMPTY, reason: 'pipeline has no activities' }; }
+    if (!defs.length) { markHarvested(key); return { ...EMPTY, code: 'pipeline_no_activities', reason: 'pipeline has no activities' }; }
 
     const runs = input.activityRuns ?? (await listActivityRuns(input.runId).catch(() => [] as AdfActivityRun[]));
     const statusByActivity = new Map<string, string>();
@@ -442,7 +487,11 @@ export async function harvestPipelineRunLineage(
       } else {
         markHarvested(key);
       }
-      return { ...EMPTY, reason: truncated ? 'harvest budget exhausted — will resume on the next poll' : 'no Copy activity with a resolvable source and sink' };
+      return {
+        ...EMPTY,
+        code: truncated ? 'harvest_budget_exhausted' : 'pipeline_no_copy_activity',
+        reason: truncated ? 'harvest budget exhausted — will resume on the next poll' : 'no Copy activity with a resolvable source and sink',
+      };
     }
 
     const events = pipelineRunEvents({
@@ -483,9 +532,9 @@ export async function harvestPipelineRunLineage(
     // rewriting the activities this pass already wrote.
     if (truncated) resumeCursor.set(key, cursor);
     else markHarvested(key);
-    return { ok: true, events: events.length, written, skipped, denied, ...(truncated ? { reason: `harvest budget exhausted after ${cursor}/${defs.length} activities — resumes on the next poll` } : {}) };
+    return { ok: true, events: events.length, written, skipped, denied, ...(truncated ? { code: 'harvest_budget_exhausted' as const, reason: `harvest budget exhausted after ${cursor}/${defs.length} activities — resumes on the next poll` } : {}) };
   } catch (e) {
-    return { ...EMPTY, ok: false, error: (e as Error)?.message || String(e) };
+    return { ...EMPTY, ok: false, code: 'harvest_error', error: (e as Error)?.message || String(e) };
   } finally {
     inFlight.delete(key);
   }
@@ -535,6 +584,7 @@ export async function harvestSparkBatchLineage(
   if (!input.attributed) {
     return {
       ...EMPTY,
+      code: 'batch_unattributed',
       reason:
         `batch ${input.batchId} on pool ${input.poolName} was not submitted by this Loom item — ` +
         'Livy batch ids are pool-scoped, so lineage is only stamped for a batch this item owns',
@@ -542,7 +592,7 @@ export async function harvestSparkBatchLineage(
   }
   const state = (input.state || '').toLowerCase();
   if (state !== 'success') {
-    return { ...EMPTY, reason: `batch state ${input.state || 'unknown'} — lineage is only stamped on success` };
+    return { ...EMPTY, code: 'run_not_succeeded', reason: `batch state ${input.state || 'unknown'} — lineage is only stamped on success` };
   }
   // Livy batch ids restart from 0 when a pool is recreated (this estate has
   // done exactly that: loompool → loompool2), so the id alone is NOT unique
@@ -551,7 +601,7 @@ export async function harvestSparkBatchLineage(
   // downstream OL consumers conflate them under one deterministic run id.
   const key = `spark:${input.workspaceId}:${input.poolName}:${input.batchId}:${input.eventTime || ''}`;
   if (alreadyHarvested(key)) {
-    return { ...EMPTY, reason: 'already harvested in this replica' };
+    return { ...EMPTY, code: 'already_harvested', reason: 'already harvested in this replica' };
   }
   inFlight.add(key);
   try {
@@ -569,6 +619,7 @@ export async function harvestSparkBatchLineage(
       markHarvested(key);
       return {
         ...EMPTY,
+        code: 'spark_lineage_not_declared',
         reason:
           'the batch declared no storage input+output (set spark.loom.lineage.inputs/outputs, ' +
           'pass --input/--output paths, or wire the openlineage-spark listener for full column lineage)',
@@ -594,7 +645,7 @@ export async function harvestSparkBatchLineage(
     markHarvested(key);
     return { ok: true, events: 1, written: r.written, skipped: r.skipped, denied: r.denied };
   } catch (e) {
-    return { ...EMPTY, ok: false, error: (e as Error)?.message || String(e) };
+    return { ...EMPTY, ok: false, code: 'harvest_error', error: (e as Error)?.message || String(e) };
   } finally {
     inFlight.delete(key);
   }

@@ -53,6 +53,11 @@ import { useSharedEditorStyles } from './shared-styles';
 // command-search) — additive over the real, unchanged Livy batch backend.
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+// #2625 — the LU-8 lineage-harvest receipt the run route has always returned,
+// finally rendered, with the inline Fix-it that resolves it.
+import { LineageHarvestBar } from '@/lib/components/lineage/lineage-harvest-bar';
+import type { LineageHarvestReceipt } from '@/lib/components/lineage/harvest-receipt';
+import { SparkLineageFixitDialog } from '@/lib/components/lineage/spark-lineage-fixit-dialog';
 
 const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
@@ -255,6 +260,9 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
 
   // log viewer state: runId -> { loading, text, error }
   const [logs, setLogs] = useState<Record<number, { loading: boolean; text?: string; error?: string }>>({});
+  // #2625 — the LU-8 harvest receipt the run-detail route returns per run.
+  const [lineage, setLineage] = useState<Record<number, LineageHarvestReceipt>>({});
+  const [fixitOpen, setFixitOpen] = useState(false);
 
   const mainFileInput = useRef<HTMLInputElement | null>(null);
 
@@ -312,10 +320,13 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     return s.trim() && Number.isFinite(n) ? n : undefined;
   };
 
-  const buildSpec = () => {
+  const buildSpec = (confOverride?: Record<string, string>) => {
     let conf: Record<string, string> = {};
-    try { conf = JSON.parse(confText || '{}'); }
-    catch { throw new Error('Spark conf must be valid JSON'); }
+    if (confOverride) conf = confOverride;
+    else {
+      try { conf = JSON.parse(confText || '{}'); }
+      catch { throw new Error('Spark conf must be valid JSON'); }
+    }
     if (retryEnabled) {
       const rc = Number(retryCount);
       const ri = Number(retryInterval);
@@ -358,6 +369,34 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
       await reload();
     } catch (e: any) { setErr(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
+  };
+
+  /** The job's CURRENT Spark conf, for the lineage Fix-it wizard's initial
+   *  selection. Invalid JSON in the conf editor yields `{}` here rather than
+   *  throwing — the wizard must still open (it is how you recover). */
+  const currentConf: Record<string, string> = useMemo(() => {
+    try {
+      const parsed = JSON.parse(confText || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch { return {}; }
+  }, [confText]);
+
+  /**
+   * #2625 Fix-it apply: persist the picked `spark.loom.lineage.inputs/outputs`
+   * onto the job spec through the SAME item PUT the Save button uses. The conf
+   * is passed EXPLICITLY rather than round-tripped through `confText` state,
+   * because `setConfText` has not committed yet at this point and `buildSpec`
+   * would otherwise save the pre-Fix-it conf.
+   *
+   * Throws on failure so the dialog can surface the real error verbatim.
+   */
+  const applyLineageDeclaration = async (nextConf: Record<string, string>) => {
+    const spec = buildSpec(nextConf);
+    await saveItemState('spark-job-definition', id, { ...(cosmosItem?.state || {}), spec });
+    setConfText(JSON.stringify(nextConf, null, 2));
+    setDirty(false);
+    setSaveMsg(`Lineage declaration saved at ${new Date().toLocaleTimeString()}`);
+    await reload();
   };
 
   const submit = async () => {
@@ -409,12 +448,20 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     finally { setBusy(false); }
   };
 
-  const loadLog = async (runId: number) => {
+  /**
+   * Fetch ONE run's detail: the driver-log tail AND the LU-8 lineage-harvest
+   * receipt. The route has always returned both; before #2625 the editor read
+   * only `job` and dropped `lineage` on the floor, so an honest remediation
+   * ("this batch declared no storage input+output …") reached the browser and
+   * was rendered by nothing.
+   */
+  const loadRunDetail = useCallback(async (runId: number) => {
     setLogs((m) => ({ ...m, [runId]: { loading: true } }));
     try {
       const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs/${runId}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'log fetch failed');
+      if (j.lineage) setLineage((m) => ({ ...m, [runId]: j.lineage as LineageHarvestReceipt }));
       const log: string[] = j.job?.log || [];
       const errInfo: any[] = j.job?.errorInfo || [];
       // Honest gate: an unattributed pool-scoped Livy batch comes back as a
@@ -430,7 +477,34 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) {
       setLogs((m) => ({ ...m, [runId]: { loading: false, error: e?.message || String(e) } }));
     }
-  };
+  }, [id]);
+
+  // The newest run that has REACHED a terminal state — the only one whose
+  // lineage receipt is final, and therefore the one worth surfacing at the top
+  // of the Runs tab without waiting for the operator to expand a log.
+  //
+  // Chosen by MAX Livy batch id, not by array position: the Livy `batches`
+  // listing does not document an order, and "first settled row" would silently
+  // pin the bar to the OLDEST run whenever the pool returns ascending ids.
+  const latestSettledRun = useMemo(() => {
+    let best: SparkBatchRun | undefined;
+    for (const r of runs) {
+      if (ACTIVE_STATES.has((r.state || '').toLowerCase())) continue;
+      if (!best || r.id > best.id) best = r;
+    }
+    return best;
+  }, [runs]);
+
+  // Fetch that run's detail ONCE (keyed on id+state, so a run settling triggers
+  // exactly one extra call — no new polling loop on top of the 5s runs refresh).
+  // Gated on the Runs tab so simply opening the editor costs nothing extra.
+  const settledKey = latestSettledRun ? `${latestSettledRun.id}:${latestSettledRun.state || ''}` : '';
+  const fetchedDetailFor = useRef<string>('');
+  useEffect(() => {
+    if (tab !== 'runs' || !settledKey || fetchedDetailFor.current === settledKey || !latestSettledRun) return;
+    fetchedDetailFor.current = settledKey;
+    void loadRunDetail(latestSettledRun.id);
+  }, [tab, settledKey, latestSettledRun, loadRunDetail]);
 
   // Ctrl+S / Cmd+S → Save.
   useEffect(() => {
@@ -695,6 +769,17 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                   </MessageBarBody>
                 </MessageBar>
               )}
+              {/* #2625 — the LU-8 harvest receipt for the newest settled run.
+                  Warning + inline Fix-it when the job declares no datasets;
+                  a neutral note (or a success chip) otherwise; nothing at all
+                  when the receipt carries no news. */}
+              {latestSettledRun && (
+                <LineageHarvestBar
+                  receipt={lineage[latestSettledRun.id]}
+                  onFixit={() => setFixitOpen(true)}
+                  onRefresh={() => loadRunDetail(latestSettledRun.id)}
+                />
+              )}
               <div className={styles.toolbar}>
                 <Button appearance="primary" onClick={submit} disabled={!canSubmit}>
                   {busy ? 'Submitting…' : 'Submit batch'}
@@ -768,18 +853,27 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
                         const opened = (d.openItems as (string | number)[]) || [];
                         for (const v of opened) {
                           const rid = Number(v);
-                          if (Number.isFinite(rid) && !logs[rid]) loadLog(rid);
+                          if (Number.isFinite(rid) && !logs[rid]) loadRunDetail(rid);
                         }
                       }}>
                       {runs.map((r) => (
                         <AccordionItem key={r.id} value={r.id}>
                           <AccordionHeader>Batch #{r.id} · {r.name || '—'} · {r.state || '—'}</AccordionHeader>
                           <AccordionPanel>
+                            {/* The receipt for THIS run. Skipped for the newest
+                                settled run, whose bar is already at the top. */}
+                            {r.id !== latestSettledRun?.id && (
+                              <LineageHarvestBar
+                                receipt={lineage[r.id]}
+                                onFixit={() => setFixitOpen(true)}
+                                onRefresh={() => loadRunDetail(r.id)}
+                              />
+                            )}
                             {logs[r.id]?.loading && <Spinner size="tiny" label="Loading log…" labelPosition="after" />}
                             {logs[r.id]?.error && <ErrBar error={logs[r.id]!.error!} />}
                             {logs[r.id]?.text !== undefined && (
                               <>
-                                <Button size="small" appearance="subtle" onClick={() => loadLog(r.id)} style={{ marginBottom: tokens.spacingVerticalXS }}>
+                                <Button size="small" appearance="subtle" onClick={() => loadRunDetail(r.id)} style={{ marginBottom: tokens.spacingVerticalXS }}>
                                   Reload log
                                 </Button>
                                 <pre className={styles.logPre}>{logs[r.id]!.text}</pre>
@@ -803,6 +897,14 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
               <Badge appearance="outline" color="warning">unsaved changes</Badge>
             </div>
           )}
+          {/* #2625 — the inline Fix-it wizard behind the lineage gate. */}
+          <SparkLineageFixitDialog
+            open={fixitOpen}
+            onClose={() => setFixitOpen(false)}
+            itemId={id}
+            conf={currentConf}
+            onApply={applyLineageDeclaration}
+          />
         </div>
       </>
     } />

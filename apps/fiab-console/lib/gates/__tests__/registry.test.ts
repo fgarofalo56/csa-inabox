@@ -154,11 +154,16 @@ describe('gate live status (evalEnv-backed)', () => {
     const st = gateStatus('svc-openlineage')!;
     expect(st.status).toBe('configured');
     // The enrichment is the pool-setup WIZARD (mint credential + pool config),
-    // never a bare env write, and both L5 lineage surfaces are named.
+    // never a bare env write, and every lineage surface is named — the two L5
+    // catalog ones plus (issue #2625) the two RUN surfaces that receive a LU-8
+    // harvest receipt and render it with an inline Fix-it.
     const meta = GATE_META['svc-openlineage'];
     expect(meta.fixit.kind).toBe('wizard');
-    expect(meta.surfaces.map((s) => s.path)).toEqual(['/items/lakehouse', '/catalog']);
+    expect(meta.surfaces.map((s) => s.path)).toEqual([
+      '/items/lakehouse', '/catalog', '/items/spark-job-definition', '/items/data-pipeline',
+    ]);
     expect(meta.legacyCodes).toContain('openlineage_not_configured');
+    expect(meta.legacyCodes).toContain('spark_lineage_not_declared');
   });
 
   it('svc-digital-twins is satisfied by the ADX graph-twin default (no Azure Digital Twins needed)', () => {
