@@ -7,7 +7,7 @@
  */
 
 import type { SessionPayload } from '@/lib/auth/session';
-import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
+import { resolveWorkspaceAccessByOid, type WorkspaceAccessOpts } from '@/lib/auth/workspace-access';
 import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
@@ -225,11 +225,32 @@ export async function loadItemRaw(itemId: string, itemType: string): Promise<Wor
   return resources[0] ?? null;
 }
 
+/**
+ * #2703 — build the workspace-access options for a helper that MAY have been
+ * handed the caller's session.
+ *
+ * These helpers are addressed by `tenantId` (the caller's Entra `oid`) rather
+ * than by a session, because ~263 route call sites pass only the oid. That used
+ * to mean the cross-tenant `tid` boundary was skipped on every one of them —
+ * `resolveWorkspaceAccessByOid` only ran it when a caller remembered to pass
+ * `callerTid`, and none of these did.
+ *
+ * Passing `callerTid` explicitly (even as `undefined`) is now the compiler-
+ * enforced way to say "enforce the boundary": the resolver falls back to the
+ * ambient request session's tid for THIS SAME oid when the value is undefined.
+ * So a route that threads `opts.session` gets the boundary from the session it
+ * already has, and a route that does not still gets it from the request cookie.
+ * Never `skipTidBoundary` — none of these helpers is off-request.
+ */
+function accessOptsFor(session?: SessionPayload): WorkspaceAccessOpts {
+  return { callerTid: session?.claims.tid, groups: session?.claims.groups };
+}
+
 export async function loadOwnedItem(
   itemId: string,
   itemType: string,
   tenantId: string,
-  opts: { allowReadRoles?: boolean } = {},
+  opts: { allowReadRoles?: boolean; session?: SessionPayload } = {},
 ): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -243,7 +264,7 @@ export async function loadOwnedItem(
     .fetchAll();
   const item = resources[0];
   if (!item) return null;
-  const access = await resolveWorkspaceAccessByOid(tenantId, item.workspaceId);
+  const access = await resolveWorkspaceAccessByOid(tenantId, item.workspaceId, accessOptsFor(opts.session));
   if (!access) return null;
   if (!opts.allowReadRoles && !access.canWrite) return null;
   return item;
@@ -273,7 +294,7 @@ export async function listOwnedItems(
   if (opts.workspaceId) {
     const access = opts.session
       ? await authorizeWorkspaceList(opts.session, opts.workspaceId)
-      : await resolveWorkspaceAccessByOid(tenantId, opts.workspaceId);
+      : await resolveWorkspaceAccessByOid(tenantId, opts.workspaceId, accessOptsFor());
     if (!access) return [];
     const { resources } = await items.items
       .query<WorkspaceItem>(
@@ -300,10 +321,11 @@ export async function listOwnedItems(
   const owned: WorkspaceItem[] = [];
   // Resolve unique workspace visibility in one pass.
   const wsCache = new Map<string, boolean>();
+  const accessOpts = accessOptsFor(opts.session);
   for (const it of resources) {
     let visible = wsCache.get(it.workspaceId);
     if (visible === undefined) {
-      visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId)) !== null;
+      visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId, accessOpts)) !== null;
       wsCache.set(it.workspaceId, visible);
     }
     if (visible) owned.push(it);
@@ -316,9 +338,27 @@ export async function listOwnedItems(
  * single workspace. Used by the Copilot `item_list` tool when no specific type
  * is given (the model often asks for "all"). Mirrors listOwnedItems' ownership
  * resolution.
+ *
+ * `opts.session` (#2703) — this helper used to take NO session at all, so the
+ * cross-tenant tid boundary inside the access resolver could never run for it,
+ * despite it backing the Copilot `item_list` tool. Callers that hold a session
+ * now pass it: the workspace-scoped path authorizes through
+ * `authorizeWorkspaceList` (tid + groups + admin-open, the same chokepoint the
+ * pickers use) and the per-row filter carries the caller's tid. Callers without
+ * one in scope still get the boundary from the ambient request session.
  */
-export async function listAllOwnedItems(tenantId: string, workspaceId?: string): Promise<WorkspaceItem[]> {
+export async function listAllOwnedItems(
+  tenantId: string,
+  workspaceId?: string,
+  opts: { session?: SessionPayload } = {},
+): Promise<WorkspaceItem[]> {
   const items = await itemsContainer();
+  // Workspace-scoped + a session in hand → authorize the ONE workspace through
+  // the list chokepoint first, so an unauthorized id returns [] without a scan.
+  if (workspaceId && opts.session) {
+    const access = await authorizeWorkspaceList(opts.session, workspaceId);
+    if (!access) return [];
+  }
   const query = workspaceId
     ? { query: `SELECT * FROM c WHERE c.workspaceId = @w AND ${NOT_RECYCLED}`, parameters: [{ name: '@w', value: workspaceId }] }
     : { query: `SELECT * FROM c WHERE ${NOT_RECYCLED}`, parameters: [] as { name: string; value: string }[] };
@@ -326,10 +366,11 @@ export async function listAllOwnedItems(tenantId: string, workspaceId?: string):
   if (resources.length === 0) return [];
   const owned: WorkspaceItem[] = [];
   const wsCache = new Map<string, boolean>();
+  const accessOpts = accessOptsFor(opts.session);
   for (const it of resources) {
     let visible = wsCache.get(it.workspaceId);
     if (visible === undefined) {
-      visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId)) !== null;
+      visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId, accessOpts)) !== null;
       wsCache.set(it.workspaceId, visible);
     }
     if (visible) owned.push(it);

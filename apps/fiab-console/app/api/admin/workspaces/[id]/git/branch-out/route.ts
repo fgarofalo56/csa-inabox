@@ -188,7 +188,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     });
 
     // 5. Apply the source item set to the new workspace (real item-crud creates).
-    const items = await listAllOwnedItems(tenantId, source.id);
+    const items = await listAllOwnedItems(tenantId, source.id, { session: s });
     let itemsCopied = 0;
     const itemsFailed: Array<{ displayName: string; itemType: string; error: string }> = [];
     for (const it of items) {

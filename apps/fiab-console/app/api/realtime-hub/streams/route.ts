@@ -12,13 +12,13 @@
  * Console UAMI can see (the legacy Fabric REST path).
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listAllOwnedItems, listOwnedWorkspaces } from '../../items/_lib/item-crud';
 import {
   listFabricWorkspaces, listEventstreams, listKqlDatabases, listEventhouses,
   FabricError, fabricHint, type FabricWorkspace,
 } from '@/lib/azure/fabric-client';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,15 +35,13 @@ export interface DataStreamRow {
 
 const FABRIC_OPT_IN = (process.env.LOOM_EVENTSTREAM_BACKEND || '').toLowerCase() === 'fabric';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
   const oid = session.claims.oid;
 
   // ---- Azure-native default: Loom eventstream + kql-database items ----
   if (!FABRIC_OPT_IN) {
     try {
-      const [items, workspaces] = await Promise.all([listAllOwnedItems(oid), listOwnedWorkspaces(oid)]);
+      const [items, workspaces] = await Promise.all([listAllOwnedItems(oid, undefined, { session }), listOwnedWorkspaces(oid)]);
       const wsName = new Map(workspaces.map((w) => [w.id, w.name] as const));
       const rows: DataStreamRow[] = [];
       for (const it of items) {
@@ -96,4 +94,4 @@ export async function GET() {
   );
   rows.sort((a, b) => a.name.localeCompare(b.name));
   return NextResponse.json({ ok: true, backend: 'fabric', workspaceCount: workspaces.length, streams: rows, warnings });
-}
+});

@@ -8,25 +8,23 @@
  * no-fabric-dependency.md).
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, listAllOwnedItems } from '../../../_lib/item-crud';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'loom-app';
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   if (!id || id === 'new') return apiOk({ workspaceId: null, items: [] });
   try {
     const app = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
     if (!app) return apiError('not found', 404);
     const workspaceId = app.workspaceId;
-    const all = await listAllOwnedItems(session.claims.oid, workspaceId);
+    const all = await listAllOwnedItems(session.claims.oid, workspaceId, { session });
     // Everything in the workspace except loom-app items themselves (an org app
     // bundles CONTENT, not other org apps) — return the fields the picker needs.
     const items = all
@@ -41,4 +39,4 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e);
   }
-}
+});

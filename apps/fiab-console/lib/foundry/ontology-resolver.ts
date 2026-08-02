@@ -327,7 +327,12 @@ export async function resolveOntologyObjectForGrounding(
     .fetchAll();
   const ontology = resources[0];
   if (!ontology) return { gate: `Ontology '${ontologyId}' was not found.` };
-  const access = await resolveWorkspaceAccessByOid(tenantId, ontology.workspaceId);
+  const access = await resolveWorkspaceAccessByOid(tenantId, ontology.workspaceId, {
+    // #2703 — `tenantId` here is the caller's oid and this seam is reached from
+    // a request handler, so the resolver recovers the caller's tid from the
+    // ambient session for THIS oid and applies the cross-tenant boundary.
+    callerTid: undefined,
+  });
   if (!access) return { gate: `You do not have access to ontology '${ontologyId}'.` };
 
   const state = (ontology.state || {}) as Record<string, unknown>;

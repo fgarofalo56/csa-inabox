@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
         // Cosmos store, NOT a real Fabric workspace. Resolve it exactly the way
         // the federated catalog SEARCH does (listAllOwnedItems) — zero calls to
         // api.fabric.microsoft.com on this path.
-        const owned = await listAllOwnedItems(s.claims.oid, workspaceId);
+        const owned = await listAllOwnedItems(s.claims.oid, workspaceId, { session: s });
         const item = owned.find((i) => i.id === itemId);
         if (!item) {
           return NextResponse.json({ ok: false, error: 'Loom item not found' }, { status: 404 });
