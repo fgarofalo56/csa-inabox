@@ -165,9 +165,20 @@ jobs:
   vitest:
     name: vitest (node 20)
     runs-on: ubuntu-latest
-    # 25m (was 20m): v8 coverage instrumentation with all:true adds a few minutes
-    # over the ~3m bare suite; keep generous headroom on the slower CI box.
-    timeout-minutes: 25
+    # 45m (was 25m, then 40m, then 55m). Two things trade time for correctness
+    # here: the coverage provider is istanbul (Babel instrumentation costs wall
+    # clock that v8's runtime-derived coverage did not) and maxForks is capped
+    # at 2 under CI to keep the main thread responsive to the 60s reporting-RPC
+    # deadline. MEASURED per-blob on this runner:
+    #     v8,       3 forks   534.52s + 562.76s = ~1097s   (25m43s, RED)
+    #     istanbul, 3 forks   728.94s + 751.68s = ~1481s   (25m43s, RED)
+    #     istanbul, 2 forks   783.84s + 816.73s = ~1601s   (27m40s, GREEN)
+    # Dropping a fork cost only ~7%, which is itself evidence that the MAIN
+    # THREAD was the bottleneck rather than worker parallelism. 45m is ~60%
+    # headroom over the green run. A TIMEOUT HERE WOULD BE A FALSE RED — it
+    # means this budget is too small, NOT that the RPC bug is back. Not a
+    # masked hang: the job still fails on any test failure or coverage miss.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: apps/fiab-console
@@ -226,18 +237,83 @@ jobs:
         if: steps.changed.outputs.console == 'true'
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run vitest (with v8 coverage floor)
+      - name: Run vitest (with istanbul coverage floor)
         if: steps.changed.outputs.console == 'true'
         env:
-          # The console's specs cold-transform a large TS dependency graph; the
-          # 6144 heap matches the build job and prevents OOM under parallel forks.
-          NODE_OPTIONS: --max-old-space-size=6144
-        # --coverage runs the suite ONCE with v8 instrumentation and enforces the
-        # ratcheting floor in vitest.config.ts (rel-T28) — the job fails if
-        # coverage drops below the floor. This step only runs when the console
-        # actually changed (the change-detection above), so bicep-/workflow-only
-        # PRs never pay the instrumentation cost.
-        run: pnpm vitest run --coverage
+          # 3072, NOT the build job's 6144 — and the reduction is the point.
+          #
+          # A GitHub runner has ~16 GB. At 6144 per fork, 3 forks plus the main
+          # process can ask for ~24 GB, and the kernel kills a fork; its IPC
+          # channel then closes and vitest reports
+          #     Serialized Error: { code: 'ERR_IPC_CHANNEL_CLOSED' }
+          # with NO blob written for that shard. That is what the missing-blob
+          # guard below caught — before it, the merge would have graded half the
+          # suite and called the job green.
+          #
+          # Each shard now transforms ~651 files rather than 1302, so it does not
+          # need the whole-suite heap. 3072 x 3 forks + main fits with headroom.
+          NODE_OPTIONS: --max-old-space-size=3072
+        # SHARDED, and deliberately WITHIN one job rather than a matrix.
+        #
+        # WHY SHARDED. vitest 3 fails a run on an unhandled error that vitest 2
+        # tolerated, and this suite produces
+        #     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
+        # — the worker->main RPC missing its deadline while REPORTING, while
+        # every test passes. Halving the per-run file count reduces the window
+        # in which that can happen. It does NOT eliminate it: this job still
+        # trips the error on a 4-core runner, and switching the coverage
+        # provider to istanbul did not change that (it is a main-thread
+        # starvation problem against a 60s deadline hardcoded in vitest's
+        # bundled birpc — no config option, no VITEST_* env var. See the long
+        # note in vitest.config.ts before forming a theory about it, and DO NOT
+        # conclude anything from a local run: on 32 cores this suite is clean
+        # under istanbul and still fails here).
+        #
+        # Sharding also earns its keep on memory, which is the reason to KEEP it
+        # regardless: at 6144 per fork the whole suite OOM-killed a fork on a
+        # ~16 GB runner and closed its IPC channel (ERR_IPC_CHANNEL_CLOSED) with
+        # no blob written. Half-suite shards at 3072 fit with headroom.
+        #
+        # WHY NOT A MATRIX. `vitest (node 20)` is the ROLL GATE — see the header
+        # of this file and loom-roll-and-validate.yml, which reads a check-run of
+        # exactly that name. A matrix would rename it to `vitest (node 20) (1/2)`
+        # and silently break every deploy. Sharding inside the job keeps the
+        # check name, and the per-process file count is what matters anyway.
+        #
+        # WHY --merge-reports FOR THE FLOOR. Each shard sees only half the files,
+        # so its coverage is PARTIAL. Enforcing --cov-fail-under per shard would
+        # compare half a numerator against a whole-suite floor and fail
+        # spuriously — or, worse, pass while measuring less than it claims. The
+        # blob reports are merged first and the ratcheting floor (rel-T28) is
+        # enforced ONCE, on the whole.
+        run: |
+          set -euo pipefail
+          rm -rf .vitest-reports
+          for shard in 1 2; do
+            echo "::group::vitest shard $shard/2"
+            # A shard's own exit code is NOT the verdict, and letting `set -e`
+            # act on it was a real bug in the first version of this step: shard 2
+            # exited non-zero on the vitest-3 RPC reporting error and killed the
+            # job BEFORE the merge could run, so the actual gate never executed.
+            #
+            # This is not a suppression. The blob carries every test result, so
+            # the merge below sees all 1302 files and fails on any genuine test
+            # failure or on the coverage floor. Deferring to it is what makes the
+            # merge the single enforcement point rather than one of three.
+            # Thresholds MUST be off per shard. A shard sees half the files, so
+            # its coverage lands well under the whole-suite floor — it fails
+            # every time, for a reason that says nothing about the code. I wrote
+            # the commit message warning about exactly this and then dropped the
+            # disable flag in the next commit; CI caught it.
+            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json               --coverage.thresholds.lines=0 --coverage.thresholds.statements=0               --coverage.thresholds.functions=0 --coverage.thresholds.branches=0               || echo "shard $shard exited non-zero — the merge below is the verdict"
+            echo "::endgroup::"
+          done
+          # Fail loudly if a shard produced no blob — that IS fatal, because the
+          # merge would then silently grade half the suite.
+          test -f .vitest-reports/blob-1-2.json || { echo "::error::shard 1 produced no blob"; exit 1; }
+          test -f .vitest-reports/blob-2-2.json || { echo "::error::shard 2 produced no blob"; exit 1; }
+          # THE gate: every test from both shards + the ratcheting coverage floor.
+          pnpm vitest --merge-reports --coverage
 
   tutorial-coverage:
     # Audits visual-tutorial coverage across ALL THREE dimensions (B-9):

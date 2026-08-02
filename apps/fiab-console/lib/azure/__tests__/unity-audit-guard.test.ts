@@ -416,18 +416,45 @@ describe('TRANSPORT VOCABULARY — one definition, two consumers', () => {
   });
 
   it('every transport, combined with a UC REST path, fails the guard in a NEW file', () => {
-    for (const t of TRANSPORTS) {
-      const s = realSources();
-      s.set('lib/azure/rogue-transport.ts', [
+    // ONE scan for ALL transports, not one scan EACH.
+    //
+    // Two rounds of this test have now been too slow, and both times the cost
+    // was a whole-tree pass sitting inside the transport loop:
+    //   round 1  realSources() in the loop  -> re-READ the tree per transport
+    //   round 2  analyzeUnityChokepoint()   -> re-SCANNED it per transport
+    // Round 1 was hoisted and round 2 was not, so this still did 9 full scans
+    // of ~4,000 files. That made this ~17s and the FILE ~63s, which mattered
+    // for a reason no one would guess from reading it: vitest's worker RPC has
+    // a 60s deadline hardcoded in its bundled birpc, and a file that runs past
+    // it fails the whole run with `Timeout calling "onTaskUpdate"` while every
+    // test still passes. Measured across three CI runs, "one file >= 60000ms"
+    // predicted the red/green outcome exactly (74.4s RED, 59.9s GREEN, 62.9s
+    // RED) — see PR #2785. This file was the only such file in 1302.
+    //
+    // The transports are INDEPENDENT rogue files, so N scans of one rogue file
+    // and one scan of N rogue files assert the same thing. analyzeUnityChokepoint
+    // accumulates into a single array with no early return and no cap, so every
+    // planted file still reports. Each transport keeps its own file name and its
+    // own assertion, so a failure still names the transport that walked past.
+    const s = realSources();
+    TRANSPORTS.forEach((t, i) => {
+      s.set(`lib/azure/rogue-transport-${i}.ts`, [
         "const P = '/api/2.1/unity-catalog/permissions/table/a.b.c';",
         'export async function go(url: string, body: unknown) {',
         `  void P; ${t.sample}`,
         '}',
       ].join('\n'));
-      expect(analyzeUnityChokepoint(s).join('\n'), `${t.id} walked past the scan`)
-        .toMatch(/rogue-transport\.ts: references a Unity Catalog/);
-    }
-  });
+    });
+    const found = analyzeUnityChokepoint(s).join('\n');
+    TRANSPORTS.forEach((t, i) => {
+      expect(found, `${t.id} walked past the scan`)
+        .toMatch(new RegExp(`rogue-transport-${i}\\.ts: references a Unity Catalog`));
+    });
+    // Budget kept generous but no longer enormous: this is now a single
+    // whole-tree scan (~2s), not nine. It stays well above that so a slow
+    // runner is never mistaken for a hang, and far below the 60s RPC deadline
+    // the old shape kept flirting with.
+  }, 60_000);
 
   it('does NOT count transport-shaped PROSE or a doc comment as a call', () => {
     // env-checks/data-plane.ts really says "present a valid LOOM_INTERNAL_TOKEN

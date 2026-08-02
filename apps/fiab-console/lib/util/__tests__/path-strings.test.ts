@@ -86,15 +86,29 @@ describe('linear time (the ReDoS bound)', () => {
   });
 
   it('scales LINEARLY, not quadratically', () => {
-    const time = (n: number) => {
+    const once = (n: number) => {
       const s = hostile(n);
       const t0 = performance.now();
       for (let i = 0; i < 20; i++) stripTrailingSlashes(s);
       return performance.now() - t0;
     };
-    time(10_000); // warm
-    const small = Math.max(time(50_000), 0.01);
-    const large = time(200_000);
+    // BEST-of-N, not a single sample. This assertion is about an ALGORITHMIC
+    // property, but it measures wall clock, so scheduler noise reads as
+    // algorithmic cost. A single sample made it fail inside the full 1302-file
+    // suite (ratio 11.85 vs a limit of 8) while passing 3/3 in isolation: under
+    // load `small` can be timed on an uncontended slice while `large` gets
+    // descheduled mid-measurement, and the ratio inflates for reasons that have
+    // nothing to do with the regex.
+    //
+    // The MINIMUM of several runs is the least-contended observation of each
+    // size — the closest thing to the true cost. Taking it on both sides keeps
+    // the bound exactly as strict (a genuinely quadratic implementation is ~16x
+    // in EVERY sample, so its minimum ratio is still ~16x) while dropping the
+    // noise that made this flaky.
+    const best = (n: number) => Math.min(once(n), once(n), once(n));
+    once(10_000); // warm the JIT before any measurement counts
+    const small = Math.max(best(50_000), 0.01);
+    const large = best(200_000);
     // 4x the input must not cost ~16x (the quadratic signature).
     expect(large / small).toBeLessThan(8);
   });
