@@ -56,16 +56,40 @@ function ghJson(path) {
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+/**
+ * Read the FULL check-run list, paging until we have `total_count` of them.
+ *
+ * `?per_page=100` alone is a latent version of the same bug this script fixes:
+ * a busy commit can carry more than 100 check-runs (a CSA Loom main commit was
+ * at 67 and climbing as of #2819), and the tail is dropped silently — so
+ * `vitest (node 20)` can be absent from the page we read while present on the
+ * commit. Returning `complete:false` lets the classifier call that UNKNOWN
+ * instead of ABSENT.
+ */
+function fetchCheckRuns(forSha) {
+  const all = [];
+  let total = null;
+  for (let page = 1; page <= 20; page++) {
+    const res = ghJson(`repos/${REPO}/commits/${forSha}/check-runs?per_page=100&page=${page}`);
+    if (total === null) total = Number(res.total_count ?? 0);
+    const batch = res.check_runs || [];
+    all.push(...batch);
+    if (batch.length === 0 || all.length >= total) break;
+  }
+  return { runs: all, complete: total !== null && all.length >= total };
+}
+
 function fetchState() {
-  const checks = ghJson(`repos/${REPO}/commits/${sha}/check-runs?per_page=100`);
+  const { runs, complete } = fetchCheckRuns(sha);
   const ci = ghJson(`repos/${REPO}/actions/workflows/${CONSOLE_CI_WORKFLOW}/runs?head_sha=${sha}`);
   return {
-    checkRuns: (checks.check_runs || []).map((r) => ({
+    checkRuns: runs.map((r) => ({
       name: r.name,
       status: r.status,
       conclusion: r.conclusion,
       started_at: r.started_at,
     })),
+    checkRunsComplete: complete,
     ciRuns: (ci.workflow_runs || []).map((r) => ({ status: r.status, conclusion: r.conclusion })),
   };
 }
@@ -75,8 +99,15 @@ function fetchMainVerification() {
   try {
     const mainSha = ghJson(`repos/${REPO}/branches/main`).commit.sha;
     const cmp = ghJson(`repos/${REPO}/compare/${sha}...${mainSha}`);
-    const mainChecks = ghJson(`repos/${REPO}/commits/${mainSha}/check-runs?per_page=100`);
-    const mainVitest = (mainChecks.check_runs || [])
+    // Paged, for the same reason as fetchState: a truncated read of main's
+    // check-runs would report mainConclusion=null and wrongly refuse a commit
+    // that main has in fact verified.
+    const { runs, complete } = fetchCheckRuns(mainSha);
+    if (!complete) {
+      console.log('  main-branch check-run list incomplete — not using it as verification.');
+      return null;
+    }
+    const mainVitest = runs
       .filter((r) => r.name === VITEST_CHECK_NAME)
       .sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)))
       .pop();

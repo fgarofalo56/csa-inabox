@@ -71,9 +71,17 @@ export const VITEST_CHECK_NAME = 'vitest (node 20)';
  *   not been created YET" from "the check is never coming".
  * @param {object?}  input.mainVerification  Only consulted when the check was
  *   CANCELLED: `{ compareStatus, behindBy, mainConclusion }`.
+ * @param {boolean} [input.checkRunsComplete=true]  False when the check-run
+ *   list could not be read in full (paging incomplete / API error). An absent
+ *   check in a TRUNCATED list is not evidence of absence.
  * @returns {{decision: 'pass'|'refuse'|'wait', reason: string}}
  */
-export function classifyVitestGate({ checkRuns = [], ciRuns = [], mainVerification = null } = {}) {
+export function classifyVitestGate({
+  checkRuns = [],
+  ciRuns = [],
+  mainVerification = null,
+  checkRunsComplete = true,
+} = {}) {
   const runs = (checkRuns || [])
     .filter((r) => r && r.name === VITEST_CHECK_NAME)
     .slice()
@@ -82,8 +90,24 @@ export function classifyVitestGate({ checkRuns = [], ciRuns = [], mainVerificati
   const latest = runs[runs.length - 1];
 
   if (!latest) {
-    // No check-run. The ONLY safe readings are "not yet" or "refuse" — never
-    // "verified". Which one depends on whether CI is still working on it.
+    // No check-run in what we READ. Before reading anything into that, check
+    // whether we actually read all of it.
+    //
+    // The check-runs endpoint pages at 100. A CSA Loom main commit was carrying
+    // 39 check-runs a few commits ago and 67 by f322c14a — climbing. Once it
+    // crosses 100, `?per_page=100` silently drops the tail and `vitest (node
+    // 20)` can simply not be in the page we looked at. "I only saw part of the
+    // list" is an UNKNOWN, and rendering it as "the check does not exist" would
+    // be this bug all over again, in a form that only appears once the repo
+    // gets busy enough — i.e. exactly when a wrong refusal costs the most.
+    if (!checkRunsComplete) {
+      return {
+        decision: 'wait',
+        reason: `could not read the complete check-run list for this SHA — '${VITEST_CHECK_NAME}' may be present but unread (paging). Treating as unknown, not absent.`,
+      };
+    }
+    // The ONLY safe readings are "not yet" or "refuse" — never "verified".
+    // Which one depends on whether CI is still working on it.
     const pending = (ciRuns || []).filter((r) => r && r.status !== 'completed');
     if (pending.length > 0) {
       return {

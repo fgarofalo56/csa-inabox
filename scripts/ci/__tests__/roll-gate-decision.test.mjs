@@ -105,6 +105,43 @@ test('regression #2819: build finished before vitest — waits, does not refuse'
   assert.notEqual(r.decision, 'refuse');
 });
 
+test('the message NAMES the observed state — never "not found" for a running check', () => {
+  // The misleading text is what caused #2819 to be misdiagnosed as a
+  // path-filter problem: the gate said "No check-run found" about a check that
+  // existed and was running. Whatever else changes, the reason must describe
+  // what was actually seen.
+  for (const status of ['queued', 'in_progress']) {
+    const r = classifyVitestGate({
+      checkRuns: [check({ status, conclusion: null })],
+      ciRuns: [{ status: 'in_progress', conclusion: null }],
+    });
+    assert.match(r.reason, new RegExp(status), `reason should name '${status}'`);
+    assert.doesNotMatch(r.reason, /no .*check-run found/i);
+    assert.doesNotMatch(r.reason, /not found/i);
+  }
+});
+
+test('LIVE RECEIPT f322c14a: in_progress at the moment the old gate refused it', () => {
+  // Old gate, run 30754930572 at 15:42:08Z:
+  //   conclusion=<none> → "No 'vitest (node 20)' check-run found … refusing"
+  // Verified directly against the API at that time: status=in_progress,
+  // conclusion=null, started 15:23:36Z. It later concluded SUCCESS, and this
+  // module was run live against the same SHA:
+  //   [15:51:27] wait: 'vitest (node 20)' is in_progress for this SHA
+  //   [15:51:58] pass: 'vitest (node 20)' concluded success
+  const atRefusalTime = classifyVitestGate({
+    checkRuns: [check({ status: 'in_progress', conclusion: null, started_at: '2026-08-02T15:23:36Z' })],
+    ciRuns: [{ status: 'in_progress', conclusion: null }],
+  });
+  assert.equal(atRefusalTime.decision, 'wait');
+
+  const afterItConcluded = classifyVitestGate({
+    checkRuns: [check({ status: 'completed', conclusion: 'success', started_at: '2026-08-02T15:23:36Z' })],
+    ciRuns: [doneRun],
+  });
+  assert.equal(afterItConcluded.decision, 'pass');
+});
+
 test('waits when no check-run exists yet but console CI is still running', () => {
   const r = classifyVitestGate({
     checkRuns: [],
@@ -120,6 +157,37 @@ test('waits when nothing at all has been observed yet (unknown, not absent)', ()
 
 test('refuses when console CI completed but produced no vitest check-run', () => {
   // The check will never arrive — this is the genuinely-unverifiable case.
+  const r = classifyVitestGate({ checkRuns: [], ciRuns: [doneRun] });
+  assert.equal(r.decision, 'refuse');
+});
+
+// ---------------------------------------------------------------------------
+// STATE 3b — the list we read was TRUNCATED. Absence from a partial read is
+// not absence. The check-runs endpoint pages at 100 and a CSA Loom main commit
+// was already at 67 and climbing, so this becomes live the moment the repo
+// gets busier — i.e. when a wrong refusal is most expensive.
+// ---------------------------------------------------------------------------
+test('a truncated check-run list is UNKNOWN, never absent — even if CI completed', () => {
+  const r = classifyVitestGate({
+    checkRuns: [],
+    ciRuns: [doneRun], // would REFUSE if the list were known-complete
+    checkRunsComplete: false,
+  });
+  assert.equal(r.decision, 'wait');
+  assert.match(r.reason, /paging|complete/i);
+});
+
+test('truncation does not mask a check we DID read', () => {
+  // If vitest is present in the partial page, its verdict still stands.
+  const r = classifyVitestGate({
+    checkRuns: [check({ conclusion: 'failure' })],
+    ciRuns: [doneRun],
+    checkRunsComplete: false,
+  });
+  assert.equal(r.decision, 'refuse');
+});
+
+test('CONTROL: completeness defaults to true so a complete read still refuses', () => {
   const r = classifyVitestGate({ checkRuns: [], ciRuns: [doneRun] });
   assert.equal(r.decision, 'refuse');
 });
