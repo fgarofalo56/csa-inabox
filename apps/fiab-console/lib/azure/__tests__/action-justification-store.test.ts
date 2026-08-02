@@ -70,6 +70,28 @@ describe('recordActionJustification', () => {
     expect(doc.detail).toBeUndefined();
     expect(doc.ontologyName).toBeUndefined();
   });
+
+  // ── #2650 ─────────────────────────────────────────────────────────────────
+  // `tenantId` is NOT one of the optional fields: Admin → Audit Logs selects
+  // with `ARRAY_CONTAINS(@tenants, c.tenantId)`, which cannot match a document
+  // that lacks the property. Omitting it for a `tid`-less session (minted /
+  // automation / PAT) made the recorded justification unreadable through the
+  // product forever.
+  it('ALWAYS stamps a tenantId — tid when present, actor oid when not', async () => {
+    await recordActionJustification(session, {
+      ontologyId: 'o', action: 'a', objectType: 'T', actionKind: 'create',
+      reason: 'seed data', outcome: 'succeeded', nowIso: '2026-07-19T00:00:00.000Z',
+    });
+    expect(upserts[0].tenantId).toBe('tid-9');
+
+    const noTid = { claims: { oid: 'oid-1', name: 'Automation', upn: 'automation@x.io' }, exp: 0 } as any;
+    await recordActionJustification(noTid, {
+      ontologyId: 'o', action: 'a', objectType: 'T', actionKind: 'create',
+      reason: 'seed data', outcome: 'succeeded', nowIso: '2026-07-19T00:00:00.000Z',
+    });
+    expect(Object.prototype.hasOwnProperty.call(upserts[1], 'tenantId')).toBe(true);
+    expect(upserts[1].tenantId).toBe('oid-1');
+  });
 });
 
 describe('listActionJustifications', () => {

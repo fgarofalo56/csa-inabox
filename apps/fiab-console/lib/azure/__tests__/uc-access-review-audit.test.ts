@@ -166,6 +166,35 @@ describe('recordUcAccessReview', () => {
     expect(rec.tenantId).not.toBe(rec.actorOid);
   });
 
+  // ── #2650 ─────────────────────────────────────────────────────────────────
+  // …and the `tid` is not always there. A minted / automation / PAT session has
+  // no `tid` claim, and the writer used to OMIT `tenantId` entirely for those —
+  // `ARRAY_CONTAINS(@tenants, c.tenantId)` cannot match a document that has no
+  // such property, so those rows were written into a hole.
+
+  it('ALWAYS writes a tenantId — a tid-less session falls back to the actor oid', async () => {
+    const noTid = { claims: { oid: 'oid-1', upn: 'automation@contoso.com', name: 'Automation' }, exp: 1 } as unknown as SessionPayload;
+    await recordUcAccessReview(noTid, {
+      securableType: 'TABLE', securableName: 'main.sales.pii', effective: true,
+      decision: 'allowed', nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    const rec = create.mock.calls[0][0] as any;
+    // The PROPERTY must exist, not merely be falsy-absent: Cosmos drops
+    // `undefined` and the reader's predicate then never matches.
+    expect(Object.prototype.hasOwnProperty.call(rec, 'tenantId')).toBe(true);
+    expect(rec.tenantId).toBe('oid-1');
+  });
+
+  it('fans the tid-less row out to the SIEM with the same scope (not an empty tenant)', async () => {
+    const noTid = { claims: { oid: 'oid-1', upn: 'automation@contoso.com', name: 'Automation' }, exp: 1 } as unknown as SessionPayload;
+    await recordUcAccessReview(noTid, {
+      securableType: 'CATALOG', securableName: 'main', effective: true,
+      decision: 'denied-principal-probe', probedPrincipal: 'ceo@contoso.com',
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    expect(emitAuditEvent.mock.calls[0][0]).toMatchObject({ tenantId: 'oid-1' });
+  });
+
   it('fans the SAME record out to the SIEM stream — Cosmos is not the only sink', async () => {
     await recordUcAccessReview(SESSION, {
       securableType: 'TABLE', securableName: 'main.sales.pii', effective: true,

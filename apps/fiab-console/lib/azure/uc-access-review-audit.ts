@@ -10,10 +10,16 @@
  * sweep goes unnoticed.
  *
  * Writes to the shared Cosmos `audit-log` container as `kind:'uc-access-review'`
- * with `tenantId` = the caller's Entra TENANT id, which is what the Admin →
- * Audit Logs reader scopes on (`app/api/admin/audit-logs/route.ts` matches the
- * viewer's `oid` OR `tid`, so tenant-scoped rows from this writer and from
- * `object-security-audit.ts` are actually retrievable — they were not before).
+ * with `tenantId` = {@link tenantScopeId} (`claims.tid ?? claims.oid`), which is
+ * what the Admin → Audit Logs reader scopes on
+ * (`app/api/admin/audit-logs/route.ts` matches the viewer's `oid` OR `tid`, so
+ * tenant-scoped rows from this writer and from `object-security-audit.ts` are
+ * actually retrievable — they were not before). The `?? oid` half matters: a
+ * session with NO `tid` claim (minted / automation / PAT paths) used to omit
+ * `tenantId` entirely, and `ARRAY_CONTAINS(@tenants, c.tenantId)` can never
+ * match a document that has no such property — those rows were written into a
+ * hole (#2650). `tenantId` is a REQUIRED field on the record type so a future
+ * edit cannot silently drop it again.
  * The row is ALSO fanned out through `emitAuditEvent`, so it reaches
  * LoomAudit_CL / the outbound webhook stream and a sweep is visible to the SIEM,
  * not only to an operator running a raw Cosmos query. Best-effort on both
@@ -25,7 +31,7 @@
 import { auditLogContainer } from './cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { randomUUID } from 'node:crypto';
-import type { SessionPayload } from '@/lib/auth/session';
+import { tenantScopeId, type SessionPayload } from '@/lib/auth/session';
 
 export const UC_ACCESS_REVIEW_KIND = 'uc-access-review';
 
@@ -60,7 +66,14 @@ export interface UcAccessReviewEvent {
   actorUpn?: string;
   /** Set when the caller was acting through a scoped API token (PAT). */
   actorTokenId?: string;
-  tenantId?: string;
+  /**
+   * Read scope — REQUIRED, never optional. `tenantScopeId(session)`, i.e. the
+   * Entra `tid` when the session has one and the actor's `oid` when it does
+   * not. The Admin → Audit Logs reader selects with
+   * `ARRAY_CONTAINS(@tenants, c.tenantId)`, so an absent property is an
+   * unreachable row (#2650).
+   */
+  tenantId: string;
   at: string;
   timestamp: string;
   who: string;
@@ -106,7 +119,7 @@ export async function recordUcAccessReview(
     ...(c.name ? { actorName: c.name } : {}),
     ...(c.upn ? { actorUpn: c.upn } : {}),
     ...(session.pat?.tokenId ? { actorTokenId: session.pat.tokenId } : {}),
-    ...(c.tid ? { tenantId: c.tid } : {}),
+    tenantId: tenantScopeId(session),
     at,
     timestamp: at,
     who: c.oid,
@@ -134,7 +147,7 @@ export async function recordUcAccessReview(
       ...(typeof rec.closureSize === 'number' ? { closureSize: rec.closureSize } : {}),
       ...(rec.actorTokenId ? { actorTokenId: rec.actorTokenId } : {}),
     },
-    tenantId: rec.tenantId || rec.actorOid,
+    tenantId: rec.tenantId,
     timestamp: at,
   });
 }
