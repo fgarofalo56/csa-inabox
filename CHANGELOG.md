@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.2...csa-inabox-v0.82.3) (2026-08-02)
+
+
+### Bug Fixes
+
+* **catalog:** read the UC owner on the Databricks path instead of asserting "no owner" ([#2804](https://github.com/fgarofalo56/csa-inabox/issues/2804)) ([0950d59](https://github.com/fgarofalo56/csa-inabox/commit/0950d59ca58f11a47d8b3423d6da92e11297e277)), closes [#2651](https://github.com/fgarofalo56/csa-inabox/issues/2651)
+* **ci:** Python suite measured a fastapi the loom-duckdb image never ships ([#2615](https://github.com/fgarofalo56/csa-inabox/issues/2615)) ([#2806](https://github.com/fgarofalo56/csa-inabox/issues/2806)) ([96a2117](https://github.com/fgarofalo56/csa-inabox/commit/96a2117e61454073a6ddf0a2f9e2edb971225cdf))
+* **deps:** ops-agent-evaluator was the last vitest 2.x manifest ([#2671](https://github.com/fgarofalo56/csa-inabox/issues/2671)) ([#2801](https://github.com/fgarofalo56/csa-inabox/issues/2801)) ([9992bf3](https://github.com/fgarofalo56/csa-inabox/commit/9992bf3553e386d3e207509220f3057998ba9a08))
+* **deps:** vitest 2.x → 3.2.7 across all six manifests ([#2671](https://github.com/fgarofalo56/csa-inabox/issues/2671)) ([#2785](https://github.com/fgarofalo56/csa-inabox/issues/2785)) ([e2a9c2e](https://github.com/fgarofalo56/csa-inabox/commit/e2a9c2ec52b267034a7b85855c80f852dcd64081))
+* **governance:** scope the posture sharedItems30d audit read to oid+tid ([#2793](https://github.com/fgarofalo56/csa-inabox/issues/2793)) ([#2803](https://github.com/fgarofalo56/csa-inabox/issues/2803)) ([fb88b15](https://github.com/fgarofalo56/csa-inabox/commit/fb88b150e120d6212c9f77effdb4f0e7ef5a9ce1))
+* **ui:** editor tab strips collapsed to their scrollbar and stopped taking clicks ([#2648](https://github.com/fgarofalo56/csa-inabox/issues/2648)) ([#2805](https://github.com/fgarofalo56/csa-inabox/issues/2805)) ([a125b08](https://github.com/fgarofalo56/csa-inabox/commit/a125b0800b7f43cdfbcb2a298529bbe4414bda31))
+
 ## [0.82.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.1...csa-inabox-v0.82.2) (2026-08-02)
 
 
