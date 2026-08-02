@@ -774,6 +774,57 @@ export function isRthSourceType(t: string): t is RthSourceType {
 }
 
 /**
+ * Source types whose events are EMITTED BY Microsoft Fabric itself, so no
+ * Azure-native backend can ever produce them.
+ *
+ * Every other member of `RTH_SOURCE_TYPES` names a real Azure or third-party
+ * system (Event Hubs, IoT Hub, Kafka, Postgres CDC, …) that Loom reaches
+ * directly — those stay on the Azure-native default path per
+ * `.claude/rules/no-fabric-dependency.md`. These four have no such source:
+ * the events only exist inside a Fabric tenant.
+ *
+ * WHY AN EXPLICIT LIST RATHER THAN A NAME TEST. The gate in
+ * `app/api/realtime-hub/connect-source` used to ask `/^Fabric/.test(sourceType)`
+ * — CodeQL `js/regex/missing-regexp-anchor` (#2666), and a heuristic either way:
+ * it classifies by how a string is SPELLED. It happened to be correct only
+ * because the caller had already narrowed `sourceType` to `RTH_SOURCE_TYPES`
+ * one branch earlier, so the prefix could not match anything unexpected. That
+ * is safety by accident of ordering, and it fails in both directions the moment
+ * the list grows:
+ *
+ *   - a Fabric-emitted source NOT named `Fabric*` would silently be treated as
+ *     Azure-native (the exact silent-dead-item failure the gate exists to stop);
+ *   - an Azure-native source that happens to start with `Fabric` would be
+ *     refused for a Fabric backend it does not need.
+ *
+ * `satisfies readonly RthSourceType[]` makes a typo here a COMPILE error rather
+ * than a silently-never-matching entry.
+ */
+export const FABRIC_ONLY_SOURCE_TYPES = [
+  'FabricWorkspaceItemEvents',
+  'FabricJobEvents',
+  'FabricOneLakeEvents',
+  'FabricCapacityUtilizationEvents',
+] as const satisfies readonly RthSourceType[];
+
+export type FabricOnlySourceType = (typeof FABRIC_ONLY_SOURCE_TYPES)[number];
+
+/**
+ * True when `t` names a source only Microsoft Fabric can emit, and therefore
+ * requires the opt-in Fabric backend AND a bound Fabric workspace.
+ *
+ * Direction of failure, stated because only one of them is loud:
+ *   MISS        -> an eventstream item is created on the Azure-native backend
+ *                  for a source that can never deliver an event. It looks
+ *                  installed, reports `ok: true`, and is permanently empty.
+ *   FALSE MATCH -> a working Azure-native source is refused with a "requires
+ *                  Fabric" error it does not actually require.
+ */
+export function isFabricOnlySourceType(t: string): t is FabricOnlySourceType {
+  return (FABRIC_ONLY_SOURCE_TYPES as readonly string[]).includes(t);
+}
+
+/**
  * Build a single-source Eventstream topology in the documented Fabric
  * shape { sources[], destinations[], operators[], streams[] }. The source
  * `type` MUST be one of `RTH_SOURCE_TYPES`; `properties` carries the
