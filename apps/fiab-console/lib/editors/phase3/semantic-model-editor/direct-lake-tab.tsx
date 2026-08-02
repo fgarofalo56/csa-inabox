@@ -60,7 +60,7 @@ export interface DirectLakeApi {
   dlBusy: boolean;
   dlLoading: boolean;
   dlMsg: { ok: boolean; text: string } | null;
-  loadDirectLake: (dsId: string, wsId: string) => Promise<void>;
+  loadDirectLake: (dsId: string) => Promise<void>;
   setDlTablePolicy: (idx: number, policy: DlPolicy) => void;
   setDlTablePartCol: (idx: number, partitionColumn: string) => void;
   saveDirectLake: () => Promise<void>;
@@ -80,11 +80,17 @@ export function useSemanticModelDirectLake({
   const [dlLoading, setDlLoading] = useState(false);
   const [dlMsg, setDlMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const loadDirectLake = useCallback(async (dsId: string, wsId: string) => {
+  const loadDirectLake = useCallback(async (dsId: string) => {
     if (!dsId) return;
     setDlLoading(true); setDlMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
+      // #2649: NO `workspaceId` param. The shim's Power BI workspace is recorded
+      // in the model's OWN Cosmos shim config (written by the PUT below) and the
+      // route already falls back to it — `?workspaceId=` here only ever carried
+      // the editor's auto-picked FIRST Power BI groupId, which stamped a Power
+      // BI id into a Loom item URL and named a workspace this model may not be
+      // in. The stored config is the authoritative binding.
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake`);
       const j = await r.json();
       if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); setDlEnabled(true); return; }
       setDlEnabled(!!j.shimEnabled);
@@ -115,8 +121,8 @@ export function useSemanticModelDirectLake({
   }, [tab, tables]);
 
   useEffect(() => {
-    if (tab === 'direct-lake' && datasetId) loadDirectLake(datasetId, workspaceId);
-  }, [tab, datasetId, workspaceId, loadDirectLake]);
+    if (tab === 'direct-lake' && datasetId) loadDirectLake(datasetId);
+  }, [tab, datasetId, loadDirectLake]);
 
   const setDlTablePolicy = useCallback((idx: number, policy: DlPolicy) => {
     setDlTables((prev) => prev.map((row, i) => (i === idx ? { ...row, policy } : row)));
@@ -162,12 +168,11 @@ export function useSemanticModelDirectLake({
 }
 
 export function SemanticModelDirectLakeTab({
-  s, dl, datasetId, workspaceId,
+  s, dl, datasetId,
 }: {
   s: Phase3Styles;
   dl: DirectLakeApi;
   datasetId: string;
-  workspaceId: string;
 }) {
   const {
     dlEnabled, dlHint, dlDeltaPath, setDlDeltaPath, dlSla, setDlSla,
@@ -270,7 +275,7 @@ export function SemanticModelDirectLakeTab({
             <Button appearance="primary" icon={<Save20Regular />} disabled={dlBusy || dlLoading} onClick={saveDirectLake}>
               {dlBusy ? 'Saving…' : 'Configure shim'}
             </Button>
-            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={dlLoading || !datasetId} onClick={() => loadDirectLake(datasetId, workspaceId)}>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={dlLoading || !datasetId} onClick={() => loadDirectLake(datasetId)}>
               {dlLoading ? 'Loading…' : 'Refresh status'}
             </Button>
           </div>

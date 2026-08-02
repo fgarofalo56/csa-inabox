@@ -1,6 +1,12 @@
 /**
- * GET  /api/items/semantic-model/[id]/refresh-policy?workspaceId=...&tableName=...
- * PUT  /api/items/semantic-model/[id]/refresh-policy?workspaceId=...
+ * GET  /api/items/semantic-model/[id]/refresh-policy?tableName=...
+ * PUT  /api/items/semantic-model/[id]/refresh-policy
+ *
+ * NOTE (#2649): this route takes NO workspace. The AAS server + database come
+ * from LOOM_AAS_XMLA_ENDPOINT / LOOM_AAS_DATABASE, and `[id]` is the model. A
+ * `?workspaceId=` was accepted-and-ignored here for a while and the editor sent
+ * its Power BI groupId in it — a Power BI id inside a Loom item URL. Callers no
+ * longer send one; nothing reads one.
  *
  * Incremental-refresh policy + hybrid-table (current-period DirectQuery) editor
  * backend. Opt-in Azure Analysis Services path — the semantic-model default
@@ -21,7 +27,6 @@
  * Docs: https://learn.microsoft.com/power-bi/connect-data/incremental-refresh-xmla
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   aasConfigGate,
   setIncrementalRefreshPolicy,
@@ -30,6 +35,7 @@ import {
   AasError,
   type AasRefreshPolicy,
 } from '@/lib/azure/aas-incremental-refresh';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,9 +70,7 @@ function backendGate(): NextResponse | null {
   return null;
 }
 
-export async function GET(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
   const gate = backendGate();
   if (gate) return gate;
   const tableName = req.nextUrl.searchParams.get('tableName') || undefined;
@@ -77,11 +81,9 @@ export async function GET(req: NextRequest, _ctx: { params: Promise<{ id: string
     const status = e instanceof AasError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function PUT(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ id: string }>(async (req: NextRequest) => {
   const gate = backendGate();
   if (gate) return gate;
 
@@ -127,4 +129,4 @@ export async function PUT(req: NextRequest, _ctx: { params: Promise<{ id: string
     const status = e instanceof AasError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

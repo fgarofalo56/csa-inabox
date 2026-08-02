@@ -174,6 +174,26 @@ describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
   /** Loom item sub-routes that `assertOwner` the `workspaceId` they are given. */
   const LOOM_SUBROUTE = /\/api\/items\/semantic-model\/[^/?]+\/(model|roles|datasource)/;
 
+  /**
+   * EVERY `/api/items/semantic-model/<id>/…` call, not just the assertOwner'd
+   * three. The original spec only ever looked at `LOOM_SUBROUTE`, which is why
+   * it stayed green while the item-detail GET, `/refreshes` and `/direct-lake`
+   * carried on sending the Power BI groupId — the live click-walk (#2817) found
+   * all three on the deployed build after #2797 shipped. This is the same rule
+   * the E2E applies (`e2e/sm-tab-clickwalk.spec.ts`, assertion (f)).
+   */
+  const SM_ITEM_CALL = /\/api\/items\/semantic-model\/([^/?#]+)(?:[/?#]|$)/;
+  /** `/api/items/semantic-model/<seg>/…` segments that are NOT a model id. */
+  const NON_ID_SEGMENTS = new Set(['build', 'scaffold', 'aas-databases', 'workspace-pane']);
+  const smItemCalls = (calls: Array<{ url: string }>) =>
+    calls.filter((c) => {
+      const seg = SM_ITEM_CALL.exec(c.url)?.[1];
+      if (!seg) return false;
+      let decoded = seg;
+      try { decoded = decodeURIComponent(seg); } catch { /* keep raw */ }
+      return !NON_ID_SEGMENTS.has(decoded);
+    });
+
   function installCrossedNamespaceMocks() {
     return installFetchMock({
       '/api/config/ui': () => ({ biBackend: 'powerbi' }),
@@ -194,6 +214,7 @@ describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
           { id: `loom:${ITEM_ID}`, name: 'Sales Semantic Model (Direct Lake)', isRefreshable: false, targetStorageMode: 'Template' },
         ],
       }),
+      '/direct-lake': () => ({ ok: true, shimEnabled: true, runs: [], config: null }),
       '/model': () => ({ ok: true, tables: [{ name: 'FactSales', columns: [], measures: [] }], relationships: [], hierarchies: [] }),
     });
   }
@@ -256,5 +277,49 @@ describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
     // Give any opt-in fetch a chance to fire before asserting it never did.
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/cosmos-items/'))).toBe(true), { timeout: 5000 });
     expect(calls.filter((c) => c.url.includes('/api/powerbi/'))).toEqual([]);
+  });
+
+  // ── The legs #2797 missed (reopened 2026-08-01 on the live click-walk) ──────
+  // #2797 split the state correctly but only re-pointed the assertOwner'd
+  // sub-routes. The item-detail GET, `/refreshes` and `/direct-lake` kept the
+  // auto-picked Power BI groupId, so the deployed build still emitted
+  //   GET /api/items/semantic-model/<id>?workspaceId=<pbi groupId>
+  //   GET /api/items/semantic-model/<id>/refreshes?workspaceId=<pbi groupId>
+  //   GET /api/items/semantic-model/<id>/direct-lake?workspaceId=<pbi groupId>
+  // and 404'd two of them. These cases widen the rule from three named
+  // sub-routes to EVERY `/api/items/semantic-model/<id>/…` call.
+
+  it('sends the Power BI groupId to NO /api/items/semantic-model/* call — every leg, not just the assertOwner\'d three', async () => {
+    const { calls } = await mountOpenedItem();
+    const smCalls = smItemCalls(calls);
+    expect(smCalls.length).toBeGreaterThan(0);
+    expect(smCalls.filter((c) => c.url.includes(PBI_WS)).map((c) => c.url)).toEqual([]);
+  });
+
+  it('does not ask Power BI for the detail/refresh history of a model that is not IN Power BI', async () => {
+    // The bound dataset is the `loom:` Cosmos template — there is no Power BI
+    // dataset by that id in the bound group, so `getDataset` / `listRefreshHistory`
+    // can only 404. The detail route DOES serve the template from Cosmos, so that
+    // one call stays (with the item's own Loom workspace); the Power BI-only
+    // refresh-history call must not be made at all.
+    const { calls } = await mountOpenedItem();
+    expect(calls.filter((c) => c.url.includes('/refreshes')).map((c) => c.url)).toEqual([]);
+    const detail = calls.filter((c) => new RegExp(`semantic-model/${encodeURIComponent(`loom:${ITEM_ID}`)}\\?`, 'i').test(c.url));
+    expect(detail.length, 'the Cosmos-backed template detail must still load').toBeGreaterThan(0);
+    expect(detail.every((c) => c.url.includes(LOOM_WS))).toBe(true);
+  });
+
+  it('opens the Direct Lake (shim) tab without stamping a Power BI groupId into the Loom item URL', async () => {
+    const { calls } = await mountOpenedItem();
+    const tab = await screen.findByRole('tab', { name: /Direct Lake \(shim\)/ }, { timeout: 8000 });
+    await userEvent.click(tab);
+    await waitFor(
+      () => expect(calls.some((c) => c.url.includes('/direct-lake'))).toBe(true),
+      { timeout: 8000 },
+    );
+    const dl = calls.filter((c) => c.url.includes('/direct-lake'));
+    expect(dl.filter((c) => c.url.includes(PBI_WS)).map((c) => c.url)).toEqual([]);
+    // …and it still addresses the OPENED model.
+    expect(dl.every((c) => c.url.includes(encodeURIComponent(`loom:${ITEM_ID}`)))).toBe(true);
   });
 });

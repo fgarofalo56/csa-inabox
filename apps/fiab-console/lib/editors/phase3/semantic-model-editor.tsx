@@ -84,7 +84,7 @@ import {
   SM_DATA_CATEGORIES, SM_SUMMARIZE, SM_DATA_TYPES, SM_FORMATS,
   INGEST_STARTER_M, INGEST_SOURCES,
 } from './semantic-model-editor/constants';
-import { ColumnTypeIcon, defaultDatasetId } from './semantic-model-editor/helpers';
+import { ColumnTypeIcon, defaultDatasetId, isLoomDatasetId, livePbiDatasetId } from './semantic-model-editor/helpers';
 import { useSmVisualStyles } from './semantic-model-editor/styles';
 import { AasSemanticModelPanel } from './semantic-model-editor/aas-panel';
 import { SemanticModelSecurityTab } from './semantic-model-editor/security-tab';
@@ -189,6 +189,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // tabular metadata by default and only exposes Power BI actions/embed when the
   // Console identity actually has Power BI workspace access.
   const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
+  // #2649 (remaining legs) — the DATASET half of the same namespace split.
+  // `datasetId` is a Loom identity for a persisted item (its own id, or the
+  // `loom:` bundle-template form); only this narrowed value is a dataset that
+  // lives INSIDE `pbiWorkspaceId`. Power BI-namespace reads key off it so a Loom
+  // id is never paired with a groupId — that pairing 404'd `GET /[id]` and
+  // `/[id]/refreshes` on every open and stamped the groupId into a Loom item URL.
+  const pbiDatasetId = livePbiDatasetId(datasets, datasetId);
 
   // --- Model builder (real Power BI push-dataset authoring) ---------------
   // Builds a NEW semantic model with tables/typed-columns/measures/relationships
@@ -719,8 +726,21 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   }, [pbiWorkspaceId, ws.workspaces]);
   useEffect(() => { if (pbiWorkspaceId) loadList(pbiWorkspaceId); }, [pbiWorkspaceId, loadList]);
   useEffect(() => {
-    if (pbiWorkspaceId && datasetId) { loadDetail(pbiWorkspaceId, datasetId); loadRefreshes(pbiWorkspaceId, datasetId); }
-  }, [pbiWorkspaceId, datasetId, loadDetail, loadRefreshes]);
+    // #2649: BOTH of these forward straight to Power BI REST — `getDataset` and
+    // `listRefreshHistory` — so their `workspaceId` is genuinely a groupId, and
+    // the dataset paired with it must genuinely live in that group. A `loom:`
+    // bundle template is served by the SAME detail route from Cosmos, which
+    // never reads the workspace beyond echoing it, so that leg gets the item's
+    // OWN Loom workspace. A persisted item that is neither (no live dataset, no
+    // bundle content) has nothing on either backend — the Loom-native model
+    // surface already covers it, and calling out was a guaranteed 404.
+    if (pbiWorkspaceId && pbiDatasetId) {
+      loadDetail(pbiWorkspaceId, pbiDatasetId);
+      loadRefreshes(pbiWorkspaceId, pbiDatasetId);
+    } else if (loomWorkspaceId && isLoomDatasetId(datasetId)) {
+      loadDetail(loomWorkspaceId, datasetId);
+    }
+  }, [pbiWorkspaceId, pbiDatasetId, loomWorkspaceId, datasetId, loadDetail, loadRefreshes]);
   useEffect(() => { if (datasetId) loadModelObjects(loomWorkspaceId, datasetId); }, [loomWorkspaceId, datasetId, loadModelObjects]);
 
   // Lazy-load roles the first time the Security tab is opened for a dataset.
@@ -741,15 +761,17 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   }, [detail?.tables]);
 
   const refreshNow = useCallback(async () => {
-    if (!pbiWorkspaceId || !datasetId) return;
+    // #2649: `/refresh` is Power BI's own refresh trigger — the dataset must be
+    // one that lives in `pbiWorkspaceId`, not the opened Loom item's id.
+    if (!pbiWorkspaceId || !pbiDatasetId) return;
     setRefreshing(true); setRefreshErr(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(pbiDatasetId)}/refresh?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) setRefreshErr(j.error || 'refresh failed');
-      else { setTimeout(() => loadRefreshes(pbiWorkspaceId, datasetId), 1500); }
+      else { setTimeout(() => loadRefreshes(pbiWorkspaceId, pbiDatasetId), 1500); }
     } finally { setRefreshing(false); }
-  }, [pbiWorkspaceId, datasetId, loadRefreshes]);
+  }, [pbiWorkspaceId, pbiDatasetId, loadRefreshes]);
 
   // Hydrate the scheduled-refresh form from the live schedule whenever the
   // selected dataset's detail loads.
@@ -997,7 +1019,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     setNativeSub('model');
   }, [datasetId]);
 
-  const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
+  // #2649: Refresh is a Power BI dataset operation — enabled only for a dataset
+  // that actually lives in the bound Power BI workspace. Keyed off `datasetId`
+  // it stayed enabled for a Loom-only model and POSTed a certain 404.
+  const canRefresh = !!pbiDatasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
   // DirectQuery models are live against the source — never refreshable (the
   // Power BI REST `isRefreshable` already returns false for DQ datasets). When
   // the model is in DirectQuery storage mode we surface the Source binder tab
@@ -1038,14 +1063,14 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
         { label: 'Add calc. table', onClick: (datasetId && modelTables) ? () => { setCalcMsg(null); setCalcTableDlgOpen(true); } : undefined, disabled: !datasetId || !modelTables, title: !modelTables ? 'configure LOOM_AAS_SERVER_URL (Tables tab) to enable calculated tables' : 'Create a calculated table (DAX)' },
       ]},
       { label: 'Source', actions: [
-        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: (canRefresh && !isDqMode) ? refreshNow : undefined, disabled: !canRefresh || isDqMode, title: isDqMode ? 'DirectQuery model is live — no data to import. Use the DirectQuery source tab to rebind.' : (detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined)) },
+        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: (canRefresh && !isDqMode) ? refreshNow : undefined, disabled: !canRefresh || isDqMode, title: isDqMode ? 'DirectQuery model is live — no data to import. Use the DirectQuery source tab to rebind.' : (detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!pbiDatasetId ? 'Power BI refresh needs a dataset in the bound Power BI workspace — use Build model to push this one' : undefined)) },
         { label: 'DirectQuery source', onClick: isDqMode ? () => setTab('datasource') : undefined, disabled: !isDqMode, title: isDqMode ? 'Bind a live Azure source for this DirectQuery model' : 'available for DirectQuery storage-mode models' },
       ]},
       { label: 'Open', actions: [
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, pbiWorkspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, pbiDatasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, pbiWorkspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
 
   return (
     <>
@@ -2037,7 +2062,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   />
                 )}
                 {tab === 'direct-lake' && (
-                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={datasetId} workspaceId={pbiWorkspaceId} />
+                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={datasetId} />
                 )}
                 {tab === 'datasource' && isDqMode && datasetId && (
                   <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={loomWorkspaceId} />
