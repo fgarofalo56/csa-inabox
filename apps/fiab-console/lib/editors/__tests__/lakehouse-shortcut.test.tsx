@@ -6,9 +6,9 @@
  * per-source cards) once a workspace with zero shortcuts is selected.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { LakehouseShortcutEditor } from '../lakehouse-shortcut-editor';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, selectOptionValue } from './test-helpers';
 
 describe('LakehouseShortcutEditor', () => {
   beforeEach(() => {
@@ -39,8 +39,15 @@ describe('LakehouseShortcutEditor', () => {
   it('renders the SC-4 guided empty state with per-source launcher cards', async () => {
     render(<LakehouseShortcutEditor item={makeItem('lakehouse-shortcut', 'Lakehouse shortcut')} id="new" />);
     // Select the fixture workspace so the (empty) shortcut list loads.
-    const select = await screen.findByRole('combobox');
-    fireEvent.change(select, { target: { value: 'ws-1' } });
+    //
+    // Via `selectOptionValue`, which waits for the ws-1 <option> to actually
+    // render before firing the change. The <Select> mounts immediately with only
+    // a disabled "Loading…" placeholder, so grabbing the combobox and changing it
+    // straight away picks a value that has no <option> yet — a silent no-op in
+    // jsdom that leaves workspaceId '' and this spec failing downstream with
+    // `expected null to be truthy` (#2834).
+    const select = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    await selectOptionValue(select, 'ws-1');
     await waitFor(() => {
       expect(document.querySelector('[data-guided-empty-state]')).toBeTruthy();
     });
