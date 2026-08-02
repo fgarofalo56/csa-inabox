@@ -12,10 +12,10 @@
  * default path for the Loom Unity (OSS Unity Catalog) backend.
  */
 import {
-  listPermissions, getCatalog, getSchema, getTable, getVolume, getFunctionUc,
-  getRegisteredModel, getExternalLocation, getStorageCredential,
+  listPermissions,
   type UCSecurableType,
 } from '@/lib/azure/unity-catalog-client';
+import { securableOwner } from '@/lib/azure/uc-securable-owner';
 import { isOssUc } from '@/lib/azure/uc-backend';
 import {
   ucSecurableChain, resolveEffectivePermissions, expandPrincipalClosure,
@@ -38,25 +38,9 @@ const CLOSURE_DEADLINE_MS = 8_000;
 /** Count bound for the same walk — a pathological nesting cannot pin the BFF. */
 const CLOSURE_MAX_PRINCIPALS = 100;
 
-/** Read the `owner` of one securable. Returns `undefined` for a type whose
- *  backend reports no owner; throws only on a real transport / authorization
- *  error, which {@link computeEffectivePermissions} downgrades to a warning. */
-async function securableOwner(host: string, type: UCSecurableType, name: string): Promise<string | undefined> {
-  switch (type) {
-    case 'CATALOG': return (await getCatalog(host, name)).owner;
-    case 'SCHEMA': return (await getSchema(host, name)).owner;
-    case 'TABLE': return (await getTable(host, name)).owner;
-    case 'VOLUME': return (await getVolume(host, name)).owner;
-    case 'FUNCTION': return (await getFunctionUc(host, name)).owner;
-    case 'REGISTERED_MODEL': return (await getRegisteredModel(host, name)).owner;
-    case 'EXTERNAL_LOCATION': return (await getExternalLocation(host, name)).owner;
-    case 'STORAGE_CREDENTIAL': return (await getStorageCredential(host, name)).owner;
-    // OSS Unity Catalog's metastore_summary carries no owner field, and
-    // Databricks answers effective-permissions natively, so there is nothing to
-    // read here on either backend.
-    case 'METASTORE': return undefined;
-  }
-}
+/** Read the `owner` of one securable — now shared with the Databricks path,
+ *  which needs the same read for a different reason (#2651). See
+ *  `uc-securable-owner.ts`. */
 
 /**
  * Compute effective permissions for a securable from the direct grants + owners
