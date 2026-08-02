@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.6...csa-inabox-v0.82.7) (2026-08-02)
+
+
+### Bug Fixes
+
+* **ci:** the roll's FD purge is submitted, not completed — measure whether that matters ([#2828](https://github.com/fgarofalo56/csa-inabox/issues/2828)) ([#2831](https://github.com/fgarofalo56/csa-inabox/issues/2831)) ([ad16803](https://github.com/fgarofalo56/csa-inabox/commit/ad16803e9bd16dd5fde34e2c189a5a2c02ed77a5))
+* **items:** close the `loom:` bundle-id class at the Cosmos chokepoints ([#2830](https://github.com/fgarofalo56/csa-inabox/issues/2830)) ([#2833](https://github.com/fgarofalo56/csa-inabox/issues/2833)) ([d7f40ed](https://github.com/fgarofalo56/csa-inabox/commit/d7f40ed17c94f8ba55f18912a1f9d5a1637c372f))
+
 ## [0.82.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.5...csa-inabox-v0.82.6) (2026-08-02)
 
 
