@@ -18,7 +18,6 @@
  * `kind`, `hasChildren`, `meta` for the UI.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listAllMetastores, listCatalogs, listSchemas, listTables, listVolumes,
   UnityCatalogNotConfiguredError,
@@ -29,6 +28,7 @@ import {
 import {
   listBusinessDomains, listDataProducts, PurviewNotConfiguredError,
 } from '@/lib/azure/purview-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,9 +41,7 @@ export interface TreeNode {
   meta?: Record<string, unknown>;
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
 
   const source = (req.nextUrl.searchParams.get('source') || '').trim();
   const pathRaw = (req.nextUrl.searchParams.get('path') || '').trim();
@@ -185,7 +183,7 @@ export async function GET(req: NextRequest) {
           });
         }
         if (path.length === 1) {
-          const items = await listAllOwnedItems(s.claims.oid, path[0]);
+          const items = await listAllOwnedItems(s.claims.oid, path[0], { session: s });
           return NextResponse.json({
             ok: true,
             // node.kind = the Loom item-type slug → the tree icon + the
@@ -264,4 +262,4 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 500 });
   }
-}
+});

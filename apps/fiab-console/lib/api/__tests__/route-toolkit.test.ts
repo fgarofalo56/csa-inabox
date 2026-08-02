@@ -80,8 +80,9 @@ describe('withWorkspaceOwner', () => {
     const res = await withWorkspaceOwner('agent-flow', handler)(req, ctx({ id: 'i1' }));
     expect(res.status).toBe(404);
     expect(handler).not.toHaveBeenCalled();
-    // write-scoped by default (no allowReadRoles)
-    expect(loadOwnedItem).toHaveBeenCalledWith('i1', 'agent-flow', 'user-1', {});
+    // write-scoped by default (no allowReadRoles), and the SESSION is threaded
+    // through so the cross-tenant tid boundary resolves from claims (#2703).
+    expect(loadOwnedItem).toHaveBeenCalledWith('i1', 'agent-flow', 'user-1', { session: SESSION });
   });
 
   it('threads the loaded item + forwards allowReadRoles', async () => {
@@ -92,7 +93,7 @@ describe('withWorkspaceOwner', () => {
     const res = await withWorkspaceOwner('agent-flow', { allowReadRoles: true }, handler)(req, ctx({ id: 'i1' }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, runs: 2 });
-    expect(loadOwnedItem).toHaveBeenCalledWith('i1', 'agent-flow', 'user-1', { allowReadRoles: true });
+    expect(loadOwnedItem).toHaveBeenCalledWith('i1', 'agent-flow', 'user-1', { allowReadRoles: true, session: SESSION });
   });
 });
 

@@ -28,6 +28,25 @@
  *      the tenant boundary (a foreign principal can only get a workspace-role
  *      row if a workspace admin in the owning tenant explicitly added their oid,
  *      and the sharing UI's principal search is tenant-scoped).
+ *
+ *      #2703 — step 4 USED TO BE OPT-IN. `opts` was optional and `callerTid` was
+ *      an optional field on it, so EVERY call site that did not hand the resolver
+ *      a session silently skipped the boundary: the four `item-crud` calls that
+ *      back `loadOwnedItem` / `listOwnedItems` / `listAllOwnedItems` (the Copilot
+ *      `item_list` tool), and `ontology-resolver`. A security control that does
+ *      nothing when an optional input is absent reads as enforced and is not —
+ *      the same shape as #2683 / #2691 / #2607 / #2652. Two changes fix it:
+ *        (a) {@link WorkspaceAccessOpts} is now REQUIRED and a discriminated
+ *            union, so a call site must either supply `callerTid` or declare
+ *            `skipTidBoundary: true` with a written reason. `tsc` — not review —
+ *            is what stops the next caller from forgetting.
+ *        (b) when `callerTid` is absent the resolver recovers it from the
+ *            AMBIENT request session ({@link ambientCallerTid}) — the very same
+ *            cookie the route already read — but ONLY when that session's `oid`
+ *            equals the `oid` being resolved, so a helper resolving access on
+ *            behalf of a different principal can never borrow the wrong tenant.
+ *            That turns the boundary ON for every session-backed request through
+ *            the session-less helpers, with no change at their 263 call sites.
  *   5. ACL — `resolveEffectiveRole` returns the caller's highest workspace role
  *      via direct + (nested) group membership. Non-null → access at that role.
  *
@@ -88,13 +107,92 @@ export async function readWorkspaceById(workspaceId: string): Promise<Workspace 
 }
 
 /**
+ * Options for {@link resolveWorkspaceAccessByOid} / {@link listAccessibleWorkspaces}.
+ *
+ * REQUIRED, and a DISCRIMINATED UNION, on purpose (#2703): the cross-tenant tid
+ * boundary must not be skippable by omission. A caller either
+ *
+ *   - supplies `callerTid` (normally `session.claims.tid`) — the boundary is
+ *     enforced. `undefined` is accepted because `UserClaims.tid` is optional;
+ *     the resolver then recovers the tid from the ambient request session, so
+ *     "I passed what the session had" still ends up enforcing; or
+ *   - declares `skipTidBoundary: true` WITH a written `skipTidBoundaryReason`.
+ *     That is the only way to switch the boundary off, it is greppable, and
+ *     `scripts/ci/check-tid-boundary-chokepoint.mjs` pins the set of files
+ *     allowed to use it.
+ *
+ * There is deliberately no default `{}` — adding a new call site that forgets
+ * the tenant boundary is a COMPILE ERROR, not a silent hole.
+ */
+export type WorkspaceAccessOpts =
+  | {
+      /** The caller's Entra tenant id (`session.claims.tid`). */
+      callerTid: string | undefined;
+      /** Caller's transitive group ids — short-circuits the Graph membership probes. */
+      groups?: string[];
+      /** Admin-open bypass (see step 6). Callers compute it with `isTenantAdmin(session)`. */
+      tenantAdmin?: boolean;
+      skipTidBoundary?: never;
+      skipTidBoundaryReason?: never;
+    }
+  | {
+      /** Explicit, reviewed opt-out — this call site genuinely has no caller tenant. */
+      skipTidBoundary: true;
+      /** WHY there is no caller tenant here. Required so the opt-out is justified in code. */
+      skipTidBoundaryReason: string;
+      groups?: string[];
+      tenantAdmin?: boolean;
+      callerTid?: never;
+    };
+
+/**
+ * Recover the caller's Entra tid from the AMBIENT request session when the call
+ * site did not pass one (#2703).
+ *
+ * The session cookie is server-minted and encrypted, so this is not caller-
+ * controlled input — it is the same value the route itself read a few frames up
+ * the stack, just not threaded through the ~263 `loadOwnedItem` call sites.
+ *
+ * SAFETY: returns the tid ONLY when the ambient session's `oid` equals the `oid`
+ * whose access is being resolved. A helper resolving access on behalf of some
+ * other principal (a background reconcile, an admin acting for a user) therefore
+ * gets `undefined` and behaves exactly as before, instead of silently
+ * attributing the request-scoped tenant to a different principal.
+ *
+ * Imported lazily and wrapped: `getSession()` reaches for `next/headers`, which
+ * throws outside a request scope (jobs, scripts, unit tests). Never throws.
+ */
+async function ambientCallerTid(oid: string): Promise<string | undefined> {
+  try {
+    const { getSession } = await import('@/lib/auth/session');
+    const s = getSession();
+    if (!s || s.claims.oid !== oid) return undefined;
+    return s.claims.tid;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the effective caller tid for the boundary check: explicit → ambient.
+ * Returns `undefined` when the call site explicitly opted out.
+ */
+async function effectiveCallerTid(oid: string, opts: WorkspaceAccessOpts): Promise<string | undefined> {
+  if (opts.skipTidBoundary) return undefined;
+  return opts.callerTid ?? (await ambientCallerTid(oid));
+}
+
+/**
  * Resolve the caller's access to a workspace from their Entra `oid` (the value
  * legacy code calls `tenantId`). Returns null when the caller neither owns the
  * workspace nor holds any ACL role on it (or the tid boundary rejects it).
  *
  * `opts.groups` short-circuits the per-group Graph membership checks when the
  * caller's transitive group set is already known (from the session claims).
- * `opts.callerTid` enables the tid-boundary check (step 4).
+ * `opts` is REQUIRED — see {@link WorkspaceAccessOpts}. The tid boundary (step 4)
+ * runs against `opts.callerTid`, falling back to the ambient request session's
+ * tid for the same principal, and is skipped ONLY when the call site declared
+ * `skipTidBoundary`.
  *
  * `opts.tenantAdmin` is the ADMIN-OPEN bypass: a tenant admin (per
  * `isTenantAdmin`) must be able to open EVERY workspace in the tenant — the
@@ -109,7 +207,7 @@ export async function readWorkspaceById(workspaceId: string): Promise<Workspace 
 export async function resolveWorkspaceAccessByOid(
   oid: string,
   workspaceId: string,
-  opts: { groups?: string[]; callerTid?: string; tenantAdmin?: boolean } = {},
+  opts: WorkspaceAccessOpts,
 ): Promise<WorkspaceAccess | null> {
   const ws = await workspacesContainer();
 
@@ -131,7 +229,10 @@ export async function resolveWorkspaceAccessByOid(
   if (!wsDoc) return null;
 
   // 4) tid boundary — reject a cross-tenant read when both sides record a tid.
-  if (opts.callerTid && wsDoc.tid && wsDoc.tid !== opts.callerTid) return null;
+  // The caller tid is the one the call site passed, or (when it had no session
+  // to pass) the ambient request session's, for the SAME principal (#2703).
+  const callerTid = await effectiveCallerTid(oid, opts);
+  if (callerTid && wsDoc.tid && wsDoc.tid !== callerTid) return null;
 
   // 5) ACL — highest workspace role via direct + (nested) group membership.
   const role = await resolveEffectiveRole(oid, workspaceId, { userGroupIds: opts.groups });
@@ -161,10 +262,14 @@ export async function resolveWorkspaceAccessByOid(
  * enumerated here — surfacing every group-shared workspace in the list would
  * cost a Graph membership probe per group per request. With the ACL flag off
  * this returns owned-only (byte-identical legacy behavior).
+ *
+ * `opts` is REQUIRED for the same reason as {@link resolveWorkspaceAccessByOid}
+ * (#2703): this list applies the identical tid boundary to each shared doc, and
+ * an omitted `callerTid` used to switch it off silently.
  */
 export async function listAccessibleWorkspaces(
   oid: string,
-  opts: { callerTid?: string } = {},
+  opts: WorkspaceAccessOpts,
 ): Promise<Workspace[]> {
   const ws = await workspacesContainer();
   const { resources: owned } = await ws.items
@@ -190,11 +295,13 @@ export async function listAccessibleWorkspaces(
 
   const ownedIds = new Set(owned.map((w) => w.id));
   const sharedIds = [...new Set(assignments.map((a) => a.workspaceId))].filter((id) => !ownedIds.has(id));
+  if (sharedIds.length === 0) return owned;
+  const callerTid = await effectiveCallerTid(oid, opts);
   const shared: Workspace[] = [];
   for (const id of sharedIds) {
     const doc = await readWorkspaceById(id);
     if (!doc) continue;
-    if (opts.callerTid && doc.tid && doc.tid !== opts.callerTid) continue; // tid boundary
+    if (callerTid && doc.tid && doc.tid !== callerTid) continue; // tid boundary
     shared.push(doc);
   }
   return [...owned, ...shared];

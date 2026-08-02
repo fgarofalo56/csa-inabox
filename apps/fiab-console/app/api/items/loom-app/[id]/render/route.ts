@@ -8,20 +8,18 @@
  * mock data, no Fabric (.claude/rules/no-vaporware.md, no-fabric-dependency.md).
  */
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, listAllOwnedItems } from '../../../_lib/item-crud';
-import { apiOk, apiError, apiUnauthorized, apiForbidden, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiForbidden, apiServerError } from '@/lib/api/respond';
 import { coerceDefinition, resolveVisibleContent } from '@/lib/editors/loom-app-model';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'loom-app';
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   if (!id || id === 'new') return apiError('no app id', 400);
   try {
     const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
@@ -40,7 +38,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
     // Refresh display names against the live workspace inventory so renamed /
     // deleted items are reflected (deleted items drop out of the manifest).
-    const live = await listAllOwnedItems(session.claims.oid, item.workspaceId);
+    const live = await listAllOwnedItems(session.claims.oid, item.workspaceId, { session });
     const byId = new Map(live.map((it) => [it.id, it]));
 
     const visible = def.content.filter((e) => access.itemIds.has(e.itemId) && byId.has(e.itemId));
@@ -83,4 +81,4 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e);
   }
-}
+});

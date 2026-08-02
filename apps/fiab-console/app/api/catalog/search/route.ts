@@ -19,10 +19,10 @@
  * for sources that are not provisioned (no fakes, no silent failures).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { searchDataMapWithFacets, PurviewNotConfiguredError, type PurviewSearchFacets } from '@/lib/azure/purview-client';
 import { searchUnity, UnityCatalogNotConfiguredError } from '@/lib/azure/unity-catalog-client';
 import { searchOneLake } from '@/lib/azure/onelake-catalog-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,9 +53,7 @@ interface SourceResult {
   durationMs: number;
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
 
   const q = (req.nextUrl.searchParams.get('q') || '').trim();
   const sourceFilter = (req.nextUrl.searchParams.get('source') || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -161,7 +159,7 @@ export async function GET(req: NextRequest) {
         }
       } else {
         const { listAllOwnedItems, listOwnedWorkspaces } = await import('../../items/_lib/item-crud');
-        const [items, wss] = await Promise.all([listAllOwnedItems(s.claims.oid), listOwnedWorkspaces(s.claims.oid)]);
+        const [items, wss] = await Promise.all([listAllOwnedItems(s.claims.oid, undefined, { session: s }), listOwnedWorkspaces(s.claims.oid)]);
         const wsName = new Map(wss.map((w) => [w.id, w.name]));
         const ql = q.toLowerCase().trim();
         const matched = items
@@ -195,4 +193,4 @@ export async function GET(req: NextRequest) {
     // is unconfigured — the UI renders an honest empty-facet state, not an error.
     facets,
   });
-}
+});

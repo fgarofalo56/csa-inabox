@@ -30,7 +30,6 @@
  * precise missing env var so the UI shows an honest infra-gate.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listAllOwnedItems, listOwnedWorkspaces } from '../items/_lib/item-crud';
 import {
   listStreamingResourcesViaGraph,
@@ -45,6 +44,7 @@ import {
   eventgridTopicsConfigGate,
   listEventGridTopics,
 } from '@/lib/azure/eventgrid-topics-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -92,9 +92,7 @@ const ITEM_KIND: Record<string, RtiHubKind> = {
   eventhouse: 'eventhouse',
 };
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (_req, { session }) => {
   const oid = session.claims.oid;
 
   const subscriptions = rtiSubscriptionScope();
@@ -119,7 +117,7 @@ export async function GET() {
   // ---- 1) Loom item index (Cosmos) — eventstream / kql-database / eventhouse ----
   let workspaceCount = 0;
   try {
-    const [items, workspaces] = await Promise.all([listAllOwnedItems(oid), listOwnedWorkspaces(oid)]);
+    const [items, workspaces] = await Promise.all([listAllOwnedItems(oid, undefined, { session }), listOwnedWorkspaces(oid)]);
     workspaceCount = workspaces.length;
     const wsName = new Map(workspaces.map((w) => [w.id, w.name] as const));
     for (const it of items) {
@@ -358,4 +356,4 @@ export async function GET() {
     _eventGridDiscovery: 'phase-2',
     warnings,
   });
-}
+});

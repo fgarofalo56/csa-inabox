@@ -133,7 +133,12 @@ export function withWorkspaceOwner<P extends { id: string } = { id: string }>(
   return withSession<P>(async (req, sctx) => {
     const id = (sctx.params as { id?: string })?.id;
     if (!id) return apiNotFound();
-    const item = await loadOwnedItem(id, itemType, sctx.session.claims.oid, opts);
+    const item = await loadOwnedItem(id, itemType, sctx.session.claims.oid, {
+      ...opts,
+      // #2703 — hand the resolver the session it already has so the cross-tenant
+      // tid boundary runs from claims rather than the ambient-cookie fallback.
+      session: sctx.session,
+    });
     if (!item) return apiNotFound();
     return handler(req, { ...sctx, item });
   });
