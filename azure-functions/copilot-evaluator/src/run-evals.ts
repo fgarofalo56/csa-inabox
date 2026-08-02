@@ -74,6 +74,9 @@ export interface RunSummary {
     passRate: number;
     /** Which retrieval backend served the questions (#2585 — see RunTotals). */
     backends?: Record<string, number>;
+    /** Golden rows attempted, and probe failures by status (#2798 — see RunTotals). */
+    rowsAttempted?: number;
+    probeErrors?: Record<string, number>;
   }[];
 }
 
@@ -136,12 +139,19 @@ export async function runEvals(
     const results: (EvalResult & {
       question: string; expectedChunks: string[]; retrievedChunks: string[]; answer: string; tier: string;
     })[] = [];
+    // #2798: a failed probe used to `continue` into the void, so a surface
+    // whose every probe failed reported hit-rate 0.00 — indistinguishable from
+    // "retrieval found nothing", and triaged as exactly that. Count the
+    // failures by status so the receipt can say which it was.
+    const probeErrors: Record<string, number> = {};
 
     for (const row of set.rows) {
       let probe;
       try {
         probe = await probeConsole(probeUrl, internalToken, { question: row.question, surface: set.surface });
       } catch (e: any) {
+        const status = String(Number.isFinite(e?.status) ? e.status : 0);
+        probeErrors[status] = (probeErrors[status] || 0) + 1;
         context.error(`[copilot-evaluator] ${set.surface}/${row.id}: eval-probe failed: ${e?.message || e}`);
         continue;
       }
@@ -191,7 +201,7 @@ export async function runEvals(
       });
     }
 
-    const totals = rollupRun(results);
+    const totals = rollupRun(results, { attempted: set.rows.length, errors: probeErrors });
     try {
       await writeResults(cosmosEndpoint, cosmosDb, runId, results);
       await writeRun(cosmosEndpoint, cosmosDb, {
@@ -210,10 +220,22 @@ export async function runEvals(
     } catch (e: any) {
       context.error(`[copilot-evaluator] ${set.surface}: Cosmos write failed: ${e?.message || e}`);
     }
+    const droppedRows = set.rows.length - totals.questions;
+    if (droppedRows > 0) {
+      // Loud + machine-greppable: a partially/never-measured surface must not
+      // slip out looking like a clean 0.00 (#2798).
+      context.warn(
+        `[copilot-evaluator] ${set.surface}: ${droppedRows}/${set.rows.length} golden row(s) NOT measured — ` +
+          `eval-probe failed by status ${JSON.stringify(probeErrors)}. ` +
+          (totals.questions === 0
+            ? 'This surface has NO scores; its 0.00 is "not measured", not "retrieval found nothing".'
+            : 'The reported rates cover only the rows that were measured.'),
+      );
+    }
     context.log(
-      `[copilot-evaluator] run ${set.surface}: ${totals.questions} Q, hit-rate ${totals.retrievalHitRate}, ` +
+      `[copilot-evaluator] run ${set.surface}: ${totals.questions}/${set.rows.length} Q, hit-rate ${totals.retrievalHitRate}, ` +
         `grounding ${totals.groundingAvg ?? 'deferred'} (judged=${totals.judged} deferred=${totals.deferred} auto-fail=${totals.autoFailed}) ` +
-        `backend=${JSON.stringify(totals.backends ?? {})}`,
+        `backend=${JSON.stringify(totals.backends ?? {})} probe-errors=${JSON.stringify(probeErrors)}`,
     );
     summary.surfaces.push({
       surface: set.surface,
@@ -222,6 +244,8 @@ export async function runEvals(
       groundingAvg: totals.groundingAvg,
       passRate: totals.passRate,
       backends: totals.backends,
+      rowsAttempted: totals.rowsAttempted,
+      probeErrors: totals.probeErrors,
     });
   }
   return summary;

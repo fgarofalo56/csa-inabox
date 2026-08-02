@@ -68,6 +68,22 @@ export interface ProbeRequest {
   top?: number;
 }
 
+/**
+ * A probe call that did not yield a scorable answer. Carries `status` so the
+ * caller can CLASSIFY the failure (429 throttle vs 401 token vs 503 no-AOAI vs
+ * a 5xx bug) without regex-parsing a message — issue #2798: probe failures were
+ * indistinguishable from "retrieval found nothing" in the run receipt.
+ */
+export class ProbeError extends Error {
+  /** HTTP status, or 0 for a transport/decode failure that never got one. */
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ProbeError';
+    this.status = status;
+  }
+}
+
 /** POST the console's internal eval-probe: real searchDocs + one real Copilot
  *  turn through aoai-chat-client. Auth = the shared VNet-internal trust token.
  *  Returns the probe result + the retrieved-chunk previews (judge evidence). */
@@ -81,9 +97,9 @@ export async function probeConsole(
     headers: { 'content-type': 'application/json', [INTERNAL_TOKEN_HEADER]: internalToken },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`eval-probe ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new ProbeError(`eval-probe ${res.status}: ${(await res.text()).slice(0, 300)}`, res.status);
   const j: any = await res.json();
-  if (!j?.ok) throw new Error(`eval-probe returned ok:false — ${String(j?.error || '').slice(0, 200)}`);
+  if (!j?.ok) throw new ProbeError(`eval-probe returned ok:false — ${String(j?.error || '').slice(0, 200)}`, 0);
   const chunks: any[] = Array.isArray(j.retrievedChunks) ? j.retrievedChunks : [];
   return {
     probe: {

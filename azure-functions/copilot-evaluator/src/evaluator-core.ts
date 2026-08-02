@@ -389,6 +389,22 @@ export interface RunTotals {
    * anchor to a live number. Absent on legacy docs written before this field.
    */
   backends?: Record<string, number>;
+  /**
+   * How many golden rows this surface ATTEMPTED (its full set size). Issue
+   * #2798: `questions` counts rows that produced a score, and rows whose probe
+   * call failed were dropped silently — so a surface whose every probe failed
+   * rolled up as `questions: 0, retrievalHitRate: 0`, a hard zero that reads
+   * EXACTLY like "retrieval found nothing" and was diagnosed as such. With
+   * `rowsAttempted` the receipt distinguishes measured-zero from not-measured.
+   */
+  rowsAttempted?: number;
+  /**
+   * Probe failures counted by HTTP status (`{"429": 118, "0": 6}`; 0 = a
+   * transport/decode failure that never got a status). Same rationale as
+   * `backends` (#2585): the CI receipt must SAY why a surface has no scores
+   * instead of forcing the next triage to infer it.
+   */
+  probeErrors?: Record<string, number>;
 }
 
 /** Count per-question backends into the run rollup (`{}` when none reported). */
@@ -402,14 +418,27 @@ export function rollupBackends(results: Pick<EvalResult, 'backend'>[]): Record<s
   return out;
 }
 
-/** Roll one surface's per-question results up into the `eval-run` totals. */
-export function rollupRun(results: EvalResult[]): RunTotals {
+/**
+ * Roll one surface's per-question results up into the `eval-run` totals.
+ *
+ * `probe` carries what the results array CANNOT: the rows that never produced a
+ * result because their probe call failed (#2798). Omit it and the rollup is
+ * byte-identical to the pre-#2798 shape.
+ */
+export function rollupRun(
+  results: EvalResult[],
+  probe?: { attempted?: number; errors?: Record<string, number> },
+): RunTotals {
   const n = results.length;
+  const probeInfo: Pick<RunTotals, 'rowsAttempted' | 'probeErrors'> = {};
+  if (probe?.attempted !== undefined) probeInfo.rowsAttempted = probe.attempted;
+  if (probe?.errors && Object.keys(probe.errors).length) probeInfo.probeErrors = { ...probe.errors };
   if (n === 0) {
     return {
       questions: 0, retrievalHitRate: 0, mrrAvg: 0, groundingAvg: null,
       answerAvg: null, passRate: 0, judged: 0, deferred: 0, autoFailed: 0,
       backends: {},
+      ...probeInfo,
     };
   }
   const judgedResults = results.filter((r) => r.judgeStatus === 'scored' && r.judge);
@@ -432,6 +461,7 @@ export function rollupRun(results: EvalResult[]): RunTotals {
     deferred: results.filter((r) => r.judgeStatus === 'deferred').length,
     autoFailed: results.filter((r) => r.judgeStatus === 'auto-fail').length,
     backends: rollupBackends(results),
+    ...probeInfo,
   };
 }
 

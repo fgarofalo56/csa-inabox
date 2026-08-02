@@ -119,6 +119,82 @@ describe('evaluateGate — floors', () => {
   });
 });
 
+/**
+ * Issue #2798 — the gate reported "hit-rate 0.00 is BELOW the floor 0.50" for
+ * four surfaces that had scored ZERO questions apiece: every eval-probe call
+ * failed, the evaluator dropped those rows, and rollupRun([]) rolls an empty
+ * result set up as a hard `retrievalHitRate: 0 / passRate: 0`. The gate read
+ * that as a measured retrieval outage and the issue was triaged as one.
+ *
+ * A surface that was never measured must not produce a quality verdict — in
+ * EITHER direction. It must not fabricate a below-floor failure, and it must
+ * not silently pass (nightly `--strict-missing` still fails it).
+ */
+describe('evaluateGate — zero-question surfaces are NOT MEASURED (#2798)', () => {
+  /** The real shape of run 30728526190's receipt: hard zeroes, no questions. */
+  const notMeasured = (surface: string, rowsAttempted?: number, probeErrors?: Record<string, number>) => ({
+    surface,
+    questions: 0,
+    rowsAttempted,
+    probeErrors,
+    retrievalHitRate: 0,
+    groundingAvg: null,
+    passRate: 0,
+  });
+
+  it('does NOT report a below-floor failure for a surface that scored zero questions', () => {
+    const cur = normalizeRuns({ surfaces: [run('help', 0.9, 4.3, 0.9), notMeasured('cost', 12, { 429: 12 })] });
+    const r = evaluateGate(cur, floorsDoc);
+    expect(r.failures).toEqual([]);
+    expect(r.rows.find((x: any) => x.surface === 'cost').status).toBe('missing');
+    expect(r.rows.find((x: any) => x.surface === 'cost').notMeasured).toBe(true);
+  });
+
+  it('says WHY: names the rows attempted and the probe-failure statuses', () => {
+    const cur = normalizeRuns({ surfaces: [notMeasured('cost', 12, { 429: 11, 0: 1 })] });
+    const r = evaluateGate(cur, floorsDoc);
+    const w = r.warnings.find((x: string) => x.includes('cost'));
+    expect(w).toContain('ZERO questions scored');
+    expect(w).toContain('of 12 golden row(s)');
+    expect(w).toContain('"429":11');
+    expect(w).toContain('NOT measured');
+  });
+
+  it('still FAILS under strictMissing (nightly) — not a licence to pass', () => {
+    const cur = normalizeRuns({ surfaces: [notMeasured('cost', 12, { 429: 12 })] });
+    const r = evaluateGate(cur, floorsDoc, { strictMissing: true });
+    expect(r.failures.some((f: string) => f.includes('cost') && f.includes('ZERO questions scored'))).toBe(true);
+    // and never as a fabricated floor breach
+    expect(r.failures.some((f: string) => f.includes('BELOW the floor'))).toBe(false);
+  });
+
+  it('a surface that DID run questions still fails its floor (gate not blanket-disabled)', () => {
+    // kql-database in the real run: 1 question, genuinely 0.00 hit-rate.
+    const cur = normalizeRuns({
+      surfaces: [{ surface: 'help', questions: 1, rowsAttempted: 15, retrievalHitRate: 0, groundingAvg: 3, passRate: 0 }],
+    });
+    const r = evaluateGate(cur, floorsDoc);
+    expect(r.failures.some((f: string) => f.includes('BELOW the floor'))).toBe(true);
+    expect(r.rows.find((x: any) => x.surface === 'help').status).toBe('fail');
+  });
+
+  it('an artifact with NO questions field is legacy, not zero — still evaluated', () => {
+    const cur = normalizeRuns({ surfaces: [{ surface: 'help', retrievalHitRate: 0.4, groundingAvg: 4.3, passRate: 0.9 }] });
+    expect(cur.get('help').questions).toBeNull();
+    const r = evaluateGate(cur, floorsDoc);
+    expect(r.failures.some((f: string) => f.includes('BELOW the floor'))).toBe(true);
+  });
+
+  it('renderMarkdown prints "not measured", never a 0.00 rate, for such a surface', () => {
+    const cur = normalizeRuns({ surfaces: [notMeasured('cost', 12, { 429: 12 })] });
+    const md = renderMarkdown(attachQuestions(evaluateGate(cur, floorsDoc), cur), {});
+    const line = md.split('\n').find((l: string) => l.startsWith('| cost'))!;
+    expect(line).toContain('not measured');
+    expect(line).toContain('0/12');
+    expect(line).not.toContain('0.00');
+  });
+});
+
 describe('evaluateGate — delta vs previous run (EVAL_REGRESSION_DELTA points)', () => {
   it('warns on a >5-point rate drop that stays above floor', () => {
     const cur = normalizeRuns({ surfaces: [run('help', 0.86, 4.3, 0.92), run('cost', 0.7, 3.5, 0.6)] });
@@ -215,6 +291,31 @@ describe('ratchetFloors — raise-only', () => {
     const { next, changes } = ratchetFloors(floorsDoc, streak, { minRuns: 3 });
     expect(changes).toEqual([]);
     expect(next.floors.help).toEqual(floorsDoc.floors.help);
+  });
+
+  it('ignores never-measured runs (questions 0) instead of pinning the floor to their 0.00 (#2798)', () => {
+    // One unmeasured run in the window used to become observedMin=0, which
+    // silently blocked this surface's floor from ever ratcheting.
+    const streak = obs([
+      run('cost', 0.82, 4.1, 0.78),
+      run('cost', 0.85, 4.2, 0.8),
+      run('cost', 0.9, 4.4, 0.83),
+      { surface: 'cost', questions: 0, retrievalHitRate: 0, groundingAvg: null, passRate: 0 } as any,
+    ]);
+    const { changes, skipped } = ratchetFloors(floorsDoc, streak, { minRuns: 3 });
+    expect(changes).toContainEqual({ surface: 'cost', metric: 'retrievalHitRate', from: 0.5, to: 0.77 });
+    expect(skipped.some((s: string) => s.includes('cost'))).toBe(false);
+  });
+
+  it('reports the unmeasured runs it dropped when that breaks the streak (#2798)', () => {
+    const streak = obs([
+      run('cost', 0.82, 4.1, 0.78),
+      { surface: 'cost', questions: 0, retrievalHitRate: 0, groundingAvg: null, passRate: 0 } as any,
+      { surface: 'cost', questions: 0, retrievalHitRate: 0, groundingAvg: null, passRate: 0 } as any,
+    ]);
+    const { changes, skipped } = ratchetFloors(floorsDoc, streak, { minRuns: 3 });
+    expect(changes).toEqual([]);
+    expect(skipped.some((s: string) => s.includes('cost') && s.includes('2 run(s) ignored'))).toBe(true);
   });
 
   it('skips surfaces without a full streak', () => {
