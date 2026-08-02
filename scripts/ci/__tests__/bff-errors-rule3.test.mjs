@@ -25,9 +25,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { rule3Violations, standaloneHttpApps, maskNonCode, errorHandlerBlocks } from '../check-bff-errors.mjs';
-import { publicErrorMessage as bridgeMessage, publicRpcError } from '../../../apps/fiab-mcp-bridge/src/safe-error.mjs';
+import {
+  publicErrorMessage as bridgeMessage,
+  publicRpcError,
+  logSafe as bridgeLogSafe,
+} from '../../../apps/fiab-mcp-bridge/src/safe-error.mjs';
 import {
   publicErrorMessage as onelakeMessage,
+  logSafe as onelakeLogSafe,
   BadRequestError,
   isBadRequest,
 } from '../../../apps/loom-onelake/src/safe-error.mjs';
@@ -193,4 +198,57 @@ test('loom-onelake BadRequestError is class-tagged, not string-matched', () => {
   assert.ok(!isBadRequest(new Error('invalid JSON body')));
   assert.ok(!isBadRequest(undefined));
   assert.ok(!isBadRequest(null));
+});
+
+// ── 5. logSafe — the log-forging defence on the logging the sanitizer owns ──
+//
+// Concentrating every app's error logging into publicErrorMessage also
+// concentrated the SINK. CodeQL js/log-injection traced request body →
+// `message.method` → `new Error(\`timeout … calling ${method}\`)` → the
+// console.error inside the sanitizer, so a method name containing CR/LF forges
+// log records. These assert the mirror of lib/util/log-safe.ts actually strips.
+
+for (const [label, logSafe] of [['mcp-bridge', bridgeLogSafe], ['loom-onelake', onelakeLogSafe]]) {
+  test(`${label} logSafe: strips CR/LF so a forged record cannot be injected`, () => {
+    const forged = 'boom\n2026-08-02 [info] admin login succeeded\r\n';
+    const out = logSafe(forged);
+    assert.ok(!/[\r\n]/.test(out), 'no line breaks may survive');
+    // Not redaction — the text stays readable, only the framing is removed.
+    assert.ok(out.includes('boom'));
+    assert.ok(out.includes('admin login succeeded'));
+  });
+
+  test(`${label} logSafe: strips NUL/TAB/DEL and other C0 controls`, () => {
+    const out = logSafe('a\u0000b\u0009c\u007Fd\u001Fe');
+    assert.equal(out, 'a b c d e');
+  });
+
+  test(`${label} logSafe: bounds the length`, () => {
+    const out = logSafe('x'.repeat(5000));
+    assert.ok(out.length <= 2003, `expected <=2003 chars, got ${out.length}`);
+    assert.ok(out.endsWith('...'));
+  });
+
+  test(`${label} logSafe: null/undefined are a plain empty string`, () => {
+    assert.equal(logSafe(null), '');
+    assert.equal(logSafe(undefined), '');
+  });
+
+  test(`${label} logSafe: the control class is not literal control characters`, () => {
+    // The console original writes this class with LITERAL control characters,
+    // which are invisible in an editor and survive a mangling copy/paste as
+    // something else entirely — the sanitizer keeps compiling and keeps
+    // returning a string while silently sanitizing nothing. Assert the
+    // BEHAVIOUR that mangling would break, on a character in the middle of the
+    // range rather than at either end.
+    assert.equal(logSafe('a\u000Bb'), 'a b');
+  });
+}
+
+test('publicErrorMessage runs the logged detail through logSafe', () => {
+  const err = new Error('boom\nFORGED [info] nothing to see here');
+  const { logged } = captureConsoleError(() => bridgeMessage(err, 'Failed.'));
+  assert.equal(logged.length, 1);
+  assert.ok(!/\n/.test(logged[0]), 'the emitted log line must be a single line');
+  assert.ok(logged[0].includes('FORGED'), 'the text is flattened, not redacted');
 });

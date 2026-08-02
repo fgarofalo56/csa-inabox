@@ -31,6 +31,42 @@ import { randomUUID } from 'node:crypto';
 const LOG_PREFIX = '[mcp-bridge]';
 
 /**
+ * C0 control characters (CR, LF, TAB, NUL ...) plus DEL.
+ *
+ * Built with new RegExp from an ASCII-only string ON PURPOSE. The console
+ * original writes this class with LITERAL control characters in the source,
+ * which are invisible in every editor and diff — one careless copy/paste and
+ * the class silently becomes something else while the code still compiles and
+ * the sanitizer still returns a string. This form cannot be mangled unseen.
+ */
+const CONTROL_CHARS = new RegExp('[\u0000-\u001F\u007F]+', 'g');
+
+/** Max characters kept from the logged detail (a stack, so larger than a field). */
+const MAX_LOG_DETAIL = 2000;
+
+/**
+ * Log-injection defence — a local mirror of apps/fiab-console/lib/util/log-safe.ts
+ * (`logSafe`), which this package cannot import.
+ *
+ * WHY IT IS NEEDED HERE SPECIFICALLY: concentrating the logging inside this
+ * module also concentrated the SINK. CodeQL js/log-injection traced a path from
+ * `readBody(req)` → `parsed` → `client.rpc(parsed)` → `message.method` →
+ * `new Error(\`timeout after ...ms calling ${method}\`)` → here. A caller who
+ * names their JSON-RPC method with an embedded CR/LF forges log records.
+ *
+ * Strips the C0 controls that break line framing and bounds the length. It does
+ * NOT redact — an opaque log is a dishonest log (no-vaporware.md), and this
+ * detail is the only remaining record of the failure. It removes the ability to
+ * fabricate structure, nothing else.
+ */
+export function logSafe(value, max = MAX_LOG_DETAIL) {
+  if (value === null || value === undefined) return '';
+  const raw = typeof value === 'string' ? value : String(value);
+  const flat = raw.replace(CONTROL_CHARS, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}...` : flat;
+}
+
+/**
  * Log `err` in full server-side and return a client-safe message.
  *
  * @param {unknown} err            the caught value — never read into the result
@@ -41,7 +77,7 @@ export function publicErrorMessage(err, publicMessage = 'internal error') {
   const ref = randomUUID().slice(0, 8);
   const detail = err instanceof Error ? err.stack || err.message : String(err);
   // eslint-disable-next-line no-console
-  console.error(`${LOG_PREFIX} internal error [ref=${ref}]:`, detail);
+  console.error(`${LOG_PREFIX} internal error [ref=${ref}]:`, logSafe(detail));
   return `${publicMessage} (ref: ${ref})`;
 }
 

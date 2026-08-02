@@ -236,7 +236,11 @@ export function errorHandlerBlocks(masked) {
 
 /** The forbidden string-extraction shapes for a catch binding named `id`. */
 function extractionPatterns(id) {
-  const X = id.replace(/[$]/g, '\\$&');
+  // FULL regex escape, not just `$`. `id` comes from a JS-identifier capture so
+  // today it can only be [A-Za-z_$][\w$]*, but a partial escape is the shape
+  // CodeQL js/incomplete-sanitization flags and the shape that breaks the day
+  // the capture is widened — escape every metacharacter, backslash included.
+  const X = id.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&');
   return [
     [new RegExp(String.raw`\b${X}\s*(?:\?\.|\.)\s*(?:message|stack)\b`, 'g'), `${id}.message / ${id}.stack`],
     [new RegExp(String.raw`\(\s*${X}\s+as\s+\w+\s*\)\s*\??\.\s*(?:message|stack)\b`, 'g'), `(${id} as Error).message`],
