@@ -132,16 +132,15 @@ def _start_flight() -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown. Replaces the deprecated `@app.on_event` (#2579).
 
-    NOTE: this migration does NOT lift the `starlette>=0.40,<0.42` pin in
-    `.github/workflows/test.yml`. That pin exists because the SHARED Python CI
-    env also installs the apps that pin `fastapi==0.115.x`
+    The shared Python CI env also installs the apps that pin `fastapi==0.115.x`
     (platform/runners/script-runner, apps/fiab-dbt-runner, apps/loom-migrate,
-    apps/fiab-wrangler-host, apps/loom-transform-runner), and fastapi 0.115.x
-    passes `on_startup=` to `starlette.routing.Router.__init__`, which starlette
-    1.x removed — that breaks every `FastAPI()` CONSTRUCTION regardless of
-    whether any app calls `on_event`. Verified: fastapi 0.115.6 + starlette
-    1.3.1 -> `TypeError: Router.__init__() got an unexpected keyword argument
-    'on_startup'`. The pin goes when those apps move off fastapi 0.115.x.
+    apps/fiab-wrangler-host, apps/loom-transform-runner, examples/ai-agents).
+    fastapi 0.115.x and this app's fastapi 0.140.13 are mutually exclusive —
+    0.115.x requires `starlette<0.42`, 0.140.13 requires `starlette>=0.46` — so
+    the install ORDER decides which stack the tests measure. `.github/workflows/
+    test.yml` therefore installs THIS requirements.txt LAST and asserts every
+    resolved version against it (#2615); before that fix the loop downgraded
+    fastapi and tests/loom_duckdb passed against a FastAPI the image never runs.
 
     The Flight thread is a daemon and is torn down with the process, so there is
     nothing to unwind after the yield.
