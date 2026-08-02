@@ -20,6 +20,7 @@ import { createOwnedItem } from '../../items/_lib/item-crud';
 import {
   connectEventstreamSource,
   isRthSourceType,
+  isFabricOnlySourceType,
   RTH_SOURCE_TYPES,
   FabricError,
 } from '@/lib/azure/fabric-client';
@@ -56,17 +57,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `Unsupported sourceType "${sourceType}".`, hint: `Allowed: ${RTH_SOURCE_TYPES.join(', ')}` }, { status: 400 });
   }
 
-  // Defense in depth: Fabric-only source types (FabricWorkspaceItemEvents /
-  // FabricJobEvents / FabricOneLakeEvents) require the Fabric backend. Reject
-  // them up front when Fabric isn't opted in, instead of silently creating an
-  // Azure-native eventstream item that can never produce those events
-  // (audit: rti-hub-catalog / connect-source — reject fabric-* when
-  // LOOM_EVENTSTREAM_BACKEND != fabric).
-  if (/^Fabric/.test(sourceType) && !FABRIC_OPT_IN) {
+  // Defense in depth: a handful of source types carry events EMITTED BY Fabric
+  // (workspace-item / job / OneLake / capacity-utilization). No Azure-native
+  // backend can produce them, so creating an Azure-native eventstream item for
+  // one yields an item that reports `ok: true` and is permanently empty.
+  //
+  // Both halves of the Fabric opt-in are required, not just the env flag. The
+  // Fabric branch below only runs when `FABRIC_OPT_IN && fabricWorkspaceId`;
+  // testing only `!FABRIC_OPT_IN` here left a live hole where an operator who
+  // set LOOM_EVENTSTREAM_BACKEND=fabric but sent no `fabricWorkspaceId` passed
+  // this gate, missed the Fabric branch, and fell through to the Azure-native
+  // path — silently creating exactly the dead item this check exists to stop.
+  //
+  // Membership, not `/^Fabric/`: classifying by name prefix was only safe
+  // because `isRthSourceType` above had already narrowed the input (CodeQL
+  // js/regex/missing-regexp-anchor, #2666). See FABRIC_ONLY_SOURCE_TYPES.
+  if (isFabricOnlySourceType(sourceType) && !(FABRIC_OPT_IN && fabricWorkspaceId)) {
     return NextResponse.json({
       ok: false,
-      error: `Source type "${sourceType}" requires the Microsoft Fabric backend, which is not enabled in this deployment.`,
-      hint: 'Set LOOM_EVENTSTREAM_BACKEND=fabric and bind a Fabric workspace to use Fabric event sources, or pick an Azure-native source.',
+      error: FABRIC_OPT_IN
+        ? `Source type "${sourceType}" requires a bound Microsoft Fabric workspace.`
+        : `Source type "${sourceType}" requires the Microsoft Fabric backend, which is not enabled in this deployment.`,
+      hint: FABRIC_OPT_IN
+        ? 'Pass fabricWorkspaceId to bind a Fabric workspace for Fabric-emitted event sources, or pick an Azure-native source.'
+        : 'Set LOOM_EVENTSTREAM_BACKEND=fabric and bind a Fabric workspace to use Fabric event sources, or pick an Azure-native source.',
     }, { status: 400 });
   }
 
