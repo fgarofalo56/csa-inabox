@@ -132,6 +132,28 @@ const WATCHED = [
     ],
     maxDays: 14,
   },
+  // ── The loom-sharing IMAGE (#2619) ───────────────────────────────────────
+  // A rung below the deploy-script class: there, deploy scripts no workflow ran;
+  // here, an app IMAGE no workflow built. LU-9 shipped a Dockerfile, a bicep
+  // module, a threat model and an entrypoint unit-test job — and nothing ever
+  // produced the artifact, so the Container App could not have been created
+  // (MANIFEST_UNKNOWN) and every merged byte of the sharing BFF was inert.
+  //
+  // NOTE ON THE DRY-RUN FILTER: this workflow has no dry-run mode to skip. All
+  // three `apply` modes build and push a real image; `build-only` is the mode
+  // that closes the prerequisite, not a no-op. So a successful run here always
+  // means an artifact was produced, which is exactly what this watchdog should
+  // be measuring.
+  {
+    workflow: 'deploy-loom-sharing.yml',
+    why: 'The ONLY thing that builds the loom-sharing image (the OSS Delta Sharing server that gives Azure Government an open-protocol endpoint). Stale here means the deployed sharing server is running packaging that no longer matches the entrypoint/Dockerfile on main — including its fail-closed bearer handling, which is the sole thing standing between a VNet-reachable port and every published share.',
+    paths: [
+      '.github/workflows/deploy-loom-sharing.yml',
+      'apps/loom-sharing/**',
+      'platform/fiab/bicep/modules/compute/loom-sharing-app.bicep',
+    ],
+    maxDays: 14,
+  },
 ];
 
 /**
