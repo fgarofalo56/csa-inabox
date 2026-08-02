@@ -9,6 +9,11 @@ name: loom-roll-and-validate
 #   1. Gate — vitest: confirm the `vitest (node 20)` required check CONCLUDED
 #      success for the commit being rolled (cheap + exact, via the check-runs
 #      API). An untested/failed commit is refused BEFORE anything ships.
+#      The gate WAITS for a verdict rather than reading once: vitest is slower
+#      than the image build that triggers this roll, so a single read lands
+#      while the check is still in_progress (#2819). Three states, kept apart —
+#      passed → proceed, failed → refuse, not-yet → keep waiting up to
+#      LOOM_ROLL_VITEST_WAIT_MINUTES (default 50). A TIMEOUT IS A REFUSAL.
 #   2. Roll the image → wait for revision health → purge Front Door.
 #   3. Validate the live URL (unauthenticated /health + /build-marker curls).
 #   4. Gate — in-VNet UAT: start the `loom-uat` Container App Job (a full-visual
@@ -17,6 +22,11 @@ name: loom-roll-and-validate
 #      roll, which the Rollback step catches and reverts to the prior revision.
 #   The pre-existing auto-rollback on live-validation failure remains the
 #   BACKSTOP.
+#
+# The decision logic for gate 1 and for ':latest' image resolution lives in
+# scripts/ci/roll-gate-decision.mjs with a node:test suite, because both
+# previously collapsed "I could not determine this" into "the answer is no" and
+# then stated the negative as fact. See scripts/ci/__tests__/.
 #
 # EMERGENCY VALVE: both test gates (vitest confirmation + UAT) are SKIPPABLE via
 # the `skip_uat` dispatch input OR the repo variable `LOOM_ROLL_SKIP_UAT=true`,
@@ -98,6 +108,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The roll gates run as node scripts (scripts/ci/roll-*.mjs) so their
+      # decision logic is unit-tested rather than living in untestable inline
+      # YAML — see #2819. Pin the runtime rather than relying on whatever the
+      # runner image happens to ship.
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Azure login
         uses: azure/login@v2.3.0
         with:
@@ -111,6 +130,13 @@ jobs:
 
       - name: Resolve inputs
         id: vars
+        env:
+          # #2819: this step calls `gh api` to list recent image builds and had
+          # NO token, so the call failed, `2>/dev/null` ate the error, the
+          # candidate loop ran ZERO times, and the workflow announced
+          # "No recent main commit has a loom-console image in <acr>" — a claim
+          # about a registry it never contacted (the whole step took 164ms).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
@@ -134,19 +160,32 @@ jobs:
               # lookup (observed live on 02481198, issue #2646). Walk back through
               # recent successful runs and pick the newest whose image ACTUALLY
               # EXISTS in the registry.
-              BUILT_SHA=""
-              for CAND in $(gh api "repos/${{ github.repository }}/actions/workflows/build-fiab-images-acr-tasks.yml/runs?branch=main&status=success&per_page=20" \
-                --jq '.workflow_runs[].head_sha' 2>/dev/null); do
-                [[ "$CAND" =~ ^[0-9a-f]{40}$ ]] || continue
-                if az acr repository show --name "${{ env.ACR_NAME }}" \
-                     --image "${{ env.APP_NAME }}:$CAND" --query digest -o tsv >/dev/null 2>&1; then
-                  BUILT_SHA="$CAND"
-                  break
-                fi
-                echo "::notice::skipping $CAND - no ${{ env.APP_NAME }} image at that tag (subset build)."
-              done
+              #
+              # #2819: this loop used to be inline here, with
+              # `az … >/dev/null 2>&1`, so "the registry says no" and "we could
+              # not ask the registry" were the same branch — and the error
+              # message asserted the former. The logic now lives in a tested
+              # script that keeps found / absent / UNREACHABLE apart and refuses
+              # rather than inventing a verdict. See
+              # scripts/ci/__tests__/roll-gate-decision.test.mjs.
+              # NOTE the redirect-to-file rather than `node … | tail -n1`: in a
+              # pipeline $? is TAIL's status, so a refusing resolver would have
+              # looked like a success and handed back its warning text. (The
+              # SHA-shape check below would still have failed closed, but with
+              # the wrong message — and depending on a second check to catch the
+              # first one's silence is how this class of bug survives.)
+              RESOLVE_LOG=$(mktemp)
+              if node scripts/ci/roll-resolve-image-tag.mjs \
+                   --acr "${{ env.ACR_NAME }}" --app "${{ env.APP_NAME }}" >"$RESOLVE_LOG" 2>&1; then
+                cat "$RESOLVE_LOG"
+                BUILT_SHA=$(tail -n 1 "$RESOLVE_LOG")
+              else
+                cat "$RESOLVE_LOG"
+                echo "::error::Could not resolve ':latest' to a built ${{ env.APP_NAME }} image (reason above). Pass an explicit SHA image_tag."
+                exit 1
+              fi
               if ! [[ "$BUILT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "::error::No recent main commit has a ${{ env.APP_NAME }} image in ${{ env.ACR_NAME }} - refusing to roll ':latest' blind. Build the image, or pass an explicit SHA image_tag."
+                echo "::error::':latest' resolution returned '$BUILT_SHA', which is not a commit SHA — refusing to roll."
                 exit 1
               fi
               if [[ "$BUILT_SHA" != "${{ github.sha }}" ]]; then
@@ -200,6 +239,21 @@ jobs:
         id: vitest_gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ROLL_VITEST_WAIT_MINUTES: ${{ vars.LOOM_ROLL_VITEST_WAIT_MINUTES || '50' }}
+        # #2819: this gate used to read the check-run conclusion ONCE and refuse
+        # when it was empty — but `.conclusion` is null while a check is QUEUED
+        # or IN_PROGRESS, so "still running" was reported as
+        #     "No 'vitest (node 20)' check-run found … Re-run CI on this commit"
+        # That is not an edge case. The roll is triggered by the image build
+        # completing, and vitest is SLOWER than the image build: on 5d51f961 the
+        # build finished 11:23:11Z, this gate read at 11:23:30Z, and vitest ran
+        # 11:05:25Z → 11:33:32Z and PASSED. Every console-touching commit hit it,
+        # and the advice ("re-run CI") could not have helped.
+        #
+        # It now WAITS for a verdict. The three states are distinct:
+        #   passed  → proceed        failed → refuse        not yet → keep waiting
+        # and waiting is bounded — a timeout is a REFUSAL, never a silent pass.
+        # Decision logic + tests: scripts/ci/roll-gate-decision.mjs.
         run: |
           set -e
           if [[ "${{ steps.vars.outputs.skip_uat }}" == "true" ]]; then
@@ -211,37 +265,7 @@ jobs:
             echo "::warning::No resolvable commit SHA for tag '${{ steps.vars.outputs.tag }}' — cannot confirm vitest. Skipping this gate (dispatch of a non-SHA tag)."
             exit 0
           fi
-          echo "Checking 'vitest (node 20)' check-run conclusion for $SHA ..."
-          # Take the most-recent run of the check (a commit may have re-runs).
-          CONCL=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name=="vitest (node 20)")] | sort_by(.started_at) | last | .conclusion' 2>/dev/null || echo "")
-          echo "conclusion=${CONCL:-<none>}"
-          if [[ "$CONCL" == "success" ]]; then
-            echo "::notice::vitest (node 20) succeeded for $SHA — proceeding to roll."
-          elif [[ -z "$CONCL" || "$CONCL" == "null" ]]; then
-            echo "::error::No 'vitest (node 20)' check-run found for $SHA — refusing to roll an unverified commit. Re-run CI on this commit, roll a tested SHA, or (emergency only) dispatch with skip_uat=true."
-            exit 1
-          elif [[ "$CONCL" == "cancelled" ]]; then
-            # A push-run can be auto-cancelled when a newer push supersedes it
-            # (concurrency), even though the commit's content was fully tested on
-            # its PR. Accept IFF the commit is an ancestor of current main AND
-            # main-HEAD's vitest concluded success (main includes this content).
-            MAIN_SHA=$(gh api "repos/${{ github.repository }}/branches/main" --jq '.commit.sha')
-            CMP=$(gh api "repos/${{ github.repository }}/compare/$SHA...$MAIN_SHA" --jq '{status: .status, behind: .behind_by}' 2>/dev/null || echo "")
-            STATUS=$(echo "$CMP" | jq -r '.status // empty')
-            BEHIND=$(echo "$CMP" | jq -r '.behind // 1')
-            MAIN_CONCL=$(gh api "repos/${{ github.repository }}/commits/$MAIN_SHA/check-runs?per_page=100" \
-              --jq '[.check_runs[] | select(.name=="vitest (node 20)")] | sort_by(.started_at) | last | .conclusion' 2>/dev/null || echo "")
-            if [[ ( "$STATUS" == "ahead" || "$STATUS" == "identical" ) && "$BEHIND" == "0" && "$MAIN_CONCL" == "success" ]]; then
-              echo "::notice::vitest for $SHA was superseded (cancelled), but the commit is an ancestor of main ($MAIN_SHA) whose vitest concluded success — content is verified, proceeding."
-            else
-              echo "::error::'vitest (node 20)' concluded 'cancelled' for $SHA and it could not be verified via main (status=$STATUS behind=$BEHIND main_vitest=$MAIN_CONCL) — refusing to roll. Fix CI or (emergency only) dispatch with skip_uat=true."
-              exit 1
-            fi
-          else
-            echo "::error::'vitest (node 20)' concluded '$CONCL' (not success) for $SHA — refusing to roll a failing commit. Fix CI or (emergency only) dispatch with skip_uat=true."
-            exit 1
-          fi
+          node scripts/ci/roll-vitest-gate.mjs "$SHA"
 
       - name: Install cosign
         if: steps.vars.outputs.skip_verify != 'true'
