@@ -23,10 +23,10 @@ import { clientFetch } from '@/lib/client-fetch';
  * MessageBar names the exact remediation — the full surface still renders.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Divider, Card, CardHeader,
-  Input, Textarea, Field, Select, Tag, Tooltip, Tab, TabList, Switch, Checkbox,
+  Input, Textarea, Field, Select, Combobox, Option, Tag, Tooltip, Tab, TabList, Switch, Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -44,6 +44,10 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ShareExplorerDialog } from '@/lib/components/marketplace/share-explorer';
+import {
+  LakehouseTablePicker, RecipientPrincipalPicker,
+  type PickedDeltaTable, type SelectedPrincipal,
+} from '@/lib/components/marketplace/share-publish-pickers';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 const useStyles = makeStyles({
@@ -62,6 +66,7 @@ const useStyles = makeStyles({
   },
   cardActions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap', alignItems: 'center' },
   formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingHorizontalL },
+  stack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '200px' },
   mono: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
@@ -860,25 +865,28 @@ function ShareCard({
           }} />
       </div>
       <AddObjectDialog open={addObjOpen} setOpen={setAddObjOpen} shareName={share.name} host={host}
-        backend={backend} onDone={onChange} />
+        backend={backend} existingObjects={share.objects || []} onDone={onChange} />
     </Card>
   );
 }
 
 /** Cascading Catalog → Schema → Table picker over /api/catalog/browse (UC). */
 function AddObjectDialog({
-  open, setOpen, shareName, host, backend, onDone,
+  open, setOpen, shareName, host, backend, existingObjects, onDone,
 }: {
   open: boolean; setOpen: (b: boolean) => void; shareName: string; host: string | null;
-  backend: 'loom' | 'databricks'; onDone: () => void;
+  backend: 'loom' | 'databricks'; existingObjects?: ShareObj[]; onDone: () => void;
 }) {
   const s = useStyles();
   // LU-9 Loom backend: a share entry is a schema + table name + the ADLS Gen2
-  // Delta root the sharing server reads. The Databricks cascade below browses a
-  // Unity Catalog metastore, which does not exist on this path.
-  const [loomSchema, setLoomSchema] = useState('');
+  // Delta root the sharing server reads. All three used to be raw <Input>s
+  // (issue #2618 — a loom_no_freeform_config violation, and a parity regression
+  // against the Databricks cascade below). Now the Delta root is PICKED, via
+  // Workspace → Lakehouse → Delta table, and the two recipient-facing names are
+  // derived from that pick.
   const [loomTable, setLoomTable] = useState('');
-  const [loomLocation, setLoomLocation] = useState('');
+  const [loomSchema, setLoomSchema] = useState('');
+  const [picked, setPicked] = useState<PickedDeltaTable | null>(null);
   // Change Data Feed. The protocol's `changes` endpoint only works for a table
   // the server was told to share history for, so this has to reach the manifest.
   const [loomHistory, setLoomHistory] = useState(false);
@@ -888,6 +896,28 @@ function AddObjectDialog({
   const [cat, setCat] = useState(''); const [sch, setSch] = useState(''); const [tbl, setTbl] = useState('');
   const [sharedAs, setSharedAs] = useState('');
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+
+  // Schemas ALREADY used by this share — a real enumeration (the share's own
+  // published objects are `schema.table`), so the second table you publish
+  // reuses the first one's schema by picking it. The Combobox stays freeform
+  // because a share's schema list is whatever the publisher creates: it is a
+  // namespace this operator invents, not an identifier Loom can enumerate.
+  const shareSchemas = useMemo(() => Array.from(new Set(
+    (existingObjects || [])
+      .map((o) => String(o.shared_as || o.name || '').split('.')[0].trim())
+      .filter(Boolean),
+  )).sort(), [existingObjects]);
+
+  // Picking a Delta table derives both recipient-facing names, so the common
+  // path needs zero typing: schema defaults to the lakehouse it came from
+  // (reusing an existing share schema when the names match), table to the
+  // source table's own name.
+  const onPick = useCallback((t: PickedDeltaTable | null) => {
+    setPicked(t);
+    if (!t) return;
+    setLoomTable((prev) => prev || t.name);
+    setLoomSchema((prev) => prev || t.lakehouseName || 'shared');
+  }, []);
 
   const browse = useCallback(async (path: string[]) => {
     if (!host) return [];
@@ -911,30 +941,42 @@ function AddObjectDialog({
           <DialogTitle>Add a table to {shareName}</DialogTitle>
           <DialogContent>
             {backend === 'loom' ? (
-              <div className={s.formGrid}>
-                <Field label="Schema" required className={s.field} hint="The middle level of share.schema.table.">
-                  <Input value={loomSchema} onChange={(_, d) => setLoomSchema(d.value)} placeholder="gold" />
-                </Field>
-                <Field label="Table" required className={s.field} hint="The name the recipient sees.">
-                  <Input value={loomTable} onChange={(_, d) => setLoomTable(d.value)} placeholder="revenue" />
-                </Field>
-                <Field
-                  label="ADLS Delta location" required className={s.field}
-                  hint="abfss://<container>@<account>.dfs.<suffix>/<path> — the Delta table root in this estate's lake."
-                >
-                  <Input value={loomLocation} onChange={(_, d) => setLoomLocation(d.value)}
-                    placeholder="abfss://lake@stloom.dfs.core.usgovcloudapi.net/gold/revenue" />
-                </Field>
-                <Field
-                  label="Share history (CDF)" className={s.field}
-                  hint="Publishes the Delta change data feed as well as the current snapshot, so the recipient's client can call /changes. Without it, a CDF read fails at the server."
-                >
-                  <Checkbox
-                    checked={loomHistory}
-                    onChange={(_, d) => setLoomHistory(!!d.checked)}
-                    label="Recipients may read table history"
-                  />
-                </Field>
+              <div className={s.stack}>
+                <LakehouseTablePicker open={open} selected={picked} onSelect={onPick} />
+                <div className={s.formGrid}>
+                  <Field
+                    label="Schema (as the recipient sees it)" required className={s.field}
+                    hint="The middle level of share.schema.table. Defaults to the lakehouse; pick a schema this share already uses, or type a new one."
+                  >
+                    <Combobox
+                      freeform
+                      placeholder="gold"
+                      value={loomSchema}
+                      selectedOptions={loomSchema ? [loomSchema] : []}
+                      onOptionSelect={(_e, d) => setLoomSchema(d.optionValue || '')}
+                      onChange={(e) => setLoomSchema(e.target.value)}
+                    >
+                      {shareSchemas.map((x) => <Option key={x} value={x}>{x}</Option>)}
+                    </Combobox>
+                  </Field>
+                  <Field
+                    label="Table (as the recipient sees it)" required className={s.field}
+                    hint="Defaults to the source table's own name. Change it to publish under an alias."
+                  >
+                    <Input value={loomTable} onChange={(_, d) => setLoomTable(d.value)}
+                      placeholder={picked?.name || 'revenue'} />
+                  </Field>
+                  <Field
+                    label="Share history (CDF)" className={s.field}
+                    hint="Publishes the Delta change data feed as well as the current snapshot, so the recipient's client can call /changes. Without it, a CDF read fails at the server."
+                  >
+                    <Checkbox
+                      checked={loomHistory}
+                      onChange={(_, d) => setLoomHistory(!!d.checked)}
+                      label="Recipients may read table history"
+                    />
+                  </Field>
+                </div>
               </div>
             ) : (
             <div className={s.formGrid}>
@@ -971,13 +1013,13 @@ function AddObjectDialog({
           <DialogActions>
             <Button
               appearance="primary"
-              disabled={busy || (backend === 'loom' ? !(loomSchema && loomTable && loomLocation) : !tbl)}
+              disabled={busy || (backend === 'loom' ? !(loomSchema.trim() && loomTable.trim() && picked) : !tbl)}
               onClick={async () => {
                 setBusy(true); setErr(null);
                 const addObjects = backend === 'loom'
                   ? [{
                     schema: loomSchema.trim(), name: loomTable.trim(),
-                    location: loomLocation.trim(), historyShared: loomHistory,
+                    location: picked!.location, historyShared: loomHistory,
                   }]
                   : [{ name: tbl, data_object_type: 'TABLE', ...(sharedAs ? { shared_as: sharedAs } : {}) }];
                 const r = await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(shareName)}`, {
@@ -987,7 +1029,7 @@ function AddObjectDialog({
                 const j = await r.json(); setBusy(false);
                 if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
                 setOpen(false); setCat(''); setSch(''); setTbl(''); setSharedAs('');
-                setLoomSchema(''); setLoomTable(''); setLoomLocation(''); setLoomHistory(false); onDone();
+                setLoomSchema(''); setLoomTable(''); setPicked(null); setLoomHistory(false); onDone();
               }}
             >{busy ? 'Adding…' : 'Add table'}</Button>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary">Cancel</Button></DialogTrigger>
@@ -1036,7 +1078,11 @@ function NewRecipientDialog({ open, setOpen, backend, onDone }: {
   // activation URL to surface and no long-lived bearer profile to mail — that
   // file would be both the identity and the credential, unrevocable per
   // recipient and unattributable per call.
-  const [principals, setPrincipals] = useState('');
+  //
+  // These used to be hand-typed GUIDs in a comma-separated <Input> (issue
+  // #2618). They are now picked from real Microsoft Graph search via the shared
+  // IdentityPicker — the same people-picker the access-governance surfaces use.
+  const [principals, setPrincipals] = useState<SelectedPrincipal[]>([]);
   const s = useStyles();
   const [name, setName] = useState(''); const [auth, setAuth] = useState('TOKEN');
   const [gmid, setGmid] = useState(''); const [comment, setComment] = useState('');
@@ -1061,11 +1107,10 @@ function NewRecipientDialog({ open, setOpen, backend, onDone }: {
                 {backend === 'loom' ? (
                   <>
                     <Field
-                      label="Entra principal id(s)" required style={{ marginTop: tokens.spacingVerticalS }}
-                      hint="Object id (oid) of a guest/B2B user, or application id of a service principal. Comma-separated for several. The recipient presents an Entra token — Loom mints no long-lived bearer profile."
+                      label="Recipient principals" required style={{ marginTop: tokens.spacingVerticalS }}
+                      hint="The guest/B2B users and service principals that ARE this recipient. They present an Entra token — Loom mints no long-lived bearer profile."
                     >
-                      <Input value={principals} onChange={(_, d) => setPrincipals(d.value)}
-                        placeholder="00000000-0000-0000-0000-000000000000" />
+                      <RecipientPrincipalPicker selected={principals} onChange={setPrincipals} />
                     </Field>
                     <MessageBar intent="info" layout="multiline" style={{ marginTop: tokens.spacingVerticalS }}>
                       <MessageBarBody>
@@ -1097,11 +1142,11 @@ function NewRecipientDialog({ open, setOpen, backend, onDone }: {
             {!activation && (
               <Button
                 appearance="primary"
-                disabled={busy || !name || (backend === 'loom' ? !principals.trim() : auth === 'DATABRICKS' && !gmid)}
+                disabled={busy || !name || (backend === 'loom' ? !principals.length : auth === 'DATABRICKS' && !gmid)}
                 onClick={async () => {
                   setBusy(true); setErr(null);
                   const body = backend === 'loom'
-                    ? { name, comment, principalIds: principals.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean) }
+                    ? { name, comment, principalIds: principals.map((p) => p.principalId) }
                     : { name, authentication_type: auth, comment, ...(auth === 'DATABRICKS' ? { data_recipient_global_metastore_id: gmid } : {}) };
                   const r = await clientFetch('/api/marketplace/sharing/recipients', {
                     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1111,12 +1156,12 @@ function NewRecipientDialog({ open, setOpen, backend, onDone }: {
                   if (!j.ok) { setErr([j.error, j.hint].filter(Boolean).join(' — ') || 'Failed'); return; }
                   onDone();
                   const url = j.recipient?.tokens?.[0]?.activation_url;
-                  if (url) setActivation(url); else { setOpen(false); setName(''); setPrincipals(''); }
+                  if (url) setActivation(url); else { setOpen(false); setName(''); setPrincipals([]); }
                 }}
               >{busy ? 'Creating…' : 'Create'}</Button>
             )}
             <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary" onClick={() => { setName(''); setComment(''); setGmid(''); setPrincipals(''); }}>Close</Button>
+              <Button appearance="secondary" onClick={() => { setName(''); setComment(''); setGmid(''); setPrincipals([]); }}>Close</Button>
             </DialogTrigger>
           </DialogActions>
         </DialogBody>

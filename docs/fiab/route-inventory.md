@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1665 |
+| Total routes | 1666 |
 | Public (no session) | 100 |
 | Session-only | 576 |
 | Owner-scoped | 699 |
-| Admin | 290 |
+| Admin | 291 |
 | Gated (backend config) | 531 |
 | Areas | 120 |
 
@@ -1821,6 +1821,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `marketplace/sharing/manifest/route.ts` | GET | admin |  | — |
 | `marketplace/sharing/providers/[name]/route.ts` | GET POST DELETE | session-only |  | — |
 | `marketplace/sharing/providers/route.ts` | GET POST | session-only | ● | — |
+| `marketplace/sharing/publishable-tables/route.ts` | GET | admin |  | — |
 | `marketplace/sharing/query/route.ts` | POST | session-only | ● | Databricks |
 | `marketplace/sharing/recipients/[name]/route.ts` | GET PATCH DELETE | admin |  | — |
 | `marketplace/sharing/recipients/route.ts` | GET POST | admin |  | — |
