@@ -42,6 +42,8 @@ This rebuild is a real visual flow-DAG designer that round-trips to
 | **Run** (single-input test run) | ✅ built — "Run" submits the saved flow with the inputs' defaults; shows per-node outputs + final output | `POST …/PromptFlows/{id}/submit` `{inputs}` |
 | LLM connection set-up gate | ⚠️ honest-gate — when the hub has no AOAI/AI-Services connection, a Fluent `MessageBar intent="warning"` names the action (Foundry Management center → Connections) + the bicep module `platform/fiab/bicep/modules/admin-plane/ai-foundry.bicep`; the full designer still renders, Run is disabled until a connection exists | `GET /api/foundry/connections` |
 | Compute-session gate on Run | ⚠️ honest-gate — a run with no started compute session returns the backend error / `NotDeployedError` surfaced in a MessageBar (start the session in Foundry) | `submitFlowRun` error path |
+| Refresh the connection list (Foundry portal "Refresh" on Connections) | ✅ built (#2584) — a "Refresh connections" button on the picker toolbar, and the ribbon **Reload**, both re-read the route with `?refresh=1` so a connection created outside Loom appears immediately instead of waiting out the 5-min server memo (#2557) | `GET /api/foundry/connections?refresh=1` |
+| Partial / truncated connection list | ⚠️ honest-gate — when the ARM walk hits its pages/time ceiling the route returns `truncated`; the editor shows a "Connection list is partial" MessageBar naming the knob (`LOOM_ARM_PAGING_MAX_PAGES` / `LOOM_ARM_PAGING_BUDGET_MS`) and SUPPRESSES the "no LLM connection" gate — a paging deadline is never reported as an empty hub | `truncated` on `GET /api/foundry/connections` |
 
 Zero ❌. Zero stub banners. The only non-functional states are the two honest
 infra gates above, and even then the full canvas + I/O panels render.
@@ -51,7 +53,7 @@ infra gates above, and even then the full canvas + I/O panels render.
 - List / create: `/api/items/prompt-flow` (GET `listPromptFlows`, POST `createPromptFlow`).
 - Open / save / delete: `/api/items/prompt-flow/[id]` (GET `getPromptFlow`, PUT `updatePromptFlow`, DELETE `deletePromptFlow`).
 - Run: `/api/items/prompt-flow/[id]/run` → `submitFlowRun(project, id, inputs)` (`POST …/PromptFlows/{id}/submit`).
-- LLM connections: `/api/foundry/connections` → `listConnections()` (hub `connections` ARM list), filtered to LLM-capable categories (AzureOpenAI / OpenAI / AIServices / Serverless / CustomKeys).
+- LLM connections: `/api/foundry/connections` → `listConnections()` (hub `connections` ARM list), filtered to LLM-capable categories (AzureOpenAI / OpenAI / AIServices / Serverless / CustomKeys). Memoized server-side for 5 min; `?refresh=1` (Refresh connections / ribbon Reload) forces a re-read, and `truncated` reports a paging deadline.
 
 All routes validate the session (401 unauthenticated) and require `project`
 (400). `NotDeployedError` → `503 {notDeployed:true, hint}`; other Foundry
@@ -78,7 +80,10 @@ owns persistence + run.
 
 DOM render tests are pre-existing-red under the repo's global `node`
 vitest-environment (`document is not defined`); coverage is via the backend
-contract tests above per `no-vaporware.md`.
+contract tests above per `no-vaporware.md`. **Update (#2584):** the jsdom
+harness works for this editor now — `lib/editors/__tests__/prompt-flow.test.tsx`
+(6) mounts `PromptFlowEditor` and asserts the ACTUAL connections URL requested
+on mount vs on Refresh/Reload, plus the truncated-vs-empty banner split.
 
 ## Verification
 

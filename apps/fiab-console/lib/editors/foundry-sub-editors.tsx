@@ -34,7 +34,7 @@ import {
   ShieldTask20Regular, Search20Regular, BranchCompare20Regular,
   Server20Regular, Database20Regular,
   Folder20Regular, Document20Regular, FolderOpen20Regular, ArrowUp20Regular, TableSimple20Regular,
-  DocumentBulletList20Regular,
+  DocumentBulletList20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
 import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -428,7 +428,16 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
   const [selected, setSelected] = useState<string | null>(null);
 
   // Foundry connections — drive the LLM-node connection picker + honest gate.
-  const [conn] = useApi<{ connections: any[] }>('/api/foundry/connections');
+  // The server memoizes this ARM list for 5 min (#2557); an EXPLICIT refresh must
+  // send `?refresh=1` or a connection created in the Azure portal stays invisible
+  // here for the whole TTL with nothing to click (#2584). Same nonce shape as the
+  // hub editor's ribbon Reload: it flips the URL AND re-fires the fetch.
+  const [connNonce, setConnNonce] = useState(0);
+  const refreshConnections = useCallback(() => setConnNonce((n) => n + 1), []);
+  const [conn] = useApi<{ connections: any[]; truncated?: 'pages' | 'time' }>(
+    connNonce > 0 ? '/api/foundry/connections?refresh=1' : '/api/foundry/connections',
+    [connNonce],
+  );
   const llmConnections = useMemo(
     () => (conn.data?.connections || [])
       .filter((c: any) => !c.category || LLM_CONNECTION_CATEGORIES.includes(c.category))
@@ -528,10 +537,14 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     const portalUrl = project
       ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/prompt-flow`
       : null;
-    return buildBaseRibbon(reload, portalUrl);
-  }, [reload, project]);
+    // Ribbon Reload re-reads the flows AND re-reads connections past the memo.
+    return buildBaseRibbon(() => { reload(); refreshConnections(); }, portalUrl);
+  }, [reload, refreshConnections, project]);
 
-  const noLlmConnection = !conn.loading && !conn.error && llmConnections.length === 0;
+  // A truncated ARM walk is NOT "no connections" — it is a paging deadline, and
+  // reading it as an empty hub is exactly the wrong conclusion (#2584).
+  const connTruncated = conn.data?.truncated;
+  const noLlmConnection = !conn.loading && !conn.error && !connTruncated && llmConnections.length === 0;
   const perNode: Array<{ node: string; output: unknown }> = useMemo(() => {
     const nodeRuns = runResult?.result?.flowRunInfo?.node_runs || runResult?.result?.node_runs || runResult?.result?.nodeRuns;
     if (!nodeRuns || typeof nodeRuns !== 'object') return [];
@@ -555,10 +568,23 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
             </Dropdown>
           </Field>
         )}
+        <Button size="small" appearance="subtle" icon={<ArrowClockwise20Regular />}
+          disabled={conn.loading} onClick={refreshConnections} data-testid="refresh-connections"
+          title="Re-read the Foundry hub connections past the 5-min server memo">Refresh connections</Button>
       </div>
 
       {/* Honest infra gate — full builder still renders below. */}
       {conn.error && <ErrorBar msg={conn.error} hint={conn.hint} notDeployed={conn.notDeployed} />}
+      {connTruncated && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Connection list is partial</MessageBarTitle>
+            The hub connection walk hit its {connTruncated} ceiling — a paging deadline, NOT an empty hub.
+            Connections may be missing from the picker below; use Refresh connections to retry, or raise{' '}
+            <code>{connTruncated === 'pages' ? 'LOOM_ARM_PAGING_MAX_PAGES' : 'LOOM_ARM_PAGING_BUDGET_MS'}</code>.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {noLlmConnection && (
         <MessageBar intent="warning">
           <MessageBarBody>
