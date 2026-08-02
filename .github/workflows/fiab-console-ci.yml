@@ -283,7 +283,12 @@ jobs:
             # the merge below sees all 1302 files and fails on any genuine test
             # failure or on the coverage floor. Deferring to it is what makes the
             # merge the single enforcement point rather than one of three.
-            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json || echo "shard $shard exited non-zero — the merge below is the verdict"
+            # Thresholds MUST be off per shard. A shard sees half the files, so
+            # its coverage is ~24.8% against a 32% whole-suite floor — it fails
+            # every time, for a reason that says nothing about the code. I wrote
+            # the commit message warning about exactly this and then dropped the
+            # disable flag in the next commit; CI caught it.
+            pnpm vitest run --shard="$shard/2" --reporter=blob               --coverage --coverage.reporter=json               --coverage.thresholds.lines=0 --coverage.thresholds.statements=0               --coverage.thresholds.functions=0 --coverage.thresholds.branches=0               || echo "shard $shard exited non-zero — the merge below is the verdict"
             echo "::endgroup::"
           done
           # Fail loudly if a shard produced no blob — that IS fatal, because the
