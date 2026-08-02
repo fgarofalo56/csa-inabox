@@ -36,8 +36,11 @@
  *
  * Widening a read to the caller's `tid` widens it to the caller's own Entra
  * tenant only — never across tenants — and every surface that uses it is
- * either tenant-admin gated or applies the widening only for tenant admins.
+ * either tenant-admin gated or applies the widening only for tenant admins
+ * (see {@link auditScopeIdsForViewer}).
  */
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import type { SessionPayload } from '@/lib/auth/session';
 
 /** The claim subset an audit-log read needs. Structurally compatible with `UserClaims`. */
 export interface AuditScopeClaims {
@@ -64,4 +67,27 @@ export const AUDIT_TENANT_PREDICATE = 'ARRAY_CONTAINS(@tenants, c.tenantId)';
 export function auditScopeIds(claims: AuditScopeClaims): string[] {
   const { oid, tid } = claims;
   return tid && tid !== oid ? [oid, tid] : [oid];
+}
+
+/**
+ * The audit scope for a viewer on a surface that is NOT tenant-admin gated.
+ *
+ * `/admin/overview`, `/admin/usage` and `/admin/audit-logs` are admin-gated, so
+ * they call {@link auditScopeIds} directly — widening them grants their callers
+ * nothing the audit viewer does not already grant. `/governance/insights` is
+ * session-only: any authenticated user reaches it, and every other number it
+ * returns is scoped to the caller's own workspaces. Widening its audit count to
+ * the Entra `tid` for everybody would hand each ordinary tenant member an
+ * org-wide activity volume they can see nowhere else on that page.
+ *
+ * So the widening applies only to tenant admins, and a non-admin's count stays
+ * deliberately actor-scoped. The policy lives HERE rather than at the call site
+ * for two reasons: it belongs next to the rule it qualifies, and an
+ * `isTenantAdmin` token in a session-only route makes
+ * `scripts/ci/generate-route-inventory.mjs` classify that route as
+ * `admin` — a claim that would be false, because the route does not 403 a
+ * non-admin, it only narrows one number for them.
+ */
+export function auditScopeIdsForViewer(session: SessionPayload): string[] {
+  return isTenantAdmin(session) ? auditScopeIds(session.claims) : [session.claims.oid];
 }

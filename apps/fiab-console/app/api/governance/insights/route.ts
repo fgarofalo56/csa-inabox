@@ -11,10 +11,9 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { workspacesContainer, itemsContainer, auditLogContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
-import { AUDIT_TENANT_PREDICATE, auditScopeIds } from '@/lib/audit/audit-scope';
+import { AUDIT_TENANT_PREDICATE, auditScopeIdsForViewer } from '@/lib/audit/audit-scope';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -28,15 +27,11 @@ export async function GET() {
   // its ~45 writers record `tenantScopeId(session)` = tid ?? oid, so an
   // oid-only predicate misses every tid-scoped row (lib/audit/audit-scope.ts).
   //
-  // Unlike /admin/overview and /admin/usage, THIS surface is session-only — any
-  // authenticated user reaches it, and every other number it returns is scoped
-  // to the caller's own workspaces. Widening the audit count to the Entra tid
-  // for everybody would hand each tenant member an org-wide activity volume
-  // they cannot see anywhere else on this page, so the widening applies only to
-  // tenant admins (who already read every audit row at /admin/audit-logs).
-  // For a non-admin the count stays deliberately actor-scoped — the alternative
-  // the issue's acceptance criteria allows.
-  const auditScope = isTenantAdmin(s) ? auditScopeIds(s.claims) : [tenantId];
+  // Unlike /admin/overview and /admin/usage, THIS surface is session-only, so
+  // the widening is admin-conditional — auditScopeIdsForViewer() narrows a
+  // non-admin back to their own oid. The policy (and the reasoning) lives in
+  // that module; see its doc comment.
+  const auditScope = auditScopeIdsForViewer(s);
   try {
     // Cached 3 min + SWR: the posture KPIs union several cross-partition
     // Cosmos scans per paint — one cached crawl serves every viewer
