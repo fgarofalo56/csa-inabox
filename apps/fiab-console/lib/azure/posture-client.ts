@@ -13,9 +13,18 @@
  *   - FAST  : a pre-computed `posture:${tenantId}` doc in the Cosmos
  *             `posture-aggregates` container (written every 5 min by the
  *             posture-refresh Azure Function).
- *   - LIVE  : `computePosture(tenantId)` recomputes the Cosmos aggregates inline
- *             (same formulas the Function uses) so the surface is correct even
- *             before the Function runs / in local dev.
+ *   - LIVE  : `computePosture(tenantId, auditScope)` recomputes the Cosmos
+ *             aggregates inline (same formulas the Function uses) so the surface
+ *             is correct even before the Function runs / in local dev.
+ *
+ * `auditScope` is REQUIRED (not defaulted) because the one read that touches the
+ * `audit-log` container — the `sharedItems30d` KPI — cannot be scoped by
+ * `tenantId` alone. That container's ~45 writers record
+ * `tenantScopeId(session)` = `tid ?? oid`, so the old `c.tenantId = @t` (with
+ * `@t = claims.oid`) predicate silently missed every `tid`-scoped share event
+ * (#2635 / #2793). Callers build the array with `lib/audit/audit-scope.ts` and
+ * pass it in; making it a required parameter means a future caller cannot
+ * reintroduce the under-count by forgetting it — tsc rejects the call.
  *
  * Every metric whose backend isn't provisioned is GATED (per
  * .claude/rules/no-vaporware.md) — the function returns the metric as `null`
@@ -38,6 +47,7 @@ import { listSensitivityLabels, MipNotConfiguredError } from './mip-graph-client
 import { listDlpAlerts, DlpNotConfiguredError } from './dlp-graph-client';
 import { listDataSources, listScansForSource, listScanRuns, PurviewNotConfiguredError } from './purview-client';
 import { queryLogs, MonitorNotConfiguredError } from './monitor-client';
+import { AUDIT_TENANT_PREDICATE } from '@/lib/audit/audit-scope';
 import type { NotConfiguredHint } from '../components/admin-security/not-configured-bar';
 
 // ---------------------------------------------------------------------------
@@ -141,7 +151,7 @@ interface EstateAggregate {
   sharedItems30d: number;
 }
 
-async function computeEstate(tenantId: string): Promise<EstateAggregate> {
+async function computeEstate(tenantId: string, auditScope: string[]): Promise<EstateAggregate> {
   const wsC = await workspacesContainer();
   const itC = await itemsContainer();
   const audC = await auditLogContainer();
@@ -178,12 +188,19 @@ async function computeEstate(tenantId: string): Promise<EstateAggregate> {
   }
 
   // Sharing in the last 30 days (audit kind === 'share').
+  //
+  // The `audit-log` container partitions on /itemId (never an oid), so this read
+  // is deliberately cross-partition — no `partitionKey` option. Its tenant scope
+  // comes from `auditScope` (oid, plus the caller's Entra tid when they are a
+  // tenant admin) bound to @tenants, NOT from `tenantId`: writers record
+  // `tenantScopeId(session)` = tid ?? oid, so an oid-only predicate under-counts
+  // every tid-scoped share event. See lib/audit/audit-scope.ts (#2635 / #2793).
   let sharedItems30d = 0;
   try {
     const since = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
     const { resources } = await audC.items.query<number>({
-      query: "SELECT VALUE COUNT(1) FROM c WHERE c.tenantId = @t AND c.at >= @since AND (c.kind = 'share' OR c.action = 'share')",
-      parameters: [{ name: '@t', value: tenantId }, { name: '@since', value: since }],
+      query: `SELECT VALUE COUNT(1) FROM c WHERE ${AUDIT_TENANT_PREDICATE} AND c.at >= @since AND (c.kind = 'share' OR c.action = 'share')`,
+      parameters: [{ name: '@tenants', value: auditScope }, { name: '@since', value: since }],
     }).fetchAll();
     sharedItems30d = resources[0] || 0;
   } catch { /* audit container may be empty */ }
@@ -343,10 +360,16 @@ export function assertCosmosConfigured(): void {
  * by the posture-refresh Function and by the BFF route when no fresh
  * pre-computed doc exists. Each non-Cosmos metric degrades to a gate rather than
  * failing the whole call.
+ *
+ * @param tenantId   The caller's workspace/item scope (`claims.oid`) — the
+ *                   partition key for the `workspaces` read.
+ * @param auditScope The tenant ids the `audit-log` read must cover, built by
+ *                   `auditScopeIdsForViewer(session)` (lib/audit/audit-scope.ts).
+ *                   Required, never defaulted — see the module doc.
  */
-export async function computePosture(tenantId: string): Promise<PostureResult> {
+export async function computePosture(tenantId: string, auditScope: string[]): Promise<PostureResult> {
   assertCosmosConfigured();
-  const estate = await computeEstate(tenantId);
+  const estate = await computeEstate(tenantId, auditScope);
 
   const [mip, dlp, purview, usage] = await Promise.all([
     computeMip(estate.labeledCount, estate.totalItems),

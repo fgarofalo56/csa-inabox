@@ -73,6 +73,17 @@ const TOUCH_EXEMPT = new Map([
   // 401/403 regression risk on two admin-visible dashboards.
   ['apps/fiab-console/app/api/admin/usage/route.ts', '#2635: one-predicate audit-scope fix; codemod reports 0 handlers'],
   ['apps/fiab-console/app/api/governance/insights/route.ts', '#2635: one-predicate audit-scope fix; zero-arg GET(), codemod reports 0 handlers'],
+  // #2793 is the tail of that same class: this route's `sharedItems30d` KPI is
+  // the last audit-log reader still binding `c.tenantId = @t` with @t = oid. The
+  // change threads ONE array (auditScopeIdsForViewer(s)) into computePosture.
+  // The auth prologue is untouched: getSession() → 401, isTenantAdmin() → 403.
+  //
+  // THE CODEMOD DECLINES — `--file=apps/fiab-console/app/api/governance/govern/posture/route.ts`
+  // reports "DRY-RUN: 0 handlers across 0 files": the route exports a zero-arg
+  // `GET()` (no NextRequest) whose prologue is getSession()+401 followed by a
+  // hand-written isTenantAdmin() 403 carrying a bespoke code/reason/remediation
+  // body, which is not the shape withSession/withTenantAdmin replaces.
+  ['apps/fiab-console/app/api/governance/govern/posture/route.ts', '#2793: one-predicate audit-scope fix; zero-arg GET() + bespoke 403 body, codemod reports 0 handlers'],
   // #2657 round 2 touched these four ONLY to build one map with safeRecord()
   // instead of `{}`. The ontology pair is the point of the round: their
   // /^[A-Za-z_][\w]{0,62}$/ key filter reads as a strict identifier check and

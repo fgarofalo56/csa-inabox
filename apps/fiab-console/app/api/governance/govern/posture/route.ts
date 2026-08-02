@@ -21,6 +21,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { auditScopeIdsForViewer } from '@/lib/audit/audit-scope';
 import {
   computePosture,
   readPostureDoc,
@@ -49,6 +50,19 @@ export async function GET() {
   }
 
   const tenantId = s.claims.oid;
+  // Audit scope for the `sharedItems30d` KPI (#2793, class of #2635). The
+  // Cosmos `audit-log` container partitions on /itemId and its ~45 writers
+  // record `tenantScopeId(session)` = tid ?? oid, so the previous
+  // `c.tenantId = @t` (with `@t = claims.oid`) predicate counted only the
+  // oid-scoped rows and missed every tid-scoped share event.
+  //
+  // `auditScopeIdsForViewer` is the same admin-conditional helper
+  // /governance/insights adopted: it widens to the caller's Entra tid ONLY for
+  // a tenant admin and returns `[oid]` for anyone else. This route already 403s
+  // a non-admin above, so today that conditional is belt-and-braces — it means
+  // the counter cannot silently become estate-wide for ordinary members if the
+  // route's gate is ever relaxed. See lib/audit/audit-scope.ts.
+  const auditScope = auditScopeIdsForViewer(s);
 
   try {
     // Always compute live so the feature-usage rows + per-metric gates are
@@ -56,7 +70,7 @@ export async function GET() {
     // posture-refresh Function) is surfaced via `precomputedAt` so the UI can
     // show whether the background refresh is healthy, without masking the live
     // gate hints behind a possibly-stale snapshot.
-    const result = await computePosture(tenantId);
+    const result = await computePosture(tenantId, auditScope);
     const cached = await readPostureDoc(tenantId).catch(() => null);
     return NextResponse.json({ ok: true, ...result, precomputedAt: cached?.updatedAt ?? null });
   } catch (e) {

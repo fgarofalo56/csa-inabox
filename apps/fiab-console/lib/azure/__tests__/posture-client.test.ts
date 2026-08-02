@@ -67,13 +67,22 @@ vi.mock('@/lib/azure/monitor-client', () => ({
 
 import { computePosture, assertCosmosConfigured, PostureNotConfiguredError } from '../posture-client';
 
+/**
+ * The audit scope the BFF route builds with `auditScopeIdsForViewer(session)`.
+ * It is a REQUIRED parameter of computePosture (#2793) so a caller cannot
+ * silently fall back to an oid-only `audit-log` read; the scope-semantics
+ * assertions live in app/api/governance/govern/__tests__/posture-audit-scope.test.ts,
+ * which drives the real container double.
+ */
+const AUDIT_SCOPE = ['tenant-1', 'entra-tid-1'];
+
 describe('posture-client.computePosture', () => {
   beforeEach(() => {
     process.env.LOOM_COSMOS_ENDPOINT = 'https://fake.documents.azure.com:443/';
   });
 
   it('computes Cosmos estate + trust/reuse aggregates from real item state', async () => {
-    const { posture } = await computePosture('tenant-1');
+    const { posture } = await computePosture('tenant-1', AUDIT_SCOPE);
     expect(posture.workspaceCount).toBe(1);
     expect(posture.totalItems).toBe(2);
     expect(posture.capacityCount).toBe(1);
@@ -86,7 +95,7 @@ describe('posture-client.computePosture', () => {
   });
 
   it('degrades every absent metric source to an honest gate (no fabricated numbers)', async () => {
-    const { posture, gates } = await computePosture('tenant-1');
+    const { posture, gates } = await computePosture('tenant-1', AUDIT_SCOPE);
     expect(posture.mipCoveragePct).toBeNull();
     expect(posture.dlpViolations30d).toBeNull();
     expect(posture.purviewLastScanAt).toBeNull();
