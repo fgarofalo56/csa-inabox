@@ -573,7 +573,7 @@ param postgresEnabled bool = false
 @description('Deploy an Azure Database for MySQL Flexible Server + starter DB.')
 param mysqlEnabled bool = false
 
-@description('Deploy an Azure Cache for Redis (Basic C0, Entra auth enabled).')
+@description('Deploy a Redis cache (Entra auth enabled). Commercial gets Azure Managed Redis (Microsoft.Cache/redisEnterprise, Balanced_B0); sovereign boundaries get the retiring Azure Cache for Redis Basic C0, because Azure Managed Redis is Azure Public cloud only. See the redisBackend derivation.')
 param redisEnabled bool = false
 
 @description('Deploy an Azure Event Grid custom topic (local-auth disabled). Day-one default ON so the business-events topics surface resolves without a setup gate; set false to opt out.')
@@ -796,9 +796,30 @@ param appGatewayCapacity int = 2
 
 // Derive a valid Redis family + capacity for the chosen SKU (Premium uses the
 // P family starting at capacity 1; Basic/Standard use the C family at 0).
+// Applies only to the CLASSIC backend — see redisBackend below.
 var redisIsPremium = redisSkuName == 'Premium'
 var redisSkuFamily = redisIsPremium ? 'P' : 'C'
 var redisSkuCapacity = redisIsPremium ? 1 : 0
+
+// #2642 — Azure Cache for Redis is retiring. Azure PUBLIC cloud: new-cache
+// creation blocked for existing customers 2026-10-01, all caches off
+// 2028-10-01. Azure Government: blocked for NEW customers 2026-10-01, existing
+// 2027-04-01. Azure Managed Redis (Microsoft.Cache/redisEnterprise) is the
+// successor — but it is AZURE PUBLIC CLOUD ONLY:
+//   "Azure Managed Redis is only available in the global Azure cloud"
+//   https://learn.microsoft.com/azure/redis/planning-faq
+//   "The Azure Redis Enterprise and Enterprise Flash tiers are available only
+//    in the Public cloud"  (AMR *is* that redisEnterprise provider)
+//   https://learn.microsoft.com/azure/azure-cache-for-redis/cache-planning-faq
+// So the backend is DERIVED from the boundary rather than exposed as a new
+// param (main.bicep is at the ARM 256-param ceiling): Commercial gets the
+// forward path, every other boundary stays on the classic provider because the
+// successor does not exist there. Written as an allowlist of ONE
+// (`== 'Commercial'`) rather than a denylist of the three sovereign values on
+// purpose: if the boundary @allowed list ever grows, an unrecognised boundary
+// must fall to the universally-available classic provider, not to a
+// Public-cloud-only one.
+var redisBackend = boundary == 'Commercial' ? 'managed' : 'classic'
 
 // ---------- User access patterns ----------
 
@@ -1984,6 +2005,7 @@ module dpRedis 'modules/deploy-planner/redis.bicep' = if (useSingleDlz && redisE
   scope: singleDlzRg
   params: {
     location: location
+    redisBackend: redisBackend
     skuName: redisSkuName
     skuFamily: redisSkuFamily
     skuCapacity: redisSkuCapacity

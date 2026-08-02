@@ -10,8 +10,19 @@
 // this module deliberately does NOT duplicate them.
 //
 // What it provisions (the amortized shared layer, per PRP §3 + §8 dedup table):
-//   1. ONE Azure Cache for Redis PREMIUM, zone-redundant, Entra-auth only —
-//      backs FOUR consumers off a single metered resource:
+//   1. ONE shared Redis cache, zone-redundant, Entra-auth only — backs FOUR
+//      consumers off a single metered resource. Since #2642 the backend is
+//      selectable via `redisBackend`:
+//        'managed' (DEFAULT) — Azure Managed Redis (Microsoft.Cache/
+//          redisEnterprise) via modules/shared/managed-redis.bicep. Azure
+//          Cache for Redis is retiring: Public-cloud creation is blocked for
+//          existing customers on 2026-10-01 and all caches are turned off on
+//          2028-10-01.
+//        'classic' — the legacy Microsoft.Cache/redis Premium cache. This is
+//          the ONLY option in Azure Government: Azure Managed Redis is Azure
+//          Public cloud only (Learn, AMR planning FAQ). Sovereign callers MUST
+//          pass redisBackend='classic'.
+//      The four consumers:
 //        - Loom Direct Lake segment-residency index
 //          (key {tableId, deltaVersion, columnId, rowGroupId} -> Arrow IPC bytes)
 //        - Loom Capacity Broker 2,880 x 30-second timepoint LCU ledger
@@ -30,15 +41,20 @@
 //
 // Grounded in Microsoft Learn:
 //   Microsoft.Cache/redis                 https://learn.microsoft.com/azure/templates/microsoft.cache/redis
+//   Microsoft.Cache/redisEnterprise (AMR) https://learn.microsoft.com/azure/templates/microsoft.cache/redisenterprise
+//   Azure Cache for Redis retirement      https://learn.microsoft.com/azure/redis/migrate/migrate-basic-standard-premium-overview
+//   AMR is Public-cloud only              https://learn.microsoft.com/azure/redis/planning-faq
 //   Redis Entra (AAD) auth + access policy assignments
 //                                         https://learn.microsoft.com/azure/azure-cache-for-redis/cache-azure-active-directory-for-authentication
 //   Zone redundancy (Premium)             https://learn.microsoft.com/azure/azure-cache-for-redis/cache-how-to-zone-redundancy
 //   userAssignedIdentities                https://learn.microsoft.com/azure/templates/microsoft.managedidentity/userassignedidentities
 //
 // NO Microsoft Fabric / Power BI dependency anywhere (no-fabric-dependency.md):
-// Redis + UAMIs + Log Analytics are Azure-native and GA in Commercial AND
-// Government (GCC / GCC-High / DoD IL4-5) — this substrate is specifically why
-// the H-band is Gov-capable.
+// Redis + UAMIs + Log Analytics are Azure-native, and a Redis of SOME flavour is
+// available in Commercial AND Government (GCC / GCC-High / DoD IL4-5) — this
+// substrate is specifically why the H-band is Gov-capable. The FLAVOUR differs
+// though: Azure Managed Redis is Azure Public cloud only, so a Gov deploy MUST
+// pass `redisBackend=classic` (see the param below).
 //
 // DEPLOYMENT: standalone out-of-band entrypoint (admin-plane/main.bicep is at the
 // 256-param ceiling, so this is NOT wired into an orchestrator; it is
@@ -47,8 +63,13 @@
 //     -f platform/fiab/bicep/modules/compute/hband-shared.bicep \
 //     -p location=<region> workspaceId=<law-resource-id> \
 //        consolePrincipalId=<uami-console-principalId> complianceTags='{...}'
+// Add `redisBackend=classic` in Azure Government, or when redeploying against an
+// EXISTING classic cache you are not ready to migrate — the default 'managed'
+// creates a NEW Azure Managed Redis cluster and does not touch the old cache.
 // then set LOOM_DIRECTLAKE_REDIS / LOOM_BROKER_REDIS (+ the per-service app URLs)
-// on the Console app via /admin/env-config or `az containerapp update`.
+// on the Console app via /admin/env-config or `az containerapp update` — use the
+// module's `redisEndpoint` output, which already carries the right port (10000
+// on managed, 6380 on classic).
 // ============================================================================
 
 targetScope = 'resourceGroup'
@@ -56,9 +77,40 @@ targetScope = 'resourceGroup'
 @description('Deployment region (e.g. centralus / usgovvirginia).')
 param location string
 
-// ── Shared Redis (Premium, zone-redundant) ──
+// ── Shared Redis (zone-redundant) ──
 
-@description('Redis SKU capacity for the Premium (P) family: 1=P1 (6GB) .. 5=P5 (120GB). P1 is the default floor — enough to hold the Broker timepoint ledger + a working set of Direct Lake segment residency keys. Tune per-tenant.')
+// #2642 — Azure Cache for Redis is retiring (Public cloud: creation blocked for
+// existing customers 2026-10-01; every cache off 2028-10-01). 'managed' is the
+// forward path. It is NOT available in Azure Government — AMR is Azure Public
+// cloud only (Learn, "Azure Managed Redis planning FAQs"), so a sovereign
+// caller MUST pass 'classic'. See modules/shared/managed-redis.bicep.
+@description('Which Redis provider backs the shared cache. "managed" = Azure Managed Redis (Microsoft.Cache/redisEnterprise) — the forward path, AZURE PUBLIC CLOUD ONLY. "classic" = the legacy Microsoft.Cache/redis Premium cache — required in Azure Government (GCC/GCC-High/IL5), where Azure Managed Redis does not exist, and the value to pass when redeploying against an EXISTING classic cache you do not want to migrate yet.')
+@allowed(['managed', 'classic'])
+param redisBackend string = 'managed'
+
+var useManagedRedis = redisBackend == 'managed'
+
+@description('Azure Managed Redis SKU (redisBackend=managed). Balanced_B5 is the default floor — the closest small Balanced size to the classic Premium P1 this replaces. Ignored when redisBackend=classic.')
+@allowed([
+  'Balanced_B0'
+  'Balanced_B1'
+  'Balanced_B3'
+  'Balanced_B5'
+  'Balanced_B10'
+  'Balanced_B20'
+  'Balanced_B50'
+  'MemoryOptimized_M10'
+  'MemoryOptimized_M20'
+  'MemoryOptimized_M50'
+  'ComputeOptimized_X5'
+  'ComputeOptimized_X10'
+])
+param managedRedisSku string = 'Balanced_B5'
+
+@description('privatelink.redis.azure.net zone id (network.bicep outputs privateDnsZoneIds.redisManaged) — the AZURE MANAGED REDIS zone, which is a DIFFERENT zone from the classic privatelink.redis.cache.* one. Used only when redisBackend=managed. Empty skips the DNS zone group.')
+param privateDnsZoneRedisManagedId string = ''
+
+@description('Redis SKU capacity for the Premium (P) family: 1=P1 (6GB) .. 5=P5 (120GB). P1 is the default floor — enough to hold the Broker timepoint ledger + a working set of Direct Lake segment residency keys. Tune per-tenant. Applies only when redisBackend=classic.')
 @minValue(1)
 @maxValue(5)
 param redisCapacity int = 1
@@ -104,8 +156,15 @@ param acrResourceId string = ''
 
 var cacheName = take('redis-loom-hband-${uniqueString(resourceGroup().id)}', 63)
 
+// AMR cluster name. Deliberately NOT `cacheName`: during a migration both the
+// classic cache and the new cluster can exist in the same RG, and an operator
+// reading the portal needs to tell them apart at a glance. Constraint is
+// ^(?=.{1,60}$)[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ — 15 + 13 (uniqueString) = 28.
+var managedCacheName = 'amr-loom-hband-${uniqueString(resourceGroup().id)}'
+
 // ── 1. Shared Azure Cache for Redis Premium (zone-redundant, Entra-only) ──
-resource redis 'Microsoft.Cache/redis@2024-11-01' = {
+// LEGACY BACKEND — only when redisBackend='classic' (required in Gov).
+resource redis 'Microsoft.Cache/redis@2024-11-01' = if (!useManagedRedis) {
   name: cacheName
   location: location
   tags: complianceTags
@@ -134,7 +193,7 @@ resource redis 'Microsoft.Cache/redis@2024-11-01' = {
 // ── 1b. Private endpoint + DNS zone group for the PE-locked cache (#53) ──
 // Live estate got this imperatively (pe-redis-loom-hband, 2026-07-16); the
 // names match so a redeploy is an idempotent no-op there.
-resource redisPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(privateEndpointSubnetId)) {
+resource redisPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!useManagedRedis && !empty(privateEndpointSubnetId)) {
   // NAME MUST STAY 'pe-redis-loom-hband': the live-estate PE was created
   // imperatively under this exact name (2026-07-16) — matching it makes the
   // redeploy an idempotent update instead of a duplicate PE. One hband cache
@@ -148,7 +207,7 @@ resource redisPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(pr
       {
         name: 'redis-link'
         properties: {
-          privateLinkServiceId: redis.id
+          privateLinkServiceId: redis!.id
           groupIds: ['redisCache']
         }
       }
@@ -156,7 +215,7 @@ resource redisPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(pr
   }
 }
 
-resource redisPeDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateEndpointSubnetId) && !empty(privateDnsZoneRedisId)) {
+resource redisPeDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!useManagedRedis && !empty(privateEndpointSubnetId) && !empty(privateDnsZoneRedisId)) {
   parent: redisPe
   name: 'default'
   properties: {
@@ -197,7 +256,7 @@ resource uamiBroker 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30
 
 // ── Redis data-access policy assignments (only the two Redis consumers) ──
 // Data Contributor = read+write keys; sufficient for residency index + ledger.
-resource redisDirectLakeAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@2024-11-01' = {
+resource redisDirectLakeAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@2024-11-01' = if (!useManagedRedis) {
   parent: redis
   name: 'loom-directlake'
   properties: {
@@ -207,7 +266,7 @@ resource redisDirectLakeAssignment 'Microsoft.Cache/redis/accessPolicyAssignment
   }
 }
 
-resource redisBrokerAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@2024-11-01' = {
+resource redisBrokerAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@2024-11-01' = if (!useManagedRedis) {
   parent: redis
   name: 'loom-capacity-broker'
   properties: {
@@ -217,7 +276,7 @@ resource redisBrokerAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@20
   }
 }
 
-resource redisConsoleAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@2024-11-01' = if (!empty(consolePrincipalId)) {
+resource redisConsoleAssignment 'Microsoft.Cache/redis/accessPolicyAssignments@2024-11-01' = if (!useManagedRedis && !empty(consolePrincipalId)) {
   parent: redis
   name: 'loom-console'
   properties: {
@@ -274,7 +333,7 @@ resource acrPullBroker 'Microsoft.Authorization/roleAssignments@2022-04-01' = if
 // (allLogs + AllMetrics) as that helper so DSC drift-detection stays consistent —
 // the diag pattern every H-band ACA app follows (the per-service app modules
 // declare the identical block scoped to their Container App).
-resource redisDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
+resource redisDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!useManagedRedis && !empty(workspaceId)) {
   name: 'diag-loom-stdz'
   scope: redis
   properties: {
@@ -294,19 +353,73 @@ resource redisDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = 
   }
 }
 
+// ── 1-managed. Shared Azure Managed Redis (#2642 forward path, DEFAULT) ──
+// Azure Cache for Redis is retiring; this is the successor provider. It carries
+// its own PE (different groupId + DNS zone), its own database child, and its own
+// Entra access-policy shape — see modules/shared/managed-redis.bicep for why
+// this is NOT a find-and-replace of the classic block above.
+//
+// NOTE ON GRANT GRANULARITY: the classic block grants 'Data Contributor'.
+// Azure Managed Redis accepts exactly ONE access policy name — 'default' —
+// which is full data access. The three principals below therefore get a
+// BROADER grant on the managed backend than on the classic one. That is a
+// provider limitation, disclosed rather than hidden.
+module managedRedis '../shared/managed-redis.bicep' = if (useManagedRedis) {
+  name: 'hband-managed-redis'
+  params: {
+    name: managedCacheName
+    location: location
+    skuName: managedRedisSku
+    // Zone redundancy on AMR is derived from the HA configuration, not from an
+    // enumerated zone list: Learn ("Reliability in Azure Managed Redis") says a
+    // cache is zone redundant when it uses the high-availability configuration
+    // in a region that supports zones — the service places the nodes. So the
+    // existing `redisZones` param is reused only as the "do we want zone
+    // redundancy" signal and the explicit list is NOT forwarded (a 3-zone list
+    // on a 2-node cluster is not something we can validate without deploying).
+    // The module still exposes `zones` for a caller that must pin placement.
+    highAvailability: empty(redisZones) ? 'Disabled' : 'Enabled'
+    publicNetworkDisabled: redisPublicNetworkDisabled
+    // EnterpriseCluster (the module default) is load-bearing: Loom's
+    // redis-cache-client has no Redis Cluster support. Do not switch to
+    // OSSCluster here without making that client cluster-aware first.
+    evictionPolicy: 'AllKeysLRU'
+    accessAssignments: concat(
+      [
+        { name: 'loom-directlake', objectId: uamiDirectLake.properties.principalId }
+        { name: 'loom-capacity-broker', objectId: uamiBroker.properties.principalId }
+      ],
+      empty(consolePrincipalId) ? [] : [{ name: 'loom-console', objectId: consolePrincipalId }]
+    )
+    privateEndpointSubnetId: privateEndpointSubnetId
+    privateDnsZoneId: privateDnsZoneRedisManagedId
+    privateEndpointName: 'pe-amr-loom-hband'
+    workspaceId: workspaceId
+    complianceTags: complianceTags
+  }
+}
+
 // ── Outputs — consumed by the per-service ACA app modules + admin-plane env ──
 
-@description('Shared Redis cache resource id.')
-output redisId string = redis.id
+@description('Shared Redis resource id (Microsoft.Cache/redisEnterprise when redisBackend=managed, Microsoft.Cache/redis when classic).')
+output redisId string = useManagedRedis ? managedRedis!.outputs.redisId : redis!.id
 
-@description('Shared Redis cache name.')
-output redisName string = redis.name
+@description('Shared Redis resource name.')
+output redisName string = useManagedRedis ? managedRedis!.outputs.redisName : redis!.name
 
-@description('Shared Redis host name — the H-band services set LOOM_DIRECTLAKE_REDIS / LOOM_BROKER_REDIS to <hostName>:6380 (SSL).')
-output redisHostName string = redis.properties.hostName
+@description('Shared Redis host name. managed => <name>.<region>.redis.azure.net; classic => <name>.redis.cache.<sovereign-suffix>. Do NOT append a port by hand — the two backends listen on different ports; use redisEndpoint.')
+output redisHostName string = useManagedRedis ? managedRedis!.outputs.hostName : redis!.properties.hostName
 
-@description('Shared Redis SSL port (non-SSL is disabled).')
-output redisSslPort int = redis.properties.sslPort
+@description('Shared Redis TLS port — 10000 on Azure Managed Redis, 6380 on the classic cache. Non-TLS is disabled on both.')
+output redisSslPort int = useManagedRedis ? managedRedis!.outputs.port : redis!.properties.sslPort
+
+@description('The value to set on LOOM_DIRECTLAKE_REDIS / LOOM_BROKER_REDIS / LOOM_SPARK_POOL_REDIS / LOOM_RESULT_CACHE_REDIS: <host>:<port>, already correct for whichever backend was deployed. Publish THIS instead of composing host + a hard-coded 6380.')
+output redisEndpoint string = useManagedRedis
+  ? managedRedis!.outputs.endpoint
+  : '${redis!.properties.hostName}:${redis!.properties.sslPort}'
+
+@description('Which Redis provider was actually deployed ("managed" = Azure Managed Redis / redisEnterprise, "classic" = Azure Cache for Redis / redis).')
+output redisBackendDeployed string = redisBackend
 
 @description('Loom OneLake service UAMI resource id (assign to compute/loom-onelake-app.bicep).')
 output onelakeUamiId string = uamiOnelake.id

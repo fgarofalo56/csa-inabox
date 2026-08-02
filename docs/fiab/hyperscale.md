@@ -19,7 +19,7 @@ per-service bicep the individual service modules ship. It provides:
 
 | Piece | What | Where |
 |---|---|---|
-| Shared Redis | One zone-redundant **Azure Cache for Redis Premium**, Entra-auth only, amortized across four consumers | `platform/fiab/bicep/modules/compute/hband-shared.bicep` |
+| Shared Redis | One zone-redundant, Entra-auth-only cache amortized across four consumers. Backend selected by `redisBackend`: **Azure Managed Redis** (`Microsoft.Cache/redisEnterprise`, default) in Commercial, **Azure Cache for Redis Premium** (`Microsoft.Cache/redis`) in Government — see [Redis backend](#redis-backend-2642) | `platform/fiab/bicep/modules/compute/hband-shared.bicep` + `modules/shared/managed-redis.bicep` |
 | Least-privilege UAMIs | Three dedicated per-service managed identities (`uami-loom-onelake`, `uami-loom-directlake`, `uami-loom-capacity-broker`) | same module |
 | Diagnostics | Standardized Azure Monitor diagnostic settings (`allLogs` + `AllMetrics` → the shared Log Analytics workspace) | same module |
 | Console env wiring | `LOOM_ONELAKE_URL`, `LOOM_DIRECTLAKE_URL`, `LOOM_BROKER_URL`, `LOOM_BROKER_REDIS` on the Console app | `platform/fiab/bicep/modules/admin-plane/main.bicep` (apps[] env) + `lib/admin/self-audit.ts` (`ENV_CHECKS`) |
@@ -98,10 +98,64 @@ back** — never to a Fabric requirement:
 ## Government (GCC / GCC-High / DoD IL4-5)
 
 Fully Gov-capable today. Azure Cache for Redis, user-assigned managed
-identities, and Log Analytics are all GA in Government. No managed-service
-substitution and no alternate Gov path are required — this substrate is
+identities, and Log Analytics are all GA in Government — this substrate is
 specifically why the H-band is Gov-capable (it replaces the Gov-scarce,
 retirement-track AAS/VertiPaq path with an owned OSS engine on Redis).
+
+Gov keeps the **classic** `Microsoft.Cache/redis` provider (`redisBackend=classic`,
+which `main.bicep` derives automatically from `boundary`). That is not a
+downgrade we chose — Azure Managed Redis is **Azure Public cloud only**
+([AMR planning FAQ][amr-faq]: *"Azure Managed Redis is only available in the
+global Azure cloud"*; the [Azure Cache for Redis planning FAQ][acr-faq] says the
+same from the other side: *"The Azure Redis Enterprise and Enterprise Flash
+tiers are available only in the Public cloud"* — and AMR **is** that
+`redisEnterprise` provider). Pointing Gov at the managed backend would replace a
+service that stops accepting new caches in 2026 with one that has never existed
+in that cloud.
+
+### Redis backend (#2642)
+
+Azure Cache for Redis is retiring. Per Microsoft Learn:
+
+| Cloud | New caches blocked (new customers) | New caches blocked (existing customers) | All caches off |
+|---|---|---|---|
+| Azure Public | 2026-04-01 | **2026-10-01** | 2028-10-01 |
+| Azure Government | **2026-10-01** | 2027-04-01 | 2028-10-01 |
+
+What this means for the H-band substrate:
+
+- **Commercial** — `redisBackend=managed` (the default). Deploys
+  `Microsoft.Cache/redisEnterprise` + its mandatory `databases/default` child.
+  Endpoint is `<name>.<region>.redis.azure.net:**10000**`, private-link
+  sub-resource `redisEnterprise`, DNS zone `privatelink.redis.azure.net`.
+- **Government** — `redisBackend=classic`. Endpoint stays
+  `<name>.redis.cache.<sovereign-suffix>:**6380**`, sub-resource `redisCache`,
+  DNS zone `privatelink.redis.cache.<sovereign-suffix>`. After 2027-04-01 a Gov
+  estate can no longer create a cache of either flavour; the Redis tier is
+  optional everywhere in Loom (the in-memory per-replica tier is the honest
+  default), so this degrades cross-replica sharing rather than function.
+- **Never compose the port by hand.** The module publishes a `redisEndpoint`
+  output that is already `<host>:<port>` for whichever backend was deployed;
+  set `LOOM_BROKER_REDIS` / `LOOM_SPARK_POOL_REDIS` / `LOOM_RESULT_CACHE_REDIS`
+  from it verbatim.
+- **Clustering policy is `EnterpriseCluster`, deliberately.** AMR's ARM default
+  is `OSSCluster`, which requires a cluster-aware client. Loom's
+  `lib/azure/redis-cache-client.ts` is a hand-rolled RESP2 client that speaks
+  only AUTH/GET/SET/DEL and degrades *silently* on error — under `OSSCluster`
+  the cache would deploy green while every read failed invisibly.
+- **Grant granularity narrows.** Classic Redis has Data Owner / Data
+  Contributor / Data Reader; AMR accepts exactly one access-policy name,
+  `default`, which is full data access. The H-band UAMIs therefore hold a
+  broader data-plane grant on the managed backend than on the classic one.
+
+An existing Commercial classic cache keeps working and is untouched by a
+redeploy — the managed backend is created alongside it under a different name
+(`amr-loom-hband-*`), and cutting over is a deliberate operator step (repoint
+the env vars, then delete the old cache). Pass `redisBackend=classic` to keep
+deploying against the existing cache.
+
+[amr-faq]: https://learn.microsoft.com/azure/redis/planning-faq
+[acr-faq]: https://learn.microsoft.com/azure/azure-cache-for-redis/cache-planning-faq
 
 ## Honest limits (this platform layer)
 

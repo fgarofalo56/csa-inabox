@@ -577,6 +577,21 @@ var dnsZones = [
   // rarely-hit monitor reads stayed cold across replicas. Index 24.
   // Gov suffix per Learn private-endpoint-dns: redis.cache.usgovcloudapi.net.
   'privatelink.redis.cache.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
+  // #2642 (2026-08) — Azure MANAGED Redis (Microsoft.Cache/redisEnterprise).
+  // A DIFFERENT private-link sub-resource ('redisEnterprise', not 'redisCache')
+  // on a DIFFERENT zone, so the classic zone above cannot serve it. Azure Cache
+  // for Redis is retiring (Public cloud: no new caches for existing customers
+  // after 2026-10-01; all caches off 2028-10-01), so hband-shared.bicep now
+  // defaults to the managed provider in Commercial and needs this zone for its
+  // PE DNS group. Index 25.
+  // NO SOVEREIGN VARIANT: Learn's private-endpoint-dns Government table does
+  // not list Azure Managed Redis at all, because AMR is not available in Azure
+  // Government (Learn, AMR planning FAQ) — Gov deployments stay on the classic
+  // zone above. The zone name is therefore NOT boundary-templated; inventing a
+  // `*.usgovcloudapi.net` variant would be a guess, and in Gov this zone is
+  // created but inert (nothing there resolves *.redis.azure.net).
+  //   https://learn.microsoft.com/azure/private-link/private-endpoint-dns
+  'privatelink.redis.azure.net'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -775,4 +790,10 @@ output privateDnsZoneIds object = {
   // this for the shared cache's PE DNS group so the PE-locked cache resolves
   // privately from the hub VNet (the console cache tier depends on it).
   redis: privateDnsZones[24].id
+  // #2642 — Azure MANAGED Redis zone (index 25), sub-resource
+  // 'redisEnterprise'. hband-shared.bicep consumes this as
+  // privateDnsZoneRedisManagedId when redisBackend='managed' (the Commercial
+  // default). Distinct from `redis` above — the classic zone cannot resolve an
+  // AMR private endpoint.
+  redisManaged: privateDnsZones[25].id
 }
