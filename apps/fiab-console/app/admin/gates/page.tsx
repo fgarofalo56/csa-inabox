@@ -96,6 +96,18 @@ export default function AdminGatesPage() {
 
   useEffect(() => { void reload(); }, [reload]);
 
+  // G2 deep-link: an honest gate elsewhere in the product links here as
+  // `/admin/gates?q=<gate-id>` (see lib/components/lineage/lineage-harvest-bar
+  // and the shared HonestGate registry link). Seed the free-text filter from
+  // that param so the link actually LANDS on the gate instead of dumping the
+  // operator into the unfiltered list. Read from `window.location` rather than
+  // `useSearchParams` so this client page needs no Suspense boundary.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const q = new URLSearchParams(window.location.search).get('q');
+    if (q) setQuery(q);
+  }, []);
+
   const categories = useMemo(
     () => Array.from(new Set((rows || []).map((r) => r.category))).sort(),
     [rows],

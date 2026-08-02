@@ -38,6 +38,10 @@ import {
   History20Regular, Bug20Regular,
 } from '@fluentui/react-icons';
 import { DebugRunPanel, statusBadge, fmtDuration } from './debug-monitor-panel';
+// #2625 — the LU-8 pipeline harvest receipt this pane has always received on
+// `?runId=` and never rendered.
+import { LineageHarvestBar } from '@/lib/components/lineage/lineage-harvest-bar';
+import type { LineageHarvestReceipt } from '@/lib/components/lineage/harvest-receipt';
 import {
   publishRunOverlay, deriveOverallStatus, startRunOverlayPolling,
   type ActivityRunOverlayRow,
@@ -152,6 +156,8 @@ function MonitorView({
   const [activities, setActivities] = useState<Record<string, ActivityRow[]>>({});
   const [activitiesErr, setActivitiesErr] = useState<Record<string, string>>({});
   const [activitiesLoading, setActivitiesLoading] = useState<Record<string, boolean>>({});
+  // #2625 — the LU-8 harvest receipt per expanded run.
+  const [lineage, setLineage] = useState<Record<string, LineageHarvestReceipt>>({});
 
   const loadRuns = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
@@ -224,6 +230,7 @@ function MonitorView({
       if (!j.ok) {
         setActivitiesErr((m) => ({ ...m, [runId]: j.error || 'failed' }));
       } else {
+        if (j.lineage) setLineage((m) => ({ ...m, [runId]: j.lineage as LineageHarvestReceipt }));
         const rows = (j.activities || []) as ActivityRow[];
         setActivities((m) => ({ ...m, [runId]: rows }));
         // U13 — drilling into a run paints its receipts on the canvas (ADF
@@ -287,6 +294,7 @@ function MonitorView({
                 activities={activities[r.runId]}
                 loading={!!activitiesLoading[r.runId]}
                 error={activitiesErr[r.runId]}
+                lineage={lineage[r.runId]}
                 onToggle={() => toggleRun(r.runId)}
                 styles={s}
               />
@@ -300,13 +308,15 @@ function MonitorView({
 
 /** A single run row + its expandable per-activity detail (MONITOR drill-down). */
 function RunRows({
-  r, isOpen, activities, loading, error, onToggle, styles: s,
+  r, isOpen, activities, loading, error, lineage, onToggle, styles: s,
 }: {
   r: RunRow;
   isOpen: boolean;
   activities?: ActivityRow[];
   loading: boolean;
   error?: string;
+  /** #2625 — this run's LU-8 harvest receipt (undefined until expanded). */
+  lineage?: LineageHarvestReceipt;
   onToggle: () => void;
   styles: ReturnType<typeof useStyles>;
 }) {
@@ -333,6 +343,10 @@ function RunRows({
         <TableRow>
           <TableCell colSpan={8}>
             <div className={s.detailBox}>
+              {/* #2625 — the LU-8 harvest receipt for this run. No Fix-it: a
+                  pipeline's lineage comes from its Copy activities' datasets,
+                  which are edited on the canvas, not from a per-run setting. */}
+              <LineageHarvestBar receipt={lineage} />
               {loading && <Spinner size="tiny" label="Loading activity output…" />}
               {error && (
                 <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>
