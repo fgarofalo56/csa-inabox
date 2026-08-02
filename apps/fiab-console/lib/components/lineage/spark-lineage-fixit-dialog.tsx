@@ -34,7 +34,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import {
   SPARK_CONF_INPUTS,
   SPARK_CONF_OUTPUTS,
-} from '@/lib/lineage/synapse-emitters';
+} from '@/lib/lineage/spark-conf-keys';
 import { SPARK_LINEAGE_GATE_ID } from './harvest-receipt';
 import { applyLineageConf, selectedFromConf } from './lineage-conf';
 

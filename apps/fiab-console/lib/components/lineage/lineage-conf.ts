@@ -6,10 +6,13 @@
  * the same two keys without importing a dialog.
  *
  * These are exactly the keys `parseSparkDatasets` reads
- * (lib/lineage/synapse-emitters.ts) — imported, never re-spelled, so a rename
- * there cannot silently orphan what the wizard writes.
+ * (lib/lineage/synapse-emitters.ts) — imported from the shared
+ * `lib/lineage/spark-conf-keys` leaf, never re-spelled, so a rename there
+ * cannot silently orphan what the wizard writes. The leaf (rather than
+ * `synapse-emitters` itself) because this module is reached from a client
+ * component, and `synapse-emitters` pulls `next/headers` in transitively.
  */
-import { SPARK_CONF_INPUTS, SPARK_CONF_OUTPUTS } from '@/lib/lineage/synapse-emitters';
+import { SPARK_CONF_INPUTS, SPARK_CONF_OUTPUTS } from '@/lib/lineage/spark-conf-keys';
 
 /**
  * Merge the picked roots into an existing Spark conf.

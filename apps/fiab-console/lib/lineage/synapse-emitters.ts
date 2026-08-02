@@ -54,6 +54,7 @@ import {
   storageDataset,
   type AdfFileLocation,
 } from '@/lib/lineage/dataset-naming';
+import { SPARK_CONF_INPUTS, SPARK_CONF_OUTPUTS } from '@/lib/lineage/spark-conf-keys';
 
 // ---------------------------------------------------------------------------
 // Deterministic run ids
@@ -368,9 +369,16 @@ const INPUT_FLAGS = new Set(['--input', '--inputs', '--in', '--source', '--src',
 /** CLI flags a Spark job conventionally uses to name its output datasets. */
 const OUTPUT_FLAGS = new Set(['--output', '--outputs', '--out', '--sink', '--dest', '--target', '--write', '--to', '-o']);
 
-/** Loom-namespaced Spark conf keys that DECLARE a job's datasets explicitly. */
-export const SPARK_CONF_INPUTS = 'spark.loom.lineage.inputs';
-export const SPARK_CONF_OUTPUTS = 'spark.loom.lineage.outputs';
+/**
+ * Loom-namespaced Spark conf keys that DECLARE a job's datasets explicitly.
+ *
+ * Defined in the dependency-free `spark-conf-keys` leaf and re-exported here so
+ * existing server-side callers keep their import path. The client half of the
+ * #2625 Fix-it wizard imports the leaf DIRECTLY — importing it from this module
+ * would pull this file's `openlineage` → … → `auth/session` (`next/headers`)
+ * chain into the browser bundle and break `next build`.
+ */
+export { SPARK_CONF_INPUTS, SPARK_CONF_OUTPUTS };
 
 export interface SparkBatchLineageInput {
   /** Synapse workspace name (job namespace authority). */
