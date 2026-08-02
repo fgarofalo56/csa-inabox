@@ -1010,9 +1010,9 @@ async function ensure() {
   // scoped ADLS POSIX ACL on just the shared path) is applied by the
   // external-share-client; Cosmos is the source of truth for the share list.
   _externalShares = await mk('external-shares', '/sourceItemId');
-  // Loom Sharing (LU-9) — published shares AND the recipients granted them, in ONE tenant-
-  // partitioned container (ids `share:<name>`/`recipient:<name>`) so the recipient hot path
-  // resolves both in a single-partition read. Grants live here and NOWHERE else (lib/sharing).
+  // Loom Sharing (LU-9) — published shares AND the recipients granted them in ONE container
+  // (ids `share:<name>`/`recipient:<name>`) so the recipient hot path resolves both in a single
+  // read. `/tenantId` CO-LOCATES; it is NOT a tenant boundary — see lib/sharing/store.ts (#2620).
   _sharing = await mk('sharing', '/tenantId');
   // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
   // One row per principal (user / group / SP) per workspace, partitioned by the
