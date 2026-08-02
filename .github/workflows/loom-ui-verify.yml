@@ -106,43 +106,40 @@ jobs:
       #       (a) the console's ACA logs carry an invalid_client callback error
       #           in the recent window (the smoking gun), and
       #       (b) the MSAL app's soonest credential expiry is < 30 days out.
-      #     continue-on-error so a missing perm never fails the whole verify —
-      #     it annotates instead, with the exact rotation command.
+      #     THIS STEP CAN FAIL, AND MUST (#2837). It previously carried BOTH
+      #     `continue-on-error: true` AND a trailing hard `exit 0`, so it printed
+      #     "::error::LOGIN BROKEN" and then concluded success. On the weekly
+      #     cron the job conclusion is the entire signal, so a live sign-in
+      #     outage rendered as a green check. Same class as #2787, two steps
+      #     below in this same file.
+      #     The original rationale ("so a missing perm never fails the whole
+      #     verify") is preserved WITHOUT the mask: scripts/ci/login-health-
+      #     verdict.sh exits 0 on every "could not check" path (unresolvable
+      #     workspace, unreadable count, missing Application.Read.All) and 1
+      #     ONLY on evidence in hand that sign-in is broken. The az reads stay
+      #     here; the verdict is a pure, unit-tested script.
       # -----------------------------------------------------------------------
       - name: Login-health preflight (MSAL secret expiry + callback errors)
-        continue-on-error: true
         env:
           MSAL_APP_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '5c59f3f3-e26d-4122-a707-a04e21ff5255' }}
           CONSOLE_RG: ${{ vars.LOOM_ADMIN_RG || format('rg-csa-loom-admin-{0}', inputs.region) }}
         run: |
           set +e
-          echo "== (a) recent auth/callback invalid_client in the console logs =="
           LAW=$(az monitor log-analytics workspace list -g "$CONSOLE_RG" --query "[?contains(name,'loom')].customerId | [0]" -o tsv 2>/dev/null | tr -d '\r')
+          HITS_RAW=""
           if [ -n "$LAW" ]; then
-            HITS=$(az monitor log-analytics query --workspace "$LAW" \
+            # NO `|| echo 0` here, on purpose: an empty result means the query did
+            # not run, and the verdict script reports that as unknown rather than
+            # as a clean zero (the second half of #2837).
+            HITS_RAW=$(az monitor log-analytics query --workspace "$LAW" \
               --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where Log_s has 'auth/callback' and Log_s has 'invalid_client' | count" \
-              -o tsv 2>/dev/null | tr -d '\r' | grep -oE '[0-9]+' | head -1)
-            if [ "${HITS:-0}" -gt 0 ]; then
-              echo "::error::LOGIN BROKEN — $HITS auth/callback invalid_client errors in the last 7d (AADSTS7000215). The MSAL secret has drifted/expired. Rotate: az containerapp secret set -n loom-console -g $CONSOLE_RG --secrets \"loom-msal-client-secret=\$(az ad app credential reset --id $MSAL_APP_ID --append --years 2 --query password -o tsv)\" then roll a new revision."
-            else
-              echo "  OK — no invalid_client callback errors in the last 7d."
-            fi
-          else
-            echo "::warning::could not resolve the console Log Analytics workspace in $CONSOLE_RG — skipping the callback-error check."
+              -o tsv 2>/dev/null | tr -d '\r')
           fi
-          echo "== (b) MSAL app credential expiry =="
           MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')
-          if [ -z "$MINEND" ] || [ "$MINEND" = "None" ]; then
-            echo "::warning::could not read MSAL app $MSAL_APP_ID credentials (the verify SP likely lacks Application.Read.All / owner) — grant it to enable the expiry check."
-          else
-            NOWSEC=$(date -u +%s); ENDSEC=$(date -u -d "$MINEND" +%s 2>/dev/null || echo "$NOWSEC")
-            DAYS=$(( (ENDSEC - NOWSEC) / 86400 ))
-            echo "  soonest MSAL secret expiry: $MINEND (${DAYS}d)"
-            if [ "$DAYS" -lt 0 ]; then echo "::error::MSAL secret is EXPIRED — sign-in is down. Rotate now (see command above).";
-            elif [ "$DAYS" -lt 30 ]; then echo "::warning::MSAL secret expires in ${DAYS}d — rotate before it lapses to avoid a login outage.";
-            else echo "  OK — >30 days of runway."; fi
-          fi
-          exit 0
+
+          LH_LAW="$LAW" LH_HITS_RAW="$HITS_RAW" LH_MIN_END="$MINEND" \
+          LH_APP_ID="$MSAL_APP_ID" LH_CONSOLE_RG="$CONSOLE_RG" \
+            bash scripts/ci/login-health-verdict.sh
 
       # -----------------------------------------------------------------------
       # 3. Resolve Key Vault name, then fetch + mask SESSION_SECRET.

@@ -106,10 +106,12 @@ jobs:
         run: bash scripts/ci/test-assert-acr-image-tags.sh
       - name: route-inventory (route taxonomy drift gate — WS-D D3)
         run: node scripts/ci/generate-route-inventory.mjs --check
+      - name: 'annotation-teeth (a step that prints ::error:: must be able to fail — #2837)'
+        run: node scripts/ci/check-annotation-teeth.mjs
       # The scripts/ci self-tests. These existed but NOTHING RAN THEM: the
       # roll-gate suite is new (#2819) and the insecure-randomness suite has been
       # sitting in the tree with a "Run: node --test …" comment and no CI lane
       # since it was written. A test nobody runs is the same class of defect as
       # a gate that measures nothing — it reads as coverage and enforces nothing.
-      - name: scripts/ci self-tests (roll-gate decisions, ratchet comment-stripping, FD purge target)
+      - name: scripts/ci self-tests (roll-gate, ratchet comment-stripping, FD purge target, login-health verdict, annotation-teeth)
         run: node --test scripts/ci/__tests__/*.test.mjs
