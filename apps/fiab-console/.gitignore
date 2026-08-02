@@ -10,8 +10,11 @@ public/duckdb/
 test-results/
 playwright-report/
 tsconfig.tsbuildinfo
-# Vitest v8 coverage output (rel-T28) — measured in CI, never committed.
+# Vitest coverage output (rel-T28) — measured in CI, never committed.
 coverage/
+# Ad-hoc provider-comparison output (see the v8-vs-istanbul note in
+# vitest.config.ts) — reproducible, never committed.
+coverage-*/
 # Playwright auth state — contains minted session cookies; never commit.
 e2e/.auth/
 .vitest-reports/

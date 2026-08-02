@@ -115,8 +115,8 @@ export default defineConfig({
     ],
     exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
     // ── Coverage (rel-T28) ────────────────────────────────────────────────
-    // v8 provider (no Babel instrumentation). `all: true` counts EVERY source
-    // file under include — not just the ones a test imported — so the
+    // istanbul provider (Babel instrumentation). `all: true` counts EVERY
+    // source file under include — not just the ones a test imported — so the
     // denominator is the whole console surface and the floor can only be
     // ratcheted UP by adding tests, never gamed by narrowing what's measured.
     //
@@ -124,8 +124,57 @@ export default defineConfig({
     // points BELOW the last measured reality. When you add tests and coverage
     // climbs, RAISE the floor to (new measured − ~2pts) in the same PR. Never
     // lower it. `pnpm vitest run --coverage` enforces it (fails under the floor).
+    //
+    // ── WHY istanbul AND NOT v8 (#2671 / PR #2785, 2026-08-01) ────────────
+    //
+    // TWO reasons, and the second is the one that matters for the gate.
+    //
+    // 1. v8 coverage is what BLOCKED the vitest 2 -> 3 upgrade. vitest 3 fails
+    //    a run on unhandled errors that vitest 2 tolerated, and this suite
+    //    reliably produced `[vitest-worker]: Timeout calling "onTaskUpdate"` —
+    //    the worker->main reporting RPC missing its deadline while every one of
+    //    the 1302 files and 13320 tests PASSED. vitest 3 made v8 coverage
+    //    AST-aware, which loads the single main thread that must answer every
+    //    task update. Measured, same commit, same machine:
+    //        vitest run                  -> exit 0, no Errors line
+    //        vitest run --coverage (v8)  -> Errors 1, exit 1
+    //        vitest run --coverage (ist) -> 1302 files / 13320 tests, 0 Errors
+    //    Six hypotheses were tested; five are disproved and recorded in PR
+    //    #2785 so nobody re-walks them (a leaking spec, teardownTimeout,
+    //    --silent, coverage.all=false, and pool:'threads' — which is WORSE,
+    //    3 failed). `experimentalAstAwareRemapping` is not exposed in 3.2.7's
+    //    types, so there is no config escape on the v8 side.
+    //
+    // 2. The BRANCH FLOOR FELL 58 -> 21 IN THIS SWITCH, AND THAT IS THE GATE
+    //    GETTING STRICTER, NOT WEAKER. Do not "fix" it back. v8 cannot see
+    //    branch structure in a file it never executed: its coverage is derived
+    //    from the runtime, so an untested file is reported as one opaque
+    //    uncovered range. Measured over the IDENTICAL include/exclude surface
+    //    with ONE test file executed (3,882 files):
+    //        provider   branches seen      functions seen
+    //        v8              3,899              3,885     (~1 per file)
+    //        istanbul      290,495             64,485     (74.5x / 16.6x)
+    //    Per file, `lib/assets/asset-signals.ts` (imported by no test) is
+    //    0/1 branches under v8 and 0/36 under istanbul. So v8's 64.57% branch
+    //    figure was a percentage of the executed files ONLY — the untested
+    //    console contributed ~1 branch each and could never drag it down.
+    //    istanbul's 23.08% is a percentage of the real branch count of the
+    //    whole surface. Same code, ~74x the denominator.
+    //
+    //    They do NOT disagree about what ran. On lib/activation/destinations.ts
+    //    both mark the same lines unexecuted; istanbul additionally counts
+    //    branch arms v8 has no entry for at all — default args
+    //    (`deps: DestinationDeps = {}`), the `??` fallback arrow on line 88,
+    //    and the same-line `if (rows.length === 0) return …` consequent that v8
+    //    folds into a covered line. v8 also emits an always-covered
+    //    pseudo-branch per function, which pads its numerator with free 100%s.
+    //
+    //    Net effect on the ratchet: under v8, adding a whole new UNTESTED file
+    //    moved the branch metric by ~1 branch. Under istanbul it adds that
+    //    file's full branch count to the denominator. The lower number is the
+    //    honest one and is harder to game.
     coverage: {
-      provider: 'v8',
+      provider: 'istanbul',
       all: true,
       reporter: ['text-summary', 'json-summary', 'text'],
       reportsDirectory: './coverage',
@@ -152,21 +201,28 @@ export default defineConfig({
         'app/**/error.tsx',
         'app/global-error.tsx',
       ],
-      // FLOOR — measured reality 2026-07-03 (whole-console, all:true):
-      //   statements 32.52% · branches 56.85% · functions 30.86% · lines 32.52%
-      // Floor set ~2pts below each (ratchet UP only — see convention above).
-      // The gap to 100% is mostly client `app/**/page.tsx` components, which the
-      // vitest slice does not render (routes/editors/lib ARE covered); those are
-      // exercised by the Playwright UAT slice (rel-T30), not here.
-      // WS-F4 (2026-07-22): ratcheted 30/54/28/30 → 32/58/34/32 after the full
-      // suite measured statements 34.16 / branches 61.57 / functions 37.57 /
-      // lines 34.16 (v8, full run) — floors held ~2pts below measured with a
-      // small margin for CI-vs-local variance.
+      // FLOOR — the gap to 100% is mostly client `app/**/page.tsx` components,
+      // which the vitest slice does not render (routes/editors/lib ARE
+      // covered); those are exercised by the Playwright UAT slice (rel-T30).
+      //
+      // HISTORY, and why the numbers below are NOT a lowering of the ratchet:
+      //   2026-07-03  v8  measured 32.52 / 56.85 / 30.86 / 32.52 -> floor 30/54/28/30
+      //   2026-07-22  v8  measured 34.16 / 61.57 / 37.57 / 34.16 -> floor 32/58/34/32
+      //   2026-08-01  PROVIDER CHANGED v8 -> istanbul. The two providers do not
+      //               share a denominator (see the note above: 3,899 vs 290,495
+      //               branches over the same files), so the v8 floors are not
+      //               comparable and could not simply be carried over. Measured
+      //               reality under istanbul on the full 1302-file run:
+      //                 statements 29.86 · branches 23.08 · functions 24.20 · lines 32.49
+      //               Floors re-baselined ~2pts below each, per the convention
+      //               above. RATCHET UP FROM HERE — the next reader should
+      //               compare against these istanbul numbers, never against the
+      //               v8 ones.
       thresholds: {
-        statements: 32,
-        branches: 58,
-        functions: 34,
-        lines: 32,
+        statements: 27,
+        branches: 21,
+        functions: 22,
+        lines: 30,
       },
     },
   },

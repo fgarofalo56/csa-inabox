@@ -165,9 +165,16 @@ jobs:
   vitest:
     name: vitest (node 20)
     runs-on: ubuntu-latest
-    # 25m (was 20m): v8 coverage instrumentation with all:true adds a few minutes
-    # over the ~3m bare suite; keep generous headroom on the slower CI box.
-    timeout-minutes: 25
+    # 40m (was 25m): the coverage provider is now istanbul (see vitest.config.ts
+    # for why), and Babel instrumentation costs real wall clock that v8's
+    # runtime-derived coverage did not. Measured on a 32-core box, whole suite:
+    # a single `all: true` coverage pass over the ~3.9k-file surface took 37s
+    # under v8 and 169s under istanbul, and each shard pays it. CI's v8 run was
+    # already ~1097s of test time inside a 25m budget, so istanbul would land
+    # near or over the edge. This is headroom for a slower-but-honest provider,
+    # NOT a masked hang: the job still fails on any test failure or coverage
+    # miss, and 40m still bounds a genuine deadlock.
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: apps/fiab-console
@@ -226,7 +233,7 @@ jobs:
         if: steps.changed.outputs.console == 'true'
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run vitest (with v8 coverage floor)
+      - name: Run vitest (with istanbul coverage floor)
         if: steps.changed.outputs.console == 'true'
         env:
           # 3072, NOT the build job's 6144 — and the reduction is the point.
@@ -244,18 +251,26 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=3072
         # SHARDED, and deliberately WITHIN one job rather than a matrix.
         #
-        # WHY SHARDED. vitest 3 fails a run on an unhandled error that vitest 2
-        # tolerated, and with v8 coverage this suite reliably produced
+        # WHY SHARDED — and the reason CHANGED on 2026-08-01, so read this
+        # rather than assuming. Sharding was introduced because vitest 3 fails a
+        # run on unhandled errors that vitest 2 tolerated, and with the v8
+        # provider this suite reliably produced
         #     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
-        # — the worker->main RPC missing its deadline while REPORTING. Every one
-        # of the 1302 files passed; only the reporting channel timed out. vitest 3
-        # made v8 coverage AST-aware, which puts far more work on the single main
-        # thread that must answer every task update, and 1302 files of that
-        # traffic outruns it. Measured, same commit, same machine:
-        #     --coverage              -> 1 failed | 13319 passed, Errors 1
-        #     --coverage --shard=1/2  -> 651 files / 6533 passed, NO Errors
-        # There is no config escape: `experimentalAstAwareRemapping` is not
-        # exposed in vitest 3.2.7's types.
+        # — the worker->main RPC missing its deadline while REPORTING, while
+        # every test passed. THAT REASON IS GONE: the provider is now istanbul
+        # (see vitest.config.ts for the full argument), and the unhandled error
+        # disappears with it — measured, whole suite, exit codes read directly
+        # rather than through a pipe:
+        #     v8:       merge exit 1, Errors 1
+        #     istanbul: shard1 exit 0, shard2 exit 0, MERGE EXIT 0, 0 Errors,
+        #               1302 files / 13324 tests, coverage identical to the
+        #               unsharded run (29.88/23.09/24.22/32.51).
+        #
+        # Sharding is KEPT for the second reason it turned out to serve: memory.
+        # At 6144 per fork the whole suite OOM-killed a fork on a ~16 GB runner
+        # and closed its IPC channel (ERR_IPC_CHANNEL_CLOSED) with no blob
+        # written. Half-suite shards at 3072 fit with headroom. Do not un-shard
+        # without re-testing that, and do not re-attribute this to the RPC error.
         #
         # WHY NOT A MATRIX. `vitest (node 20)` is the ROLL GATE — see the header
         # of this file and loom-roll-and-validate.yml, which reads a check-run of
@@ -284,7 +299,7 @@ jobs:
             # failure or on the coverage floor. Deferring to it is what makes the
             # merge the single enforcement point rather than one of three.
             # Thresholds MUST be off per shard. A shard sees half the files, so
-            # its coverage is ~24.8% against a 32% whole-suite floor — it fails
+            # its coverage lands well under the whole-suite floor — it fails
             # every time, for a reason that says nothing about the code. I wrote
             # the commit message warning about exactly this and then dropped the
             # disable flag in the next commit; CI caught it.
