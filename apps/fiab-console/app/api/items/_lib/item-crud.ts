@@ -22,6 +22,7 @@ import { autoOnboardToPurview, offboardFromPurview } from '@/lib/azure/purview-a
 import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/thread/thread-edges';
 import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
+import { cosmosIdFromLoomId } from './loom-content-id';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
@@ -257,7 +258,25 @@ export async function loadOwnedItem(
     .query<WorkspaceItem>({
       query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
       parameters: [
-        { name: '@id', value: itemId },
+        // #2830 — THE `loom:` CHOKEPOINT. A bundle-installed item is listed
+        // under the SYNTHETIC id `loom:<cosmosItemId>` and the editor threads
+        // whatever the list route handed it into EVERY sub-route. This query is
+        // `WHERE c.id = @id`, so the prefixed form matched NOTHING and dozens of
+        // sub-routes 404'd on an item that exists. It was fixed one route at a
+        // time in #2649 / #2818 / #2822 and the siblings were left each time.
+        //
+        // Resolving here closes the class: every caller of loadOwnedItem —
+        // and therefore updateOwnedItem / deleteOwnedItem / softDeleteOwnedItem
+        // / readModelState / writeModelState / the checkpoint + prep-for-ai +
+        // verified-queries + scorecard-goals stores — resolves the prefix for
+        // free, and a NEW sub-route cannot forget to.
+        //
+        // Safe unconditionally: item ids are `crypto.randomUUID()` (see
+        // createOwnedItem) and Power BI ids are GUIDs, so neither can start with
+        // `loom:` — `cosmosIdFromLoomId` is the IDENTITY for every real id.
+        // A `loom:` id whose Cosmos item does not exist still returns null: this
+        // resolves an id, it does not invent an item.
+        { name: '@id', value: cosmosIdFromLoomId(itemId) },
         { name: '@t', value: itemType },
       ],
     })

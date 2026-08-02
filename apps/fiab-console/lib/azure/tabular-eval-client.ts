@@ -42,6 +42,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { aasScope, aasXmlaUrl } from './cloud-endpoints';
 import { listOwnedItems } from '@/app/api/items/_lib/item-crud';
+import { cosmosIdFromLoomId } from '@/app/api/items/_lib/loom-content-id';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
 import {
   buildQueryCacheKey,
@@ -135,10 +136,21 @@ export async function listModels(tenantId: string): Promise<ModelSummary[]> {
   }));
 }
 
-/** Fetch a single semantic-model item by id (tenant-scoped). */
+/**
+ * Fetch a single semantic-model item by id (tenant-scoped).
+ *
+ * #2830 — the second `loom:` chokepoint. This is an exact-id match against the
+ * Cosmos item list, so a `loom:<cosmosItemId>` list id matched nothing and every
+ * consumer (listTables / listMeasures / evalDax / warmSemanticModel, and through
+ * them the DAX-query, semantic-link, model-health and Prep-for-AI surfaces) threw
+ * `Semantic model … not found` for a model that exists. `cosmosIdFromLoomId` is
+ * the IDENTITY for a real Cosmos/Power BI id, so this only ever resolves the
+ * synthetic form.
+ */
 export async function getModelItem(modelId: string, tenantId: string): Promise<WorkspaceItem | null> {
   const all = await listOwnedItems('semantic-model', tenantId);
-  return all.find((it) => it.id === modelId) ?? null;
+  const wanted = cosmosIdFromLoomId(modelId);
+  return all.find((it) => it.id === wanted) ?? null;
 }
 
 // ---------------------------------------------------------------------------

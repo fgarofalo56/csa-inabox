@@ -23,18 +23,18 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { getSession } from '@/lib/auth/session';
 import { getScorecard, listScorecardGoals, addScorecardGoalValue, PowerBiError } from '@/lib/azure/powerbi-client';
 import {
   scorecardGoalsContainer, scorecardCheckinsContainer,
   type ScorecardGoalRecord, type ScorecardCheckIn, type ScorecardGoalStatus,
 } from '@/lib/azure/cosmos-client';
 import {
-  isLoomContentId, cosmosIdFromLoomId, loadContentBackedItem,
+  isLoomContentId, cosmosIdFromLoomId, LOOM_ID_PREFIX, loadContentBackedItem,
   scorecardGoalsFromContent, scorecardMetaFromContent,
 } from '../../_lib/pbi-content-fallback';
 import { computeRollups } from '../rollup';
 import { loadScorecardConfig, mergeConfigOntoLiveGoals } from '../config-store';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,12 +77,26 @@ function mergeGoals(base: any[], records: Map<string, ScorecardGoalRecord>): any
   });
 }
 
+/**
+ * Serve a Cosmos-backed scorecard.
+ *
+ * #2830 — null means ONLY "no such scorecard / not yours". A scorecard that has
+ * been created but has no OKRs stamped into `state.content` yet is a real,
+ * owned scorecard with zero goals; 404ing it was the same found-but-empty
+ * conflation the report `…/pages` route had, and it put an error banner on a
+ * freshly created item (`ux-baseline.md` clean-first-open). Note the metadata
+ * (`id` / `displayName` / `description`) is read off the ITEM, never off the
+ * content, so it is always available.
+ */
 async function loomScorecard(cosmosItemId: string, tenantId: string, workspaceId: string, scorecardKey: string) {
   const item = await loadContentBackedItem(cosmosItemId, 'scorecard', tenantId);
   if (!item) return null;
-  const goals = scorecardGoalsFromContent(item);
-  const scorecard = scorecardMetaFromContent(item);
-  if (!goals || !scorecard) return null;
+  const goals = scorecardGoalsFromContent(item) ?? [];
+  const scorecard = scorecardMetaFromContent(item) ?? {
+    id: `${LOOM_ID_PREFIX}${item.id}`,
+    displayName: item.displayName,
+    description: item.description,
+  };
   const records = await loadGoalRecords(scorecardKey).catch(() => new Map<string, ScorecardGoalRecord>());
   return NextResponse.json({ ok: true, workspaceId, scorecard, goals: mergeGoals(goals, records) });
 }
@@ -98,14 +112,12 @@ async function goalHistory(scorecardId: string, goalId: string) {
   return resources;
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   // Azure-native DEFAULT (rel-T03/B11): workspaceId is OPTIONAL — Cosmos-backed
   // (`loom:`) scorecards + check-in history need no Power BI workspace. Only
   // the live Power BI branch below requires one.
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
-  const id = (await ctx.params).id;
+  const id = params.id;
 
   // Check-in history for a single goal.
   const historyGoal = req.nextUrl.searchParams.get('history');
@@ -157,17 +169,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   // workspaceId is OPTIONAL (rel-T03/B11): the Cosmos check-in write below is
   // the source of truth and needs no Power BI workspace; the live Power BI
   // goal push only runs when a workspace is bound.
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
   const body = await req.json().catch(() => ({}));
-  const id = (await ctx.params).id;
+  const id = params.id;
   const goalId = String(body?.goalId || '');
   const value = Number(body?.value);
   if (!goalId || !Number.isFinite(value)) {
@@ -259,13 +269,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       fabric: { recorded: false, error: e?.message || String(e), status: fabricStatus },
     });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const body = await req.json().catch(() => ({}));
-  const id = (await ctx.params).id;
+  const id = params.id;
   const goalId = String(body?.goalId || '');
   if (!goalId) return NextResponse.json({ ok: false, error: 'goalId required' }, { status: 400 });
 
@@ -307,4 +315,4 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

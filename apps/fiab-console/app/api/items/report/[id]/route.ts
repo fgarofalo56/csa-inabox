@@ -13,11 +13,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getReport, PowerBiError } from '@/lib/azure/powerbi-client';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
+  LOOM_ID_PREFIX,
   loadContentBackedItem,
   reportDetailFromContent,
   reportPagesFromContent,
@@ -25,6 +25,7 @@ import {
 import { loadModelItem } from '@/lib/azure/model-binding';
 import { resolveBiBackendMode } from '@/lib/admin/platform-settings';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,27 +48,42 @@ function aasBindingOf(item: WorkspaceItem): { aasServer: string | null; aasDatab
   };
 }
 
-/** Build the Loom-native report detail from a content-backed (loom:) item. */
+/**
+ * Build the Loom-native report detail from a content-backed (loom:) item.
+ *
+ * #2830 — returns null ONLY when the item is absent / not the caller's. A report
+ * that exists but has never been saved has no `state.content` yet (the designer's
+ * `…/definition` PUT writes it), and `reportDetailFromContent` returns null for
+ * it. Treating that as "not found" 404'd a freshly created report, the same
+ * conflation the sibling `…/pages` route had. The plain-Cosmos-id branch below
+ * already tolerates a null detail (`...(detail ?? {})`); this makes the `loom:`
+ * branch behave identically — the report's identity comes from the ITEM, not
+ * from its content.
+ */
 async function loomNativeDetail(cosmosItemId: string, tenantId: string, workspaceId: string) {
   const item = await loadContentBackedItem(cosmosItemId, 'report', tenantId);
   if (!item) return null;
   const detail = reportDetailFromContent(item);
-  if (!detail) return null;
   const pages = reportPagesFromContent(item) ?? [];
   return NextResponse.json({
     ok: true,
     workspaceId,
-    ...detail,
+    ...(detail ?? {}),
+    // Re-assert the identity so an unsaved report (detail === null) still names
+    // itself, and a saved one keeps the `loom:` id the editor threads onward.
+    report: {
+      id: `${LOOM_ID_PREFIX}${item.id}`,
+      name: item.displayName,
+      reportType: 'PowerBIReport' as const,
+    },
     ...aasBindingOf(item),
     pages,
   });
 }
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '_loom';
-  const id = (await ctx.params).id;
+  const id = params.id;
 
   // Bundle-installed / loom: synthetic ID → always serve Loom-native.
   if (isLoomContentId(id)) {
@@ -122,4 +138,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     ...aasBindingOf(item),
     pages,
   });
-}
+});

@@ -123,10 +123,19 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
 
   // Load the report's Loom-native content (pages + visuals) so newly-added
   // visuals are visible immediately. Reads state.content via the loom: pages route.
+  //
+  // #2830 — the `loom:` marker selects the Cosmos branch of the pages route (the
+  // Azure-native default), so it must not be double-applied when `reportId` is
+  // already in that form. The route reads NO workspace on that branch, which is
+  // why this used to pass the sentinel `workspaceId=loom-native` — a backend NAME
+  // in a parameter that everywhere else carries a workspace GUID — purely to get
+  // past a `workspaceId required` check. The check now applies only to the opt-in
+  // Power BI branch that actually needs a groupId, so the lie is gone.
   const loadLoomContent = useCallback(async () => {
     if (!reportId) return;
+    const loomId = reportId.startsWith('loom:') ? reportId : `loom:${reportId}`;
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent('loom:' + reportId)}/pages?workspaceId=loom-native`);
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(loomId)}/pages`);
       const j = await r.json();
       setPages(j.ok && Array.isArray(j.pages) ? j.pages : []);
     } catch { setPages([]); }
