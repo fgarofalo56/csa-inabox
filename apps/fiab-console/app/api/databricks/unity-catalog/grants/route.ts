@@ -208,6 +208,13 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
         // must not assert "nor through any group it belongs to" off a closure
         // that is just [principal] because Graph was unavailable.
         ...(p.principal_closure ? { closureResolved: p.closure_resolved === true } : {}),
+        // #2651 — the owner, read alongside the Databricks passthrough (whose
+        // effective-permissions answer never includes ownership). No new
+        // exposure: the securable's `owner` is already on every catalogs /
+        // schemas / tables list this same session can read, and this response
+        // already carries the full principal→privilege graph for the securable.
+        ...(p.owner ? { owner: p.owner } : {}),
+        ...(p.owner_unreadable ? { ownerUnreadable: true } : {}),
         ...(principal ? { principal } : {}),
       });
     }

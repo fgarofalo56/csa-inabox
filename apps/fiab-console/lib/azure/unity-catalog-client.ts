@@ -761,6 +761,18 @@ export async function listPermissions(
  * only exposes direct grants, so the BFF resolves the SAME answer itself via
  * `computeEffectivePermissions` (`uc-effective-permissions-live.ts`) — this is
  * what removed the "Databricks-only" gate, with no Fabric/Databricks dependency.
+ *
+ * #2651 — on the Databricks branch the owner is read ALONGSIDE the passthrough.
+ * Databricks' permissions APIs never report ownership ("Azure Databricks doesn't
+ * explicitly grant the ALL PRIVILEGES privilege to the owner … you won't see ALL
+ * PRIVILEGES returned when listing permissions using the Databricks API",
+ * learn.microsoft.com/azure/databricks/data-governance/unity-catalog/access-control/permissions-concepts#ownership),
+ * so an empty answer is NOT evidence that the securable is unowned — and the
+ * pane was stating exactly that. The owner comes back as a FACT (`owner`), not
+ * as synthesized `privilege_assignments`: on this backend Databricks' own answer
+ * is authoritative for what it will enforce, and inventing rows it did not
+ * return would swap one over-claim for another. A failed owner read degrades to
+ * `owner_unreadable` + a warning, never to a 502.
  */
 export async function listEffectivePermissions(
   host: string,
@@ -776,7 +788,33 @@ export async function listEffectivePermissions(
   }
   const path = permissionPath(secType, securableName).replace('/permissions/', '/effective-permissions/');
   const principal = (opts?.principal || '').trim();
-  return ucFetch<UCEffectivePermissions>(host, path, principal ? { query: { principal } } : undefined);
+  // The passthrough is started FIRST so the owner read is concurrent, not
+  // additive latency. Both are settled, never raced: a caller can legitimately
+  // be able to read grants and not the object (or vice versa).
+  const permsP = ucFetch<UCEffectivePermissions>(host, path, principal ? { query: { principal } } : undefined);
+  const ownerP = (async () => {
+    // Dynamic for the same reason as above: that module reads back through this
+    // one, so a static edge would be an import cycle.
+    const { securableOwner } = await import('@/lib/azure/uc-securable-owner');
+    return securableOwner(host, secType, securableName);
+  })();
+  const [permsResult, ownerResult] = await Promise.allSettled([permsP, ownerP]);
+  if (permsResult.status === 'rejected') throw permsResult.reason;
+  const perms = permsResult.value;
+  if (ownerResult.status === 'rejected') {
+    const why = (ownerResult.reason as Error)?.message || String(ownerResult.reason);
+    return {
+      ...perms,
+      owner_unreadable: true,
+      warnings: [
+        ...(perms.warnings || []),
+        `Could not read the owner of ${secType} ${securableName || '(metastore)'}: ${why}. `
+        + 'Databricks never reports ownership through the permissions APIs, so an empty answer here '
+        + 'is not evidence that this securable is unowned.',
+      ],
+    };
+  }
+  return ownerResult.value ? { ...perms, owner: ownerResult.value } : perms;
 }
 
 /** REST permission patch — for simple `GRANT priv TO principal` and

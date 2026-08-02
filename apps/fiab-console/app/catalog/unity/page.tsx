@@ -23,6 +23,7 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 import { UC_PRIVILEGES_BY_SECURABLE, ucPrivilegesFor } from '@/lib/azure/uc-effective-permissions';
+import { ucEffectiveEmptyState, ucGrantsCaption } from '@/lib/azure/uc-grants-copy';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
@@ -709,6 +710,15 @@ function GrantsPane({ oss }: { oss: boolean }) {
   // Graph is unavailable the closure is just [principal], and the pane must not
   // then claim "…nor through any group it belongs to".
   const [closureResolved, setClosureResolved] = useState(false);
+  // #2651 — the owner of the queried securable, read alongside the Databricks
+  // effective-permissions passthrough (which never reports ownership). Without
+  // this the empty state asserted "no owner" on a catalog that has one.
+  const [owner, setOwner] = useState<string | null>(null);
+  const [ownerUnreadable, setOwnerUnreadable] = useState(false);
+  // The securable type the CURRENT grid answers for. The dropdown can move after
+  // a load, and the empty state names the type — it must name the one that was
+  // actually queried, not whatever is selected now.
+  const [queriedSecurable, setQueriedSecurable] = useState('CATALOG');
   const [warnings, setWarnings] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [gated, setGated] = useState<string | null>(null);
@@ -732,6 +742,7 @@ function GrantsPane({ oss }: { oss: boolean }) {
   const load = useCallback(async () => {
     if (!fullName.trim() && securable !== 'METASTORE') { setErr('Enter the securable full name (e.g. main.sales or main.sales.orders).'); return; }
     setBusy(true); setErr(null); setGated(null); setWarnings([]); setClosure(null); setClosureResolved(false);
+    setOwner(null); setOwnerUnreadable(false);
     try {
       const p = new URLSearchParams({ securable_type: securable, full_name: fullName.trim() });
       if (effective) {
@@ -752,6 +763,9 @@ function GrantsPane({ oss }: { oss: boolean }) {
       setWarnings(Array.isArray(j.warnings) ? j.warnings : []);
       setClosure(Array.isArray(j.principalClosure) ? j.principalClosure : null);
       setClosureResolved(j.closureResolved === true);
+      setOwner(typeof j.owner === 'string' && j.owner ? j.owner : null);
+      setOwnerUnreadable(j.ownerUnreadable === true);
+      setQueriedSecurable(securable);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [securable, fullName, effective, forPrincipal]);
@@ -880,10 +894,18 @@ function GrantsPane({ oss }: { oss: boolean }) {
         </div>
       )}
       <Caption1 className={s.mutedBlock}>
-        {effective
-          ? `Effective permissions resolve inheritance down the containment chain (catalog → schema → object), expand ALL PRIVILEGES, add what ownership implies (the owner of THIS securable holds everything applicable to it; the owner of a PARENT gets MANAGE on it and nothing more — ownership does not inherit downward in Unity Catalog), check the USE CATALOG / USE SCHEMA prerequisites, and — with a principal — union in its transitive group memberships. ${oss ? 'Resolved by the Loom BFF from the OSS catalog’s direct grants.' : 'Resolved by the Databricks effective-permissions API.'}`
-          : 'Showing the grants recorded directly on this securable. Tick “Effective (inherited)” to include everything inherited from its parents and from ownership.'}
+        {ucGrantsCaption({ effective, backend: oss ? 'oss' : 'databricks' })}
       </Caption1>
+      {effective && (owner || ownerUnreadable) && (
+        <span className={s.actionsRow}>
+          <Caption1 className={s.muted}>
+            Owner (read separately — not part of this backend’s effective-permissions answer):
+          </Caption1>
+          {owner
+            ? <Badge appearance="tint" color="informative">{owner}</Badge>
+            : <Badge appearance="outline" color="warning">could not be read — see the warning above</Badge>}
+        </span>
+      )}
       {closure && closure.length > 1 && (
         <span className={s.actionsRow}>
           <Caption1 className={s.muted}>Group memberships applied:</Caption1>
@@ -898,13 +920,17 @@ function GrantsPane({ oss }: { oss: boolean }) {
           rows={grants}
           getRowId={(g) => g.principal}
           empty={effective
-            ? (forPrincipal.trim()
-              ? (closureResolved
-                // Only claim the group dimension when the directory ACTUALLY
-                // answered. With Graph unavailable the closure is [principal].
-                ? `${forPrincipal.trim()} holds no privileges here — not directly, not from a parent, not through ownership, and not through any group it belongs to.`
-                : `${forPrincipal.trim()} holds no privileges here from any grant, parent or owner that Loom could read. Group memberships were NOT resolved (see the warning above), so a privilege held via a group would not appear.`)
-              : 'Nobody holds any privilege here — no direct grant, no inherited grant, no owner.')
+            // Backend-aware (#2651): the Databricks passthrough never reports
+            // ownership, so this line must not assert "no owner" there — it says
+            // what that answer actually covered, and names the owner Loom read.
+            ? ucEffectiveEmptyState({
+              backend: oss ? 'oss' : 'databricks',
+              securableType: queriedSecurable,
+              forPrincipal,
+              closureResolved,
+              ...(owner ? { owner } : {}),
+              ownerUnreadable,
+            })
             : 'No grants on this securable yet — add one below.'}
         />
       )}

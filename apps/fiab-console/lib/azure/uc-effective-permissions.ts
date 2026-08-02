@@ -391,6 +391,24 @@ export interface UCEffectivePermissions {
    *  `[principal]` because Graph was unavailable — the pane must NOT then say
    *  "…nor through any group it belongs to". */
   closure_resolved?: boolean;
+  /** The owner of the QUERIED securable, read alongside the answer (#2651).
+   *
+   *  Populated on the **Databricks** backend, whose native effective-permissions
+   *  endpoint never reports ownership at all ("Azure Databricks doesn't
+   *  explicitly grant the ALL PRIVILEGES privilege to the owner"), so an empty
+   *  `privilege_assignments` is NOT evidence that the securable is unowned. It
+   *  is returned as a FACT and deliberately NOT synthesized into
+   *  `privilege_assignments`: on that backend Databricks' own answer is
+   *  authoritative for what it will enforce, and inventing rows it did not
+   *  return would swap one over-claim for another.
+   *
+   *  The OSS / Loom Unity resolver folds ownership into the assignments itself,
+   *  so it leaves this unset. */
+  owner?: string;
+  /** True when the owner read was ATTEMPTED and FAILED (the reason is in
+   *  `warnings`). The pane must then neither name an owner nor claim there is
+   *  none. */
+  owner_unreadable?: boolean;
 }
 
 export interface ResolveEffectiveOptions {
