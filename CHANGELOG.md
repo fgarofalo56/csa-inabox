@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.3...csa-inabox-v0.82.4) (2026-08-02)
+
+
+### Bug Fixes
+
+* **lineage:** render the LU-8 harvest gate + inline Fix-it ([#2625](https://github.com/fgarofalo56/csa-inabox/issues/2625)) ([#2807](https://github.com/fgarofalo56/csa-inabox/issues/2807)) ([b16f1dc](https://github.com/fgarofalo56/csa-inabox/commit/b16f1dca81dbb8641afc129224af0e91996b52b7))
+
 ## [0.82.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.2...csa-inabox-v0.82.3) (2026-08-02)
 
 
