@@ -7,7 +7,7 @@
  * re-implementing the component under test.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, within } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, within, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import {
@@ -42,6 +42,14 @@ let graphResults: unknown[] = [];
 const graphCalls: string[] = [];
 
 beforeEach(() => {
+  // Role queries here navigate Fluent listbox popovers, which render through a
+  // portal. Portalled Fluent surfaces intermittently carry `aria-hidden` under
+  // jsdom (see the sibling data-shares-publish-dialogs spec for the dump that
+  // proved it), which silently empties any `*ByRole` result. Opt out of the
+  // a11y-tree filter so navigation is deterministic; the assertions that carry
+  // the meaning here are the `onSelect` payload checks, not the lookups.
+  // `configure` is global, so it is restored in afterEach.
+  configure({ defaultHidden: true });
   clientFetchMock.mockReset();
   graphResults = [];
   graphCalls.length = 0;
@@ -50,7 +58,7 @@ beforeEach(() => {
     return { ok: true, status: 200, json: async () => ({ ok: true, results: graphResults }) };
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { configure({ defaultHidden: false }); cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 function wrap(ui: React.ReactElement) {
   return render(<FluentProvider theme={webLightTheme}>{ui}</FluentProvider>);

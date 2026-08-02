@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Caption1, Button, Dropdown, Option, Field, Persona, Spinner,
+  Caption1, Button, Dropdown, Option, Field, Persona,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -182,49 +182,56 @@ export function LakehouseTablePicker({
 
   return (
     <div className={s.stack}>
+      {/*
+        Each Dropdown stays MOUNTED for its whole lifecycle — "loading" is a
+        placeholder + disabled state on the control itself, not a <Spinner>
+        swapped into the Field's control slot.
+
+        This is a UX choice, not a correctness fix: keeping the control mounted
+        means the field is labelled and focusable from first paint and the form
+        does not reflow as each stage resolves (the Workspace row used to be a
+        small spinner that then became a full-width Dropdown, jolting the two
+        rows below it). Fluent wires `<label for>` to the control correctly
+        either way.
+      */}
       <Field label="Workspace" required>
-        {workspaces === null ? <Spinner size="tiny" /> : (
-          <Dropdown
-            placeholder="Select a workspace…"
-            value={workspaces.find((w) => w.id === wsId)?.displayName || ''}
-            selectedOptions={wsId ? [wsId] : []}
-            onOptionSelect={(_e, d) => setWsId(d.optionValue || '')}
-          >
-            {workspaces.map((w) => <Option key={w.id} value={w.id}>{w.displayName}</Option>)}
-          </Dropdown>
-        )}
+        <Dropdown
+          placeholder={workspaces === null ? 'Loading workspaces…' : 'Select a workspace…'}
+          disabled={workspaces === null}
+          value={(workspaces || []).find((w) => w.id === wsId)?.displayName || ''}
+          selectedOptions={wsId ? [wsId] : []}
+          onOptionSelect={(_e, d) => setWsId(d.optionValue || '')}
+        >
+          {(workspaces || []).map((w) => <Option key={w.id} value={w.id}>{w.displayName}</Option>)}
+        </Dropdown>
       </Field>
 
       <Field label="Lakehouse" required hint="The Delta tables Loom can publish live under a lakehouse item's own ADLS Gen2 root.">
-        {wsId && lakehouses === null ? <Spinner size="tiny" /> : (
-          <Dropdown
-            placeholder={wsId ? 'Select a lakehouse…' : 'Pick a workspace first'}
-            disabled={!wsId}
-            value={(lakehouses || []).find((l) => l.id === lhId)?.displayName || ''}
-            selectedOptions={lhId ? [lhId] : []}
-            onOptionSelect={(_e, d) => setLhId(d.optionValue || '')}
-          >
-            {(lakehouses || []).map((l) => <Option key={l.id} value={l.id}>{l.displayName}</Option>)}
-          </Dropdown>
-        )}
+        <Dropdown
+          placeholder={!wsId ? 'Pick a workspace first' : lakehouses === null ? 'Loading lakehouses…' : 'Select a lakehouse…'}
+          disabled={!wsId || lakehouses === null}
+          value={(lakehouses || []).find((l) => l.id === lhId)?.displayName || ''}
+          selectedOptions={lhId ? [lhId] : []}
+          onOptionSelect={(_e, d) => setLhId(d.optionValue || '')}
+        >
+          {(lakehouses || []).map((l) => <Option key={l.id} value={l.id}>{l.displayName}</Option>)}
+        </Dropdown>
       </Field>
 
       <Field label="Delta table" required hint="Scanned live from the lakehouse's storage — only real Delta tables are listed.">
-        {lhId && tables === null ? <Spinner size="tiny" /> : (
-          <Dropdown
-            placeholder={lhId ? 'Select a Delta table…' : 'Pick a lakehouse first'}
-            disabled={!lhId || !(tables || []).length}
-            value={selected?.name || ''}
-            selectedOptions={selected ? [selected.name] : []}
-            onOptionSelect={(_e, d) => pickTable(d.optionValue || '')}
-          >
-            {(tables || []).map((t) => (
-              <Option key={t.name} value={t.name} text={t.name}>
-                {humanSize(t.sizeBytes) ? `${t.name} · ${humanSize(t.sizeBytes)}` : t.name}
-              </Option>
-            ))}
-          </Dropdown>
-        )}
+        <Dropdown
+          placeholder={!lhId ? 'Pick a lakehouse first' : tables === null ? 'Scanning for Delta tables…' : 'Select a Delta table…'}
+          disabled={!lhId || !(tables || []).length}
+          value={selected?.name || ''}
+          selectedOptions={selected ? [selected.name] : []}
+          onOptionSelect={(_e, d) => pickTable(d.optionValue || '')}
+        >
+          {(tables || []).map((t) => (
+            <Option key={t.name} value={t.name} text={t.name}>
+              {humanSize(t.sizeBytes) ? `${t.name} · ${humanSize(t.sizeBytes)}` : t.name}
+            </Option>
+          ))}
+        </Dropdown>
       </Field>
 
       {lhId && tables !== null && tables.length === 0 && !gate && (

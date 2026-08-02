@@ -14,9 +14,33 @@
  * must be unchanged, so those assertions hold both before and after the fix.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, within } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, within, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+
+/**
+ * This surface mounts SEVERAL Fluent <Dialog>s at once (New share, New
+ * recipient, the share explorer, plus one Add-object dialog per ShareCard).
+ * Fluent's modal bookkeeping then marks non-active `DialogSurface`s
+ * `aria-hidden="true"`, and in jsdom — which has no top-layer or real focus
+ * management — the surface under test intermittently keeps that attribute even
+ * while it is the open one.
+ *
+ * `*ByRole` defaults to `hidden:false`, i.e. it consults the accessibility
+ * tree, so every query inside the dialog then finds nothing. That is what made
+ * this spec pass locally and fail on a loaded CI runner: verified by dumping
+ * the DOM in the failing state, where `<label for>` and the control `id` were
+ * correctly paired and the ONLY hidden ancestor was
+ * `DIV.fui-DialogSurface{aria-hidden=true}`.
+ *
+ * So: opt role queries out of the a11y-tree filter, and assert the cascade via
+ * `*ByLabelText`, which both is deterministic here and is the stronger claim —
+ * it proves each control is actually labelled.
+ *
+ * `configure` is a global singleton in @testing-library/dom, so it is set and
+ * restored per test rather than at module scope — otherwise it would leak into
+ * any other spec sharing this worker.
+ */
 
 const clientFetchMock = vi.fn();
 vi.mock('@/lib/client-fetch', () => ({
@@ -49,6 +73,7 @@ function shareListFor(backend: 'loom' | 'databricks') {
 let backend: 'loom' | 'databricks' = 'loom';
 
 beforeEach(() => {
+  configure({ defaultHidden: true });
   backend = 'loom';
   clientFetchMock.mockReset();
   clientFetchMock.mockImplementation(async (url: string) => {
@@ -74,7 +99,7 @@ beforeEach(() => {
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { configure({ defaultHidden: false }); cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 async function openOutbound() {
   const { DataShares } = await import('../data-shares');
@@ -107,9 +132,32 @@ describe('AddObjectDialog — Loom backend (issue #2618)', () => {
 
   it('replaces it with a Workspace -> Lakehouse -> Delta table cascade', async () => {
     await openAddTable();
-    expect(await screen.findByRole('combobox', { name: /Workspace/i })).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: /Lakehouse/i })).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: /Delta table/i })).toBeInTheDocument();
+    // By LABEL, not by role-name: this asserts the control exists AND is
+    // labelled, and does not depend on Fluent's modal aria-hidden bookkeeping.
+    expect(await screen.findByLabelText(/^Workspace/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Lakehouse/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Delta table/)).toBeInTheDocument();
+  });
+
+  it('stays assertable when Fluent marks the dialog surface aria-hidden (the CI failure mode)', async () => {
+    await openAddTable();
+    // Reproduce the exact condition that made this spec red on a 4-core runner:
+    // several Dialogs are mounted on this surface at once, and Fluent's modal
+    // bookkeeping intermittently leaves `aria-hidden` on the open one under
+    // jsdom (no top layer, no real focus management). Under that attribute the
+    // whole subtree drops out of the accessibility tree, so `*ByRole` with the
+    // default `hidden:false` finds nothing — while the DOM, and the
+    // `<label for>` -> control `id` wiring, are entirely correct.
+    const surface = document.querySelector('.fui-DialogSurface');
+    expect(surface).not.toBeNull();
+    surface!.setAttribute('aria-hidden', 'true');
+
+    expect(screen.getByLabelText(/^Workspace/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Lakehouse/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Delta table/)).toBeInTheDocument();
+    // And the pre-fix free-text field is still absent under the same condition,
+    // so the issue-#2618 assertion cannot silently pass by finding nothing.
+    expect(screen.queryByLabelText(/ADLS Delta location/i)).toBeNull();
   });
 
   it('enumerates lakehouses from the real backend rather than a built-in list', async () => {
@@ -123,7 +171,7 @@ describe('AddObjectDialog — Loom backend (issue #2618)', () => {
     const user = await openAddTable();
     // The share fixture publishes `gold.orders`, so `gold` is a real, enumerated
     // option — not something the operator has to retype.
-    await user.click(await screen.findByRole('combobox', { name: /Schema/i }));
+    await user.click(await screen.findByLabelText(/^Schema/));
     expect(await screen.findByRole('option', { name: 'gold' })).toBeInTheDocument();
   });
 
@@ -187,7 +235,8 @@ describe('CONTROL — Databricks backend is unchanged', () => {
     expect(screen.getByText('Catalog')).toBeInTheDocument();
     expect(screen.getByText('Shared as (alias)')).toBeInTheDocument();
     // The Loom-only pickers must not leak onto this branch.
-    expect(screen.queryByRole('combobox', { name: /Workspace/i })).toBeNull();
+    expect(screen.queryByLabelText(/^Workspace/)).toBeNull();
+    expect(screen.queryByLabelText(/^Delta table/)).toBeNull();
   });
 
   it('still offers the TOKEN / DATABRICKS authentication choice', async () => {
