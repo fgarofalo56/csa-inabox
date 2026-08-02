@@ -43,6 +43,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from './aca-managed-identity';
 import { objectSyncJobsContainer } from './cosmos-client';
+import { safeRecord } from '@/lib/security/safe-object';
 import type { OntoDatasource } from '@/lib/editors/ontology-model';
 
 // ============================================================
@@ -328,7 +329,13 @@ async function fetchRowPage(
 
 function resultToObjects(columns: string[], rows: unknown[][]): Array<Record<string, unknown>> {
   return rows.map((row) => {
-    const obj: Record<string, unknown> = {};
+    // Keys are SOURCE COLUMN NAMES. The identifier filter below reads as strict
+    // but `_` is `\w`, so `__proto__` / `constructor` / `toString` all match it
+    // (proved in lib/security/__tests__/request-key-sinks.test.ts). On an object
+    // literal a `__proto__` column is silently dropped and a `toString` column
+    // shadows an inherited method, so a later `String(obj)` throws. Null-prototype
+    // record: every column name round-trips as plain data.
+    const obj = safeRecord<unknown>();
     for (let i = 0; i < columns.length; i++) {
       const col = columns[i];
       if (!/^[A-Za-z_][\w]{0,62}$/.test(col)) continue;
@@ -473,7 +480,10 @@ export async function runDatasetSync(
         const pkValue = pkRaw !== undefined && pkRaw !== null ? pkRaw : offset + i;
         const resolvedPkProp = pkCol === '_rownum' ? '_rownum' : pkCol;
 
-        const props: Record<string, unknown> = {};
+        // `propName` is `datasource.columnMap[col]` — an EDITOR-SUPPLIED mapping —
+        // falling back to the source column name. Same weak identifier filter as
+        // `resultToObjects`; same null-prototype record for the same reason.
+        const props = safeRecord<unknown>();
         for (const [col, val] of Object.entries(row)) {
           const propName = colMap[col] || col;
           if (/^[A-Za-z_][\w]{0,62}$/.test(propName)) props[propName] = val;
@@ -487,7 +497,9 @@ export async function runDatasetSync(
         const idocs = batch.rows.map((row, i) => {
           const pkRaw = pkCol === '_rownum' ? offset + i : row[pkCol];
           const pkValue = pkRaw !== undefined && pkRaw !== null ? pkRaw : offset + i;
-          const props: Record<string, unknown> = {};
+          // Same editor-supplied key space as the AGE upsert above; the search
+          // document's `properties` bag must be prototype-less for the same reason.
+          const props = safeRecord<unknown>();
           for (const [col, val] of Object.entries(row)) {
             const propName = colMap[col] || col;
             if (/^[A-Za-z_][\w]{0,62}$/.test(propName)) props[propName] = val;
