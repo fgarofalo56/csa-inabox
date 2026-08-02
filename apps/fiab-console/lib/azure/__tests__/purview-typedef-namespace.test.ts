@@ -13,15 +13,18 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  asAtlasBusinessMetadataName,
   asAtlasClassificationTypedefName,
   assertNamespacedTypedefNames,
+  isNamespacedBusinessMetadataName,
   isNamespacedTypedefName,
   loomClassificationTypedefName,
   loomSensitivityLabelTypedefName,
+  loomTenantBusinessMetadataName,
   SENSITIVITY_LABEL_TYPEDEF_PREFIX,
   UnnamespacedTypedefError,
 } from '../purview-typedef-namespace';
-import { MAX_ATLAS_NAME_LENGTH } from '@/lib/governance/uc-overlay/model';
+import { MAX_ATLAS_NAME_LENGTH, tenantBusinessMetadataName } from '@/lib/governance/uc-overlay/model';
 
 const TENANT_A = '11111111-2222-3333-4444-555555555555';
 const TENANT_B = '99999999-8888-7777-6666-555555555555';
@@ -194,5 +197,57 @@ describe('typedefSlug — linear edge-trim is output-identical to the regex it r
     const t0 = Date.now();
     loomClassificationTypedefName('t'.repeat(32), evil);
     expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+});
+
+// ── BUSINESS METADATA — the same class, one API surface over (#2633) ────────
+// An Atlas business-metadata typedef is ACCOUNT-GLOBAL too, and
+// `setBusinessMetadata` writes it with isOverwrite=true (a WHOLE-BAG replace),
+// so the bare `LoomCustomTags` bag has both a leak/clobber and a permanent
+// vocabulary-growth failure mode on a shared Purview account.
+describe('business-metadata bag namespace', () => {
+  it('mints `LoomCustomTags_<t8>` and gives two tenants two different bags', () => {
+    expect(loomTenantBusinessMetadataName(TENANT_A)).toMatch(/^LoomCustomTags_[0-9a-f]{8}$/);
+    expect(loomTenantBusinessMetadataName(TENANT_A)).not.toBe(loomTenantBusinessMetadataName(TENANT_B));
+  });
+
+  it('is the SAME name the LU-5 overlay projects, so one tenant has ONE bag', () => {
+    expect(loomTenantBusinessMetadataName(TENANT_A)).toBe(tenantBusinessMetadataName(TENANT_A));
+  });
+
+  it('ATTACK: the account-global `LoomCustomTags` bag is NOT mintable', () => {
+    expect(() => asAtlasBusinessMetadataName('LoomCustomTags')).toThrow(UnnamespacedTypedefError);
+    expect(isNamespacedBusinessMetadataName('LoomCustomTags')).toBe(false);
+  });
+
+  it('ATTACK: a look-alike suffix that is not an 8-hex discriminator is refused', () => {
+    const bad = [
+      'LoomCustomTags_', 'LoomCustomTags_tenantA', 'LoomCustomTags_DEADBEEF',
+      'LoomCustomTags_deadbee', 'LoomCustomTags_deadbeef1', 'CustomTags_deadbeef', '',
+    ];
+    for (const n of bad) {
+      expect(isNamespacedBusinessMetadataName(n)).toBe(false);
+      expect(() => asAtlasBusinessMetadataName(n)).toThrow(UnnamespacedTypedefError);
+    }
+  });
+
+  it('names the business-metadata builder in the refusal, not the classification one', () => {
+    try {
+      asAtlasBusinessMetadataName('LoomCustomTags');
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as Error).message).toContain('loomTenantBusinessMetadataName');
+      expect((e as Error).message).toContain('business metadata');
+    }
+  });
+
+  it('CONTROL: the classification refusal message is unchanged', () => {
+    try {
+      asAtlasClassificationTypedefName('PII');
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as Error).message).toContain('classification typedef(s)');
+      expect((e as Error).message).toContain('loomClassificationTypedefName');
+    }
   });
 });

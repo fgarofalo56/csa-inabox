@@ -7,12 +7,42 @@
  *        → { ok, configured, hasAsset, name, attributes: Record<string,string>, gov }
  *        Reads the item's Atlas entity (resolved from
  *        item.state.purviewAssetGuid / purviewGuid) and returns the custom-tag
- *        bag stored under the `LoomCustomTags` business-metadata namespace.
+ *        bag stored under this TENANT's `LoomCustomTags_<t8>` namespace, with
+ *        the legacy account-global `LoomCustomTags` bag merged UNDERNEATH it.
  *
  *   POST /api/items/[type]/[id]/business-metadata   body { attributes: Record<string,string> }
- *        → ensureBusinessMetadataDef(keys) (grows the typedef with any new keys)
- *          then setBusinessMetadata(guid, attributes) (isOverwrite=true), then
- *          re-reads the entity so the response reflects backend truth.
+ *        → ensureBusinessMetadataDef(keys, bag) (grows the TENANT bag with any
+ *          new keys) then setBusinessMetadata(guid, attributes, bag)
+ *          (isOverwrite=true), then re-reads the entity so the response
+ *          reflects backend truth.
+ *
+ * WHY THE BAG IS TENANT-NAMESPACED (issue #2633)
+ * ---------------------------------------------------------------------------
+ * An Atlas business-metadata typedef is ACCOUNT-GLOBAL, while a Loom "tenant"
+ * is only a Cosmos partition. This route used to write the bare `LoomCustomTags`
+ * bag with `isOverwrite=true`, which REPLACES the whole bag on the entity — so
+ * on a Purview account shared by two Loom tenants, tenant B saving a tag on an
+ * asset silently destroyed tenant A's tags on that same asset, and every
+ * tenant-authored key was added PERMANENTLY to the shared typedef where every
+ * other tenant could see it. It now writes `LoomCustomTags_<t8>`, the same
+ * per-tenant bag the LU-5 governance overlay already uses
+ * (`model.tenantBusinessMetadataName`), minted through the typedef-namespace
+ * authority so the account-global bag is not even expressible here.
+ *
+ * MIGRATION — READ BOTH, TENANT BAG WINS, DELETES TOMBSTONE
+ * ---------------------------------------------------------------------------
+ * Values written before this change live in the bare bag, so a bare rename
+ * would orphan them. Instead:
+ *   - GET merges `{...legacyBag, ...tenantBag}` — the tenant bag wins per key.
+ *   - POST writes the caller's full set to the tenant bag AND an explicit `''`
+ *     for every legacy key the caller dropped. Without that tombstone, deleting
+ *     a pre-migration tag would appear to work and then be resurrected by the
+ *     legacy fallback on the very next read (the legacy bag is not writable, so
+ *     the key cannot be removed at the source). `''` in the tenant bag over a
+ *     key that exists in the legacy bag therefore reads as "deleted" — which
+ *     also means a pre-migration key cannot be kept with a deliberately EMPTY
+ *     value; blanking it deletes it. That trade is deliberate: a governance
+ *     surface may not silently un-delete a tag.
  *
  * Why a dedicated route (mirrors ./classifications/route.ts):
  *   - Custom tags are Atlas business metadata — a distinct surface from
@@ -33,6 +63,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import type { SessionPayload } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import {
   itemsContainer,
   workspacesContainer,
@@ -43,10 +74,15 @@ import {
   getAssetDetail,
   ensureBusinessMetadataDef,
   setBusinessMetadata,
+  businessMetadataAttrName,
   LOOM_BUSINESS_METADATA_NAME,
 } from '@/lib/azure/purview-client';
+import {
+  loomTenantBusinessMetadataName,
+  type AtlasBusinessMetadataName,
+} from '@/lib/azure/purview-typedef-namespace';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
-import { safeRecord, toSafeStringMap } from '@/lib/security/safe-object';
+import { safeRecord, toSafeStringMap, safeGet } from '@/lib/security/safe-object';
 import { withSession } from '@/lib/api/route-toolkit';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { safeRecordFrom, UnsafeKeyError } from '@/lib/util/safe-keys';
@@ -99,17 +135,35 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
 }
 
 /**
- * Pull the custom-tag bag out of an Atlas entity's businessAttributes map.
- * Same null-prototype coercion as the write side: these keys are the tag names a
- * caller previously wrote, echoed back by Purview, so they are caller-authored
- * too and must not be able to shadow an inherited member of the returned map.
+ * One business-metadata bag off an Atlas entity, null-prototype coerced.
+ * These keys are the tag names a caller previously wrote, echoed back by
+ * Purview, so they are caller-authored too and must not be able to shadow an
+ * inherited member of the returned map — hence `safeGet` + `toSafeStringMap`.
  */
-function tagsFromDetail(detail: any): Record<string, string> {
-  const bag = detail?.entity?.businessAttributes?.[LOOM_BUSINESS_METADATA_NAME];
-  return toSafeStringMap(bag) ?? safeRecord<string>();
+function bagOf(detail: any, name: string): Record<string, string> {
+  return toSafeStringMap(safeGet<unknown>(detail?.entity?.businessAttributes, name)) ?? safeRecord<string>();
+}
+
+/**
+ * The item's custom tags = the TENANT bag laid over the LEGACY account-global
+ * bag (#2633). The tenant bag wins per key, and a `''` there over a key that
+ * exists in the legacy bag is a TOMBSTONE (the POST writes one for every legacy
+ * key the caller dropped) — see the module header.
+ */
+function tagsFromDetail(detail: any, bmName: AtlasBusinessMetadataName): Record<string, string> {
+  const legacy = bagOf(detail, LOOM_BUSINESS_METADATA_NAME);
+  const mine = bagOf(detail, bmName);
+  const out = safeRecord<string>();
+  for (const [k, v] of Object.entries(legacy)) out[k] = v;
+  for (const [k, v] of Object.entries(mine)) {
+    if (v === '' && Object.prototype.hasOwnProperty.call(legacy, k)) delete out[k];
+    else out[k] = v;
+  }
+  return out;
 }
 
 export const GET = withSession<{ type: string; id: string }>(async (_req, { session, params }) => {
+  const bmName = loomTenantBusinessMetadataName(tenantScopeId(session));
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
@@ -122,7 +176,7 @@ export const GET = withSession<{ type: string; id: string }>(async (_req, { sess
         ok: false,
         configured: false,
         hasAsset: false,
-        name: LOOM_BUSINESS_METADATA_NAME,
+        name: bmName,
         attributes: {},
         hint: PURVIEW_HINT,
         gov,
@@ -135,7 +189,7 @@ export const GET = withSession<{ type: string; id: string }>(async (_req, { sess
         ok: true,
         configured: true,
         hasAsset: false,
-        name: LOOM_BUSINESS_METADATA_NAME,
+        name: bmName,
         attributes: {},
         gov,
       });
@@ -144,7 +198,7 @@ export const GET = withSession<{ type: string; id: string }>(async (_req, { sess
     let attributes: Record<string, string> = {};
     try {
       const detail = await getAssetDetail(guid);
-      attributes = tagsFromDetail(detail);
+      attributes = tagsFromDetail(detail, bmName);
     } catch (e: any) {
       // Asset may not be scanned yet, or the GUID is stale — surface honestly
       // but do not 500 the pane.
@@ -152,7 +206,7 @@ export const GET = withSession<{ type: string; id: string }>(async (_req, { sess
         ok: true,
         configured: true,
         hasAsset: true,
-        name: LOOM_BUSINESS_METADATA_NAME,
+        name: bmName,
         attributes: {},
         warning: (e?.message || String(e)).slice(0, 200),
         gov,
@@ -163,7 +217,7 @@ export const GET = withSession<{ type: string; id: string }>(async (_req, { sess
       ok: true,
       configured: true,
       hasAsset: true,
-      name: LOOM_BUSINESS_METADATA_NAME,
+      name: bmName,
       attributes,
       gov,
     });
@@ -204,6 +258,7 @@ export const POST = withSession<{ type: string; id: string }>(async (req, { sess
     throw e;
   }
 
+  const bmName = loomTenantBusinessMetadataName(tenantScopeId(session));
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
@@ -230,18 +285,41 @@ export const POST = withSession<{ type: string; id: string }>(async (req, { sess
     }
 
     const keys = Object.keys(attributes);
-    // Grow the LoomCustomTags business-metadata typedef with any new keys, then
-    // overwrite the asset's tag bag. (setBusinessMetadata also ensures the def,
-    // but we call it explicitly per the route contract.)
-    await ensureBusinessMetadataDef(keys);
-    await setBusinessMetadata(guid, attributes);
+    // #2633 — write the TENANT bag (`LoomCustomTags_<t8>`), never the
+    // account-global one. `isOverwrite=true` replaces the whole bag, so writing
+    // the shared one would destroy every other tenant's tags on this asset.
+    //
+    // Tombstones: the legacy bag is read-only now, so a pre-migration key the
+    // caller dropped cannot be removed at its source. Write `''` for it in the
+    // tenant bag instead — `tagsFromDetail` reads that as "deleted". Without
+    // this, deleting a pre-migration tag would appear to succeed and then be
+    // resurrected by the legacy fallback on the very next read.
+    const toWrite = safeRecord<string>();
+    for (const [k, v] of Object.entries(attributes)) toWrite[k] = v;
+    try {
+      const before = await getAssetDetail(guid);
+      const kept = new Set(keys.map(businessMetadataAttrName));
+      for (const legacyKey of Object.keys(bagOf(before, LOOM_BUSINESS_METADATA_NAME))) {
+        if (!kept.has(legacyKey)) toWrite[legacyKey] = '';
+      }
+    } catch {
+      // Pre-read is best-effort: on failure we simply write no tombstones. The
+      // caller's tags still land; a dropped pre-migration key may reappear.
+    }
+
+    const writeKeys = Object.keys(toWrite);
+    // Grow the tenant bag's typedef with any new keys, then overwrite it.
+    // (setBusinessMetadata also ensures the def, but we call it explicitly per
+    // the route contract.)
+    await ensureBusinessMetadataDef(writeKeys, bmName);
+    await setBusinessMetadata(guid, toWrite, bmName);
 
     // Re-read so the response reflects backend truth (e.g. an all-empty save is
     // a no-op on the existing bag — the UI must see what actually persisted).
     let saved: Record<string, string> = attributes;
     try {
       const detail = await getAssetDetail(guid);
-      saved = tagsFromDetail(detail);
+      saved = tagsFromDetail(detail, bmName);
     } catch {
       /* re-read best-effort; fall back to the requested map */
     }
@@ -258,7 +336,7 @@ export const POST = withSession<{ type: string; id: string }>(async (req, { sess
       ok: true,
       configured: true,
       hasAsset: true,
-      name: LOOM_BUSINESS_METADATA_NAME,
+      name: bmName,
       attributes: saved,
     });
   } catch (e: any) {
