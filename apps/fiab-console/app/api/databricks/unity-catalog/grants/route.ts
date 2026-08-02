@@ -34,6 +34,20 @@
  * writes a `uc-access-review` audit row (`lib/azure/uc-access-review-audit.ts`)
  * so an enumeration sweep cannot run untraced.
  *
+ * AUTHORIZATION — PATCH (#2692). `withSession` is the AUTHENTICATION wrapper:
+ * it admits any signed-in tenant user. This PATCH calls `updatePermissions`,
+ * i.e. it rewrites WHO HOLDS WHICH PRIVILEGE on a Unity Catalog securable — a
+ * privilege-escalation primitive if it is only authenticated. It is now
+ * **tenant-admin** gated (`requireTenantAdmin`, the same check `withTenantAdmin`
+ * runs, byte-compatible 403 `admin_only` envelope). UC securables are
+ * METASTORE-scoped, so there is no owning Loom workspace to scope to and
+ * tenant-admin is the only coherent scope. The gate runs BEFORE the Databricks
+ * config gate and before the body is trusted, so a non-admin learns nothing
+ * about the deployment's configuration. Both outcomes are audited: the DENIAL
+ * here (a refusal never reaches a transport, so this is the only place it can
+ * be recorded) and the APPLIED change, which additionally lands on the LU-3
+ * choke point as `grant.update` with the upstream outcome.
+ *
  * Console UAMI must be the object owner / metastore admin / have MANAGE on the
  * securable (else UC 403s, surfaced verbatim).
  */
@@ -45,7 +59,7 @@ import {
   formatUcPrivilege, isUcPrivilegeRevocableHere, isUcPrivilegeBlocked,
   type UcEffectivePrivilege, type UcUsagePrerequisite,
 } from '@/lib/azure/uc-effective-permissions';
-import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { isTenantAdmin, requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { decidePrincipalProbe } from '@/lib/auth/uc-principal-probe';
 import { auditUcAccessReview } from '@/lib/azure/uc-access-review-audit';
 import {
@@ -204,7 +218,56 @@ export const GET = withSession(async (req: NextRequest, { session }) => {
   }
 });
 
-export const PATCH = withSession(async (req: NextRequest) => {
+/** What a REFUSED grant mutation was trying to do, for the denial audit row.
+ *  Every field is BOUNDED and derived, never a copy of the caller's JSON: the
+ *  securable type is snapped to the validated enum, and the rest are counts.
+ *  The 403 branch runs before any request validation and `withSession` applies
+ *  no rate limit, so an ungranted caller must not be able to drive arbitrary
+ *  text into the shared audit container (the amplification defect #2607's
+ *  round-3 fixed on the sibling governance trail; `securableName` is bounded a
+ *  second time at the sink). Parsing NEVER throws — a refusal is still audited
+ *  when the body is garbage. */
+async function attemptedGrantChange(req: NextRequest): Promise<{
+  securableType: string; fullName: string;
+  changedPrincipals: number; privilegesAdded: number; privilegesRemoved: number;
+}> {
+  const empty = { securableType: '(unparsed)', fullName: '', changedPrincipals: 0, privilegesAdded: 0, privilegesRemoved: 0 };
+  let body: any;
+  try { body = await req.json(); } catch { return empty; }
+  const rawType = String(body?.securable_type || '').toUpperCase().trim();
+  const all = Array.isArray(body?.changes) ? body.changes : [];
+  // Count every entry, but only WALK a bounded prefix — a refusal must not do
+  // O(caller-chosen) work per request on an ungated path.
+  const scanned = all.slice(0, 1000);
+  const lenOf = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  return {
+    securableType: SECURABLES.has(rawType as UCSecurableType) ? rawType : '(invalid)',
+    fullName: String(body?.full_name ?? '').trim(),
+    changedPrincipals: all.length,
+    privilegesAdded: scanned.reduce((n: number, c: any) => n + lenOf(c?.add), 0),
+    privilegesRemoved: scanned.reduce((n: number, c: any) => n + lenOf(c?.remove), 0),
+  };
+}
+
+export const PATCH = withSession(async (req: NextRequest, { session }) => {
+  // AUTHORIZATION FIRST — this rewrites the grant graph. Before the config gate
+  // (a non-admin must not learn the deployment's Databricks state) and before
+  // the body is trusted. `requireTenantAdmin` is the exact check
+  // `withTenantAdmin` runs; it is inlined here ONLY so the refusal can be
+  // audited, which a wrapper short-circuit cannot do.
+  const refused = requireTenantAdmin(session);
+  if (refused) {
+    const attempt = await attemptedGrantChange(req);
+    void auditUcAccessReview(session, {
+      securableType: attempt.securableType, securableName: attempt.fullName,
+      effective: false, decision: 'denied-grant-change',
+      changedPrincipals: attempt.changedPrincipals,
+      privilegesAdded: attempt.privilegesAdded,
+      privilegesRemoved: attempt.privilegesRemoved,
+      nowIso: new Date().toISOString(),
+    });
+    return refused;
+  }
   const g = gate(); if (g) return g;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -243,6 +306,18 @@ export const PATCH = withSession(async (req: NextRequest) => {
   try {
     const host = await primaryWorkspaceHost();
     const p = await updatePermissions(host, securableType, fullName, { add, remove });
+    // The APPLIED change. The upstream REST call itself is on the LU-3 choke
+    // point (`grant.update`); this row is the AUTHORIZATION decision, and pairs
+    // with the denial row above so both halves of the gate are visible in one
+    // place.
+    void auditUcAccessReview(session, {
+      securableType, securableName: fullName,
+      effective: false, decision: 'allowed-grant-change',
+      changedPrincipals: new Set([...add, ...remove].map((c) => c.principal)).size,
+      privilegesAdded: add.reduce((n, c) => n + c.privileges.length, 0),
+      privilegesRemoved: remove.reduce((n, c) => n + c.privileges.length, 0),
+      nowIso: new Date().toISOString(),
+    });
     return NextResponse.json({ ok: true, grants: grantsOf(p) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

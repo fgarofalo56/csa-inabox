@@ -770,7 +770,13 @@ function GrantsPane({ oss }: { oss: boolean }) {
         }),
       });
       const j = await r.json();
-      if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
+      if (!j.ok) {
+        // A grant mutation is tenant-admin only (#2692). Render the honest gate
+        // — the reason AND the exact remediation — not a bare "forbidden".
+        if (j.code === 'admin_only') setErr(`${j.reason} ${j.remediation}`);
+        else setErr(j.error || `HTTP ${r.status}`);
+        return;
+      }
       setGrants(j.grants || []);
       setPrivs(new Set());
     } catch (e: any) { setErr(e?.message || String(e)); }
