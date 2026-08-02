@@ -391,7 +391,7 @@ jobs:
           fi
 
           if ! az containerapp job show -n loom-uat -g "$RG" -o none 2>/dev/null; then
-            echo "::warning::loom-uat Container App Job not found in $RG — the in-VNet UAT harness is not deployed in this estate. SKIPPING the UAT gate (deploy it via scripts/csa-loom/deploy-loom-uat-job.sh to enable). Live-URL validation + auto-rollback remain the backstop."
+            echo "::warning::loom-uat Container App Job not found in $RG — the in-VNet UAT harness is not deployed in this estate. SKIPPING the UAT gate. Deploy it by dispatching the deploy-loom-uat workflow (gh workflow run deploy-loom-uat.yml --ref main -f dry_run=false) — #2816 gave that script a CI entry point, so this no longer needs a workstation. Live-URL validation + auto-rollback remain the backstop."
             exit 0
           fi
 

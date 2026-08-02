@@ -80,7 +80,67 @@ const WATCHED = [
     // set by how long an undeployed fix stayed live unnoticed.
     maxDays: 14,
   },
+  // ── The other four deploy-*-job.sh paths (#2816) ─────────────────────────
+  // #2815 gave the copilot-evaluator a workflow. It was one of FIVE scripts in
+  // the same state; the remaining four were reachable only from a workstation
+  // with `az` write access, so they could not appear here at all — this
+  // watchdog can only see deploy paths that are workflows. Same 14-day bound
+  // as the evaluator, for the same reason: one image build plus a job update
+  // against an already-provisioned estate is minutes of work.
+  {
+    workflow: 'deploy-lineage-extractor.yml',
+    why: 'Builds + rolls the loom-lineage-extractor image. bicep creates the JOB but never builds the IMAGE, so stale here means the scheduled extractor keeps running old logic (or no image at all) while every execution still reports Succeeded and lineage quietly stops updating.',
+    paths: [
+      '.github/workflows/deploy-lineage-extractor.yml',
+      'azure-functions/lineage-extractor/**',
+      'scripts/csa-loom/deploy-lineage-extractor-job.sh',
+    ],
+    maxDays: 14,
+  },
+  {
+    workflow: 'deploy-secret-expiry.yml',
+    why: 'Builds + rolls the loom-secret-expiry-monitor image — the job that warns BEFORE an MSAL/Key Vault credential expires. Stale here is what the 2026-07-19 sign-in outage looked like from the inside: the credential lapsed, and the thing that should have said so was not running current code.',
+    paths: [
+      '.github/workflows/deploy-secret-expiry.yml',
+      'azure-functions/secret-expiry-monitor/**',
+      'scripts/csa-loom/deploy-secret-expiry-job.sh',
+    ],
+    maxDays: 14,
+  },
+  {
+    workflow: 'deploy-loom-uat.yml',
+    // The sharpest of the four: a VALIDATION capability that was itself
+    // undeployable. When the job is absent or stale, loom-roll-and-validate
+    // either SKIPS its UAT gate outright or grades the roll with an old suite —
+    // green either way.
+    why: 'Builds + rolls the loom-uat image (the in-VNet Playwright UAT harness). Stale here means loom-roll-and-validate grades every roll with an out-of-date suite, or skips the gate entirely — a roll gate reading green on tests that no longer match the app.',
+    paths: [
+      '.github/workflows/deploy-loom-uat.yml',
+      'apps/fiab-console/Dockerfile.uat',
+      'apps/fiab-console/e2e/**',
+      'scripts/csa-loom/deploy-loom-uat-job.sh',
+    ],
+    maxDays: 14,
+  },
+  {
+    workflow: 'deploy-loom-verify.yml',
+    why: 'Refreshes the loom-verify job. scripts/csa-loom/loom-verify.js is base64-embedded into the job at deploy time, so THIS workflow is the only way that file reaches production — stale here means the API verifier is probing production with a route list that no longer matches it, and passing.',
+    paths: [
+      '.github/workflows/deploy-loom-verify.yml',
+      'scripts/csa-loom/loom-verify.js',
+      'scripts/csa-loom/deploy-loom-verify-job.sh',
+    ],
+    maxDays: 14,
+  },
 ];
+
+/**
+ * Marker a deploy workflow puts in its `run-name` when dispatched with
+ * dry_run=true. A dry run resolves coordinates and touches nothing, so counting
+ * one as a deploy would let this watchdog be silenced by a run that deployed
+ * NOTHING — the precise "green on nothing" shape this file exists to catch.
+ */
+const DRY_RUN_MARKER = 'DRY RUN';
 
 const DAY_MS = 86_400_000;
 
@@ -89,7 +149,7 @@ function gh(args) {
 }
 
 /**
- * Newest SUCCESSFUL run.
+ * Newest SUCCESSFUL run that actually DEPLOYED.
  *   { at: ISO }           — ran successfully
  *   { at: null }          — query worked; the workflow has genuinely never run
  *   { queryFailed: true } — gh/auth/network broke; we do NOT know
@@ -99,15 +159,21 @@ function gh(args) {
  * the whole point of this check is that a control must not claim something it
  * did not actually measure. Both still fail (never silently green), but they
  * say different things.
+ *
+ * Runs whose display title carries the DRY_RUN_MARKER are SKIPPED. Those runs
+ * succeed having deployed nothing; treating one as a deploy would let a dry run
+ * clear the drift it did not fix. Hence `--limit 20` and a client-side filter
+ * rather than `--limit 1` — the newest success may well be a dry run.
  */
 function lastSuccessfulRun(workflow) {
   try {
     const out = gh([
       'run', 'list', '--workflow', workflow, '--status', 'success',
-      '--limit', '1', '--json', 'createdAt', '--repo', REPO,
+      '--limit', '20', '--json', 'createdAt,displayTitle', '--repo', REPO,
     ]);
     const rows = JSON.parse(out || '[]');
-    return { at: rows[0]?.createdAt || null };
+    const real = rows.filter((r) => !String(r.displayTitle || '').includes(DRY_RUN_MARKER));
+    return { at: real[0]?.createdAt || null, dryRunsSkipped: rows.length - real.length };
   } catch (e) {
     return { queryFailed: true, error: String(e?.stderr || e?.message || e).slice(0, 160) };
   }
@@ -138,7 +204,7 @@ for (const entry of WATCHED) {
   const stale = queryFailed || neverRan
     || (Date.parse(codeAt) > Date.parse(runAt) && driftDays > entry.maxDays);
 
-  rows.push({ ...entry, runAt, codeAt, driftDays, neverRan, queryFailed, queryError: run.error, stale });
+  rows.push({ ...entry, runAt, codeAt, driftDays, neverRan, queryFailed, queryError: run.error, dryRunsSkipped: run.dryRunsSkipped || 0, stale });
 }
 
 if (process.argv.includes('--json')) {
@@ -151,7 +217,11 @@ for (const r of rows) {
     : r.neverRan ? 'NEVER RUN'
       : `last success ${r.runAt.slice(0, 10)}`;
   const drift = (r.queryFailed || r.neverRan) ? '' : `, code ${r.codeAt.slice(0, 10)} (+${r.driftDays}d)`;
-  console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${when}${drift}`);
+  // Named, not silent: a dry run that was skipped is the difference between
+  // "nobody dispatched this" and "somebody dispatched it and it deployed
+  // nothing", and those need different responses.
+  const dry = r.dryRunsSkipped ? `  [${r.dryRunsSkipped} dry run(s) ignored]` : '';
+  console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${when}${drift}${dry}`);
 }
 
 const stale = rows.filter((r) => r.stale);
@@ -163,7 +233,7 @@ if (stale.length === 0) {
 console.error(`\n[deploy-staleness] FAIL — ${stale.length} deploy path(s) carry code that was never applied.\n`);
 for (const r of stale) {
   console.error(`  ${r.workflow}`);
-  console.error(`    ${r.queryFailed ? `run history UNKNOWN — the gh query failed: ${r.queryError}` : r.neverRan ? 'has NEVER run' : `${r.driftDays} days of undeployed code (limit ${r.maxDays})`}`);
+  console.error(`    ${r.queryFailed ? `run history UNKNOWN — the gh query failed: ${r.queryError}` : r.neverRan ? `has NEVER run${r.dryRunsSkipped ? ` for real (${r.dryRunsSkipped} dry run(s) ignored — a dry run deploys nothing)` : ''}` : `${r.driftDays} days of undeployed code (limit ${r.maxDays})`}`);
   console.error(`    why it matters: ${r.why}`);
   console.error(`    dispatch: gh workflow run ${r.workflow} --ref main\n`);
 }

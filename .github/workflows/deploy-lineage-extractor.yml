@@ -1,0 +1,324 @@
+name: deploy-lineage-extractor
+
+run-name: >-
+  deploy-lineage-extractor
+  ${{ inputs.dry_run && '[DRY RUN — nothing deployed]' || format('→ {0}', inputs.region || 'centralus') }}
+
+# CSA Loom — dispatchable deploy path for the `loom-lineage-extractor`
+# Container App Job (the in-VNet, scheduled column-lineage extractor, WS-L L3).
+#
+# ── WHY THIS EXISTS (#2816, class of #2814) ────────────────────────────────
+# `scripts/csa-loom/deploy-lineage-extractor-job.sh` is the only thing that
+# BUILDS and rolls the extractor image. Until this workflow it was referenced by
+# ZERO workflows — not even as a warning string — so the only way to ship an
+# extractor change was a workstation with `az` write access on the admin RG.
+#
+# bicep (modules/admin-plane/lineage-extractor-job.bicep) CREATES the job on a
+# full deploy, but bicep does not build images: the job's first scheduled
+# execution exits cleanly until an image exists. So without this path, extractor
+# code merges and never runs.
+#
+# It was also invisible to the "merged ≠ deployed" watchdog (#2775) by
+# construction — that check compares a watched WORKFLOW's last successful run
+# against the code it deploys, and a deploy path that is not a workflow can
+# never register as stale. This workflow is registered in `WATCHED` in
+# scripts/ci/check-deploy-staleness.mjs.
+#
+# ── WHAT IT DOES ───────────────────────────────────────────────────────────
+# It is a WRAPPER. It does not reimplement the script, which owns the ACR
+# firewall-lease acquire/release lifecycle (#2603 — ownership-checked, released
+# from an EXIT trap so a failed build cannot leave the registry open). Read that
+# script's header before changing anything here.
+#
+# This workflow resolves the coordinates the script requires as environment
+# variables, and REFUSES to run it when a value cannot be resolved safely.
+#
+# ── AUTH ───────────────────────────────────────────────────────────────────
+# Service-principal `creds:` login, matching deploy-copilot-evaluator.yml (the
+# template) and full-app-deploy-commercial.yml. NOT OIDC: this repo's federated
+# credential is scoped to `repo:...:ref:refs/heads/main`
+# (docs/reference-architecture/identity-secrets-flow.md), so an OIDC login would
+# authenticate only on a main-ref dispatch and fail for a branch dispatch during
+# a fix — the wrong constraint for a deploy-path repair workflow. `id-token:
+# write` in this repo exists for keyless cosign signing; this workflow signs
+# nothing, so it takes `contents: read` only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region of the target Admin Plane (e.g. centralus, eastus2).'
+        type: string
+        default: centralus
+      subscription:
+        description: 'Target subscription id (defaults to the AZURE_SUBSCRIPTION_ID secret).'
+        type: string
+        required: false
+      cron:
+        description: 'Schedule cron override — STANDARD 5-FIELD UTC. Empty keeps the job''s current schedule (script default */15 * * * * on first create).'
+        type: string
+        required: false
+      dry_run:
+        description: 'Resolve + print every coordinate and STOP. Nothing is built, no ACR firewall change, no job write.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Never cancel in flight: this holds the ACR firewall lease while the image
+# builds, and cancelling mid-lease is the exact class of bug #2603 exists to
+# prevent (a dead run's cleanup slamming the registry shut under a live build).
+concurrency:
+  group: deploy-lineage-extractor-${{ inputs.region || 'centralus' }}
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: ${{ inputs.region || 'centralus' }}
+  JOB_NAME: loom-lineage-extractor
+
+jobs:
+  deploy:
+    name: Build image + create/refresh the lineage-extractor job
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      # ── Resolve the coordinates the script hard-requires ──────────────────
+      # SUB / CONSOLE_UAMI_ID / CONSOLE_UAMI_CLIENT_ID / ACR are `${VAR:?}` in
+      # the script — it exits non-zero on the first missing one before touching
+      # anything. ADMIN_RG and CAE have defaults, but the defaults are
+      # centralus-shaped, so resolve them too rather than inherit a wrong region.
+      #
+      # PUBLIC REPO: the subscription id and the UAMI ARM id (which embeds it)
+      # are masked before anything can echo them — the script's own closing
+      # "Trigger a run with: … --subscription $SUB" line would otherwise print a
+      # subscription id into a world-readable log.
+      - name: Resolve deploy coordinates
+        # Every dispatch input / repo var reaches the shell as an ENVIRONMENT
+        # VARIABLE, never as a `${{ }}` splice into the script body — a
+        # workflow_dispatch string input is attacker-influencable in the general
+        # case, and interpolation would make it shell source.
+        env:
+          VAR_ADMIN_RG: ${{ vars.LOOM_ADMIN_RG }}
+          VAR_UAMI_NAME: ${{ vars.LOOM_CONSOLE_UAMI_NAME }}
+          VAR_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT }}
+        run: |
+          set -euo pipefail
+          # `containerapp` lives in an az extension. Install it explicitly rather
+          # than relying on dynamic-install prompting.
+          az extension add --name containerapp --only-show-errors 2>/dev/null || true
+
+          RG="${VAR_ADMIN_RG:-}"
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          echo "::add-mask::$SUB"
+
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].loginServer" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$ACR" ] || ACR=$(az acr list -g "$RG" --query "[0].loginServer" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$ACR" ]; then
+            echo "::error::No container registry found in $RG. The Admin Plane must be provisioned before the extractor image can be built — run the infra deploy first."
+            exit 1
+          fi
+
+          CAE=$(az containerapp env list -g "$RG" --query "[?starts_with(name,'cae-')]|[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$CAE" ] || CAE=$(az containerapp env list -g "$RG" --query "[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$CAE" ]; then
+            echo "::error::No Container Apps managed environment found in $RG. The extractor job runs inside the console's VNet-integrated CAE; it cannot be created without one."
+            exit 1
+          fi
+
+          # identity.bicep names it uami-loom-console-<region>. Repo var wins,
+          # then the conventional name, then a prefix match (renamed identity).
+          UAMI_NAME="${VAR_UAMI_NAME:-}"
+          [ -n "$UAMI_NAME" ] || UAMI_NAME="uami-loom-console-${AZURE_LOCATION}"
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$RG" -o json 2>/dev/null || true)
+          if [ -z "$UAMI_JSON" ]; then
+            UAMI_JSON=$(az identity list -g "$RG" --query "[?starts_with(name,'uami-loom-console')]|[0]" -o json 2>/dev/null || true)
+          fi
+          UAMI_ID=$(printf '%s' "$UAMI_JSON" | jq -r '.id // empty')
+          UAMI_CLIENT="${VAR_UAMI_CLIENT:-}"
+          [ -n "$UAMI_CLIENT" ] || UAMI_CLIENT=$(printf '%s' "$UAMI_JSON" | jq -r '.clientId // empty')
+          if [ -z "$UAMI_ID" ] || [ -z "$UAMI_CLIENT" ]; then
+            echo "::error::Could not resolve the Console UAMI in $RG (looked for $UAMI_NAME, then any uami-loom-console*). The job runs AS this identity and pulls the image with it. Set the LOOM_CONSOLE_UAMI_NAME / LOOM_CONSOLE_UAMI_CLIENT repo vars, or check the region."
+            exit 1
+          fi
+          echo "::add-mask::$UAMI_ID"
+          echo "::add-mask::$UAMI_CLIENT"
+
+          {
+            echo "ADMIN_RG=$RG"
+            echo "SUB=$SUB"
+            echo "CAE=$CAE"
+            echo "ACR=$ACR"
+            echo "CONSOLE_UAMI_ID=$UAMI_ID"
+            echo "CONSOLE_UAMI_CLIENT_ID=$UAMI_CLIENT"
+          } >> "$GITHUB_ENV"
+
+          echo "::notice::admin RG=$RG  CAE=$CAE  ACR=$ACR  UAMI=$UAMI_NAME (ids masked)"
+
+      # ── The one piece of real logic: do not blank a working job ───────────
+      # The script builds ENV_ARGS from its own environment and passes ALL of it
+      # to `az containerapp job update --set-env-vars`. Per the az CLI contract,
+      # --set-env-vars ADDS OR UPDATES the named variables and leaves unnamed
+      # ones alone — so unrelated env (e.g. the bicep-set LOOM_SYNAPSE_DEV_SUFFIX,
+      # which this script does not carry) survives. But every name the script
+      # DOES list is written, and a name this workflow leaves unresolved is
+      # written as the EMPTY STRING, not skipped.
+      #
+      # That is the #2815 failure in a different service: an emptied
+      # LOOM_COSMOS_ENDPOINT makes the extractor honest-gate, the scheduled run
+      # writes zero edges, and lineage silently stops updating while every
+      # execution still reports Succeeded. So the authoritative source is the
+      # RUNNING JOB; the console app is the fallback for a first create; and an
+      # unreadable existing job is a hard stop, never a best-effort write.
+      - name: Resolve extractor config (carry forward — never blank a live job)
+        env:
+          INPUT_CRON: ${{ inputs.cron }}
+        run: |
+          set -euo pipefail
+          CFG_VARS="LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE LOOM_ADF_NAME LOOM_ADF_RG LOOM_ADF_SUB LOOM_SYNAPSE_WORKSPACE LOOM_ARM_ENDPOINT"
+
+          pick() { printf '%s' "$1" | jq -r --arg n "$2" 'first((. // [])[] | select(.name==$n) | (.value // "")) // ""'; }
+
+          JOB_ENV='[]'
+          JOB_EXISTS=false
+          if az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" -o none 2>/dev/null; then
+            JOB_EXISTS=true
+            JOB_ENV=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.template.containers[0].env" -o json 2>/dev/null || echo 'READ_FAILED')
+            if [ "$JOB_ENV" = "READ_FAILED" ] || ! printf '%s' "$JOB_ENV" | jq -e 'type=="array"' >/dev/null 2>&1; then
+              echo "::error::$JOB_NAME exists in $ADMIN_RG but its env set could not be read. REFUSING to run the deploy: the script would rewrite every listed config value to the empty string and the extractor would honest-gate, writing zero lineage edges while every scheduled execution still reports Succeeded. Fix the read (RBAC / az) and re-dispatch."
+              exit 1
+            fi
+            echo "Existing job found — carrying its config forward ($(printf '%s' "$JOB_ENV" | jq 'length') env var(s) on the job)."
+          else
+            echo "::notice::$JOB_NAME does not exist in $ADMIN_RG yet — the script will CREATE it. Config falls back to the loom-console app's env."
+          fi
+
+          APP_ENV=$(az containerapp show -g "$ADMIN_RG" -n loom-console \
+            --query "properties.template.containers[0].env" -o json 2>/dev/null || echo '[]')
+          printf '%s' "$APP_ENV" | jq -e 'type=="array"' >/dev/null 2>&1 || APP_ENV='[]'
+
+          MISSING=""
+          for V in $CFG_VARS; do
+            CUR=$(pick "$JOB_ENV" "$V")
+            VAL="$CUR"
+            SRC=job
+            if [ -z "$VAL" ]; then VAL=$(pick "$APP_ENV" "$V"); SRC=console; fi
+            if [ -z "$VAL" ]; then SRC='(unset — script default applies)'; fi
+
+            # would-blank guard: the job holds a value and we resolved nothing.
+            if [ -n "$CUR" ] && [ -z "$VAL" ]; then MISSING="$MISSING $V"; fi
+
+            # PUBLIC REPO: LOOM_ADF_SUB is a subscription id. Mask before it can
+            # reach the dry-run print or any az echo.
+            if [ "$V" = "LOOM_ADF_SUB" ] && [ -n "$VAL" ]; then echo "::add-mask::$VAL"; fi
+
+            [ -n "$VAL" ] && echo "$V=$VAL" >> "$GITHUB_ENV"
+            echo "  $V <- $SRC"
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::REFUSING to deploy — these values are set on the live $JOB_NAME but resolved empty here, so the script would blank them:$MISSING"
+            exit 1
+          fi
+
+          # LOOM_COSMOS_ENDPOINT is `${VAR:?}` in the script: without it the
+          # script exits before the ACR lease is taken. Say so precisely here
+          # rather than let a deploy die on an opaque bash message.
+          COSMOS=$(pick "$JOB_ENV" LOOM_COSMOS_ENDPOINT)
+          [ -n "$COSMOS" ] || COSMOS=$(pick "$APP_ENV" LOOM_COSMOS_ENDPOINT)
+          if [ -z "$COSMOS" ]; then
+            echo "::error::LOOM_COSMOS_ENDPOINT could not be resolved from the $JOB_NAME job or the loom-console app. deploy-lineage-extractor-job.sh declares it \${LOOM_COSMOS_ENDPOINT:?} and exits before doing anything — the extractor writes its edges to Cosmos, so there is no meaningful default. Provision/repair the console's Cosmos wiring first."
+            exit 1
+          fi
+
+          # Schedule: explicit input wins; otherwise keep whatever the job is on,
+          # so the env var the script stamps never disagrees with the trigger
+          # config. (Update does not change the schedule; create uses this for
+          # --cron-expression.)
+          CRON="${INPUT_CRON:-}"
+          if [ -z "$CRON" ] && [ "$JOB_EXISTS" = true ]; then
+            CRON=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.configuration.scheduleTriggerConfig.cronExpression" -o tsv 2>/dev/null | tr -d '\r' || true)
+          fi
+          [ -n "$CRON" ] && [ "$CRON" != "None" ] && echo "LINEAGE_EXTRACTOR_CRON=$CRON" >> "$GITHUB_ENV"
+          echo "  LINEAGE_EXTRACTOR_CRON <- ${CRON:-script default */15 * * * *}"
+
+      - name: DRY RUN — resolved plan only, nothing deployed
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "DRY RUN. No image was built. The ACR firewall was not touched. The job was not written."
+          echo
+          echo "  admin RG    : $ADMIN_RG"
+          echo "  CAE         : $CAE"
+          echo "  ACR         : $ACR"
+          echo "  image       : $ACR/loom-lineage-extractor:latest"
+          echo "  job         : $JOB_NAME"
+          echo "  cron        : ${LINEAGE_EXTRACTOR_CRON:-<script default */15 * * * *>}"
+          echo "  build commit: ${GITHUB_SHA}"
+          echo
+          echo "Config that WOULD be written (empty = script default applies):"
+          for V in LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE LOOM_ADF_NAME LOOM_ADF_RG LOOM_ADF_SUB LOOM_SYNAPSE_WORKSPACE LOOM_ARM_ENDPOINT; do
+            printf '  %-32s %s\n' "$V" "$(printenv "$V" || echo '<unset>')"
+          done
+          echo
+          echo "::warning::DRY RUN — the lineage extractor was NOT deployed. This run does NOT count as a deploy for the staleness watchdog. Re-dispatch with dry_run=false to actually build and roll it."
+
+      # The script owns everything from here: ACR firewall lease acquire →
+      # `az acr build` → lease release → `az containerapp job create|update`.
+      # Do not inline any of it.
+      - name: Deploy — build image + create/refresh the job
+        if: ${{ !inputs.dry_run }}
+        run: bash scripts/csa-loom/deploy-lineage-extractor-job.sh
+
+      # Read-only confirmation that the write actually landed. A deploy path that
+      # reports success without reading back what it changed is how the class of
+      # bug in #2775 / #2814 / #2816 survives.
+      - name: Verify the job now points at the built image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          IMAGE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null | tr -d '\r' || true)
+          CONTAINER=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          STATE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.provisioningState" -o tsv 2>/dev/null | tr -d '\r' || true)
+          COSMOS=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          echo "image=$IMAGE container=$CONTAINER provisioningState=$STATE"
+          if [ -z "$IMAGE" ]; then
+            echo "::error::$JOB_NAME is not readable after the deploy — cannot confirm the image rolled."
+            exit 1
+          fi
+          # bicep names the container 'extractor', and the script header's log
+          # query (ContainerName_s == 'extractor') keys off that. The script's own
+          # CREATE path passes no --container-name, so az defaults it to the JOB
+          # name — a job created by the script alone would be invisible to that
+          # query. Warn rather than fail: unlike the evaluator, no automated gate
+          # reads this name, so a mismatch misleads a human reading logs; it does
+          # not take a gate green on nothing.
+          if [ "$CONTAINER" != "extractor" ]; then
+            echo "::warning::container name is '$CONTAINER', not 'extractor'. The log query in the script header (ContainerAppConsoleLogs_CL | where ContainerName_s == 'extractor') will return NOTHING for this job. Deploy the bicep module (modules/admin-plane/lineage-extractor-job.bicep) to get the canonical name."
+          fi
+          if [ -z "$COSMOS" ] || [ "$COSMOS" = "None" ]; then
+            echo "::error::LOOM_COSMOS_ENDPOINT is empty on the job after the deploy — the extractor will honest-gate and write zero lineage edges while its executions still report Succeeded. This is the exact blanking this workflow is built to prevent; investigate before the next scheduled run."
+            exit 1
+          fi
+          echo "::notice::$JOB_NAME rolled to $IMAGE (built from ${GITHUB_SHA}). The next scheduled execution picks it up."

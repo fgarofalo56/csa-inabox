@@ -1,5 +1,14 @@
 name: deploy-copilot-evaluator
 
+# The DRY RUN marker is load-bearing, not decoration: check-deploy-staleness.mjs
+# skips runs whose display title carries it. Without that, dispatching this with
+# dry_run=true would succeed having deployed nothing and still clear the drift
+# it did not fix — the "green on nothing" shape the watchdog exists to catch.
+run-name: >-
+  deploy-copilot-evaluator
+  ${{ inputs.dry_run && '[DRY RUN — nothing deployed]' || format('→ {0}', inputs.region || 'centralus') }}
+
+
 # CSA Loom — dispatchable deploy path for the `loom-copilot-evaluator`
 # Container App Job (the in-VNet Copilot quality-eval harness).
 #

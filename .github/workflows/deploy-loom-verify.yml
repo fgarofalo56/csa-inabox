@@ -1,0 +1,315 @@
+name: deploy-loom-verify
+
+run-name: >-
+  deploy-loom-verify
+  ${{ inputs.dry_run && '[DRY RUN — nothing deployed]' || format('→ {0}', inputs.region || 'centralus') }}
+
+# CSA Loom — dispatchable deploy path for the `loom-verify` Container App Job
+# (the UNATTENDED, in-VNet API verifier for the live console).
+#
+# ── WHY THIS EXISTS (#2816, class of #2814) ────────────────────────────────
+# `scripts/csa-loom/deploy-loom-verify-job.sh` is the only thing that creates or
+# refreshes the verifier job. Until this workflow it was referenced by ZERO
+# workflows — not even as a warning string — so the only way to refresh it was a
+# workstation with `az` write access on the admin RG plus ARM read on the
+# console's secrets.
+#
+# Like loom-uat, this is a VALIDATION capability that was itself undeployable:
+# the job mints a `loom_session` cookie from the console's SESSION_SECRET and
+# probes the admin / security / governance API endpoints, failing on any
+# 401/5xx. A verifier that cannot be refreshed drifts away from the routes it is
+# supposed to be checking, and reports pass on a shrinking surface.
+#
+# Registered in `WATCHED` in scripts/ci/check-deploy-staleness.mjs, so changes to
+# scripts/csa-loom/loom-verify.js (which is base64-embedded into the job at
+# deploy time — the ONLY way that file reaches production) now register as drift.
+#
+# ── WHAT IT DOES ───────────────────────────────────────────────────────────
+# It is a WRAPPER. It does not reimplement the script, which owns the base64
+# embedding of loom-verify.js, the job YAML, and the read of the console's
+# LITERAL SESSION_SECRET via ARM (piped straight to `az`, never printed). Read
+# that script's header before changing anything here.
+#
+# NOTE — no image is built. This job reuses the CONSOLE image and overrides its
+# command, so there is no `az acr build` and no ACR firewall lease. That makes
+# this the cheapest and least destructive of the four #2816 wrappers.
+#
+# ── AUTH ───────────────────────────────────────────────────────────────────
+# Service-principal `creds:` login, matching deploy-copilot-evaluator.yml (the
+# template). NOT OIDC: this repo's federated credential is scoped to
+# `repo:...:ref:refs/heads/main`, so an OIDC login would authenticate only on a
+# main-ref dispatch and fail for a branch dispatch during a fix. `id-token:
+# write` here exists for cosign; this workflow signs nothing.
+#
+# The SP additionally needs ARM read on the console app's secrets
+# (Microsoft.App/containerApps/listSecrets). Contributor on the admin RG covers
+# it; a narrower role may not.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region of the target Admin Plane. NOTE: the script''s job YAML pins location: centralus — a mismatch is refused below rather than deployed wrong.'
+        type: string
+        default: centralus
+      subscription:
+        description: 'Target subscription id (defaults to the AZURE_SUBSCRIPTION_ID secret).'
+        type: string
+        required: false
+      console_url:
+        description: 'Console base URL the verifier probes (blank = LOOM_VERIFY_URL repo var, then the value already on the job).'
+        type: string
+        required: false
+      dry_run:
+        description: 'Resolve + print every coordinate and STOP. No job write, no secret read.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-loom-verify-${{ inputs.region || 'centralus' }}
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: ${{ inputs.region || 'centralus' }}
+  JOB_NAME: loom-verify
+  CONSOLE_APP: loom-console
+
+jobs:
+  deploy:
+    name: Create/refresh the loom-verify job
+    runs-on: ubuntu-latest
+    # No image build — this only renders a YAML and applies it.
+    timeout-minutes: 30
+    steps:
+      # loom-verify.js is read off the checked-out tree and base64-embedded into
+      # the job, so the checked-out commit IS the verifier.
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      # ── Resolve the coordinates the script hard-requires ──────────────────
+      # SUB / CONSOLE_UAMI_ID / CONSOLE_IMAGE / LOOM_URL / LOOM_AUTOMATION_OID
+      # are `${VAR:?}` in the script — it exits non-zero on the first missing
+      # one. ACR is derived from CONSOLE_IMAGE by the script itself
+      # (ACR="${ACR:-${CONSOLE_IMAGE%%/*}}"), so it is not resolved here.
+      #
+      # PUBLIC REPO: the subscription id and the UAMI ARM id are masked before
+      # anything can echo them — the script's own closing "Trigger: …
+      # --subscription $SUB" line would otherwise print a subscription id into a
+      # world-readable log.
+      - name: Resolve deploy coordinates
+        env:
+          VAR_ADMIN_RG: ${{ vars.LOOM_ADMIN_RG }}
+          VAR_UAMI_NAME: ${{ vars.LOOM_CONSOLE_UAMI_NAME }}
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --only-show-errors 2>/dev/null || true
+
+          RG="${VAR_ADMIN_RG:-}"
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          echo "::add-mask::$SUB"
+
+          CAE=$(az containerapp env list -g "$RG" --query "[?starts_with(name,'cae-')]|[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$CAE" ] || CAE=$(az containerapp env list -g "$RG" --query "[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$CAE" ]; then
+            echo "::error::No Container Apps managed environment found in $RG. loom-verify runs inside the console's VNet-integrated CAE (that is the point — the Key Vault is private-endpoint only); it cannot be created without one."
+            exit 1
+          fi
+
+          UAMI_NAME="${VAR_UAMI_NAME:-}"
+          [ -n "$UAMI_NAME" ] || UAMI_NAME="uami-loom-console-${AZURE_LOCATION}"
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$RG" -o json 2>/dev/null || true)
+          if [ -z "$UAMI_JSON" ]; then
+            UAMI_JSON=$(az identity list -g "$RG" --query "[?starts_with(name,'uami-loom-console')]|[0]" -o json 2>/dev/null || true)
+          fi
+          UAMI_ID=$(printf '%s' "$UAMI_JSON" | jq -r '.id // empty')
+          if [ -z "$UAMI_ID" ]; then
+            echo "::error::Could not resolve the Console UAMI in $RG (looked for $UAMI_NAME, then any uami-loom-console*). loom-verify runs AS this identity and pulls the console image with it. Set the LOOM_CONSOLE_UAMI_NAME repo var, or check the region."
+            exit 1
+          fi
+          echo "::add-mask::$UAMI_ID"
+
+          # CONSOLE_IMAGE — required. The verifier RUNS the console image with an
+          # overridden command, so the authoritative source is the image the
+          # console app is actually serving. Never a guessed tag: a wrong tag
+          # would verify a build that is not in production.
+          CONSOLE_IMAGE=$(az containerapp show -g "$RG" -n "$CONSOLE_APP" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$CONSOLE_IMAGE" ]; then
+            echo "::error::Could not read the running image from the $CONSOLE_APP container app in $RG. deploy-loom-verify-job.sh declares CONSOLE_IMAGE \${CONSOLE_IMAGE:?} and the verifier runs THAT image — there is no safe default, because a guessed tag would verify a build that is not in production."
+            exit 1
+          fi
+
+          # ── Region guard ────────────────────────────────────────────────
+          # deploy-loom-verify-job.sh writes the job YAML with a HARD-CODED
+          # `location:` line. Read the literal out of the script rather than
+          # restate it, so this guard cannot drift from the script.
+          PINNED=$(sed -n 's/^location:[[:space:]]*\([a-z0-9]*\).*/\1/p' scripts/csa-loom/deploy-loom-verify-job.sh | head -1)
+          CAE_LOC=$(az containerapp env show -n "$CAE" -g "$RG" --query location -o tsv 2>/dev/null | tr -d '\r' || true)
+          CAE_LOC_NORM=$(printf '%s' "$CAE_LOC" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+          if [ -n "$PINNED" ] && [ -n "$CAE_LOC_NORM" ] && [ "$PINNED" != "$CAE_LOC_NORM" ]; then
+            echo "::error::REFUSING to deploy — deploy-loom-verify-job.sh pins 'location: $PINNED' in the job YAML, but the target CAE ($CAE) is in '$CAE_LOC_NORM'. Fix the hard-coded location in the script before deploying loom-verify outside $PINNED."
+            exit 1
+          fi
+
+          {
+            echo "ADMIN_RG=$RG"
+            echo "SUB=$SUB"
+            echo "CAE=$CAE"
+            echo "CONSOLE_UAMI_ID=$UAMI_ID"
+            echo "CONSOLE_IMAGE=$CONSOLE_IMAGE"
+          } >> "$GITHUB_ENV"
+
+          echo "::notice::admin RG=$RG  CAE=$CAE ($CAE_LOC_NORM)  console image=$CONSOLE_IMAGE  UAMI=$UAMI_NAME (ids masked)"
+
+      # ── Do not strip a working job ────────────────────────────────────────
+      # Like loom-uat and unlike the --set-env-vars siblings, this script renders
+      # a FULL job YAML and applies it with `az containerapp job create|update
+      # --yaml`, which REPLACES the whole template. An unresolved optional value
+      # is therefore DROPPED from the job rather than blanked.
+      - name: Resolve verifier config (carry forward — never strip a live job)
+        env:
+          INPUT_URL: ${{ inputs.console_url }}
+          VAR_URL: ${{ vars.LOOM_VERIFY_URL }}
+          VAR_OID: ${{ vars.LOOM_AUTOMATION_OID }}
+          VAR_UPN: ${{ vars.LOOM_AUTOMATION_UPN }}
+          VAR_NAME: ${{ vars.LOOM_AUTOMATION_NAME }}
+        run: |
+          set -euo pipefail
+          pick() { printf '%s' "$1" | jq -r --arg n "$2" 'first((. // [])[] | select(.name==$n) | (.value // "")) // ""'; }
+
+          JOB_ENV='[]'
+          JOB_EXISTS=false
+          if az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" -o none 2>/dev/null; then
+            JOB_EXISTS=true
+            JOB_ENV=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.template.containers[0].env" -o json 2>/dev/null || echo 'READ_FAILED')
+            if [ "$JOB_ENV" = "READ_FAILED" ] || ! printf '%s' "$JOB_ENV" | jq -e 'type=="array"' >/dev/null 2>&1; then
+              echo "::error::$JOB_NAME exists in $ADMIN_RG but its env set could not be read. REFUSING to run the deploy: the script applies a FULL job YAML, so every value not resolved here would be dropped from the job. Fix the read (RBAC / az) and re-dispatch."
+              exit 1
+            fi
+            echo "Existing job found — carrying its config forward ($(printf '%s' "$JOB_ENV" | jq 'length') env var(s) on the job)."
+          else
+            # Called out honestly rather than discovered mid-deploy: the script's
+            # job YAML references `secretRef: session-secret` but declares no
+            # `secrets:` block (its loom-uat sibling declares a placeholder for
+            # exactly this reason), and the secret is only set AFTER the
+            # create|update. So a first CREATE may be rejected for referencing a
+            # secret that does not exist yet. This has not been executed, so it
+            # is stated as a risk, not a finding.
+            echo "::warning::$JOB_NAME does not exist in $ADMIN_RG — this will take the script's CREATE path, which is the less-exercised one. deploy-loom-verify-job.sh's YAML references 'secretRef: session-secret' without declaring the secret (unlike deploy-loom-uat-job.sh, which seeds a placeholder), and sets it only afterwards. If the create is rejected for an unresolvable secretRef, that is the cause — the update path is unaffected."
+          fi
+
+          for V in LOOM_AUTOMATION_UPN LOOM_AUTOMATION_NAME; do
+            VAL=$(pick "$JOB_ENV" "$V")
+            SRC=job
+            if [ -z "$VAL" ] && [ "$V" = "LOOM_AUTOMATION_UPN" ]; then VAL="${VAR_UPN:-}"; SRC=repo-var; fi
+            if [ -z "$VAL" ] && [ "$V" = "LOOM_AUTOMATION_NAME" ]; then VAL="${VAR_NAME:-}"; SRC=repo-var; fi
+            if [ -z "$VAL" ]; then SRC='(unset — script default applies)'; fi
+            [ -n "$VAL" ] && echo "$V=$VAL" >> "$GITHUB_ENV"
+            echo "  $V <- $SRC"
+          done
+
+          # LOOM_URL — required (${LOOM_URL:?}). input → repo var → live job.
+          URL="${INPUT_URL:-}"
+          SRC=input
+          if [ -z "$URL" ]; then URL="${VAR_URL:-}"; SRC=repo-var; fi
+          if [ -z "$URL" ]; then URL=$(pick "$JOB_ENV" LOOM_URL); SRC=job; fi
+          if [ -z "$URL" ]; then
+            echo "::error::LOOM_URL could not be resolved. deploy-loom-verify-job.sh declares it \${LOOM_URL:?} and exits before doing anything — the verifier has no console to probe. Pass console_url, or set the LOOM_VERIFY_URL repo var."
+            exit 1
+          fi
+          echo "LOOM_URL=$URL" >> "$GITHUB_ENV"
+          echo "  LOOM_URL <- $SRC ($URL)"
+
+          # LOOM_AUTOMATION_OID — required. The object id baked into the minted
+          # session cookie, i.e. WHO the harness claims to be in audit logs.
+          OID="${VAR_OID:-}"
+          SRC=repo-var
+          if [ -z "$OID" ]; then OID=$(pick "$JOB_ENV" LOOM_AUTOMATION_OID); SRC=job; fi
+          if [ -z "$OID" ]; then
+            echo "::error::LOOM_AUTOMATION_OID could not be resolved. deploy-loom-verify-job.sh declares it \${LOOM_AUTOMATION_OID:?}. It is the tenant-admin object id the minted session asserts — set the LOOM_AUTOMATION_OID repo var (same value loom-ui-verify.yml uses). This workflow will not guess an identity."
+            exit 1
+          fi
+          echo "::add-mask::$OID"
+          echo "LOOM_AUTOMATION_OID=$OID" >> "$GITHUB_ENV"
+          echo "  LOOM_AUTOMATION_OID <- $SRC (masked)"
+
+          echo "JOB_EXISTED=$JOB_EXISTS" >> "$GITHUB_ENV"
+
+      - name: DRY RUN — resolved plan only, nothing deployed
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "DRY RUN. The job was not written. The console's SESSION_SECRET was NOT read."
+          echo
+          echo "  admin RG     : $ADMIN_RG"
+          echo "  CAE          : $CAE"
+          echo "  job          : $JOB_NAME (exists: ${JOB_EXISTED:-false})"
+          echo "  runs image   : $CONSOLE_IMAGE  (the console's LIVE image — no build)"
+          echo "  console app  : $CONSOLE_APP (source of the session-secret)"
+          echo "  verifier src : scripts/csa-loom/loom-verify.js @ ${GITHUB_SHA} (base64-embedded into the job)"
+          echo
+          echo "Config that WOULD be written (empty = env var omitted from the job YAML):"
+          for V in LOOM_URL LOOM_AUTOMATION_OID LOOM_AUTOMATION_UPN LOOM_AUTOMATION_NAME; do
+            printf '  %-28s %s\n' "$V" "$(printenv "$V" || echo '<unset>')"
+          done
+          echo
+          echo "::warning::DRY RUN — loom-verify was NOT deployed. This run does NOT count as a deploy for the staleness watchdog. Re-dispatch with dry_run=false to actually roll it."
+
+      # The script owns everything from here: base64-embed loom-verify.js →
+      # render the job YAML → `az containerapp job create|update --yaml` → set
+      # the session-secret from the console's ARM literal. Do not inline any of it.
+      - name: Deploy — create/refresh the job
+        if: ${{ !inputs.dry_run }}
+        run: bash scripts/csa-loom/deploy-loom-verify-job.sh
+
+      # Read-only confirmation. Deliberately does NOT read the secret VALUE — the
+      # script sets it under `set -e`, so a failed secret set fails the script and
+      # therefore this workflow; that is the assertion.
+      - name: Verify the job reflects what was just deployed
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          IMAGE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null | tr -d '\r' || true)
+          CONTAINER=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          STATE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.provisioningState" -o tsv 2>/dev/null | tr -d '\r' || true)
+          SECRETS=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.configuration.secrets[].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          echo "image=$IMAGE container=$CONTAINER provisioningState=$STATE"
+          if [ -z "$IMAGE" ]; then
+            echo "::error::$JOB_NAME is not readable after the deploy — cannot confirm it rolled."
+            exit 1
+          fi
+          # The documented Log Analytics lookup (ContainerName_s == 'verify',
+          # LOOM_VERIFY_RESULT line) keys off the container name.
+          if [ "$CONTAINER" != "verify" ]; then
+            echo "::error::container name is '$CONTAINER', expected 'verify'. The result lookup (ContainerAppConsoleLogs_CL | where ContainerName_s == 'verify' … LOOM_VERIFY_RESULT) keys off that name; leaving this would make every run's result unreadable while the job still reports Succeeded."
+            exit 1
+          fi
+          if [ "$IMAGE" != "$CONSOLE_IMAGE" ]; then
+            echo "::error::the job runs '$IMAGE' but the console is serving '$CONSOLE_IMAGE'. The verifier would be probing production while running a different build's code. Re-dispatch."
+            exit 1
+          fi
+          if ! printf '%s\n' "$SECRETS" | grep -qx 'session-secret'; then
+            echo "::error::the job has no 'session-secret' after the deploy. It cannot mint a loom_session cookie, so every probe returns 401 and the verifier fails wholesale. Check ARM read access to the $CONSOLE_APP secrets."
+            exit 1
+          fi
+          echo "::notice::$JOB_NAME refreshed — running $IMAGE with loom-verify.js from ${GITHUB_SHA}. Start one with: az containerapp job start -n $JOB_NAME -g $ADMIN_RG"
