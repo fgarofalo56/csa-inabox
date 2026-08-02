@@ -340,6 +340,37 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // issue #2624 (G2) — the Unity Catalog system-tables surface returns two
+    // machine-readable gate codes (`uc_system_tables_boundary`,
+    // `uc_system_schema_grant`) that belonged to NO gate, so the pane rendered a
+    // bare MessageBar with no Fix-it and neither code appeared on /admin/gates
+    // or was discoverable by Copilot. This spec is the gate those codes map to.
+    //
+    // It shares LOOM_DATABRICKS_HOSTNAME with svc-databricks (precedented — the
+    // hostname key is already shared with svc-aml): no NEW env var is invented,
+    // because the real day-2 prerequisite is not an env write at all. It is the
+    // metastore/account-admin system-schema enablement plus the UAMI grants,
+    // which is why the Fix-it is `role-grant`, not a picker.
+    id: 'svc-databricks-system-tables', category: 'azure-services',
+    title: 'Unity Catalog system tables (audit / billing / query history)', severity: 'optional',
+    required: ['LOOM_DATABRICKS_HOSTNAME'], warnOnMiss: true,
+    remediation: 'Reading system.access.audit / system.billing.usage / system.query.history needs (1) LOOM_DATABRICKS_HOSTNAME + a SQL warehouse, (2) the system schema ENABLED on the metastore — a metastore or account admin runs `databricks system-schemas enable <metastore_id> system.<schema>` (PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas/{schema}); the Audit & system tables dialog offers this inline — and (3) USE CATALOG on `system` + USE SCHEMA + SELECT on each system schema for the Console UAMI. None of the three is an env write the Console can perform for you.',
+    provisionedBy: 'modules/landing-zone (Databricks workspace) → admin-plane forwards loomDatabricksHostname → apps[] env. The system-schema enablement + grants are a one-time metastore-admin action, not IaC.',
+    role: 'Databricks metastore or account admin (to enable a system schema) + USE CATALOG / USE SCHEMA / SELECT on system.* for the Console UAMI',
+    docs: 'https://learn.microsoft.com/azure/databricks/admin/system-tables/',
+    // X-MATRIX: Databricks Unity Catalog has no Azure Government endpoint, so the
+    // system tables do not exist at the GCC-High / DoD boundary at ALL — not a
+    // config miss. Prompting for an env var there would be dishonest, so this
+    // declares 'unavailable' and the surface renders the no-Fix-it fallback bar.
+    // Note the OSS backend is NOT the fallback: Loom Unity has no system schemas
+    // either (ossUcUnsupportedPath gates /systemschemas), so LOOM_UC_BACKEND=oss
+    // would resolve nothing here.
+    availability: {
+      commercial: 'ga', gccHigh: 'unavailable', il5: 'unavailable',
+      fallbackNote: 'Databricks Unity Catalog has no Azure Government endpoint, so its system tables do not exist at this boundary — and the OSS Loom Unity backend does not implement system schemas either, so switching LOOM_UC_BACKEND resolves nothing. The Azure-native equivalent is Azure Monitor / Log Analytics over the Databricks diagnostic logs, plus Loom\'s own catalog access trail: every Unity Catalog call funnels through the BFF audit choke point into the Cosmos _auditLog trail and the LoomAudit_CL SIEM stream, queried with unityAuditKql().',
+    },
+  },
+  {
     id: 'svc-synapse-spark-pool', category: 'azure-services', title: 'Synapse Spark pool (ML predict / scheduled runs)', severity: 'optional',
     required: ['LOOM_SYNAPSE_SPARK_POOL'], warnOnMiss: true,
     remediation: 'Set LOOM_SYNAPSE_SPARK_POOL (e.g. loompool) so ml-model predict and scheduled job run-adapters have a Spark compute target (synapse_spark_pool_not_configured).',

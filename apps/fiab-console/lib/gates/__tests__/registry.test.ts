@@ -61,6 +61,26 @@ describe('gate registry completeness', () => {
     }
   });
 
+  it('svc-databricks-system-tables owns the two UC system-tables codes with a role-grant Fix-it (#2624)', () => {
+    // G2: before this gate existed, the route's `uc_system_tables_boundary` /
+    // `uc_system_schema_grant` codes resolved to NOTHING — no registry row, no
+    // Fix-it, absent from /admin/gates, invisible to Copilot.
+    const gate = getGate('svc-databricks-system-tables')!;
+    expect(gate, 'svc-databricks-system-tables missing from the registry').toBeTruthy();
+    expect(gate.legacyCodes).toContain('uc_system_tables_boundary');
+    expect(gate.legacyCodes).toContain('uc_system_schema_grant');
+    // The prerequisite is a metastore-admin enablement + UAMI grants, NOT an env
+    // write — an env/resource picker here would be a button that cannot fix.
+    expect(gate.fixit.kind).toBe('role-grant');
+    expect(gate.fixit.grantNote, 'a role-grant Fix-it must name the operator action').toBeTruthy();
+    expect(gate.surfaces.length).toBeGreaterThan(0);
+    // Databricks Unity Catalog has no Azure Government endpoint, so in Gov this
+    // is cloud-unavailable (honest fallback bar, no Fix-it), not a config miss.
+    expect(gate.availability?.gccHigh).toBe('unavailable');
+    expect(gate.availability?.il5).toBe('unavailable');
+    expect(gate.availability?.fallbackNote).toMatch(/unityAuditKql|Log Analytics/);
+  });
+
   it('maps the Phase-1 inventory legacy codes to canonical gates', () => {
     const expectations: Record<string, string> = {
       adls_not_configured: 'svc-adls',

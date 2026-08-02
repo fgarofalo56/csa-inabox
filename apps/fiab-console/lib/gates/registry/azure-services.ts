@@ -291,6 +291,28 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     legacyCodes: ['warehouse_not_configured', 'dq_monitor_not_configured', 'mdm_not_configured'],
   },
+  // issue #2624 (G2) — the gate that finally OWNS the two orphan codes the
+  // Unity Catalog system-tables route emits. Before this they resolved to
+  // nothing: HonestGate looks a code up with getGate() and fell through to its
+  // "not in the registry" bar with NO Fix-it, and /admin/gates never listed
+  // them, so Copilot could not discover or resolve either one.
+  //
+  // The Fix-it is 'role-grant' on purpose. The prerequisite is a metastore-admin
+  // enablement + UAMI grants, so an env picker would be a button that cannot
+  // fix anything. The one action Loom CAN take itself — PUT systemschemas — is
+  // already wired as the inline "Attempt to enable system.<schema>" button in
+  // the Audit & system tables dialog, and the grantNote names the rest.
+  'svc-databricks-system-tables': {
+    surfaces: [
+      { path: '/items/sql-warehouse', label: 'SQL warehouse editor — Audit & system tables' },
+      { path: '/api/databricks/unity-catalog/system-tables', label: 'System tables BFF route' },
+    ],
+    fixit: {
+      kind: 'role-grant',
+      grantNote: 'A Databricks metastore or account admin enables the schema — `databricks system-schemas enable <metastore_id> system.<schema>` (the Audit & system tables dialog offers this inline) — then grants the Console UAMI USE CATALOG on `system`, USE SCHEMA, and SELECT on that schema. Neither step is an env write. In GCC-High / IL5 there is nothing to grant: Databricks Unity Catalog has no Azure Government endpoint, so this gate reports cloud-unavailable and the surface names the Log Analytics / unityAuditKql() equivalent instead.',
+    },
+    legacyCodes: ['uc_system_tables_boundary', 'uc_system_schema_grant'],
+  },
   'svc-synapse-spark-pool': {
     surfaces: [
       { path: '/items/ml-model', label: 'ML model predict' },
