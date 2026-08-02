@@ -93,13 +93,6 @@ jobs:
           # requirements.txt below re-pins them to the exact runtime versions,
           # which is what makes a dependabot bump a real signal.
           pip install -e ".[dev,governance,functions,portal,bff,postgres,tutorials,streaming,serving]"
-          # apps/loom-duckdb/requirements.txt holds the EXACT duckdb / pyarrow
-          # pins that tests/loom_duckdb exercises. Installed on its own, with NO
-          # `|| true`, because a swallowed failure here is the exact bug this
-          # lane exists to catch: the suite would otherwise run against whatever
-          # the `serving` floor resolved to and report GREEN having measured
-          # nothing (#2543).
-          pip install -r apps/loom-duckdb/requirements.txt
           # Install any additional per-domain requirements. These stay tolerant
           # (many are optional/experimental runners not under test here), but a
           # failure is now SURFACED as a CI annotation + a job-summary line
@@ -115,48 +108,50 @@ jobs:
             echo "### :warning: requirements.txt installs that failed" >> "$GITHUB_STEP_SUMMARY"
             for req in $failed_reqs; do echo "- \`$req\`" >> "$GITHUB_STEP_SUMMARY"; done
           fi
-          # Re-assert the loom-duckdb ENGINE pins after the loop: it also
-          # installs apps/loom-transform-runner/requirements.txt (dbt-core,
-          # dbt-databricks, dbt-duckdb, sqlmesh) into this SAME environment, and
-          # those transitively constrain duckdb/pyarrow. Without this the
-          # versions under test would be decided by `find` order, not by the
-          # app. Only duckdb/pyarrow are re-pinned (not the whole file) so this
-          # cannot fight the other apps over shared web deps. The assignment
-          # fails the step under `set -e` if those pins ever disappear from the
-          # file, which is correct — that IS the guarantee.
-          duckdb_pins=$(grep -E '^(duckdb|pyarrow)==' apps/loom-duckdb/requirements.txt)
-          pip install $duckdb_pins
-          python -c "import duckdb, pyarrow; print(f'loom-duckdb suite runs against duckdb {duckdb.__version__} / pyarrow {pyarrow.__version__}')"
           # mypy >= 1.16 added a hard dependency on pathspec and imports
           # `pathspec.patterns.gitignore`, which only exists in pathspec >= 0.12.
           # The per-domain requirements loop above can pull an older transitive
           # pathspec, breaking `mypy` at import time ("No module named
-          # 'pathspec.patterns.gitignore'"). Force the modern version LAST so the
+          # 'pathspec.patterns.gitignore'"). Force the modern version so the
           # mypy step always finds the expected module layout. See
-          # https://github.com/python/mypy/issues/19275.
+          # https://github.com/python/mypy/issues/19275. (Independent of the
+          # loom-duckdb install below — nothing there touches pathspec.)
           pip install -U 'pathspec>=0.12.1'
-          # starlette 1.x removed the deprecated `on_startup` kwarg that
-          # fastapi<0.116 (pinned to 0.115.6 by platform/runners/script-runner/
-          # requirements.txt and to 0.115.5 by apps/fiab-dbt-runner,
-          # apps/loom-migrate, apps/fiab-wrangler-host,
-          # apps/loom-transform-runner and examples/ai-agents — ALL installed
-          # into this SAME env by the loop above) still passes to
-          # Router — a later transitive upgrade (mcp → sse-starlette 3.x)
-          # silently drags starlette to 1.x and breaks EVERY FastAPI()
-          # construction ("Router.__init__() got an unexpected keyword argument
-          # 'on_startup'", portal tests). Force the fastapi-0.115-compatible
-          # starlette LAST, same pattern as the pathspec pin above.
+          # ---------------------------------------------------------------
+          # apps/loom-duckdb/requirements.txt goes LAST. It describes the
+          # container image that actually SHIPS, and tests/loom_duckdb is its
+          # ONLY automated signal (#2543), so it must be the file that decides
+          # the stack under test — not `find` order.
           #
-          # NOT removable by the loom-duckdb lifespan migration (#2579, DONE).
-          # This pin is about how fastapi 0.115.x CONSTRUCTS a FastAPI(), not
-          # about whether an app calls `on_event`: apps/loom-duckdb held the last
-          # `@app.on_event` in the repo and is now on the lifespan API, and the
-          # pin is still required. Verified directly — fastapi 0.115.6 +
-          # starlette 1.3.1 raises `TypeError: Router.__init__() got an
-          # unexpected keyword argument 'on_startup'` on a bare `FastAPI()`.
-          # TODO: remove this pin when the six requirements.txt files named above
-          # move off fastapi 0.115.x (apps/loom-duckdb is already on 0.140.13).
-          pip install -U 'starlette>=0.40,<0.42'
+          # This used to run BEFORE the loop, which silently lost (#2615): six
+          # other requirements files pin fastapi 0.115.x, and fastapi 0.115.x
+          # (starlette<0.42) and fastapi 0.140.13 (starlette>=0.46) are mutually
+          # exclusive, so the loop downgraded fastapi and a trailing
+          # `starlette>=0.40,<0.42` pin locked the downgrade in. Only duckdb and
+          # pyarrow were re-asserted, so the HTTP tier was exercised against a
+          # FastAPI the image never runs — and the suite passed on both stacks,
+          # which is why it produced no signal at all.
+          #
+          # Verified before/after in a clean venv: tests/loom_duckdb (99) and
+          # portal/shared/portal_tests (271) are green on fastapi 0.140.13 +
+          # starlette 1.3.1. The five apps pinned at fastapi 0.115.x have no
+          # collected test that imports their FastAPI app (tests/fiab_dbt_runner
+          # and tests/loom_transform_runner load the dependency-free redact.py by
+          # path), so nothing under test constructs a 0.115-era app. That is what
+          # retires the old starlette pin: the `on_startup` TypeError it guarded
+          # against is a fastapi-0.115 constructor behaviour, and 0.115 is no
+          # longer the resolved fastapi.
+          #
+          # NO `|| true`: a swallowed failure here is exactly the bug this lane
+          # exists to catch.
+          pip install -r apps/loom-duckdb/requirements.txt
+          # Assert it actually won. Prints every pinned distribution with its
+          # resolved version and FAILS the step on any mismatch, so a new
+          # requirements.txt landing later in `find` order, or a future
+          # reordering, is loud instead of silent (#2615).
+          python scripts/ci/assert_installed_pins.py \
+            apps/loom-duckdb/requirements.txt \
+            --label 'apps/loom-duckdb (the image tests/loom_duckdb must measure)'
 
       - name: Lint with ruff
         if: steps.relevant.outputs.run == 'true'
