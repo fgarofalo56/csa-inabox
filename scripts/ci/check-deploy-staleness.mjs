@@ -58,6 +58,28 @@ const WATCHED = [
     paths: ['.github/workflows/csa-loom-post-deploy-bootstrap.yml'],
     maxDays: 21,
   },
+  {
+    workflow: 'deploy-copilot-evaluator.yml',
+    // An undeployed evaluator does not fail — it scores. The nightly
+    // copilot-quality-evals gate runs against whatever image the job happens to
+    // be on, so stale evaluator code means every nightly run reports quality
+    // measured by old logic, in green. #2799's probeErrors/rowsAttempted
+    // diagnostic is inert until this runs. Before #2814 the deploy path was a
+    // local shell script no workflow executed, which is why it could not appear
+    // here at all: this watchdog can only see deploy paths that are workflows.
+    why: 'Builds + rolls the loom-copilot-evaluator image. Stale here means the nightly Copilot quality gate scores production with old evaluator logic and still reads green — a gate measuring the wrong thing, not a red X.',
+    paths: [
+      '.github/workflows/deploy-copilot-evaluator.yml',
+      'azure-functions/copilot-evaluator/**',
+      'scripts/csa-loom/deploy-copilot-evaluator-job.sh',
+    ],
+    // Tighter than the 21/30-day entries: this is a single image build plus a
+    // job update against one already-provisioned estate — minutes, not a
+    // multi-hour Gov deploy — so there is no cost argument for tolerating long
+    // drift. Matched to the 14 days of the gov-uc-purview-wire entry, which was
+    // set by how long an undeployed fix stayed live unnoticed.
+    maxDays: 14,
+  },
 ];
 
 const DAY_MS = 86_400_000;

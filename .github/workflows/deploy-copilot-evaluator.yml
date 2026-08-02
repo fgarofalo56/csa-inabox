@@ -1,0 +1,338 @@
+name: deploy-copilot-evaluator
+
+# CSA Loom — dispatchable deploy path for the `loom-copilot-evaluator`
+# Container App Job (the in-VNet Copilot quality-eval harness).
+#
+# ── WHY THIS EXISTS (#2814) ────────────────────────────────────────────────
+# `scripts/csa-loom/deploy-copilot-evaluator-job.sh` is the ONLY way to build
+# and roll the evaluator image. Until this workflow, it appeared in
+# .github/workflows/ exactly twice — both times inside a `::warning::` STRING
+# telling a human to run it on a workstation with `az` write access. It was
+# executed by zero `run:` steps.
+#
+# That made every evaluator change merged-but-inert by construction. #2799
+# fixed the evals gate's zero-question arithmetic and added `probeErrors` /
+# `rowsAttempted` to the run receipt — the fields that would name WHY the probe
+# calls fail — and that diagnostic could not reach the running job.
+#
+# It was also invisible to the "merged ≠ deployed" watchdog (#2775): that check
+# compares a watched WORKFLOW's last successful run against the code it
+# deploys, so a deploy path that is not a workflow at all cannot register as
+# stale. This workflow is registered in `WATCHED` in
+# scripts/ci/check-deploy-staleness.mjs, which closes that blind spot.
+#
+# ── WHAT IT DOES ───────────────────────────────────────────────────────────
+# It is a WRAPPER. It does not reimplement the script, which already owns the
+# ACR firewall-lease acquire/release lifecycle (#2603), the `git archive` HEAD
+# staging that avoids the Windows MAX_PATH build-context failure (#2564), and
+# the load-bearing `--container-name evaluator` detail. Read that script's
+# header before changing anything here.
+#
+# This workflow's whole job is to resolve the coordinates the script requires
+# as environment variables, and to refuse to run it when a value cannot be
+# resolved safely. See the "would-blank" guard below — that is the one piece of
+# real logic here, and it exists because the script's update path passes EVERY
+# config value to `az containerapp job update --set-env-vars`, so running it
+# with an unresolved value would overwrite a working job's config with the
+# empty string. That is precisely the failure copilot-quality-evals.yml
+# documents at length: a stripped `LOOM_COSMOS_ENDPOINT` made the evaluator
+# honest-gate, which produced a receipt with ZERO surfaces, which made the
+# quality gate pass having measured nothing.
+#
+# ── NOT YET EXECUTED ───────────────────────────────────────────────────────
+# As authored, this workflow has NEVER been run. Authoring it could not include
+# running it: every step it performs is an `az` write against the live estate,
+# so "verifying" it is the deploy. Dispatch it the first time with
+# `dry_run=true`, which resolves and prints every coordinate WITHOUT touching
+# the ACR or the job, then re-dispatch with `dry_run=false`.
+#
+# ── AUTH ───────────────────────────────────────────────────────────────────
+# Service-principal `creds:` login, matching BOTH immediate siblings:
+# full-app-deploy-commercial.yml (the closest deploy sibling — same ACR-open /
+# `az acr build` / Container Apps-write shape) and copilot-quality-evals.yml
+# (which drives this same job). The repo's OIDC federated credential is scoped
+# to `repo:fgarofalo56/csa-inabox:ref:refs/heads/main`
+# (docs/reference-architecture/identity-secrets-flow.md), so an OIDC login here
+# would authenticate only when dispatched against main and would fail for a
+# branch dispatch during a fix. The SP creds path works from any ref, which is
+# what a deploy-path repair workflow needs.
+#
+# Permissions are least-privilege: `contents: read` only. No `id-token: write`
+# — this workflow signs nothing (the sibling needs that solely for cosign).
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region of the target Admin Plane (e.g. centralus, eastus2).'
+        type: string
+        default: centralus
+      subscription:
+        description: 'Target subscription id (defaults to the AZURE_SUBSCRIPTION_ID secret).'
+        type: string
+        required: false
+      cron:
+        description: 'Schedule cron override — STANDARD 5-FIELD UTC. Empty keeps the job''s current schedule (or the script default 0 7 * * * on first create).'
+        type: string
+        required: false
+      dry_run:
+        description: 'Resolve + print every coordinate and STOP. Nothing is built, no ACR firewall change, no job write. Use this for the first dispatch.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never cancel in flight. This workflow holds the ACR firewall lease while the
+# image builds; cancelling mid-lease is the exact class of bug #2603 exists to
+# prevent (a dead run's cleanup slamming the registry shut under a live build).
+concurrency:
+  group: deploy-copilot-evaluator-${{ inputs.region || 'centralus' }}
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: ${{ inputs.region || 'centralus' }}
+  JOB_NAME: loom-copilot-evaluator
+
+jobs:
+  deploy:
+    name: Build image + create/refresh the evaluator job
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # The script stages its build context with `git archive HEAD`, so the
+      # checked-out commit IS the image. Default fetch-depth (1) is sufficient.
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      # ── Resolve the coordinates the script hard-requires ──────────────────
+      # ADMIN_RG / CAE / ACR / CONSOLE_UAMI_ID / CONSOLE_UAMI_CLIENT_ID / SUB.
+      # PUBLIC REPO: the subscription id and the UAMI ARM id (which embeds it)
+      # are masked before anything can echo them — the script's own closing
+      # "Trigger a run with: … --subscription $SUB" line would otherwise print
+      # the subscription id into a world-readable log.
+      - name: Resolve deploy coordinates
+        id: resolve
+        # Every dispatch input / repo var reaches the shell as an ENVIRONMENT
+        # VARIABLE, never as a `${{ }}` splice into the script body — a
+        # workflow_dispatch string input is attacker-influencable in the general
+        # case, and interpolation would make it shell source.
+        env:
+          VAR_ADMIN_RG: ${{ vars.LOOM_ADMIN_RG }}
+          VAR_UAMI_NAME: ${{ vars.LOOM_CONSOLE_UAMI_NAME }}
+          VAR_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT }}
+        run: |
+          set -euo pipefail
+          # `containerapp` lives in an az extension. Install it explicitly rather
+          # than relying on dynamic-install prompting — same reasoning
+          # copilot-quality-evals.yml records for the log-analytics extension.
+          az extension add --name containerapp --only-show-errors 2>/dev/null || true
+
+          RG="${VAR_ADMIN_RG:-}"
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          echo "::add-mask::$SUB"
+
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].loginServer" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$ACR" ] || ACR=$(az acr list -g "$RG" --query "[0].loginServer" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$ACR" ]; then
+            echo "::error::No container registry found in $RG. The Admin Plane must be provisioned before the evaluator image can be built — run the infra deploy first."
+            exit 1
+          fi
+
+          CAE=$(az containerapp env list -g "$RG" --query "[?starts_with(name,'cae-')]|[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$CAE" ] || CAE=$(az containerapp env list -g "$RG" --query "[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$CAE" ]; then
+            echo "::error::No Container Apps managed environment found in $RG. The evaluator job runs inside the console's VNet-integrated CAE; it cannot be created without one."
+            exit 1
+          fi
+
+          # identity.bicep names it uami-loom-console-<region>. Repo var wins,
+          # then the conventional name, then a prefix match (renamed identity).
+          UAMI_NAME="${VAR_UAMI_NAME:-}"
+          [ -n "$UAMI_NAME" ] || UAMI_NAME="uami-loom-console-${AZURE_LOCATION}"
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$RG" -o json 2>/dev/null || true)
+          if [ -z "$UAMI_JSON" ]; then
+            UAMI_JSON=$(az identity list -g "$RG" --query "[?starts_with(name,'uami-loom-console')]|[0]" -o json 2>/dev/null || true)
+          fi
+          UAMI_ID=$(printf '%s' "$UAMI_JSON" | jq -r '.id // empty')
+          UAMI_CLIENT="${VAR_UAMI_CLIENT:-}"
+          [ -n "$UAMI_CLIENT" ] || UAMI_CLIENT=$(printf '%s' "$UAMI_JSON" | jq -r '.clientId // empty')
+          if [ -z "$UAMI_ID" ] || [ -z "$UAMI_CLIENT" ]; then
+            echo "::error::Could not resolve the Console UAMI in $RG (looked for $UAMI_NAME, then any uami-loom-console*). The job runs AS this identity and pulls the image with it. Set the LOOM_CONSOLE_UAMI_NAME / LOOM_CONSOLE_UAMI_CLIENT repo vars, or check the region."
+            exit 1
+          fi
+          echo "::add-mask::$UAMI_ID"
+          echo "::add-mask::$UAMI_CLIENT"
+
+          {
+            echo "ADMIN_RG=$RG"
+            echo "SUB=$SUB"
+            echo "CAE=$CAE"
+            echo "ACR=$ACR"
+            echo "CONSOLE_UAMI_ID=$UAMI_ID"
+            echo "CONSOLE_UAMI_CLIENT_ID=$UAMI_CLIENT"
+          } >> "$GITHUB_ENV"
+
+          # Safe to print: RG/CAE are naming-convention values and the ACR login
+          # server already appears in this repo's committed comments. The
+          # subscription id and both UAMI ids are masked above.
+          echo "::notice::admin RG=$RG  CAE=$CAE  ACR=$ACR  UAMI=$UAMI_NAME (ids masked)"
+
+      # ── The one piece of real logic: do not blank a working job ───────────
+      # `deploy-copilot-evaluator-job.sh` builds ENV_ARGS from its own
+      # environment and passes ALL of it to `az containerapp job update
+      # --set-env-vars`. Any value this workflow leaves unresolved is therefore
+      # written to the live job as the EMPTY STRING, not left alone.
+      #
+      # An emptied LOOM_COSMOS_ENDPOINT makes the evaluator honest-gate with
+      # `{"ok":false,"reason":"missing config: ..."}` — a receipt carrying ZERO
+      # surfaces — and the copilot-quality-evals gate then passes having
+      # measured nothing. So the authoritative source for these values is the
+      # RUNNING JOB itself; the console app is the fallback for a first create;
+      # and an unreadable existing job is a hard stop, never a best-effort
+      # write. (The read pattern mirrors copilot-quality-evals.yml, which
+      # rebuilds the same env set for its execution override.)
+      #
+      # LOOM_INTERNAL_TOKEN is deliberately NOT resolved: it is not in the
+      # script's ENV_ARGS — it is wired separately, and ONLY when non-empty —
+      # so leaving it unset preserves the existing job secret untouched and
+      # keeps this workflow from ever reading a secret value into a shell.
+      - name: Resolve evaluator config (carry forward — never blank a live job)
+        id: config
+        env:
+          INPUT_CRON: ${{ inputs.cron }}
+        run: |
+          set -euo pipefail
+          CFG_VARS="LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE LOOM_AOAI_ENDPOINT LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT LOOM_AOAI_STRONG_DEPLOYMENT LOOM_AOAI_MINI_DEPLOYMENT LOOM_AOAI_DEPLOYMENT LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP LOOM_EVAL_PROBE_URL LOOM_ARM_ENDPOINT"
+
+          pick() { printf '%s' "$1" | jq -r --arg n "$2" 'first((. // [])[] | select(.name==$n) | (.value // "")) // ""'; }
+
+          JOB_ENV='[]'
+          JOB_EXISTS=false
+          if az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" -o none 2>/dev/null; then
+            JOB_EXISTS=true
+            JOB_ENV=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.template.containers[0].env" -o json 2>/dev/null || echo 'READ_FAILED')
+            if [ "$JOB_ENV" = "READ_FAILED" ] || ! printf '%s' "$JOB_ENV" | jq -e 'type=="array"' >/dev/null 2>&1; then
+              echo "::error::$JOB_NAME exists in $ADMIN_RG but its env set could not be read. REFUSING to run the deploy: the script would rewrite every config value to the empty string and the evaluator would honest-gate with zero surfaces, taking the quality gate green on nothing. Fix the read (RBAC / az) and re-dispatch."
+              exit 1
+            fi
+            echo "Existing job found — carrying its config forward ($(printf '%s' "$JOB_ENV" | jq 'length') env var(s) on the job)."
+          else
+            echo "::notice::$JOB_NAME does not exist in $ADMIN_RG yet — the script will CREATE it. Config falls back to the loom-console app's env."
+          fi
+
+          APP_ENV=$(az containerapp show -g "$ADMIN_RG" -n loom-console \
+            --query "properties.template.containers[0].env" -o json 2>/dev/null || echo '[]')
+          printf '%s' "$APP_ENV" | jq -e 'type=="array"' >/dev/null 2>&1 || APP_ENV='[]'
+
+          MISSING=""
+          for V in $CFG_VARS; do
+            CUR=$(pick "$JOB_ENV" "$V")
+            VAL="$CUR"
+            SRC=job
+            if [ -z "$VAL" ]; then VAL=$(pick "$APP_ENV" "$V"); SRC=console; fi
+            if [ -z "$VAL" ]; then SRC='(unset — script default applies)'; fi
+
+            # would-blank guard: the job holds a value and we resolved nothing.
+            # Only reachable via a read/parse defect, which is exactly what this
+            # is here to catch before it reaches `--set-env-vars`.
+            if [ -n "$CUR" ] && [ -z "$VAL" ]; then MISSING="$MISSING $V"; fi
+
+            [ -n "$VAL" ] && echo "$V=$VAL" >> "$GITHUB_ENV"
+            echo "  $V <- $SRC"
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::REFUSING to deploy — these values are set on the live $JOB_NAME but resolved empty here, so the script would blank them:$MISSING"
+            exit 1
+          fi
+
+          # Schedule: explicit input wins; otherwise keep whatever the job is
+          # already on, so the env var the script stamps never disagrees with
+          # the trigger config. (Update does not change the schedule; create
+          # uses this for --cron-expression.)
+          CRON="${INPUT_CRON:-}"
+          if [ -z "$CRON" ] && [ "$JOB_EXISTS" = true ]; then
+            CRON=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.configuration.scheduleTriggerConfig.cronExpression" -o tsv 2>/dev/null | tr -d '\r' || true)
+          fi
+          [ -n "$CRON" ] && [ "$CRON" != "None" ] && echo "COPILOT_EVALUATOR_CRON=$CRON" >> "$GITHUB_ENV"
+          echo "  COPILOT_EVALUATOR_CRON <- ${CRON:-script default}"
+
+          if [ "$JOB_EXISTS" != true ]; then
+            echo "::warning::First create — LOOM_INTERNAL_TOKEN is not wired by this workflow (it is a Container Apps SECRET and is never read into CI). The eval probe will honest-gate until a bicep deploy of platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep wires it. On an EXISTING job the secret is preserved untouched."
+          fi
+
+      - name: DRY RUN — resolved plan only, nothing deployed
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "DRY RUN. No image was built. The ACR firewall was not touched. The job was not written."
+          echo
+          echo "  admin RG    : $ADMIN_RG"
+          echo "  CAE         : $CAE"
+          echo "  ACR         : $ACR"
+          echo "  image       : $ACR/loom-copilot-evaluator:latest"
+          echo "  job         : $JOB_NAME"
+          echo "  cron        : ${COPILOT_EVALUATOR_CRON:-<script default 0 7 * * *>}"
+          echo "  build commit: ${GITHUB_SHA}"
+          echo
+          echo "Config that WOULD be written (empty = script default applies):"
+          for V in LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE LOOM_AOAI_ENDPOINT LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT LOOM_AOAI_STRONG_DEPLOYMENT LOOM_AOAI_MINI_DEPLOYMENT LOOM_AOAI_DEPLOYMENT LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP LOOM_EVAL_PROBE_URL LOOM_ARM_ENDPOINT; do
+            printf '  %-40s %s\n' "$V" "$(printenv "$V" || echo '<unset>')"
+          done
+          echo
+          echo "::warning::DRY RUN — the evaluator was NOT deployed. Re-dispatch with dry_run=false to actually build and roll it."
+
+      # The script owns everything from here: ACR firewall lease acquire →
+      # `git archive HEAD` context staging → `az acr build` → lease release →
+      # `az containerapp job create|update`. Do not inline any of it.
+      - name: Deploy — build image + create/refresh the job
+        if: ${{ !inputs.dry_run }}
+        run: bash scripts/csa-loom/deploy-copilot-evaluator-job.sh
+
+      # Read-only confirmation that the write actually landed. A deploy path
+      # that reports success without reading back what it changed is how the
+      # class of bug in #2775 / #2814 survives.
+      - name: Verify the job now points at the built image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          IMAGE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null | tr -d '\r' || true)
+          CONTAINER=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          STATE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.provisioningState" -o tsv 2>/dev/null | tr -d '\r' || true)
+          COSMOS=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          echo "image=$IMAGE container=$CONTAINER provisioningState=$STATE"
+          if [ -z "$IMAGE" ]; then
+            echo "::error::$JOB_NAME is not readable after the deploy — cannot confirm the image rolled."
+            exit 1
+          fi
+          # Load-bearing per the script header: copilot-quality-evals.yml and the
+          # Log Analytics receipt query both key off the container being named
+          # `evaluator`. A drifted name still RUNS, and the gate then measures
+          # nothing.
+          if [ "$CONTAINER" != "evaluator" ]; then
+            echo "::error::container name is '$CONTAINER', expected 'evaluator'. The eval receipt lookup keys off that name — leaving this would take the quality gate green on zero surfaces. See the script header."
+            exit 1
+          fi
+          if [ -z "$COSMOS" ] || [ "$COSMOS" = "None" ]; then
+            echo "::warning::LOOM_COSMOS_ENDPOINT is empty on the job — every eval mode will honest-gate (nothing to persist) and runs will produce a receipt with zero surfaces."
+          fi
+          echo "::notice::$JOB_NAME rolled to $IMAGE (built from ${GITHUB_SHA}). Next scheduled execution picks it up; copilot-quality-evals.yml starts one on demand."

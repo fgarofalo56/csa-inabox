@@ -117,9 +117,9 @@ jobs:
           JOB=loom-copilot-evaluator
           if ! az containerapp job show -g "$RG" -n "$JOB" >/dev/null 2>&1; then
             # G2-honest gate, not a red X: the svc-copilot-evaluator gate names
-            # the bicep module that deploys it. Nightly runs surface this as a
+            # the workflow that resolves it. Nightly runs surface this as a
             # warning until the job exists.
-            echo "::warning::copilot-evaluator job ($JOB) not found in $RG - svc-copilot-evaluator gate unresolved. Deploy platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep and build its image with scripts/csa-loom/deploy-copilot-evaluator-job.sh. Skipping the eval run."
+            echo "::warning::copilot-evaluator job ($JOB) not found in $RG - svc-copilot-evaluator gate unresolved. Resolve it by dispatching the deploy-copilot-evaluator workflow (gh workflow run deploy-copilot-evaluator.yml --ref main -f region=$AZURE_LOCATION), which builds the image and creates/refreshes the job; infra module platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep. Skipping the eval run."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -342,7 +342,9 @@ jobs:
 
             The `loom-copilot-evaluator` Container App Job is not deployed in this
             estate, so no eval run was executed for this corpus change
-            (`svc-copilot-evaluator` gate). Deploy
-            `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep`
-            and build its image with `scripts/csa-loom/deploy-copilot-evaluator-job.sh`,
-            then re-run the workflow.
+            (`svc-copilot-evaluator` gate). Dispatch the
+            [`deploy-copilot-evaluator`](../actions/workflows/deploy-copilot-evaluator.yml)
+            workflow — `gh workflow run deploy-copilot-evaluator.yml --ref main` —
+            which builds the image and creates/refreshes the job (infra module:
+            `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep`),
+            then re-run this workflow.
