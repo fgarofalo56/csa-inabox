@@ -19,6 +19,14 @@
  *                            cap contract the gate treats null as NO-CHANGE —
  *                            never a regression, never a fabricated pass.
  *   passRate          0..1  deterministic verdict (+ grounding>=4 when judged)
+ *   questions         int   rows that produced a score. ZERO means the surface
+ *                            was NOT MEASURED (every eval-probe call failed) —
+ *                            the evaluator rolls an empty result set up as a
+ *                            hard 0.00, so the gate must NOT read that as a
+ *                            retrieval result. Issue #2798. null = a legacy
+ *                            artifact that never carried the count.
+ *   rowsAttempted     int   golden rows the surface tried (#2798, optional)
+ *   probeErrors       map   probe failures by HTTP status (#2798, optional)
  *
  * Delta convention: EVAL_REGRESSION_DELTA is in POINTS. Rate metrics compare in
  * percentage points (0.05 = 5 points). groundingAvg maps its 4-wide 1..5 scale
@@ -56,7 +64,11 @@ export function normalizeRuns(json) {
   const fromDoc = (d) => ({
     surface: d.surface,
     startedAt: d.startedAt,
-    questions: d.totals?.questions ?? d.questions ?? 0,
+    // null (not 0) when the field is ABSENT — a legacy doc that never carried a
+    // count must not be mistaken for a run that measured nothing (#2798).
+    questions: numOrNull(d.totals?.questions ?? d.questions),
+    rowsAttempted: numOrNull(d.totals?.rowsAttempted ?? d.rowsAttempted),
+    probeErrors: d.totals?.probeErrors ?? d.probeErrors ?? null,
     retrievalHitRate: numOrNull(d.totals?.retrievalHitRate ?? d.retrievalHitRate),
     groundingAvg: numOrNull(d.totals?.groundingAvg ?? d.groundingAvg),
     passRate: numOrNull(d.totals?.passRate ?? d.passRate),
@@ -144,6 +156,32 @@ export function evaluateGate(current, floorsDoc, opts = {}) {
       rows.push(row);
       continue;
     }
+    // A surface PRESENT in the artifact but with zero scored questions was not
+    // measured either — the evaluator rolls an empty result set up as a hard
+    // `retrievalHitRate: 0 / passRate: 0` (evaluator-core.rollupRun). Scoring
+    // that against a floor states a fact about product quality that this run
+    // never established: issue #2798 reported "retrieval returning NOTHING" on
+    // four surfaces that had in truth run ZERO questions apiece, because every
+    // probe call failed. Same policy as the absent case above, and as the
+    // whole-artifact case in check-eval-regression.mjs ("a pipeline problem,
+    // not a quality regression") — it is NOT a licence to pass: the run is
+    // still reported, and --strict-missing (nightly) still fails it.
+    if (cur.questions === 0) {
+      row.status = strictMissing ? 'fail' : 'missing';
+      row.notMeasured = true;
+      const attempted = Number.isFinite(cur.rowsAttempted) ? cur.rowsAttempted : null;
+      const errs =
+        cur.probeErrors && Object.keys(cur.probeErrors).length
+          ? ` eval-probe failures by status: ${JSON.stringify(cur.probeErrors)}.`
+          : ' The run receipt carries no probe-error detail (evaluator predates #2798).';
+      const msg =
+        `${surface}: ZERO questions scored${attempted !== null ? ` of ${attempted} golden row(s)` : ''} — ` +
+        `this surface was NOT measured, so its 0.00 is not a retrieval result and its floors were NOT evaluated.${errs}`;
+      if (strictMissing) failures.push(msg);
+      else warnings.push(`${msg} — partial run tolerated (pass --strict-missing on full runs)`);
+      rows.push(row);
+      continue;
+    }
     if (!floor) {
       row.status = 'no-floor';
       notes.push(`${surface}: no floor yet — add one via the ratchet once runs accumulate`);
@@ -223,10 +261,17 @@ export function renderMarkdown(report, meta = {}) {
       if (m.verdict === 'below-floor') s += ` **< floor ${metricDef.display(m.floor)}**`;
       return s;
     };
-    const q = row.status === 'missing' ? '—' : (cellQuestions(row) ?? '—');
+    // Not scored in this run (absent, or present with zero questions — #2798).
+    // NEVER print a rate for these: a rendered "0.00" is what got four
+    // never-measured surfaces triaged as a retrieval outage.
+    const unscored = row.status === 'missing' || row.notMeasured;
+    const label = row.notMeasured ? 'not measured' : 'not run';
+    const q = unscored
+      ? (Number.isFinite(row.rowsAttempted) ? `0/${row.rowsAttempted}` : '—')
+      : (cellQuestions(row) ?? '—');
     lines.push(
-      `| ${row.surface} | ${q} | ${row.status === 'missing' ? 'not run' : cell('retrievalHitRate')} | ` +
-      `${row.status === 'missing' ? '—' : cell('groundingAvg')} | ${row.status === 'missing' ? '—' : cell('passRate')} | ` +
+      `| ${row.surface} | ${q} | ${unscored ? label : cell('retrievalHitRate')} | ` +
+      `${unscored ? '—' : cell('groundingAvg')} | ${unscored ? '—' : cell('passRate')} | ` +
       `${icon[row.status] ?? row.status} ${row.status} |`,
     );
   }
@@ -254,6 +299,7 @@ export function attachQuestions(report, current) {
   for (const row of report.rows) {
     const cur = current.get(row.surface);
     if (cur && Number.isFinite(cur.questions)) row.questions = cur.questions;
+    if (cur && Number.isFinite(cur.rowsAttempted)) row.rowsAttempted = cur.rowsAttempted;
   }
   return report;
 }
@@ -286,9 +332,19 @@ export function ratchetFloors(floorsDoc, observations, opts = {}) {
   const changes = [];
   const skipped = [];
 
-  for (const [surface, runs] of observations) {
+  for (const [surface, allRuns] of observations) {
+    // Drop never-measured runs BEFORE the streak count (#2798): such a run
+    // rolls up as retrievalHitRate 0, which would become `observedMin` and pin
+    // the proposal below every existing floor — one unmeasured run would
+    // silently block this surface's floor from EVER ratcheting, while looking
+    // like ordinary "no sustained gain".
+    const runs = Array.isArray(allRuns) ? allRuns.filter((r) => r?.questions !== 0) : allRuns;
+    const dropped = Array.isArray(allRuns) ? allRuns.length - runs.length : 0;
     if (!Array.isArray(runs) || runs.length < minRuns) {
-      skipped.push(`${surface}: only ${runs?.length ?? 0} run(s) observed (need >= ${minRuns} for a sustained streak)`);
+      skipped.push(
+        `${surface}: only ${runs?.length ?? 0} run(s) observed (need >= ${minRuns} for a sustained streak)` +
+        (dropped > 0 ? ` — ${dropped} run(s) ignored: zero questions scored (not measured)` : ''),
+      );
       continue;
     }
     const floor = next.floors[surface] ?? {};

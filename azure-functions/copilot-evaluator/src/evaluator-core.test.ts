@@ -219,6 +219,32 @@ describe('computePass + rollupRun', () => {
     expect(rollupRun([])).toMatchObject({ questions: 0, groundingAvg: null, answerAvg: null });
   });
 
+  // Catches the #2798 observability gap, the same shape as #2585's `backends`
+  // below: rows whose eval-probe call failed were dropped silently, so a
+  // surface whose EVERY probe failed rolled up as `questions: 0,
+  // retrievalHitRate: 0` — a hard zero indistinguishable from "retrieval found
+  // nothing", which is exactly how it was triaged. The rollup must carry what
+  // it FAILED to measure, not just what it measured.
+  it('carries rowsAttempted + probeErrors so a not-measured run cannot pose as a 0.00', () => {
+    const t = rollupRun([], { attempted: 15, errors: { 429: 14, 0: 1 } });
+    expect(t.questions).toBe(0);
+    expect(t.rowsAttempted).toBe(15);
+    expect(t.probeErrors).toEqual({ 429: 14, 0: 1 });
+  });
+  it('reports probe failures on a PARTIALLY measured run too', () => {
+    const t = rollupRun([{ ...base, questionId: 'q1' }], { attempted: 15, errors: { 429: 14 } });
+    expect(t.questions).toBe(1);
+    expect(t.rowsAttempted).toBe(15);
+    expect(t.probeErrors).toEqual({ 429: 14 });
+  });
+  it('omits both fields when no probe info is supplied (legacy shape preserved)', () => {
+    const t = rollupRun([{ ...base }]);
+    expect(t).not.toHaveProperty('rowsAttempted');
+    expect(t).not.toHaveProperty('probeErrors');
+    // a clean run reports rowsAttempted but no error map
+    expect(rollupRun([{ ...base }], { attempted: 1, errors: {} })).not.toHaveProperty('probeErrors');
+  });
+
   // Catches the #2585 observability gap: `backend` was recorded on every
   // per-question doc but never rolled up, so the CI receipt could not say which
   // retrieval backend served a run and the triage had to infer it. A rollup
