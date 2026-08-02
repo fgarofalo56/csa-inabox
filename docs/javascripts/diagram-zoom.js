@@ -11,8 +11,8 @@
  * each Mermaid diagram into a *closed* shadow root on the .mermaid
  * div, which means querySelector("svg") from light DOM returns null.
  * We work around that by recovering the original ``` mermaid source
- * from the cached page HTML and asking mermaid.render() for a fresh
- * SVG to display in the modal.
+ * from the cached page HTML and handing it to mermaid.run(), which
+ * renders a fresh SVG into a host element we own inside the modal.
  *
  * Depends on the global `svgPanZoom` (CDN) and `window.mermaid`
  * (Material lazy-loads mermaid@11 when any pre.mermaid is on a page).
@@ -103,7 +103,6 @@
   }
 
   let activeInstance = null;
-  let renderSeq = 0;
 
   function destroyActivePanZoom() {
     if (activeInstance && typeof activeInstance.destroy === "function") {
@@ -157,29 +156,48 @@
       stage.innerHTML = '<div class="diagram-zoom-loading">Could not recover diagram source.</div>';
       return;
     }
-    if (!window.mermaid || typeof window.mermaid.render !== "function") {
+    if (!window.mermaid || typeof window.mermaid.run !== "function") {
       stage.innerHTML = '<div class="diagram-zoom-loading">Mermaid library not loaded.</div>';
       return;
     }
 
-    const id = `diagram-zoom-svg-${++renderSeq}`;
-    let svgMarkup;
+    // Hand the diagram source to Mermaid as TEXT and let Mermaid own both the
+    // rendering and the injection: mermaid.run() replaces the host element's
+    // content with the SVG it built.
+    //
+    // `source` is page text (the ``` mermaid block), so assigning it with
+    // textContent — never innerHTML — is what makes this safe: character data
+    // can never be reinterpreted as markup. This function used to build the
+    // SVG itself via mermaid.render() and then assign that string to
+    // stage.innerHTML, which is the DOM-text-to-HTML flow CodeQL flagged as
+    // js/xss-through-dom (alert #320, source: the code.textContent read in
+    // loadPageMermaidSources).
+    //
+    // Sanitising the finished SVG here instead was evaluated and rejected:
+    // DOMPurify unconditionally drops <foreignObject> children (as of 3.2.7 its
+    // HTML-integration-point set is ["annotation-xml"] only, with no option to
+    // extend it), and <foreignObject> is where Mermaid puts every node and edge
+    // label — so that route renders every diagram label-less. Sanitisation
+    // therefore stays where it belongs: inside Mermaid, whose securityLevel
+    // ("strict" by default) sanitises the diagram it emits. That is the exact
+    // same pipeline that renders the inline diagram on the page, so the modal
+    // trusts nothing the page itself does not already trust.
+    const host = document.createElement("div");
+    host.className = "diagram-zoom-render";
+    host.textContent = source;
+    stage.replaceChildren(host);
+
     try {
-      const result = await window.mermaid.render(id, source);
-      svgMarkup = result && result.svg;
+      await window.mermaid.run({ nodes: [host], suppressErrors: true });
     } catch (e) {
-      console.warn("[diagram-zoom] mermaid.render failed", e);
+      console.warn("[diagram-zoom] mermaid.run failed", e);
+    }
+
+    const svgEl = host.querySelector("svg");
+    if (!svgEl) {
       stage.innerHTML = '<div class="diagram-zoom-loading">Failed to render diagram.</div>';
       return;
     }
-    if (!svgMarkup) {
-      stage.innerHTML = '<div class="diagram-zoom-loading">Empty render output.</div>';
-      return;
-    }
-
-    stage.innerHTML = svgMarkup;
-    const svgEl = stage.querySelector("svg");
-    if (!svgEl) return;
     svgEl.removeAttribute("style");
     svgEl.setAttribute("width", "100%");
     svgEl.setAttribute("height", "100%");

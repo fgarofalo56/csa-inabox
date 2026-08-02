@@ -153,6 +153,14 @@ body.diagram-zoom-open {
   cursor: grabbing;
 }
 
+/* Host element mermaid.run() renders the SVG into. It must fill the stage so
+   the `height: 100%` below resolves against the stage box exactly as it did
+   when the SVG was a direct child of .diagram-zoom-stage. */
+.diagram-zoom-render {
+  position: absolute;
+  inset: 0;
+}
+
 .diagram-zoom-stage svg {
   display: block;
   width: 100%;
