@@ -24,12 +24,13 @@ import {
   type AasRefreshRequest,
 } from '@/lib/azure/aas-server-client';
 import { usingAasAsync } from '../../_lib/bi-backend';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function receipt(label: string, body: unknown): void {
-  try { console.info(`[${label}] receipt: ${JSON.stringify(body).slice(0, 300)}`); } catch { /* noop */ }
+  try { console.info(`[${logSafe(label)}] receipt: ${JSON.stringify(body).slice(0, 300)}`); } catch { /* noop */ }
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

@@ -103,6 +103,7 @@ import {
 } from '@/lib/azure/eventgrid-client';
 import { xmlaEndpointFromWorkspace } from '@/lib/azure/cloud-endpoints';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { logSafe } from '@/lib/util/log-safe';
 import {
   columnarCacheBackendSelected,
   columnarCacheQuery,
@@ -218,7 +219,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     } catch (e: any) {
       // Power BI query failed (model unloaded, capacity paused, etc.) → fall
       // through transparently to Serverless. Log for diagnostics only.
-      console.warn('[direct-lake] warm-cache DAX query failed, falling back to Serverless:', e?.message);
+      console.warn('[direct-lake] warm-cache DAX query failed, falling back to Serverless:', logSafe(e?.message));
     }
   }
 

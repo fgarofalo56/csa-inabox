@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { logSafe } from '@/lib/util/log-safe'
 
 /**
  * Shared BFF response envelope for CSA Loom API routes.
@@ -58,8 +59,18 @@ export function apiServerError(
   code = 'internal_error',
 ) {
   const detail = err instanceof Error ? (err.stack || err.message) : String(err)
+  // logSafe, NOT raw: this is the 500 path for EVERY route, and an Error's
+  // message routinely embeds request-derived text ("unknown item type <x>",
+  // a driver echoing a supplied identifier). A `\n` in that text forges a
+  // second, attacker-authored log record (CodeQL js/log-injection #587).
+  //
+  // The stack is flattened to one bounded record on purpose. Container Apps
+  // ships stdout to Log Analytics LINE BY LINE, so a multi-line stack was
+  // already being split across unrelated records — which is both the forging
+  // vector and the reason stacks were hard to read. 4000 chars keeps a full
+  // stack; it is a framing fix, not a redaction.
   // eslint-disable-next-line no-console
-  console.error('[api] server error:', detail)
+  console.error('[api] server error:', logSafe(detail, 4000))
   return apiError(publicMessage, 500, { code })
 }
 
@@ -81,7 +92,10 @@ export function apiServerError(
  */
 export function apiHonestError(err: unknown, status = 500, publicMessage?: string) {
   const msg = publicMessage ?? (err instanceof Error ? err.message : String(err))
+  // Same class as apiServerError above: an honest-gate message is still built
+  // from an Error, so it can still carry a newline. CodeQL flagged only the
+  // sibling — this one is the identical shape and is fixed with it.
   // eslint-disable-next-line no-console
-  console.error('[api] honest-gate error:', msg)
+  console.error('[api] honest-gate error:', logSafe(msg, 1000))
   return apiError(msg, status)
 }

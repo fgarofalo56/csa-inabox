@@ -50,6 +50,7 @@ import {
 import { assertFabricFamilyAvailable } from '@/lib/azure/cloud-endpoints';
 import { getDomainsStore } from '@/lib/azure/domains-client';
 import { apiServerError, apiHonestError } from '@/lib/api/respond';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -339,7 +340,7 @@ export async function GET(request: Request) {
           // workspace so the envelope carries an honest degraded indicator
           // instead of silently rendering a partial/empty catalog (a Cosmos
           // outage must not look like "no items" — no-vaporware.md).
-          console.warn(`[onelake/catalog] workspace ${wsId} item read failed: ${e?.message || e}`);
+          console.warn(`[onelake/catalog] workspace ${logSafe(wsId)} item read failed: ${logSafe(e?.message || e)}`);
           failedWorkspaceIds.push(wsId);
           return [] as any[];
         }

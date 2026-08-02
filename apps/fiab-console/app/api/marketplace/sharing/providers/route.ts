@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listProviders, listProviderShares, createProvider } from '@/lib/azure/unity-catalog-client';
 import { resolveShareHost, sharingErrorResponse } from '../_lib';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
         credentialSecret = saved.name;
       }
     } catch (e) {
-      console.warn(`[sharing] provider '${name}' added but credential not stored in KV:`, (e as Error)?.message);
+      console.warn(`[sharing] provider '${logSafe(name)}' added but credential not stored in KV:`, logSafe((e as Error)?.message));
     }
     return NextResponse.json({ ok: true, host, provider, credentialSecret });
   } catch (e) {

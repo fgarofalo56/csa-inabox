@@ -39,6 +39,7 @@ import { createLivySessionAsync } from '@/lib/azure/synapse-dev-client';
 import { defaultSparkPool } from '@/lib/azure/synapse-livy-client';
 import { buildAbfssUri, buildMaintenancePySpark, validateMaintenanceRequest } from '@/lib/azure/delta-maintenance';
 import { icebergMetadataLocation } from '@/lib/azure/iceberg-metadata';
+import { logSafe } from '@/lib/util/log-safe';
 import {
   ICEBERG_CATALOG_GATE_ID,
   icebergCatalogConfigGate,
@@ -63,12 +64,17 @@ export const dynamic = 'force-dynamic';
 
 const CONTAINER_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 
+/**
+ * Flatten an error for a user-facing status string. Strips markup, collapses
+ * whitespace, then routes through the SHARED `logSafe` for control-character
+ * removal + bounding — this was the third separate implementation of that idea
+ * in the repo; now there is one.
+ */
 function sanitize(e: unknown): string {
-  return (e instanceof Error ? e.message : String(e))
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 600);
+  return logSafe(
+    (e instanceof Error ? e.message : String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '),
+    600,
+  );
 }
 
 async function loadDoc(tenantId: string, container: string): Promise<LakehouseInteropDoc | null> {

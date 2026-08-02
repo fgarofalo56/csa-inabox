@@ -51,6 +51,7 @@
  */
 
 import { FetchTimeoutError } from './fetch-with-timeout';
+import { logSafe } from '@/lib/util/log-safe';
 
 /** Why a paged walk stopped short of its final page. */
 export type PagingTruncation = 'pages' | 'time';
@@ -171,7 +172,15 @@ export class PagingBudget {
   private truncation: PagingTruncation | null = null;
 
   constructor(label: string, opts: PagingBudgetOptions = {}) {
-    this.label = label;
+    // Sanitize ONCE, at the chokepoint. Callers build this label by
+    // interpolating request-derived values — `gate-options ${id}` (a route
+    // param), `aml ${label}`, `aml-environments ${path}` — and it is then
+    // emitted by warnIfTruncated() via console.warn and embedded in the
+    // PagingDeadlineError message. A `\n` in the route param forged a second
+    // log record (CodeQL js/log-injection #718, 3 flows). Sanitizing here
+    // covers every present and future consumer of `this.label`, rather than
+    // each individual log site.
+    this.label = logSafe(label, 120);
     this.maxPages =
       opts.maxPages !== undefined && Number.isFinite(opts.maxPages) && opts.maxPages > 0
         ? Math.floor(opts.maxPages)

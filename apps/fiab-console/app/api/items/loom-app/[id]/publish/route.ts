@@ -19,6 +19,7 @@ import { withSession } from '@/lib/api/route-toolkit';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { coerceDefinition, stampPublish, stampUnpublish, publishBlocker, appConsumerUrl } from '@/lib/editors/loom-app-model';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ export const POST = withSession(async (req: NextRequest, { session, params }) =>
     const url = appConsumerUrl(id);
     try {
       // eslint-disable-next-line no-console
-      console.info(`[loom-app/publish.POST] receipt: id=${id} version=${version} items=${def.content.length} audiences=${def.audiences.length} url=${url}`);
+      console.info(`[loom-app/publish.POST] receipt: id=${logSafe(id)} version=${logSafe(version)} items=${def.content.length} audiences=${def.audiences.length} url=${logSafe(url)}`);
     } catch { /* noop */ }
     return apiOk({ published: true, version, publishedAt: now, url });
   } catch (e) {

@@ -173,6 +173,33 @@ const TOUCH_EXEMPT = new Map([
   // catalog/register turned an honest 501 into a 500 and was caught only by an
   // existing test.
   ['apps/fiab-console/app/api/admin/mcp-servers/deploy/route.ts', '#2656: codemod reports "POST: getSession() without the exact 401 guard" — migrate in a dedicated admin-family PR'],
+  // The log-injection class closure wrapped request-derived values reaching
+  // console.* in logSafe()/logSafeError() — ONE expression per site, no control
+  // flow and no auth change. It is the same shape as #2768's exemptions above,
+  // widened to the whole route surface so the class closes rather than another
+  // 2-of-6 subset.
+  //
+  // THE CODEMOD DECLINES THESE. Sampled before claiming the exemption:
+  //   --file=…/search/items/route.ts        -> "0 handlers across 0 files"
+  //   --file=…/workspaces/[id]/route.ts     -> "0 handlers across 0 files"
+  //   --file=…/onelake/catalog/route.ts     -> "0 handlers across 0 files"
+  // Their prologues are not the exact getSession()+401 shape withSession
+  // replaces, so there is nothing mechanical to rewrite. Hand-migrating 13 auth
+  // prologues inside a logging-sanitization PR is unrelated churn carrying real
+  // 401/403 regression risk — the precise trade-off the entries above record.
+  ['apps/fiab-console/app/api/apps/supercharge/seed/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/items/rayfin-app/[id]/render/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/items/rayfin-app/preview/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/items/semantic-model/[id]/direct-lake/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/items/semantic-model/[id]/refresh/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/marketplace/sharing/providers/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/onelake/catalog/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/search/items/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/setup/wire-existing/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/synapse/notebooks/[name]/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/workspaces/[id]/items/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/workspaces/[id]/route.ts', 'log-injection: logSafe() one-liner; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/workspaces/[id]/task-flows/[flowId]/run/route.ts', 'log-injection: logSafe() one-liner + deleted a duplicate local sanitizer; codemod reports 0 handlers'],
   // N9 wired semantic-contract (VQR-first + refuse) evaluation into this streaming
   // data-agent chat hot-path; it returns a custom SSE stream + bespoke NextResponse
   // error envelopes, so withSession's try/catch→apiServerError wrapper would break

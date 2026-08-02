@@ -14,6 +14,7 @@ import { getSession } from '@/lib/auth/session';
 import { workspacesContainer, itemsContainer, searchHistoryContainer } from '@/lib/azure/cosmos-client';
 import { isSearchConfigured, searchLoomItems } from '@/lib/azure/loom-search';
 import crypto from 'node:crypto';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
       }
     } catch (e: any) {
       // Search hit but errored — fall through to Cosmos as a safety net.
-      console.warn('AI Search query failed; falling back to Cosmos:', e?.message);
+      console.warn('AI Search query failed; falling back to Cosmos:', logSafe(e?.message));
     }
   }
 

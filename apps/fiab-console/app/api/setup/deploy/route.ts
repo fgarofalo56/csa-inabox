@@ -23,6 +23,7 @@ import {
 } from '@/lib/setup/user-arm-deploy';
 import { fetchWithTimeout, withDeadline } from '@/lib/azure/fetch-with-timeout';
 import { deployWorkflowForBoundary } from '@/lib/setup/deploy-workflows';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -255,7 +256,7 @@ export async function POST(req: NextRequest) {
   const work = handleDeploy(req).catch((e: any) => {
     // A thrown handler would otherwise become a Next 500 HTML page — keep the
     // contract: this route ALWAYS answers structured JSON.
-    console.error('[setup/deploy] handler threw:', e);
+    console.error('[setup/deploy] handler threw:', logSafeError(e));
     return NextResponse.json(
       { ok: false, error: `Deploy submit failed: ${e?.message ?? String(e)}` },
       { status: 500 },
@@ -704,7 +705,7 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
     // Any other ARM error is NON-FATAL — log and fall through (null) to the
     // orchestrator / dispatch / copy-paste tiers so the operator still gets a path.
     console.error(
-      `[setup/deploy] user-delegated ARM submit failed (${submitted.status ?? 'n/a'}); falling back: ${submitted.error}`,
+      `[setup/deploy] user-delegated ARM submit failed (${logSafe(submitted.status ?? 'n/a')}); falling back: ${logSafe(submitted.error)}`,
     );
     return null;
   };
@@ -790,9 +791,9 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
           { status: 403 },
         );
       }
-      console.error(`[setup/deploy] orchestrator returned ${orchRes.status}; falling back.`);
+      console.error(`[setup/deploy] orchestrator returned ${logSafe(orchRes.status)}; falling back.`);
     } catch (e) {
-      console.error('[setup/deploy] orchestrator call failed; falling back:', (e as Error).message);
+      console.error('[setup/deploy] orchestrator call failed; falling back:', logSafe((e as Error).message));
     }
   }
 
@@ -880,9 +881,9 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
           { status: 202 },
         );
       }
-      console.error(`[setup/deploy] GitHub workflow dispatch failed (${dispatchRes.status})`);
+      console.error(`[setup/deploy] GitHub workflow dispatch failed (${logSafe(dispatchRes.status)})`);
     } catch (e) {
-      console.error('[setup/deploy] GitHub workflow dispatch exception:', (e as Error).message);
+      console.error('[setup/deploy] GitHub workflow dispatch exception:', logSafe((e as Error).message));
     }
   }
 

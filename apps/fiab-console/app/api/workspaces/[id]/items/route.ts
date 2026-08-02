@@ -7,6 +7,7 @@ import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError, apiServerError } from '@/lib/api/respond';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -180,7 +181,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         if (pairedResource) void upsertLoomDoc(docForItem(pairedResource, session.claims.oid));
       } catch (pairErr) {
         // eslint-disable-next-line no-console
-        console.warn('[items.POST] failed to auto-create paired SQL endpoint', pairErr);
+        console.warn('[items.POST] failed to auto-create paired SQL endpoint', logSafe(pairErr));
       }
     }
 

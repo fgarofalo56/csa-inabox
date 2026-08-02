@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { runSuperchargeSeed } from '@/lib/apps/supercharge-seed';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,8 +48,8 @@ export async function POST(req: NextRequest) {
   // Fire the seed in the background; the Container App Node process stays alive
   // across the response so the Livy session cold-start + statement complete.
   void runSuperchargeSeed(pool)
-    .then((r) => { if (!r.ok) console.error('[supercharge-seed]', workspaceId, r.status, r.error || r.gate); })
-    .catch((e) => console.error('[supercharge-seed] threw', workspaceId, e?.message || e));
+    .then((r) => { if (!r.ok) console.error('[supercharge-seed]', logSafe(workspaceId), logSafe(r.status), logSafe(r.error || r.gate)); })
+    .catch((e) => console.error('[supercharge-seed] threw', logSafe(workspaceId), logSafe(e?.message || e)));
 
   return NextResponse.json(
     { ok: true, status: 'seeding', pool, note: 'Sample-data seed started on the Spark pool; Bronze notebooks can ingest once it completes (~1-3 min after cold-start).' },

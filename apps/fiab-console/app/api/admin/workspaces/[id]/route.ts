@@ -35,6 +35,7 @@ import {
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { Workspace, WorkspaceItem, WorkspaceLicenseMode } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -192,7 +193,7 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
     if (ws.workspaceIdentity?.status === 'provisioned' || workspaceIdentityProvisioningEnabled()) {
       identityCascade = await cascadeDeleteWorkspaceIdentity(ws.id, ws.workspaceIdentity?.principalId);
       if (identityCascade.status === 'failed') {
-        console.warn(`[admin-workspace-delete] identity cascade failed for ${ws.id}: ${identityCascade.error}`);
+        console.warn(`[admin-workspace-delete] identity cascade failed for ${logSafe(ws.id)}: ${logSafe(identityCascade.error)}`);
       }
     }
     const c = await workspacesContainer();

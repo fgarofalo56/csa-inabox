@@ -74,6 +74,7 @@ import { checkRate } from '@/lib/azure/rate-limiter';
 import { authenticateRecipient, assertShareAccess, sharingOwnerTenantId } from '@/lib/sharing/recipient-auth';
 import { listShares, getShare, loomSharingFetch, LoomSharingNotConfiguredError } from '@/lib/sharing/store';
 import { randomId } from '@/lib/util/random-id';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 import {
   toProtocolShare,
   toProtocolSchemas,
@@ -340,7 +341,7 @@ async function authorize(
       if (auth.operatorHint) {
         // Operator remediation is LOGGED, never returned: an anonymous caller
         // must not be able to read this estate's configuration state.
-        console.warn(`[delta-sharing] ${auth.status} ${auth.reason}: ${auth.operatorHint}`);
+        console.warn(`[delta-sharing] ${logSafe(auth.status)} ${logSafe(auth.reason)}: ${logSafe(auth.operatorHint)}`);
       }
     } else {
       // 403: authenticated, but not a registered recipient — the single most
@@ -535,10 +536,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ path?: stri
   } catch (e) {
     if (e instanceof LoomSharingNotConfiguredError) {
       // The remediation names bicep modules and env vars — log it, never return it.
-      console.warn(`[delta-sharing] not configured: ${e.message} — ${e.hint.followUp}`);
+      console.warn(`[delta-sharing] not configured: ${logSafe(e.message)} — ${logSafe(e.hint.followUp)}`);
       return protocolError(503, 'UNAVAILABLE', 'Delta Sharing is unavailable in this deployment.');
     }
-    console.error('[delta-sharing] GET failed', e);
+    console.error('[delta-sharing] GET failed', logSafeError(e));
     return protocolError(500, 'INTERNAL_ERROR', 'The Delta Sharing endpoint failed to serve this request.');
   }
 }
@@ -556,10 +557,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ path?: str
     return protocolError(404, 'RESOURCE_DOES_NOT_EXIST', 'Unknown Delta Sharing resource.');
   } catch (e) {
     if (e instanceof LoomSharingNotConfiguredError) {
-      console.warn(`[delta-sharing] not configured: ${e.message} — ${e.hint.followUp}`);
+      console.warn(`[delta-sharing] not configured: ${logSafe(e.message)} — ${logSafe(e.hint.followUp)}`);
       return protocolError(503, 'UNAVAILABLE', 'Delta Sharing is unavailable in this deployment.');
     }
-    console.error('[delta-sharing] POST failed', e);
+    console.error('[delta-sharing] POST failed', logSafeError(e));
     return protocolError(500, 'INTERNAL_ERROR', 'The Delta Sharing endpoint failed to serve this request.');
   }
 }

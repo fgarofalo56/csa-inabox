@@ -38,6 +38,7 @@ import {
   type MigrateConnection,
 } from '@/lib/migrate/migrate-client';
 import { assessInventory, type MigrationSourceType } from '@/lib/migrate/assessment';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,7 +58,7 @@ async function writeAuditRow(row: Record<string, unknown>): Promise<void> {
     await al.items.create({ id: crypto.randomUUID(), ...row });
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.warn('[migrate] audit row write failed:', (e as Error)?.message || e);
+    console.warn('[migrate] audit row write failed:', logSafe((e as Error)?.message || e));
   }
 }
 

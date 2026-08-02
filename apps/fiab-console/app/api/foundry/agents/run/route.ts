@@ -38,6 +38,7 @@ import {
 import { recallAgentMemories, writeAgentMemory } from '@/lib/azure/agent-memory-service';
 import type { AgentMemoryActor } from '@/lib/copilot/agent-memory-core';
 import { withDeadline } from '@/lib/azure/fetch-with-timeout';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,14 +78,14 @@ const learnBudgetMs = () => budgetMs('LOOM_AGENT_MEMORY_LEARN_BUDGET_MS', 5_000)
 async function bestEffortMemory<T>(label: string, ms: number, work: () => Promise<T>): Promise<T | null> {
   let p: Promise<T>;
   try { p = work(); } catch (e) {
-    console.warn(`[foundry/agents/run] ${label} failed synchronously; continuing without it:`, e);
+    console.warn(`[foundry/agents/run] ${logSafe(label)} failed synchronously; continuing without it:`, logSafeError(e));
     return null;
   }
   p.catch(() => { /* handled here so a post-deadline failure never goes unhandled */ });
   try {
     return await withDeadline(p, ms, label);
   } catch (e) {
-    console.warn(`[foundry/agents/run] ${label} unavailable within ${ms}ms; continuing without it:`, e);
+    console.warn(`[foundry/agents/run] ${logSafe(label)} unavailable within ${logSafe(ms)}ms; continuing without it:`, logSafeError(e));
     return null;
   }
 }

@@ -29,6 +29,7 @@ import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import { RUM_FLAG_ID, RUM_MAX_BODY_BYTES, parseRumBatch } from '@/lib/telemetry/rum-shared';
 import { isRumEnvEnabled, postRumBatch, rumSampleRate } from '@/lib/telemetry/rum-ingest';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,7 +68,7 @@ export const POST = withSession(async (req: NextRequest, { session }) => {
   } catch (e) {
     // Telemetry loss is NEVER a caller failure — log server-side, answer ok.
     // eslint-disable-next-line no-console
-    console.warn('[rum] forward to App Insights failed:', (e as Error)?.message || e);
+    console.warn('[rum] forward to App Insights failed:', logSafe((e as Error)?.message || e));
     return apiOk({ accepted: 0, forwarded: false });
   }
 });

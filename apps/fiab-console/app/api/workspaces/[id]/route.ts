@@ -13,6 +13,7 @@ import {
 import { resolveWorkspaceAccessByOid, type WorkspaceAccess } from '@/lib/auth/workspace-access';
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -153,7 +154,7 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     if (ws.workspaceIdentity?.status === 'provisioned' || workspaceIdentityProvisioningEnabled()) {
       identityCascade = await cascadeDeleteWorkspaceIdentity(ws.id, ws.workspaceIdentity?.principalId);
       if (identityCascade.status === 'failed') {
-        console.warn(`[workspace-delete] identity cascade failed for ${ws.id}: ${identityCascade.error}`);
+        console.warn(`[workspace-delete] identity cascade failed for ${logSafe(ws.id)}: ${logSafe(identityCascade.error)}`);
       }
     }
     const wsContainer = await workspacesContainer();
