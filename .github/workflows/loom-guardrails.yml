@@ -72,6 +72,8 @@ jobs:
         run: node scripts/ci/check-bicep-sync.mjs
       - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
         run: node scripts/ci/check-deploy-script-reachability.mjs
+      - name: afd-endpoint-discovery (no CDN endpoint addressed by a name CI never discovered — #2828)
+        run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
       - name: prp-freshness (loom-next-level FRESH0 — warn-only)
@@ -107,5 +109,5 @@ jobs:
       # sitting in the tree with a "Run: node --test …" comment and no CI lane
       # since it was written. A test nobody runs is the same class of defect as
       # a gate that measures nothing — it reads as coverage and enforces nothing.
-      - name: scripts/ci self-tests (roll-gate decisions, ratchet comment-stripping)
+      - name: scripts/ci self-tests (roll-gate decisions, ratchet comment-stripping, FD purge target)
         run: node --test scripts/ci/__tests__/*.test.mjs
