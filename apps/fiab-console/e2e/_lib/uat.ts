@@ -224,6 +224,20 @@ export async function captureFailures<T>(page: Page, fn: () => Promise<T>, opts:
   }
 }
 
+/**
+ * #2830 — the `loom:`-id 4xx assertion. Four defects in this family reached
+ * production, and every one was VISIBLE in a Playwright run beforehand: the
+ * capture log printed the 404 and no assertion looked at it.
+ *
+ *   404 GET /api/items/report/loom%3A8872fd18-…/pages?workspaceId=loom-native
+ *
+ * `captureFailures` already records these; the gap was that nothing FAILED on
+ * them. The predicate lives in a dependency-free sibling so it can be unit-
+ * tested (vitest excludes `e2e/`) — an unproven assertion is how this class
+ * survived — and is re-exported here so specs keep one import.
+ */
+export { loomIdFailures, assertNoLoomIdFailures } from './loom-id-failures';
+
 /** Write a tutorial markdown for a passed editor with screenshots + steps. */
 export interface TutorialStep {
   description: string;

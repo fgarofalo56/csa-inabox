@@ -36,16 +36,15 @@ import type {
 } from '@/lib/apps/content-bundles/types';
 import { computeRollups, type ComputedGoal } from '../scorecard/rollup';
 
-/** Prefix that marks a synthetic, Cosmos-backed (not-yet-in-PBI) entry. */
-export const LOOM_ID_PREFIX = 'loom:';
-
-export function isLoomContentId(id: string): boolean {
-  return typeof id === 'string' && id.startsWith(LOOM_ID_PREFIX);
-}
-
-export function cosmosIdFromLoomId(id: string): string {
-  return isLoomContentId(id) ? id.slice(LOOM_ID_PREFIX.length) : id;
-}
+/**
+ * The `loom:` id vocabulary now lives in the dependency-free `loom-content-id`
+ * module (#2830) so the low-level Cosmos primitives — `_lib/item-crud.ts` and
+ * `lib/azure/tabular-eval-client.ts` — can resolve the prefix at their own
+ * chokepoint without importing this module's Cosmos/bundle/rollup dependencies.
+ * Re-exported here so every existing import site is unchanged.
+ */
+export { LOOM_ID_PREFIX, isLoomContentId, cosmosIdFromLoomId } from './loom-content-id';
+import { LOOM_ID_PREFIX } from './loom-content-id';
 
 /**
  * List tenant-owned items of `itemType` whose `state.content.kind === kind`.

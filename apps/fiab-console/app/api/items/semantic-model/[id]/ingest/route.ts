@@ -41,7 +41,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import {
   adfConfigGate,
@@ -65,7 +64,9 @@ import { aasConfigGate, postAasRefresh } from '@/lib/azure/aas-client';
 import { parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import { dfsUrl } from '@/lib/azure/cloud-endpoints';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { cosmosIdFromLoomId } from '../../../_lib/loom-content-id';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -157,11 +158,9 @@ function executeDataFlowActivity(dataFlowName: string) {
   };
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const { id } = await ctx.params;
+  const { id } = params;
   const short = id.slice(0, 8);
 
   // ----- ADF gate (Phase A always runs on ADF) -----
@@ -303,9 +302,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (workspaceId) {
       try {
         const items = await itemsContainer();
-        const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
+        // #2830 — the point read is `.item(<id>, <partition>)`, an exact-id
+        // lookup. A `loom:<cosmosItemId>` id would miss, `resource` would be
+        // undefined, and the run state would be dropped SILENTLY (the catch and
+        // the `if (resource)` both swallow it). `cosmosIdFromLoomId` is the
+        // identity for a plain id, so this is a no-op for today's caller and
+        // correct for any caller that threads the list form.
+        const cosmosId = cosmosIdFromLoomId(id);
+        const { resource } = await items.item(cosmosId, workspaceId).read<WorkspaceItem>();
         if (resource) {
-          await items.item(id, workspaceId).replace({
+          await items.item(cosmosId, workspaceId).replace({
             ...resource,
             state: {
               ...(resource.state || {}),
@@ -336,4 +342,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e), warnings: warnings.length ? warnings : undefined }, { status: 502 });
   }
-}
+});

@@ -33,7 +33,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   BASE, signIn, createWorkspace, createItem, cleanupWorkspaces,
-  captureFailures, recordVerdict,
+  captureFailures, recordVerdict, assertNoLoomIdFailures,
 } from './_lib/uat';
 
 // Publishing object types that carry a version timeline in the chrome. Chosen to
@@ -67,7 +67,7 @@ test.describe('publish-version', () => {
   for (const type of PUBLISHING_TYPES) {
     test(`version timeline + restore — ${type}`, async ({ page, context }) => {
       await signIn(context).catch(() => { /* storageState may already be set */ });
-      const { result } = await captureFailures(page, async () => {
+      const { result, networkErrors } = await captureFailures(page, async () => {
         // 1) Workspace + item.
         const wsId = await createWorkspace(page, `pv-${type}`);
         createdWorkspaces.push(wsId);
@@ -196,6 +196,12 @@ test.describe('publish-version', () => {
       });
       // captureFailures records screenshots/console on throw; surface a clear pass note.
       expect(result, `publish-version flow for ${type}`).toBeTruthy();
+      // #2830 — this run is where the report `…/pages` 404 on a `loom:` id was
+      // first SEEN, and it passed anyway because every assertion here looks at
+      // the version timeline. A `loom:` id only exists for an item that IS in
+      // Cosmos, so a 4xx on one is always a resolution defect. Asserted AFTER
+      // the flow assertion so a genuine flow failure still reports first.
+      assertNoLoomIdFailures(networkErrors, `the ${type} publish-version walk`);
     });
   }
 });
