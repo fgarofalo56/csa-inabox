@@ -58,7 +58,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   getRoles,
   setRoles,
@@ -73,6 +72,7 @@ import { dedicatedTarget, executeQuery as synapseExecute, type QueryResult } fro
 import { listRlsPolicies, sqlBracket, sqlString } from '@/lib/azure/synapse-permissions-client';
 import { executeStatement } from '@/lib/azure/databricks-client';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
+import { cosmosIdFromLoomId } from '../../../_lib/pbi-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   compileSynapse,
@@ -87,6 +87,7 @@ import {
   type SecurityRoleDef,
   type MetaPerm,
 } from '@/lib/azure/rls-compiler';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -206,13 +207,33 @@ function toEditorRole(r: SecurityRoleDef): AasRole {
 // projects only relationships+measures and would drop securityRoles on read).
 // The rest of `state` — including `state.model.relationships` / `.measures` — is
 // preserved.
+//
+// #2649 — THE `loom:` BUNDLE-TEMPLATE ID. A bundle-installed model is listed
+// under the SYNTHETIC id `loom:<cosmosItemId>` (`_lib/pbi-content-fallback.ts`),
+// and the editor threads whatever the list route handed it straight into every
+// sub-route. `loadOwnedItem` queries Cosmos `WHERE c.id = @id`, so the prefixed
+// form matches NOTHING and the Azure-native branch 404'd on an item that is
+// sitting right there — the last failure in the live click-walk:
+//
+//   404 GET /api/items/semantic-model/loom%3A9ebf823c-…/roles?workspaceId=…
+//
+// `cosmosIdFromLoomId` resolves it to the real Cosmos id (and is the IDENTITY
+// for any other id, so a live Power BI dataset id still passes through
+// untouched). Same treatment the sibling Loom-native sub-route `../synonyms`
+// already applies to the same `[id]` segment.
+//
+// This is a SERVE, not a skip: unlike `/refreshes` — Power BI-only history a
+// template genuinely cannot have — RLS/OLS roles ARE a Loom-native concept.
+// They live in `item.state.model.securityRoles` on exactly this Cosmos item and
+// compile to a Synapse SECURITY POLICY / Databricks ROW FILTER, so skipping
+// would leave the Security tab dead for every bundle-installed model.
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function readSecurityRoles(
   id: string,
   tenantId: string,
 ): Promise<{ item: WorkspaceItem | null; roles: SecurityRoleDef[] }> {
-  const item = await loadOwnedItem(id, ITEM_TYPE, tenantId);
+  const item = await loadOwnedItem(cosmosIdFromLoomId(id), ITEM_TYPE, tenantId);
   if (!item) return { item: null, roles: [] };
   const model = (item.state as Record<string, unknown> | undefined)?.model as
     | { securityRoles?: unknown }
@@ -307,10 +328,8 @@ function validateRoles(roles: unknown): { error: string } | { roles: AasRole[] }
 // GET
 // ═════════════════════════════════════════════════════════════════════════════
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
   const backend = resolveRlsBackend();
 
   if (backend === 'none') {
@@ -349,16 +368,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     roles: roles.map(toEditorRole),
     ...(deployed !== undefined ? { deployed } : {}),
   });
-}
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PUT — persist (source of truth) then compile + deploy real DDL
 // ═════════════════════════════════════════════════════════════════════════════
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = (await ctx.params).id;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const id = params.id;
   const backend = resolveRlsBackend();
 
   if (backend === 'none') {
@@ -435,20 +452,18 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     warnings: artifact.warnings,
     summary: artifact.summary,
   });
-}
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // POST ?action=test — impersonate a UPN and return the FILTERED rows (receipt)
 // ═════════════════════════════════════════════════════════════════════════════
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const action = req.nextUrl.searchParams.get('action');
   if (action !== 'test') {
     return NextResponse.json({ ok: false, error: 'unsupported action (use ?action=test)' }, { status: 400 });
   }
-  const id = (await ctx.params).id;
+  const id = params.id;
   const backend = resolveRlsBackend();
 
   if (backend === 'none') {
@@ -554,4 +569,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
