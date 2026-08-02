@@ -102,3 +102,10 @@ jobs:
         run: bash scripts/ci/test-assert-acr-image-tags.sh
       - name: route-inventory (route taxonomy drift gate — WS-D D3)
         run: node scripts/ci/generate-route-inventory.mjs --check
+      # The scripts/ci self-tests. These existed but NOTHING RAN THEM: the
+      # roll-gate suite is new (#2819) and the insecure-randomness suite has been
+      # sitting in the tree with a "Run: node --test …" comment and no CI lane
+      # since it was written. A test nobody runs is the same class of defect as
+      # a gate that measures nothing — it reads as coverage and enforces nothing.
+      - name: scripts/ci self-tests (roll-gate decisions, ratchet comment-stripping)
+        run: node --test scripts/ci/__tests__/*.test.mjs
