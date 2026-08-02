@@ -260,10 +260,22 @@ properties:
           - { name: SESSION_SECRET,          secretRef: session-secret }
 YAML
 
-az containerapp job create -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" \
-  --yaml "$TMP_AZ" -o none 2>/dev/null \
-  || az containerapp job update -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" \
-       --yaml "$TMP_AZ" -o none
+# Create or update — branch on an explicit existence probe rather than
+# `create 2>/dev/null || update`. The old form discarded the create's stderr, so
+# a create that failed for a real reason surfaced only as the fallback's "job
+# does not exist" and the actual cause was gone. That is precisely how the
+# undeclared-secret defect (#1545 here, and the same defect left in
+# deploy-loom-verify-job.sh until #2816) stayed invisible. Only the `show` probe
+# swallows output, and its failure is not an error.
+if az containerapp job show -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" >/dev/null 2>&1; then
+  echo "[deploy-loom-uat-job] Updating existing loom-uat job..."
+  az containerapp job update -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" \
+    --yaml "$TMP_AZ" -o none
+else
+  echo "[deploy-loom-uat-job] Creating loom-uat job..."
+  az containerapp job create -n loom-uat -g "$ADMIN_RG" --subscription "$SUB" \
+    --yaml "$TMP_AZ" -o none
+fi
 rm -f "$TMP"
 
 # ---------------------------------------------------------------------------

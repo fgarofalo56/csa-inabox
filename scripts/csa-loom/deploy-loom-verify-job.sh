@@ -78,6 +78,19 @@ properties:
     registries:
       - server: ${ACR}
         identity: ${CONSOLE_UAMI_ID}
+    secrets:
+      # MUST be declared here, even though the `az containerapp job secret set`
+      # below immediately overwrites the value (on the update path it is written
+      # and replaced within two consecutive CLI calls; the job is Manual-trigger,
+      # so nothing can execute in between). ARM rejects a request whose env var
+      # carries a secretRef to a secret the payload does not define ("deployment
+      # error referencing unknown secret" — Learn, troubleshoot-deployment-errors).
+      # The identical omission in the loom-uat sibling made THAT job uncreatable
+      # until #1545: "the job YAML referenced secretRef: session-secret but never
+      # DEFINED it -> create failed -> the || job update also failed (job does not
+      # exist)". This script kept the same shape from #1533 and never got the fix.
+      - name: session-secret
+        value: "placeholder-overwritten-below"
   template:
     containers:
       - name: verify
@@ -93,8 +106,19 @@ properties:
           - { name: SESSION_SECRET, secretRef: session-secret }
 YAML
 
-az containerapp job create -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP_AZ" -o none 2>/dev/null \
-  || az containerapp job update -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP_AZ" -o none
+# Create or update — branch on an explicit existence probe rather than
+# `create 2>/dev/null || update`. The old form discarded the create's stderr,
+# so when the create failed for a REAL reason (the undeclared secret above) the
+# operator saw only the fallback's "job does not exist" and the actual cause was
+# gone. Only the `show` probe swallows output, and its failure is not an error.
+# Same shape as deploy-lineage-extractor-job.sh / deploy-secret-expiry-job.sh.
+if az containerapp job show -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" >/dev/null 2>&1; then
+  echo "[deploy-loom-verify-job] Updating existing loom-verify job..."
+  az containerapp job update -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP_AZ" -o none
+else
+  echo "[deploy-loom-verify-job] Creating loom-verify job..."
+  az containerapp job create -n loom-verify -g "$ADMIN_RG" --subscription "$SUB" --yaml "$TMP_AZ" -o none
+fi
 rm -f "$TMP"
 
 # Set the job secret to the CONSOLE's literal SESSION_SECRET (read via ARM,

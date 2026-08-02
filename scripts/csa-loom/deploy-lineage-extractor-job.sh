@@ -122,10 +122,22 @@ ENV_ARGS=(
 
 if az containerapp job show -n loom-lineage-extractor -g "$ADMIN_RG" --subscription "$SUB" >/dev/null 2>&1; then
   echo "[deploy-lineage-extractor] Updating existing job image + env..."
+  # NO --container-name here, deliberately: with exactly one container the CLI
+  # adopts the EXISTING container's name (containerapp_job_decorator.set_up_container),
+  # so this update retargets whatever the job already has — including a job
+  # created by an older revision of this script under a different name. Passing
+  # a name that does not match would ADD A SECOND CONTAINER instead of updating.
   az containerapp job update -n loom-lineage-extractor -g "$ADMIN_RG" --subscription "$SUB" \
     --image "$IMAGE" --set-env-vars "${ENV_ARGS[@]}"
 else
   echo "[deploy-lineage-extractor] Creating job..."
+  # --container-name is REQUIRED on create. Without it the CLI names the
+  # container after the JOB (`container_def["name"] = container_name or job_name`),
+  # producing `loom-lineage-extractor` — which diverges from the bicep module
+  # (modules/admin-plane/lineage-extractor-job.bicep names it `extractor`) and
+  # silently breaks this script's own documented log query,
+  # `ContainerName_s == 'extractor'`, which would then return zero rows and be
+  # indistinguishable from "the extractor found nothing".
   az containerapp job create -n loom-lineage-extractor -g "$ADMIN_RG" --subscription "$SUB" \
     --environment "$CAEID" \
     --trigger-type Schedule \
@@ -134,6 +146,7 @@ else
     --replica-retry-limit 1 \
     --parallelism 1 \
     --replica-completion-count 1 \
+    --container-name extractor \
     --image "$IMAGE" \
     --cpu 0.5 --memory 1.0Gi \
     --mi-user-assigned "$CONSOLE_UAMI_ID" \
