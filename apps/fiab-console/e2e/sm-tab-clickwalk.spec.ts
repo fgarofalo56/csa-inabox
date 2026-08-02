@@ -81,6 +81,9 @@
  *     legitimately does not render there and the test says so in an annotation
  *     rather than pretending it walked it — test 2 is the one that guarantees
  *     the full strip is walked.
+ *   • Every strip lookup is scoped to the EDITOR SURFACE (<main>). The app
+ *     shell's own topbar carries a `role="tablist"` ("Open tabs") whose entries
+ *     are route links, and walking it clicked Home — see `otherStrips()`.
  *
  * No item ids are hardcoded: the read-only target is discovered at runtime via
  * /api/items/by-type and the spec skips with a clear message if the estate has
@@ -111,6 +114,17 @@ const BIG_STRIP_MARKER = /Direct Lake \(shim\)|Incremental refresh|Gateway & end
 
 /** The guided empty state's Build-model launcher — the Power BI-free way in. */
 const BUILD_LAUNCHER = '[data-launch-card="build"]';
+
+/**
+ * The editor surface. `app-shell.tsx` renders the page's `children` inside
+ * <main>; the topbar (brand, workspace switcher, <TabStrip/>, search) and the
+ * left <nav> are SIBLINGS of it. Scoping every strip lookup here keeps the
+ * walk inside the surface under test and out of the app's own chrome (#2649).
+ */
+const EDITOR_SURFACE = 'main';
+
+/** App-shell chrome marks itself so surface walks can opt out of it. */
+const CHROME_MARKER = '[data-loom-chrome]';
 
 interface Target {
   id: string;
@@ -462,10 +476,77 @@ async function enterBigStrip(page: Page): Promise<boolean> {
   return hasBigStrip(page);
 }
 
-/** Every tablist on the page that is NOT the full item strip (ribbon, sub-tabs). */
+/**
+ * Every tablist ON THE EDITOR SURFACE that is NOT the full item strip
+ * (ribbon, Loom-native sub-tabs) — explicitly NOT the app shell's own chrome.
+ *
+ * WHY THIS IS SCOPED (#2649, run 30749421956). This used to be a page-wide
+ * `page.locator('[role="tablist"]')`. `app-shell.tsx` renders <TabStrip/> in
+ * the TOPBAR — a sibling of <main>, not inside it — and that strip's root is
+ * `<div role="tablist" aria-label="Open tabs">` whose entries are `<a href>`
+ * ROUTE LINKS. Its first entry is the always-pinned Home tab, `href="/"`.
+ *
+ * So the page-wide selector resolved app chrome as strip #0 and the walk
+ * clicked the Home link. The trace records it verbatim:
+ *
+ *   locator resolved to <a href="/" role="tab" aria-label="Home" …>
+ *   attempting click action … click action done
+ *   waiting for scheduled navigations to finish … navigations have finished
+ *
+ * after which the <h1> read "Home" and the spec reported "the editor changed
+ * item mid-walk". The EDITOR never navigated: clicking Home goes Home, which
+ * is correct. The SELECTOR was wrong — it walked the browser chrome, not the
+ * surface under test.
+ *
+ * `main [role=…]` is the scoping `catalog-uat.uat.ts` and
+ * `deep-functional-uat.uat.ts` already use for exactly this reason; the
+ * `[data-loom-chrome]` opt-out is belt-and-braces for any chrome that ends up
+ * rendered inside the main region.
+ */
 function otherStrips(page: Page): Locator {
-  return page.locator('[role="tablist"]').filter({ hasNot: page.getByRole('tab', { name: BIG_STRIP_MARKER }) });
+  return page
+    .locator(`${EDITOR_SURFACE} [role="tablist"]:not(${CHROME_MARKER})`)
+    .filter({ hasNot: page.getByRole('tab', { name: BIG_STRIP_MARKER }) });
 }
+
+/**
+ * The app shell's DOM SHAPE, reproduced offline for the scope self-check:
+ * the topbar (carrying the open-tabs chrome strip) is a SIBLING of <main>, and
+ * the editor's own strip lives inside it. `markChrome: false` reproduces the
+ * deployed DOM as it was when run 30749421956 recorded the failure, before the
+ * `data-loom-chrome` marker existed.
+ */
+const appShellFixture = ({ markChrome }: { markChrome: boolean }): string => `
+  <body style="margin:0">
+    <header style="display:flex;height:48px">
+      <div ${markChrome ? 'data-loom-chrome="open-tabs" ' : ''}role="tablist" aria-label="Open tabs" style="display:flex">
+        <a href="/" role="tab" aria-selected="false" style="height:32px;width:120px">Home</a>
+        <a href="/items/semantic-model/abc" role="tab" aria-selected="true" style="height:32px;width:220px">Real-Time Analytics Semantic Model</a>
+      </div>
+    </header>
+    <main>
+      <h1>Real-Time Analytics Semantic Model</h1>
+      <div role="tablist" aria-label="Model" style="display:flex">
+        ${['Model', 'Tables', 'Measures']
+          .map((t, i) => `<div role="tab" aria-selected="${i === 0}" style="height:32px;width:140px">${t}</div>`)
+          .join('')}
+      </div>
+    </main>
+  </body>`;
+
+/** aria-labels of the strips the walk would actually visit, in order. */
+const stripLabels = (page: Page): Promise<string[]> =>
+  otherStrips(page).evaluateAll((els: Element[]) => els.map((el) => el.getAttribute('aria-label') ?? '(unlabelled)'));
+
+/** Any tab the walk would click that is really a route link (`<a href>`). */
+const routeLinkTabs = (page: Page): Promise<string[]> =>
+  otherStrips(page)
+    .locator('[role="tab"]')
+    .evaluateAll((els: Element[]) =>
+      els
+        .filter((el) => el.hasAttribute('href'))
+        .map((el) => `${el.textContent?.trim()}→${el.getAttribute('href')}`),
+    );
 
 /** Walk the ribbon / Loom-native sub-tab strips on the current surface. */
 async function walkOtherStrips(
@@ -613,6 +694,93 @@ test.describe.serial('semantic-model tab click-walk (#2648 / #2649)', () => {
       ),
       'the detector must NOT report a problem on healthy geometry (false positives would get it switched off)',
     ).toEqual([]);
+  });
+
+  // --------------------------------------------------------------------------
+  // SCOPE SELF-CHECK — proves the walk stays on the EDITOR surface (#2649).
+  //
+  // The click-walk's job is the editor's strips. The app shell renders its own
+  // `role="tablist"` in the topbar (<TabStrip/>, "Open tabs") whose entries are
+  // ROUTE LINKS — Home is literally `<a href="/">`. A page-wide selector cannot
+  // tell chrome from surface, so the walk clicked Home and then reported "the
+  // editor changed item mid-walk" (run 30749421956) — blaming the editor for a
+  // navigation the spec itself triggered.
+  //
+  // This reproduces the app-shell DOM shape offline (chrome tablist OUTSIDE
+  // <main>, editor tablist INSIDE it) and asserts `otherStrips()` resolves the
+  // editor strip and NOT the chrome. Like the detector self-check above it
+  // needs no estate, no backend and no data, so it can fail on a fixed estate.
+  // --------------------------------------------------------------------------
+  test('scope self-check — the walk resolves editor strips, never app-shell chrome', async ({ page }, testInfo) => {
+    await page.setContent(appShellFixture({ markChrome: true }));
+
+    // NON-VACUITY: the fixture must actually contain the ambiguity, i.e. a
+    // page-wide selector really would pick up the chrome. Without this the
+    // assertions below could pass on a fixture that never reproduced the bug.
+    const pageWide = page.locator('[role="tablist"]');
+    expect(
+      await pageWide.count(),
+      'the fixture did not reproduce the chrome-vs-surface ambiguity; this self-check would be vacuous',
+    ).toBe(2);
+    expect(
+      await pageWide.locator('[role="tab"]').count(),
+      'the fixture must expose both chrome tabs and editor tabs to a page-wide walk',
+    ).toBe(5);
+
+    // THE ASSERTION — the walk resolves exactly one strip, the editor's.
+    const labels = await stripLabels(page);
+    expect(
+      labels,
+      `otherStrips() resolved ${labels.length} strip(s) — ${labels.join(', ')}. It must resolve the editor's ` +
+        'strip only; "Open tabs" is the app shell\'s topbar chrome and its tabs are route links.',
+    ).toEqual(['Model']);
+
+    // No tab the walk will click may be a route link — that is the exact thing
+    // that navigated the page away from the item.
+    const hrefs = await routeLinkTabs(page);
+    expect(
+      hrefs,
+      `the walk would click ${hrefs.length} tab(s) that are navigation links: ${hrefs.join(', ')} — ` +
+        'clicking one leaves the item and the spec then blames the editor for it (#2649)',
+    ).toEqual([]);
+
+    // The <main> scoping must carry this on its own: the data-loom-chrome
+    // marker is defence in depth, not the mechanism. Re-run against chrome that
+    // carries NO marker (i.e. the deployed DOM this failure was recorded on).
+    await page.setContent(appShellFixture({ markChrome: false }));
+    const unmarked = await stripLabels(page);
+    expect(
+      unmarked,
+      `with an UNMARKED chrome strip the walk resolved ${unmarked.join(', ')} — <main> scoping alone must ` +
+        'already exclude the topbar, otherwise the fix depends entirely on the marker',
+    ).toEqual(['Model']);
+    expect(
+      await routeLinkTabs(page),
+      'unmarked chrome still leaked route links into the walk',
+    ).toEqual([]);
+
+    testInfo.annotations.push({
+      type: 'scope-self-check',
+      description:
+        `page-wide=2 strips / 5 tabs → scoped=[${labels.join(', ')}] ` +
+        `(marker-less chrome: [${unmarked.join(', ')}]) route-links-in-walk=${hrefs.length}`,
+    });
+  });
+
+  // CONTROL for the scoping fix. Deliberately a SEPARATE test, and deliberately
+  // a CONTAINMENT assertion rather than an equality one: the page-wide selector
+  // resolved the editor's strip too (alongside the chrome), so this stays green
+  // both before and after the fix. It goes red only if a "fix" over-corrects and
+  // stops reaching real surface strips — the failure mode where the walk quietly
+  // walks nothing and every downstream assertion passes vacuously.
+  test('scope self-check control — the editor\'s own sub-tabs stay walkable', async ({ page }) => {
+    await page.setContent(appShellFixture({ markChrome: true }));
+    const walkable = (await otherStrips(page).locator('[role="tab"]').allTextContents()).map((t) => t.trim());
+    expect(
+      walkable,
+      `the walk reached ${walkable.length} tab(s): ${walkable.join(', ') || '(none)'} — the editor strip's own ` +
+        'tabs must remain reachable. Scoping must NARROW the walk, not empty it.',
+    ).toEqual(expect.arrayContaining(['Model', 'Tables', 'Measures']));
   });
 
   // --------------------------------------------------------------------------

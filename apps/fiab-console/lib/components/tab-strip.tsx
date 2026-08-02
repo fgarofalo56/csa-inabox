@@ -643,7 +643,14 @@ export function TabStrip() {
   }, [groupBy, hiddenTabs, wsNames]);
 
   return (
-    <div className={styles.root} role="tablist" aria-label="Open tabs">
+    /* `data-loom-chrome` marks this as APP CHROME, not a surface tab strip.
+       Its entries are route links (Home is `href="/"`), so a click here
+       legitimately navigates the whole page — unlike an in-surface tab, which
+       only swaps a panel. A page-wide `[role="tablist"]` walk cannot tell the
+       two apart and clicked Home mid-walk (#2649, run 30749421956); this
+       marker plus the <main> scoping in e2e/sm-tab-clickwalk.spec.ts lets any
+       surface-level walk opt out of the chrome explicitly. */
+    <div className={styles.root} data-loom-chrome="open-tabs" role="tablist" aria-label="Open tabs">
       <div className={styles.scroller} ref={scrollerRef}>
         {renderItems.slice(0, visibleCount).map(item => {
           if (item.kind === 'header') {
