@@ -25,6 +25,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { workspacesContainer, itemsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+import { AUDIT_TENANT_PREDICATE, auditScopeIds } from '@/lib/audit/audit-scope';
 import {
   fetchActiveUsersTrend,
   fetchFeatureAdoption,
@@ -57,13 +58,19 @@ export async function GET(req: NextRequest) {
   const adminDenied = requireTenantAdmin(s);
   if (adminDenied) return adminDenied;
   const tenantId = s.claims.oid;
+  // Audit-log rows carry either the actor's oid or the Entra tid, and the
+  // container partitions on /itemId — see lib/audit/audit-scope.ts (#2635).
+  // Safe to widen here: this surface is already tenant-admin gated above.
+  const auditScope = auditScopeIds(s.claims);
 
   const url = new URL(req.url);
   const daysRaw = Number(url.searchParams.get('days'));
   const days = Number.isFinite(daysRaw) ? Math.min(90, Math.max(1, Math.floor(daysRaw))) : 30;
   const featureFilter = (url.searchParams.get('feature') || '').trim() || null;
   const refresh = url.searchParams.get('refresh') === '1';
-  const cacheKey = buildScopedCacheKey('admin/usage', { tenantId, days, featureFilter: featureFilter ?? '' });
+  const cacheKey = buildScopedCacheKey('admin/usage', {
+    tenantId, auditScope: auditScope.join('|'), days, featureFilter: featureFilter ?? '',
+  });
 
   try {
     // Cosmos multi-container fan-out + Log Analytics — 5-min SWR window
@@ -109,9 +116,9 @@ export async function GET(req: NextRequest) {
     const byItem = new Map<string, { itemId: string; count: number }>();
     try {
       const { resources: audits } = await audC.items.query({
-        query: 'SELECT c.itemId, c.at FROM c WHERE c.tenantId = @t AND c.at >= @since',
+        query: `SELECT c.itemId, c.at FROM c WHERE ${AUDIT_TENANT_PREDICATE} AND c.at >= @since`,
         parameters: [
-          { name: '@t', value: tenantId },
+          { name: '@tenants', value: auditScope },
           { name: '@since', value: since },
         ],
       }).fetchAll();

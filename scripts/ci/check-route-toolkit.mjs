@@ -58,6 +58,21 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2635 touched these two ONLY to widen ONE audit-log Cosmos predicate from
+  // `c.tenantId = @t` (with @t = claims.oid) to the shared oid-OR-tid scope in
+  // lib/audit/audit-scope.ts — the same scope the /admin/audit-logs reader
+  // already uses (#2608). One query per file. Neither route's auth prologue
+  // changes: usage keeps getSession() → 401 + requireTenantAdmin() → 403,
+  // insights keeps getSession() → 401.
+  //
+  // THE CODEMOD DECLINES BOTH — `--file=` reports "0 handlers" for each:
+  // usage's prologue is getSession() followed by requireTenantAdmin(), and
+  // insights exports a zero-argument `GET()` (no NextRequest), neither of which
+  // is the exact getSession()+401 shape withSession replaces. Hand-migrating an
+  // auth prologue inside a counter-scope fix is unrelated churn with real
+  // 401/403 regression risk on two admin-visible dashboards.
+  ['apps/fiab-console/app/api/admin/usage/route.ts', '#2635: one-predicate audit-scope fix; codemod reports 0 handlers'],
+  ['apps/fiab-console/app/api/governance/insights/route.ts', '#2635: one-predicate audit-scope fix; zero-arg GET(), codemod reports 0 handlers'],
   // #2657 round 2 touched these four ONLY to build one map with safeRecord()
   // instead of `{}`. The ontology pair is the point of the round: their
   // /^[A-Za-z_][\w]{0,62}$/ key filter reads as a strict identifier check and

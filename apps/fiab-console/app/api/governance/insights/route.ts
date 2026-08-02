@@ -11,8 +11,10 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { workspacesContainer, itemsContainer, auditLogContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { AUDIT_TENANT_PREDICATE, auditScopeIds } from '@/lib/audit/audit-scope';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -22,14 +24,27 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tenantId = s.claims.oid;
+  // Audit scope (#2635). The `audit-log` container partitions on /itemId and
+  // its ~45 writers record `tenantScopeId(session)` = tid ?? oid, so an
+  // oid-only predicate misses every tid-scoped row (lib/audit/audit-scope.ts).
+  //
+  // Unlike /admin/overview and /admin/usage, THIS surface is session-only — any
+  // authenticated user reaches it, and every other number it returns is scoped
+  // to the caller's own workspaces. Widening the audit count to the Entra tid
+  // for everybody would hand each tenant member an org-wide activity volume
+  // they cannot see anywhere else on this page, so the widening applies only to
+  // tenant admins (who already read every audit row at /admin/audit-logs).
+  // For a non-admin the count stays deliberately actor-scoped — the alternative
+  // the issue's acceptance criteria allows.
+  const auditScope = isTenantAdmin(s) ? auditScopeIds(s.claims) : [tenantId];
   try {
     // Cached 3 min + SWR: the posture KPIs union several cross-partition
     // Cosmos scans per paint — one cached crawl serves every viewer
     // (perf directive 2026-07-15; VA-scale).
     const { value: payload } = await getOrComputeCached(
-      buildScopedCacheKey('governance/insights', { tenantId }),
+      buildScopedCacheKey('governance/insights', { tenantId, auditScope: auditScope.join('|') }),
       'governance',
-      () => computeInsights(tenantId),
+      () => computeInsights(tenantId, auditScope),
       { ttlMs: 3 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
     );
     return NextResponse.json(payload);
@@ -38,7 +53,7 @@ export async function GET() {
   }
 }
 
-async function computeInsights(tenantId: string): Promise<Record<string, unknown>> {
+async function computeInsights(tenantId: string, auditScope: string[]): Promise<Record<string, unknown>> {
   {
     const wsC = await workspacesContainer();
     const itC = await itemsContainer();
@@ -121,8 +136,8 @@ async function computeInsights(tenantId: string): Promise<Record<string, unknown
     try {
       const since = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
       const { resources } = await audC.items.query({
-        query: 'SELECT VALUE COUNT(1) FROM c WHERE c.tenantId = @t AND c.at >= @since',
-        parameters: [{ name: '@t', value: tenantId }, { name: '@since', value: since }],
+        query: `SELECT VALUE COUNT(1) FROM c WHERE ${AUDIT_TENANT_PREDICATE} AND c.at >= @since`,
+        parameters: [{ name: '@tenants', value: auditScope }, { name: '@since', value: since }],
       }).fetchAll();
       auditEvents30d = resources[0] || 0;
     } catch { /* container may be empty */ }

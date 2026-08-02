@@ -7,12 +7,15 @@
  * source that can be absent (Graph users, ARM capacity, ARM alerts, MIP labels).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { auditQueryImpl, twoScopeFixture } from '@/lib/audit/__tests__/audit-container-double';
 
 // --------------------------------------------------------------------------
 // session
 // --------------------------------------------------------------------------
+const SESSION_OID = 'tenant-oid';
+const SESSION_TID = 'entra-tenant-id';
 const getSessionMock = vi.fn(
-  () => ({ claims: { oid: 'tenant-oid', upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 }) as any,
+  () => ({ claims: { oid: SESSION_OID, tid: SESSION_TID, upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 }) as any,
 );
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
@@ -29,10 +32,15 @@ vi.mock('@azure/identity', () => {
 // --------------------------------------------------------------------------
 function makeContainer() {
   const docs = new Map<string, any>();
-  let queryImpl: (q: any) => any[] = () => [];
+  let queryImpl: (q: any, opts?: any) => any[] = () => [];
+  // Every (query, requestOptions) pair the route handed this container — the
+  // request options are how a spec proves a read was (or was NOT) pinned to a
+  // physical partition (#2635).
+  const calls: Array<{ query: string; parameters: any[]; options?: any }> = [];
   return {
+    calls,
     _seed(id: string, pk: string, doc: any) { docs.set(`${pk}::${id}`, doc); },
-    _setQuery(fn: (q: any) => any[]) { queryImpl = fn; },
+    _setQuery(fn: (q: any, opts?: any) => any[]) { queryImpl = fn; },
     item(id: string, pk: string) {
       return {
         async read<T>() {
@@ -43,7 +51,10 @@ function makeContainer() {
       };
     },
     items: {
-      query(q: any) { return { async fetchAll() { return { resources: queryImpl(q) }; } }; },
+      query(q: any, opts?: any) {
+        calls.push({ query: q?.query, parameters: q?.parameters ?? [], options: opts });
+        return { async fetchAll() { return { resources: queryImpl(q, opts) }; } };
+      },
     },
   };
 }
@@ -126,12 +137,12 @@ function seedHappyCosmos() {
 }
 
 beforeEach(() => {
-  for (const c of Object.values(containers)) c._setQuery(() => []);
-  getSessionMock.mockReturnValue({ claims: { oid: 'tenant-oid', upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 } as any);
+  for (const c of Object.values(containers)) { c._setQuery(() => []); c.calls.length = 0; }
+  getSessionMock.mockReturnValue({ claims: { oid: SESSION_OID, tid: SESSION_TID, upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 } as any);
   // #1602 gates the overview behind requireTenantAdmin; authorize the test
   // session (oid 'tenant-oid') as the bootstrap tenant admin so the real gate
   // passes and the tiles render. The 401 spec sets session=null and still 401s.
-  process.env.LOOM_TENANT_ADMIN_OID = 'tenant-oid';
+  process.env.LOOM_TENANT_ADMIN_OID = SESSION_OID;
   listResourcesMock.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }, { id: 'r3' }]);
   listAlertHistoryMock.mockResolvedValue([
     { monitorCondition: 'Fired' }, { monitorCondition: 'Resolved' }, { monitorCondition: 'Fired' },
@@ -252,5 +263,78 @@ describe('/api/admin/overview', () => {
     expect(j.tiles.workspaces.count).toBeNull();
     expect(j.tiles.workspaces.gated).toBe(true);
     expect(j.tiles.workspaces.hint).toMatch(/LOOM_COSMOS_ENDPOINT/);
+  });
+
+  // ------------------------------------------------------------------------
+  // #2635 — the auditEvents tile read the /itemId-partitioned audit-log
+  // container as if it were partitioned on /tenantId.
+  // ------------------------------------------------------------------------
+  describe('auditEvents tile — audit-log scope (#2635)', () => {
+    // Cosmos-faithful double: rows only resolve from their OWN /itemId
+    // partition, and the tenant predicate is honoured as written.
+    function seedRealisticAuditRows() {
+      seedHappyCosmos();
+      containers.auditLog._setQuery(auditQueryImpl(twoScopeFixture({ oid: SESSION_OID, tid: SESSION_TID })));
+    }
+
+    it('does NOT pin the read to a partition — audit-log partitions on /itemId, not /tenantId', async () => {
+      seedRealisticAuditRows();
+      const { GET } = await import('@/app/api/admin/overview/route');
+      await GET();
+      expect(containers.auditLog.calls).toHaveLength(1);
+      // A partitionKey here means the read was pinned to `itemId === <caller oid>`
+      // — a partition no audit row can occupy, so the tile could only ever be 0.
+      expect(containers.auditLog.calls[0].options?.partitionKey).toBeUndefined();
+    });
+
+    it('counts BOTH the oid-scoped and the tid-scoped row', async () => {
+      seedRealisticAuditRows();
+      const { GET } = await import('@/app/api/admin/overview/route');
+      const j = await (await GET()).json();
+      // Two rows in the fixture: one written by the admin-plane audit stream
+      // (tenantId = actor oid), one via tenantScopeId() (tenantId = Entra tid).
+      expect(j.tiles.auditEvents).toEqual({ count: 2, gated: false });
+    });
+
+    it('binds the caller oid AND tid as the tenant scope', async () => {
+      seedRealisticAuditRows();
+      const { GET } = await import('@/app/api/admin/overview/route');
+      await GET();
+      const tenants = containers.auditLog.calls[0].parameters.find((p: any) => p.name === '@tenants');
+      expect(tenants?.value).toEqual([SESSION_OID, SESSION_TID]);
+    });
+
+    it('still counts oid-scoped rows on a bootstrap session with no tid', async () => {
+      getSessionMock.mockReturnValue({ claims: { oid: SESSION_OID, upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 } as any);
+      seedRealisticAuditRows();
+      const { GET } = await import('@/app/api/admin/overview/route');
+      const j = await (await GET()).json();
+      expect(j.tiles.auditEvents).toEqual({ count: 1, gated: false });
+    });
+
+    it('excludes rows older than the 30-day window', async () => {
+      seedHappyCosmos();
+      const old = new Date(Date.now() - 40 * 24 * 3600_000).toISOString();
+      containers.auditLog._setQuery(auditQueryImpl([
+        ...twoScopeFixture({ oid: SESSION_OID, tid: SESSION_TID }),
+        { id: 'audit-stale', itemId: 'lakehouse:sales', tenantId: SESSION_TID, at: old },
+      ]));
+      const { GET } = await import('@/app/api/admin/overview/route');
+      const j = await (await GET()).json();
+      expect(j.tiles.auditEvents).toEqual({ count: 2, gated: false });
+    });
+
+    it('leaves the genuinely /tenantId-partitioned tiles pinned to one partition', async () => {
+      seedRealisticAuditRows();
+      const { GET } = await import('@/app/api/admin/overview/route');
+      await GET();
+      // Regression guard for the obvious over-correction: workspaces,
+      // feature-permissions, attribute-groups and label-assignments DO
+      // partition on /tenantId and must keep their single-partition read.
+      for (const c of [containers.featurePermissions, containers.attributeGroups, containers.labelAssignments]) {
+        expect(c.calls[0]?.options?.partitionKey).toBe(SESSION_OID);
+      }
+      expect(containers.workspaces.calls[0]?.options?.partitionKey).toBe(SESSION_OID);
+    });
   });
 });
