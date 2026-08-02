@@ -353,10 +353,19 @@ export async function listAllOwnedItems(
   opts: { session?: SessionPayload } = {},
 ): Promise<WorkspaceItem[]> {
   const items = await itemsContainer();
-  // Workspace-scoped + a session in hand → authorize the ONE workspace through
-  // the list chokepoint first, so an unauthorized id returns [] without a scan.
-  if (workspaceId && opts.session) {
-    const access = await authorizeWorkspaceList(opts.session, workspaceId);
+  // Workspace-scoped path: authorize the ONE workspace up front, so an
+  // unauthorized id returns [] without a scan — the same shape `listOwnedItems`
+  // uses. The ternary is a CODE-level choice (does this caller hold a session?),
+  // not a security branch: `authorizeWorkspaceList` and the session-less
+  // resolver apply the identical owner → ACL → tid-boundary chain, and when the
+  // early return does not fire every row is still filtered through
+  // `resolveWorkspaceAccessByOid` below. `item-crud-tid-boundary.test.ts` pins
+  // that equivalence, so dropping `session` (or `workspaceId`) from the call is
+  // not a way to reach a workspace the caller cannot see.
+  if (workspaceId) {
+    const access = opts.session
+      ? await authorizeWorkspaceList(opts.session, workspaceId)
+      : await resolveWorkspaceAccessByOid(tenantId, workspaceId, accessOptsFor());
     if (!access) return [];
   }
   const query = workspaceId

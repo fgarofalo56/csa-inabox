@@ -119,4 +119,30 @@ describe('item-crud helpers apply the cross-tenant tid boundary (#2703)', () => 
     expect(out).toEqual([]);
     expect(itemsFetchAll).not.toHaveBeenCalled();
   });
+
+  /**
+   * CodeQL js/user-controlled-bypass flags the `if (workspaceId)` fast path in
+   * `listAllOwnedItems` — a caller-supplied value selecting which authorization
+   * path runs — exactly as it flags the sibling in `listOwnedItems` (#625, the
+   * alert #2703 opens by dismissing). It is a PERFORMANCE branch: both arms
+   * authorize, and dropping either input is not an escape. That equivalence has
+   * to be a pinned property, not a property of today's source.
+   */
+  describe('the workspaceId / session inputs select a path, they do not gate one', () => {
+    beforeEach(() => {
+      getSession.mockReturnValue({ claims: { oid: CALLER_OID, tid: FOREIGN_TENANT } });
+    });
+
+    it('a forbidden workspace stays forbidden with a session, without one, and unscoped', async () => {
+      const session = { claims: { oid: CALLER_OID, tid: FOREIGN_TENANT }, exp: 0 } as any;
+      expect(await listAllOwnedItems(CALLER_OID, WS_ID, { session })).toEqual([]);
+      expect(await listAllOwnedItems(CALLER_OID, WS_ID)).toEqual([]);
+      expect(await listAllOwnedItems(CALLER_OID)).toEqual([]);
+    });
+
+    it('the session-less scoped path authorizes BEFORE the query, like the session path', async () => {
+      await listAllOwnedItems(CALLER_OID, WS_ID);
+      expect(itemsFetchAll).not.toHaveBeenCalled();
+    });
+  });
 });
