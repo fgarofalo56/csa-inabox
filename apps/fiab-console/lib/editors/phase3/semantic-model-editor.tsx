@@ -68,6 +68,7 @@ import { MetricViewBuilder } from '../components/metric-view-builder';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
+import { getItem } from '@/lib/api/workspaces';
 import { useBiBackend, useSemanticBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
 import { AskAffordance } from '@/lib/components/ask/AskAffordance';
@@ -83,7 +84,7 @@ import {
   SM_DATA_CATEGORIES, SM_SUMMARIZE, SM_DATA_TYPES, SM_FORMATS,
   INGEST_STARTER_M, INGEST_SOURCES,
 } from './semantic-model-editor/constants';
-import { ColumnTypeIcon } from './semantic-model-editor/helpers';
+import { ColumnTypeIcon, defaultDatasetId } from './semantic-model-editor/helpers';
 import { useSmVisualStyles } from './semantic-model-editor/styles';
 import { AasSemanticModelPanel } from './semantic-model-editor/aas-panel';
 import { SemanticModelSecurityTab } from './semantic-model-editor/security-tab';
@@ -133,7 +134,29 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // editor keeps its Loom-native surface.
   const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces(pbiOptIn);
-  const [workspaceId, setWorkspaceId] = useState('');
+  // ── TWO workspace namespaces, never interchangeable (#2649) ────────────────
+  // `pbiWorkspaceId` — a POWER BI groupId (usePowerBiWorkspaces →
+  //   /api/powerbi/workspaces). Only Power BI-backed calls may receive it:
+  //   list / detail / refresh / refresh-schedule / take-over / measures / build /
+  //   direct-lake / app.powerbi.com deep links + the PBI governance panels.
+  // `loomWorkspaceId` — THIS item's own Loom workspace GUID (its Cosmos
+  //   partition key). The assertOwner-guarded Loom item routes (`[id]/model`,
+  //   `[id]/datasource`) accept nothing else and answer 404 "semantic model not
+  //   found" for a Power BI groupId — which is what 404'd them on EVERY open.
+  //   Resolved from the item record exactly as the sibling Power BI-family
+  //   editor in this folder already does (paginated-report-editor.tsx).
+  const [pbiWorkspaceId, setPbiWorkspaceId] = useState('');
+  const [loomWorkspaceId, setLoomWorkspaceId] = useState('');
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    // Best-effort: the Loom routes treat an ABSENT workspaceId as "no owner
+    // check", so degrading to '' still works — unlike sending a foreign id.
+    getItem(item.slug, id)
+      .then((it) => { if (!cancelled && it?.workspaceId) setLoomWorkspaceId(it.workspaceId); })
+      .catch(() => { /* leave loomWorkspaceId unresolved */ });
+    return () => { cancelled = true; };
+  }, [item.slug, id]);
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
@@ -298,7 +321,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     if (!datasetId) return;
     setModelLoading(true); setModelGate(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(loomWorkspaceId)}`);
       const j = await r.json();
       if (!j.ok && j.gate) { setModelGate(j.gate); setModelTables(null); return; }
       if (!j.ok) { setModelGate({ missing: 'error', detail: j.error || `HTTP ${r.status}` }); setModelTables(null); return; }
@@ -308,7 +331,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) {
       setModelGate({ missing: 'error', detail: e?.message || String(e) });
     } finally { setModelLoading(false); }
-  }, [datasetId, workspaceId]);
+  }, [datasetId, loomWorkspaceId]);
 
   // Lazy-load the XMLA model the first time the Tables tab is opened for a
   // dataset. Re-fetches when the dataset changes.
@@ -356,7 +379,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     // (TMSL Alter requires every read-write property, not a partial patch).
     const full: SmColumn = { ...editCol.col, ...colPatch };
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(loomWorkspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'alter-column', tableName: editCol.tableName, columnName: editCol.col.name, column: full }),
       });
@@ -367,13 +390,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setModelTables(null); await loadModel();
     } catch (e: any) { setPatchMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setPatchBusy(false); }
-  }, [editCol, colPatch, datasetId, workspaceId, loadModel]);
+  }, [editCol, colPatch, datasetId, loomWorkspaceId, loadModel]);
 
   const addCalcColumn = useCallback(async () => {
     if (!datasetId || !selectedTableName || !calcColName.trim() || !calcColExpr.trim()) return;
     setCalcBusy(true); setCalcMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(loomWorkspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           op: 'add-calculated-column', tableName: selectedTableName,
@@ -387,13 +410,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setTimeout(() => { setCalcColDlgOpen(false); setCalcMsg(null); }, 1200);
     } catch (e: any) { setCalcMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setCalcBusy(false); }
-  }, [datasetId, workspaceId, selectedTableName, calcColName, calcColExpr, calcColType, calcColCat, calcColFolder, loadModel]);
+  }, [datasetId, loomWorkspaceId, selectedTableName, calcColName, calcColExpr, calcColType, calcColCat, calcColFolder, loadModel]);
 
   const addCalcTable = useCallback(async () => {
     if (!datasetId || !calcTableName.trim() || !calcTableExpr.trim()) return;
     setCalcBusy(true); setCalcMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(loomWorkspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'add-calculated-table', tableName: calcTableName.trim(), expression: calcTableExpr.trim() }),
       });
@@ -405,7 +428,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setTimeout(() => { setCalcTableDlgOpen(false); setCalcMsg(null); }, 1200);
     } catch (e: any) { setCalcMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setCalcBusy(false); }
-  }, [datasetId, workspaceId, calcTableName, calcTableExpr, loadModel]);
+  }, [datasetId, loomWorkspaceId, calcTableName, calcTableExpr, loadModel]);
 
   // --- Incremental refresh policy + hybrid table (current-period DirectQuery) ---
   // Extracted to ./semantic-model-editor/incremental-refresh-tab (R10). The
@@ -472,7 +495,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     }
     setSecSaving(true); setSecSaveMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?workspaceId=${encodeURIComponent(loomWorkspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ roles: secRoles }),
       });
@@ -481,13 +504,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setSecSaveMsg({ ok: true, text: `Saved ${j.roleCount} role(s) to the model via XMLA TMSL.` });
     } catch (e: any) { setSecSaveMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setSecSaving(false); }
-  }, [datasetId, workspaceId, secRoles]);
+  }, [datasetId, loomWorkspaceId, secRoles]);
 
   const runTestRole = useCallback(async () => {
     if (!datasetId || !secSelectedRole || !testRoleUpn.trim() || !testQuery.trim()) return;
     setTestBusy(true); setTestErr(null); setTestResult(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?action=test&workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?action=test&workspaceId=${encodeURIComponent(loomWorkspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ roleName: secSelectedRole, effectiveUserName: testRoleUpn.trim(), daxQuery: testQuery }),
       });
@@ -496,7 +519,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setTestResult({ rows: j.rows || [], rowCount: j.rowCount ?? (j.rows?.length || 0) });
     } catch (e: any) { setTestErr(e?.message || String(e)); }
     finally { setTestBusy(false); }
-  }, [datasetId, workspaceId, secSelectedRole, testRoleUpn, testQuery]);
+  }, [datasetId, loomWorkspaceId, secSelectedRole, testRoleUpn, testQuery]);
 
   // Mutate a single role in place (immutable update for setSecRoles).
   const updateRole = useCallback((roleName: string, mut: (r: SecRole) => SecRole) => {
@@ -505,7 +528,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
 
   // Automatic aggregations builder (XMLA TMSL alternateOf) — extracted to
   // ./semantic-model-editor/aggregations-tab (R10).
-  const agg = useSemanticModelAggregations({ workspaceId, datasetId, tables: detail?.tables });
+  const agg = useSemanticModelAggregations({ workspaceId: loomWorkspaceId, datasetId, tables: detail?.tables });
   // Direct Lake query with transparent Serverless fallback (direct-lake-query tab).
   // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
   // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
@@ -538,7 +561,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // Direct Lake (shim) — extracted to ./semantic-model-editor/direct-lake-tab
   // (R10). Called at the exact position the raw state block occupied so the
   // hook + effect order of this component is unchanged.
-  const dl = useSemanticModelDirectLake({ tab, datasetId, workspaceId, tables: detail?.tables });
+  const dl = useSemanticModelDirectLake({ tab, datasetId, workspaceId: pbiWorkspaceId, tables: detail?.tables });
 
   // Composite + Dual per-table storage mode (Tables tab). Each table gets an
   // Import / DirectQuery / Dual picker so a single model can MIX modes; the
@@ -611,12 +634,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       const r = await clientFetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDatasets([]); setListErr(j.error); return; }
-      setDatasets(j.datasets || []);
-      setDatasetId((prev) => prev || (j.datasets?.[0]?.id ?? ''));
+      const list: DatasetLite[] = j.datasets || [];
+      setDatasets(list);
+      setDatasetId((prev) => prev || defaultDatasetId(list, id));
     } catch (e: any) {
       setDatasets([]); setListErr(e?.message || String(e));
     }
-  }, []);
+  }, [id]);
 
   const loadDetail = useCallback(async (wsId: string, dsId: string) => {
     setDetailErr(null); setDetail(null);
@@ -655,7 +679,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     if (!datasetId) return;
     setCgBusy(true); setCgMsg(null);
     try {
-      const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const q = loomWorkspaceId ? `?workspaceId=${encodeURIComponent(loomWorkspaceId)}` : '';
       const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ calculationGroups: calcGroups }),
@@ -665,13 +689,13 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setCgMsg({ ok: true, text: `Saved via ${j.backend}. ${(j.steps || []).join(' ')}` });
     } catch (e: any) { setCgMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setCgBusy(false); }
-  }, [datasetId, workspaceId, calcGroups]);
+  }, [datasetId, loomWorkspaceId, calcGroups]);
 
   const saveFieldParams = useCallback(async () => {
     if (!datasetId) return;
     setFpBusy(true); setFpMsg(null);
     try {
-      const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const q = loomWorkspaceId ? `?workspaceId=${encodeURIComponent(loomWorkspaceId)}` : '';
       const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fieldParameters: fieldParams }),
@@ -681,27 +705,30 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setFpMsg({ ok: true, text: `Saved via ${j.backend}. ${(j.steps || []).join(' ')}` });
     } catch (e: any) { setFpMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setFpBusy(false); }
-  }, [datasetId, workspaceId, fieldParams]);
+  }, [datasetId, loomWorkspaceId, fieldParams]);
 
   // Auto-pick the first Power BI workspace once loaded so the list fetch fires
-  // and the first dataset auto-selects — enabling New measure / Refresh / Open
-  // immediately instead of leaving them disabled behind a manual pick. Matches
-  // the Eventstream/Activator auto-pick pattern. Users can still switch.
+  // and a dataset binds — enabling New measure / Refresh / Open immediately
+  // instead of leaving them disabled behind a manual pick. Matches the
+  // Eventstream/Activator auto-pick pattern. Users can still switch.
+  // #2649: this auto-pick is POWER BI-ONLY. It must never reach a Loom item
+  // route — `loomWorkspaceId` (resolved from the item record above) is the only
+  // value those accept, and the auto-picked groupId 404'd all of them.
   useEffect(() => {
-    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
-  }, [workspaceId, ws.workspaces]);
-  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+    if (!pbiWorkspaceId && ws.workspaces && ws.workspaces.length > 0) setPbiWorkspaceId(ws.workspaces[0].id);
+  }, [pbiWorkspaceId, ws.workspaces]);
+  useEffect(() => { if (pbiWorkspaceId) loadList(pbiWorkspaceId); }, [pbiWorkspaceId, loadList]);
   useEffect(() => {
-    if (workspaceId && datasetId) { loadDetail(workspaceId, datasetId); loadRefreshes(workspaceId, datasetId); }
-  }, [workspaceId, datasetId, loadDetail, loadRefreshes]);
-  useEffect(() => { if (datasetId) loadModelObjects(workspaceId, datasetId); }, [workspaceId, datasetId, loadModelObjects]);
+    if (pbiWorkspaceId && datasetId) { loadDetail(pbiWorkspaceId, datasetId); loadRefreshes(pbiWorkspaceId, datasetId); }
+  }, [pbiWorkspaceId, datasetId, loadDetail, loadRefreshes]);
+  useEffect(() => { if (datasetId) loadModelObjects(loomWorkspaceId, datasetId); }, [loomWorkspaceId, datasetId, loadModelObjects]);
 
   // Lazy-load roles the first time the Security tab is opened for a dataset.
   useEffect(() => {
     if (tab === 'security' && datasetId && secRoles === null && !secBusy) {
-      loadRoles(datasetId, workspaceId);
+      loadRoles(datasetId, loomWorkspaceId);
     }
-  }, [tab, datasetId, workspaceId, secRoles, secBusy, loadRoles]);
+  }, [tab, datasetId, loomWorkspaceId, secRoles, secBusy, loadRoles]);
   // Reset role state when the selected dataset changes.
   useEffect(() => { setSecRoles(null); setSecSelectedRole(''); setSecSaveMsg(null); setTestResult(null); }, [datasetId]);
   // Default the test query / OLS table to the first model table once known.
@@ -714,15 +741,15 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   }, [detail?.tables]);
 
   const refreshNow = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
+    if (!pbiWorkspaceId || !datasetId) return;
     setRefreshing(true); setRefreshErr(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) setRefreshErr(j.error || 'refresh failed');
-      else { setTimeout(() => loadRefreshes(workspaceId, datasetId), 1500); }
+      else { setTimeout(() => loadRefreshes(pbiWorkspaceId, datasetId), 1500); }
     } finally { setRefreshing(false); }
-  }, [workspaceId, datasetId, loadRefreshes]);
+  }, [pbiWorkspaceId, datasetId, loadRefreshes]);
 
   // Hydrate the scheduled-refresh form from the live schedule whenever the
   // selected dataset's detail loads.
@@ -745,11 +772,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   }, []);
 
   const saveSchedule = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
+    if (!pbiWorkspaceId || !datasetId) return;
     setSchedBusy(true); setSchedMsg(null);
     const times = schedTimes.split(',').map((t) => t.trim()).filter(Boolean);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-schedule?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-schedule?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled: schedEnabled, days: schedDays, times, localTimeZoneId: schedTz, notifyOption: schedNotify }),
       });
@@ -759,20 +786,20 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setDetail((prev) => prev ? { ...prev, refreshSchedule: j.schedule } : prev);
     } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setSchedBusy(false); }
-  }, [workspaceId, datasetId, schedEnabled, schedDays, schedTimes, schedTz, schedNotify]);
+  }, [pbiWorkspaceId, datasetId, schedEnabled, schedDays, schedTimes, schedTz, schedNotify]);
 
   const takeOver = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
+    if (!pbiWorkspaceId || !datasetId) return;
     setTakeoverBusy(true); setSchedMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/take-over?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/take-over?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
       setSchedMsg({ ok: true, text: 'Dataset taken over by the Console identity. You can now edit the schedule.' });
-      loadDetail(workspaceId, datasetId);
+      loadDetail(pbiWorkspaceId, datasetId);
     } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setTakeoverBusy(false); }
-  }, [workspaceId, datasetId, loadDetail]);
+  }, [pbiWorkspaceId, datasetId, loadDetail]);
 
   // Incremental-refresh callbacks — extracted to
   // ./semantic-model-editor/incremental-refresh-tab (R10). Called here, at the
@@ -780,14 +807,14 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // declarations occupied, i.e. after `loadRefreshes` which the last of them
   // closes over. The state half was registered further up (see `irState`), so
   // the cluster's draft survives tab switches exactly as before.
-  const irActions = useSemanticModelIncrementalRefreshActions(irState, { workspaceId, datasetId, loadRefreshes });
+  const irActions = useSemanticModelIncrementalRefreshActions(irState, { workspaceId: pbiWorkspaceId, datasetId, loadRefreshes });
   const ir: IncrementalRefreshApi = { ...irState, ...irActions };
 
   // Apply the per-table storage modes: builds a composite model.bim TMSL with a
   // per-partition `mode` (import/directQuery/dual) and applies it via the
   // datasource BFF route, then surfaces the live DAX probe + TMSL receipt.
   const applyModes = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
+    if (!pbiWorkspaceId || !datasetId) return;
     setModesBusy(true); setModesMsg(null); setTmslReceipt(null);
     try {
       const tables = (detail?.tables || []).map((t) => {
@@ -810,7 +837,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
           crossFilteringBehavior: (r.crossFilteringBehavior === 'bothDirections' ? 'bothDirections' : 'oneDirection') as 'oneDirection' | 'bothDirections',
         }));
       const r = await clientFetch(
-        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/datasource?workspaceId=${encodeURIComponent(workspaceId)}`,
+        `/api/items/semantic-model/${encodeURIComponent(datasetId)}/datasource?workspaceId=${encodeURIComponent(loomWorkspaceId)}`,
         {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ displayName: detail?.dataset?.name || 'CompositeModel', tables, relationships: rels }),
@@ -828,17 +855,17 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       });
     } catch (e: any) { setModesMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setModesBusy(false); }
-  }, [workspaceId, datasetId, detail?.tables, detail?.dataset?.name, tableModes, tableSourceQ, relationships]);
+  }, [pbiWorkspaceId, loomWorkspaceId, datasetId, detail?.tables, detail?.dataset?.name, tableModes, tableSourceQ, relationships]);
 
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
   // and evaluates a probe row — invalid DAX returns the engine's real
   // error message (not a mocked "looks good"). Persistence requires XMLA.
   const validateDax = useCallback(async () => {
-    if (!workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
+    if (!pbiWorkspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
     setDaxBusy(true); setDaxResult(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/measures?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/measures?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ measureName: measureName.trim(), tableName: measureTable.trim(), daxExpression: daxExpr }),
       });
@@ -849,7 +876,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       setDaxResult({ ok: true, value: v });
     } catch (e: any) { setDaxResult({ ok: false, error: e?.message || String(e) }); }
     finally { setDaxBusy(false); }
-  }, [workspaceId, datasetId, measureName, measureTable, daxExpr]);
+  }, [pbiWorkspaceId, datasetId, measureName, measureTable, daxExpr]);
 
   // Probe the model route once a dataset is selected so the Measures tab can
   // show the Save-to-model button when LOOM_SEMANTIC_BACKEND=analysis-services
@@ -876,7 +903,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     if (!datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
     setSaveBusy(true); setSaveResult(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${loomWorkspaceId ? `?workspaceId=${encodeURIComponent(loomWorkspaceId)}` : ''}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           tableName: measureTable.trim(),
@@ -893,10 +920,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       }
       const evalNote = j?.evaluate ? ` Evaluated value: ${j.evaluate.value === null || j.evaluate.value === undefined ? 'NULL' : String(j.evaluate.value)}.` : '';
       setSaveResult({ ok: true, text: `Measure "${measureName.trim()}" saved to the model via TMSL createOrReplace.${evalNote}` });
-      if (workspaceId && datasetId) loadDetail(workspaceId, datasetId);
+      if (pbiWorkspaceId && datasetId) loadDetail(pbiWorkspaceId, datasetId);
     } catch (e: any) { setSaveResult({ ok: false, text: e?.message || String(e) }); }
     finally { setSaveBusy(false); }
-  }, [datasetId, workspaceId, measureName, measureTable, daxExpr, formatString, displayFolder, loadDetail]);
+  }, [datasetId, pbiWorkspaceId, loomWorkspaceId, measureName, measureTable, daxExpr, formatString, displayFolder, loadDetail]);
 
   const focusNewMeasure = useCallback(() => {
     setTab('measures');
@@ -917,7 +944,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       const r = await clientFetch(`/api/items/semantic-model/${dsPath}/direct-lake`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId, table: dlTable, maxRows: dlMaxRows }),
+        body: JSON.stringify({ workspaceId: pbiWorkspaceId, table: dlTable, maxRows: dlMaxRows }),
       });
       const j: DlQueryResult = await r.json();
       setDlResult(j);
@@ -926,16 +953,16 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     } finally {
       setDlqLoading(false);
     }
-  }, [workspaceId, datasetId, dlTable, dlMaxRows]);
+  }, [pbiWorkspaceId, datasetId, dlTable, dlMaxRows]);
 
   // Build a REAL new semantic model (push dataset) via the Power BI Push
   // Datasets REST API. After a successful build we refresh the dataset list
   // and select the new model so the user lands in its detail view.
   const buildModel = useCallback(async () => {
-    if (!workspaceId || !bModelName.trim() || bTables.length === 0) return;
+    if (!pbiWorkspaceId || !bModelName.trim() || bTables.length === 0) return;
     setBBusy(true); setBMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/build?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/build?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: bModelName.trim(),
@@ -950,11 +977,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       const j = await r.json();
       if (!j.ok) { setBMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
       setBMsg({ ok: true, text: `Created semantic model "${j.name}" (id ${String(j.datasetId).slice(0, 8)}…). Reloading workspace…` });
-      await loadList(workspaceId);
+      await loadList(pbiWorkspaceId);
       if (j.datasetId) { setDatasetId(j.datasetId); setTab('tables'); }
     } catch (e: any) { setBMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setBBusy(false); }
-  }, [workspaceId, bModelName, bTables, bRels, loadList]);
+  }, [pbiWorkspaceId, bModelName, bTables, bRels, loadList]);
 
   const focusBuild = useCallback(() => {
     setTab('build');
@@ -977,10 +1004,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // and disable Refresh with an honest "no data to import" reason.
   const isDqMode = (detail?.dataset?.targetStorageMode || '').toLowerCase() === 'directquery';
   const openInPbi = useCallback(() => {
-    if (workspaceId && datasetId) {
-      window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`, '_blank', 'noreferrer');
+    if (pbiWorkspaceId && datasetId) {
+      window.open(`https://app.powerbi.com/groups/${encodeURIComponent(pbiWorkspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`, '_blank', 'noreferrer');
     }
-  }, [workspaceId, datasetId]);
+  }, [pbiWorkspaceId, datasetId]);
   // Only real, working actions. Authoring that genuinely requires the XMLA
   // endpoint / Power BI Desktop (RLS roles, perspectives, Direct Lake toggle,
   // TMSL import) is NOT shown as a dead button — it's documented in the
@@ -991,7 +1018,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
         { label: 'Get data', onClick: () => { setGetDataOpen(true); setIngestTab('source'); }, title: 'Ingest data with Power Query (M) → Delta in ADLS → refresh the semantic layer (Azure-native, no Fabric required)' },
       ]},
       { label: 'Model', actions: [
-        { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
+        { label: 'Build model', onClick: pbiWorkspaceId ? focusBuild : undefined, disabled: !pbiWorkspaceId, title: !pbiWorkspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
         { label: 'Model view', onClick: focusModel, title: datasetId ? 'Interactive relationship diagram (cardinality, cross-filter, active/inactive) + drill-hierarchy editor; writes TMSL' : 'Loom-native relationship diagram — table cards + cardinality-marked join lines over this model’s definition (no Power BI required)' },
       ]},
       { label: 'Measures', actions: [
@@ -1018,14 +1045,14 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, workspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, pbiWorkspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
 
   return (
     <>
     <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} collabPresence
       leftPanel={
         <PowerBiTree
-          workspaceId={workspaceId}
+          workspaceId={pbiWorkspaceId}
           selectedDatasetId={datasetId}
           onOpenDataset={(dsId) => { setDatasetId(dsId); setTab('tables'); }}
           onNewDataset={focusBuild}
@@ -1043,11 +1070,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
               <OpenInLoomReportBuilderButton type="semantic-model" id={id} name={detail?.dataset?.name} />
               {powerBiConfigured && (
                 <>
-                  <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-                  <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+                  <WorkspacePicker value={pbiWorkspaceId} onChange={setPbiWorkspaceId} {...ws} />
+                  <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => pbiWorkspaceId && loadList(pbiWorkspaceId)} disabled={!pbiWorkspaceId}>Refresh</Button>
                 </>
               )}
-              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!powerBiConfigured || !workspaceId} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
+              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!powerBiConfigured || !pbiWorkspaceId} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
               <Button
                 appearance="primary"
                 icon={<Play20Regular />}
@@ -1090,7 +1117,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                             cards for file/OData sources. */}
                         <LoomItemSourcePicker
                           purpose="semantic-model"
-                          workspaceId={workspaceId}
+                          workspaceId={loomWorkspaceId}
                           onResolved={(res) => {
                             setSourceGate(null);
                             const m = mExprFromBinding(res.binding);
@@ -1596,7 +1623,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                 )}
                 {tab === 'model' && (
                   <PbiModelViewPanel
-                    workspaceId={workspaceId || undefined}
+                    workspaceId={loomWorkspaceId || undefined}
                     datasetId={datasetId}
                   />
                 )}
@@ -1607,7 +1634,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                     1/* cardinality markers, Overview ⇄ Entity-diagram toggle. */}
                 {tab === 'entity' && (
                   <EntityDiagram
-                    source={{ kind: 'semantic-model', itemId: datasetId, workspaceId: workspaceId || undefined }}
+                    source={{ kind: 'semantic-model', itemId: datasetId, workspaceId: loomWorkspaceId || undefined }}
                     height={600}
                     resizeStorageKey="semantic-model-entity-tables"
                   />
@@ -1619,7 +1646,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                     <ModelTabsExtra
                       item={{
                         id,
-                        workspaceId,
+                        workspaceId: loomWorkspaceId,
                         itemType: 'semantic-model',
                         displayName: item.displayName,
                         createdBy: '',
@@ -1702,10 +1729,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                       onClick={() => setBRels((p) => [...p, { name: `rel-${p.length + 1}`, fromTable: '', fromColumn: '', toTable: '', toColumn: '', crossFilteringBehavior: 'OneDirection' }])}>Add relationship</Button>
 
                     <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', marginTop: tokens.spacingVerticalL}}>
-                      <Button appearance="primary" icon={<Save20Regular />} disabled={bBusy || !workspaceId || !bModelName.trim()} onClick={buildModel}>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={bBusy || !pbiWorkspaceId || !bModelName.trim()} onClick={buildModel}>
                         {bBusy ? 'Creating…' : 'Create model'}
                       </Button>
-                      {!workspaceId && <Caption1>Select a workspace first.</Caption1>}
+                      {!pbiWorkspaceId && <Caption1>Select a workspace first.</Caption1>}
                     </div>
                     {bMsg && <MessageBar intent={bMsg.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{bMsg.text}</MessageBarBody></MessageBar>}
                   </>
@@ -1758,9 +1785,9 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                       <Button
                         appearance="primary"
                         icon={<Play20Regular />}
-                        disabled={daxBusy || !workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
+                        disabled={daxBusy || !pbiWorkspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
                         onClick={validateDax}
-                        title={!workspaceId ? 'Validate uses the Power BI executeQueries REST endpoint — select a Power BI workspace first' : undefined}
+                        title={!pbiWorkspaceId ? 'Validate uses the Power BI executeQueries REST endpoint — select a Power BI workspace first' : undefined}
                       >
                         {daxBusy ? 'Validating…' : 'Validate DAX'}
                       </Button>
@@ -1891,7 +1918,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                 )}
                 {tab === 'incremental' && (
                   <SemanticModelIncrementalRefreshTab
-                    s={s} ir={ir} tables={detail?.tables} workspaceId={workspaceId} datasetId={datasetId}
+                    s={s} ir={ir} tables={detail?.tables} workspaceId={pbiWorkspaceId} datasetId={datasetId}
                   />
                 )}
                 {tab === 'config' && (
@@ -1952,7 +1979,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                     testBusy={testBusy}
                     testResult={testResult}
                     testErr={testErr}
-                    onReload={() => loadRoles(datasetId, workspaceId)}
+                    onReload={() => loadRoles(datasetId, loomWorkspaceId)}
                     onAddRole={() => {
                       const base = 'NewRole';
                       const existing = new Set((secRoles || []).map((r) => r.name));
@@ -2001,22 +2028,22 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   />
                 )}
                 {tab === 'direct-lake' && (
-                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={datasetId} workspaceId={workspaceId} />
+                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={datasetId} workspaceId={pbiWorkspaceId} />
                 )}
                 {tab === 'datasource' && isDqMode && datasetId && (
-                  <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={workspaceId} />
+                  <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={loomWorkspaceId} />
                 )}
                 {tab === 'governance' && datasetId && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXL }}>
                     {/* F17 — read-only sensitivity label inherited from the model's
                         upstream lineage source (warehouse / lakehouse it's built on). */}
                     <UpstreamSensitivityField itemId={id} />
-                    <EndorsementControl workspaceId={workspaceId} itemId={datasetId} itemType="datasets" />
-                    <GatewayDatasourcesPanel workspaceId={workspaceId} datasetId={datasetId} />
+                    <EndorsementControl workspaceId={pbiWorkspaceId} itemId={datasetId} itemType="datasets" />
+                    <GatewayDatasourcesPanel workspaceId={pbiWorkspaceId} datasetId={datasetId} />
                   </div>
                 )}
                 {tab === 'access' && (
-                  <ManageAccessPanel workspaceId={workspaceId} />
+                  <ManageAccessPanel workspaceId={pbiWorkspaceId} />
                 )}
                 {tab === 'embed' && powerBiConfigured && (
                   <MessageBar intent="info">
@@ -2044,7 +2071,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                     />
                   </div>
                 )}
-                {tab === 'prep-for-ai' && <SemanticModelPrepForAiPane id={id} datasetId={datasetId} workspaceId={workspaceId} />}
+                {tab === 'prep-for-ai' && <SemanticModelPrepForAiPane id={id} datasetId={datasetId} workspaceId={loomWorkspaceId} />}
                 {tab === 'verified-queries' && <VerifiedQueriesPane id={id} modelName={detail?.dataset?.name || ''} />}
                 {tab === 'calcGroups' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>

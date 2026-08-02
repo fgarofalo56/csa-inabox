@@ -88,7 +88,12 @@ export interface EntitySource {
   kind: EntitySourceKind;
   /** The item id (semantic-model dataset id / lakehouse id / kql-database id). */
   itemId: string;
-  /** Semantic-model: the Power BI workspace id (optional; Loom-native works without). */
+  /**
+   * Semantic-model: the LOOM workspace id (the item's Cosmos partition key) —
+   * NOT a Power BI groupId. The reader targets
+   * `/api/items/semantic-model/{id}/model`, which `assertOwner`s it and 404s a
+   * Power BI groupId (#2649). Optional; Loom-native works without it.
+   */
   workspaceId?: string;
   /** Lakehouse: comma list of containers to scan (defaults to all configured). */
   containers?: string;

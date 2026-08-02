@@ -48,7 +48,12 @@ interface ModelResponse {
 }
 
 export interface PbiModelViewPanelProps {
-  /** Power BI groupId — appended to all calls; absent for Loom-native models. */
+  /**
+   * The LOOM workspace id (the item's Cosmos partition key) — NOT a Power BI
+   * groupId. Every call below targets `/api/items/semantic-model/[id]/model`,
+   * which runs `assertOwner(workspaceId, oid)` and answers 404 "semantic model
+   * not found" for a Power BI groupId (#2649). Omit it for Loom-native models.
+   */
   workspaceId?: string;
   /** Power BI dataset id OR a Loom content id (loom:<cosmosItemId>). */
   datasetId: string;
