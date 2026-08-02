@@ -39,6 +39,30 @@ export function defaultDatasetId(datasets: DatasetLite[], openedItemId: string):
   return openedItemId;
 }
 
+/** A `loom:`-prefixed entry: a Cosmos-backed template, not a live Power BI dataset. */
+export function isLoomDatasetId(datasetId: string): boolean {
+  return datasetId.startsWith(LOOM_DATASET_ID_PREFIX);
+}
+
+/**
+ * `datasetId` NARROWED to a live Power BI dataset — or '' when it is a Loom
+ * identity (#2649, remaining legs).
+ *
+ * The list route returns `loom:<cosmosItemId>` templates FIRST and the live
+ * Power BI datasets of the bound group after them, and `defaultDatasetId`
+ * falls back to the OPENED item's id when neither matches. So `datasetId` is a
+ * Power BI dataset id only when it appears in that list without the `loom:`
+ * prefix. Every Power BI-namespace read — dataset detail, refresh history, the
+ * Direct-Lake warm-cache runs — addresses a dataset INSIDE the bound Power BI
+ * group and must be keyed off THIS value, never off `datasetId`: pairing a Loom
+ * id with a Power BI groupId is what 404'd `GET /[id]` and `/[id]/refreshes` on
+ * every open while stamping the groupId into a Loom item URL.
+ */
+export function livePbiDatasetId(datasets: DatasetLite[] | null, datasetId: string): string {
+  if (!datasetId || isLoomDatasetId(datasetId)) return '';
+  return (datasets || []).some((d) => d.id === datasetId) ? datasetId : '';
+}
+
 /** Type-differentiated icon for a column, keyed off its backend-native data type. */
 export function ColumnTypeIcon({ dataType, className }: { dataType?: string; className?: string }) {
   return <span className={className} aria-hidden="true">{SM_KIND_ICON[classifyColumnType(dataType)]}</span>;

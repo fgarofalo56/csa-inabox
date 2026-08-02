@@ -137,7 +137,11 @@ describe('R10 module — direct-lake-tab', () => {
 
     const call = lastCall(calls, '/direct-lake');
     expect(call).toBeDefined();
-    expect(call!.url).toContain('/api/items/semantic-model/ds-1/direct-lake?workspaceId=ws-1');
+    // #2649: the GET carries NO workspace. The shim's Power BI workspace lives
+    // in the model's own Cosmos config (the route falls back to it); the param
+    // only ever carried the editor's auto-picked groupId — a Power BI id inside
+    // a Loom item URL.
+    expect(call!.url).toBe('/api/items/semantic-model/ds-1/direct-lake');
     expect(result.current.dlEnabled).toBe(true);
     expect(result.current.dlDeltaPath).toBe('abfss://gold@acct.dfs.core.windows.net/fact');
     expect(result.current.dlSla).toBe(900);
@@ -217,7 +221,10 @@ describe('R10 module — incremental-refresh-tab', () => {
 
     const put = calls.find((c) => c.init?.method === 'PUT' && c.url.includes('/refresh-policy'));
     expect(put).toBeDefined();
-    expect(put!.url).toContain('/api/items/semantic-model/ds-1/refresh-policy?workspaceId=ws-1');
+    // #2649: no workspace in the URL — the refresh-policy route is AAS/XMLA and
+    // resolves its server from env; it never read `workspaceId`, and what the
+    // editor sent was a Power BI groupId.
+    expect(put!.url).toBe('/api/items/semantic-model/ds-1/refresh-policy');
     const body = JSON.parse(String(put!.init?.body));
     expect(body.tableName).toBe('FactSales');
     expect(body.policy).toMatchObject({

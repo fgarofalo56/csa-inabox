@@ -168,11 +168,15 @@ export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefresh
 
   // Load the live partition schema (TMSCHEMA_PARTITIONS via AAS XMLA). Surfaces
   // the honest AAS config gate when LOOM_SEMANTIC_BACKEND!=analysis-services.
+  // #2649: the route is AAS/XMLA and resolves its server from env — it never
+  // reads `workspaceId`. It is kept as the enablement guard (a Power BI
+  // workspace still gates the surface today) but is NOT put in the URL, where
+  // it only ever stamped a Power BI groupId into a Loom item route.
   const loadIrPolicy = useCallback(async () => {
     if (!workspaceId || !datasetId) return;
     setIrGate(null); setIrPartitions([]);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}&tableName=${encodeURIComponent(irTableName)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?tableName=${encodeURIComponent(irTableName)}`);
       const j = await r.json();
       if (!j.ok) { setIrGate(j.error); return; }
       setIrPartitions(j.partitions || []);
@@ -191,7 +195,7 @@ export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefresh
     if (!workspaceId || !datasetId || !irTableName) return;
     setIrBusy(true); setIrMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           tableName: irTableName,
