@@ -23,6 +23,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import { AUDIT_TENANT_PREDICATE, auditScopeIds } from '@/lib/audit/audit-scope';
 import type { SqlParameter } from '@azure/cosmos';
 import {
   queryAuditLog,
@@ -85,8 +86,11 @@ export const GET = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   // every `object-security` and `uc-access-review` row was written into a hole.
   // The whole surface is already tenant-admin gated (above), so widening the
   // read to the viewer's tenant grants no new visibility to anyone.
+  // The scope rule now lives in lib/audit/audit-scope.ts, shared with the
+  // sibling counters on /admin/overview, /admin/usage and /governance/insights
+  // that had drifted back to the oid-only predicate (#2635).
   const tenantId = s.claims.oid; // cache/partition scope (existing design)
-  const auditScopeIds = [tenantId, ...(s.claims.tid && s.claims.tid !== tenantId ? [s.claims.tid] : [])];
+  const auditScopeIdList = auditScopeIds(s.claims);
 
   const p = req.nextUrl.searchParams;
   const q      = (p.get('q')      || '').toLowerCase().trim();
@@ -97,15 +101,15 @@ export const GET = withTenantAdmin(async (req: NextRequest, { session: s }) => {
   const itemId = (p.get('itemId') || '').trim();
   const top    = Math.min(1000, Math.max(1, Number(p.get('top') || 200)));
   const refresh = p.get('refresh') === '1';
-  const cacheKey = buildScopedCacheKey('admin/audit-logs', { tenantId, scope: auditScopeIds.join('|'), q, type, since, until, user, itemId, top });
+  const cacheKey = buildScopedCacheKey('admin/audit-logs', { tenantId, scope: auditScopeIdList.join('|'), q, type, since, until, user, itemId, top });
 
   const gates: { purview?: string; purviewInfo?: string; la?: string } = {};
 
   // ── 1. Cosmos (primary) ────────────────────────────────────────────────────
   async function fetchCosmos(): Promise<AuditRow[]> {
     const c = await auditLogContainer();
-    const where: string[] = ['ARRAY_CONTAINS(@tenants, c.tenantId)'];
-    const params: SqlParameter[] = [{ name: '@tenants', value: auditScopeIds }];
+    const where: string[] = [AUDIT_TENANT_PREDICATE];
+    const params: SqlParameter[] = [{ name: '@tenants', value: auditScopeIdList }];
     if (type)  { where.push('c.kind = @kind'); params.push({ name: '@kind',  value: type  }); }
     if (since) { where.push('c.at >= @since'); params.push({ name: '@since', value: since }); }
     if (until) { where.push('c.at <= @until'); params.push({ name: '@until', value: until }); }

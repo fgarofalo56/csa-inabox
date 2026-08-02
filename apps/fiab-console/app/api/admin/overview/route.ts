@@ -20,9 +20,13 @@
  *   openAuditItems                 — ARM AlertsManagement fired alerts
  *   sensitivityLabels              — Microsoft Graph MIP sensitivity labels
  *
- * Auth: getSession() → 401. Tenant isolation: every Cosmos query binds the
- * caller's oid (s.claims.oid) as the tenant partition key — cross-tenant
- * leakage is structurally impossible.
+ * Auth: getSession() → 401, then tenant-admin → 403. Tenant isolation: every
+ * Cosmos query over a /tenantId-partitioned container binds the caller's oid
+ * (s.claims.oid) as the tenant partition key — cross-tenant leakage is
+ * structurally impossible. The ONE exception is the `audit-log` container,
+ * which partitions on /itemId and whose rows carry either the actor's oid or
+ * the Entra tid: it is read cross-partition, scoped to the caller's own
+ * [oid, tid] (lib/audit/audit-scope.ts, #2635).
  */
 import { NextResponse } from 'next/server';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
@@ -41,6 +45,7 @@ import {
   incidentsContainer,
 } from '@/lib/azure/cosmos-client';
 import type { SqlParameter } from '@azure/cosmos';
+import { AUDIT_TENANT_PREDICATE, auditScopeIds } from '@/lib/audit/audit-scope';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
 import { listResources, listAlertHistory, queryLogs } from '@/lib/azure/monitor-client';
 import { listSensitivityLabels } from '@/lib/azure/mip-graph-client';
@@ -98,7 +103,16 @@ async function tile(fn: () => Promise<number>, hint: string): Promise<TileCount>
 }
 
 // ----------------------------------------------------------------------------
-// Cosmos-backed counts (all tenant-isolated on /tenantId = caller oid)
+// Cosmos-backed counts
+//
+// `countWhereTenant` is for containers PARTITIONED ON /tenantId (workspaces,
+// feature-permissions, attribute-groups, label-assignments, …): it binds the
+// caller's oid both as the predicate value and as the partition key, so the
+// read touches exactly one physical partition and cross-tenant leakage is
+// structurally impossible.
+//
+// It is DELIBERATELY NOT usable for the `audit-log` container, which partitions
+// on /itemId — see `auditEventCount` below and lib/audit/audit-scope.ts.
 // ----------------------------------------------------------------------------
 
 async function countWhereTenant(
@@ -112,6 +126,33 @@ async function countWhereTenant(
     query: `SELECT VALUE COUNT(1) FROM c WHERE c.tenantId = @t${extra}`,
     parameters: [{ name: '@t', value: tenantId }, ...params],
   }, { partitionKey: tenantId }).fetchAll();
+  return resources[0] ?? 0;
+}
+
+/**
+ * Audit events in the last 30 days — the `auditEvents` tile (#2635).
+ *
+ * Two deviations from `countWhereTenant`, BOTH mandatory, both explained in
+ * lib/audit/audit-scope.ts:
+ *   1. NO `partitionKey` option. The `audit-log` container partitions on
+ *      `/itemId`, so passing the caller's oid as the partition key pinned the
+ *      read to the partition `itemId === <caller oid>` — a partition no audit
+ *      row can ever occupy (`itemId` is the item/target). The tile was
+ *      structurally guaranteed to render 0, not merely under-count.
+ *   2. `oid`-OR-`tid` tenant scope, matching the `/admin/audit-logs` reader
+ *      (#2608), so the ~45 writers that record `tenantScopeId(session)` are
+ *      visible. This surface is tenant-admin gated (`withTenantAdmin`), so it
+ *      grants no visibility the audit viewer does not already grant.
+ */
+async function auditEventCount(scopeIds: string[], since: string): Promise<number> {
+  const c = await auditLogContainer();
+  const { resources } = await c.items.query<number>({
+    query: `SELECT VALUE COUNT(1) FROM c WHERE ${AUDIT_TENANT_PREDICATE} AND c.at >= @since`,
+    parameters: [
+      { name: '@tenants', value: scopeIds },
+      { name: '@since', value: since },
+    ],
+  }).fetchAll();
   return resources[0] ?? 0;
 }
 
@@ -247,20 +288,23 @@ async function blockedGateCount(): Promise<number> {
 
 export const GET = withTenantAdmin(async (_req, { session }) => {
   const tenantId = session.claims.oid;
+  // Audit-log rows are NOT partitioned on tenantId and are written under either
+  // the actor's oid or the Entra tid — see lib/audit/audit-scope.ts (#2635).
+  const auditScope = auditScopeIds(session.claims);
 
   // Cached 2 min + SWR: 12 parallel cross-partition Cosmos counts + ARM +
   // Graph reads per paint — at scale that is the Admin landing page's whole
   // budget. One cached crawl serves every admin (perf directive 2026-07-15).
   const { value: tiles } = await getOrComputeCached(
-    buildScopedCacheKey('admin/overview', { tenantId }),
+    buildScopedCacheKey('admin/overview', { tenantId, auditScope: auditScope.join('|') }),
     'admin',
-    () => computeTiles(tenantId),
+    () => computeTiles(tenantId, auditScope),
     { ttlMs: 2 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
   );
   return NextResponse.json({ ok: true, tiles });
 });
 
-async function computeTiles(tenantId: string): Promise<OverviewTiles> {
+async function computeTiles(tenantId: string, auditScope: string[]): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
@@ -269,10 +313,9 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
     tile(() => itemsCount(tenantId), COSMOS_HINT),
-    tile(() => countWhereTenant(
-      auditLogContainer, tenantId,
-      ' AND c.at >= @since',
-      [{ name: '@since', value: new Date(Date.now() - 30 * 24 * 3600_000).toISOString() }],
+    tile(() => auditEventCount(
+      auditScope,
+      new Date(Date.now() - 30 * 24 * 3600_000).toISOString(),
     ), COSMOS_HINT),
     tile(() => countWhereTenant(featurePermissionsContainer, tenantId), COSMOS_HINT),
     tile(() => countWhereTenant(attributeGroupsContainer, tenantId), COSMOS_HINT),
