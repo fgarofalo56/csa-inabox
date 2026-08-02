@@ -215,6 +215,26 @@ export default defineConfig({
       },
     },
     {
+      // #2648/#2649 — semantic-model tab CLICK-WALK. Real `locator.click()` on
+      // every tab of every strip in the editor, with an elementFromPoint hit
+      // test at each tab's own centre (the 9px-scroller defect made tabs
+      // visible but pointer-dead, which only a browser can catch), plus the
+      // #2649 request assertions (opened-item binding, no Power BI groupId on
+      // a Loom item route, zero 404s). Deliberately NOT in route-smoke and NOT
+      // a required check: it is the G1 receipt for those two issues.
+      name: 'sm-tab-clickwalk',
+      testDir: './e2e',
+      testMatch: /sm-tab-clickwalk\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        // Wide enough that a 26-tab strip has somewhere to scroll rather than
+        // wrapping into a different layout than the one #2648 was measured in.
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
       // L5 — column fan-out canvas + impact analysis receipts.
       name: 'lineage-columns',
       testDir: './e2e',
