@@ -148,3 +148,113 @@ describe('SemanticModelEditor', () => {
     expect((again as HTMLInputElement).value).toContain('DRAFT_VALUE');
   });
 });
+
+// ── #2649 — the two workspace id namespaces must never be crossed ────────────
+// The editor kept ONE `workspaceId` and fed it to BOTH `/api/powerbi/*` (which
+// wants a Power BI groupId) and the assertOwner-guarded Loom item routes
+// `/api/items/semantic-model/[id]/{model,roles,datasource}` (which want the
+// item's own Loom workspace and answer 404 "semantic model not found" for
+// anything else) — then auto-bound it to `powerBiWorkspaces[0]`. Result: two
+// 404s on EVERY open. Second half: `datasetId` auto-selected
+// `datasets[0]` — on a real estate a bundle template from a DIFFERENT
+// workspace — so every tab edited a model the user never opened.
+//
+// These cases are written to go RED on that tree: revert either half of the fix
+// and the corresponding expectation fails.
+describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
+  /** A Power BI groupId, as returned by /api/powerbi/workspaces. */
+  const PBI_WS = 'a3f1be79-855a-41b6-a719-d9d51e72d473';
+  /** The Loom workspace that actually owns the opened item. */
+  const LOOM_WS = 'b8720200-0000-4000-8000-000000000001';
+  /** The item the user opened (the id in the URL / breadcrumb). */
+  const ITEM_ID = 'b572e1c3-4cfb-4ba9-9d40-b905334b2500';
+  /** A DIFFERENT tenant-owned template that the list route returns FIRST. */
+  const FOREIGN_ID = 'loom:cfe580db-26c6-452d-817e-05422bc8e287';
+
+  /** Loom item sub-routes that `assertOwner` the `workspaceId` they are given. */
+  const LOOM_SUBROUTE = /\/api\/items\/semantic-model\/[^/?]+\/(model|roles|datasource)/;
+
+  function installCrossedNamespaceMocks() {
+    return installFetchMock({
+      '/api/config/ui': () => ({ biBackend: 'powerbi' }),
+      '/api/powerbi/workspaces': () => ({ ok: true, workspaces: [{ id: PBI_WS, name: 'fabric-csa-dev' }] }),
+      // The item record — the ONLY source of the opened item's Loom workspace.
+      '/api/cosmos-items/semantic-model/': () => ({
+        id: ITEM_ID, workspaceId: LOOM_WS, itemType: 'semantic-model',
+        displayName: 'Sales Semantic Model (Direct Lake)',
+        createdBy: '', createdAt: '', updatedAt: '', state: {},
+      }),
+      // The list route merges tenant-wide Cosmos templates with the bound Power
+      // BI workspace's live datasets. The FOREIGN template sorts first, exactly
+      // as on the estate where this was reproduced.
+      '/api/items/semantic-model?workspaceId=': () => ({
+        ok: true,
+        datasets: [
+          { id: FOREIGN_ID, name: 'Sales Analytics (Premium Import)', isRefreshable: false, targetStorageMode: 'Template' },
+          { id: `loom:${ITEM_ID}`, name: 'Sales Semantic Model (Direct Lake)', isRefreshable: false, targetStorageMode: 'Template' },
+        ],
+      }),
+      '/model': () => ({ ok: true, tables: [{ name: 'FactSales', columns: [], measures: [] }], relationships: [], hierarchies: [] }),
+    });
+  }
+
+  async function mountOpenedItem() {
+    const mocks = installCrossedNamespaceMocks();
+    render(<SemanticModelEditor item={makeItem('semantic-model', 'Semantic model')} id={ITEM_ID} />);
+    // Wait for a Loom sub-route call that carries a `workspaceId=` — i.e. the
+    // BOUND-dataset path, after the list resolved and a workspace was picked.
+    // (The Loom-native model view fires an unqualified `…/model` on mount; that
+    // one is not evidence of binding.) This condition is satisfied on the buggy
+    // tree too — with the Power BI groupId — so it does not mask the defect.
+    await waitFor(
+      () => expect(mocks.calls.some((c) => LOOM_SUBROUTE.test(c.url) && c.url.includes('workspaceId='))).toBe(true),
+      { timeout: 8000 },
+    );
+    return mocks;
+  }
+
+  /** Loom sub-route calls that actually carry a workspace id. */
+  const qualified = (calls: Array<{ url: string }>) =>
+    calls.filter((c) => LOOM_SUBROUTE.test(c.url) && c.url.includes('workspaceId='));
+
+  beforeEach(() => { invalidatePlatformConfig(); installFetchMock({}); });
+  afterEach(() => { vi.restoreAllMocks(); invalidatePlatformConfig(); });
+
+  it('never sends the Power BI workspace id to an assertOwner-guarded Loom item route', async () => {
+    const { calls } = await mountOpenedItem();
+    const loomCalls = qualified(calls);
+    expect(loomCalls.length).toBeGreaterThan(0);
+    // The exact 404 signature from the issue: a Power BI groupId on a Loom route.
+    expect(loomCalls.filter((c) => c.url.includes(PBI_WS)).map((c) => c.url)).toEqual([]);
+  });
+
+  it("sends the item's OWN Loom workspace to the Loom model route", async () => {
+    const { calls } = await mountOpenedItem();
+    expect(qualified(calls).some((c) => c.url.includes(LOOM_WS))).toBe(true);
+  });
+
+  it('binds to the OPENED item, not to the first entry the list route happens to return', async () => {
+    const { calls } = await mountOpenedItem();
+    const loomCalls = qualified(calls);
+    // `datasetId` lands in the PATH segment, so the bound model is observable.
+    expect(loomCalls.some((c) => c.url.includes(encodeURIComponent(`loom:${ITEM_ID}`)))).toBe(true);
+    expect(calls.filter((c) => c.url.includes(encodeURIComponent(FOREIGN_ID))).map((c) => c.url)).toEqual([]);
+  });
+
+  it('still makes ZERO Power BI calls on the DEFAULT (Loom-native) render — no-fabric-dependency.md', async () => {
+    const { calls } = installFetchMock({
+      // biBackend absent = the Azure-native default; Power BI stays opt-in.
+      '/api/config/ui': () => ({}),
+      '/api/cosmos-items/semantic-model/': () => ({
+        id: ITEM_ID, workspaceId: LOOM_WS, itemType: 'semantic-model',
+        displayName: 'Sales Semantic Model (Direct Lake)',
+        createdBy: '', createdAt: '', updatedAt: '', state: {},
+      }),
+    });
+    render(<SemanticModelEditor item={makeItem('semantic-model', 'Semantic model')} id={ITEM_ID} />);
+    await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+    // Give any opt-in fetch a chance to fire before asserting it never did.
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/api/cosmos-items/'))).toBe(true), { timeout: 5000 });
+    expect(calls.filter((c) => c.url.includes('/api/powerbi/'))).toEqual([]);
+  });
+});

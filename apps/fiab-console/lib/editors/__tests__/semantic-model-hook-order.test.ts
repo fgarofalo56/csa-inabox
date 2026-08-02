@@ -9,7 +9,15 @@
  *
  * The golden in `fixtures/semantic-model-hook-order.txt` was generated from
  * commit 20b3fe93 (`apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx`
- * at 3,025 LOC, before any R10 slice landed). It is 193 entries.
+ * at 3,025 LOC, before any R10 slice landed). It was 193 entries; it is now 195.
+ *
+ * The +2 (a `useState` + a `useEffect` inserted at index 6) is the ONE
+ * legitimate hook ADDITION since: #2649 split the editor's single `workspaceId`
+ * into `pbiWorkspaceId` (a Power BI groupId) and `loomWorkspaceId` (the item's
+ * own Loom workspace, resolved from its record), because feeding one value to
+ * both namespaces 404'd every assertOwner-guarded Loom item route on open. Per
+ * the regeneration policy at the foot of this comment, the golden was
+ * regenerated in that same commit and the two-line fixture diff is the artifact.
  *
  * This guard is not theoretical. The first push of PR #2565 (commit 25e464b0)
  * collapsed the incremental-refresh cluster into a single
@@ -50,7 +58,7 @@ describe('R10 decomposition — SemanticModelEditorInner hook order', () => {
       },
     );
 
-    expect(golden.length).toBe(193);
+    expect(golden.length).toBe(195);
     // Compare as joined strings so a failure prints the first differing region
     // rather than 193 lines of noise.
     const firstDiff = actual.findIndex((h, i) => h !== golden[i]);
