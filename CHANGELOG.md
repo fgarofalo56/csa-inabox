@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.1...csa-inabox-v0.82.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* **admin:** audit-log counters read the wrong partition and the wrong tenant scope ([#2792](https://github.com/fgarofalo56/csa-inabox/issues/2792)) ([80c5361](https://github.com/fgarofalo56/csa-inabox/commit/80c536182f16f1ed0e1855dbb799fb91bb6fc39b))
+* **audit:** tid-less sessions wrote audit rows nobody could ever read ([#2650](https://github.com/fgarofalo56/csa-inabox/issues/2650)) ([#2794](https://github.com/fgarofalo56/csa-inabox/issues/2794)) ([0f32f42](https://github.com/fgarofalo56/csa-inabox/commit/0f32f42927dcaed7c926c373a9c01cdd3813636c))
+* **ci:** route-smoke can fail again — flaky vs regression ([#2787](https://github.com/fgarofalo56/csa-inabox/issues/2787)) ([#2788](https://github.com/fgarofalo56/csa-inabox/issues/2788)) ([ff3c51e](https://github.com/fgarofalo56/csa-inabox/commit/ff3c51ef40033e70ad4954afb7b0f7c3b41ce7ed))
+* **copilot-evals:** a surface that scored ZERO questions is NOT a 0.00 hit-rate ([#2799](https://github.com/fgarofalo56/csa-inabox/issues/2799)) ([a7114d6](https://github.com/fgarofalo56/csa-inabox/commit/a7114d60e3049104ea9c58a6abca8a851c366430)), closes [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585)
+* **prompt-flow:** give the LLM connection picker a memo-busting refresh ([#2584](https://github.com/fgarofalo56/csa-inabox/issues/2584)) ([#2791](https://github.com/fgarofalo56/csa-inabox/issues/2791)) ([96c739c](https://github.com/fgarofalo56/csa-inabox/commit/96c739c1488c1891d5073a21a382311984370810))
+* **realtime-hub:** Fabric-only sources need BOTH halves of the opt-in ([#2666](https://github.com/fgarofalo56/csa-inabox/issues/2666)) ([#2790](https://github.com/fgarofalo56/csa-inabox/issues/2790)) ([61f847d](https://github.com/fgarofalo56/csa-inabox/commit/61f847d9e765583d8bf3724d827342aebe89dc4c))
+* **security:** the cross-tenant tid boundary was skipped on every session-less workspace-access call ([#2703](https://github.com/fgarofalo56/csa-inabox/issues/2703)) ([#2796](https://github.com/fgarofalo56/csa-inabox/issues/2796)) ([186c6b8](https://github.com/fgarofalo56/csa-inabox/commit/186c6b83b14510bb1abb73be589650f5578e7be3))
+* **security:** unity-catalog grants PATCH was authentication-only (privilege escalation) ([#2795](https://github.com/fgarofalo56/csa-inabox/issues/2795)) ([6c4d9ea](https://github.com/fgarofalo56/csa-inabox/commit/6c4d9eaf8566227e023c38c04e49d00b02220cf7)), closes [#2692](https://github.com/fgarofalo56/csa-inabox/issues/2692)
+* **semantic-model:** stop crossing the Power BI and Loom workspace id namespaces ([#2649](https://github.com/fgarofalo56/csa-inabox/issues/2649)) ([#2797](https://github.com/fgarofalo56/csa-inabox/issues/2797)) ([bd2c16a](https://github.com/fgarofalo56/csa-inabox/commit/bd2c16a99231c68ba407aeb43ebbf13ea37a8f71))
+
 ## [0.82.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.0...csa-inabox-v0.82.1) (2026-08-01)
 
 
