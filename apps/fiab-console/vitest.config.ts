@@ -133,7 +133,13 @@ export default defineConfig({
       exclude: [
         '**/__tests__/**',
         '**/*.test.{ts,tsx}',
-        '**/*.d.ts',
+        // .d.mts / .d.cts too — `**/*.d.ts` alone missed them, so
+        // lib/lsp/pylsp-bridge.d.mts sat in the coverage DENOMINATOR despite
+        // having no executable lines, diluting the very signal the note above
+        // says this list protects. It also breaks a Babel-instrumenting
+        // provider outright: istanbul tries to transform it and dies with
+        // `The constant "__test" must be initialized`.
+        '**/*.d.{ts,mts,cts}',
         // Type-only / declaration barrels and generated assets carry no
         // executable lines — counting them just dilutes the signal.
         'lib/**/*.types.ts',
