@@ -25,6 +25,27 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.4...csa-inabox-v0.82.5) (2026-08-02)
+
+
+### Bug Fixes
+
+* **ci:** give the copilot-evaluator an executable deploy path ([#2814](https://github.com/fgarofalo56/csa-inabox/issues/2814)) ([#2815](https://github.com/fgarofalo56/csa-inabox/issues/2815)) ([c5ccff8](https://github.com/fgarofalo56/csa-inabox/commit/c5ccff8c3aea70e69e8f42683805b8a7940c1621))
+* **e2e:** scope the semantic-model click-walk to the editor surface ([#2649](https://github.com/fgarofalo56/csa-inabox/issues/2649)) ([#2820](https://github.com/fgarofalo56/csa-inabox/issues/2820)) ([3b7fbd0](https://github.com/fgarofalo56/csa-inabox/commit/3b7fbd0ff8499000200ffdd7b08569a81bccf028))
+* **security:** stop diagram-zoom parsing mermaid output as HTML (js/xss-through-dom) ([#2812](https://github.com/fgarofalo56/csa-inabox/issues/2812)) ([286166e](https://github.com/fgarofalo56/csa-inabox/commit/286166efba3d5fceb8ab65859669904e139a4a90)), closes [#2669](https://github.com/fgarofalo56/csa-inabox/issues/2669)
+* **semantic-model:** stop pairing a Power BI groupId with a Loom dataset id ([#2649](https://github.com/fgarofalo56/csa-inabox/issues/2649)) ([#2818](https://github.com/fgarofalo56/csa-inabox/issues/2818)) ([902455d](https://github.com/fgarofalo56/csa-inabox/commit/902455d5c279e53cfa65b98aacb4052fcae6d406))
+
+
+### Documentation
+
+* **sharing:** the `sharing` partition key co-locates, it does not isolate ([#2620](https://github.com/fgarofalo56/csa-inabox/issues/2620)) ([#2810](https://github.com/fgarofalo56/csa-inabox/issues/2810)) ([cbe9f80](https://github.com/fgarofalo56/csa-inabox/commit/cbe9f807221ded8444007a8d21f7170f8004a7e7))
+
+
+### Tests
+
+* **e2e:** CLICK-WALK the semantic-model tab strip against the live estate ([#2648](https://github.com/fgarofalo56/csa-inabox/issues/2648), [#2649](https://github.com/fgarofalo56/csa-inabox/issues/2649)) ([#2817](https://github.com/fgarofalo56/csa-inabox/issues/2817)) ([5d51f96](https://github.com/fgarofalo56/csa-inabox/commit/5d51f961ac8c3f9e4b97635295029ed51926b630))
+* **loom-duckdb:** measure flightsql.py by arming the tracer on Flight's threads ([#2811](https://github.com/fgarofalo56/csa-inabox/issues/2811)) ([1e0358b](https://github.com/fgarofalo56/csa-inabox/commit/1e0358ba43dc9269ca1b2d864aa5738c8ce98cd3)), closes [#2580](https://github.com/fgarofalo56/csa-inabox/issues/2580)
+
 ## [0.82.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.3...csa-inabox-v0.82.4) (2026-08-02)
 
 
