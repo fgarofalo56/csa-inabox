@@ -76,7 +76,14 @@ function isGovLocation(loc: string | undefined | null): boolean {
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto' },
+  // `flexShrink: 0` is LOAD-BEARING (#2648): this strip is a direct flex child
+  // of ItemEditorChrome's height-constrained `mainPanel` column AND sets
+  // `overflow-x: auto`, so its CSS automatic minimum size is 0 rather than
+  // min-content. Without the pin it absorbs the column's whole negative free
+  // space and collapses to its own scrollbar height (~9px) while the TabList
+  // inside stays 32px and paints outside the scroller — losing pointer events,
+  // which made the tabs keyboard-only. See lib/editors/shared-styles.ts.
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto', flexShrink: 0, minHeight: 'fit-content' },
   // `minmax(0,1fr)` so a long unbroken value (Discovery URL, endpoint, principal
   // id) wraps instead of forcing the grid — and therefore the page — wider.
   metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },

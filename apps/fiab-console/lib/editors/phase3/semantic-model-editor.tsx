@@ -1282,8 +1282,17 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
             <>
               {/* ux-fabric-a W1 — tab-strip density: Fabric's item-tab strips are
                   compact (size=small) and scroll horizontally instead of wrapping
-                  or clipping; this strip carries 20+ real surfaces. */}
-              <div className={s.tabBar} style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+                  or clipping; this strip carries 20+ real surfaces.
+
+                  `flexShrink: 0` is LOAD-BEARING (#2648) and must stay next to
+                  the `overflowX` that makes this a scroll container. Making the
+                  strip a scroller drops its CSS automatic minimum size from
+                  min-content to 0, so as a direct flex child of the chrome's
+                  height-constrained column it collapsed to its own scrollbar
+                  (measured 9px) while the 32px TabList painted outside it and
+                  stopped receiving pointer events — all 26 tabs became
+                  keyboard-only. Keep the scroll (26 tabs need it) AND the pin. */}
+              <div className={s.tabBar} style={{ overflowX: 'auto', overflowY: 'hidden', flexShrink: 0 }}>
                 <TabList selectedValue={tab} size="small" onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
