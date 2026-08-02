@@ -66,8 +66,17 @@ export function loomSharingEnabled(): boolean {
   return process.env.LOOM_SHARING_ENABLED !== 'false';
 }
 
-/** The Loom tenant that owns the shares. Recipients are external, so the owning
- *  tenant cannot be read off the caller's token — it is the estate's own. */
+/**
+ * The Loom tenant that owns the shares. Recipients are external, so the owning
+ * tenant cannot be read off the caller's token — it is the estate's own.
+ *
+ * THE SINGLE SOURCE of the `sharing` container's partition key, for BOTH the
+ * recipient protocol path and the admin path (#2620). It is an estate CONSTANT,
+ * so that key is single-valued and co-locates shares with recipients; it is not
+ * a tenant boundary and must not be read as one. `session.claims.tid` is
+ * deliberately never used here — see the SINGLE-ESTATE ASSUMPTION block in
+ * lib/sharing/store.ts for what would have to change first.
+ */
 export function sharingOwnerTenantId(): string {
   return (
     process.env.LOOM_ENTRA_TENANT_ID

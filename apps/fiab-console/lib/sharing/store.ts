@@ -205,12 +205,49 @@ export async function loomSharingFetch(
 
 // ── Cosmos store ───────────────────────────────────────────────────────────
 //
-// ONE tenant-partitioned container holds both record kinds, with document ids
-// namespaced `share:<name>` / `recipient:<name>`. That is deliberate: every
-// recipient protocol call has to resolve the caller's grants, so keeping the
-// two kinds co-partitioned lets that hot path be a single-partition read
-// instead of two round trips. The model keeps bare names as ids; the prefixing
-// is an implementation detail confined to this file.
+// ONE container holds both record kinds, with document ids namespaced
+// `share:<name>` / `recipient:<name>`. That is deliberate: every recipient
+// protocol call has to resolve the caller's grants, so keeping the two kinds
+// co-partitioned lets that hot path be a single-partition read instead of two
+// round trips. The model keeps bare names as ids; the prefixing is an
+// implementation detail confined to this file.
+//
+// ---------------------------------------------------------------------------
+// SINGLE-ESTATE ASSUMPTION — `/tenantId` CO-LOCATES, IT DOES NOT ISOLATE (#2620)
+// ---------------------------------------------------------------------------
+// The container's partition key is `/tenantId` (lib/azure/cosmos-client.ts), and
+// every function below takes a `tenantId`. Read that as a co-location key and
+// NOTHING more. In any one deployment it is SINGLE-VALUED: every caller — the
+// recipient protocol path (`/api/delta-sharing/*`) and the admin path
+// (`/api/marketplace/sharing/*`) alike — passes `sharingOwnerTenantId()`, an
+// ESTATE CONSTANT read from LOOM_ENTRA_TENANT_ID / LOOM_MSAL_TENANT_ID /
+// AZURE_TENANT_ID. It is never `session.claims.tid`.
+//
+// That is correct for the shipped model rather than an oversight. Delta Sharing
+// recipients are EXTERNAL to the estate, so the owning tenant genuinely cannot
+// be read off the caller's token; the estate's own tenant is the only value
+// both paths can agree on. But it means the `tenantId = @t` predicate on every
+// query below filters nothing, and a reviewer must not mistake it for a tenant
+// boundary the way the phrase "tenant-partitioned" invited.
+//
+// THE ACTUAL BOUNDARY on this container is the recipient grant check in
+// lib/sharing/model.ts (`matchRecipientByPrincipal` → `recipientCanAccessShare`),
+// applied by lib/sharing/recipient-auth.ts before anything reaches the sharing
+// server. Nothing here defends a second tenant, and nothing here needs to: a
+// Loom estate is one tenant, and the Console's admin surface is reachable only
+// by that tenant's admins.
+//
+// IF A MULTI-TENANT CONSOLE EVER LANDS this becomes a real hole — tenant B's
+// admin would administer tenant A's shares, because both resolve to the same
+// partition. Closing it then means deriving the owner tenant from the session on
+// the ADMIN paths while keeping the estate constant on the RECIPIENT path (which
+// has no session), plus a cross-tenant negative test. That is issue #2620 option
+// (b) and is deliberately NOT what this code does. The invariant as shipped —
+// "the partition key comes from the estate constant, never from session claims"
+// — is pinned by __tests__/estate-partition-key.test.ts so the day someone wires
+// a session-derived tenant in here, it is a red build and not a silent
+// half-migration.
+
 
 type SharingDoc<T> = T & { kind: 'share' | 'recipient'; name: string };
 
@@ -289,7 +326,8 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Every published share for a tenant. Single-partition read. */
+/** Every published share in the estate. Single-partition read — `tenantId` is
+ *  the estate constant, so this is the whole share list, not a tenant slice. */
 export async function listShares(tenantId: string): Promise<LoomShare[]> {
   const c = await sharingContainer();
   const { resources } = await c.items
@@ -342,8 +380,9 @@ export async function deleteShare(tenantId: string, name: string): Promise<void>
   }
 }
 
-/** Every recipient for a tenant. Single-partition read — this is on the
- *  recipient hot path, once per protocol call. */
+/** Every recipient in the estate. Single-partition read — this is on the
+ *  recipient hot path, once per protocol call. As with {@link listShares},
+ *  `tenantId` is the estate constant and selects everything, not a slice. */
 export async function listRecipients(tenantId: string): Promise<LoomRecipient[]> {
   const c = await sharingContainer();
   const { resources } = await c.items
