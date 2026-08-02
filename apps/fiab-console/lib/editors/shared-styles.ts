@@ -38,8 +38,34 @@ export const useSharedEditorStyles = makeStyles({
   },
   /** Responsive auto-fill card grid. */
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
-  /** Tab strip container. */
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  /**
+   * Tab strip container.
+   *
+   * `flexShrink: 0` is LOAD-BEARING (#2648) — do not drop it. Every editor
+   * renders its strip as a direct flex child of ItemEditorChrome's
+   * height-constrained `mainPanel` column (`height: calc(100vh - 112px)` →
+   * `flex: 1; min-height: 0`). CSS gives a column flex item an automatic
+   * minimum size of `min-content` ONLY while its `overflow` is `visible`; the
+   * moment a long strip becomes its own scroll container (`overflow-x: auto`,
+   * which the 26-tab semantic-model strip and the Foundry hub strip both set)
+   * that automatic minimum resolves to **0** instead. The strip then absorbs
+   * the column's entire negative free space and collapses to the height of its
+   * own horizontal scrollbar — measured live at **9px** — while the
+   * `fui-TabList` inside keeps its 32px height and therefore paints OUTSIDE its
+   * own scroller, underneath the sibling content divs. The tabs stay visible
+   * but stop receiving pointer events entirely: every tab became
+   * keyboard-only, including under Playwright `{ force: true }`.
+   *
+   * Pinning the strip against shrink keeps it at content height, so the tabs
+   * stay inside their scroller and clickable. `minHeight: 'fit-content'` is the
+   * belt-and-braces for grid/other contexts where `flex-shrink` does not apply.
+   */
+  tabBar: {
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    flexShrink: 0,
+    minHeight: 'fit-content',
+  },
   /** Query/exec results container. */
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '180px' },
   /** Results metadata row (row count, duration…). */
