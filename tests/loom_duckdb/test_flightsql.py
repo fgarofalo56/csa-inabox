@@ -16,6 +16,9 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
+import sys
+import threading
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -412,3 +415,88 @@ class TestAuditLog:
         sql = "SELECT '" + ("x" * 4000) + "' AS s"
         wire.plan(sql)
         assert len(wire.audit[-1]["statement"]) == 2000
+
+    def test_the_default_audit_sink_writes_exactly_one_json_line_per_access(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Every test above injects its own sink, so the sink the CONTAINER
+        # actually runs was never exercised. Container Apps ships stdout to Log
+        # Analytics line-by-line: a row that spans two lines is two malformed
+        # records, and the ATO join on `ticketId` silently loses half its rows.
+        row = {
+            "source": "loom-duckdb-flightsql",
+            "operation": "flight.doGet",
+            "ticketId": "ticket-1",
+            "statement": "SELECT 1\n-- a statement with a newline in it",
+        }
+        with caplog.at_level(logging.INFO, logger="loom-duckdb.flightsql"):
+            flightsql._stdout_audit(row)
+
+        emitted = [r.getMessage() for r in caplog.records if r.name == "loom-duckdb.flightsql"]
+        assert len(emitted) == 1
+        payload = emitted[0].split("flight-access ", 1)[1]
+        assert "\n" not in payload
+        assert json.loads(payload) == row
+
+
+# ── coverage instrumentation (#2580) ─────────────────────────────────────────
+class TestTracingOnFlightThreads:
+    """`sys.settrace` is per-thread; Flight's callbacks are not on our threads.
+
+    coverage.py reaches a thread only by installing its tracer through
+    `threading.settrace()`, which CPython applies to threads started via the
+    `threading` module. `pyarrow.flight` dispatches every callback on gRPC's
+    C++-managed threads, so `flightsql.py` executed in full while the instrument
+    reported 26% of it — which is why the file used to be omitted from the gated
+    coverage set entirely.
+
+    `arm_tracer()` in `conftest.py` closes that: it hands the active trace
+    function to `sys.settrace()` from inside the foreign thread, on entry to
+    every Flight callback. This test is the guard on that mechanism — if a
+    callback ever runs unarmed again, the coverage number for this file goes
+    back to being fiction, and this goes RED instead of the number quietly
+    dropping.
+    """
+
+    def test_a_flight_callback_runs_on_a_foreign_thread_with_the_tracer_armed(
+        self, wire: Wire, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Stand in for coverage.py's own hook so this test means the same thing
+        # with and without `--cov`. It DELEGATES to whatever is really installed,
+        # so running under coverage still measures the Flight thread normally.
+        real = threading.gettrace()
+
+        def probe_trace(frame: Any, event: Any, arg: Any) -> Any:
+            return real(frame, event, arg) if real is not None else None
+
+        monkeypatch.setattr(threading, "gettrace", lambda: probe_trace)
+
+        observed: list[tuple[int, Any]] = []
+        sink = wire.server._audit
+
+        def record(row: dict[str, Any]) -> None:
+            # `_log` runs inside the production callback, on its own thread.
+            observed.append((threading.get_ident(), sys.gettrace()))
+            sink(row)
+
+        monkeypatch.setattr(wire.server, "_audit", record)
+
+        wire.plan("SELECT 1")
+
+        assert observed, "the Flight callback never reached the audit sink"
+        ident, trace_fn = observed[0]
+
+        # CONTROL — holds with and without the fix. It is the premise of #2580:
+        # the callback really does run off the main thread. If this ever fails,
+        # Flight stopped using foreign threads and the arming is redundant.
+        assert ident != threading.get_ident(), (
+            "The Flight callback ran on the main thread — the premise of #2580 "
+            "no longer holds and conftest.arm_tracer() can be reconsidered."
+        )
+
+        assert trace_fn is not None, (
+            "A Flight callback ran on an UNTRACED thread: coverage.py cannot "
+            "measure apps/loom-duckdb/app/flightsql.py, and any percentage "
+            "reported for it is fiction. See arm_tracer() in "
+            "tests/loom_duckdb/conftest.py (#2580)."
+        )

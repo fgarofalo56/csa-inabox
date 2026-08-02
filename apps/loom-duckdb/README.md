@@ -133,15 +133,27 @@ an instrument reading, not a self-assessment:
 
 | module | line+branch |
 | --- | --- |
+| `flightsql.py` | 100% |
+| `main.py` | 100% |
 | `engine.py` | 99% |
-| `main.py` | 97% |
-| `sqlguard.py` | 95% |
+| `sqlguard.py` | 97% |
 | `tickets.py` | 91% |
 | `pbcodec.py` | 84% |
-| **gated total** | **93%** |
+| **gated total** | **96%** |
 
-`flightsql.py` is deliberately in `[tool.coverage.run] omit`: pyarrow.flight
-dispatches every server callback on gRPC's own native threads, which coverage.py
-cannot trace (`sys.settrace` is per-thread). It reports 26% for code the tests
-provably execute — see #2580. Its real signal is the 30 behavioural tests in
-`test_flightsql.py`.
+`flightsql.py` used to be in `[tool.coverage.run] omit` and reported 26%: pyarrow.flight
+dispatches every server callback on gRPC's own native threads, and `sys.settrace`
+is per-thread, so coverage.py never saw code the tests provably executed (#2580).
+It is now measured. `arm_tracer()` in `tests/loom_duckdb/conftest.py` hands the
+active trace function to `sys.settrace()` from inside those threads, on entry to
+each Flight callback — nothing about the module under test changes, the real
+handler still runs on the real gRPC thread over the real wire. Verified on
+CPython 3.10/3.11/3.12/3.13. `TestTracingOnFlightThreads` in `test_flightsql.py`
+is the guard: it fails if a callback ever runs on an unarmed thread again, so the
+number can never quietly go back to being fiction.
+
+Two fixes proposed on #2580 were measured and rejected: `COVERAGE_CORE=sysmon` is
+refused outright while `branch = true` (`sys.monitoring` cannot measure branches
+before CPython 3.14, and coverage falls back to the default core with a warning),
+and `threading.settrace_all_threads()` only reaches thread states that already
+exist, so it never sees gRPC's.

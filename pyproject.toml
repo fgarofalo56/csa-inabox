@@ -564,16 +564,14 @@ omit = [
     "**/__init__.py",
     "**/conftest.py",
     "**/test_*.py",
-    # coverage.py CANNOT measure this file: pyarrow.flight dispatches every
-    # server callback (`start_call`, `get_flight_info`, `get_schema`, `do_get`,
-    # `_log`, ...) on gRPC's own C++-managed threads, and `sys.settrace` is
-    # per-thread — coverage only traces threads created through the `threading`
-    # module. Proof it is an artifact and not a gap: test_flightsql.py asserts
-    # on `wire.audit[-1]['principalOid']`, which can only exist because `_log`
-    # (flightsql.py:141) ran, yet coverage reports that line as missed. Gating
-    # on the fictitious 26% it reports would misstate reality. Tracked in #2580;
-    # the real signal for this surface is its 30 behavioural tests.
-    "apps/loom-duckdb/app/flightsql.py",
+    # NOTE (#2580): apps/loom-duckdb/app/flightsql.py used to be omitted here
+    # because coverage.py reported a fictitious 26% for it — pyarrow.flight
+    # dispatches every server callback on gRPC's C++-managed threads and
+    # `sys.settrace` is per-thread, so coverage never saw code that demonstrably
+    # ran. It is now MEASURED (100%): tests/loom_duckdb/conftest.py arms the
+    # active trace function from inside those threads (`arm_tracer`), and
+    # test_flightsql.py::TestTracingOnFlightThreads fails if a callback ever
+    # runs unarmed again. Do not re-add it here — fix the guard instead.
 ]
 
 [tool.coverage.report]
