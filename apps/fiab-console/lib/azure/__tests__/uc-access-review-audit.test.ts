@@ -227,4 +227,83 @@ describe('recordUcAccessReview', () => {
     expect((emitAuditEvent.mock.calls[0][0] as any).detail)
       .toMatchObject({ resultPrincipals: 42, closureSize: 7 });
   });
+
+  // ── #2692 — the WRITE half of the grants surface ──────────────────────────
+  // `PATCH …/grants` was authentication-only. It is tenant-admin gated now, and
+  // BOTH outcomes land here: the applied change and — the row that only this
+  // module can carry, because a refusal never reaches a transport — the denial.
+
+  it('records a DENIED grant change as an access CHANGE, not an access review', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'CATALOG', securableName: 'sales', effective: false,
+      decision: 'denied-grant-change',
+      changedPrincipals: 1, privilegesAdded: 1, privilegesRemoved: 0,
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    expect((create.mock.calls[0][0] as any)).toMatchObject({
+      kind: UC_ACCESS_REVIEW_KIND,
+      category: 'access-change',
+      decision: 'denied-grant-change',
+      itemId: 'unity-catalog:CATALOG:sales',
+      changedPrincipals: 1, privilegesAdded: 1, privilegesRemoved: 0,
+      tenantId: 'tid-1',
+    });
+    expect(emitAuditEvent.mock.calls[0][0]).toMatchObject({
+      action: 'unity-catalog.grant-change.denied', outcome: 'denied',
+    });
+  });
+
+  it('records an APPLIED grant change with its blast radius', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'SCHEMA', securableName: 'main.sales', effective: false,
+      decision: 'allowed-grant-change',
+      changedPrincipals: 2, privilegesAdded: 3, privilegesRemoved: 1,
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    expect((create.mock.calls[0][0] as any).category).toBe('access-change');
+    expect(emitAuditEvent.mock.calls[0][0]).toMatchObject({
+      action: 'unity-catalog.grant-change.applied', outcome: 'success',
+    });
+    expect((emitAuditEvent.mock.calls[0][0] as any).detail)
+      .toMatchObject({ changedPrincipals: 2, privilegesAdded: 3, privilegesRemoved: 1 });
+  });
+
+  // ── Amplification: the denial branch runs BEFORE any request validation and
+  // `withSession` applies no rate limit, so an ungranted caller must not be able
+  // to drive unbounded text/numbers into the shared audit container. Bounded at
+  // the SINK, so every caller inherits it (the defect #2607 round-3 fixed on the
+  // sibling governance trail).
+
+  it('BOUNDS a hostile securable name instead of copying it into Cosmos', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'CATALOG', securableName: 'A'.repeat(50_000), effective: false,
+      decision: 'denied-grant-change', nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    const rec = create.mock.calls[0][0] as any;
+    expect(rec.securableName.length).toBeLessThanOrEqual(257);
+    expect(rec.itemId.length).toBeLessThan(300);
+  });
+
+  it('BOUNDS a hostile probed principal too (the READ denial path)', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'TABLE', securableName: 'main.sales.pii', effective: true,
+      probedPrincipal: 'B'.repeat(50_000), decision: 'denied-principal-probe',
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    expect((create.mock.calls[0][0] as any).probedPrincipal.length).toBeLessThanOrEqual(257);
+  });
+
+  it('CLAMPS a hostile count rather than storing whatever arrived', async () => {
+    await recordUcAccessReview(SESSION, {
+      securableType: 'CATALOG', securableName: 'sales', effective: false,
+      decision: 'denied-grant-change',
+      changedPrincipals: 9_999_999, privilegesAdded: -5, privilegesRemoved: Number.NaN,
+      nowIso: '2026-07-28T00:00:00.000Z',
+    });
+    const rec = create.mock.calls[0][0] as any;
+    expect(rec.changedPrincipals).toBe(10_000);
+    expect(rec.privilegesAdded).toBe(0);
+    // NaN is not a count — it must not reach the row at all.
+    expect('privilegesRemoved' in rec).toBe(false);
+  });
 });

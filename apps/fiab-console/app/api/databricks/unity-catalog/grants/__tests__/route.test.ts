@@ -13,13 +13,29 @@
  * platform identity, so a non-admin aiming it at a THIRD party must 403, must
  * not reach the directory at all, and must leave an audit row. "A can read A's
  * own answer" proves nothing about whether A can read B's.
+ *
+ * #2692 does the same for the WRITE half. `PATCH …/grants` shipped on
+ * `withSession` — the AUTHENTICATION wrapper — while calling
+ * `updatePermissions`, so any signed-in tenant user could rewrite who holds
+ * which privilege on any securable. It is tenant-admin gated now, and the
+ * attacks below assert BOTH the 403 and that `updatePermissions` was never
+ * reached: a 403 returned after the grant landed is not a gate.
+ *
+ * `requireTenantAdmin` is NOT mocked — the real implementation runs, driven by
+ * the real `LOOM_TENANT_ADMIN_OID` / `LOOM_TENANT_ADMIN_GROUP_ID` mechanism, so
+ * these specs exercise the actual gate rather than a stub that returns whatever
+ * the test wants. (`isTenantAdmin` stays a spy because the GET principal-probe
+ * path takes it as an explicit argument.)
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/azure/databricks-client', () => ({ databricksConfigGate: vi.fn() }));
 vi.mock('@/lib/azure/uc-backend', () => ({ isOssUc: vi.fn(() => false) }));
-vi.mock('@/lib/auth/feature-gate', () => ({ isTenantAdmin: vi.fn(() => false) }));
+vi.mock('@/lib/auth/feature-gate', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isTenantAdmin: vi.fn(() => false),
+}));
 vi.mock('@/lib/azure/uc-access-review-audit', () => ({ auditUcAccessReview: vi.fn(async () => {}) }));
 vi.mock('@/lib/azure/unity-catalog-client', () => ({
   primaryWorkspaceHost: vi.fn(async () => 'adb-1.7.azuredatabricks.net'),
@@ -48,6 +64,15 @@ beforeEach(() => {
   (isTenantAdmin as any).mockReturnValue(false);
   (auditUcAccessReview as any).mockResolvedValue(undefined);
   (primaryWorkspaceHost as any).mockResolvedValue('adb-1.7.azuredatabricks.net');
+  // PATCH is tenant-admin gated (#2692) and the REAL requireTenantAdmin runs, so
+  // the existing PATCH specs below need the caller to actually BE an admin. The
+  // attack block clears this.
+  process.env.LOOM_TENANT_ADMIN_OID = 'oid-1';
+});
+
+afterEach(() => {
+  delete process.env.LOOM_TENANT_ADMIN_OID;
+  delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
 });
 
 describe('GET /grants', () => {
@@ -175,6 +200,141 @@ describe('PATCH /grants', () => {
   it('400 when no valid changes', async () => {
     const res = await PATCH(patchReq({ securable_type: 'CATALOG', full_name: 'sales', changes: [{ principal: '' }] }));
     expect(res.status).toBe(400);
+  });
+
+  it('audits the APPLIED change with its blast radius', async () => {
+    (updatePermissions as any).mockResolvedValue({ privilege_assignments: [] });
+    await PATCH(patchReq({
+      securable_type: 'SCHEMA', full_name: 'main.sales',
+      changes: [
+        { principal: 'analysts', add: ['SELECT', 'MODIFY'] },
+        { principal: 'contractors', remove: ['SELECT'] },
+      ],
+    }));
+    expect(auditUcAccessReview).toHaveBeenCalledTimes(1);
+    expect((auditUcAccessReview as any).mock.calls[0][1]).toMatchObject({
+      decision: 'allowed-grant-change',
+      securableType: 'SCHEMA', securableName: 'main.sales',
+      changedPrincipals: 2, privilegesAdded: 2, privilegesRemoved: 1,
+    });
+  });
+});
+
+// ============================================================
+// #2692 — the grant MUTATION was authentication-only. Tested as an ATTACK.
+// ============================================================
+
+describe('PATCH /grants — authorization (privilege escalation)', () => {
+  const CHANGE = {
+    securable_type: 'CATALOG', full_name: 'sales',
+    changes: [{ principal: 'mallory@contoso.com', add: ['ALL_PRIVILEGES'] }],
+  };
+
+  beforeEach(() => {
+    // A perfectly valid, signed-in, NON-admin session — exactly what
+    // `withSession` alone admitted.
+    delete process.env.LOOM_TENANT_ADMIN_OID;
+    delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
+    (updatePermissions as any).mockResolvedValue({ privilege_assignments: [] });
+  });
+
+  it('ATTACK: a signed-in NON-admin cannot grant itself ALL_PRIVILEGES — 403, and nothing is written', async () => {
+    const res = await PATCH(patchReq(CHANGE));
+    expect(res.status).toBe(403);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('admin_only');
+    // The honest gate names the remediation rather than saying "forbidden".
+    expect(j.remediation).toBeTruthy();
+    // The whole point: the mutation must NOT reach Unity Catalog. A 403 handed
+    // back after updatePermissions ran would still have moved the privilege.
+    expect(updatePermissions).not.toHaveBeenCalled();
+    expect(primaryWorkspaceHost).not.toHaveBeenCalled();
+  });
+
+  it('ATTACK: a REVOKE is refused the same way (denial of service on the grant graph)', async () => {
+    const res = await PATCH(patchReq({
+      securable_type: 'TABLE', full_name: 'main.sales.orders',
+      changes: [{ principal: 'ceo@contoso.com', remove: ['SELECT'] }],
+    }));
+    expect(res.status).toBe(403);
+    expect(updatePermissions).not.toHaveBeenCalled();
+  });
+
+  it('ATTACK: the METASTORE securable — the top of the tree — is refused too', async () => {
+    const res = await PATCH(patchReq({
+      securable_type: 'METASTORE', full_name: '',
+      changes: [{ principal: 'mallory@contoso.com', add: ['CREATE_CATALOG'] }],
+    }));
+    expect(res.status).toBe(403);
+    expect(updatePermissions).not.toHaveBeenCalled();
+  });
+
+  it('the gate runs BEFORE the Databricks config gate — a non-admin learns nothing about the deployment', async () => {
+    (databricksConfigGate as any).mockReturnValue({ missing: 'LOOM_DATABRICKS_HOSTNAME' });
+    const res = await PATCH(patchReq(CHANGE));
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('admin_only');
+  });
+
+  it('the gate runs BEFORE validation — an invalid securable is still a 403, not a 400', async () => {
+    const res = await PATCH(patchReq({ securable_type: 'PIPELINE', full_name: 'x', changes: [{ principal: 'p', add: ['SELECT'] }] }));
+    expect(res.status).toBe(403);
+    expect(updatePermissions).not.toHaveBeenCalled();
+  });
+
+  it('every DENIAL is audited, with what was attempted — bounded to derived facts', async () => {
+    await PATCH(patchReq(CHANGE));
+    expect(auditUcAccessReview).toHaveBeenCalledTimes(1);
+    expect((auditUcAccessReview as any).mock.calls[0][1]).toMatchObject({
+      decision: 'denied-grant-change',
+      securableType: 'CATALOG', securableName: 'sales',
+      changedPrincipals: 1, privilegesAdded: 1, privilegesRemoved: 0,
+      effective: false,
+    });
+  });
+
+  it('an unparseable body still leaves a denial row (a refusal is never silent)', async () => {
+    const res = await PATCH({ json: async () => { throw new SyntaxError('bad json'); } } as any);
+    expect(res.status).toBe(403);
+    expect((auditUcAccessReview as any).mock.calls[0][1]).toMatchObject({
+      decision: 'denied-grant-change', securableType: '(unparsed)',
+    });
+  });
+
+  it('an unrecognised securable is NOT copied verbatim into the audit row', async () => {
+    await PATCH(patchReq({ securable_type: 'X'.repeat(5000), full_name: 'y', changes: [] }));
+    expect((auditUcAccessReview as any).mock.calls[0][1].securableType).toBe('(invalid)');
+  });
+
+  it('an audit-sink failure never changes the refusal', async () => {
+    (auditUcAccessReview as any).mockRejectedValue(new Error('cosmos down'));
+    const res = await PATCH(patchReq(CHANGE));
+    expect(res.status).toBe(403);
+    expect(updatePermissions).not.toHaveBeenCalled();
+  });
+
+  it('a TENANT ADMIN is let through — the gate is authorization, not a wall', async () => {
+    process.env.LOOM_TENANT_ADMIN_OID = 'oid-1';
+    const res = await PATCH(patchReq(CHANGE));
+    expect(res.status).toBe(200);
+    expect(updatePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('admin standing via the GROUP claim works too (the deploy-param path)', async () => {
+    process.env.LOOM_TENANT_ADMIN_GROUP_ID = 'grp-admins';
+    (getSession as any).mockReturnValue({ ...SESSION, claims: { ...SESSION.claims, groups: ['grp-admins'] } });
+    const res = await PATCH(patchReq(CHANGE));
+    expect(res.status).toBe(200);
+    expect(updatePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('401 without a session at all (authentication still precedes authorization)', async () => {
+    (getSession as any).mockReturnValue(null);
+    const res = await PATCH(patchReq(CHANGE));
+    expect(res.status).toBe(401);
+    expect(updatePermissions).not.toHaveBeenCalled();
+    expect(auditUcAccessReview).not.toHaveBeenCalled();
   });
 });
 

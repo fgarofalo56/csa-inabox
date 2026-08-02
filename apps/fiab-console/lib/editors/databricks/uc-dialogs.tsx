@@ -541,7 +541,12 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
         body: JSON.stringify({ securable_type: grSecurable, full_name: grFullName.trim(), changes: [change] }),
       });
       const j = await r.json();
-      if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
+      if (!j.ok) {
+        // Tenant-admin-only mutation (#2692) — surface the honest gate text.
+        if (j.code === 'admin_only') setGrErr(`${j.reason} ${j.remediation}`);
+        else setGrErr(j.error || `HTTP ${r.status}`);
+        return;
+      }
       setGrGrants((j.grants || []).map((g: any) => ({ principal: g.principal, privileges: g.privileges || [] })));
       setGrPrivs(new Set());
     } catch (e: any) { setGrErr(e?.message || String(e)); }
