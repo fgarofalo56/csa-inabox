@@ -14,7 +14,11 @@ name: loom-roll-and-validate
 #      while the check is still in_progress (#2819). Three states, kept apart —
 #      passed → proceed, failed → refuse, not-yet → keep waiting up to
 #      LOOM_ROLL_VITEST_WAIT_MINUTES (default 50). A TIMEOUT IS A REFUSAL.
-#   2. Roll the image → wait for revision health → purge Front Door.
+#   2. Roll the image → wait for revision health → purge Front Door. The purge
+#      DISCOVERS the endpoint that backs the URL about to be validated (by
+#      hostName or routed custom domain) rather than assuming a name, and an
+#      unresolvable endpoint is a failure rather than a swallowed error — for
+#      months it was neither, so the purge never once ran (#2828).
 #   3. Validate the live URL (unauthenticated /health + /build-marker curls).
 #   4. Gate — in-VNet UAT: start the `loom-uat` Container App Job (a full-visual
 #      Playwright suite that runs INSIDE the console VNet, minting a session — no
@@ -369,12 +373,128 @@ jobs:
             if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then break; fi
             sleep 10
           done
-          # Purge Front Door so we don't validate a cached old page.
-          FD_PROFILE=$(az afd profile list -g ${{ env.RG_NAME }} --query "[0].name" -o tsv)
-          if [[ -n "$FD_PROFILE" ]]; then
-            az afd endpoint purge --profile-name "$FD_PROFILE" -g ${{ env.RG_NAME }} \
-              --endpoint-name ${{ env.APP_NAME }} --content-paths '/*' --no-wait || true
+
+      # #2828 — the purge that had NEVER executed.
+      #
+      # This lived at the tail of "Wait for revision health" and read:
+      #
+      #   FD_PROFILE=$(az afd profile list -g "$RG" --query "[0].name" -o tsv)  # discovered
+      #   az afd endpoint purge --profile-name "$FD_PROFILE" -g "$RG" \
+      #     --endpoint-name loom-console --content-paths '/*' --no-wait || true # ASSUMED
+      #
+      # The real endpoint carries a per-deployment suffix (loom-console-<suffix>),
+      # so every roll's purge failed `ResourceNotFound` — and `|| true` discarded
+      # the verdict inside a step that reported success, which is also why the
+      # error was invisible: it was buried in a step about revision health. Same
+      # class as #2819 / #2775: a control that runs, fails, and reads green.
+      #
+      # Both the profile AND the endpoint are now DISCOVERED, and the endpoint is
+      # chosen because it BACKS THE URL WE ARE ABOUT TO VALIDATE — its own
+      # hostName, or a custom domain routed to it (the live shape: the roll probes
+      # the vanity domain, which no endpoint hostName equals). Never by index:
+      # "[0].name" is the same assumption one line over. Selection logic +
+      # unit tests: scripts/ci/fd-resolve-purge-target.mjs.
+      #
+      # THREE STATES, KEPT APART — the #2819 lesson applied here:
+      #   not-applicable  no AFD profile in the RG. Front Door is opt-in
+      #                   (frontDoorEnabled, default off), so this is a legitimate
+      #                   estate shape -> ::notice::, continue.
+      #   unresolved      profiles exist but none has an endpoint backing this URL
+      #                   (or two-plus candidates and no match). We cannot claim
+      #                   the cache was cleared, so the validation that follows
+      #                   cannot be trusted -> ::error:: naming the host sought AND
+      #                   every endpoint/domain that exists -> FAIL the step.
+      #                   Deterministic misconfiguration; retrying cannot help.
+      #   resolved        purge it. A purge API error is RETRIED (3x, backoff) and,
+      #                   if it still fails, is a loud ::warning:: rather than a
+      #                   roll-blocker — the same policy this file already applies
+      #                   to an unreachable ACR in the SC1 gate: an infra hiccup
+      #                   must never permanently block a roll, but it must never
+      #                   read as success either. Unreachable != purged.
+      #
+      # Blast radius of a FAIL here: the run goes red and files an issue, but the
+      # Rollback step keys on validate/uat outcomes, so a healthy new revision is
+      # NOT reverted for a Front Door discovery problem.
+      #
+      # PUBLIC REPO: `az afd route list --query "[].customDomains[].id"` returns
+      # ARM ids containing the subscription. They are basenamed here and never
+      # printed.
+      - name: Purge Front Door (endpoint discovered, never assumed)
+        id: fdpurge
+        env:
+          RG: ${{ env.RG_NAME }}
+          PROBE_URL: ${{ steps.vars.outputs.url }}
+        run: |
+          REC="$(mktemp)"
+          PROFILES=$(az afd profile list -g "$RG" --query "[].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+
+          for P in $PROFILES; do
+            printf 'profile\t%s\n' "$P" >> "$REC"
+            CDLIST=$(az afd custom-domain list --profile-name "$P" -g "$RG" \
+              --query "[].[name,hostName]" -o tsv 2>/dev/null | tr -d '\r' || true)
+            EPLIST=$(az afd endpoint list --profile-name "$P" -g "$RG" \
+              --query "[].[name,hostName]" -o tsv 2>/dev/null | tr -d '\r' || true)
+            EPNAMES=$(printf '%s\n' "$EPLIST" | awk -F'\t' 'NF{print $1}')
+            for EN in $EPNAMES; do
+              EH=$(printf '%s\n' "$EPLIST" | awk -F'\t' -v n="$EN" '$1==n{print $2; exit}')
+              printf 'endpoint\t%s\t%s\t%s\n' "$P" "$EN" "${EH:-}" >> "$REC"
+              # Which custom domains are routed to THIS endpoint. `$EN` traces back
+              # to the `az afd endpoint list` above — the shape
+              # check-afd-endpoint-discovery requires. Basename the ARM ids: this
+              # repo is public and those ids carry the subscription.
+              CDNAMES=$(az afd route list --profile-name "$P" -g "$RG" --endpoint-name "$EN" \
+                --query "[].customDomains[].id" -o tsv 2>/dev/null \
+                | awk -F/ '{print $NF}' | tr -d '\r' || true)
+              for CDN in $CDNAMES; do
+                CDH=$(printf '%s\n' "$CDLIST" | awk -F'\t' -v n="$CDN" '$1==n{print $2; exit}')
+                if [ -n "${CDH:-}" ]; then
+                  printf 'domain\t%s\t%s\t%s\n' "$P" "$EN" "$CDH" >> "$REC"
+                fi
+              done
+            done
+          done
+
+          VERDICT="$(node scripts/ci/fd-resolve-purge-target.mjs --url "$PROBE_URL" --input "$REC")"
+          STATE=$(printf '%s\n' "$VERDICT" | sed -n 's/^state=//p')
+          FD_PROFILE=$(printf '%s\n' "$VERDICT" | sed -n 's/^profile=//p')
+          FD_ENDPOINT=$(printf '%s\n' "$VERDICT" | sed -n 's/^endpoint=//p')
+          FD_VIA=$(printf '%s\n' "$VERDICT" | sed -n 's/^via=//p')
+          FD_DETAIL=$(printf '%s\n' "$VERDICT" | sed -n 's/^detail=//p')
+
+          if [[ "$STATE" == "not-applicable" ]]; then
+            echo "::notice::No Front Door profile in $RG — nothing to purge (Front Door is opt-in via frontDoorEnabled). The live-URL validation below reads the origin directly."
+            exit 0
           fi
+
+          if [[ "$STATE" != "resolved" ]]; then
+            echo "::error::Front Door purge target UNRESOLVED for $PROBE_URL — $FD_DETAIL. The roll cannot claim the CDN cache was cleared, so the live-URL validation that follows may be reading a cached page (this is #2828: the purge silently failed for every roll before this). The endpoints that DO exist are listed above; either point the roll's \`url\` input at a host one of them serves, or wire the custom domain to a route."
+            exit 1
+          fi
+
+          echo "::notice::Front Door purge target: profile=$FD_PROFILE endpoint=$FD_ENDPOINT (via $FD_VIA — $FD_DETAIL)"
+
+          # Submitted, not awaited: an AFD purge can take minutes and blocking the
+          # roll on it would trade a silent failure for a slow one. `--no-wait`
+          # still surfaces addressing errors (ResourceNotFound et al) synchronously
+          # — which is exactly the error class that went unseen for #2828.
+          PURGED=false
+          for ATTEMPT in 1 2 3; do
+            ERR="$(mktemp)"
+            if az afd endpoint purge --profile-name "$FD_PROFILE" -g "$RG" \
+                 --endpoint-name "$FD_ENDPOINT" --content-paths '/*' --no-wait 2>"$ERR"; then
+              PURGED=true
+              echo "::notice::Front Door purge submitted for $FD_ENDPOINT (/*) on attempt $ATTEMPT."
+              break
+            fi
+            echo "[fd-purge] attempt $ATTEMPT failed; az stderr:" >&2
+            sed -e 's/^/  /' "$ERR" >&2 || true
+            if [[ "$ATTEMPT" != "3" ]]; then sleep $(( ATTEMPT * 10 )); fi
+          done
+
+          if [[ "$PURGED" != "true" ]]; then
+            echo "::warning::Front Door purge FAILED after 3 attempts against the CORRECTLY RESOLVED endpoint $FD_ENDPOINT (profile $FD_PROFILE) — see the az stderr above. The endpoint is right, so this is a CDN control-plane problem, not the #2828 addressing bug; treating it the same way this workflow treats an unreachable ACR in the SC1 gate: loud, not roll-blocking. The live-URL validation below may therefore read a cached page."
+          fi
+
           sleep 20
 
       - name: Validate live URL
@@ -517,7 +637,7 @@ jobs:
                 `New revision (rolled back): \`${{ steps.roll.outputs.new_revision }}\``,
                 `URL probed: ${{ steps.vars.outputs.url }}`,
                 ``,
-                `Check the workflow run for which gate failed (vitest confirmation / cosign signature verify / health / version / build-marker / notebook page / data-pipeline page / copilot tools / in-VNet UAT).`,
+                `Check the workflow run for which gate failed (vitest confirmation / cosign signature verify / health / Front Door purge target / version / build-marker / notebook page / data-pipeline page / copilot tools / in-VNet UAT).`,
               ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
