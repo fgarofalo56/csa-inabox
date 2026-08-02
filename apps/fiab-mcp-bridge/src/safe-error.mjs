@@ -33,13 +33,13 @@ const LOG_PREFIX = '[mcp-bridge]';
 /**
  * C0 control characters (CR, LF, TAB, NUL ...) plus DEL.
  *
- * Built with new RegExp from an ASCII-only string ON PURPOSE. The console
+ * Written as a regex LITERAL with backslash-u escapes, never with literal
  * original writes this class with LITERAL control characters in the source,
  * which are invisible in every editor and diff — one careless copy/paste and
  * the class silently becomes something else while the code still compiles and
  * the sanitizer still returns a string. This form cannot be mangled unseen.
  */
-const CONTROL_CHARS = new RegExp('[\u0000-\u001F\u007F]+', 'g');
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]+/g;
 
 /** Max characters kept from the logged detail (a stack, so larger than a field). */
 const MAX_LOG_DETAIL = 2000;

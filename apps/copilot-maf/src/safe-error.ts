@@ -35,14 +35,15 @@ const MAX_LOG_DETAIL = 2000;
 /**
  * C0 control characters (CR, LF, TAB, NUL ...) plus DEL.
  *
- * Built with new RegExp from an ASCII-only string ON PURPOSE. The console
- * original (lib/util/log-safe.ts) writes this class with LITERAL control
- * characters in the source, which are invisible in every editor and diff --
- * one careless copy/paste and the class silently becomes something else while
- * the code still compiles and the sanitizer still returns a string. This form
- * cannot be mangled unseen.
+ * Written as a regex LITERAL with backslash-u escapes, never with literal
+ * control characters. A literal is what CodeQL js/log-injection can read as a
+ * sanitizer (a RegExp built from a string is opaque to it, and the alert
+ * survived a sanitizer that demonstrably worked). The escapes matter too: the
+ * console original uses LITERAL control characters, which are invisible in
+ * every editor and diff -- they were silently mangled twice while being copied
+ * here, and the mangled form still compiles and still returns a string.
  */
-const CONTROL_CHARS = new RegExp('[\u0000-\u001F\u007F]+', 'g');
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]+/g;
 
 /**
  * Log-injection defence -- a local mirror of apps/fiab-console/lib/util/log-safe.ts
