@@ -1,0 +1,341 @@
+name: deploy-loom-uat
+
+run-name: >-
+  deploy-loom-uat
+  ${{ inputs.dry_run && '[DRY RUN — nothing deployed]' || format('→ {0}', inputs.region || 'centralus') }}
+
+# CSA Loom — dispatchable deploy path for the `loom-uat` Container App Job (the
+# UNATTENDED, in-VNet, full-visual Playwright UAT runner for the live console).
+#
+# ── WHY THIS EXISTS (#2816, class of #2814) ────────────────────────────────
+# `scripts/csa-loom/deploy-loom-uat-job.sh` is the only thing that builds and
+# rolls the UAT image. Before this workflow it appeared in `.github/workflows/`
+# exactly once — inside an `echo "::warning::"` STRING at
+# loom-roll-and-validate.yml:394 telling a human to go run it:
+#
+#   "loom-uat Container App Job not found in $RG … SKIPPING the UAT gate
+#    (deploy it via scripts/csa-loom/deploy-loom-uat-job.sh to enable)"
+#
+# A naive grep counts that as a hit. It is not an execution, which is precisely
+# why the gap survived: the reference was real, the deploy path was not.
+#
+# This is the sharpest of the four in #2816, because loom-uat is a VALIDATION
+# capability that was itself undeployable. When the job is absent,
+# loom-roll-and-validate SKIPS its UAT gate and the roll proceeds green on a
+# gate that never ran — the "gates that measure nothing" class, reached by way
+# of an undeployable deploy path.
+#
+# Registered in `WATCHED` in scripts/ci/check-deploy-staleness.mjs, so UAT-spec
+# changes that never reach the job now show as drift instead of silently
+# grading rolls with an old suite.
+#
+# ── WHAT IT DOES ───────────────────────────────────────────────────────────
+# It is a WRAPPER. It does not reimplement the script, which owns the ACR
+# firewall-lease lifecycle (#2603), the temporary `.dockerignore` rewrite that
+# lets ACR Tasks see e2e/ + tests/ (ACR Tasks does not honor a per-Dockerfile
+# .dockerignore), and the Step-5 read of the console's LITERAL SESSION_SECRET
+# via ARM — which the job needs to mint its own session and which is never
+# printed. Read that script's header before changing anything here.
+#
+# ── AUTH ───────────────────────────────────────────────────────────────────
+# Service-principal `creds:` login, matching deploy-copilot-evaluator.yml (the
+# template). NOT OIDC: this repo's federated credential is scoped to
+# `repo:...:ref:refs/heads/main`, so an OIDC login would authenticate only on a
+# main-ref dispatch and fail for a branch dispatch during a fix. `id-token:
+# write` here exists for cosign; this workflow signs nothing.
+#
+# The SP additionally needs ARM read on the console app's secrets
+# (Microsoft.App/containerApps/listSecrets) for the script's Step 5. Contributor
+# on the admin RG covers it; a narrower role may not.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region of the target Admin Plane. NOTE: the script''s job YAML pins location: centralus — a mismatch is refused below rather than deployed wrong.'
+        type: string
+        default: centralus
+      subscription:
+        description: 'Target subscription id (defaults to the AZURE_SUBSCRIPTION_ID secret).'
+        type: string
+        required: false
+      console_url:
+        description: 'Console base URL the UAT suite drives (blank = LOOM_VERIFY_URL repo var, then the value already on the job).'
+        type: string
+        required: false
+      dry_run:
+        description: 'Resolve + print every coordinate and STOP. Nothing is built, no ACR firewall change, no job write, no secret read.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Never cancel in flight: this holds the ACR firewall lease while the image
+# builds (#2603). It also matters more here than elsewhere — a cancelled run
+# can leave apps/fiab-console/.dockerignore rewritten if the script's EXIT trap
+# does not get to run.
+concurrency:
+  group: deploy-loom-uat-${{ inputs.region || 'centralus' }}
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: ${{ inputs.region || 'centralus' }}
+  JOB_NAME: loom-uat
+  CONSOLE_APP: loom-console
+
+jobs:
+  deploy:
+    name: Build UAT image + create/refresh the loom-uat job
+    runs-on: ubuntu-latest
+    # The UAT image carries the console build plus Playwright browsers; it is the
+    # heaviest of the four job images.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      # ── Resolve the coordinates the script hard-requires ──────────────────
+      # SUB / CONSOLE_UAMI_ID / ACR / LOOM_URL / LOOM_AUTOMATION_OID are
+      # `${VAR:?}` in the script — it exits non-zero on the first missing one.
+      # (Note it wants CONSOLE_UAMI_ID but NOT CONSOLE_UAMI_CLIENT_ID; the client
+      # id is optional and travels as LOOM_UAMI_CLIENT_ID, handled below.)
+      #
+      # PUBLIC REPO: the subscription id and the UAMI ARM id are masked before
+      # anything can echo them — the script's own closing "Trigger full suite:
+      # … --subscription $SUB" lines would otherwise print a subscription id
+      # into a world-readable log.
+      - name: Resolve deploy coordinates
+        env:
+          VAR_ADMIN_RG: ${{ vars.LOOM_ADMIN_RG }}
+          VAR_UAMI_NAME: ${{ vars.LOOM_CONSOLE_UAMI_NAME }}
+          VAR_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT }}
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --only-show-errors 2>/dev/null || true
+
+          RG="${VAR_ADMIN_RG:-}"
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          echo "::add-mask::$SUB"
+
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].loginServer" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$ACR" ] || ACR=$(az acr list -g "$RG" --query "[0].loginServer" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$ACR" ]; then
+            echo "::error::No container registry found in $RG. The Admin Plane must be provisioned before the UAT image can be built — run the infra deploy first."
+            exit 1
+          fi
+
+          CAE=$(az containerapp env list -g "$RG" --query "[?starts_with(name,'cae-')]|[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$CAE" ] || CAE=$(az containerapp env list -g "$RG" --query "[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$CAE" ]; then
+            echo "::error::No Container Apps managed environment found in $RG. loom-uat runs inside the console's VNet-integrated CAE (that is the whole point — the ACR and Key Vault are private-endpoint only); it cannot be created without one."
+            exit 1
+          fi
+
+          UAMI_NAME="${VAR_UAMI_NAME:-}"
+          [ -n "$UAMI_NAME" ] || UAMI_NAME="uami-loom-console-${AZURE_LOCATION}"
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$RG" -o json 2>/dev/null || true)
+          if [ -z "$UAMI_JSON" ]; then
+            UAMI_JSON=$(az identity list -g "$RG" --query "[?starts_with(name,'uami-loom-console')]|[0]" -o json 2>/dev/null || true)
+          fi
+          UAMI_ID=$(printf '%s' "$UAMI_JSON" | jq -r '.id // empty')
+          UAMI_CLIENT="${VAR_UAMI_CLIENT:-}"
+          [ -n "$UAMI_CLIENT" ] || UAMI_CLIENT=$(printf '%s' "$UAMI_JSON" | jq -r '.clientId // empty')
+          if [ -z "$UAMI_ID" ]; then
+            echo "::error::Could not resolve the Console UAMI in $RG (looked for $UAMI_NAME, then any uami-loom-console*). loom-uat runs AS this identity and pulls the image with it. Set the LOOM_CONSOLE_UAMI_NAME repo var, or check the region."
+            exit 1
+          fi
+          echo "::add-mask::$UAMI_ID"
+          [ -n "$UAMI_CLIENT" ] && echo "::add-mask::$UAMI_CLIENT"
+
+          # ── Region guard ────────────────────────────────────────────────
+          # deploy-loom-uat-job.sh writes the job YAML with a HARD-CODED
+          # `location:` line. Deploying into a CAE in a different region would
+          # either fail obscurely at ARM or place the job somewhere the script
+          # did not intend. Read the literal out of the script rather than
+          # restate it here, so this guard cannot drift from the script.
+          PINNED=$(sed -n 's/^location:[[:space:]]*\([a-z0-9]*\).*/\1/p' scripts/csa-loom/deploy-loom-uat-job.sh | head -1)
+          CAE_LOC=$(az containerapp env show -n "$CAE" -g "$RG" --query location -o tsv 2>/dev/null | tr -d '\r' || true)
+          CAE_LOC_NORM=$(printf '%s' "$CAE_LOC" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+          if [ -n "$PINNED" ] && [ -n "$CAE_LOC_NORM" ] && [ "$PINNED" != "$CAE_LOC_NORM" ]; then
+            echo "::error::REFUSING to deploy — deploy-loom-uat-job.sh pins 'location: $PINNED' in the job YAML, but the target CAE ($CAE) is in '$CAE_LOC_NORM'. Running it here would create the job in the wrong region (or fail at ARM after the image build). Fix the hard-coded location in the script before deploying loom-uat outside $PINNED."
+            exit 1
+          fi
+
+          {
+            echo "ADMIN_RG=$RG"
+            echo "SUB=$SUB"
+            echo "CAE=$CAE"
+            echo "ACR=$ACR"
+            echo "CONSOLE_UAMI_ID=$UAMI_ID"
+          } >> "$GITHUB_ENV"
+          [ -n "$UAMI_CLIENT" ] && echo "LOOM_UAMI_CLIENT_ID=$UAMI_CLIENT" >> "$GITHUB_ENV"
+
+          echo "::notice::admin RG=$RG  CAE=$CAE ($CAE_LOC_NORM)  ACR=$ACR  UAMI=$UAMI_NAME (ids masked)"
+
+      # ── The one piece of real logic: do not strip a working job ───────────
+      # This script differs from the --set-env-vars siblings: it renders a FULL
+      # job YAML and applies it with `az containerapp job create|update --yaml`,
+      # which REPLACES the whole template. So an unresolved optional value here
+      # is not written as an empty string — the env var is DROPPED from the job
+      # entirely.
+      #
+      # That matters concretely. loom-roll-and-validate.yml sets UAT_GREP_INVERT
+      # on the job before each gate run (to skip the slow tutorial screenshot
+      # suite); a redeploy that dropped it would silently change what the roll
+      # gate measures. LOOM_UAT_RESULTS_CONTAINER / _ACCOUNT being dropped means
+      # the run stops uploading its HTML report and the evidence quietly
+      # disappears. So the authoritative source is the RUNNING JOB, and an
+      # unreadable existing job is a hard stop, never a best-effort write.
+      - name: Resolve UAT config (carry forward — never strip a live job)
+        env:
+          INPUT_URL: ${{ inputs.console_url }}
+          VAR_URL: ${{ vars.LOOM_VERIFY_URL }}
+          VAR_OID: ${{ vars.LOOM_AUTOMATION_OID }}
+          VAR_UPN: ${{ vars.LOOM_AUTOMATION_UPN }}
+          VAR_NAME: ${{ vars.LOOM_AUTOMATION_NAME }}
+        run: |
+          set -euo pipefail
+          # Carried verbatim from the live job. LOOM_URL / LOOM_AUTOMATION_OID are
+          # handled separately below because they are required, not optional.
+          CFG_VARS="LOOM_AUTOMATION_UPN LOOM_AUTOMATION_NAME UAT_PROJECT UAT_GREP UAT_GREP_INVERT LOOM_UAT_RESULTS_CONTAINER LOOM_UAT_RESULTS_ACCOUNT"
+
+          pick() { printf '%s' "$1" | jq -r --arg n "$2" 'first((. // [])[] | select(.name==$n) | (.value // "")) // ""'; }
+
+          JOB_ENV='[]'
+          JOB_EXISTS=false
+          if az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" -o none 2>/dev/null; then
+            JOB_EXISTS=true
+            JOB_ENV=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.template.containers[0].env" -o json 2>/dev/null || echo 'READ_FAILED')
+            if [ "$JOB_ENV" = "READ_FAILED" ] || ! printf '%s' "$JOB_ENV" | jq -e 'type=="array"' >/dev/null 2>&1; then
+              echo "::error::$JOB_NAME exists in $ADMIN_RG but its env set could not be read. REFUSING to run the deploy: the script applies a FULL job YAML, so every value not resolved here would be dropped from the job — including the UAT_GREP_INVERT the roll gate depends on. Fix the read (RBAC / az) and re-dispatch."
+              exit 1
+            fi
+            echo "Existing job found — carrying its config forward ($(printf '%s' "$JOB_ENV" | jq 'length') env var(s) on the job)."
+          else
+            echo "::notice::$JOB_NAME does not exist in $ADMIN_RG yet — the script will CREATE it. This is the state loom-roll-and-validate.yml warns about and skips its UAT gate for."
+          fi
+
+          for V in $CFG_VARS; do
+            VAL=$(pick "$JOB_ENV" "$V")
+            SRC=job
+            if [ -z "$VAL" ] && [ "$V" = "LOOM_AUTOMATION_UPN" ]; then VAL="${VAR_UPN:-}"; SRC=repo-var; fi
+            if [ -z "$VAL" ] && [ "$V" = "LOOM_AUTOMATION_NAME" ]; then VAL="${VAR_NAME:-}"; SRC=repo-var; fi
+            if [ -z "$VAL" ]; then SRC='(unset — script default applies)'; fi
+            [ -n "$VAL" ] && echo "$V=$VAL" >> "$GITHUB_ENV"
+            echo "  $V <- $SRC"
+          done
+
+          # LOOM_URL — required (${LOOM_URL:?}). input → repo var → live job.
+          URL="${INPUT_URL:-}"
+          SRC=input
+          if [ -z "$URL" ]; then URL="${VAR_URL:-}"; SRC=repo-var; fi
+          if [ -z "$URL" ]; then URL=$(pick "$JOB_ENV" LOOM_URL); SRC=job; fi
+          if [ -z "$URL" ]; then
+            echo "::error::LOOM_URL could not be resolved. deploy-loom-uat-job.sh declares it \${LOOM_URL:?} and exits before doing anything — the suite has no console to drive. Pass console_url, or set the LOOM_VERIFY_URL repo var."
+            exit 1
+          fi
+          echo "LOOM_URL=$URL" >> "$GITHUB_ENV"
+          echo "  LOOM_URL <- $SRC ($URL)"
+
+          # LOOM_AUTOMATION_OID — required. It is the object id baked into the
+          # minted session cookie, i.e. WHO the harness claims to be in audit
+          # logs. Never invent one.
+          OID="${VAR_OID:-}"
+          SRC=repo-var
+          if [ -z "$OID" ]; then OID=$(pick "$JOB_ENV" LOOM_AUTOMATION_OID); SRC=job; fi
+          if [ -z "$OID" ]; then
+            echo "::error::LOOM_AUTOMATION_OID could not be resolved. deploy-loom-uat-job.sh declares it \${LOOM_AUTOMATION_OID:?}. It is the tenant-admin object id the harness's minted session asserts — set the LOOM_AUTOMATION_OID repo var (same value loom-ui-verify.yml uses). This workflow will not guess an identity."
+            exit 1
+          fi
+          echo "::add-mask::$OID"
+          echo "LOOM_AUTOMATION_OID=$OID" >> "$GITHUB_ENV"
+          echo "  LOOM_AUTOMATION_OID <- $SRC (masked)"
+
+          echo "JOB_EXISTED=$JOB_EXISTS" >> "$GITHUB_ENV"
+
+      - name: DRY RUN — resolved plan only, nothing deployed
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "DRY RUN. No image was built. The ACR firewall was not touched. The job was not written. The console's SESSION_SECRET was NOT read."
+          echo
+          echo "  admin RG    : $ADMIN_RG"
+          echo "  CAE         : $CAE"
+          echo "  ACR         : $ACR"
+          echo "  image       : $ACR/loom-uat:latest"
+          echo "  job         : $JOB_NAME (exists: ${JOB_EXISTED:-false})"
+          echo "  console app : $CONSOLE_APP (source of the session-secret in the script's Step 5)"
+          echo "  build commit: ${GITHUB_SHA}"
+          echo
+          echo "Config that WOULD be written (empty = env var omitted from the job YAML):"
+          for V in LOOM_URL LOOM_AUTOMATION_OID LOOM_AUTOMATION_UPN LOOM_AUTOMATION_NAME UAT_PROJECT UAT_GREP UAT_GREP_INVERT LOOM_UAT_RESULTS_CONTAINER LOOM_UAT_RESULTS_ACCOUNT LOOM_UAMI_CLIENT_ID; do
+            printf '  %-32s %s\n' "$V" "$(printenv "$V" || echo '<unset>')"
+          done
+          echo
+          echo "::warning::DRY RUN — loom-uat was NOT deployed. This run does NOT count as a deploy for the staleness watchdog. Re-dispatch with dry_run=false to actually build and roll it."
+
+      # The script owns everything from here: ACR firewall lease acquire →
+      # .dockerignore rewrite → `az acr build` → lease release + .dockerignore
+      # restore → `az containerapp job create|update --yaml` → Step 5 secret
+      # wiring. Do not inline any of it.
+      - name: Deploy — build UAT image + create/refresh the job
+        if: ${{ !inputs.dry_run }}
+        run: bash scripts/csa-loom/deploy-loom-uat-job.sh
+
+      # Read-only confirmation that the write landed. Deliberately does NOT read
+      # the secret VALUE — the script's Step 5 runs under `set -e`, so a failed
+      # `job secret set` fails the script and therefore this workflow; that is
+      # the assertion, and reading the secret here would only put it in a CI
+      # shell for no additional signal.
+      - name: Verify the job now points at the built image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          IMAGE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null | tr -d '\r' || true)
+          CONTAINER=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          STATE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.provisioningState" -o tsv 2>/dev/null | tr -d '\r' || true)
+          URL=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].env[?name=='LOOM_URL'].value | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          SECRETS=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.configuration.secrets[].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          echo "image=$IMAGE container=$CONTAINER provisioningState=$STATE url=$URL"
+          if [ -z "$IMAGE" ]; then
+            echo "::error::$JOB_NAME is not readable after the deploy — cannot confirm the image rolled."
+            exit 1
+          fi
+          # Load-bearing: loom-roll-and-validate.yml's UAT gate and the documented
+          # Log Analytics query both key off the container being named 'uat'. A
+          # drifted name still RUNS, and the gate then reads a result line that
+          # is not there — green on nothing.
+          if [ "$CONTAINER" != "uat" ]; then
+            echo "::error::container name is '$CONTAINER', expected 'uat'. The roll gate's result lookup (ContainerAppConsoleLogs_CL | where ContainerName_s == 'uat' … UAT_RESULT) keys off that name; leaving this would take the roll gate green having measured nothing. See the script header."
+            exit 1
+          fi
+          # The script's YAML seeds session-secret with a placeholder and Step 5
+          # overwrites it from the console's ARM literal. If the secret is absent
+          # the job cannot mint a session and every UAT run fails at setup.
+          if ! printf '%s\n' "$SECRETS" | grep -qx 'session-secret'; then
+            echo "::error::the job has no 'session-secret' after the deploy. Every UAT execution will fail at global-setup (it mints the loom_session cookie from SESSION_SECRET). Re-run, or check ARM read access to the $CONSOLE_APP secrets."
+            exit 1
+          fi
+          if [ -z "$URL" ] || [ "$URL" = "None" ]; then
+            echo "::warning::LOOM_URL is empty on the deployed job — the suite has no console to drive."
+          fi
+          echo "::notice::$JOB_NAME rolled to $IMAGE (built from ${GITHUB_SHA}). loom-roll-and-validate.yml will now find the job and RUN its UAT gate instead of skipping it. Start one on demand with: az containerapp job start -n $JOB_NAME -g $ADMIN_RG"

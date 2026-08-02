@@ -70,6 +70,8 @@ jobs:
         run: node scripts/ci/check-cloud-endpoint-literals.mjs
       - name: bicep-sync (orphan modules + env-sync core)
         run: node scripts/ci/check-bicep-sync.mjs
+      - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
+        run: node scripts/ci/check-deploy-script-reachability.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
       - name: prp-freshness (loom-next-level FRESH0 — warn-only)
