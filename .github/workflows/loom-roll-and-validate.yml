@@ -416,6 +416,52 @@ jobs:
       # Rollback step keys on validate/uat outcomes, so a healthy new revision is
       # NOT reverted for a Front Door discovery problem.
       #
+      # IS THE PURGE EVEN LOAD-BEARING? (#2828 follow-up.) `--no-wait` means
+      # SUBMITTED, not COMPLETED, and Learn is explicit that a purge "can take up
+      # to 10 minutes to propagate across all Azure Front Door POP locations" —
+      # so NO sleep in this workflow can make "submitted" mean "cleared". If the
+      # route caches, the validation below really can read a stale page.
+      #
+      # It does not, in this platform, and that was MEASURED rather than assumed
+      # — three independent layers agreeing:
+      #   1. TEMPLATE — modules/admin-plane/front-door.bicep declares
+      #      `console-route` (patternsToMatch '/*') with NO `cacheConfiguration`
+      #      property at all. For Microsoft.Cdn AFD routes, absent == caching
+      #      disabled. Every estate this repo deploys inherits that.
+      #   2. RESOURCE — `az afd route list` on the live centralus profile returns
+      #      `cacheConfiguration: null` for `console-route`.
+      #   3. BEHAVIOUR — every path this roll validates (/build-marker.txt,
+      #      /api/health, /api/version, /items/notebook/new, /) answers
+      #      `X-Cache: CONFIG_NOCACHE`, which Learn defines as "configured to not
+      #      cache in the Front Door profile".
+      # So today the purge clears an empty cache and `--no-wait` costs nothing.
+      #
+      # Two things that do NOT provide that guarantee, so nothing here leans on
+      # them:
+      #   - Origin `Cache-Control`. The HTML paths send `no-store`, but
+      #     /api/health and /api/version send NO cache-control at all, and Learn
+      #     says Front Door then picks its own 1–3 day TTL. Origin headers alone
+      #     would leave those two cacheable.
+      #   - The `?_<epoch>` cache-buster in loom-validate-live.sh. Front Door's
+      #     default query-string behaviour is IGNORE query string, so every
+      #     buster collapses to the same cache key. It would not bust anything in
+      #     the world where busting mattered.
+      #
+      # The single load-bearing fact is therefore `cacheConfiguration == null`,
+      # and a comment asserting it would rot the day someone enables caching for
+      # a perfectly good reason (e.g. /_next/static/*). So the step READS it —
+      # `caching=on|off|unknown` from the resolver — and pays for awaiting the
+      # purge only where awaiting buys something:
+      #   off      submit with --no-wait; nothing is cached, so completion is
+      #            irrelevant. Zero added deploy time. This is today.
+      #   on       AWAIT completion (no --no-wait), bounded by
+      #            FD_PURGE_TIMEOUT_SECONDS (default 300) so a slow purge can
+      #            never hang a roll; a timeout is a loud ::warning::, not silence.
+      #   unknown  treated as `on`. Absence of evidence read as success is the
+      #            #2828 defect itself; it does not get to reappear here.
+      # The purge is still issued when caching is off — an unexercised purge path
+      # is exactly how #2828 stayed invisible for months.
+      #
       # PUBLIC REPO: `az afd route list --query "[].customDomains[].id"` returns
       # ARM ids containing the subscription. They are basenamed here and never
       # printed.
@@ -424,6 +470,13 @@ jobs:
         env:
           RG: ${{ env.RG_NAME }}
           PROBE_URL: ${{ steps.vars.outputs.url }}
+          # Mapped from a repo variable, not just read from the shell: an
+          # undeclared `${FD_PURGE_TIMEOUT_SECONDS:-300}` could only ever BE 300,
+          # since nothing in Actions puts repo/org variables in the step
+          # environment. That is a knob that does not turn — the same shape of
+          # defect as the rest of this file's history. Set the repo variable to
+          # change it; the `:-300` below is only a belt-and-braces default.
+          FD_PURGE_TIMEOUT_SECONDS: ${{ vars.FD_PURGE_TIMEOUT_SECONDS || '300' }}
         run: |
           REC="$(mktemp)"
           PROFILES=$(az afd profile list -g "$RG" --query "[].name" -o tsv 2>/dev/null | tr -d '\r' || true)
@@ -451,6 +504,15 @@ jobs:
                   printf 'domain\t%s\t%s\t%s\n' "$P" "$EN" "$CDH" >> "$REC"
                 fi
               done
+              # Does anything on this endpoint actually CACHE? An AFD route with
+              # no cacheConfiguration does not cache at all, which is what makes
+              # `--no-wait` free rather than a gap. Emitted as a count so a failed
+              # query stays UNKNOWN instead of collapsing into "0 == off".
+              CACHEN=$(az afd route list --profile-name "$P" -g "$RG" --endpoint-name "$EN" \
+                --query "length([?cacheConfiguration!=null])" -o tsv 2>/dev/null | tr -d '\r' || true)
+              if [ -n "${CACHEN:-}" ]; then
+                printf 'cache\t%s\t%s\t%s\n' "$P" "$EN" "$CACHEN" >> "$REC"
+              fi
             done
           done
 
@@ -459,6 +521,7 @@ jobs:
           FD_PROFILE=$(printf '%s\n' "$VERDICT" | sed -n 's/^profile=//p')
           FD_ENDPOINT=$(printf '%s\n' "$VERDICT" | sed -n 's/^endpoint=//p')
           FD_VIA=$(printf '%s\n' "$VERDICT" | sed -n 's/^via=//p')
+          FD_CACHING=$(printf '%s\n' "$VERDICT" | sed -n 's/^caching=//p')
           FD_DETAIL=$(printf '%s\n' "$VERDICT" | sed -n 's/^detail=//p')
 
           if [[ "$STATE" == "not-applicable" ]]; then
@@ -473,28 +536,61 @@ jobs:
 
           echo "::notice::Front Door purge target: profile=$FD_PROFILE endpoint=$FD_ENDPOINT (via $FD_VIA — $FD_DETAIL)"
 
-          # Submitted, not awaited: an AFD purge can take minutes and blocking the
-          # roll on it would trade a silent failure for a slow one. `--no-wait`
-          # still surfaces addressing errors (ResourceNotFound et al) synchronously
-          # — which is exactly the error class that went unseen for #2828.
+          # Await the purge only where awaiting buys something — see the header
+          # comment. `off` is the measured state of every estate this repo
+          # deploys, so the common path adds zero deploy time.
+          PURGE_TIMEOUT="${FD_PURGE_TIMEOUT_SECONDS:-300}"
+          if [[ "$FD_CACHING" == "off" ]]; then
+            PURGE_ARGS=(--no-wait)
+            PURGE_VERB="submitted"
+            echo "::notice::Route caching is DISABLED on $FD_ENDPOINT (no route carries a cacheConfiguration), so Front Door caches nothing for this URL and answers X-Cache: CONFIG_NOCACHE. The purge is issued anyway — to keep the path exercised, which is what #2828 lacked — with --no-wait, because there is no cache whose clearing the validation below needs to wait for."
+          else
+            PURGE_ARGS=()
+            PURGE_VERB="completed"
+            if [[ "$FD_CACHING" == "on" ]]; then
+              echo "::warning::Route caching is ENABLED on $FD_ENDPOINT. That makes this purge load-bearing for the live-URL validation that follows, so the roll now AWAITS its completion (bounded at ${PURGE_TIMEOUT}s) instead of firing and forgetting. Expect this roll to take longer. NOTE: completion of the control-plane operation is still not POP propagation, which Learn says can take up to 10 minutes — if validation starts flaking on stale content, that is the reason, and the fix is to exclude the validated paths from caching rather than to sleep longer."
+            else
+              echo "::warning::Could NOT determine whether route caching is enabled on $FD_ENDPOINT (the 'az afd route list' cacheConfiguration query returned nothing). Treating UNKNOWN as ENABLED and awaiting the purge (bounded at ${PURGE_TIMEOUT}s) — reading absence of evidence as 'nothing is cached' is the exact #2828 defect and does not get to reappear here."
+            fi
+          fi
+
           PURGED=false
+          TIMED_OUT=false
           for ATTEMPT in 1 2 3; do
             ERR="$(mktemp)"
-            if az afd endpoint purge --profile-name "$FD_PROFILE" -g "$RG" \
-                 --endpoint-name "$FD_ENDPOINT" --content-paths '/*' --no-wait 2>"$ERR"; then
+            # `|| RC=$?` and not `if ...; then`: a bare `if` whose condition fails
+            # and has no else returns 0, so `$?` after the `fi` would report the
+            # IF, not the purge — a control reading green off the wrong subject,
+            # which is the whole reason this file has a #2828 in it.
+            RC=0
+            timeout "$PURGE_TIMEOUT" az afd endpoint purge --profile-name "$FD_PROFILE" -g "$RG" \
+              --endpoint-name "$FD_ENDPOINT" --content-paths '/*' "${PURGE_ARGS[@]}" 2>"$ERR" || RC=$?
+            if [[ "$RC" == "0" ]]; then
               PURGED=true
-              echo "::notice::Front Door purge submitted for $FD_ENDPOINT (/*) on attempt $ATTEMPT."
+              echo "::notice::Front Door purge $PURGE_VERB for $FD_ENDPOINT (/*) on attempt $ATTEMPT."
               break
             fi
-            echo "[fd-purge] attempt $ATTEMPT failed; az stderr:" >&2
+            echo "[fd-purge] attempt $ATTEMPT failed (exit $RC); az stderr:" >&2
             sed -e 's/^/  /' "$ERR" >&2 || true
+            # 124 is `timeout` killing a purge that was still running. Retrying
+            # restarts the same slow operation and burns another timeout, so stop.
+            if [[ "$RC" == "124" ]]; then TIMED_OUT=true; break; fi
             if [[ "$ATTEMPT" != "3" ]]; then sleep $(( ATTEMPT * 10 )); fi
           done
 
-          if [[ "$PURGED" != "true" ]]; then
+          if [[ "$TIMED_OUT" == "true" ]]; then
+            echo "::warning::Front Door purge did NOT complete within ${PURGE_TIMEOUT}s on $FD_ENDPOINT (profile $FD_PROFILE) — it was submitted and is very likely still running, but this roll can no longer claim the cache was cleared, so the live-URL validation below may read a cached page. Not roll-blocking (same policy as an unreachable ACR in the SC1 gate: unreachable != unsigned, incomplete != unpurged), but not silent either. Raise FD_PURGE_TIMEOUT_SECONDS if this recurs."
+          elif [[ "$PURGED" != "true" ]]; then
             echo "::warning::Front Door purge FAILED after 3 attempts against the CORRECTLY RESOLVED endpoint $FD_ENDPOINT (profile $FD_PROFILE) — see the az stderr above. The endpoint is right, so this is a CDN control-plane problem, not the #2828 addressing bug; treating it the same way this workflow treats an unreachable ACR in the SC1 gate: loud, not roll-blocking. The live-URL validation below may therefore read a cached page."
           fi
 
+          # Settle time for the revision flip, NOT purge propagation. This sleep
+          # predates the purge (it sat at the tail of "Wait for revision health")
+          # and 20s was never remotely enough for a POP purge — Learn says up to
+          # 10 minutes. It is kept because ingress can lag a revision going
+          # Healthy+Running, and removing it would be trading a proven-harmless
+          # 20s for a flake class this workflow has already been burned by
+          # (#1249/#1300/#1303/#1305/#1306). It is NOT the purge's guarantee.
           sleep 20
 
       - name: Validate live URL

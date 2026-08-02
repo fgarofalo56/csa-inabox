@@ -21,7 +21,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { hostOf, parseRecords, resolvePurgeTarget } from '../fd-resolve-purge-target.mjs';
+import { cachingStateOf, hostOf, parseRecords, resolvePurgeTarget } from '../fd-resolve-purge-target.mjs';
 
 /** The live centralus shape, confirmed read-only from `az afd endpoint list`. */
 const LIVE = [
@@ -32,6 +32,12 @@ const LIVE = [
         name: 'loom-console-k6mvh5sm6z7do',
         hostName: 'loom-console-k6mvh5sm6z7do-e9cmggbahge3hwf7.b02.azurefd.net',
         domains: ['csa-loom.limitlessdata.ai'],
+        // MEASURED, not assumed: `az afd route list` returns
+        // `cacheConfiguration: null` for the sole route (`console-route`,
+        // patternsToMatch '/*'), so ZERO routes on this endpoint cache — which
+        // is why the live URL answers `X-Cache: CONFIG_NOCACHE` and why the
+        // purge's `--no-wait` is not an exposure in this estate.
+        cachedRoutes: 0,
       },
     ],
   },
@@ -157,6 +163,7 @@ test('parseRecords builds the live shape from the TSV stream the workflow emits'
     'profile\tfd-loom-k6mvh5sm6z7do',
     'endpoint\tfd-loom-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do-e9cmggbahge3hwf7.b02.azurefd.net',
     'domain\tfd-loom-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do\tcsa-loom.limitlessdata.ai',
+    'cache\tfd-loom-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do\t0',
     '',
   ].join('\n');
   const profiles = parseRecords(tsv);
@@ -166,11 +173,149 @@ test('parseRecords builds the live shape from the TSV stream the workflow emits'
 
 test('parseRecords tolerates CRLF, blank lines and unknown kinds', () => {
   const tsv = 'profile\tp\r\n\nnoise\tx\r\nendpoint\tp\te\th\r\n';
-  assert.deepEqual(parseRecords(tsv), [{ name: 'p', endpoints: [{ name: 'e', hostName: 'h', domains: [] }] }]);
+  assert.deepEqual(parseRecords(tsv), [
+    { name: 'p', endpoints: [{ name: 'e', hostName: 'h', domains: [], cachedRoutes: null }] },
+  ]);
 });
 
 test('parseRecords of an EMPTY stream yields no profiles -> not-applicable', () => {
   // A resource group with Front Door genuinely absent must not read as a failure.
   assert.deepEqual(parseRecords(''), []);
   assert.equal(resolvePurgeTarget({ url: 'https://x.example', profiles: parseRecords('') }).state, 'not-applicable');
+});
+
+/* --------------------------------------------------------------------------
+ * Route caching — is the purge load-bearing at all? (#2828 follow-up)
+ *
+ * The purge is fired with `--no-wait`, i.e. SUBMITTED not COMPLETED, and a
+ * purge can take up to 10 minutes to reach every POP. That is only an exposure
+ * if the route caches. It does not (measured three ways: bicep declares
+ * `console-route` with no cacheConfiguration; ARM returns cacheConfiguration
+ * null; the live URL answers X-Cache: CONFIG_NOCACHE) — so these tests pin the
+ * FACT that makes it a non-problem, rather than a comment asserting it.
+ *
+ * MUTATION-PROVEN. The tempting simplification is a boolean:
+ *
+ *     caching = Number(cachedRoutes) > 0        // null -> false -> 'off'
+ *
+ * which silently reclassifies "the az query failed" as "nothing is cached" —
+ * absence of evidence read as success, the #2828 defect exactly. Under that
+ * mutation `UNKNOWN is not off` and `a failed cache query stays UNKNOWN` go
+ * RED, while the CONTROLS (`0 routes -> off`, `1 route -> on`) stay green
+ * either way, so the shortcut cannot hide behind them.
+ * ------------------------------------------------------------------------ */
+
+test('cachingStateOf keeps UNKNOWN and OFF apart', () => {
+  assert.equal(cachingStateOf(0), 'off');          // CONTROL
+  assert.equal(cachingStateOf(1), 'on');           // CONTROL
+  assert.equal(cachingStateOf(7), 'on');
+  assert.equal(cachingStateOf(null), 'unknown');   // the mutation target
+  assert.equal(cachingStateOf(undefined), 'unknown');
+  assert.equal(cachingStateOf(NaN), 'unknown');
+  assert.equal(cachingStateOf('0'), 'unknown');    // a string is not a count
+});
+
+test('the measured live estate resolves with caching OFF', () => {
+  const r = resolvePurgeTarget({ url: 'https://csa-loom.limitlessdata.ai', profiles: LIVE });
+  assert.equal(r.state, 'resolved');
+  assert.equal(r.caching, 'off');
+});
+
+test('a route WITH cacheConfiguration flips the resolved endpoint to caching ON', () => {
+  const profiles = [
+    {
+      name: 'fd-loom',
+      endpoints: [{ name: 'ep', hostName: 'h.example', domains: [], cachedRoutes: 1 }],
+    },
+  ];
+  const r = resolvePurgeTarget({ url: 'https://h.example', profiles });
+  assert.equal(r.state, 'resolved');
+  assert.equal(r.caching, 'on');
+});
+
+test('UNKNOWN is not off — a missing cache record must never read as "nothing is cached"', () => {
+  const profiles = [
+    // No cachedRoutes at all: the workflow emitted no `cache` record for it.
+    { name: 'fd-loom', endpoints: [{ name: 'ep', hostName: 'h.example', domains: [] }] },
+  ];
+  const r = resolvePurgeTarget({ url: 'https://h.example', profiles });
+  assert.equal(r.state, 'resolved');
+  assert.equal(r.caching, 'unknown');
+  assert.notEqual(r.caching, 'off');
+});
+
+test('a failed cache query stays UNKNOWN rather than collapsing to 0', () => {
+  // `az ... --query "length(...)"` returning empty/garbage is exactly what a
+  // permissions or API hiccup looks like. It must not be read as "0 == off".
+  for (const bad of ['', '   ', 'null', 'None', '-1', '1.5', 'ERROR']) {
+    const profiles = parseRecords(
+      ['profile\tp', 'endpoint\tp\te\th.example', `cache\tp\te\t${bad}`, ''].join('\n'),
+    );
+    assert.equal(profiles[0].endpoints[0].cachedRoutes, null, `"${bad}" should stay unknown`);
+    assert.equal(resolvePurgeTarget({ url: 'https://h.example', profiles }).caching, 'unknown');
+  }
+});
+
+test('parseRecords reads a cache record, including for an endpoint it has not seen', () => {
+  const withEndpoint = parseRecords(['profile\tp', 'endpoint\tp\te\th', 'cache\tp\te\t3', ''].join('\n'));
+  assert.equal(withEndpoint[0].endpoints[0].cachedRoutes, 3);
+
+  // Defensive, matching how `domain` records behave: a truncated stream that
+  // carries the cache row but not the endpoint row still yields a candidate.
+  const orphan = parseRecords(['profile\tp', 'cache\tp\te\t2', ''].join('\n'));
+  assert.deepEqual(orphan, [
+    { name: 'p', endpoints: [{ name: 'e', hostName: '', domains: [], cachedRoutes: 2 }] },
+  ]);
+});
+
+test('every non-resolved state reports caching UNKNOWN, never off', () => {
+  const notApplicable = resolvePurgeTarget({ url: 'https://x.example', profiles: [] });
+  assert.equal(notApplicable.state, 'not-applicable');
+  assert.equal(notApplicable.caching, 'unknown');
+
+  const twoNoMatch = resolvePurgeTarget({
+    url: 'https://nomatch.example',
+    profiles: [
+      {
+        name: 'fd-loom',
+        endpoints: [
+          { name: 'a', hostName: 'a.example', domains: [], cachedRoutes: 0 },
+          { name: 'b', hostName: 'b.example', domains: [], cachedRoutes: 0 },
+        ],
+      },
+    ],
+  });
+  assert.equal(twoNoMatch.state, 'unresolved');
+  // Both candidates say 0, but no endpoint was chosen — so there is no endpoint
+  // whose caching we can report, and 'off' would be a claim about nothing.
+  assert.equal(twoNoMatch.caching, 'unknown');
+});
+
+test('the CLI emits a caching= line the workflow can parse', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync, mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { fileURLToPath } = await import('node:url');
+
+  const script = fileURLToPath(new URL('../fd-resolve-purge-target.mjs', import.meta.url));
+  const rec = join(mkdtempSync(join(tmpdir(), 'fdrec-')), 'rec.tsv');
+  writeFileSync(
+    rec,
+    [
+      'profile\tfd-loom-k6mvh5sm6z7do',
+      'endpoint\tfd-loom-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do-e9cmggbahge3hwf7.b02.azurefd.net',
+      'domain\tfd-loom-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do\tcsa-loom.limitlessdata.ai',
+      'cache\tfd-loom-k6mvh5sm6z7do\tloom-console-k6mvh5sm6z7do\t0',
+      '',
+    ].join('\n'),
+  );
+
+  const out = execFileSync(process.execPath, [script, '--url', 'https://csa-loom.limitlessdata.ai', '--input', rec], {
+    encoding: 'utf8',
+  });
+  // Parsed with the same `sed -n 's/^caching=//p'` shape the workflow uses.
+  const caching = out.split('\n').find((l) => l.startsWith('caching='));
+  assert.equal(caching, 'caching=off');
+  assert.ok(out.includes('endpoint=loom-console-k6mvh5sm6z7do'));
 });
