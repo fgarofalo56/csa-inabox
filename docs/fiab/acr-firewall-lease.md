@@ -3,7 +3,24 @@
 **Issue:** [#2603](https://github.com/fgarofalo56/csa-inabox/issues/2603)
 **Primitive:** `scripts/csa-loom/acr-firewall-lease.sh`
 **Safety net:** `.github/workflows/acr-firewall-sweeper.yml`
-**Regression test:** `scripts/ci/test-acr-firewall-lease.sh` (Loom Guardrails lane)
+**Sweeper discovery:** `scripts/csa-loom/acr-firewall-sweep-all.sh` ([#2836](https://github.com/fgarofalo56/csa-inabox/issues/2836))
+**Regression tests:** `scripts/ci/test-acr-firewall-lease.sh` and
+`scripts/ci/test-acr-firewall-sweep-all.sh` (both in the Loom Guardrails lane)
+
+> **#2836 — why discovery is a script, not inline YAML.** The sweeper used to
+> resolve the admin RG and the registry list inline in the workflow, under
+> `set -uo pipefail` (no `-e`), and infer "there is nothing to sweep" from an
+> empty command substitution. A failing `az` — expired token, ARM throttling, a
+> transient 5xx — produced the same empty string as a genuinely empty
+> subscription, so the job printed `::notice::… nothing to sweep.` and exited
+> **0**. The safety net reported success while protecting nothing, in exactly
+> the correlated case (broken credentials) where a build is most likely to have
+> died mid-lease. Discovery now lives in `acr-firewall-sweep-all.sh`, which
+> captures every `az` exit status explicitly and only treats `rc=0` **with**
+> empty output as an empty estate. An admin RG holding zero `acrloom*`
+> registries is also an error, not an empty estate — `admin-plane/registry.bicep`
+> puts the registry in that RG.
+
 
 ## The problem
 
