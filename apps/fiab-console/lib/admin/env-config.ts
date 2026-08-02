@@ -23,6 +23,7 @@
  * import from both the BFF route and (the type only) the client pane.
  */
 import { bicepStringLiteral } from '@/lib/util/bicep-literal';
+import { isSecretEnvKey } from '@/lib/util/secret-env-key';
 import { ENV_CHECKS, VALUE_HINT, CTX, type AuditCategory, type AuditSeverity, type EnvSpec } from './self-audit';
 
 export interface EditableEnvVar {
@@ -53,11 +54,22 @@ export interface EditableEnvVar {
   optionalDefault?: boolean;
 }
 
-/** A value is treated as secret when its key matches any of these.
- * `_WEBHOOK_URL$` (O1): incoming-webhook URLs (Teams workflow / PagerDuty /
- * on-call bridge) embed a bearer token in the path — never echo them. */
+/** A value is treated as secret when its key matches the shared env-key rule.
+ *
+ * This used to be a local regex:
+ *   /SECRET|PASSWORD|CONNECTION_STRING|CONNECTIONSTRING|_KEY$|_KEYS$|_PWD$|_WEBHOOK_URL$/i
+ * It had both defects that `lib/util/secret-env-key.ts` exists to close. It
+ * carried the #2772 parse trap (alternation binds looser than `$`, so only
+ * `_WEBHOOK_URL$` and its neighbours were anchored while `SECRET`/`PASSWORD`
+ * matched anywhere — the mixed reading nobody notices), and honest-gate.tsx
+ * held a SECOND copy answering the same question with a DIFFERENT list
+ * (`TOKEN$`, no `_WEBHOOK_URL$`). Measured over the repo's 1203 env-var names,
+ * the divergence hid ~20 real bearer tokens from this masker alone —
+ * LOOM_INTERNAL_TOKEN, LOOM_SCIM_BEARER_TOKEN, LOOM_PURVIEW_TOKEN and the rest
+ * would have been echoed verbatim into a support bundle the day any of them
+ * joined an ENV_CHECKS spec. One rule, one file, one place to review. */
 function isSecretKey(key: string): boolean {
-  return /SECRET|PASSWORD|CONNECTION_STRING|CONNECTIONSTRING|_KEY$|_KEYS$|_PWD$|_WEBHOOK_URL$/i.test(key);
+  return isSecretEnvKey(key);
 }
 
 /** Keys whose value is constrained in the Azure Government L5 (DoD/IL5)

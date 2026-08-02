@@ -50,14 +50,19 @@ Recommended next step: restart each Container App via
 
 ## Evidence
 
-- Playwright JSON result + screenshots staged on jumpbox at `/tmp/loom-uat/`
+- Playwright JSON result + screenshots staged on the jumpbox in the artifact
+  directory — `$LOOM_UAT_ARTIFACT_DIR`, defaulting to `~/.loom-uat`. This was
+  `/tmp/loom-uat` until the fix for CodeQL js/insecure-temporary-file
+  (#323 / #330): `/tmp` is world-writable and the jumpbox is multi-user, so any
+  other local user could pre-create that path (or symlink it) and read
+  screenshots of an authenticated console session. `$HOME` removes the class.
 - Run output captured in this session's transcript
 - All 8 pane URLs returned HTTP 404 with the ACA edge page
 
 ## Plumbing committed in this session
 
 - `apps/fiab-console/tests/uat-console-smoke.mjs` — Playwright smoke test (URL points at `loom-console.internal.delightfulmoss-…`)
-- `scripts/csa-loom/uat-runner-final.sh` — base64-bundled runner, installs Playwright locally on the jumpbox, runs the smoke test, writes screenshots + JSON to `/tmp/loom-uat/`
+- `scripts/csa-loom/uat-runner-final.sh` — base64-bundled runner, installs Playwright locally on the jumpbox, runs the smoke test, writes screenshots + JSON to the artifact directory above (which it creates mode 0700, refusing a symlink, before node starts)
 - Private DNS zone `delightfulmoss-96202bfd.eastus2.azurecontainerapps.io` — manually created in `rg-csa-loom-admin-eastus2`, wildcard A records, linked to hub + DLZ VNets
 - Container App `loom-console` — probes stripped via REST PUT, new `loom-console--0000001` revision Healthy
 

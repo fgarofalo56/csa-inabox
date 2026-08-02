@@ -35,6 +35,7 @@ import {
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { getGate, type GateDef, type GateRequiredSetting } from '@/lib/gates/registry';
+import { isSecretEnvKey } from '@/lib/util/secret-env-key';
 
 const useStyles = makeStyles({
   bar: { marginBottom: tokens.spacingVerticalL },
@@ -69,8 +70,18 @@ const useStyles = makeStyles({
 
 interface GateOption { value: string; label: string; resourceId: string }
 
+/**
+ * Whether this setting's value must be typed into a PASSWORD field.
+ *
+ * Was a local regex — `…|_KEY$|_KEYS$|_PWD$|TOKEN$/i` — which is the second of
+ * two copies of the same question. env-config.ts held the other, with a
+ * DIFFERENT list (`_WEBHOOK_URL$` instead of `TOKEN$`), so a Teams webhook URL
+ * was masked in the support bundle and typed in cleartext HERE. Both also
+ * carried the #2772 mixed-anchor parse trap. One shared rule now — see
+ * lib/util/secret-env-key.ts.
+ */
 function isSecretVar(k: string): boolean {
-  return /SECRET|PASSWORD|CONNECTION_STRING|CONNECTIONSTRING|_KEY$|_KEYS$|_PWD$|TOKEN$/i.test(k);
+  return isSecretEnvKey(k);
 }
 
 /**

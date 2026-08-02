@@ -4,17 +4,20 @@
 // to the Console). Validates all 8 panes load + basic interactions.
 //
 // Usage: node uat-console-smoke.mjs <console-url>
-// Output: JSON to stdout with pass/fail per pane + screenshots in /tmp/loom-uat/
+// Output: JSON to stdout with pass/fail per pane + screenshots in the artifact
+//         dir (LOOM_UAT_ARTIFACT_DIR, else ~/.loom-uat — NOT a shared /tmp path).
 
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
-import { ensureArtifactDir } from './_artifact-dir.mjs';
+import { ensureArtifactDir, defaultArtifactDir } from './_artifact-dir.mjs';
 
 const CONSOLE_URL = process.argv[2] || process.env.LOOM_CONSOLE_URL ||
   'https://loom-console.internal.delightfulmoss-96202bfd.eastus2.azurecontainerapps.io';
-const SCREENSHOT_DIR = '/tmp/loom-uat';
-ensureArtifactDir(SCREENSHOT_DIR);
+// Never a fixed path under the OS temp dir: /tmp is world-writable, so another
+// local user can pre-create it (or symlink it) and read screenshots of an
+// authenticated console session. See tests/_artifact-dir.mjs.
+const SCREENSHOT_DIR = ensureArtifactDir(defaultArtifactDir());
 
 const results = { url: CONSOLE_URL, started: new Date().toISOString(), panes: [] };
 
