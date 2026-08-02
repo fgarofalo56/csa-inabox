@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.5...csa-inabox-v0.82.6) (2026-08-02)
+
+
+### Bug Fixes
+
+* **ci:** give the other four deploy-*-job.sh scripts an executable CI path ([#2816](https://github.com/fgarofalo56/csa-inabox/issues/2816)) ([#2825](https://github.com/fgarofalo56/csa-inabox/issues/2825)) ([0cdcfe9](https://github.com/fgarofalo56/csa-inabox/commit/0cdcfe9e97793d914f95f2f60517ca54e76a2f7b))
+* **ci:** roll gate refused commits whose vitest was still RUNNING ([#2819](https://github.com/fgarofalo56/csa-inabox/issues/2819)) ([#2824](https://github.com/fgarofalo56/csa-inabox/issues/2824)) ([8db1d0b](https://github.com/fgarofalo56/csa-inabox/commit/8db1d0b366ba5b845ac6b157827bcc211a5cec0e))
+* **ci:** the roll's Front Door purge has never executed ([#2828](https://github.com/fgarofalo56/csa-inabox/issues/2828)) ([#2829](https://github.com/fgarofalo56/csa-inabox/issues/2829)) ([e539347](https://github.com/fgarofalo56/csa-inabox/commit/e5393476615279e7ab46ff9f2ca953679ae93c68))
+* **marketplace:** replace free-text data-share publish dialogs with real pickers ([#2618](https://github.com/fgarofalo56/csa-inabox/issues/2618)) ([#2826](https://github.com/fgarofalo56/csa-inabox/issues/2826)) ([50836f6](https://github.com/fgarofalo56/csa-inabox/commit/50836f66da558eb709834342b857f5f234016ce2))
+* **semantic-model:** resolve the `loom:` template id before the roles lookup ([#2649](https://github.com/fgarofalo56/csa-inabox/issues/2649)) ([#2822](https://github.com/fgarofalo56/csa-inabox/issues/2822)) ([49ba116](https://github.com/fgarofalo56/csa-inabox/commit/49ba116d3355202737336d5a5ea2295a3c5e9315))
+
 ## [0.82.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.4...csa-inabox-v0.82.5) (2026-08-02)
 
 
