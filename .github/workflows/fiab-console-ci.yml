@@ -373,3 +373,38 @@ jobs:
       - name: Run the entrypoint fail-closed suite
         working-directory: apps/loom-sharing
         run: node --test tests/
+
+  # -- #2835: EVERY node:test suite in the repo, discovered not listed --------
+  #
+  # The `loom-sharing` job above and the scripts/ci self-test step in
+  # loom-guardrails.yml each reached the same conclusion -- "a test nobody runs
+  # is the same class of defect as a gate that measures nothing" -- and each
+  # fixed exactly ONE directory by hand. Neither generalized, so four suites
+  # (58 tests) were still dark: apps/loom-unity (Unity Catalog authorization is
+  # DEFAULT-ON and FAIL-CLOSED), apps/loom-onelake (path-traversal defenses and
+  # the no-Fabric-host invariant), scripts/csa-loom (the image preflight fails
+  # rather than deploying blind), and tools/ado-loom-task.
+  #
+  # Adding a third and fourth hand-written lane would close those four and leave
+  # the class open, so this job DISCOVERS instead: any node:test file added
+  # anywhere is picked up the day it lands. The runner fails closed when
+  # discovery matches nothing and when every suite skips, because both of those
+  # are green-while-measuring-nothing.
+  #
+  # `loom-sharing` above is deliberately left in place: it is an independent
+  # control proving this job changed no existing behaviour. The few seconds of
+  # overlap are worth that.
+  #
+  # Pure node:test -- no install, no network, ~20s.
+  node-test-suites:
+    name: 'node:test suites (node 20)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: 'Discover and run every node:test suite'
+        run: node scripts/ci/check-node-test-suites.mjs
