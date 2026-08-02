@@ -2,8 +2,8 @@
  * Shared Cosmos-semantics test double for the `audit-log` container (#2635).
  *
  * NOT a test file (no `.test.` in the name, so vitest's `__tests__/ **.test.ts`
- * glob skips it) — it is the fixture the /admin/overview, /admin/usage and
- * /governance/insights specs share.
+ * glob skips it) — it is the fixture the /admin/overview, /admin/usage,
+ * /governance/insights and /governance/govern/posture specs share.
  *
  * It emulates the two behaviours that made the real bug invisible to a naive
  * mock, and ONLY those:
@@ -18,8 +18,10 @@
  *      uses NEITHER form throws, so a future drift to a third spelling fails
  *      loudly instead of silently returning everything.
  *
- * Plus the `c.at >= @since` window and `SELECT VALUE COUNT(1)` projection,
- * because every surface under test uses them.
+ * Plus the `c.at >= @since` window, the optional `c.kind/c.action = 'share'`
+ * narrowing (only the posture `sharedItems30d` counter binds it), and the
+ * `SELECT VALUE COUNT(1)` projection, because every surface under test uses
+ * them.
  */
 
 export interface AuditRowFixture {
@@ -73,6 +75,13 @@ export function runAuditQuery(
   // 3. Time window.
   const since = params.get('@since');
   if (typeof since === 'string') visible = visible.filter((r) => r.at >= since);
+
+  // 4. Event-kind narrowing. Only the Govern posture `sharedItems30d` counter
+  //    adds `(c.kind = 'share' OR c.action = 'share')`; every other caller's
+  //    query omits it and is unaffected by this branch.
+  if (/c\.kind\s*=\s*'share'|c\.action\s*=\s*'share'/.test(spec.query)) {
+    visible = visible.filter((r) => r.kind === 'share' || r.action === 'share');
+  }
 
   return /SELECT\s+VALUE\s+COUNT\(1\)/i.test(spec.query) ? [visible.length] : visible;
 }
