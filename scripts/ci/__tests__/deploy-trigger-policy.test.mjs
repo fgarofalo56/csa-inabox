@@ -225,12 +225,22 @@ test('a non-bool input is a hard error, not something az gets handed', () => {
   );
 });
 
-test('scheduled reconcile leaves deployAppsEnabled FALSE (image-tag rollback guard)', () => {
-  // appImageTags.console defaults to 'v0.1' in both main.bicep files and the
-  // workflow never overrides it, while production runs a commit-SHA tag. A
-  // nightly job with deployAppsEnabled=true would rewrite the Console image to
-  // loom-console:v0.1. If someone flips this default, they must first make the
-  // schedule pin the running tags -- this test is the tripwire.
+test('scheduled reconcile still STARTS deployAppsEnabled at FALSE (fail-safe base)', () => {
+  // appImageTags.console defaults to 'v0.1' in both main.bicep files, while
+  // production runs a commit-SHA tag, so a nightly job that simply set
+  // deployAppsEnabled=true would rewrite the Console image to a tag that does
+  // not exist.
+  //
+  // refs #2775 closed that gap, but NOT by flipping this default. The value
+  // resolved here stays the safe 'false' and is the BASE that
+  // scripts/ci/reconcile-policy.mjs `decideDeployApps` may upgrade to 'true' --
+  // and only after `az containerapp list` has positively identified the tag
+  // every running image is on, so the ARM PUT is a no-op for the image. Default
+  // deny, upgrade on evidence.
+  //
+  // So this tripwire is still exactly right: flipping the default HERE would
+  // hand ARM an unpinned 'true' on any path that skips the resolver. The
+  // upgrade must stay in the step that does the measuring.
   const { flags } = resolveFeatureFlags({ eventName: 'schedule', inputs: {} });
   assert.equal(flags.deployAppsEnabled, 'false');
 });

@@ -5302,7 +5302,17 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
     location: location
     caeId: containerPlatformModule.outputs.caeId
     acrLoginServer: registry.outputs.acrLoginServer
-    imageTag: appImageTags.console
+    // NOT appImageTags.console (refs #2775). dbt-runner.bicep builds
+    // `${acrLoginServer}/loom-dbt-runner:${imageTag}` — a DIFFERENT repository
+    // from loom-console — so sharing the console key made one tag govern two
+    // images. They already diverge in production (loom-console on a commit SHA,
+    // loom-dbt-runner on v0.1), and commercial-full.bicepparam pins
+    // `console: 'v2.1'`, which asks ACR for a `loom-dbt-runner:v2.1` that no
+    // producer has ever pushed. It also made the scheduled reconcile's
+    // image-immutability invariant unsatisfiable: pinning the key to either
+    // running tag rewrites the other. Read optionally so no existing param bag
+    // needs a new key. check-reconcile-safety.mjs (I2) keeps it split.
+    imageTag: appImageTags.?dbtRunner ?? 'v0.1'
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
