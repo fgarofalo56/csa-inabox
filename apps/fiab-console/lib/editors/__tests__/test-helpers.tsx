@@ -7,8 +7,8 @@
  */
 import React from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
-import { vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { expect, vi } from 'vitest';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import type { RenderOptions } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -70,4 +70,49 @@ export function installFetchMock(handlers: Record<string, (url: string, init?: R
   });
   vi.spyOn(global, 'fetch').mockImplementation(fetchMock as any);
   return { fetchMock, calls };
+}
+
+/**
+ * Pick `value` in a native `<select>` (Fluent `Select`) whose `<option>`s are
+ * populated by an in-flight fetch. Waits for the OPTION, then fires the change,
+ * then asserts the selection actually took.
+ *
+ * WHY THIS EXISTS — the #2834 flake.
+ *
+ * Every workspace/resource picker in the console renders its `<Select>`
+ * IMMEDIATELY, disabled, carrying only a "Loading…" placeholder `<option>`, and
+ * fills in the real options when the fetch resolves:
+ *
+ *     <Select disabled={(workspaces?.length ?? 0) === 0}>
+ *       {!workspaceId && <option value="">{workspaces === null ? 'Loading…' : …}</option>}
+ *       {(workspaces || []).map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+ *     </Select>
+ *
+ * So `findByRole('combobox')` resolves as soon as the PLACEHOLDER exists —
+ * which can be well before the option you actually want to pick is in the DOM.
+ * Waiting on the fetch *call* (`calls.some(c => c.url.includes(…))`) does not
+ * help either: that only proves the request was issued, not that its response
+ * was applied to state and re-rendered.
+ *
+ * Assigning a value with no matching `<option>` is a SILENT no-op in jsdom
+ * (`selectedIndex` → -1, `value` → ''), so the synthetic change event carries
+ * '' and the component's state never advances. The spec then fails much later
+ * and very confusingly — in #2834 as `expected null to be truthy` on the
+ * lakehouse-shortcut guided empty state, three panels downstream of the real
+ * problem. It failed 3/3 under full-suite load and passed 3/3 in isolation,
+ * because contention is what lets the render lose the race.
+ *
+ * Waiting for the option removes the race outright: there is no timing constant
+ * to tune, only "the data has arrived". The post-assert turns any future
+ * regression into a precise failure HERE rather than a mystery downstream.
+ */
+export async function selectOptionValue(select: HTMLSelectElement, value: string): Promise<void> {
+  await waitFor(() => {
+    expect(
+      Array.from(select.options).some((o) => o.value === value),
+      `<option value="${value}"> never rendered — the list backing this <select> did not load`,
+    ).toBe(true);
+  });
+  fireEvent.change(select, { target: { value } });
+  expect(select.value, `selecting "${value}" did not take`).toBe(value);
 }

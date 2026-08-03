@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, cleanup } from '@testing-library/react';
 import { ActivatorEditor } from '../phase3-editors';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, selectOptionValue } from './test-helpers';
 
 describe('ActivatorEditor', () => {
   let calls: Array<{ url: string; init?: RequestInit }>;
@@ -67,8 +67,14 @@ describe('ActivatorEditor', () => {
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/loom/workspaces'))).toBe(true));
     // Pick the workspace by changing the WorkspacePicker's Select value. Scope
     // to this render's container so the query is unambiguous.
-    const select = within(container).getByRole('combobox');
-    fireEvent.change(select, { target: { value: 'ws-1' } });
+    //
+    // `selectOptionValue` waits for the ws-1 <option> to render first. The call
+    // having been ISSUED (asserted above) does not mean its response has been
+    // applied — WorkspacePicker mounts its <Select> disabled with only a
+    // "Loading workspaces…" placeholder, and changing to a value with no
+    // matching <option> is a silent no-op in jsdom (#2834).
+    const select = within(container).getByRole('combobox') as HTMLSelectElement;
+    await selectOptionValue(select, 'ws-1');
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/api/items/activator?workspaceId=ws-1'))).toBe(true);
     });
@@ -77,7 +83,7 @@ describe('ActivatorEditor', () => {
   it('rule wizard exposes the Azure Monitor data-source + evaluation + severity controls and POSTs them', async () => {
     const { container } = render(<ActivatorEditor item={makeItem('activator', 'Activator')} id="act-fixture" />);
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/loom/workspaces'))).toBe(true));
-    fireEvent.change(within(container).getByRole('combobox'), { target: { value: 'ws-1' } });
+    await selectOptionValue(within(container).getByRole('combobox') as HTMLSelectElement, 'ws-1');
     // Once a workspace is chosen the first reflex auto-selects and its rules load.
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/items/activator/reflex-1/rules'))).toBe(true));
 
@@ -128,7 +134,7 @@ describe('ActivatorEditor', () => {
   it('switching the data source to Event Hub swaps the KQL editor for the hub picker', async () => {
     const { container } = render(<ActivatorEditor item={makeItem('activator', 'Activator')} id="act-fixture" />);
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/loom/workspaces'))).toBe(true));
-    fireEvent.change(within(container).getByRole('combobox'), { target: { value: 'ws-1' } });
+    await selectOptionValue(within(container).getByRole('combobox') as HTMLSelectElement, 'ws-1');
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/items/activator/reflex-1/rules'))).toBe(true));
 
     // Two "New rule" buttons: ribbon stub + DialogTrigger inline. Use first.
