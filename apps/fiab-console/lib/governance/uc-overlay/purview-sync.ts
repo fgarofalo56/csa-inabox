@@ -36,7 +36,7 @@ import {
   addAssetClassification, ensureClassificationDefs, isPurviewConfigured,
   removeAssetClassification, setBusinessMetadata,
 } from '@/lib/azure/purview-client';
-import { asAtlasClassificationTypedefName } from '@/lib/azure/purview-typedef-namespace';
+import { asAtlasBusinessMetadataName, asAtlasClassificationTypedefName } from '@/lib/azure/purview-typedef-namespace';
 import { resolveAssetIdentities } from '@/lib/azure/asset-identity';
 import { resolveWorkspaceHostnames } from '@/lib/azure/unity-catalog-client';
 import {
@@ -167,12 +167,19 @@ export async function syncOverlayToPurview(
   }
   const bmKeys = Object.keys(projection.businessMetadata);
   if (bmKeys.length) {
-    // TENANT-NAMESPACED bag (`LoomCustomTags_<t8>`), not the account-global
-    // `LoomCustomTags` default — see model.tenantBusinessMetadataName. Atlas
+    // TENANT-NAMESPACED bag (`LoomCustomTags_<t8>`), never the account-global
+    // `LoomCustomTags` — see model.tenantBusinessMetadataName. Atlas
     // business-metadata typedefs are account-global and this is written with
-    // isOverwrite=true, so the default would let one tenant clobber another's
-    // cost_center / loom_certification on a shared Purview account.
-    await setBusinessMetadata(guid, projection.businessMetadata, projection.businessMetadataName);
+    // isOverwrite=true, so a shared bag would let one tenant clobber another's
+    // cost_center / loom_certification on a shared Purview account. Since
+    // #2633 the shared bag is not even expressible: `setBusinessMetadata` takes
+    // a branded name. The mint happens HERE for the same reason the
+    // classification mint does — model.ts must stay client-importable and so
+    // cannot import the authority.
+    await setBusinessMetadata(
+      guid, projection.businessMetadata,
+      asAtlasBusinessMetadataName(projection.businessMetadataName),
+    );
   }
 
   return {

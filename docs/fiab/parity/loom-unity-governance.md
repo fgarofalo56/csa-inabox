@@ -1,5 +1,5 @@
 <!-- parity-doc-meta
-Reviewed-on: 2026-07-30
+Reviewed-on: 2026-08-02
 Validated-against:
   - apps/fiab-console/lib/governance/uc-overlay/model.ts
   - apps/fiab-console/lib/governance/uc-overlay/store.ts
@@ -125,7 +125,7 @@ Legend: built ✅ · honest-gate ⚠️ · MISSING ❌
 | # | Source capability | Loom | Where / backend |
 |---|---|---|---|
 | E1 | Governed tags → controlled classifications | ✅ built | `ensureClassificationDefs` + `addAssetClassification` (Atlas v2), name `Loom_<tenant8>_<key>_<value>` — tenant-namespaced because Atlas typedefs are ACCOUNT-GLOBAL while a Loom tenant is a Cosmos partition |
-| E2 | Free tags + certification → business metadata | ✅ built | `setBusinessMetadata` into a **tenant-namespaced** `LoomCustomTags_<tenant8>` bag (`isOverwrite=true`). Namespaced for the same reason E1 is: an Atlas business-metadata typedef is ACCOUNT-GLOBAL, its attribute names come verbatim from tenant-authored free-tag keys, and the write overwrites — so the account-global default would let one tenant clobber another's `cost_center` / `loom_certification` on a shared Purview account (`model.tenantBusinessMetadataName`) |
+| E2 | Free tags + certification → business metadata | ✅ built | `setBusinessMetadata` into a **tenant-namespaced** `LoomCustomTags_<tenant8>` bag (`isOverwrite=true`). Namespaced for the same reason E1 is: an Atlas business-metadata typedef is ACCOUNT-GLOBAL, its attribute names come verbatim from tenant-authored free-tag keys, and the write overwrites — so an account-global bag would let one tenant clobber another's `cost_center` / `loom_certification` on a shared Purview account (`model.tenantBusinessMetadataName`). Since #2633 the account-global bag is **not expressible**: `setBusinessMetadata` / `ensureBusinessMetadataDef` take a branded `AtlasBusinessMetadataName`, mintable only by `purview-typedef-namespace.loomTenantBusinessMetadataName`, and the pre-existing item-level custom-tags route (`/api/items/[type]/[id]/business-metadata`) writes the SAME per-tenant bag |
 | E2a | **REVOKE** a classification Loom applied | ✅ built | `removeAssetClassification` (new DELETE counterpart). The sync is a SUPERSEDE: classifications recorded in `overlay.purview.classifications` that are no longer desired are removed, so an asset can never carry `…_pii_yes` **and** `…_pii_no` |
 | E2b | **CLEAR** a stale certification / removed free tag | ✅ built | `loom_certification` is ALWAYS emitted (`none` when de-certified) and previously-pushed business-metadata keys are blanked, so a de-certified asset does not keep a `certified` label |
 | E2c | Push to a re-registered asset | ✅ built | a LIVE `resolveAssetIdentities` wins over the cached `purview.guid`; the cached guid is only the fallback |

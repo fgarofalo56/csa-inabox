@@ -42,7 +42,9 @@
  * Docs: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2 (typedefs)
  *       https://learn.microsoft.com/purview/data-map-classification-custom
  */
-import { capAtlasTypedefName, tenantTypedefPrefix } from '@/lib/governance/uc-overlay/model';
+import {
+  capAtlasTypedefName, tenantBusinessMetadataName, tenantTypedefPrefix,
+} from '@/lib/governance/uc-overlay/model';
 import { trimChar } from '@/lib/util/trim';
 
 export { tenantTypedefPrefix };
@@ -72,12 +74,14 @@ export type AtlasClassificationTypedefName = string & {
 /** Thrown when a name that would become an account-global typedef is not namespaced. */
 export class UnnamespacedTypedefError extends Error {
   readonly rejected: string[];
-  constructor(rejected: string[]) {
+  constructor(rejected: string[], kind: 'classification' | 'business metadata' = 'classification') {
+    const builders = kind === 'classification'
+      ? 'loomClassificationTypedefName / loomSensitivityLabelTypedefName'
+      : 'loomTenantBusinessMetadataName';
     super(
-      `Refusing to create ACCOUNT-GLOBAL Purview Atlas classification typedef(s) from ` +
+      `Refusing to create ACCOUNT-GLOBAL Purview Atlas ${kind} typedef(s) from ` +
       `un-namespaced name(s): ${rejected.slice(0, 5).join(', ')}. Build the name with ` +
-      `lib/azure/purview-typedef-namespace (loomClassificationTypedefName / ` +
-      `loomSensitivityLabelTypedefName) so it carries a tenant discriminator.`,
+      `lib/azure/purview-typedef-namespace (${builders}) so it carries a tenant discriminator.`,
     );
     this.name = 'UnnamespacedTypedefError';
     this.rejected = rejected;
@@ -212,4 +216,66 @@ export function loomSensitivityLabelTypedefName(
   return capAtlasTypedefName(
     `LOOM.LABEL.${tenantTypedefPrefix(tenantId)}.${slug}`,
   ) as AtlasClassificationTypedefName;
+}
+
+// ---------------------------------------------------------------------------
+// BUSINESS METADATA (issue #2633) — the same class, one API surface over.
+//
+// An Atlas BUSINESS-METADATA typedef ("managed attributes") is ACCOUNT-GLOBAL
+// exactly like a classification typedef, and `setBusinessMetadata` writes it
+// with `isOverwrite=true` — which REPLACES the whole bag on that entity. So the
+// account-global `LoomCustomTags` bag has TWO cross-tenant failure modes on a
+// shared Purview account, not one:
+//
+//   1. LEAK/CLOBBER — tenant B saving custom tags on an asset overwrites every
+//      attribute tenant A had written into the same bag on the same entity.
+//   2. PERMANENT VOCABULARY GROWTH — `ensureBusinessMetadataDef` adds each
+//      tenant-authored key to the shared typedef, forever, visible to everyone.
+//
+// LU-5 already writes a per-tenant bag (`model.tenantBusinessMetadataName` →
+// `LoomCustomTags_<t8>`); the pre-existing item-level custom-tags route did not.
+// The remedy is the SAME shape as the classification one above: a branded name
+// that only this module can mint, so `purview-client.setBusinessMetadata` /
+// `ensureBusinessMetadataDef` cannot be handed a bare bag name and still
+// compile. `LOOM_BUSINESS_METADATA_NAME` therefore survives as a READ-ONLY
+// legacy constant (pre-migration values live under it) and is not mintable.
+// ---------------------------------------------------------------------------
+
+/**
+ * An Atlas BUSINESS-METADATA bag name proven to carry a tenant discriminator.
+ * Structurally unforgeable outside this module, same as
+ * {@link AtlasClassificationTypedefName}.
+ */
+export type AtlasBusinessMetadataName = string & {
+  readonly __atlasNamespacedBag: unique symbol;
+};
+
+/** `LoomCustomTags_<t8>` — the ONLY shape {@link tenantBusinessMetadataName} emits. */
+const NAMESPACED_BUSINESS_METADATA_SHAPE = /^LoomCustomTags_[0-9a-f]{8}$/;
+
+/** True when `name` is a tenant-namespaced business-metadata bag. */
+export function isNamespacedBusinessMetadataName(name: string): boolean {
+  return NAMESPACED_BUSINESS_METADATA_SHAPE.test((name || '').trim());
+}
+
+/**
+ * Validate + brand a business-metadata bag name. THE ONLY mint. Fails CLOSED:
+ * the bare `LoomCustomTags` bag is rejected, because growing/overwriting it is
+ * the defect this exists to prevent.
+ * @throws UnnamespacedTypedefError when the name is not namespaced.
+ */
+export function asAtlasBusinessMetadataName(name: string): AtlasBusinessMetadataName {
+  const n = (name || '').trim();
+  if (!isNamespacedBusinessMetadataName(n)) throw new UnnamespacedTypedefError([name], 'business metadata');
+  return n as AtlasBusinessMetadataName;
+}
+
+/**
+ * The business-metadata bag a tenant's free-form custom tags are written to —
+ * `LoomCustomTags_<t8>`. Delegates to `model.tenantBusinessMetadataName` so the
+ * LU-5 overlay and the item-level custom-tags route resolve to the SAME bag for
+ * the same tenant (one namespace rule in the tree), then brands it.
+ */
+export function loomTenantBusinessMetadataName(tenantId: string): AtlasBusinessMetadataName {
+  return asAtlasBusinessMetadataName(tenantBusinessMetadataName(tenantId));
 }

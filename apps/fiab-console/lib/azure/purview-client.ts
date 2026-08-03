@@ -74,7 +74,7 @@ import {
 } from './purview-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 import { assertNamespacedTypedefNames, SENSITIVITY_LABEL_TYPEDEF_PREFIX,
-  type AtlasClassificationTypedefName } from './purview-typedef-namespace';
+  type AtlasBusinessMetadataName, type AtlasClassificationTypedefName } from './purview-typedef-namespace';
 import { derivePurviewArmResourceId, purviewArmProviderForKind } from './purview-source-mapping';
 import { dfsUrl, getBlobSuffix } from './cloud-endpoints';
 // L4 — column-lineage pure helpers/types live in a sibling module
@@ -1465,13 +1465,14 @@ export async function createGlossaryTerm(payload: {
 // ensureBusinessMetadataDef creates the typedef and grows it with any missing
 // attribute keys (idempotent), so a free-form "Custom tags" key/value UI can
 // use arbitrary keys. Needs the Loom UAMI "Data Curator" on the root collection.
+// ACCOUNT-GLOBAL + isOverwrite=true (whole-bag replace) ⇒ `bmName` is REQUIRED and branded: ./purview-typedef-namespace (#2633).
 // ------------------------------------------------------------
 
-/** Default business-metadata namespace Loom writes free-form custom tags into. */
+/** LEGACY, READ-ONLY (#2633): the pre-per-tenant account-global bag. Readable so old values aren't orphaned; not brandable, so no longer writable. */
 export const LOOM_BUSINESS_METADATA_NAME = 'LoomCustomTags';
 
 /** Normalize a free-form key into a valid Atlas attribute name (letters/digits/_). */
-function businessMetadataAttrName(key: string): string {
+export function businessMetadataAttrName(key: string): string {
   return trimEdges((key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_'), '_') || 'tag';
 }
 
@@ -1505,7 +1506,7 @@ async function getBusinessMetadataDef(bmName: string): Promise<any | null> {
  */
 export async function ensureBusinessMetadataDef(
   attributeKeys: string[],
-  bmName: string = LOOM_BUSINESS_METADATA_NAME,
+  bmName: AtlasBusinessMetadataName,
 ): Promise<void> {
   purviewAccount();
   const wantKeys = [...new Set((attributeKeys || []).map(businessMetadataAttrName).filter(Boolean))];
@@ -1555,7 +1556,7 @@ export async function ensureBusinessMetadataDef(
 export async function setBusinessMetadata(
   guid: string,
   tags: Record<string, string>,
-  bmName: string = LOOM_BUSINESS_METADATA_NAME,
+  bmName: AtlasBusinessMetadataName,
 ): Promise<void> {
   purviewAccount();
   if (!guid) throw new PurviewError(400, null, 'guid is required');
