@@ -300,9 +300,15 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ONELAKE_URL: 'https://loom-onelake.<aca-env-domain>',
   LOOM_DIRECTLAKE_URL: 'https://loom-directlake.<aca-env-domain>',
   LOOM_BROKER_URL: 'https://loom-capacity-broker.<aca-env-domain>',
-  LOOM_BROKER_REDIS: '<hband-redis-host>.redis.cache.windows.net:6380',
+  // #2642 — the shared H-band cache is Azure Managed Redis (host
+  // <name>.<region>.redis.azure.net, port 10000) in Commercial, and the
+  // retiring Azure Cache for Redis (<name>.redis.cache.<suffix>:6380) in Azure
+  // Government, where Azure Managed Redis is not available. Take the value from
+  // the `redisEndpoint` output of compute/hband-shared.bicep — it already
+  // carries the right port for whichever backend was deployed.
+  LOOM_BROKER_REDIS: '<hband-redis-host>.<region>.redis.azure.net:10000',
   // ── Warm Spark pool cross-replica lease store (PSR-3) ──
-  LOOM_SPARK_POOL_REDIS: '<hband-redis-host>.redis.cache.windows.net:6380',
+  LOOM_SPARK_POOL_REDIS: '<hband-redis-host>.<region>.redis.azure.net:10000',
   LOOM_SPARK_POOL_LEASE_CONTAINER: 'spark-warm-leases',
   // ── wave-3 coverage: backends the earlier checks missed entirely (see
   //    docs/fiab/health-coverage-audit.md — semantic/AAS, AML, APIM, Power
@@ -317,7 +323,7 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_POSTGRES_HOST: '<postgres-flexible-server>.postgres.database.azure.com',
   LOOM_EVENTGRID_BUSINESS_TOPIC: '<eventgrid-custom-topic-name>',
   LOOM_EVENTGRID_RG: '<eventgrid-resource-group (defaults to the DLZ RG)>',
-  LOOM_RESULT_CACHE_REDIS: '<redis-host>.redis.cache.windows.net:6380',
+  LOOM_RESULT_CACHE_REDIS: '<redis-host>.<region>.redis.azure.net:10000',
   LOOM_PAGINATED_RENDER_URL: 'https://<paginated-report-renderer-function>.azurewebsites.net',
   // ── V1 synthetic user-journey monitoring (loom-next-level WS-V) ──
   LOOM_SYNTHETIC_MONITOR_ENABLED: 'true',

@@ -129,8 +129,8 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-redis-result-cache', category: 'data-plane', title: 'Result-cache Redis (ADX / query result cache)', severity: 'optional',
     required: ['LOOM_RESULT_CACHE_REDIS'], warnOnMiss: true, optionalDefault: true,
-    optionalDefaultDetail: 'query result caching runs on the built-in in-memory per-replica cache with zero loss of function. Set LOOM_RESULT_CACHE_REDIS (the shared Azure Cache for Redis host) only to make the cache shared across Console replicas.',
-    remediation: 'Set LOOM_RESULT_CACHE_REDIS to <redis-host>:6380 (the shared H-band Azure Cache for Redis) to upgrade the per-replica in-memory result cache to a shared cross-replica cache. Optional scale-out — the in-memory default is fully functional.',
+    optionalDefaultDetail: 'query result caching runs on the built-in in-memory per-replica cache with zero loss of function. Set LOOM_RESULT_CACHE_REDIS (the shared Redis host) only to make the cache shared across Console replicas.',
+    remediation: 'Set LOOM_RESULT_CACHE_REDIS to the shared H-band Redis endpoint to upgrade the per-replica in-memory result cache to a shared cross-replica cache. Use the redisEndpoint output of compute/hband-shared.bicep verbatim — it is <host>:10000 on Azure Managed Redis (Commercial) and <host>:6380 on the retiring Azure Cache for Redis (Azure Government, where Managed Redis is unavailable), so do not hard-code a port. Optional scale-out — the in-memory default is fully functional.',
     provisionedBy: 'modules/compute/hband-shared.bicep (shared Redis) → LOOM_RESULT_CACHE_REDIS on the Console app',
     role: 'Redis access key from Key Vault (LOOM_RESULT_CACHE_REDIS_PASSWORD secretRef) or AAD data-plane per module wiring',
   },
