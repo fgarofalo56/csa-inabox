@@ -148,7 +148,7 @@ jobs:
             # not run, and the verdict script reports that as unknown rather than
             # as a clean zero (the second half of #2837).
             HITS_RAW=$(az monitor log-analytics query --workspace "$LAW" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where Log_s has 'auth/callback' and Log_s has 'invalid_client' | count" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | count" \
               -o tsv 2>/dev/null | tr -d '\r')
           fi
           MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')

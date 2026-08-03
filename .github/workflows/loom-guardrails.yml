@@ -42,6 +42,8 @@ jobs:
         run: node scripts/ci/check-loom-content-id-chokepoint.mjs
       - name: kv-secret-purpose (every Key Vault read declares its name-space)
         run: node scripts/ci/check-kv-secret-purpose.mjs
+      - name: containerlog-query-scope (a log query must not be able to count its own output)
+        run: node scripts/ci/check-containerlog-query-scope.mjs
       - name: no-freeform (raw-JSON config surfaces)
         run: node scripts/ci/check-no-freeform.mjs
       - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
