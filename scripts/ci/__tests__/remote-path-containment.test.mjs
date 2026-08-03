@@ -12,10 +12,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   findRemotePathWrites,
   checkHelperIntegrity,
   findRivalHelpers,
+  collectFunctions,
 } from '../check-remote-path-containment.mjs';
 
 // ── M1 / M4: a network value reaching a path without containment ────────────
@@ -193,4 +195,244 @@ test('M5 — a rival containment helper is reported', () => {
 
 test('CONTROL — a comment mentioning safeJoin is not a rival definition', () => {
   assert.deepEqual(findRivalHelpers('// consider a safeJoin(base, rel) helper one day\n'), []);
+});
+
+// ── #2869 F1: the declaration syntax must not decide whether the guard sees it ─
+//
+// The three blocks below are the SAME defect written three ways. Before the
+// fix, only the first was detected — so a guard that read as a class closure
+// was really a check on which syntax the author happened to pick.
+
+const ARROW_DEFECT = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const writeAll = (dir, files) => {
+  for (const f of files) writeFileSync(join(dir, f.path), f.content);
+};
+async function run(client, dir) {
+  const ctx = await client.request('GET', '/context');
+  writeAll(dir, ctx.files);
+}`;
+
+test('M9 — taint crosses an ARROW FUNCTION boundary', () => {
+  const hits = findRemotePathWrites(ARROW_DEFECT);
+  assert.equal(hits.length, 1, 'the write inside the arrow function is reached through the call site');
+  assert.equal(hits[0].contained, false);
+});
+
+test('M9 CONTROL — the same arrow function, contained, passes', () => {
+  const hits = findRemotePathWrites(ARROW_DEFECT.replace('join(dir, f.path)', 'containedJoin(dir, f.path)'));
+  assert.equal(hits.length, 1, 'still recognised as network-derived');
+  assert.equal(hits[0].contained, true);
+});
+
+test('M10 — taint crosses a CLASS METHOD boundary', () => {
+  const src = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+class Puller {
+  writeAll(dir, files) {
+    for (const f of files) writeFileSync(join(dir, f.path), f.content);
+  }
+  async run(client, dir) {
+    const ctx = await client.request('GET', '/context');
+    this.writeAll(dir, ctx.files);
+  }
+}`;
+  const hits = findRemotePathWrites(src);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].contained, false);
+});
+
+test('taint crosses an OBJECT-LITERAL method and an arrow property', () => {
+  for (const decl of ['writeAll(dir, files) {', 'writeAll: (dir, files) => {']) {
+    const src = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const io = {
+  ${decl}
+    for (const f of files) writeFileSync(join(dir, f.path), f.content);
+  },
+};
+async function run(client, dir) {
+  const ctx = await client.request('GET', '/context');
+  io.writeAll(dir, ctx.files);
+}`;
+    const hits = findRemotePathWrites(src);
+    assert.equal(hits.length, 1, `not detected for \`${decl}\``);
+    assert.equal(hits[0].contained, false);
+  }
+});
+
+test('CONTROL — `if (…) {` and `catch (e) {` are not mistaken for callables', () => {
+  // The method matcher looks for `NAME(params) {` at the start of a line, which
+  // is also the shape of every control-flow keyword. If `if` became a callable,
+  // any call to something named `if`-adjacent would propagate taint into an
+  // unrelated block and the guard would start inventing findings.
+  const names = collectFunctions(`
+function real(a) {
+  if (a) { return 1; }
+  for (const x of a) { noop(x); }
+  try { noop(); } catch (e) { noop(e); }
+  while (a) { break; }
+  switch (a) { default: break; }
+}`).map((f) => f.name).sort();
+  assert.deepEqual(names, ['real']);
+});
+
+// ── #2869 F2: a destructured response still binds ────────────────────────────
+
+test('M11 — a DESTRUCTURED network response still propagates taint', () => {
+  const src = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+export async function pull(client, dir) {
+  const { files } = await client.request('GET', '/context');
+  for (const f of files) writeFileSync(join(dir, f.path), f.content);
+}`;
+  const hits = findRemotePathWrites(src);
+  assert.equal(hits.length, 1, 'the destructured binding used to record nothing at all');
+  assert.equal(hits[0].contained, false);
+});
+
+test('M11 CONTROL — the destructured form, contained, passes', () => {
+  const src = `
+import { writeFileSync } from 'node:fs';
+import { containedJoin } from '../safe-path.js';
+export async function pull(client, dir) {
+  const { files } = await client.request('GET', '/context');
+  for (const f of files) writeFileSync(containedJoin(dir, f.path), f.content);
+}`;
+  const hits = findRemotePathWrites(src);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].contained, true);
+});
+
+test('a RENAMED / nested / rest destructure binds the LOCAL name', () => {
+  for (const pattern of ['{ files: entries }', '{ data: { files: entries } }', '{ ...entries }']) {
+    const src = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+export async function pull(client, dir) {
+  const ${pattern} = await client.request('GET', '/context');
+  for (const f of entries) writeFileSync(join(dir, f.path), f.content);
+}`;
+    assert.equal(findRemotePathWrites(src).length, 1, `not detected for \`${pattern}\``);
+  }
+});
+
+test('a destructured LOOP HEAD still carries taint to the sink', () => {
+  const src = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+export async function pull(client, dir) {
+  const { files } = await client.request('GET', '/context');
+  for (const { path: rel, content } of files) writeFileSync(join(dir, rel), content);
+}`;
+  assert.equal(findRemotePathWrites(src).length, 1);
+});
+
+// ── REALITY CHECK: the shape the real CLI actually has ──────────────────────
+//
+// This is the fixture that matters most, and it is here because the F2 fix
+// BROKE the guard while every other test stayed green. Recording
+// `const { client } = await requireAuth(…)` as a binding made `client` expand
+// inline, turning `await client.request(` — which the network pattern matches —
+// into `await (await requireAuth(opts)).request(`, which it does not. The
+// repo-wide run went from "2 network-derived" to "0" and still printed OK.
+//
+// A fixture that models the code's assumptions instead of production reality
+// (a bare `const client = …`) would have passed throughout. This one mirrors
+// the real chain: destructured auth → client → request → cross-function call.
+test('REALITY — destructured client → request → cross-function write is still seen', () => {
+  const src = `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { containedJoin } from '../safe-path.js';
+export async function runApps(sub, args, opts) {
+  const { client, output } = await requireAuth(opts);
+  const dir = resolve(flagStr(args.flags, 'dir') || './out');
+  const ctx = await client.request('GET', api('/context'));
+  const written = writeBuildContext(dir, ctx.files);
+  return written;
+}
+export function writeBuildContext(dir, files) {
+  const planned = files.map((f) => ({ abs: containedJoin(dir, f?.path), content: f?.content ?? '' }));
+  for (const p of planned) {
+    mkdirSync(dirname(p.abs), { recursive: true });
+    writeFileSync(p.abs, p.content, 'utf-8');
+  }
+  return planned.length;
+}`;
+  const hits = findRemotePathWrites(src);
+  assert.equal(hits.length, 2, 'both the mkdir and the write must stay VISIBLE as network-derived');
+  assert.ok(hits.every((h) => h.contained), 'and both must read as contained');
+});
+
+test('REALITY — the same file with the containment removed goes RED', () => {
+  // The other half of the pair: "visible" is only worth asserting if the
+  // visibility can still produce a finding.
+  const src = `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+export async function runApps(sub, args, opts) {
+  const { client, output } = await requireAuth(opts);
+  const ctx = await client.request('GET', api('/context'));
+  return writeBuildContext('./out', ctx.files);
+}
+export function writeBuildContext(dir, files) {
+  const planned = files.map((f) => ({ abs: join(dir, f?.path), content: f?.content ?? '' }));
+  for (const p of planned) {
+    mkdirSync(dirname(p.abs), { recursive: true });
+    writeFileSync(p.abs, p.content, 'utf-8');
+  }
+  return planned.length;
+}`;
+  const hits = findRemotePathWrites(src);
+  assert.equal(hits.length, 2);
+  assert.ok(hits.every((h) => !h.contained), 'neither is contained');
+});
+
+// ── #2869 F3: a COMMENT must not satisfy an integrity layer ──────────────────
+
+test('M8 — a `..` rejection COMMENTED OUT is reported, not just a deleted one', () => {
+  // The original check tested the RAW body, which still contains comments — so
+  // deleting the line fired and disabling it did not. Disabling is the more
+  // likely edit, and it leaves containment just as gone.
+  const commented = INTACT_HELPER.replace(
+    /( *)if \(rel\.split.*\n/,
+    "$1// if (rel.split('/').some((s) => s === '..')) refuse('dotdot');\n",
+  );
+  const problems = checkHelperIntegrity(commented);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /no longer rejects "\.\." segments/);
+});
+
+test('an absolute-path rejection COMMENTED OUT is reported', () => {
+  const commented = INTACT_HELPER.replace(
+    /( *)if \(rel\.startsWith\('\/'\).*\n/,
+    "$1/* disabled for now: if (rel.startsWith('/')) refuse('absolute'); */\n",
+  );
+  const problems = checkHelperIntegrity(commented);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /no longer rejects absolute paths/);
+});
+
+test('CONTROL — a comment ABOUT the layers, with the layers intact, passes', () => {
+  // The mirror image: masking must not make a correct helper look gutted.
+  const documented = INTACT_HELPER.replace(
+    'export function containedJoin',
+    "// Rejects '..' segments and paths that startsWith('/'), then re-checks.\nexport function containedJoin",
+  );
+  assert.deepEqual(checkHelperIntegrity(documented), []);
+});
+
+test('CONTROL — the SHIPPED helper passes every layer', () => {
+  // Reads the real file: the fixtures above are only evidence if the thing they
+  // model is itself still intact.
+  const shipped = readFileSync(
+    new URL('../../../apps/loom-cli/src/safe-path.ts', import.meta.url),
+    'utf8',
+  );
+  assert.deepEqual(checkHelperIntegrity(shipped), []);
 });
