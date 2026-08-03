@@ -59,16 +59,34 @@ permissions:
   contents: read
   security-events: write
 
+# A merge burst spawned three concurrent analyses within 45 seconds on 08-03.
+# With the larger JS/TS budget below that stacks badly, and only the newest
+# commit actually needs analyzing. One in-progress run per ref, and a newly
+# queued run supersedes any earlier *pending* one.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Per-language budget. Python interprets in ~2 minutes; JS/TS normally takes
+    # 11-14 but a single pathological query can blow far past that (see below).
+    # The JOB budget is deliberately larger than the ANALYSIS budget so that when
+    # the analysis is killed there is still time left to REPORT it.
+    timeout-minutes: ${{ matrix.jobTimeout }}
 
     strategy:
       fail-fast: false
       matrix:
-        language: [python, javascript-typescript]
+        include:
+          - language: python
+            analysisTimeout: 25
+            jobTimeout: 35
+          - language: javascript-typescript
+            analysisTimeout: 90
+            jobTimeout: 100
 
     steps:
       - name: Checkout repository
@@ -83,7 +101,46 @@ jobs:
       - name: Autobuild
         uses: github/codeql-action/autobuild@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
 
+      # The timeout lives on the STEP, not only the job. A job-level timeout
+      # CANCELS the job: conclusion `cancelled`, no chance to report, and grey in
+      # the checks list. A step-level timeout FAILS the step and leaves the job
+      # budget to run the assertion below, which turns the whole run red.
       - name: Perform CodeQL Analysis
+        id: analyze
+        timeout-minutes: ${{ matrix.analysisTimeout }}
         uses: github/codeql-action/analyze@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
         with:
           category: "/language:${{ matrix.language }}"
+
+      # WHY THIS EXISTS — the 2026-08-03 silent scan outage.
+      #
+      # `Security/CWE-912/HttpToFileAccess.ql` went from 22.4s at 8c0b10b1 to
+      # >17m56s and never terminated, so query 105/105 was still running when the
+      # 30-minute job timeout fired. On that timeout the action uploads
+      # `codeql-failed-run.sarif` (results_count 0 / rules_count 0 / error
+      # "unsuccessful execution"). GitHub records it, correctly refuses to retire
+      # alerts from it, and the alert list FREEZES at the last real scan while
+      # still reading as current.
+      #
+      # 24 consecutive JS/TS runs died that way over ~10 hours. Every one showed
+      # as `cancelled`, CodeQL is not a required check, so nothing blocked and
+      # nothing paged — and six js/log-injection alerts that #2850 had already
+      # fixed sat "open", inviting a second, redundant fix for code that was
+      # never the problem.
+      #
+      # A scan that did not finish must look like a FAILURE, not a shrug.
+      - name: Assert the analysis actually completed
+        if: always()
+        env:
+          OUTCOME: ${{ steps.analyze.outcome }}
+          LANGUAGE: ${{ matrix.language }}
+          BUDGET: ${{ matrix.analysisTimeout }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" = "success" ]; then
+            echo "[codeql] ${LANGUAGE}: analysis completed and results were uploaded."
+            exit 0
+          fi
+          echo "::error title=CodeQL ${LANGUAGE} analysis did not complete::outcome=${OUTCOME}. No results were evaluated, so a 'failed run' SARIF (0 rules / 0 results) was uploaded instead. GitHub does NOT retire alerts from that upload: the code-scanning list for ${LANGUAGE} is now FROZEN at the last real scan and will read as current while every merge since goes unscanned. Do not triage ${LANGUAGE} alerts until this is green. If this timed out at ${BUDGET}m, find the query that stopped terminating in the 'Perform CodeQL Analysis' log (the last 'Starting evaluation of' with no matching 'Evaluation done')."
+          exit 1
+
