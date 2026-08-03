@@ -11,14 +11,25 @@ import { clientFetch } from '@/lib/client-fetch';
  *   Share    → /api/items/[type]/[id]/share     (Cosmos shares, token URL)
  *   Learn    → static lib/learn/content.ts entry (or honest empty state)
  *
- * 'Don't show again' for Learn is persisted via
- *   POST /api/user-prefs { key: `learnDismissed:${type}`, value: true }
+ * Learn is OPT-IN (#2893). It used to AUTO-OPEN on arrival for every item type
+ * that had content, and the `size="medium"` Drawer covers ~45% of a 1280px
+ * viewport — i.e. exactly the region where a pipeline/eventstream canvas
+ * lives. Confirmed on two unrelated editors, so it was the shared chrome, not
+ * a per-editor bug. The drawer now opens only from the visible Learn button in
+ * this action row; "first visit" is signalled by a quiet dot on that button.
+ *
+ * 'Don't show this again' for Learn switches that dot off and is persisted the
+ * moment it is ticked (not only when the primary button is pressed — closing
+ * via the header X or Esc used to silently discard it), via
+ *   POST /api/user-prefs { key: `learnDismissed:${type}`, value: boolean }
+ * and re-hydrated into the checkbox on the next open, so the promise the
+ * checkbox makes is one the surface actually keeps.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Button, Tooltip, Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
-  Textarea, Checkbox, MessageBar, MessageBarBody,
+  Textarea, Checkbox, CounterBadge, MessageBar, MessageBarBody,
   Spinner, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -50,6 +61,15 @@ const useStyles = makeStyles({
     wordBreak: 'break-all',
   },
   learnBody: { whiteSpace: 'pre-wrap', lineHeight: 1.5 },
+  // Anchor for the "unread Learn" dot so it rides the Learn button instead of
+  // pushing the action row wider.
+  learnAnchor: { position: 'relative', display: 'inline-flex' },
+  learnDot: {
+    position: 'absolute',
+    top: tokens.spacingVerticalXXS,
+    insetInlineEnd: tokens.spacingHorizontalXXS,
+    pointerEvents: 'none',
+  },
 });
 
 export function ItemSidePanel({ type, id }: Props) {
@@ -57,25 +77,29 @@ export function ItemSidePanel({ type, id }: Props) {
   const [open, setOpen] = useState<null | 'comments' | 'history' | 'share' | 'learn' | 'sensitivity' | 'classifications'>(null);
   const isNew = id === 'new';
 
-  // Auto-open Learn for first visit, unless dismissed — OR unless the
-  // URL carries `?noLearn=1` / `?screenshot=1`, which lets screenshot
-  // harnesses and Playwright UATs render the editor in its clean state
-  // without manually clicking the drawer closed (the Tutorial pages on
-  // the docs site shouldn't bake the Learn drawer into every screenshot).
+  // #2893 — Learn NEVER auto-opens. A first visit only lights a dot on the
+  // Learn button; the drawer is opened by the user from that visible
+  // affordance. `learnDismissed` also seeds the drawer's checkbox so the
+  // stored preference is visibly honoured on reopen. Both stay false when the
+  // pref lookup fails — the safe default is "no dot", never "occlude the
+  // canvas".
+  const [learnHint, setLearnHint] = useState(false);
+  const [learnDismissed, setLearnDismissed] = useState(false);
+
   useEffect(() => {
-    if (isNew) return;
-    if (typeof window !== 'undefined') {
-      const sp = new URLSearchParams(window.location.search);
-      if (sp.has('noLearn') || sp.has('screenshot') || sp.get('learn') === '0') {
-        return;
-      }
-    }
+    if (isNew || !getLearn(type)) { setLearnHint(false); setLearnDismissed(false); return; }
+    let cancelled = false;
     clientFetch(`/api/user-prefs?key=learnDismissed:${type}`).then(r => r.json()).then(d => {
-      if (!d?.value) {
-        const learn = getLearn(type);
-        if (learn) setOpen('learn');
-      }
+      if (cancelled) return;
+      setLearnDismissed(!!d?.value);
+      setLearnHint(!d?.value);
     }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [type, isNew]);
+
+  const onLearnDismissChange = useCallback((next: boolean) => {
+    setLearnDismissed(next);
+    setLearnHint(!next && !!getLearn(type) && !isNew);
   }, [type, isNew]);
 
   return (
@@ -100,10 +124,19 @@ export function ItemSidePanel({ type, id }: Props) {
         <Button appearance="subtle" icon={<Tag24Regular />} onClick={() => !isNew && setOpen('classifications')}
           aria-label="Classifications" disabled={isNew} />
       </Tooltip>
-      <Tooltip content="Learn about this item" relationship="label">
-        <Button appearance="subtle" icon={<BookOpen24Regular />} onClick={() => setOpen('learn')}
-          aria-label="Learn about this item" />
-      </Tooltip>
+      <span className={styles.learnAnchor}>
+        <Tooltip content="Learn about this item" relationship="label">
+          <Button appearance="subtle" icon={<BookOpen24Regular />} onClick={() => setOpen('learn')}
+            aria-label="Learn about this item" data-testid="item-learn-button" />
+        </Tooltip>
+        {/* Quiet "there's guidance here you haven't dismissed" affordance — the
+            replacement for the drawer opening itself over the canvas. This is
+            what "Don't show this again" turns off. */}
+        {learnHint && (
+          <CounterBadge className={styles.learnDot} dot color="brand" size="small"
+            aria-hidden data-testid="item-learn-hint" />
+        )}
+      </span>
       <Drawer open={open !== null} onOpenChange={(_, d) => { if (!d.open) setOpen(null); }}
               position="end" size="medium">
         <DrawerHeader>
@@ -125,7 +158,10 @@ export function ItemSidePanel({ type, id }: Props) {
           {open === 'share'   && <SharePane   type={type} id={id} />}
           {open === 'sensitivity' && <SensitivityLabelPane type={type} id={id} />}
           {open === 'classifications' && <ClassificationPane type={type} id={id} />}
-          {open === 'learn'   && <LearnPane   type={type} id={id} onClose={() => setOpen(null)} />}
+          {open === 'learn'   && (
+            <LearnPane type={type} id={id} dismissed={learnDismissed}
+              onDismissChange={onLearnDismissChange} onClose={() => setOpen(null)} />
+          )}
         </DrawerBody>
       </Drawer>
     </div>
@@ -275,19 +311,26 @@ function SharePane({ type, id }: Props) {
   );
 }
 
-function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: () => void }) {
+function LearnPane({ type, id, dismissed = false, onDismissChange, onClose }: {
+  type: string; id?: string; dismissed?: boolean;
+  onDismissChange?: (next: boolean) => void; onClose: () => void;
+}) {
   const styles = useStyles();
   const learn = getLearn(type);
-  const [dismiss, setDismiss] = useState(false);
+  // Seeded from the PERSISTED preference so reopening shows the real state.
+  const [dismiss, setDismiss] = useState(dismissed);
   const [activeStep, setActiveStep] = useState(0);
-  const save = async () => {
-    if (dismiss) {
-      await clientFetch('/api/user-prefs', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ key: `learnDismissed:${type}`, value: true }),
-      }).catch(() => {});
-    }
-    onClose();
+  // Persist on TOGGLE, not on the primary button: the drawer can also be closed
+  // via the header X, the Esc key, or a click outside, and all three used to
+  // throw the ticked checkbox away (#2893). Un-ticking writes `false`, so the
+  // preference is reversible instead of a one-way door.
+  const setDismissPersisted = async (next: boolean) => {
+    setDismiss(next);
+    onDismissChange?.(next);
+    await clientFetch('/api/user-prefs', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: `learnDismissed:${type}`, value: next }),
+    }).catch(() => {});
   };
   /** Hand the active step to the Help Copilot (tutorial-step awareness +
    *  auto-error-detect). Dispatches the same CustomEvent the widget listens
@@ -389,9 +432,9 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
           </MessageBarBody>
         </MessageBar>
       )}
-      <Checkbox checked={dismiss} onChange={(_, d) => setDismiss(!!d.checked)}
-        label="Don't show this again" />
-      <Button appearance="primary" onClick={save}>{dismiss ? 'Save & close' : 'Close'}</Button>
+      <Checkbox checked={dismiss} onChange={(_, d) => { void setDismissPersisted(!!d.checked); }}
+        label="Don't show this again" data-testid="learn-dismiss" />
+      <Button appearance="primary" onClick={onClose}>Close</Button>
     </div>
   );
 }
