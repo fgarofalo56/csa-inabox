@@ -25,6 +25,20 @@
  *
  * KEEP IN SYNC: apps/fiab-console/e2e/_lib/route-enum.ts implements the same
  * walk + fixture map for the Playwright slice; both files carry this note.
+ *
+ * SELF-DEFENCE (added 2026-08-02, refs #2860). This script called itself a
+ * merge-blocker in the header above and was invoked by NO workflow — it had
+ * never run. Reading it before wiring surfaced two ways it passes while
+ * measuring nothing, both of which follow from IEEE-754 comparison rules:
+ *   - APP_DIR walks to zero pages  → total=0 → ratio = 0/0 = NaN, and
+ *     `NaN < floorRatio` is FALSE, so the ratchet reports OK on an empty tree.
+ *   - floorRatio missing from the JSON → `ratio < undefined` is also FALSE.
+ * Both now fail closed. Same class as the 2026-07-28 "gates that measure
+ * nothing" sweep.
+ *
+ * ROUTE_SMOKE_APP_DIR / ROUTE_SMOKE_FLOOR_FILE override the two paths. They
+ * exist for scripts/ci/__tests__/ratchet-fail-closed.test.mjs, which drives
+ * fixture trees; CI sets neither.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,8 +46,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const APP_DIR = path.join(REPO_ROOT, 'apps', 'fiab-console', 'app');
-const FLOOR_PATH = path.join(REPO_ROOT, 'apps', 'fiab-console', 'e2e', 'route-coverage-floor.json');
+const APP_DIR = process.env.ROUTE_SMOKE_APP_DIR
+  ? path.resolve(process.env.ROUTE_SMOKE_APP_DIR)
+  : path.join(REPO_ROOT, 'apps', 'fiab-console', 'app');
+const FLOOR_PATH = process.env.ROUTE_SMOKE_FLOOR_FILE
+  ? path.resolve(process.env.ROUTE_SMOKE_FLOOR_FILE)
+  : path.join(REPO_ROOT, 'apps', 'fiab-console', 'e2e', 'route-coverage-floor.json');
 
 /** KEEP IN SYNC with e2e/_lib/route-enum.ts DYNAMIC_FIXTURES. */
 const DYNAMIC_FIXTURES = {
@@ -76,8 +94,22 @@ function loadFloor() {
 }
 
 function main() {
+  if (!fs.existsSync(APP_DIR) || !fs.statSync(APP_DIR).isDirectory()) {
+    console.error(`[route-smoke-floor] REFUSING TO PASS — APP_DIR does not exist: ${APP_DIR}`);
+    console.error('  The walk cannot enumerate routes, so the ratio is meaningless. Fix the path.');
+    process.exit(1);
+  }
+
   const { patterns, enumerable, excludedDynamic } = enumerate();
   const total = patterns.length;
+
+  // total===0 makes ratio NaN, and `NaN < floorRatio` is FALSE — the ratchet
+  // would report OK having enumerated nothing. Fail closed instead.
+  if (total === 0) {
+    console.error(`[route-smoke-floor] REFUSING TO PASS — walked ${APP_DIR} and found ZERO page.tsx files.`);
+    console.error('  This repo has >100. The walk has stopped matching (App Router layout change?).');
+    process.exit(1);
+  }
 
   if (process.argv.includes('--update-baseline')) {
     let prev = {};
@@ -121,6 +153,18 @@ function main() {
   const knownIssues = floor.knownIssues ?? [];
   const covered = enumerable.length - knownIssues.length;
   const ratio = covered / total;
+
+  // `ratio < undefined` and `ratio < NaN` are both FALSE, so a floor file that
+  // lost its floorRatio (hand-edit, bad merge, truncated write) would disable
+  // the comparison while still printing OK. Validate before comparing.
+  if (typeof floor.floorRatio !== 'number' || !Number.isFinite(floor.floorRatio) || floor.floorRatio <= 0) {
+    console.error(
+      `[route-smoke-floor] REFUSING TO PASS — floorRatio in ${path.relative(REPO_ROOT, FLOOR_PATH)} is ` +
+        `${JSON.stringify(floor.floorRatio)}, not a positive number. The ratchet would compare against nothing.`,
+    );
+    console.error('  Re-capture it: node scripts/ci/check-route-smoke-floor.mjs --update-baseline');
+    process.exit(1);
+  }
 
   if (ratio < floor.floorRatio) {
     failures.push(

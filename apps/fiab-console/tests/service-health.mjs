@@ -14,6 +14,7 @@
  * Run: SESSION_SECRET=<from-KV> node tests/service-health.mjs
  */
 import crypto from 'node:crypto';
+import { classify } from './service-health-classify.mjs';
 
 const BASE = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net';
 const SECRET = process.env.SESSION_SECRET;
@@ -116,22 +117,11 @@ console.log('------------------+-----------------------------------------------+
 for (const [family, path, method, body, optional] of PROBES) {
   try {
     const { status, text, json } = await probe(family, path, method, body);
-    let result, kind;
-    if (status >= 200 && status < 300) {
-      const hint = json?.ok === false
-        ? `ok:false (${json.error?.slice?.(0, 50)})`
-        : Array.isArray(json?.items || json?.workspaces || json?.entries || json?.hits || json?.resources)
-          ? `${(json.items || json.workspaces || json.entries || json.hits || json.resources).length} items`
-          : 'OK';
-      result = hint; kind = 'PASS'; SUMMARY.pass++;
-    } else if (status === 503 || (status === 404 && optional)) {
-      result = `not configured: ${(json?.error || text.slice(0, 60))}`;
-      kind = 'NOTE'; SUMMARY.note++;
-    } else {
-      const errMsg = json?.error || text.slice(0, 80);
-      result = `${errMsg}`;
-      kind = 'FAIL'; SUMMARY.fail++;
-    }
+    // Scoring lives in service-health-classify.mjs so it can be unit-tested
+    // (refs #2860) — the old inline version counted a 200 carrying
+    // `{ok:false, error}` as a PASS.
+    const { kind, result } = classify({ status, json, text, optional });
+    SUMMARY[kind.toLowerCase()]++;
     RESULTS.push({ family, path, status, kind, result });
     const pad = (s, n) => (s + ' '.repeat(n)).slice(0, n);
     console.log(`${pad(family, 18)}| ${pad(path, 46)}| ${pad(String(status), 7)}| ${kind} — ${result.slice(0, 60)}`);

@@ -127,6 +127,22 @@ jobs:
         run: node scripts/ci/generate-route-inventory.mjs --check
       - name: 'annotation-teeth (a step that prints ::error:: must be able to fail — #2837)'
         run: node scripts/ci/check-annotation-teeth.mjs
+      # ── controls that existed and did not run (refs #2860) ──────────────────
+      # annotation-teeth covers "invoked but cannot fail". These four were one
+      # rung lower: NOT INVOKED AT ALL. check-route-smoke-floor.mjs called
+      # itself a merge-blocker in its own header and no workflow ever ran it;
+      # check-insecure-randomness.mjs is a ratchet whose BASELINE nothing was
+      # comparing against; generate-coverage-summary.mjs --check is a drift gate
+      # that had never checked (and was RED the first time it ran). The fourth
+      # is the reachability guard itself, which now keeps the class closed.
+      - name: ci-guard-reachability (every scripts/ci control is invoked by a workflow — refs #2860)
+        run: node scripts/ci/check-ci-guard-reachability.mjs
+      - name: route-smoke-floor (app/**/page.tsx coverage ratchet — WS-V V4)
+        run: node scripts/ci/check-route-smoke-floor.mjs
+      - name: insecure-randomness (Math.random() shrink-only ratchet — #2656)
+        run: node scripts/ci/check-insecure-randomness.mjs
+      - name: coverage-summary (published thresholds vs the ones CI enforces — WS-F1)
+        run: node scripts/ci/generate-coverage-summary.mjs --check
       # The scripts/ci self-tests. These existed but NOTHING RAN THEM: the
       # roll-gate suite is new (#2819) and the insecure-randomness suite has been
       # sitting in the tree with a "Run: node --test …" comment and no CI lane
