@@ -98,6 +98,15 @@ jobs:
         run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
+      # deploy-staleness (above) says the reconcile has not RUN. This says that
+      # when it does run, it cannot destroy, duplicate or re-image the estate:
+      # no destructive step on the schedule, one image repository per
+      # appImageTags key, and every tag pinned through the env var the resolver
+      # exports. #2881 fixed the guard that had been blocking that path without
+      # walking what lay beyond it — a successful scheduled run would have torn
+      # the estate down.
+      - name: reconcile-safety (a scheduled reconcile is non-destructive — #2775)
+        run: node scripts/ci/check-reconcile-safety.mjs
       - name: prp-freshness (loom-next-level FRESH0 — warn-only)
         env:
           GH_TOKEN: ${{ github.token }}

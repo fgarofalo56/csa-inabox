@@ -96,25 +96,35 @@ export const FLAG_INPUT_NAMES = Object.freeze({
 });
 
 /**
- * WHY A SCHEDULED RECONCILE STILL DOES NOT APPLY CONSOLE ENV VARS.
+ * WHY THE SCHEDULED VALUE RESOLVED *HERE* IS STILL FALSE (refs #2775).
  *
  * The Container Apps (and therefore every LOOM_* env var on loom-console) are
  * created by `module appDeployments 'app-deployments.bicep' = if
  * (containerPlatform == 'containerApps' && deployAppsEnabled)` in
  * modules/admin-plane/main.bicep. With deployAppsEnabled=false that module does
  * not run, so a green scheduled reconcile applies infrastructure and leaves the
- * Console env exactly as it is.
+ * Console env exactly as it is. That is what "185 of 192 configured" on
+ * /admin/env-config was measuring: LOOM_RISINGWAVE_URL and
+ * LOOM_DUCKLAKE_CATALOG_URL are emitted by admin-plane/main.bicep behind
+ * `deployAppsEnabled`, so they had never been applied to anything.
  *
- * Setting it true here would be worse than leaving it false. `appImageTags`
- * defaults to `console: 'v0.1'` in BOTH platform/fiab/bicep/main.bicep and
- * modules/admin-plane/main.bicep, and deploy-fiab-commercial.yml never
- * overrides it, while production currently runs a commit-SHA tag. An unattended
- * nightly job that rewrites the Console image to `loom-console:v0.1` is an
- * outage, not a reconcile.
+ * Simply setting it true here would be worse than leaving it false.
+ * `appImageTags` defaults to `console: 'v0.1'` in BOTH
+ * platform/fiab/bicep/main.bicep and modules/admin-plane/main.bicep, while
+ * production runs a commit-SHA tag. An unattended nightly job that rewrites the
+ * Console image to `loom-console:v0.1` is an outage, not a reconcile.
  *
- * Closing that gap needs the schedule to resolve and pass the RUNNING image
- * tags before it may set deployAppsEnabled=true. That is a deliberate operator
- * change, not something to smuggle into a guard fix.
+ * The day-one-config work under #2775 closed that gap the correct way round.
+ * The value resolved here stays the
+ * SAFE base; `scripts/ci/reconcile-policy.mjs` `decideDeployApps` may upgrade it
+ * to 'true' — but only after `scripts/ci/reconcile-resolve.mjs` has read the tag
+ * every running Container App is on and exported it as LOOM_<APP>_TAG, which
+ * params/commercial.bicepparam now resolves through readEnvironmentVariable(),
+ * making the ARM PUT a no-op for every image. Default deny; upgrade on evidence.
+ *
+ * The constant is retained under its old name so nothing that imports it
+ * breaks, and because the statement it makes is still true OF THIS FILE: this
+ * module never enables app deployment. Only the step that measures may.
  */
 export const SCHEDULED_RECONCILE_DOES_NOT_APPLY_APP_ENV = true;
 
