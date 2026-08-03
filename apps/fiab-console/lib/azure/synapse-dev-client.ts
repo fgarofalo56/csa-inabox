@@ -196,7 +196,12 @@ async function callDev(path: string, init?: RequestInit): Promise<Response> {
 
 async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
   if (!r.ok && r.status !== 202) {
-    throw new Error(`${label} failed ${r.status}: ${await r.text()}`);
+    // `status` rides along so BFF routes can classify a 404 (bound-but-absent
+    // artifact = expected guided state) without regexing the message. The
+    // verbatim body stays on `message` for the server log. See #2895.
+    const err = new Error(`${label} failed ${r.status}: ${await r.text()}`) as Error & { status?: number };
+    err.status = r.status;
+    throw err;
   }
   const text = await r.text();
   if (!text) return {} as T;

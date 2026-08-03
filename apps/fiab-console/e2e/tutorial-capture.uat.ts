@@ -49,11 +49,14 @@ if (!fs.existsSync(MANIFEST)) {
 interface Step { description: string; screenshotPath: string }
 
 /**
- * Append the `screenshot=1` flag so the "Learn about this item" Drawer (and any
- * other first-visit help surface that honours the flag — item-side-panel.tsx)
- * NEVER auto-opens in the first place. This is the primary defence; the
- * `closeAllOverlays` sweep below is the belt-and-suspenders backstop for any
- * overlay a tab click / editor mount might still raise.
+ * Append the `screenshot=1` flag so any first-visit help surface that honours
+ * it stays out of the capture.
+ *
+ * Since #2893 the "Learn about this item" Drawer no longer auto-opens at all —
+ * it is opt-in from the Learn button in the item chrome — so this flag is a
+ * backstop for OTHER surfaces rather than the primary defence it used to be.
+ * The `closeAllOverlays` sweep below remains the belt-and-suspenders catch for
+ * any overlay a tab click / editor mount might still raise.
  */
 function withScreenshotFlag(url: string): string {
   return url + (url.includes('?') ? '&' : '?') + 'screenshot=1';

@@ -10,9 +10,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getPipeline, upsertPipeline, deletePipeline, type SynapsePipeline } from '@/lib/azure/synapse-dev-client';
 import { resolveBinding, bindingErrorResponse, pipelineDefinitionFromContent, loadPipelineItem } from '@/lib/azure/pipeline-binding';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,10 +22,8 @@ const ITEM_TYPE = 'synapse-pipeline';
 // see pipeline-binding.ts loadPipelineItem for why.
 const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
     binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
@@ -66,14 +64,24 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         backendError: e?.message || String(e),
       });
     }
+    // #2895 (Synapse twin of the ADF route) — a 404 means the item is bound but
+    // the workspace has no pipeline by that name yet. Expected + recoverable:
+    // the editor guides "create it or rebind" over a live canvas. Every other
+    // status stays a genuine 502 error.
+    if (e?.status === 404) {
+      return NextResponse.json({
+        ok: false,
+        code: 'pipeline-missing',
+        pipelineName,
+        error: `The Synapse workspace has no pipeline named "${pipelineName}" yet.`,
+      }, { status: 404 });
+    }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const body = (await req.json().catch(() => null)) as SynapsePipeline | null;
   if (!body || !body.properties) {
     return NextResponse.json({ ok: false, error: 'body must be { name?, properties: {...} }' }, { status: 400 });
@@ -91,12 +99,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   let pipelineName: string;
   try {
     ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
@@ -110,4 +116,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
