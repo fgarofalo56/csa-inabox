@@ -7,10 +7,25 @@
  * to `path.join(dir, …)`, which resolves `..` — so a response could write
  * anywhere the CLI user can write.
  *
- * MUTATION CONTRACT: restoring `join(dir, f.path)` in `writeBuildContext` must
- * turn the `refuses` + `writes nothing outside` cases RED. The `CONTROL` block
- * passes both before and after, so a fix that simply refuses everything is
- * caught too.
+ * MUTATION CONTRACT, verified by applying it. Restoring `join(dir, f.path)` in
+ * `writeBuildContext` turns exactly THREE tests RED, all of them in the
+ * `writes nothing outside the output directory` block:
+ *
+ *   - a traversal entry leaves the neighbouring file byte-identical
+ *     → AssertionError: expected 'PWNED' to be 'ORIGINAL'
+ *   - creates NOTHING when any entry in the context is hostile
+ *     → expected [Function] to throw an error
+ *   - an absolute path does not overwrite the file it names
+ *     → expected 'ENOENT…' to match /Refusing to write a file/
+ *
+ * The `refuses` cases do NOT go red, and cannot: they call `containedJoin`
+ * directly, so no mutation of `writeBuildContext` can reach them. They are the
+ * helper's own contract; the block above is the call site's. An earlier version
+ * of this comment claimed both halves went red — a proof that does not hold is
+ * worse than no proof, because it stops the next reader from checking (#2869 F4).
+ *
+ * The `CONTROL` block passes both before and after, so a "fix" that simply
+ * refuses everything is caught too.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
