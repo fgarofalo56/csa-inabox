@@ -160,6 +160,15 @@ jobs:
         run: node scripts/ci/generate-route-inventory.mjs --check
       - name: 'annotation-teeth (a step that prints ::error:: must be able to fail — #2837)'
         run: node scripts/ci/check-annotation-teeth.mjs
+      # annotation-teeth judges steps that PRINT ::error::. The publish-version
+      # E2E printed nothing of the sort — Playwright's own "1 failed, 6 passed"
+      # is not an annotation — so it sailed through while continue-on-error threw
+      # the verdict away and a missing `id:` made it unreferenceable (#2875,
+      # third recurrence in loom-ui-verify.yml after #2787 and #2837). This
+      # covers the complementary population: browser/verification steps whose
+      # EXIT STATUS is the verdict.
+      - name: 'ui-verify-step-teeth (a browser step verdict must reach the job conclusion — refs #2875)'
+        run: node scripts/ci/check-ui-verify-step-teeth.mjs
       # ── controls that existed and did not run (refs #2860) ──────────────────
       # annotation-teeth covers "invoked but cannot fail". These four were one
       # rung lower: NOT INVOKED AT ALL. check-route-smoke-floor.mjs called

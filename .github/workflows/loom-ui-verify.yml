@@ -280,13 +280,6 @@ jobs:
           CI: 'true'
 
       # -----------------------------------------------------------------------
-      # 6a2. Publish-version E2E (task #7) — live front-end version-history +
-      #      restore across publishing object types, with the SAME minted
-      #      session. Separate project so its heavier per-type create/save flow
-      #      is its own signal; continue-on-error so a per-type selector hiccup
-      #      annotates the run but does not mask the core verify gate.
-      # -----------------------------------------------------------------------
-      # -----------------------------------------------------------------------
       # 6a1. Optional extra projects (apex A4): the full page-by-page sweep
       #      (`route-smoke` asserts a clean mount + zero console errors + zero
       #      5xx on EVERY app/**/page.tsx route) and any other project, run
@@ -333,8 +326,36 @@ jobs:
           LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
           CI: 'true'
 
+      # -----------------------------------------------------------------------
+      # 6a2. Publish-version E2E (task #7) — live front-end version-history +
+      #      restore across publishing object types, with the SAME minted
+      #      session. Separate project so its heavier per-type create/save flow
+      #      is its own signal.
+      #
+      #      THIRD OCCURRENCE OF THE SAME DEFECT, IN THIS SAME FILE (refs #2875).
+      #      This step carried `continue-on-error: true` AND had no `id:`, so its
+      #      outcome was not merely tolerated — it was UNREFERENCEABLE. The final
+      #      gate below could not have consumed it even if someone had thought
+      #      to. Run 30824614880 therefore concluded SUCCESS while Playwright
+      #      printed "1 failed, 6 passed" for `version timeline + restore —
+      #      report`. #2787 fixed exactly this shape on the sibling step 30 lines
+      #      up and did not look at this one; that is how the class recurred.
+      #
+      #      The flag is gone AND the ambiguity it existed for is gone: the
+      #      publish-version project now carries `retries: 2`
+      #      (apps/fiab-console/playwright.config.ts), so a per-type selector
+      #      hiccup is reported FLAKY and exits 0, while a type that fails every
+      #      attempt fails this step. Removing the flag WITHOUT the retries would
+      #      have traded a silent-green for a noisy-red and someone would have
+      #      put the flag back.
+      #
+      #      `id:` + inclusion in the gate's UVG_BLOCKING is belt-and-braces: the
+      #      step failing is already enough to fail the job, and the gate
+      #      re-asserts it so that re-adding tolerance here cannot silently undo
+      #      this fix a fourth time.
+      # -----------------------------------------------------------------------
       - name: Run publish-version E2E (--project=publish-version)
-        continue-on-error: true
+        id: publish_version
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           PLAYWRIGHT_JSON_OUTPUT_NAME="test-results/publish-version/report.json" \
@@ -354,12 +375,23 @@ jobs:
       #     path (scripts/csa-loom/e2e-receipt.mjs shares the exact cookie mint)
       #     to capture a light+dark screenshot + Playwright trace of the route
       #     against the live console, into apps/fiab-console/test-results/receipts/.
-      #     continue-on-error so an UNREACHABLE/REJECTED receipt annotates the run
-      #     but does not mask the smoke-verify result above.
+      #
+      #     Its `continue-on-error: true` is gone too (refs #2875) — same sweep,
+      #     same reasoning as the step above. The stated rationale ("so an
+      #     UNREACHABLE/REJECTED receipt annotates the run but does not mask the
+      #     smoke-verify result above") did not hold: a failing step never masked
+      #     an earlier one, GitHub reports both. What it actually did was discard
+      #     a real verdict. scripts/csa-loom/e2e-receipt.mjs exits 2 on
+      #     UNREACHABLE and 3 on SESSION REJECTED — a route the operator
+      #     explicitly asked to receipt failing to load, or bouncing a valid
+      #     minted session to sign-in, is precisely the finding this dispatch
+      #     exists to surface, not noise to swallow. The artifact upload below is
+      #     `if: always()`, so the screenshots and trace are still collected on
+      #     the failing path; nothing diagnostic is lost by letting it go red.
       # -----------------------------------------------------------------------
       - name: Capture browser-E2E receipt (optional)
+        id: receipt
         if: ${{ inputs.target_route != '' }}
-        continue-on-error: true
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           SLUG_ARG=""
@@ -408,9 +440,16 @@ jobs:
       #    It does NOT swallow the suite's own status: a failed Playwright step
       #    has already failed the job on its own, and the outcomes are passed in
       #    so a red suite is re-reported here alongside the login-health verdict
-      #    — both causes visible, neither hiding the other. Only the steps that
-      #    are meant to block are listed; publish-version and the optional
-      #    receipt keep their deliberate continue-on-error tolerance.
+      #    — both causes visible, neither hiding the other.
+      #
+      #    EVERY browser step in this job is listed (refs #2875). It used to list
+      #    only the two that had ids, with a comment saying "publish-version and
+      #    the optional receipt keep their deliberate continue-on-error
+      #    tolerance" — which described the very hole that let run 30824614880
+      #    conclude green over a failed Playwright test. Both are now blocking
+      #    steps with ids, and check-ui-verify-step-teeth.mjs fails the build if
+      #    a browser step is ever added here without one, or if one acquires
+      #    tolerance without the gate consuming its outcome.
       # -----------------------------------------------------------------------
       - name: Enforce login-health verdict + blocking suite results
         if: always()
@@ -418,5 +457,5 @@ jobs:
           UVG_PREFLIGHT_OUTCOME: ${{ steps.login_health.outcome }}
           UVG_VERDICT: ${{ steps.login_health.outputs.verdict }}
           UVG_RC: ${{ steps.login_health.outputs.rc }}
-          UVG_BLOCKING: 'verify=${{ steps.verify_project.outcome }},extra-projects=${{ steps.extra_projects.outcome }}'
+          UVG_BLOCKING: 'verify=${{ steps.verify_project.outcome }},extra-projects=${{ steps.extra_projects.outcome }},publish-version=${{ steps.publish_version.outcome }},receipt=${{ steps.receipt.outcome }}'
         run: bash scripts/ci/ui-verify-gate-verdict.sh

@@ -120,6 +120,83 @@ test('MATRIX: preflight UNKNOWN + suite green → job PASSES, with a warning', (
 });
 
 // ---------------------------------------------------------------------------
+// MATRIX for the two labels added by #2875. Before that change the gate was fed
+// `verify` and `extra-projects` only, and the comment above it blessed
+// publish-version and the receipt as "deliberate continue-on-error tolerance" —
+// which is precisely how run 30824614880 concluded green over a failed
+// Playwright test. These rows pin the four corners for the new labels.
+// ---------------------------------------------------------------------------
+
+test('MATRIX #2875: publish-version FAILED + everything else green → job FAILS', () => {
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'ok',
+    UVG_RC: '0',
+    UVG_BLOCKING: 'verify=success,extra-projects=skipped,publish-version=failure,receipt=skipped',
+  });
+  assert.equal(r.code, 1, 'a red publish-version suite must fail the run — this is the #2875 defect');
+  assert.match(r.out, /::error::the 'publish-version' step FAILED/);
+  assert.equal(causeCount(r.out), 1);
+});
+
+test('MATRIX #2875: publish-version FLAKY-but-passed-on-retry → job PASSES', () => {
+  // Playwright exits 0 when a test fails then passes within `retries`, so the
+  // step outcome is `success`. The retries added to the project are what makes
+  // this row distinguishable from the one above; without them every hiccup
+  // would land in the FAILED row and the tolerance flag would come straight
+  // back.
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'ok',
+    UVG_RC: '0',
+    UVG_BLOCKING: 'verify=success,extra-projects=skipped,publish-version=success,receipt=skipped',
+  });
+  assert.equal(r.code, 0, 'a flaky-then-passing suite must not fail the run');
+  assert.doesNotMatch(r.out, /::error::/);
+});
+
+test('MATRIX #2875: the optional receipt FAILED → job FAILS', () => {
+  // e2e-receipt.mjs exits 2 on UNREACHABLE and 3 on SESSION REJECTED. A route
+  // the operator explicitly asked to receipt failing to load is the finding,
+  // not noise.
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'ok',
+    UVG_RC: '0',
+    UVG_BLOCKING: 'verify=success,extra-projects=skipped,publish-version=success,receipt=failure',
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /::error::the 'receipt' step FAILED/);
+});
+
+test('MATRIX #2875: a not-dispatched receipt (skipped) is NOT a failure', () => {
+  // The receipt only runs when target_route is set; a blank dispatch must stay
+  // green or every routine verify goes red.
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'ok',
+    UVG_RC: '0',
+    UVG_BLOCKING: 'verify=success,extra-projects=skipped,publish-version=success,receipt=skipped',
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.out, /receipt: skipped \(not a blocking result\)/);
+});
+
+test('MATRIX #2875: preflight BROKEN + publish-version FAILED → BOTH causes visible', () => {
+  const r = run({
+    UVG_PREFLIGHT_OUTCOME: 'success',
+    UVG_VERDICT: 'broken',
+    UVG_RC: '1',
+    UVG_BLOCKING: 'verify=success,extra-projects=skipped,publish-version=failure,receipt=failure',
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /::error::LOGIN-HEALTH BROKEN/);
+  assert.match(r.out, /::error::the 'publish-version' step FAILED/);
+  assert.match(r.out, /::error::the 'receipt' step FAILED/);
+  assert.equal(causeCount(r.out), 3);
+});
+
+// ---------------------------------------------------------------------------
 // FAIL-CLOSED — a gate that reads absence as health is #2837 in a new place.
 // ---------------------------------------------------------------------------
 
