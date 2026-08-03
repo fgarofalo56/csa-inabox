@@ -142,5 +142,5 @@ jobs:
       # sitting in the tree with a "Run: node --test …" comment and no CI lane
       # since it was written. A test nobody runs is the same class of defect as
       # a gate that measures nothing — it reads as coverage and enforces nothing.
-      - name: scripts/ci self-tests (roll-gate, ratchet comment-stripping, FD purge target, login-health verdict, annotation-teeth)
+      - name: scripts/ci self-tests (roll-gate, ratchet comment-stripping, FD purge target, login-health verdict, annotation-teeth, bff-errors RULE 3)
         run: node --test scripts/ci/__tests__/*.test.mjs
