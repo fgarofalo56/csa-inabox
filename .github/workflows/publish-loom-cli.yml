@@ -11,11 +11,22 @@ name: publish-loom-cli
 # Requires repo/org secret NPM_TOKEN (an npm automation token with publish
 # rights to the @csa-loom scope). Without it, the publish step is skipped and
 # the build/test still run as a CI gate.
+#
+# ALSO RUNS ON PULL REQUESTS that touch the CLI. Until 2026-08 this workflow was
+# tag-only, which meant `apps/loom-cli`'s vitest suite — including the path
+# traversal regression suite for `loom apps run-local` — ran ONLY when someone
+# cut an npm release. A test nobody runs is the same class of defect as a gate
+# that measures nothing: it reads as coverage and enforces nothing. The publish
+# step is gated on the tag push, so a PR run is build + typecheck + test only.
 
 on:
   push:
     tags:
       - 'loom-cli-v*'
+  pull_request:
+    paths:
+      - 'apps/loom-cli/**'
+      - '.github/workflows/publish-loom-cli.yml'
   workflow_dispatch:
     inputs:
       dry_run:

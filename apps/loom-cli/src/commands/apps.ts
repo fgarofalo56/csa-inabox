@@ -17,9 +17,10 @@
  * Everything wraps the same BFF routes the editor uses — no parallel API.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { requireAuth, CliError } from './context.js';
+import { containedJoin } from '../safe-path.js';
 import type { GlobalOptions } from '../config.js';
 import { flagStr, flagBool, type ParsedArgs } from '../args.js';
 import { printResult } from '../output.js';
@@ -117,14 +118,10 @@ export async function runApps(sub: string, args: ParsedArgs, opts: GlobalOptions
     case 'run-local': {
       const dir = resolve(flagStr(args.flags, 'dir') || `./loom-app-${id.slice(0, 8)}`);
       const ctx = await client.request<{ files: Array<{ path: string; content: string }> }>('GET', api('/context'));
-      for (const f of ctx.files) {
-        const p = join(dir, f.path);
-        mkdirSync(dirname(p), { recursive: true });
-        writeFileSync(p, f.content, 'utf-8');
-      }
+      const written = writeBuildContext(dir, ctx.files);
       const rt = await fetchRuntime(client, id);
       const port = rt.port || 8000;
-      process.stderr.write(`Wrote ${ctx.files.length} files to ${dir}\n`);
+      process.stderr.write(`Wrote ${written} files to ${dir}\n`);
       if (flagBool(args.flags, 'run')) {
         const tag = `loom-app-local-${id.slice(0, 8)}`;
         const build = spawnSync('docker', ['build', '-t', tag, dir], { stdio: 'inherit' });
@@ -167,6 +164,30 @@ export async function runApps(sub: string, args: ParsedArgs, opts: GlobalOptions
     default:
       throw new CliError(`Unknown apps subcommand "${sub}". Use: build | status | deploy | logs | start | stop | run-local | export | import | ci-template | reconcile`);
   }
+}
+
+/**
+ * Write an app build context fetched from the Loom API under `dir`.
+ *
+ * `files[].path` is a value that arrived over HTTP, so every entry goes through
+ * `containedJoin` — the CLI does not trust the peer to have sanitized it (see
+ * `src/safe-path.ts`). A single hostile entry aborts the whole write rather
+ * than leaving a half-materialized tree the caller might `docker build`.
+ *
+ * Exported so the traversal regression suite can drive it directly.
+ */
+export function writeBuildContext(dir: string, files: Array<{ path: string; content: string }>): number {
+  if (!Array.isArray(files)) {
+    throw new CliError('The build context response had no `files` array — is --api-url a Loom console?');
+  }
+  // Validate EVERY path before creating anything, so a hostile entry cannot
+  // leave a partially-written directory behind.
+  const planned = files.map((f) => ({ abs: containedJoin(dir, f?.path), content: f?.content ?? '' }));
+  for (const p of planned) {
+    mkdirSync(dirname(p.abs), { recursive: true });
+    writeFileSync(p.abs, p.content, 'utf-8');
+  }
+  return planned.length;
 }
 
 async function fetchRuntime(client: { request<T>(m: string, p: string, b?: unknown): Promise<T> }, id: string): Promise<RuntimeShape> {
