@@ -27,6 +27,12 @@ sdk/** text eol=lf
 scripts/csa-loom/acr-firewall-lease.sh text eol=lf
 scripts/ci/test-acr-firewall-lease.sh text eol=lf
 
+# #2836 — the sweeper's discovery half and its regression test, same reason:
+# acr-firewall-sweeper.yml runs the first with `bash` on a Linux runner and
+# loom-guardrails.yml runs the second.
+scripts/csa-loom/acr-firewall-sweep-all.sh text eol=lf
+scripts/ci/test-acr-firewall-sweep-all.sh text eol=lf
+
 # PR #2640 — same reason for the image preflight and its self-test: both are run
 # by `bash` in loom-guardrails.yml and in the Gov/Commercial deploy lanes, and a
 # CRLF checkout would break them with "$'\r': command not found".

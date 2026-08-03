@@ -100,19 +100,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          # Resolve the admin RG by PREFIX — it may or may not carry a region
-          # suffix (mirrors build-fiab-images-acr-tasks / console-bluegreen-roll).
-          RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
-          if [[ -z "$RG" ]]; then
-            echo "::notice::No rg-csa-loom-admin* resource group in this subscription — nothing to sweep."
-            exit 0
-          fi
-          RC=0
-          for ACR in $(az acr list --resource-group "$RG" --query "[?starts_with(name,'acrloom')].name" -o tsv | tr -d '\r'); do
-            bash scripts/csa-loom/acr-firewall-lease.sh sweep --acr "$ACR" \
-              ${{ inputs.force && '--force' || '' }} || RC=1
-          done
-          exit $RC
+          # Discovery lives in a SCRIPT, not inline here, because inline YAML
+          # cannot be tested and this step was silently broken (#2836): a failed
+          # `az` produced an empty string, took the "nothing to sweep" branch and
+          # exited 0. The script captures every rc explicitly and is covered by
+          # scripts/ci/test-acr-firewall-sweep-all.sh.
+          bash scripts/csa-loom/acr-firewall-sweep-all.sh ${{ inputs.force && '--force' || '' }}
 
   gov:
     name: Sweep Gov ACR
@@ -164,14 +157,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
-          if [[ -z "$RG" ]]; then
-            echo "::notice::No rg-csa-loom-admin* resource group in the Gov subscription — nothing to sweep."
-            exit 0
-          fi
-          RC=0
-          for ACR in $(az acr list --resource-group "$RG" --query "[?starts_with(name,'acrloom')].name" -o tsv | tr -d '\r'); do
-            bash scripts/csa-loom/acr-firewall-lease.sh sweep --acr "$ACR" \
-              ${{ inputs.force && '--force' || '' }} || RC=1
-          done
-          exit $RC
+          # Same tested discovery script as the Commercial job — see #2836. The
+          # Gov job ran the identical broken copy, so it had the identical hole.
+          bash scripts/csa-loom/acr-firewall-sweep-all.sh ${{ inputs.force && '--force' || '' }}

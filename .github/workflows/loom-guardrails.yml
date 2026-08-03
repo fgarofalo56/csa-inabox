@@ -100,6 +100,11 @@ jobs:
         run: node scripts/ci/check-parity-doc-freshness.mjs
       - name: acr-firewall-lease (ownership + fail-closed semantics — #2603)
         run: bash scripts/ci/test-acr-firewall-lease.sh
+      # The lease test above covers the lease SCRIPT. This one covers the
+      # sweeper's DISCOVERY, which decides which registries get swept at all and
+      # used to read an `az` failure as "nothing to sweep" and exit 0 (#2836).
+      - name: acr-firewall-sweep-all (discovery must not read an az failure as "empty" — #2836)
+        run: bash scripts/ci/test-acr-firewall-sweep-all.sh
       # LIC0 lives in license-scan.yml too, but THAT workflow is path-filtered to
       # package.json / requirements.txt / the manifest — it does NOT run on a
       # bicep change. The guard now also reviews UPSTREAM CONTAINER IMAGES pinned
