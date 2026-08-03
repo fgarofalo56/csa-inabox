@@ -120,7 +120,20 @@ KVW_RETRY_SECONDS="${LOOM_KV_WINDOW_RETRY_SECONDS:-8}"
 #     the literal "unset" fails the Disabled/Deny assertion — which is the
 #     correct, fail-closed reading.
 # `|| `[]`` keeps length() valid when networkAcls.ipRules is null.
-KVW_STATE_QUERY='[properties.publicNetworkAccess || `"unset"`, properties.networkAcls.defaultAction || `"unset"`, length(properties.networkAcls.ipRules || `[]`)]'
+# MUST be a multiselect HASH, not a list.
+#
+# az --query with a top-level LIST and -o tsv emits ONE ELEMENT PER LINE, not a
+# tab-separated row. Verified against the real vault: the list form returned three
+# lines (Disabled, Deny, 0) while the hash form returned one tab-separated row.
+#
+# _kvw_read_state below does head -1 then a tab-split, so with the list form it
+# read only the first field, left the other two empty, and the numeric sentinel
+# fired on EVERY call -- returning 1 unconditionally against real az, which aborts
+# kvw_open before it ever opens the write window.
+#
+# Key ORDER is declaration order, not alphabetical (verified with a deliberately
+# reverse-alphabetical control), so pna / da / n arrive in the order read below.
+KVW_STATE_QUERY='{pna: properties.publicNetworkAccess || `"unset"`, da: properties.networkAcls.defaultAction || `"unset"`, n: length(properties.networkAcls.ipRules || `[]`)}'
 
 # --- logging -----------------------------------------------------------------
 _kvw_note() {
