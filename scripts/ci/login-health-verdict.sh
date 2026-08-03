@@ -64,7 +64,12 @@ ROTATE_CMD="az containerapp secret set -n loom-console -g ${RG} --secrets \"loom
 
 # --- (a) recent auth/callback invalid_client in the console logs -------------
 echo "== (a) recent auth/callback invalid_client in the console logs =="
-if [ -z "${LH_LAW:-}" ]; then
+# `az … -o tsv` renders a null JMESPath result as the LITERAL string "None", which
+# is non-empty and would take the "workspace resolved" branch below (#2857). The
+# LH_MIN_END check already guarded for this; LH_LAW did not. "None" is never a
+# valid Log Analytics customerId (that is a GUID), so treating it as unresolvable
+# cannot suppress a real signal.
+if [ -z "${LH_LAW:-}" ] || [ "${LH_LAW:-}" = "None" ]; then
   echo "::warning::could not resolve the console Log Analytics workspace in ${RG} — the callback-error check did NOT run (this is 'unknown', not 'healthy')."
 else
   HITS_RAW="${LH_HITS_RAW:-}"
