@@ -294,6 +294,17 @@ const TOUCH_EXEMPT = new Map([
   // items family gets its `err()` prologue taught to the codemod.
   ['apps/fiab-console/app/api/items/[type]/[id]/classifications/route.ts', 'LU-5 S4: codemod reports SKIPPED (bespoke err() 401 envelope); typedef-namespace fix only'],
   ['apps/fiab-console/app/api/items/[type]/[id]/sensitivity/route.ts', 'LU-5 S4: codemod reports SKIPPED (bespoke err() 401 envelope); typedef-namespace fix only'],
+  // #2896 touched this route ONLY to wrap the slow runSelfAudit() in
+  // getOrComputeCached (serve-stale) so /admin/readiness stops being an ~8s
+  // spinner — the gate list, statuses, and probe set are unchanged.
+  // `migrate-route-toolkit.mjs --file=app/api/admin/readiness/route.ts` reports
+  // SKIPPED — "GET: getSession() without the exact 401 guard": the prologue is a
+  // CAPABILITY gate (enforceCapability(session, 'admin.env-config', 'Admin')),
+  // not the getSession()→401 shape withSession/withDlzAccess replace, and there
+  // is no toolkit wrapper for capability gates yet. Hand-migrating an auth
+  // prologue inside a load-latency fix is unrelated churn with real regression
+  // risk on the admin readiness surface.
+  ['apps/fiab-console/app/api/admin/readiness/route.ts', '#2896: load-latency cache only; codemod reports SKIPPED (enforceCapability gate, no getSession→401 shape)'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
