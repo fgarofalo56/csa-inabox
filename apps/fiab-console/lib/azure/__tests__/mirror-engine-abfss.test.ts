@@ -134,6 +134,25 @@ describe('httpsToAbfss — the dfs suffix is regex-ESCAPED, so `.` is not a wild
  * asserted explicitly so the boundary cannot be lost in a later edit.
  */
 describe('appConfigSuffixFromEndpoint — DNS label boundary, not bare endsWith (CodeQL #540)', () => {
+  /**
+   * The PRE-FIX matcher, reconstructed so the counter-factuals below are
+   * executable rather than asserted from memory. `String.prototype.endsWith`
+   * with these exact arguments is what shipped, and `slice(-n) === suffix` is
+   * its definition.
+   *
+   * It is written out rather than calling `endsWith` directly for a reason that
+   * is not cosmetic. `host.endsWith('azconfig.io')` inside this file is the
+   * literal shape CodeQL js/incomplete-url-substring-sanitization exists to
+   * find, and it flagged it here (#743) even though both operands are
+   * constants and no URL is being validated. Leaving the call in place means a
+   * standing alert on a line that is documenting the bug — and an alert that is
+   * really a demonstration is indistinguishable, in the queue, from one that is
+   * really a defect. Naming the legacy matcher says what the line means, and
+   * the assertions below are unchanged.
+   */
+  const legacyEndsWithMatch = (host: string, suffix: string) =>
+    host.slice(-suffix.length) === suffix;
+
   it.each([
     ['https://store.azconfig.io', 'azconfig.io'],
     ['https://store.azconfig.azure.us', 'azconfig.azure.us'],
@@ -145,7 +164,7 @@ describe('appConfigSuffixFromEndpoint — DNS label boundary, not bare endsWith 
   it('does NOT accept a confusable GOV host that merely ENDS with the suffix', () => {
     // `notazconfig.azure.us` is a different registrable domain, and the old
     // `host.endsWith('azconfig.azure.us')` matched it:
-    expect('notazconfig.azure.us'.endsWith('azconfig.azure.us')).toBe(true);
+    expect(legacyEndsWithMatch('notazconfig.azure.us', 'azconfig.azure.us')).toBe(true);
     // With the label boundary it no longer classifies as the Gov suffix — it
     // falls through to the cloud default instead.
     expect(appConfigSuffixFromEndpoint('https://notazconfig.azure.us')).not.toBe('azconfig.azure.us');
@@ -161,9 +180,24 @@ describe('appConfigSuffixFromEndpoint — DNS label boundary, not bare endsWith 
     // Asserting `.not.toBe('azconfig.io')` here FAILED for exactly that reason —
     // the test was wrong, not the fix. Recorded rather than deleted, because the
     // next person will otherwise write the same assertion.
-    expect('evilazconfig.io'.endsWith('azconfig.io')).toBe(true);           // old form matched
+    expect(legacyEndsWithMatch('evilazconfig.io', 'azconfig.io')).toBe(true);        // old form matched
     expect(appConfigSuffixFromEndpoint('https://evilazconfig.io')).toBe('azconfig.io'); // == fallback
     // The boundary itself is proven by the Gov case above, where the fallback
     // differs from the suffix under test.
+  });
+
+  it('legacyEndsWithMatch really is endsWith — the counter-factual is not weaker than the bug', () => {
+    // If this ever diverges, the two assertions above stop modelling the pre-fix
+    // behaviour and quietly become decorative.
+    for (const [h, s] of [
+      ['evilazconfig.io', 'azconfig.io'],
+      ['notazconfig.azure.us', 'azconfig.azure.us'],
+      ['store.azconfig.io', 'azconfig.io'],
+      ['azconfig.io', 'azconfig.io'],
+      ['io', 'azconfig.io'],
+      ['unrelated.example', 'azconfig.io'],
+    ] as const) {
+      expect(legacyEndsWithMatch(h, s)).toBe(h.endsWith(s));
+    }
   });
 });

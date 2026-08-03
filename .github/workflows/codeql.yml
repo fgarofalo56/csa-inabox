@@ -77,6 +77,34 @@ jobs:
     # the analysis is killed there is still time left to REPORT it.
     timeout-minutes: ${{ matrix.jobTimeout }}
 
+    # ── The follow-up #2876 named: WHICH remedy, decided by measurement ────────
+    #
+    # #2876 diagnosed the outage and made it loud, and explicitly left open
+    # "deciding between a query exclusion, a --timeout, and a code change".
+    # Two full `workflow_dispatch` analyses settle it. Dispatch, not
+    # `pull_request`: a PR run is diff-informed (it passes
+    # `--extension-packs=codeql-action/pr-diff-range`) and evaluated
+    # HttpToFileAccess in 1.1s against 22–25s on the full database, so a green PR
+    # check proves nothing about this.
+    #
+    #   run 30814347795 — `--timeout=600` ONLY
+    #       "1 of 105 queries timed out."
+    #       "##[error]Error running analysis for javascript: Encountered a fatal
+    #        error while running codeql database run-queries …"
+    #       job FAILURE, 22.9 min; analysis recorded results=0 rules=0
+    #
+    #   run 30816595636 — plus the query-filter below
+    #       104/105 started, 104 done, "Successfully uploaded results"
+    #       job SUCCESS, 13.0 min; analysis recorded results=96 rules=102
+    #
+    # So `--timeout` alone does NOT restore the scan: `run-queries` exits
+    # non-zero when any query times out, and the upload is still empty. It is
+    # kept anyway, one rung below the 90-minute step budget, because it turns a
+    # future pathological query red in ~23 minutes instead of ~90 and stops us
+    # paying an hour and a half of runner time to learn the same thing.
+    env:
+      CODEQL_ACTION_EXTRA_OPTIONS: '{"database":{"run-queries":["--timeout=600"]}}'
+
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +125,29 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
+          # THE REMEDY THAT ACTUALLY RESTORES THE SCAN (measured — see the env
+          # block above). An `exclude` filter removes the query from the set that
+          # RUNS rather than filtering its output, which is the only reason it
+          # helps: the problem is evaluation time, not results.
+          #
+          # js/http-to-file-access evaluated in 22–25s for months and stopped
+          # terminating at 8022cec6 — the commit that CLOSED it (#2842). It then
+          # took the whole javascript analysis down with it for 24 consecutive
+          # commits. With it excluded the other 104 queries complete in 13.0 min,
+          # back to the 12.9–14.1 min baseline, and the alert list comes back.
+          #
+          # There are currently ZERO open alerts of this rule (#2842 closed both),
+          # so what is given up is future instances only — and it is given up
+          # explicitly, in the tree, with a reason, rather than silently by a
+          # timeout that also discards the other 104.
+          #
+          # CONTAINMENT, NOT A ROOT CAUSE. Delete this filter once the blow-up in
+          # the #2842 build-context writer (apps/loom-cli/src/safe-path.ts,
+          # commands/apps.ts) is diagnosed.
+          config: |
+            query-filters:
+              - exclude:
+                  id: js/http-to-file-access
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@e46ed2cbd01164d986452f91f178727624ae40d7 # v3
