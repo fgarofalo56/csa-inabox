@@ -69,7 +69,11 @@ export const NAMESPACE_SEPARATOR = '\u001f';
 
 /** Honest config gate — the missing env var, or null when the catalog is wired. */
 export function icebergCatalogConfigGate(): { missing: string } | null {
-  return (process.env.LOOM_ICEBERG_CATALOG_URL || '').trim() ? null : { missing: 'LOOM_ICEBERG_CATALOG_URL' };
+  const url = (process.env.LOOM_ICEBERG_CATALOG_URL || '').trim();
+  // Empty OR a value that can't be a real remote catalog (a bind address / a
+  // circular self-reference) → gated. A placeholder like 0.0.0.0:3000 must show
+  // the honest "not configured" gate, not pass through to an "unreachable" fetch.
+  return url && !isUnreachableCatalogUrl(url) ? null : { missing: 'LOOM_ICEBERG_CATALOG_URL' };
 }
 
 /** True when the Iceberg REST Catalog service is deployed + wired. */
@@ -91,7 +95,7 @@ export class IcebergCatalogError extends Error {
 /** Base URL of the internal catalog service (no trailing slash). Throws 503. */
 export function icebergCatalogBase(): string {
   const url = (process.env.LOOM_ICEBERG_CATALOG_URL || '').trim().replace(/\/+$/, '');
-  if (!url) {
+  if (!url || isUnreachableCatalogUrl(url)) {
     throw new IcebergCatalogError(
       'The Iceberg REST Catalog is not deployed in this environment. Set LOOM_ICEBERG_CATALOG_URL to the '
       + 'internal ingress FQDN of the iceberg-catalog Container App (deploy '
@@ -104,6 +108,33 @@ export function icebergCatalogBase(): string {
     );
   }
   return url;
+}
+
+/**
+ * A `LOOM_ICEBERG_CATALOG_URL` value that CANNOT be a real remote catalog and
+ * should be treated as unconfigured (→ the honest 503 gate) instead of being
+ * fetched into an ugly "unreachable at …" error.
+ *
+ * Observed live (Commercial console): the placeholder
+ * `https://0.0.0.0:3000/api/catalog/iceberg` was sitting in the env — a dev
+ * BIND address (0.0.0.0 / :: are listen-on-all, never a connect target) that
+ * also circularly points back at Loom's OWN BFF proxy path. Fetching it fails,
+ * so the surface showed "Iceberg REST Catalog unreachable at https://0.0.0.0…"
+ * instead of the designed "not configured — dual metadata still works" gate.
+ * A stale/placeholder value must degrade to the same honest state as unset.
+ */
+export function isUnreachableCatalogUrl(raw: string): boolean {
+  let host = '';
+  try {
+    host = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return true; // unparseable → cannot be reached
+  }
+  // Bind-all / unspecified addresses — valid to LISTEN on, never to connect to.
+  if (host === '0.0.0.0' || host === '::' || host === '0:0:0:0:0:0:0:0') return true;
+  // A value pointing back at this app's own BFF proxy is circular, not a catalog.
+  if (/\/api\/catalog\/iceberg(\/|$)/.test(raw)) return true;
+  return false;
 }
 
 /** IRC path prefix on the catalog server (env-overridable, normalized). */
