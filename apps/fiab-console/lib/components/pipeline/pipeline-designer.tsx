@@ -71,6 +71,7 @@ import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas'
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { registerCanvasCommands, type CanvasCommand } from '@/lib/components/canvas/canvas-command-registry';
+import type { PipelineHostTab } from './pipeline-level-inspector';
 import type {
   PipelineActivity, PipelineParameter, PipelineVariable, PipelineSpec,
 } from './types';
@@ -192,9 +193,37 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow4,
     overflow: 'hidden',
   },
-  // Bottom properties dock — elevated floating panel.
+  // ONE vertical SplitPane owns the canvas↔dock space, exactly as ADF Studio
+  // does (and as data-pipeline-editor.tsx already did): the canvas FILLS
+  // everything above the divider and the bottom stack is the sized pane.
+  // Before this, `dock` was `flexShrink: 0` with NO height, so the dock took its
+  // CONTENT height — and with nothing selected that content is an EmptyState
+  // whose `minHeight: 320px` is a hard floor under `box-sizing: border-box`.
+  // Inside the 560px region that left ~96px for the canvas: React Flow measured
+  // its own `minHeight: 400px` shell, framed `fitView` around y≈200, and put
+  // the nodes, the CanvasRightRail and the MiniMap BELOW the clip — the canvas
+  // was not small, it was invisible.
+  dockSplit: { flex: 1, minHeight: 0, height: 'auto' },
+  // The sized pane: authoring-errors strip above the properties dock, so the
+  // canvas keeps its full share whichever of the two the user expands.
+  bottomStack: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minHeight: 0, minWidth: 0,
+    // The errors strip is self-bounded (its own maxHeight + scroll) — never let
+    // the dock's flex-grow squash its header.
+    '> :first-child': { flexShrink: 0 },
+  },
+  // Bottom properties dock — elevated floating panel. Now flex-fills the sized
+  // pane with its own internal scroll (DockedInspector's body scrolls), so
+  // expanding a config section can never steal canvas height again. `display:
+  // flex` so the inspector fills it without relying on percentage-height
+  // resolution through a flex item.
   dock: {
-    flexShrink: 0,
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    overflow: 'hidden',
     borderRadius: tokens.borderRadiusLarge,
     boxShadow: tokens.shadow4,
   },
@@ -207,6 +236,25 @@ const useStyles = makeStyles({
 /** Accent for the generic "Activities" palette chrome — the kit's generic
  *  (Apps → move/blue) accent, so the shell matches the palette tiles' language. */
 const PALETTE_ACCENT = getActivityVisual().accent;
+
+// ── Canvas ↔ config-dock split (A5) ─────────────────────────────────────────
+// Raw px below are resize bounds that no Fluent token expresses (the same
+// documented carve-out from web3-ui that data-pipeline-editor.tsx takes).
+/** Floor for the bottom stack — below this the config form is unusable. */
+export const DOCK_MIN_PX = 200;
+/**
+ * Initial bottom-stack size, as a SHARE of the split rather than a fixed px.
+ * A fixed default cannot hold at both ends of the range: 300px of the ~468px
+ * the split has at the region's 560px floor leaves the canvas a minority (35%),
+ * while the same 300px on a tall monitor is a sliver. A share keeps the canvas
+ * dominant at every height, and `DOCK_MIN_PX` still floors it so the form stays
+ * usable in the smallest window.
+ */
+export const DOCK_DEFAULT_SHARE = '38%';
+/** Height the pane keeps while the dock is collapsed: header + errors strip. */
+export const DOCK_COLLAPSED_PX = 96;
+/** G3 sizingKey — persisted under loom.splitpane.<key>. */
+export const DOCK_SIZING_KEY = 'pipeline-designer.config-dock';
 
 export interface PipelineDesignerHandle {
   fitToScreen: () => void;
@@ -249,6 +297,13 @@ export interface PipelineDesignerProps {
   onApplyTemplateSpec?: (spec: PipelineSpec) => void;
   /** Focus the Pipeline Copilot composer — shows the guided "Ask Copilot" card. */
   onAskCopilot?: () => void;
+  /**
+   * Navigate the host editor's pipeline-configurations tab row. Wired through to
+   * the no-selection (pipeline-level) dock so Fabric's Settings / Output /
+   * Parameters panes are one click from the canvas. Omit → those buttons are not
+   * rendered at all (never rendered dead — `no-vaporware.md`).
+   */
+  onOpenPipelineTab?: (tab: PipelineHostTab) => void;
 }
 
 export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesignerProps>(function PipelineDesigner({
@@ -264,6 +319,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   apiSlug,
   onApplyTemplateSpec,
   onAskCopilot,
+  onOpenPipelineTab,
 }, ref) {
   const s = useStyles();
   const canvasRef = useRef<CanvasHandle>(null);
@@ -282,6 +338,11 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   const [snapToGrid] = useState(true);
   const [showGrid] = useState(true);
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  // Bottom-dock collapse. Lifted OUT of PropertiesPanel so collapsing actually
+  // RECLAIMS CANVAS: the same flag drives the DockedInspector chevron and the
+  // vertical SplitPane's collapsed size. While it lived inside the panel the
+  // dock's pane kept its full height and the toggle only hid the tabs.
+  const [dockCollapsed, setDockCollapsed] = useState(false);
   // Whether keyboard focus is inside this designer — gates W21 command-palette
   // registration so canvas commands are only searchable while the canvas is active.
   const [focused, setFocused] = useState(false);
@@ -619,12 +680,17 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   return (
     // User-resizable outer height (drag the bottom grip or use the keyboard),
     // persisted per-surface. Bounds: minPx 360 (the inherent layout floor for
-    // palette + canvas + dock) up to ~80vh, default 560 — which matches the
-    // shell's prior fixed height so first paint is visually unchanged.
+    // palette + canvas + dock) up to ~80vh.
+    //
+    // `fill` (G3): until the user's first drag, the region GROWS into the height
+    // actually available below it and tracks window resizes, instead of sitting
+    // at a fixed 560px on every screen. 560 stays the FLOOR, so this can only
+    // give the canvas more room than before, never less.
     <ResizableCanvasRegion
       storageKey="pipeline-designer"
       defaultPx={560}
       minPx={360}
+      fill
       ariaLabel="Resize pipeline design canvas height"
     >
     <div
@@ -783,72 +849,92 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
           )}
         </div>
 
-        <div className={s.canvasWrap}>
-          <PipelineCanvas
-            ref={canvasRef}
-            activities={levelActivities}
-            selectedName={selectedName || undefined}
-            onSelect={setSelectedName}
-            itemId={itemId}
-            snapToGrid={snapToGrid}
-            showGrid={showGrid}
-            onDrillInto={drillInto}
-            onDrillBack={() => { if (drillPath.length > 0) popTo(drillPath.length - 1); }}
-            onDropPaletteKey={(key) => {
-              const def = findByKey(key);
-              if (!def) return;
-              if (!addRuleFor(def.type).allowed) return; // nesting-limit gate
-              insertActivity(def);
-            }}
-            onConnect={connect}
-            onDeleteActivity={deleteActivity}
-            onUndo={doUndo}
-            onRedo={doRedo}
-            canUndo={history.canUndo}
-            canRedo={history.canRedo}
-            onAddActivities={addActivitiesAtLevel}
-            readOnly={readOnly}
-            hideEmptyState={showGuidedEmpty}
-          />
-          {/* Guided empty-state launcher — Fabric's 4-path + Ask Copilot start
-              screen. Overlays the empty canvas; each card drops real activities. */}
-          {showGuidedEmpty && (
-            <GuidedEmptyStateLauncher
-              onBlank={() => setBlankStart(true)}
-              onCopyData={() => insertActivityByKey('Copy')}
-              onSample={insertSamplePipeline}
-              onTemplates={() => setGalleryOpen(true)}
-              onAskCopilot={onAskCopilot}
+        <SplitPane
+          direction="vertical"
+          primary="second"
+          storageKey={DOCK_SIZING_KEY}
+          defaultSize={DOCK_DEFAULT_SHARE}
+          minSize={DOCK_MIN_PX}
+          collapsed={dockCollapsed}
+          collapsedSize={DOCK_COLLAPSED_PX}
+          className={s.dockSplit}
+          dividerLabel="Resize activity configuration panel"
+        >
+          <div className={s.canvasWrap}>
+            <PipelineCanvas
+              ref={canvasRef}
+              activities={levelActivities}
+              selectedName={selectedName || undefined}
+              onSelect={setSelectedName}
+              itemId={itemId}
+              snapToGrid={snapToGrid}
+              showGrid={showGrid}
+              onDrillInto={drillInto}
+              onDrillBack={() => { if (drillPath.length > 0) popTo(drillPath.length - 1); }}
+              onDropPaletteKey={(key) => {
+                const def = findByKey(key);
+                if (!def) return;
+                if (!addRuleFor(def.type).allowed) return; // nesting-limit gate
+                insertActivity(def);
+              }}
+              onConnect={connect}
+              onDeleteActivity={deleteActivity}
+              onUndo={doUndo}
+              onRedo={doRedo}
+              canUndo={history.canUndo}
+              canRedo={history.canRedo}
+              onAddActivities={addActivitiesAtLevel}
+              readOnly={readOnly}
+              hideEmptyState={showGuidedEmpty}
             />
-          )}
-        </div>
-        {/* Pre-run "Authoring errors" panel — lists unmet required fields per
-            activity (linked to nodes) BEFORE any run, with tab-dot parity. */}
-        <AuthoringErrorsPanel
-          validations={levelValidations}
-          deepCount={deepIssueCount}
-          open={authoringOpen}
-          onOpenChange={setAuthoringOpen}
-          onSelectActivity={setSelectedName}
-        />
-        {/* Bottom properties dock — ADF Studio edits the selected sub-resource
-            (activity) in a panel at the bottom of the canvas. */}
-        <div className={s.dock}>
-          <PropertiesPanel
-            layout="dock"
-            activity={selected}
-            allActivities={levelActivities}
-            parameters={parameters}
-            variables={variables}
-            parentActivity={currentContainer || null}
-            onDrillInto={drillInto}
-            onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
-            onDelete={() => { if (selected) deleteActivity(selected.name); }}
-            itemId={itemId}
-            workspaceId={workspaceId}
-            apiSlug={apiSlug}
-          />
-        </div>
+            {/* Guided empty-state launcher — Fabric's 4-path + Ask Copilot start
+                screen. Overlays the empty canvas; each card drops real activities. */}
+            {showGuidedEmpty && (
+              <GuidedEmptyStateLauncher
+                onBlank={() => setBlankStart(true)}
+                onCopyData={() => insertActivityByKey('Copy')}
+                onSample={insertSamplePipeline}
+                onTemplates={() => setGalleryOpen(true)}
+                onAskCopilot={onAskCopilot}
+              />
+            )}
+          </div>
+          <div className={s.bottomStack}>
+            {/* Pre-run "Authoring errors" panel — lists unmet required fields per
+                activity (linked to nodes) BEFORE any run, with tab-dot parity. */}
+            <AuthoringErrorsPanel
+              validations={levelValidations}
+              deepCount={deepIssueCount}
+              open={authoringOpen}
+              onOpenChange={setAuthoringOpen}
+              onSelectActivity={setSelectedName}
+            />
+            {/* Bottom properties dock — ADF Studio edits the selected sub-resource
+                (activity) in a panel at the bottom of the canvas; with NOTHING
+                selected it shows pipeline-level settings (Fabric parity, see
+                properties-panel.tsx). */}
+            <div className={s.dock}>
+              <PropertiesPanel
+                layout="dock"
+                activity={selected}
+                allActivities={levelActivities}
+                parameters={parameters}
+                variables={variables}
+                parentActivity={currentContainer || null}
+                onDrillInto={drillInto}
+                onSelectActivity={setSelectedName}
+                onOpenPipelineTab={onOpenPipelineTab}
+                collapsed={dockCollapsed}
+                onToggleCollapse={() => setDockCollapsed((c) => !c)}
+                onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
+                onDelete={() => { if (selected) deleteActivity(selected.name); }}
+                itemId={itemId}
+                workspaceId={workspaceId}
+                apiSlug={apiSlug}
+              />
+            </div>
+          </div>
+        </SplitPane>
         <Caption1 className={s.status}>
           {drillPath.length === 0 ? 'Pipeline' : `${currentContainer?.name || ''}${branchLabel(currentBranch) ? ` · ${branchLabel(currentBranch)}` : ''}`}
           {' · '}

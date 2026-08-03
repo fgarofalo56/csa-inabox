@@ -1322,7 +1322,7 @@ function DesignerInner({
       <ResizableCanvasRegion
         storageKey="mapping-dataflow"
         defaultPx={520}
-        minPx={360}
+        minPx={360} fill
         ariaLabel="Resize mapping data flow canvas height"
       >
         {/* G3: canvas | config divider is user-draggable (keyboard-accessible)

@@ -80,7 +80,13 @@ const ADF_FACTORY_REGIONS = [
 ];
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
+  // `flex: '1 0 auto'` (G3): the editor column FILLS the chrome's mainPanel
+  // (display:flex/column, overflow:auto) instead of collapsing to content
+  // height, so the resizable canvas region inside it has real viewport space to
+  // grow into and tracks a window resize. `flex-shrink: 0` keeps it from being
+  // squeezed below its content when the pipeline is taller than the panel — the
+  // panel scrolls instead.
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%', flex: '1 0 auto' },
   gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
   // Un-caged starter-graph region: full width (mirrors the bound-state canvas),
   // so the installed-app graph is readable instead of squeezed into the 720px
@@ -1155,6 +1161,10 @@ export function PipelineEditorCore({
                   }}
                   // "Ask Copilot" focuses the docked Pipeline Copilot composer.
                   onAskCopilot={() => { try { window.dispatchEvent(new CustomEvent('loom:pipeline-ask-copilot')); } catch { /* noop */ } }}
+                  // Fabric parity: with nothing selected the bottom dock shows
+                  // pipeline-level settings, and its buttons jump to the real
+                  // pipeline-configurations panes in THIS tab row.
+                  onOpenPipelineTab={(t) => setTab(t)}
                 />
               )}
               {tab === 'parameters' && (

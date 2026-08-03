@@ -108,6 +108,11 @@ const useStyles = makeStyles({
     position: 'relative',
     width: '100%',
     height: '100%',
+    // This floor is for the STANDALONE empty-state render above (no resizable
+    // region wraps it, so it needs a body). The in-region render deliberately
+    // overrides it with an inline `minHeight: 0` — a px floor larger than the
+    // region's clip would make React Flow frame `fitView` around a viewport
+    // that is partly off-screen. Do not "unify" these two.
     minHeight: '520px',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -809,6 +814,9 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
       storageKey="network-topology"
       defaultPx={560}
       minPx={360}
+      // G3: grow into the height actually available (and track window resizes)
+      // until the user's first drag on this key; `defaultPx` stays the FLOOR.
+      fill
       ariaLabel="Resize network topology canvas height"
     >
     <div className={styles.shell} style={{ minHeight: 0 }}>

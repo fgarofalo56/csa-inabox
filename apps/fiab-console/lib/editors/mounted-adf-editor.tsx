@@ -1017,6 +1017,9 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
         storageKey="mounted-adf"
         defaultPx={560}
         minPx={460}
+        // G3: grow into the height actually available (and track window resizes)
+        // until the user's first drag on this key; `defaultPx` stays the FLOOR.
+        fill
         ariaLabel="Resize data flow canvas height"
       >
       {/* G3: palette + config widths are user-draggable (keyboard-accessible)
