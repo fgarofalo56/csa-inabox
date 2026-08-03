@@ -12,6 +12,7 @@
  */
 import { callAoai, resolveAoaiTargetFromEnv, type AoaiTarget } from './aoai.js';
 import { fetchToolSchemas, toAoaiTools, invokeTool } from './tools.js';
+import { publicErrorMessage } from './safe-error.js';
 import type { ChatMessage, OrchestratorStep, OrchestratorUsage } from './types.js';
 
 // Verbatim copy of the Console orchestrator SYSTEM_PROMPT so MAF-tier answers
@@ -38,8 +39,14 @@ export async function* orchestrateMaf(
   let target: AoaiTarget;
   try {
     target = resolveAoaiTargetFromEnv();
-  } catch (e: any) {
-    yield { kind: 'error', error: e?.message || String(e) };
+  } catch (e) {
+    yield {
+      kind: 'error',
+      error: publicErrorMessage(
+        e,
+        'MAF tier is not configured — set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT on the copilot-maf app.',
+      ),
+    };
     return;
   }
 
@@ -63,8 +70,8 @@ export async function* orchestrateMaf(
     let resp: any;
     try {
       resp = await callAoai(target, messages, tools);
-    } catch (e: any) {
-      yield { kind: 'error', error: e?.message || String(e) };
+    } catch (e) {
+      yield { kind: 'error', error: publicErrorMessage(e, 'The Azure OpenAI chat-completions call failed.') };
       return;
     }
     const u = resp?.usage || {};
