@@ -27,6 +27,7 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { StdioMcpClient } from './stdio-client.mjs';
+import { publicRpcError } from './safe-error.mjs';
 
 const PORT = parseInt(process.env.LOOM_MCP_BRIDGE_PORT || process.env.PORT || '8080', 10);
 const CONFIG_PATH = process.env.LOOM_MCP_BRIDGE_CONFIG || '/app/config/loom-mcp-bridge.json';
@@ -77,7 +78,9 @@ async function handleToolsList(res, client, rpcId) {
     const tools = await client.listTools();
     send(res, 200, { jsonrpc: '2.0', id: rpcId ?? `list-${Date.now()}`, result: { tools } });
   } catch (e) {
-    send(res, 200, { jsonrpc: '2.0', id: rpcId ?? `list-${Date.now()}`, error: { code: -32000, message: String(e?.message || e) } });
+    // The caught value is a spawn/transport/upstream failure from a child
+    // process we launched — container paths, argv, stacks. Sanitize (#505).
+    send(res, 200, { jsonrpc: '2.0', id: rpcId ?? `list-${Date.now()}`, error: publicRpcError(e, `Listing tools on bridged server '${client.entry.id}' failed`) });
   }
 }
 
@@ -93,7 +96,10 @@ async function handleToolsCall(res, client, parsed) {
     const result = await client.callTool(name, args);
     send(res, 200, { jsonrpc: '2.0', id: rpcId, result });
   } catch (e) {
-    send(res, 200, { jsonrpc: '2.0', id: rpcId, error: { code: -32000, message: String(e?.message || e) } });
+    // NB: the public text names the CATALOG entry id (a value we own), never
+    // `name` — that is raw request input and reflecting it would trade a
+    // stack-trace leak for a reflection.
+    send(res, 200, { jsonrpc: '2.0', id: rpcId, error: publicRpcError(e, `Tool call on bridged server '${client.entry.id}' failed`) });
   }
 }
 
@@ -143,7 +149,7 @@ async function handleSseMessage(req, res, client, sessionId) {
     }
   } catch (e) {
     if (parsed.id != null && sess) {
-      sess.res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: parsed.id, error: { code: -32000, message: String(e?.message || e) } })}\n\n`);
+      sess.res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: parsed.id, error: publicRpcError(e, `Bridged server '${client.entry.id}' rejected the request`) })}\n\n`);
     }
   }
 }
