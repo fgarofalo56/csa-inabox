@@ -102,6 +102,14 @@ jobs:
         run: node scripts/ci/check-prp-freshness.mjs
       - name: pnpm-overrides (CVE floors declared for BOTH pnpm majors — #2729 regression)
         run: node scripts/ci/check-pnpm-overrides.mjs
+      # The npm-side sibling. portal/react-webapp is npm + package-lock.json, a
+      # different toolchain from apps/fiab-console, so the pnpm guard above says
+      # nothing about it and #2729's floors never reached it. npm's failure mode
+      # is also different: `npm ci` hard-fails when a declared floor is missing
+      # from the lockfile, so the ONE way an npm floor goes quiet is by governing
+      # nothing — which npm is blind to and this guard is built for.
+      - name: npm-cve-floors (npm overrides must govern something, and reach the image)
+        run: node scripts/ci/check-npm-cve-floors.mjs
       - name: duplicate-env (env name emitted more than once per app)
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)

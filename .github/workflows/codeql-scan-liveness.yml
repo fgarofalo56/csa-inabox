@@ -1,0 +1,62 @@
+name: CodeQL scan liveness
+
+# Is the scanner actually scanning?
+#
+# On 2026-08-03 the JS/TS CodeQL job failed 24 times in a row over ~10 hours.
+# Every run showed `cancelled`, CodeQL is not a required check, and each failed
+# run still uploaded a SARIF — so the code-scanning list froze at the last real
+# scan and kept reading as current. Six js/log-injection alerts that #2850 had
+# already fixed sat "open", and the obvious next move was to write a second,
+# redundant fix for code that was never the problem.
+#
+# codeql.yml now fails loudly when an analysis does not complete. This workflow
+# is the backstop for every OTHER way the scan can stop happening — the
+# workflow being disabled, a path filter that stops matching (the #2714 class),
+# a permissions change, a language added to the matrix that never runs. It asks
+# the API what was actually analyzed rather than trusting that a green check
+# means a scan happened.
+#
+# Not a PR gate on purpose: a repo-wide scanner outage should not block every
+# unrelated PR. It runs hourly and on every push to main, so a silent outage
+# becomes a red run within the hour instead of within ten.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/codeql.yml'
+      - '.github/workflows/codeql-scan-liveness.yml'
+      - 'scripts/ci/codeql-scan-liveness.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: read
+
+concurrency:
+  group: codeql-scan-liveness-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  liveness:
+    name: CodeQL scan liveness (main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20'
+
+      # Reads the analyzed languages out of codeql.yml's matrix, then asserts
+      # that for EACH of them the newest analysis on main is a real one — not a
+      # `codeql-failed-run.sarif` upload (rules_count 0 / error set), which is
+      # what a killed analysis leaves behind.
+      - name: codeql-scan-liveness (the newest analysis per language is a real scan)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/codeql-scan-liveness.mjs --repo "${{ github.repository }}" --ref refs/heads/main
