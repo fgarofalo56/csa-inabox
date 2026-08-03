@@ -93,10 +93,34 @@ describe('SparkJobDefinitionEditor — lineage harvest gate (#2625)', () => {
   it('does NOT nag on a run whose receipt has nothing to say', async () => {
     mountWith({ ok: true, events: 0, written: 0, skipped: 0, denied: 0, code: 'already_harvested', reason: 'already harvested in this replica' });
     await openRunsTab();
-    // CONTROL — the Runs tab itself still renders exactly as before.
+
+    // CONTROLS. Both are load-bearing and both must be AWAITED — this spec's
+    // point is the two ABSENCE assertions below, and an absence proves nothing
+    // about a surface that has not finished loading.
+    //
+    // `Run history` is a STATIC section header (spark-job-definition-editor.tsx
+    // renders it as a sibling of the rows block, not inside it), so it is in the
+    // DOM the instant the tab is selected — before either fetch resolves.
+    // Sampling anything synchronously off the back of it is the #2834 race:
+    // the query resolves against chrome that exists in the loading state while
+    // the data it stands in for has not arrived. Reading the row with a
+    // synchronous `getByText` failed 3/3 under full-suite load in CI and passed
+    // in isolation, because contention is what lets the render lose the race.
+    // Same class as `selectOptionValue` in ./test-helpers — the cure is waiting
+    // for THE DATA, never for a timing constant.
+    //
+    // (1) the runs LIST landed and rendered its row …
     await screen.findByText(/Run history/i);
-    expect(screen.getByText('loom-sjd-fixture-1')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText(/already harvested/i)).not.toBeInTheDocument());
+    await screen.findByText('loom-sjd-fixture-1');
+    // (2) … and the run DETAIL landed too. `GET …/runs/7` returns the driver log
+    //     and the `lineage` receipt under test in ONE response, so the log tail
+    //     reaching the DOM is proof that the receipt reached the component.
+    //     Without this the assertions below pass vacuously — they would keep
+    //     passing even if `already_harvested` stopped being a silent code.
+    fireEvent.click(screen.getByRole('button', { name: /Batch #7/ }));
+    await screen.findByText('line 1');
+
+    expect(screen.queryByText(/already harvested/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /fix it/i })).not.toBeInTheDocument();
   });
 
