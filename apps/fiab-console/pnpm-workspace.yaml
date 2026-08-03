@@ -44,3 +44,46 @@ overrides:
   # the same floor was applied to portal/react-webapp in #2730, which is a
   # separate npm manifest with its own overrides block.
   sharp: '>=0.35.0'
+  #
+  # ── Batch 1 — dev-toolchain transitives (refs #2671) ──────────────────────
+  #
+  # WHY A MAJOR CEILING AND NOT A BARE `>=` FLOOR. Every floor above is
+  # open-ended, and that is load-bearing here: a pnpm override REPLACES the
+  # parent's declared range outright, it does not intersect with it. Proof from
+  # this very lockfile — `uuid: '>=11.1.1'` resolved to **14.0.1**, three
+  # majors past what any parent asked for. Harmless for uuid; NOT harmless for
+  # these five, whose parents would break on a major bump. So each entry below
+  # is floor + `<nextMajor>`: still an upgrade-permitting floor inside the
+  # major, never a silent major float.
+  #
+  # js-yaml <4.2.0 and <4.3.0 advisories. Sole consumer is @eslint/eslintrc@3.3.5
+  # (`js-yaml: ^4.1.1`), so 4.3.1 is a drop-in. Without `<5` this would resolve
+  # js-yaml 5.x into a parent that never declared support for it.
+  js-yaml: '>=4.3.1 <5'
+  # form-data <4.0.6 advisory. Sole consumer is jsdom@25.0.1 (`form-data: ^4.0.0`).
+  form-data: '>=4.0.6 <5'
+  #
+  # brace-expansion — THREE separate, per-major entries. Do NOT collapse these
+  # into one blanket `brace-expansion: '>=5.0.7'`; that combination is broken,
+  # and it is broken in a way no version number hints at. The module's PUBLIC
+  # SHAPE changed across the majors (verified by unpacking each published
+  # tarball, not by reading a changelog):
+  #
+  #   1.1.16 / 1.1.18  →  `module.exports = expandTop`      (callable)
+  #   2.1.2  / 2.1.4   →  `module.exports = expandTop`      (callable)
+  #   4.x              →  ESM-only                          (no CJS entry)
+  #   5.0.7  / 5.0.9   →  `exports.expand = expand`         (NOT callable)
+  #
+  # minimatch@3.1.5 does `var expand = require('brace-expansion')` and then
+  # `expand(pattern)`. Hand it a 5.x and every eslint run dies with
+  # "expand is not a function"; hand it a 4.x and the CJS require fails
+  # outright. The per-major split is therefore mandatory, not stylistic.
+  #
+  # The `pkg@range` key form scopes an override to consumers whose declared
+  # range falls inside that range, which is exactly the three minimatch lines:
+  #   minimatch@3.1.5  → 'brace-expansion': ^1.1.7  → floored to 1.x
+  #   minimatch@9.0.9  → 'brace-expansion': ^2.0.2  → floored to 2.x
+  #   minimatch@10.2.5 → 'brace-expansion': ^5.0.5  → floored to 5.x
+  'brace-expansion@1': '>=1.1.16 <2'
+  'brace-expansion@2': '>=2.1.2 <3'
+  'brace-expansion@5': '>=5.0.7 <6'
