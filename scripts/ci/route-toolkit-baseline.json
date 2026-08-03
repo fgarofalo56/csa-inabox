@@ -144,7 +144,6 @@
     "apps/fiab-console/app/api/admin/spark-telemetry/audit/route.ts": 1,
     "apps/fiab-console/app/api/admin/tenant-settings/groups/route.ts": 1,
     "apps/fiab-console/app/api/admin/tenant-settings/route.ts": 1,
-    "apps/fiab-console/app/api/admin/updates/apply/route.ts": 1,
     "apps/fiab-console/app/api/admin/updates/status/route.ts": 1,
     "apps/fiab-console/app/api/admin/usage/embed/route.ts": 1,
     "apps/fiab-console/app/api/admin/usage/route.ts": 1,
