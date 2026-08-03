@@ -13,15 +13,36 @@
 // differ from the admin RG and cross-RG role assignments cannot be authored
 // inline (BCP139) — same pattern as adx-mi-storage-rbac.bicep.
 //
-// Website Contributor (de139f84-1756-47ae-9be6-808fbbe706ee) is the least built-in
-// role covering staticSites write + listSecrets on Commercial / GCC — Contributor
-// is NOT required there. It does NOT resolve in Azure Government, though: a LIVE
-// `az deployment sub create` into usgovvirginia (2026-07-10) failed this
-// assignment with `RoleDefinitionDoesNotExist: de139f84175647ae9be6808fbbe706ee`.
-// So on GCC-High / IL5 this module falls back to Contributor (which exists in
-// every cloud) — the narrowest built-in available in Gov that still covers the
-// staticSites write + listSecrets the publish routes need. 100% Azure-native (ARM
-// staticSites); no Microsoft Fabric.
+// Website Contributor (de139f84-1756-47ae-9be6-808fbbe84772) is the least built-in
+// role covering staticSites write + listSecrets — Contributor is NOT required.
+//
+// CORRECTED 2026-08-03 (refs #2775). This constant was previously written as
+// `de139f84-1756-47ae-9be6-808fbbe706ee`, which is not a role definition in ANY
+// cloud — the last five hex digits were wrong (…706ee for …84772). Verified
+// against live Commercial:
+//
+//   az role definition list --name "Website Contributor" --query "[0].name"
+//     -> de139f84-1756-47ae-9be6-808fbbe84772
+//   az role definition list --query "[?name=='de139f84-1756-47ae-9be6-808fbbe706ee']"
+//     -> (empty)
+//
+// The header used to read this failure as an Azure Government gap: a LIVE
+// `az deployment sub create` into usgovvirginia (2026-07-10) failed with
+// `RoleDefinitionDoesNotExist: de139f84175647ae9be6808fbbe706ee`, and the
+// conclusion drawn was "Website Contributor does not resolve in Gov". It never
+// resolved anywhere. The SAME assignment then failed on COMMERCIAL in the
+// 2026-07-23 admin-plane deployment, with the same message and the same GUID —
+// which is what a cloud-specific explanation could not have predicted, and is
+// the evidence that the diagnosis, not the cloud, was wrong.
+//
+// The Gov behaviour below is deliberately left alone: `sovereignRedundant`
+// already skips this assignment entirely in GCC-High / IL5 (the core RBAC grants
+// cover the same permission there, and re-creating it tripped RoleAssignmentExists
+// on the 2026-07-10 round-2 deploy), so no Gov code path evaluates the role id.
+// Whether Gov could now use Website Contributor instead of Contributor is a
+// separate question that needs a real Gov deploy to answer — it is NOT settled by
+// this fix, and nothing here depends on the answer.
+// 100% Azure-native (ARM staticSites); no Microsoft Fabric.
 
 targetScope = 'resourceGroup'
 
@@ -35,8 +56,10 @@ param boundary string = 'Commercial'
 @description('When true, skip the role grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
-// Website Contributor — Commercial / GCC least-privilege for staticSites.
-var websiteContributorRoleId = 'de139f84-1756-47ae-9be6-808fbbe706ee'
+// Website Contributor — least-privilege for staticSites write + listSecrets.
+// See the header: the previous value (…808fbbe706ee) was a typo for this one and
+// resolved in no cloud, which is what failed the 2026-07-23 admin-plane deploy.
+var websiteContributorRoleId = 'de139f84-1756-47ae-9be6-808fbbe84772'
 // Contributor — the Azure Government fallback (Website Contributor is absent there;
 // see header). Broader than Website Contributor but the narrowest built-in that
 // exists in Gov and covers Microsoft.Web/staticSites write + listSecrets.
