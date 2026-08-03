@@ -46,6 +46,11 @@ import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ReportVisualDesigner } from '../components/report-visual-designer';
 import { ReportSubscriptionsPanel } from '../components/report-subscriptions-panel';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
+import {
+  planReportEmbedRequest,
+  isPowerBiBackedReport,
+  type EmbedSkipReason,
+} from './powerbi-embed-plan';
 import { useStyles } from './styles';
 
 const PRESET_THEMES: Array<{ key: string; label: string; theme: Record<string, unknown> }> = [
@@ -325,6 +330,8 @@ function ReportLikeEditor({
   const [err, setErr] = useState<string | null>(null);
   const [embed, setEmbed] = useState<{ token: string; embedUrl: string; reportId: string } | null>(null);
   const [embedErr, setEmbedErr] = useState<string | null>(null);
+  // Why no embed is showing, when that is a normal state rather than a failure.
+  const [embedSkip, setEmbedSkip] = useState<EmbedSkipReason | null>(null);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | 'PNG' | 'XLSX' | 'DOCX' | null>(null);
@@ -629,6 +636,12 @@ function ReportLikeEditor({
   }, [reloadBookmarks]);
 
   const hasReport = !!reportId;
+  // Refresh / Export POST the selected id to Power BI REST just as embed-token
+  // does, so they cannot succeed for a synthetic `loom:` entry. Gate them on the
+  // selection being a live Power BI object rather than merely present, so they
+  // are not buttons that fail whatever the user does (no-vaporware.md).
+  const hasPbiReport = isPowerBiBackedReport(reportId);
+  const loomNativeHint = 'this is a Loom-native report with no Power BI object — publish it to Power BI first';
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Open', actions: [
@@ -636,19 +649,19 @@ function ReportLikeEditor({
         { label: 'Copy link', onClick: report?.webUrl ? copyReportLink : undefined, disabled: !report?.webUrl, title: !report?.webUrl ? 'select a report first' : 'copy the workspace URL to clipboard' },
       ]},
       { label: 'Data', actions: [
-        { label: refreshBusy ? 'Refreshing…' : 'Refresh data', onClick: hasReport && !refreshBusy ? refreshData : undefined, disabled: !hasReport || refreshBusy, title: !hasReport ? 'select a report first' : 'queue a refresh of the report’s underlying semantic model' },
+        { label: refreshBusy ? 'Refreshing…' : 'Refresh data', onClick: hasPbiReport && !refreshBusy ? refreshData : undefined, disabled: !hasPbiReport || refreshBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'queue a refresh of the report’s underlying semantic model' },
         { label: 'Reload metadata', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : 'reload list + selected report metadata' },
       ]},
       ...(kind === 'paginated' ? [{ label: 'Export', actions: [
         // Paginated reports render through the SSRS engine — PDF / Excel / Word
         // are the parity exports the Power BI service exposes for RDL.
-        { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the paginated report to PDF via Power BI REST (ExportTo + paginatedReportConfiguration)' },
-        { label: exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel', onClick: hasReport && !exportBusy ? () => exportReport('XLSX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the paginated report to Excel (.xlsx) via Power BI REST' },
-        { label: exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word', onClick: hasReport && !exportBusy ? () => exportReport('DOCX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the paginated report to Word (.docx) via Power BI REST' },
+        { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasPbiReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasPbiReport || !!exportBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'export the paginated report to PDF via Power BI REST (ExportTo + paginatedReportConfiguration)' },
+        { label: exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel', onClick: hasPbiReport && !exportBusy ? () => exportReport('XLSX') : undefined, disabled: !hasPbiReport || !!exportBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'export the paginated report to Excel (.xlsx) via Power BI REST' },
+        { label: exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word', onClick: hasPbiReport && !exportBusy ? () => exportReport('DOCX') : undefined, disabled: !hasPbiReport || !!exportBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'export the paginated report to Word (.docx) via Power BI REST' },
       ]}] : [{ label: 'Export', actions: [
-        { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PDF via Power BI REST' },
-        { label: exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX', onClick: hasReport && !exportBusy ? () => exportReport('PPTX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PowerPoint via Power BI REST' },
-        { label: exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG', onClick: hasReport && !exportBusy ? () => exportReport('PNG') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PNG via Power BI REST' },
+        { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasPbiReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasPbiReport || !!exportBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'export the report to PDF via Power BI REST' },
+        { label: exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX', onClick: hasPbiReport && !exportBusy ? () => exportReport('PPTX') : undefined, disabled: !hasPbiReport || !!exportBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'export the report to PowerPoint via Power BI REST' },
+        { label: exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG', onClick: hasPbiReport && !exportBusy ? () => exportReport('PNG') : undefined, disabled: !hasPbiReport || !!exportBusy, title: !hasReport ? 'select a report first' : !hasPbiReport ? loomNativeHint : 'export the report to PNG via Power BI REST' },
       ]}]),
       ...(kind === 'paginated' ? [] : [{ label: 'View', actions: [
         { label: 'Refresh visuals', onClick: hasReport ? refreshVisuals : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reload the embedded report visuals (report.refresh)' },
@@ -665,7 +678,7 @@ function ReportLikeEditor({
         { label: copilotOpen ? 'Hide Report Copilot' : 'Report Copilot', onClick: () => setCopilotOpen((v) => !v), title: 'narrative summary + suggested visuals over the bound Loom semantic model (no Power BI required)' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme, copilotOpen]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, hasPbiReport, loomNativeHint, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow, showFormatPane, toggleFormatPane, resetTheme, copilotOpen]);
 
   // Mint a per-report embed token whenever the selected report changes.
   //
@@ -673,35 +686,29 @@ function ReportLikeEditor({
   // SAME powerbi-client SDK — there is no separate `pbi-paginated` package. They
   // mint their token through the MULTI-RESOURCE GenerateToken (reports[] +
   // referenced semantic-model datasets[]), so they hit a dedicated BFF route.
+  // A synthetic `loom:` selection has NO Power BI object (see
+  // powerbi-embed-plan.ts): the planner returns skip='loom-native' and no
+  // request is issued, so the editor shows the Loom-native state instead of a
+  // red "Could not mint embed token" for a token that could never exist.
   useEffect(() => {
-    if (!workspaceId || !reportId) { setEmbed(null); return; }
-    let cancelled = false;
-    if (kind === 'paginated') {
-      (async () => {
-        setEmbedErr(null);
-        try {
-          const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/paginated-embed-token`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceId, datasetIds: report?.datasetId ? [report.datasetId] : [] }),
-          });
-          const j = await r.json();
-          if (cancelled) return;
-          if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, reportId: j.reportId });
-          else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
-        } catch (e: any) {
-          if (!cancelled) setEmbedErr(e?.message || String(e));
-        }
-      })();
-      return () => { cancelled = true; };
+    const { request, skip } = planReportEmbedRequest({
+      workspaceId, reportId, kind, editMode, datasetId: report?.datasetId,
+    });
+    if (!request) {
+      setEmbed(null);
+      setEmbedErr(null);
+      setEmbedSkip(skip);
+      return;
     }
+    let cancelled = false;
     (async () => {
       setEmbedErr(null);
+      setEmbedSkip(null);
       try {
-        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
+        const r = await clientFetch(request.url, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ workspaceId, accessLevel: editMode ? 'Edit' : 'View' }),
+          body: JSON.stringify(request.body),
         });
         const j = await r.json();
         if (cancelled) return;
@@ -851,6 +858,27 @@ function ReportLikeEditor({
                     <div><strong>Type:</strong> {report?.reportType || (kind === 'paginated' ? 'PaginatedReport' : 'PowerBIReport')}</div>
                     <div><strong>Dataset ID:</strong> {report?.datasetId || '—'}</div>
                     {report?.webUrl && <div><strong>Web URL:</strong> <a href={report.webUrl} target="_blank" rel="noreferrer">{report.webUrl}</a></div>}
+                  </div>
+                </div>
+              ) : embedSkip === 'loom-native' ? (
+                // Selection is a synthetic `loom:` entry — a bundle-installed
+                // report held in Cosmos `state.content` with no Power BI object.
+                // There is no token to mint, so this is an ordinary state, not a
+                // failure (ux-baseline.md: no error banners on first open).
+                <div className={s.card}>
+                  <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM}}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Loom-native report — nothing to embed yet</MessageBarTitle>
+                      This report is stored in CSA Loom and has no Power BI object, so a Power BI embed
+                      token does not apply. Its pages and visuals render in the Loom-native report view.
+                      Publish it to Power BI from the report designer to make it embeddable, or pick a
+                      Power BI report from the list to embed one.
+                    </MessageBarBody>
+                  </MessageBar>
+                  <Subtitle2 style={{ marginBottom: tokens.spacingVerticalM}}>Report metadata (Loom-native)</Subtitle2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
+                    <div><strong>Name:</strong> {report?.name || '—'}</div>
+                    <div><strong>Pages:</strong> {pages.length}</div>
                   </div>
                 </div>
               ) : kind === 'paginated' ? (

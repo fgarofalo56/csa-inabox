@@ -112,6 +112,15 @@ jobs:
       # nothing — which npm is blind to and this guard is built for.
       - name: npm-cve-floors (npm overrides must govern something, and reach the image)
         run: node scripts/ci/check-npm-cve-floors.mjs
+      # The third member of that family, and the one that closes the gap both
+      # others assume shut: they check WHAT is pinned, this checks that the
+      # lockfile doing the pinning is in the build context at all. #2816 —
+      # azure-functions/lineage-extractor shipped `RUN npm ci` with no
+      # package-lock.json anywhere in the repo, and nothing caught it for months
+      # because the only thing that reads a Dockerfile is a build, and that image
+      # had never been built. It failed on its first real deploy, in 12 seconds.
+      - name: dockerfile-lockfiles (npm ci / --frozen-lockfile needs its lockfile in the context — #2816)
+        run: node scripts/ci/check-dockerfile-lockfiles.mjs
       - name: duplicate-env (env name emitted more than once per app)
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)
