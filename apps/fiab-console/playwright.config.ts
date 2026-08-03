@@ -91,6 +91,27 @@ export default defineConfig({
       testDir: './e2e',
       testMatch: /publish-version\.spec\.ts/,
       dependencies: ['mint'],
+      // Same reasoning as route-smoke below, reached the same way (refs #2875).
+      // The workflow step wrapped this project in continue-on-error and so
+      // reported "1 failed, 6 passed" as a GREEN run (run 30824614880). The
+      // reflex fix — delete the flag — would have been wrong on its own: with
+      // the global `retries: 0` an intermittent failure is indistinguishable
+      // from a regression, and that ambiguity is what someone was reaching for
+      // the flag to escape. This project is MORE exposed to it than route-smoke,
+      // not less: every test creates a real workspace and item, PATCHes them
+      // twice through the live save path, then drives the chrome drawer — all
+      // under a 30s actionTimeout against a shared console that is
+      // simultaneously running the other projects' sweeps.
+      //
+      // Retries restore the distinction Playwright already models: fail-then-
+      // pass is reported FLAKY and exits 0; fail-every-attempt stays FAILED and
+      // exits non-zero. Only then is dropping continue-on-error honest.
+      //
+      // Safe to retry: each attempt runs in a fresh worker and pushes its own
+      // workspace id onto createdWorkspaces, and Playwright runs the outgoing
+      // worker's afterAll (cleanupWorkspaces) at teardown — so a retry leaves no
+      // orphaned workspace behind, it just cleans up one more.
+      retries: 2,
       use: {
         storageState: 'e2e/.auth/loom-state.json',
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
