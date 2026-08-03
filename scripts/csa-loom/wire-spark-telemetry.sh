@@ -155,7 +155,17 @@ else
   else
     KV_NAME_CONF="${KV_NAME:-}"
   fi
-  CONF_FILE="$(mktemp 2>/dev/null || echo "/tmp/loom-spark-la-$$.conf")"
+  # `mktemp` with NO fallback. The fallback used to be
+  # `echo "/tmp/loom-spark-la-$$.conf"` — a PID, which is small, guessable and
+  # reused, in a world-writable directory. The `>` redirect below FOLLOWS a
+  # symlink, so another local user who plants that path gets an arbitrary file
+  # of their choosing overwritten with this content, as whatever user runs the
+  # script (root, on most CI images). A missing `mktemp` is a broken image, not
+  # a condition worth degrading into that.
+  CONF_FILE="$(mktemp)" || {
+    echo "::error::mktemp is unavailable — refusing to fall back to a predictable /tmp path."
+    exit 1
+  }
   {
     echo "spark.sql.adaptive.enabled true"
     echo "spark.sql.adaptive.coalescePartitions.enabled true"
