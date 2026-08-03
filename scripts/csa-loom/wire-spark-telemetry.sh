@@ -103,22 +103,26 @@ if [ -z "$KV_NAME" ]; then
 else
   echo "   Key Vault: $KV_NAME (secret: $SPARK_LA_SECRET_NAME)"
   # Private-KV write window (scoped to this runner IP), restored on exit.
-  KV_ORIG_PNA=""; RUNNER_IP=""
+  #
+  # #2855: the restore used to be `az keyvault update ... 2>/dev/null || true`
+  # followed unconditionally by `echo "(restored Key Vault ... private)"` — so a
+  # failed re-lock printed a claim that it had succeeded and left the vault
+  # public. It now goes through the verified helper, whose close re-reads the
+  # ACLs; this script has no always() backstop, so a failed close is fatal here.
+  KV_ORIG_PNA=""
   restore_kv() {
     if [ "${KV_TOGGLE_PUBLIC:-0}" = "1" ] && [ -n "${KV_NAME:-}" ] && [ "${KV_ORIG_PNA:-Enabled}" != "Enabled" ]; then
-      [ -n "${RUNNER_IP:-}" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$RUNNER_IP" -o none 2>/dev/null || true
-      az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null || true
-      echo "   (restored Key Vault $KV_NAME private)"
+      if ! bash "$(dirname "${BASH_SOURCE[0]}")/kv-firewall-window.sh" close --vault "$KV_NAME"; then
+        exit 1
+      fi
     fi
   }
   trap restore_kv EXIT
   if [ "${KV_TOGGLE_PUBLIC:-0}" = "1" ]; then
     KV_ORIG_PNA="$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)"
     if [ "$KV_ORIG_PNA" != "Enabled" ]; then
-      RUNNER_IP="$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)"
-      az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none 2>/dev/null || true
-      [ -n "$RUNNER_IP" ] && az keyvault network-rule add -n "$KV_NAME" --ip-address "$RUNNER_IP" -o none 2>/dev/null || true
-      sleep 15
+      bash "$(dirname "${BASH_SOURCE[0]}")/kv-firewall-window.sh" open --vault "$KV_NAME" \
+        || echo "::warning::Could not open the Key Vault write window — the secret write may be unreachable."
     fi
   fi
   if az keyvault secret set --vault-name "$KV_NAME" --name "$SPARK_LA_SECRET_NAME" --value "$LAW_KEY" -o none 2>/dev/null; then

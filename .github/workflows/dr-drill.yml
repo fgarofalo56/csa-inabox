@@ -484,15 +484,11 @@ jobs:
           echo "KV_NAME=$KV_NAME" >> $GITHUB_ENV
           echo "Vault: $KV_NAME"
           # Same single-IP window pattern as csa-loom-post-deploy-bootstrap.yml:
-          # default-action stays Deny; re-locked in always().
+          # default-action stays Deny; re-locked (and VERIFIED) in always().
           KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
           echo "KV_PRIOR_PNA=$KV_PNA" >> $GITHUB_ENV
           if [ "$KV_PNA" != "Enabled" ]; then
-            KV_RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org)
-            echo "KV_RUNNER_IP=$KV_RUNNER_IP" >> $GITHUB_ENV
-            az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none
-            az keyvault network-rule add -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none
-            sleep 20
+            bash scripts/csa-loom/kv-firewall-window.sh open --vault "$KV_NAME"
           fi
 
       - name: Run secret recovery drill (canary, purge-block assertion)
@@ -508,15 +504,21 @@ jobs:
           path: test-results/dr/
           if-no-files-found: ignore
 
-      - name: Re-lock vault firewall
+      - name: Re-lock vault firewall (verified)
+        # #2855: this used to be
+        #   az keyvault update -n "$KV_NAME" --public-network-access Disabled …
+        #   echo "Vault $KV_NAME re-locked (private endpoint only)."
+        # Under `set -uo pipefail` (no -e) the trailing echo becomes the step's
+        # exit status, so a failed re-lock exited 0 AND printed a claim that the
+        # vault was locked. The helper re-reads publicNetworkAccess +
+        # defaultAction + the ipRules count and its non-zero exit is now the
+        # step's, so a vault left open fails the drill.
         if: always()
         run: |
           set -uo pipefail
           [ -n "${KV_NAME:-}" ] || exit 0
           if [ "${KV_PRIOR_PNA:-Enabled}" != "Enabled" ]; then
-            [ -n "${KV_RUNNER_IP:-}" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none 2>/dev/null || true
-            az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none
-            echo "Vault $KV_NAME re-locked (private endpoint only)."
+            bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME"
           fi
 
   bicep-rollback:
