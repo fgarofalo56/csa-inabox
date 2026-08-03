@@ -45,6 +45,14 @@
  *       post-resolve `base + sep` containment comparison. Per #2729 a fix that
  *       is present but gutted is the worst outcome: it reads as protection and
  *       enforces nothing. A2 alone would happily pass against an empty helper.
+ *       "Performs" is asserted in TWO parts, because presence is not
+ *       enforcement: each layer's test must appear in EXECUTABLE code (not a
+ *       comment — #2869 F3), and each must lead to an actual `refuse`/`throw`,
+ *       with the post-resolve comparison NEGATED. An `if` that tests the right
+ *       thing and does nothing satisfied the presence-only form, and — verified
+ *       against the shipped tree — was invisible to the 27-test `apps/loom-cli`
+ *       suite too, because the remaining layers still rejected those inputs.
+ *       Nothing observed the loss of a layer, which is precisely A1's job.
  *   A2  ADOPTION. Every filesystem write whose path expression is tainted by a
  *       network read resolves through `containedJoin`.
  *   A3  NO RIVAL. Nobody hand-rolls a second containment helper, because two
@@ -64,20 +72,31 @@
  * caught as `function writeAll(…)` and invisible as `const writeAll = (…) =>`,
  * and `const { files } = await client.request(…)` — the most idiomatic way to
  * read a JSON response — recorded no binding at all. Both are fixed. So that
- * the next reader can check rather than trust, the boundary is written down:
+ * the next reader can check rather than trust, the boundary is written down.
+ *
+ * The boundary is itself checkable, and checking it found two more misses: the
+ * first version of this list put `writeAll = (dir, files) => {}` (a class field
+ * — no `const`) and `const writeAll = files => {}` (one parameter, no parens)
+ * on NEITHER side, and both were in fact missed. A boundary a reader consults
+ * and is misled by is the same over-claim the list exists to prevent, so treat
+ * NOT FOLLOWED as the tested floor it is, not as an exhaustive census.
  *
  *   FOLLOWED   `function NAME(…) {}`; `const NAME = (…) => {}`; `= async (…) =>`;
  *              `= function (…) {}`; class/object methods `NAME(…) {}`;
- *              object-literal arrow props `NAME: (…) => {}`; expression-bodied
- *              arrows (for sink attribution); `const {a, b} = …`,
+ *              object-literal arrow props `NAME: (…) => {}`; binder-less
+ *              assigned arrows `NAME = (…) => {}` (class fields, `this.NAME =`);
+ *              paren-less single-parameter arrows `NAME = param => {}`;
+ *              expression-bodied arrows (for sink attribution); `const {a, b} = …`,
  *              `const [a] = …`, `const {k: local} = …`, `{...rest}`, nested
  *              patterns, and the same destructuring in a `for (… of …)` head.
  *   NOT FOLLOWED  a callable invoked through a value rather than its name
- *              (`handlers[kind](dir, files)`, `arr.map(writeOne)`); taint through
- *              a class FIELD or module-level mutable (`this.files = …`); a method
- *              whose parameter list contains brackets (`f(o: {a: 1})`), which is
- *              skipped rather than mis-parsed; re-export/import chains across
- *              files — the pass is per-file.
+ *              (`handlers[kind](dir, files)`, `arr.map(writeOne)`); taint stored
+ *              in and read back out of a class field or module-level mutable
+ *              (`this.files = …`) — as DATA; a method or arrow whose parameter
+ *              list contains brackets (`f(o: {a: 1})`), or an arrow field
+ *              carrying a type annotation (`w: (d: string) => void = (d) => {}`),
+ *              which are skipped rather than mis-parsed; re-export/import chains
+ *              across files — the pass is per-file.
  *
  * KNOWN LIMIT, stated rather than hidden: this is a textual taint pass, not a
  * type-aware one. It is deliberately conservative — it can MISS an exotic
@@ -99,6 +118,17 @@
  *   M9  the same defect written as an arrow function (#2869 F1)           exit 1
  *   M10 the same defect written as a class method (#2869 F1)              exit 1
  *   M11 the response destructured: `const { files } = …` (#2869 F2)       exit 1
+ *   M12 the same defect in a class FIELD arrow `w = (d, f) => {}`         exit 1
+ *   M13 the same defect in a paren-less arrow `const w = files => {}`     exit 1
+ *   M14 the `..` layer kept but its consequent emptied (present + inert)  exit 1
+ *   M15 the absolute-path layer logging instead of refusing               exit 1
+ *   M16 the post-resolve layer with its `!` dropped (inverted, not gone)  exit 1
+ *
+ * M12-M16 also have paired NEGATIVE CONTROLS that pass BOTH ways, so "the
+ * mutation reddens something" is distinguished from "the check reddens
+ * everything": the contained forms of M12/M13, comparison operators ending in
+ * `=` not being collected as callables, and `throw`/braced/prettier-wrapped
+ * spellings of a rejection all staying silent.
  *
  * Usage: node scripts/ci/check-remote-path-containment.mjs
  */
@@ -299,17 +329,27 @@ const NOT_A_FUNCTION = new Set([
  * `{ name, params, start, end, taintedParams }` where `start`/`end` bracket the
  * body.
  *
- * FOUR SHAPES, because the first cut recognised only the first one and #2869 F1
+ * SIX SHAPES, because the first cut recognised only the first one and #2869 F1
  * is exactly that: `writeAll` written as an arrow function or a class method
  * broke the call-site taint chain, so the guard reported a clean file while the
  * identical logic in `function writeAll(…)` form was caught. A guard that
- * depends on which of three interchangeable syntaxes the author picked is not
+ * depends on which of six interchangeable syntaxes the author picked is not
  * closing a class.
  *
  *   1. `function NAME(…) {`                       — declaration / named expression
  *   2. `const NAME = (…) => {` and `= function (…) {`
  *   3. `NAME(…) {`                                — class + object-literal methods
  *   4. `NAME: (…) => {`                           — object-literal arrow properties
+ *   5. `NAME = (…) => {` with NO binder            — class fields, `this.NAME = …`
+ *   6. `NAME = param => {`                        — paren-LESS single-parameter arrow
+ *
+ * Shapes 5 and 6 are the residual of the same defect. #2872 fixed the three
+ * shapes #2869 named and wrote a FOLLOWED / NOT FOLLOWED boundary — but the
+ * boundary listed neither `writeAll = (dir, files) => {}` (a class field, which
+ * has no `const`) nor `const writeAll = files => {}` (one parameter, no
+ * parens). Both were missed, and being missed while absent from NOT FOLLOWED is
+ * the same over-claim in miniature: a reader checking the boundary would have
+ * concluded they were covered. Verified by probe before and after.
  *
  * KNOWN LIMITS, stated rather than hidden (this stays a textual pass):
  *   - An EXPRESSION-bodied arrow (`const w = (d, f) => writeFileSync(…)`) has no
@@ -318,7 +358,9 @@ const NOT_A_FUNCTION = new Set([
  *   - A callable reached only through a value (`handlers[kind](dir, files)`,
  *     `arr.map(writeOne)`) is not resolved to its declaration.
  *   - A method whose parameter list contains brackets (`f(o: { a: 1 })`) is
- *     skipped by shape 3 rather than mis-parsed.
+ *     skipped by shape 3 rather than mis-parsed. Shape 5 skips an arrow field
+ *     carrying a TYPE annotation (`w: (d: string) => void = (d) => {…}`) for the
+ *     same reason — the annotation contains both `=` and `=>`.
  * Each is a MISS — a future alert — never a false positive, which is the trade
  * this guard is designed around.
  */
@@ -401,6 +443,43 @@ export function collectFunctions(masked) {
   )) {
     if (NOT_A_FUNCTION.has(m[1])) continue;
     push(m[1], paramNames(m[2]), m.index + m[0].length - 1);
+  }
+
+  // 5 — arrows assigned with NO `const|let|var` binder: a class FIELD
+  //     (`writeAll = (dir, files) => { … }`) or a property assignment
+  //     (`this.writeAll = (…) => { … }`, `obj.writeAll = (…) => { … }`).
+  //     Shape 2 requires a binder, so both were invisible. The `const` form
+  //     also matches here and is deduplicated by `push`'s `name@open` key.
+  //     The lookaround keeps `==`, `===`, `!=`, `<=`, `>=`, `+=` … out.
+  for (const m of masked.matchAll(
+    /([A-Za-z_$][\w$]*)\s*(?<![=!<>+\-*/%&|^])=(?!=)\s*(?:async\s+)?\(([^()[\]{}]*)\)\s*(?::[^=>{;\n]*)?=>\s*\{/g,
+  )) {
+    if (NOT_A_FUNCTION.has(m[1])) continue;
+    push(m[1], paramNames(m[2]), m.index + m[0].length - 1);
+  }
+
+  // 6 — PAREN-LESS single-parameter arrows: `const writeAll = files => { … }`,
+  //     `writeAll = files => { … }`. Shapes 2 and 5 both anchor on a `(`, so the
+  //     one syntax prettier leaves alone in plain `.mjs`/`.js` was unreachable.
+  for (const m of masked.matchAll(
+    /([A-Za-z_$][\w$]*)\s*(?<![=!<>+\-*/%&|^])=(?!=)\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*=>\s*/g,
+  )) {
+    if (NOT_A_FUNCTION.has(m[1]) || NOT_A_FUNCTION.has(m[2])) continue;
+    const bodyStart = m.index + m[0].length;
+    if (masked[bodyStart] === '{') {
+      push(m[1], [m[2]], bodyStart);
+      continue;
+    }
+    // Expression-bodied, same treatment as shape 2: range to end of statement.
+    const rest = masked.slice(bodyStart);
+    const stop = rest.search(/;|\n\s*\n/);
+    fns.push({
+      name: m[1],
+      params: [m[2]],
+      start: bodyStart,
+      end: bodyStart + (stop < 0 ? rest.length : stop),
+      taintedParams: new Set(),
+    });
   }
 
   return fns;
@@ -619,6 +698,44 @@ export function findRemotePathWrites(src) {
   return hits;
 }
 
+/**
+ * TRUE when some `if (…)` whose CONDITION matches `condRe` actually REJECTS —
+ * i.e. its consequent calls `refuse(` or `throw`s.
+ *
+ * WHY THIS EXISTS. Layers 1-3 used to be satisfied by the mere PRESENCE of
+ * their test text anywhere in the executable body, so an `if` that tested the
+ * right thing and then did nothing read as an intact layer. Reproduced against
+ * the shipped tree: replacing the `..` rejection's consequent with an empty
+ * block left this check silent AND the whole 27-test `apps/loom-cli` suite
+ * green, because the post-resolve layer still caught those inputs — a layer
+ * enforcing nothing while every control called it intact. That is the #2729
+ * inert-fix shape one level below the comment case #2869 F3 named, and A1's
+ * claim is "still performs all three layers", not "still mentions them".
+ *
+ * `condRe` must NOT carry the `g` flag: a global regex is stateful across
+ * `.test()` calls and would skip matches.
+ */
+function rejectsWhen(body, condRe) {
+  for (const m of body.matchAll(/\bif\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    const close = matchBracket(body, open);
+    if (close < 0) continue;
+    if (!condRe.test(body.slice(open + 1, close))) continue;
+    const after = body.slice(close + 1);
+    const block = after.match(/^\s*\{/);
+    let consequent;
+    if (block) {
+      const bOpen = close + block[0].length;
+      const bClose = matchBracket(body, bOpen);
+      consequent = body.slice(bOpen, bClose < 0 ? body.length : bClose);
+    } else {
+      consequent = after.split(';')[0];
+    }
+    if (/\brefuse\s*\(|\bthrow\b/.test(consequent)) return true;
+  }
+  return false;
+}
+
 /** Assert the containment helper still has all three layers. EXPORTED for the self-test. */
 export function checkHelperIntegrity(hsrc) {
   const problems = [];
@@ -650,19 +767,44 @@ export function checkHelperIntegrity(hsrc) {
   // a layer — the same rule A2 already applies to adoption.
   const codeBody = close > 0 ? maskComments(hsrc).slice(open, close) : maskComments(hsrc).slice(open);
 
-  // Each layer is asserted SEPARATELY. A helper that keeps its name, its
-  // signature and two of its three checks is the #2729 "inert fix" shape:
-  // it reads as protection and enforces less than it claims.
-  if (!/===\s*['"`]\.\.['"`]|includes\s*\(\s*['"`]\.\.['"`]\s*\)/.test(codeBody)) {
+  // Each layer is asserted SEPARATELY, and in TWO parts: the test must be
+  // present in executable code, and it must lead to an actual rejection. A
+  // helper that keeps its name, its signature and two of its three checks is
+  // the #2729 "inert fix" shape: it reads as protection and enforces less than
+  // it claims. So is one that keeps all three `if`s and empties a consequent.
+  const DOTDOT = /===\s*['"`]\.\.['"`]|includes\s*\(\s*['"`]\.\.['"`]\s*\)/;
+  const ABSOLUTE = /startsWith\s*\(\s*['"`]\//;
+  // The post-resolve layer must be NEGATED. `if (abs.startsWith(base + sep))
+  // refuse(…)` inverts containment — it rejects everything inside the base and
+  // admits everything outside — while satisfying a presence-only check.
+  const CONTAINED = /!\s*[\w.]*\bstartsWith\s*\(\s*base\s*\+\s*sep\s*\)/;
+
+  if (!DOTDOT.test(codeBody)) {
     problems.push(`${HELPER_FILE}: ${HELPER}() no longer rejects ".." segments — containment is inert.`);
+  } else if (!rejectsWhen(codeBody, DOTDOT)) {
+    problems.push(
+      `${HELPER_FILE}: ${HELPER}() still TESTS for ".." segments but no longer refuses on one — ` +
+        'the layer is present and inert. Guard it with `if (…) refuse(…)`.',
+    );
   }
-  if (!/startsWith\s*\(\s*['"`]\//.test(codeBody)) {
+  if (!ABSOLUTE.test(codeBody)) {
     problems.push(`${HELPER_FILE}: ${HELPER}() no longer rejects absolute paths — containment is inert.`);
+  } else if (!rejectsWhen(codeBody, ABSOLUTE)) {
+    problems.push(
+      `${HELPER_FILE}: ${HELPER}() still TESTS for absolute paths but no longer refuses on one — ` +
+        'the layer is present and inert. Guard it with `if (…) refuse(…)`.',
+    );
   }
   if (!/startsWith\s*\(\s*base\s*\+\s*sep\s*\)/.test(body)) {
     problems.push(
       `${HELPER_FILE}: ${HELPER}() no longer performs the post-resolve \`base + sep\` containment ` +
         'comparison — the syntactic checks alone are not the chokepoint.',
+    );
+  } else if (!rejectsWhen(body, CONTAINED)) {
+    problems.push(
+      `${HELPER_FILE}: ${HELPER}() performs the post-resolve \`base + sep\` comparison but does not ` +
+        'refuse on the NEGATED result — containment is inert or inverted. Expected ' +
+        '`if (!abs.startsWith(base + sep)) refuse(…)`.',
     );
   }
   return problems;
