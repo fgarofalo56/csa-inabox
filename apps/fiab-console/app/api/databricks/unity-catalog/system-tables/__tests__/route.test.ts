@@ -41,6 +41,7 @@ vi.mock('@/lib/azure/unity-catalog-client', () => ({
 import { GET, POST } from '../route';
 import { getSession } from '@/lib/auth/session';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { databricksConfigGate } from '@/lib/azure/databricks-client';
 import {
   readAccessAudit, listSystemSchemas, enableSystemSchema,
 } from '@/lib/azure/unity-catalog-client';
@@ -157,5 +158,73 @@ describe('window validation', () => {
     expect(j.gated).toBe(true);
     expect(typeof j.code).toBe('string');
     expect(j.code.length).toBeGreaterThan(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// issue #2624 (G2) — a `code` is only machine-READABLE if something can resolve
+// it. These pin the normalized registry envelope that makes the pane's inline
+// Fix-it possible. `lib/gates/__tests__/route-gate-codes.test.ts` guards the
+// same contract from the registry side (source-scanned, so an unreachable new
+// code cannot slip through).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('gated answers carry a registry-resolvable gate envelope (#2624)', () => {
+  it('the Gov boundary gate resolves to a gate and reads cloud-unavailable, not blocked', async () => {
+    (isGovCloud as never as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const j = await (await GET(req('?table=audit'))).json();
+    // Back-compat: every pre-existing field keeps its exact value + HTTP 200.
+    expect(j.ok).toBe(false);
+    expect(j.gated).toBe(true);
+    expect(j.code).toBe('uc_system_tables_boundary');
+    expect(j.error).toMatch(/LoomAudit_CL/);
+    // New: the registry linkage HonestGate drives the Fix-it from.
+    expect(j.gate?.id).toBe('svc-databricks-system-tables');
+    expect(j.gate?.fixItHref).toBe('/admin/gates?gate=svc-databricks-system-tables');
+    // Databricks Unity Catalog has no Azure Government endpoint. Offering a
+    // "set an env var" Fix-it there would be dishonest, so the envelope marks
+    // the state that makes HonestGate render the fallback bar with NO Fix-it.
+    expect(j.gate?.state).toBe('cloud-unavailable');
+    // And the fallback must NOT be "switch to the OSS backend" — Loom Unity has
+    // no system schemas either, so that would resolve nothing.
+    expect(j.gate?.fallbackNote).toMatch(/unityAuditKql|Log Analytics/);
+  });
+
+  it('the schema-grant gate resolves to the same gate but stays a fixable blocked state', async () => {
+    (isGovCloud as never as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (readAccessAudit as never as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      Object.assign(new Error('UAMI lacks SELECT on system.access'), { status: 403 }),
+    );
+    const res = await GET(req('?table=audit'));
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.code).toBe('uc_system_schema_grant');
+    expect(j.gate?.id).toBe('svc-databricks-system-tables');
+    // NOT cloud-unavailable: in Commercial this is a real, resolvable grant.
+    expect(j.gate?.state).toBeUndefined();
+    expect(j.gate?.remediation).toMatch(/system-schemas enable|USE CATALOG/);
+  });
+
+  it('the not-configured gate keeps its own gate id (it is a different remediation)', async () => {
+    delete process.env.LOOM_DATABRICKS_HOSTNAME;
+    (databricksConfigGate as never as ReturnType<typeof vi.fn>).mockReturnValueOnce({ missing: 'LOOM_DATABRICKS_HOSTNAME' });
+    const j = await (await GET(req('?table=audit'))).json();
+    expect(j.code).toBe('svc-databricks');
+    // Collapsing this onto the system-tables gate would send an operator to
+    // enable a system schema on a workspace that is not wired up at all.
+    expect(j.gate?.id).toBe('svc-databricks');
+    // The unmet var comes from the LIVE gate evaluation, not a hard-coded [].
+    expect(j.gate?.missing).toContain('LOOM_DATABRICKS_HOSTNAME');
+  });
+
+  it('POST 403 (enable needs a metastore admin) carries the same gate envelope', async () => {
+    (enableSystemSchema as never as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      Object.assign(new Error('forbidden'), { status: 403 }),
+    );
+    const res = await POST(post({ action: 'enable-schema', schema: 'access' }));
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.code).toBe('uc_system_schema_grant');
+    expect(j.gate?.id).toBe('svc-databricks-system-tables');
+    expect(j.error).toMatch(/metastore or account admin/);
   });
 });

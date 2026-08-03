@@ -1,6 +1,9 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+// Type-only (erased at compile time — the server module never enters this bundle).
+import type { GateEnvelopeGate } from '@/lib/api/gate-envelope';
 /**
  * Databricks editors — Unity Catalog governance dialogs.
  *
@@ -2220,6 +2223,14 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [gate, setGate] = useState<string | null>(null);
+  /**
+   * issue #2624 (G2) — this pane kept ONLY `j.error`, so all four of the route's
+   * distinct gates rendered the same "System schema not available" bar with the
+   * same enable button, including the two where it provably cannot work. Keeping
+   * the registry envelope + code lets HonestGate render the real Fix-it.
+   */
+  const [gateEnv, setGateEnv] = useState<GateEnvelopeGate | null>(null);
+  const [gateCode, setGateCode] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -2241,7 +2252,8 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
   const wq = warehouseId ? `&warehouseId=${encodeURIComponent(warehouseId)}` : '';
 
   const load = useCallback(async () => {
-    setLoading(true); setErr(null); setGate(null); setColumns([]); setRows([]); setExecMs(null);
+    setLoading(true); setErr(null); setGate(null); setGateEnv(null); setGateCode(null);
+    setColumns([]); setRows([]); setExecMs(null);
     try {
       let url: string;
       if (tab === 'classification') {
@@ -2269,7 +2281,7 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
       }
       const r = await fetch(url);
       const j = await r.json();
-      if (j.gated) { setGate(j.error); return; }
+      if (j.gated) { setGate(j.error); setGateEnv(j.gate ?? null); setGateCode(j.code ?? null); return; }
       if (!j.ok) { setErr(j.error || 'failed to read system table'); return; }
       setColumns(j.columns || []);
       setRows(j.rows || []);
@@ -2287,12 +2299,25 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
         body: JSON.stringify({ action: 'enable-schema', schema: sch }),
       });
       const j = await r.json();
-      if (j.gated) { setGate(j.error); return; }
+      if (j.gated) { setGate(j.error); setGateEnv(j.gate ?? null); setGateCode(j.code ?? null); return; }
       if (!j.ok) { setErr(j.error || 'enable failed'); return; }
       await load();
     } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
   };
   const enableSchema = tab === 'audit' ? 'access' : tab === 'query' ? 'query' : tab === 'billing' ? 'billing' : tab === 'quality' ? 'data_quality_monitoring' : 'data_classification';
+  /**
+   * "Attempt to enable system.<schema>" only remediates `uc_system_schema_grant`.
+   * For `svc-databricks` / `uc_system_tables_boundary` the POST re-runs the same
+   * resolveGate() and returns the identical gate, so the button cannot work. The
+   * sibling classification / quality routes emit no code — `null` keeps those.
+   */
+  const enableBtn = (gateCode === null || gateCode === 'uc_system_schema_grant') ? (
+    <div style={{ marginTop: tokens.spacingVerticalS }}>
+      <Button size="small" appearance="outline" disabled={busy} onClick={() => void tryEnable(enableSchema)}>
+        Attempt to enable system.{enableSchema}
+      </Button>
+    </div>
+  ) : null;
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
@@ -2362,15 +2387,22 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
               </div>
 
               {gate && (
-                <MessageBar intent="warning"><MessageBarBody>
-                  <MessageBarTitle>System schema not available</MessageBarTitle>
-                  {gate}
-                  <div style={{ marginTop: tokens.spacingVerticalS }}>
-                    <Button size="small" appearance="outline" disabled={busy} onClick={() => void tryEnable(enableSchema)}>
-                      Attempt to enable system.{enableSchema}
-                    </Button>
+                gateEnv ? (
+                  // Registry-driven Fix-it, or (Gov) the honest fallback bar. onResolved is
+                  // withheld when cloud-unavailable: that CTA reads "Use the Loom-native
+                  // equivalent", and wiring it to a reload would change nothing.
+                  <div>
+                    <HonestGate gate={gateEnv} surface={'Audit & system tables'} detail={gate} onResolved={gateEnv.state === 'cloud-unavailable' ? undefined : () => void load()} />
+                    {enableBtn}
                   </div>
-                </MessageBarBody></MessageBar>
+                ) : (
+                  // Legacy shape — the classification / quality routes send no gate block.
+                  <MessageBar intent="warning"><MessageBarBody>
+                    <MessageBarTitle>System schema not available</MessageBarTitle>
+                    {gate}
+                    {enableBtn}
+                  </MessageBarBody></MessageBar>
+                )
               )}
               {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Read failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
 

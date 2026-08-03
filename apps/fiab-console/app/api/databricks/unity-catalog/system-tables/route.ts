@@ -44,6 +44,8 @@
 
 import { NextResponse } from 'next/server';
 import { withTenantAdmin } from '@/lib/api/route-toolkit';
+import { buildGateEnvelope } from '@/lib/api/gate-envelope';
+import { availabilityFor } from '@/lib/gates/registry';
 import { databricksConfigGate, listWarehouses } from '@/lib/azure/databricks-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import {
@@ -54,17 +56,74 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface Gate { gated: true; error: string; code: string }
+/** The registry gate that owns this surface's two bespoke codes (issue #2624). */
+export const SYSTEM_TABLES_GATE_ID = 'svc-databricks-system-tables';
+
+interface Gate {
+  gated: true;
+  error: string;
+  /** Back-compat machine-readable code (unchanged on the wire). */
+  code: string;
+  /** The registry gate the code maps to — drives the inline Fix-it (G2). */
+  gateId: string;
+  /**
+   * True when the backing capability does not EXIST in the active cloud (vs a
+   * config miss). HonestGate then drops the Fix-it and names the fallback —
+   * prompting for an env var that cannot help would be dishonest.
+   */
+  cloudUnavailable?: boolean;
+}
+
+/**
+ * Serialize a gate as the WS-D2 normalized envelope.
+ *
+ * Before #2624 this route returned a bare `{ ok:false, gated:true, code, error }`.
+ * The code was machine-readable but resolved to NOTHING: the only consumer
+ * (`AuditSystemDialog`) dropped it and rendered a bare MessageBar, and
+ * `HonestGate` resolves a gate by id, so even a wired consumer would have hit
+ * its "not in the registry" branch. The `gate` block below is ADDITIVE — every
+ * pre-existing top-level field keeps its exact value and HTTP 200 — so old
+ * clients are byte-compatible while the pane can now drive a real Fix-it.
+ */
+function gatedJson(gate: Gate): NextResponse {
+  // `missing` is deliberately NOT overridden: buildGateEnvelope defaults it to
+  // the LIVE gateStatus(id).missing, so the not-configured case names
+  // LOOM_DATABRICKS_HOSTNAME while the grant / boundary cases (where the var IS
+  // set) correctly report nothing missing.
+  const env = buildGateEnvelope(gate.gateId, { code: gate.code, message: gate.error });
+  return NextResponse.json(
+    {
+      ...env,
+      gate: gate.cloudUnavailable
+        ? {
+            ...env.gate,
+            state: 'cloud-unavailable' as const,
+            // Sourced from the gate's own X-MATRIX declaration rather than
+            // restated here, so the note can never drift from the registry.
+            fallbackNote: availabilityFor(gate.gateId)?.fallbackNote ?? env.gate.fallbackNote,
+          }
+        : env.gate,
+    },
+    // Deliberately 200, not GATE_HTTP_STATUS (503): this surface's gates have
+    // always been 200 + `gated:true`, and the dialog branches on `j.gated`.
+    { status: 200 },
+  );
+}
 
 function resolveGate(): Gate | null {
   const cfg = databricksConfigGate();
   if (cfg) {
-    return { gated: true, code: 'svc-databricks', error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
+    return { gated: true, code: 'svc-databricks', gateId: 'svc-databricks', error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
   }
   if (isGovCloud()) {
     return {
       gated: true,
       code: 'uc_system_tables_boundary',
+      gateId: SYSTEM_TABLES_GATE_ID,
+      // Not a config miss — Databricks Unity Catalog has no Azure Government
+      // endpoint, so no env value can unblock this. (Nor does LOOM_UC_BACKEND=oss:
+      // Loom Unity has no system schemas either — ossUcUnsupportedPath gates them.)
+      cloudUnavailable: true,
       error:
         `Unity Catalog system tables (audit / billing / query history) are not available at the ${cloudBoundaryLabel()} boundary. ` +
         `They require a Commercial or GCC Databricks account (Microsoft Entra-connected Unity Catalog metastore). ` +
@@ -104,7 +163,7 @@ function invalidWindow(days: number | undefined, limit: number | undefined): str
 
 export const GET = withTenantAdmin(async (req) => {
   const gate = resolveGate();
-  if (gate) return NextResponse.json({ ok: false, gated: true, code: gate.code, error: gate.error }, { status: 200 });
+  if (gate) return gatedJson(gate);
 
   const sp = req.nextUrl.searchParams;
 
@@ -138,7 +197,7 @@ export const GET = withTenantAdmin(async (req) => {
   try {
     warehouseId = await resolveWarehouseId(sp.get('warehouseId')?.trim() || undefined);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, gated: true, code: 'svc-databricks-sql', error: e?.message || String(e) }, { status: 200 });
+    return gatedJson({ gated: true, code: 'svc-databricks-sql', gateId: 'svc-databricks-sql', error: e?.message || String(e) });
   }
 
   try {
@@ -156,14 +215,14 @@ export const GET = withTenantAdmin(async (req) => {
   } catch (e: any) {
     // The client throws a typed gate (schema not enabled / UAMI missing grants)
     // with a 403; surface it as a gated MessageBar rather than a hard error.
-    if (e?.status === 403) return NextResponse.json({ ok: false, gated: true, code: 'uc_system_schema_grant', error: e?.message || String(e) }, { status: 200 });
+    if (e?.status === 403) return gatedJson({ gated: true, code: 'uc_system_schema_grant', gateId: SYSTEM_TABLES_GATE_ID, error: e?.message || String(e) });
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
 });
 
 export const POST = withTenantAdmin(async (req, { session }) => {
   const gate = resolveGate();
-  if (gate) return NextResponse.json({ ok: false, gated: true, code: gate.code, error: gate.error }, { status: 200 });
+  if (gate) return gatedJson(gate);
 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
@@ -181,10 +240,10 @@ export const POST = withTenantAdmin(async (req, { session }) => {
   } catch (e: any) {
     // Enabling needs metastore/account admin — a 403 is an honest admin-action gate.
     if (e?.status === 403) {
-      return NextResponse.json({
-        ok: false, gated: true, code: 'uc_system_schema_grant',
+      return gatedJson({
+        gated: true, code: 'uc_system_schema_grant', gateId: SYSTEM_TABLES_GATE_ID,
         error: `Enabling the system.${schema} schema requires a metastore or account admin. The Console UAMI is not one — ask an admin to run \`databricks system-schemas enable <metastore_id> system.${schema}\` (or PUT /api/2.1/unity-catalog/metastores/{id}/systemschemas/${schema}).`,
-      }, { status: 200 });
+      });
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
