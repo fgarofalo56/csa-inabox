@@ -207,6 +207,16 @@ The Atlas typedef NAMESPACE rules that E1/E2 rely on (the branded
 rule for `MICROSOFT.GOVERNANCE.LABELS.*`) ship in PR #2607 — see its S4
 section. This PR consumes them and adds nothing to that surface.
 
+`purview-client.ts` holds BOTH account-global Atlas typedef sinks, and until
+#2633 only the classification one carried the runtime backstop the namespace
+authority prescribes for "the paths TypeScript cannot see". The branded
+`AtlasBusinessMetadataName` #2846 added is a COMPILE-TIME guarantee — erased in
+the emitted JS — so `ensureBusinessMetadataDef` / `setBusinessMetadata` now also
+call `assertNamespacedBusinessMetadataName(bmName)`, which fails closed. That
+matters most for the business-metadata half specifically, because it is the
+more destructive of the two calls: it POSTs `…?isOverwrite=true`, replacing the
+WHOLE bag on the entity, where `addAssetClassification` only adds.
+
 **The audit trail is BEST-EFFORT, not guaranteed.** `audit.write` swallows Cosmos
 failures so an audit outage cannot fail a governance write that already applied
 (the same contract as `writeDomainAudit`). With the audit container missing or

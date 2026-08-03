@@ -271,6 +271,34 @@ export function asAtlasBusinessMetadataName(name: string): AtlasBusinessMetadata
 }
 
 /**
+ * RUNTIME BACKSTOP for the business-metadata sinks — the exact counterpart of
+ * {@link assertNamespacedTypedefNames}, which `ensureClassificationDefs` has
+ * called since LU-5 round 4.
+ *
+ * WHY A SECOND LAYER IS NOT REDUNDANT HERE (issue #2633). This module's header
+ * states the rule for the classification half: the brand is the primary
+ * guarantee, and the runtime assert exists "for the paths TypeScript cannot see
+ * (an `any`-typed payload, a JS caller, a `as any` cast)". PR #2846 gave the
+ * business-metadata half layer 1 — `bmName` became required and branded — but
+ * NOT layer 2, so the two account-global sinks in `purview-client.ts` shipped
+ * with asymmetric enforcement, and the weaker one guards the STRICTLY more
+ * destructive call: `setBusinessMetadata` POSTs `…?isOverwrite=true`, which
+ * REPLACES the whole bag on the entity, where `addAssetClassification` only
+ * adds. A brand is erased at compile time; the emitted JS accepts any string.
+ *
+ * `asAtlasBusinessMetadataName` and `isNamespacedBusinessMetadataName` were
+ * already exported and unit-tested for precisely this check — nothing on the
+ * write path called them. Fails CLOSED, like the classification assert: growing
+ * or overwriting the account-global `LoomCustomTags` bag is permanent and
+ * cross-tenant, so refusing is strictly safer than proceeding.
+ */
+export function assertNamespacedBusinessMetadataName(name: string): void {
+  if (!isNamespacedBusinessMetadataName(name)) {
+    throw new UnnamespacedTypedefError([name], 'business metadata');
+  }
+}
+
+/**
  * The business-metadata bag a tenant's free-form custom tags are written to —
  * `LoomCustomTags_<t8>`. Delegates to `model.tenantBusinessMetadataName` so the
  * LU-5 overlay and the item-level custom-tags route resolve to the SAME bag for
