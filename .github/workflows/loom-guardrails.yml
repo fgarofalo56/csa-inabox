@@ -110,7 +110,7 @@ jobs:
       # is also different: `npm ci` hard-fails when a declared floor is missing
       # from the lockfile, so the ONE way an npm floor goes quiet is by governing
       # nothing — which npm is blind to and this guard is built for.
-      - name: npm-cve-floors (npm overrides must govern something, and reach the image)
+      - name: npm-cve-floors (npm overrides must govern something, reach the BUILD, and state their exposure honestly)
         run: node scripts/ci/check-npm-cve-floors.mjs
       # The third member of that family, and the one that closes the gap both
       # others assume shut: they check WHAT is pinned, this checks that the
