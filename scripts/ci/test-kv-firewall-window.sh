@@ -76,12 +76,29 @@ set -- "${ARGS[@]:-}"
 case "${1:-}:${2:-}" in
   keyvault:show)
     [ "${SHOW_RC:-0}" = "0" ] || { echo "AuthorizationFailed" >&2; exit 1; }
+    # FAITHFUL az RENDERING. Real az -o tsv renders a top-level JMESPath LIST as one
+    # element PER LINE, and a multiselect HASH as ONE tab-separated row. The previous
+    # stub matched the LIST form and emitted a TAB ROW -- a shape real az never
+    # produces -- so it modelled the bug as correct and could not detect that the
+    # shipped query returned three lines. Both forms are now modelled honestly, so
+    # reverting the query to a list turns these tests RED.
     case "$QUERY" in
-      \[properties.publicNetworkAccess*)
+      \{*)
         n=0
-        [ -n "${RULES:-}" ] && n=$(printf '%s' "$RULES" | tr ',' '\n' | grep -c .)
-        printf '%s\t%s\t%s\n' "$PNA" "$DA" "$n" ;;
-      *) printf '\n' ;;
+        [ -n "${RULES:-}" ] && n=$(printf '%s' "$RULES" | tr ',' '
+' | grep -c .)
+        printf '%s	%s	%s
+' "$PNA" "$DA" "$n" ;;
+      \[*)
+        n=0
+        [ -n "${RULES:-}" ] && n=$(printf '%s' "$RULES" | tr ',' '
+' | grep -c .)
+        printf '%s
+%s
+%s
+' "$PNA" "$DA" "$n" ;;
+      *) printf '
+' ;;
     esac ;;
 
   keyvault:update)
