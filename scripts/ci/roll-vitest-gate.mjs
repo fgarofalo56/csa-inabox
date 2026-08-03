@@ -28,7 +28,13 @@
  *   ROLL_VITEST_POLL_SECONDS poll interval (default 30)
  */
 import { execFileSync } from 'node:child_process';
-import { classifyVitestGate, VITEST_CHECK_NAME } from './roll-gate-decision.mjs';
+import {
+  classifyVitestGate,
+  checkRunSeconds,
+  consoleTouchedFromCommit,
+  projectCheckRun,
+  VITEST_CHECK_NAME,
+} from './roll-gate-decision.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
 const CONSOLE_CI_WORKFLOW = 'fiab-console-ci.yml';
@@ -50,6 +56,11 @@ function ghJson(path) {
   const out = execFileSync('gh', ['api', path], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    // execFileSync defaults maxBuffer to 1 MiB and throws ENOBUFS past it.
+    // `GET /commits/{sha}` embeds a patch per file, so a large squash blows
+    // straight through 1 MiB — and that throw would land in the same catch as
+    // a genuine API failure, turning "the response was big" into "unknown".
+    maxBuffer: 64 * 1024 * 1024,
   });
   return JSON.parse(out);
 }
@@ -79,16 +90,28 @@ function fetchCheckRuns(forSha) {
   return { runs: all, complete: total !== null && all.length >= total };
 }
 
+/**
+ * Does the rolled commit change apps/fiab-console?
+ *
+ * #2632: the gate needs this to tell a LEGITIMATE fast green (fiab-console-ci
+ * reports the check green in ~10s when the console is untouched, so bicep-only
+ * commits stay rollable) from the failure mode where the change detector could
+ * not resolve its diff range and reported green on a console-wide change.
+ *
+ * Throws on an API failure rather than returning null, so the caller can tell
+ * "ask again next poll" from "asked, and the answer is genuinely unknown"
+ * (a file list truncated at the 300-file cap). Never guess `false`: that is the
+ * value that waves a fast green through.
+ */
+function fetchConsoleTouched(forSha) {
+  return consoleTouchedFromCommit(ghJson(`repos/${REPO}/commits/${forSha}`));
+}
+
 function fetchState() {
   const { runs, complete } = fetchCheckRuns(sha);
   const ci = ghJson(`repos/${REPO}/actions/workflows/${CONSOLE_CI_WORKFLOW}/runs?head_sha=${sha}`);
   return {
-    checkRuns: runs.map((r) => ({
-      name: r.name,
-      status: r.status,
-      conclusion: r.conclusion,
-      started_at: r.started_at,
-    })),
+    checkRuns: runs.map(projectCheckRun),
     checkRunsComplete: complete,
     ciRuns: (ci.workflow_runs || []).map((r) => ({ status: r.status, conclusion: r.conclusion })),
   };
@@ -108,6 +131,7 @@ function fetchMainVerification() {
       return null;
     }
     const mainVitest = runs
+      .map(projectCheckRun)
       .filter((r) => r.name === VITEST_CHECK_NAME)
       .sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)))
       .pop();
@@ -115,6 +139,9 @@ function fetchMainVerification() {
       compareStatus: cmp.status,
       behindBy: cmp.behind_by,
       mainConclusion: mainVitest ? mainVitest.conclusion : null,
+      // #2632: borrowing main's verdict is only sound if main's run ACTUALLY
+      // executed. Without this the cancelled-path would accept a 10s green.
+      mainSeconds: mainVitest ? checkRunSeconds(mainVitest) : null,
     };
   } catch (err) {
     console.log(`  main-branch verification unavailable: ${err.message.split('\n')[0]}`);
@@ -129,7 +156,32 @@ console.log(
   `Adjudicating '${VITEST_CHECK_NAME}' for ${sha} (waiting up to ${WAIT_MINUTES}m; a timeout REFUSES).`,
 );
 
+// Whether the commit touches the console decides whether a FAST green is
+// admissible (#2632). Read it before polling — the commit's contents do not
+// change — but keep retrying while the API is the reason we do not know, so one
+// transient 5xx cannot turn a legitimate path-filtered green into a refusal.
+let consoleTouched = null;
+let consoleTouchedAnswered = false;
+function refreshConsoleTouched() {
+  if (consoleTouchedAnswered) return;
+  try {
+    consoleTouched = fetchConsoleTouched(sha);
+    consoleTouchedAnswered = true; // includes a deliberate null (truncated list)
+    console.log(
+      `  changes apps/fiab-console: ${
+        consoleTouched === null
+          ? 'UNKNOWN — file list truncated; a fast green will NOT be accepted'
+          : consoleTouched
+      }`,
+    );
+  } catch (err) {
+    console.log(`  could not read the file list for ${sha} (will retry): ${err.message.split('\n')[0]}`);
+  }
+}
+refreshConsoleTouched();
+
 for (;;) {
+  refreshConsoleTouched();
   let state;
   try {
     state = fetchState();
@@ -143,11 +195,11 @@ for (;;) {
     continue;
   }
 
-  let verdict = classifyVitestGate(state);
+  let verdict = classifyVitestGate({ ...state, consoleTouched });
   if (verdict.decision === 'refuse' && /cancelled/.test(verdict.reason)) {
     // Re-adjudicate with the ancestor-of-main evidence before refusing.
     const mainVerification = fetchMainVerification();
-    if (mainVerification) verdict = classifyVitestGate({ ...state, mainVerification });
+    if (mainVerification) verdict = classifyVitestGate({ ...state, consoleTouched, mainVerification });
   }
 
   last = verdict.reason;

@@ -19,17 +19,37 @@ import {
   classifyVitestGate,
   classifyAcrProbeError,
   resolveImageTag,
+  checkRunSeconds,
+  consoleTouchedFromCommit,
+  projectCheckRun,
+  COMMIT_FILES_CAP,
   VITEST_CHECK_NAME,
+  VITEST_MIN_PLAUSIBLE_SECONDS,
 } from '../roll-gate-decision.mjs';
 
-const check = (over = {}) => ({
-  name: VITEST_CHECK_NAME,
-  status: 'completed',
-  conclusion: 'success',
-  started_at: '2026-08-02T11:05:25Z',
-  ...over,
-});
+/**
+ * A check-run with a REAL run's wall time.
+ *
+ * #2632 measured the two populations across 950 executed and 251 skipped runs:
+ * a run that actually executed took 294–1036s; a change-detector skip took
+ * 8–14s. 700s is a representative real run, so every pre-existing expectation
+ * below still describes a check that genuinely ran. Pass `seconds:` to model a
+ * different wall time, or `completed_at: undefined` to model an unmeasurable one.
+ */
+const check = ({ seconds = 700, ...over } = {}) => {
+  const started_at = over.started_at ?? '2026-08-02T11:05:25Z';
+  return {
+    name: VITEST_CHECK_NAME,
+    status: 'completed',
+    conclusion: 'success',
+    started_at,
+    completed_at: new Date(Date.parse(started_at) + seconds * 1000).toISOString(),
+    ...over,
+  };
+};
 const doneRun = { status: 'completed', conclusion: 'success' };
+/** Main really ran its suite — the evidence the cancelled path borrows. */
+const mainRan = { compareStatus: 'ahead', behindBy: 0, mainConclusion: 'success', mainSeconds: 700 };
 
 // ---------------------------------------------------------------------------
 // STATE 1 — the check exists and passed → proceed
@@ -207,7 +227,7 @@ test('accepts a cancelled check when the commit is an ancestor of a green main',
   const r = classifyVitestGate({
     checkRuns: [check({ conclusion: 'cancelled' })],
     ciRuns: [doneRun],
-    mainVerification: { compareStatus: 'ahead', behindBy: 0, mainConclusion: 'success' },
+    mainVerification: mainRan,
   });
   assert.equal(r.decision, 'pass');
 });
@@ -216,7 +236,7 @@ test('refuses a cancelled check when main itself is not green', () => {
   const r = classifyVitestGate({
     checkRuns: [check({ conclusion: 'cancelled' })],
     ciRuns: [doneRun],
-    mainVerification: { compareStatus: 'ahead', behindBy: 0, mainConclusion: 'failure' },
+    mainVerification: { ...mainRan, mainConclusion: 'failure' },
   });
   assert.equal(r.decision, 'refuse');
 });
@@ -225,7 +245,7 @@ test('refuses a cancelled check when the commit is behind main', () => {
   const r = classifyVitestGate({
     checkRuns: [check({ conclusion: 'cancelled' })],
     ciRuns: [doneRun],
-    mainVerification: { compareStatus: 'diverged', behindBy: 3, mainConclusion: 'success' },
+    mainVerification: { ...mainRan, compareStatus: 'diverged', behindBy: 3 },
   });
   assert.equal(r.decision, 'refuse');
 });
@@ -233,6 +253,161 @@ test('refuses a cancelled check when the commit is behind main', () => {
 test('refuses a cancelled check when main verification is unavailable', () => {
   const r = classifyVitestGate({ checkRuns: [check({ conclusion: 'cancelled' })], ciRuns: [doneRun] });
   assert.equal(r.decision, 'refuse');
+});
+
+// ---------------------------------------------------------------------------
+// STATE 1b — GREEN, BUT DID IT RUN? (#2632)
+//
+// A conclusion records what the job REPORTED, not what it DID. When
+// fiab-console-ci's change detector could not resolve `origin/<base>...HEAD` it
+// fell through to the branch that reports this REQUIRED check green without
+// installing, building, or testing anything. The audit found 108 merged
+// console-touching PRs carrying such a `success`, produced in 8–14s, against
+// 294–1036s for a run that executed. This gate read only `.conclusion`, so it
+// would have accepted every one of them.
+//
+// Wall time is the only signal that separates the two. The ONLY admissible fast
+// green is one where we POSITIVELY established the console was untouched —
+// fiab-console-ci reports the check green (rather than skipping it) on
+// path-filtered commits so bicep-only work stays rollable, and that must keep
+// passing.
+// ---------------------------------------------------------------------------
+test('refuses a success that is far too fast to have run, on a console-touching commit', () => {
+  // The literal #2632 shape: run 29884658023, PR #2378, 10 seconds, on a change
+  // that decomposed three monolith editors. Its job log reads
+  //   "No apps/fiab-console changes — skipping vitest, reporting this check green."
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: 10 })],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /never ran|actually executed/i);
+});
+
+test('the whole observed skip range is refused, and the whole observed real range passes', () => {
+  // Measured extremes, not invented ones. Nothing lies between 14s and 294s.
+  for (const seconds of [8, 14, 60, 119]) {
+    const r = classifyVitestGate({ checkRuns: [check({ seconds })], ciRuns: [doneRun], consoleTouched: true });
+    assert.equal(r.decision, 'refuse', `${seconds}s should be refused`);
+  }
+  for (const seconds of [120, 294, 700, 1036]) {
+    const r = classifyVitestGate({ checkRuns: [check({ seconds })], ciRuns: [doneRun], consoleTouched: true });
+    assert.equal(r.decision, 'pass', `${seconds}s should pass`);
+  }
+});
+
+test('a fast green on a commit that provably does NOT touch the console still passes', () => {
+  // This is the documented path-filtered behaviour. If this ever turns red,
+  // every bicep-only / workflow-only commit becomes unrollable.
+  const r = classifyVitestGate({
+    checkRuns: [check({ seconds: 9 })],
+    ciRuns: [doneRun],
+    consoleTouched: false,
+  });
+  assert.equal(r.decision, 'pass');
+});
+
+test('UNKNOWN touch-state is not treated as untouched — a fast green is refused', () => {
+  // `null` arises when the commit's file list could not be read, or was
+  // truncated at the API's 300-file cap. Defaulting that to "untouched" would
+  // reopen the hole from the other side.
+  for (const consoleTouched of [null, undefined]) {
+    const r = classifyVitestGate({ checkRuns: [check({ seconds: 11 })], ciRuns: [doneRun], consoleTouched });
+    assert.equal(r.decision, 'refuse');
+  }
+});
+
+test('CONTROL: unknown touch-state does NOT refuse a run that plainly executed', () => {
+  // The rule must key on the DURATION, not on the unknown. Refusing here would
+  // block every roll whose commit lookup hiccuped.
+  const r = classifyVitestGate({ checkRuns: [check({ seconds: 700 })], ciRuns: [doneRun], consoleTouched: null });
+  assert.equal(r.decision, 'pass');
+});
+
+test('an unmeasurable wall time is unknown — refused unless the console is known untouched', () => {
+  const unmeasurable = check({ completed_at: undefined });
+  assert.equal(
+    classifyVitestGate({ checkRuns: [unmeasurable], ciRuns: [doneRun], consoleTouched: true }).decision,
+    'refuse',
+  );
+  assert.equal(
+    classifyVitestGate({ checkRuns: [unmeasurable], ciRuns: [doneRun], consoleTouched: false }).decision,
+    'pass',
+  );
+});
+
+test('the cancelled path cannot borrow a main run that did not execute either', () => {
+  // Borrowing main's verdict is only sound if main's own run really ran. If
+  // main's tip commit was path-filtered, its 10s green verified nothing — least
+  // of all a console-touching ancestor. Without this, closing the hole on the
+  // success path would have left it wide open one branch over.
+  const r = classifyVitestGate({
+    checkRuns: [check({ conclusion: 'cancelled' })],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+    mainVerification: { ...mainRan, mainSeconds: 10 },
+  });
+  assert.equal(r.decision, 'refuse');
+
+  const ran = classifyVitestGate({
+    checkRuns: [check({ conclusion: 'cancelled' })],
+    ciRuns: [doneRun],
+    consoleTouched: true,
+    mainVerification: mainRan,
+  });
+  assert.equal(ran.decision, 'pass');
+});
+
+test('the floor is a named constant with the measured separation around it', () => {
+  assert.equal(VITEST_MIN_PLAUSIBLE_SECONDS, 120);
+  assert.ok(VITEST_MIN_PLAUSIBLE_SECONDS > 14, 'must exceed the slowest observed skip');
+  assert.ok(VITEST_MIN_PLAUSIBLE_SECONDS < 294, 'must sit under the fastest observed real run');
+});
+
+// --- the pieces the I/O shell depends on -----------------------------------
+
+test('projectCheckRun keeps completed_at — without it every duration is unmeasurable', () => {
+  // The shell used to hand-map four fields. Shipping the duration rule without
+  // widening that map would have disabled the guard while looking correct.
+  const projected = projectCheckRun({
+    name: VITEST_CHECK_NAME,
+    status: 'completed',
+    conclusion: 'success',
+    started_at: '2026-08-02T11:05:25Z',
+    completed_at: '2026-08-02T11:17:05Z',
+    id: 1,
+  });
+  assert.equal(projected.completed_at, '2026-08-02T11:17:05Z');
+  assert.equal(checkRunSeconds(projected), 700);
+});
+
+test('checkRunSeconds returns null rather than a wrong number', () => {
+  assert.equal(checkRunSeconds({ started_at: '2026-08-02T11:05:25Z' }), null);
+  assert.equal(checkRunSeconds({ completed_at: '2026-08-02T11:05:25Z' }), null);
+  assert.equal(checkRunSeconds({ started_at: 'nonsense', completed_at: 'nonsense' }), null);
+  assert.equal(checkRunSeconds(null), null);
+  // Clock skew must not manufacture a plausible-looking duration.
+  assert.equal(
+    checkRunSeconds({ started_at: '2026-08-02T11:17:05Z', completed_at: '2026-08-02T11:05:25Z' }),
+    null,
+  );
+});
+
+test('consoleTouchedFromCommit mirrors the detector paths and never guesses false', () => {
+  const files = (...names) => ({ files: names.map((filename) => ({ filename })) });
+  assert.equal(consoleTouchedFromCommit(files('apps/fiab-console/lib/x.ts')), true);
+  assert.equal(consoleTouchedFromCommit(files('.github/workflows/fiab-console-ci.yml')), true);
+  assert.equal(consoleTouchedFromCommit(files('platform/fiab/bicep/main.bicep')), false);
+  // No list at all -> unknown, not "nothing changed".
+  assert.equal(consoleTouchedFromCommit(null), null);
+  assert.equal(consoleTouchedFromCommit({}), null);
+  // Truncated at the API cap with no console file SEEN -> unknown.
+  const capped = files(...Array.from({ length: COMMIT_FILES_CAP }, (_, i) => `docs/d${i}.md`));
+  assert.equal(consoleTouchedFromCommit(capped), null);
+  // ...but a POSITIVE sighting is conclusive even in a truncated list.
+  capped.files[0].filename = 'apps/fiab-console/app/page.tsx';
+  assert.equal(consoleTouchedFromCommit(capped), true);
 });
 
 // ---------------------------------------------------------------------------
