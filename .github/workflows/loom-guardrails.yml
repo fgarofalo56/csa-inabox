@@ -68,6 +68,8 @@ jobs:
         run: node scripts/ci/check-temp-artifact-safety.mjs
       - name: log-injection (sanitizer stays CodeQL-recognisable + route console.* args are sanitized)
         run: node scripts/ci/check-log-injection.mjs
+      - name: prototype-pollution (request-derived object keys + the dismissal register)
+        run: node scripts/ci/check-prototype-pollution.mjs
       - name: unity-audit-chokepoint (every Unity Catalog call is audited — loom-apex LU-3)
         run: node scripts/ci/check-unity-audit-chokepoint.mjs
       - name: breaker-coverage (unbounded-fetch ratchet — loom-next-level CH1)

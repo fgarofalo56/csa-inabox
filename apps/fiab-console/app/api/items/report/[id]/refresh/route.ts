@@ -45,7 +45,6 @@
  * an honest, actionable gate.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getReport, refreshDataset, PowerBiError } from '@/lib/azure/powerbi-client';
 import {
   isLoomContentId,
@@ -70,7 +69,9 @@ import {
   aasConfigGate,
   AasError,
 } from '@/lib/azure/aas-incremental-refresh';
+import { safeRecord } from '@/lib/security/safe-object';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -107,8 +108,14 @@ interface LastRefreshRecord {
 
 /** Validate a persisted `state.tableStorage` bag into mode-per-table. */
 function parseTableStorage(value: unknown): Record<string, { mode: StorageMode }> {
-  if (!value || typeof value !== 'object') return {};
-  const out: Record<string, { mode: StorageMode }> = {};
+  if (!value || typeof value !== 'object') return safeRecord<{ mode: StorageMode }>();
+  // THIRD copy of this reader. The two siblings — the data-source route's
+  // `validateTableStorage` (the WRITE side) and report-model-resolver's
+  // `parseTableStorageState` — were both moved onto a null-prototype record in
+  // #2657/#2675; this one was missed. The keys are table names that the write
+  // side accepts free-form, so a persisted `{"__proto__": {"mode": "Import"}}`
+  // would land here and replace this map's prototype instead of storing a table.
+  const out = safeRecord<{ mode: StorageMode }>();
   for (const [table, raw] of Object.entries(value as Record<string, unknown>)) {
     if (!raw || typeof raw !== 'object') continue;
     const mode = (raw as Record<string, unknown>).mode;
@@ -210,11 +217,9 @@ const SCHEDULE_GATE =
 // POST — Azure-native re-materialization (default) / opt-in Power BI refresh.
 // ───────────────────────────────────────────────────────────────────────────
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
-  const rawId = (await ctx.params).id;
+  const rawId = params.id;
   const cosmosId = isLoomContentId(rawId) ? cosmosIdFromLoomId(rawId) : rawId;
   const oid = session.claims.oid;
 
@@ -378,17 +383,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   await persist();
   return NextResponse.json({ ok: true, mode: 'materialize', refreshed, lastRefresh });
-}
+});
 
 // ───────────────────────────────────────────────────────────────────────────
 // GET — last-refreshed state + recurring-schedule honest gate.
 // ───────────────────────────────────────────────────────────────────────────
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
 
-  const rawId = (await ctx.params).id;
+  const rawId = params.id;
   const cosmosId = isLoomContentId(rawId) ? cosmosIdFromLoomId(rawId) : rawId;
 
   const item = await loadContentBackedItem(cosmosId, 'report', session.claims.oid);
@@ -408,4 +411,4 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       gate: { error: SCHEDULE_GATE, missing: 'LOOM_ADF_FACTORY' },
     },
   });
-}
+});
