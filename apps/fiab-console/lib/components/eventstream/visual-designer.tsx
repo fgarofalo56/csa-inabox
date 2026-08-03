@@ -684,6 +684,9 @@ function EventstreamCanvasInner({
       storageKey="eventstream"
       defaultPx={480}
       minPx={320}
+      // G3: grow into the height actually available (and track window resizes)
+      // until the user's first drag on this key; `defaultPx` stays the FLOOR.
+      fill
       ariaLabel="Resize eventstream canvas height"
     >
       <div

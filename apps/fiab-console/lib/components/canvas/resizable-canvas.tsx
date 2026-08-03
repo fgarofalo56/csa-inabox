@@ -103,6 +103,79 @@ export function measureContainerCeiling(clip: HTMLElement, region: HTMLElement):
   return Number.isFinite(avail) && avail > 0 ? avail : null;
 }
 
+// ── G3 viewport fill ────────────────────────────────────────────────────────
+// A `defaultPx` is a FIXED height on every screen: the region that was designed
+// at 560px stays 560px on a 4K monitor with 1200px of empty room below it, and
+// does not react to a window resize. `fill` (opt-in) makes the region grow into
+// the space genuinely available below its top edge until the user's FIRST drag
+// on that storage key, at which point the persisted height takes over exactly as
+// before. `defaultPx` becomes a FLOOR rather than the answer, so turning `fill`
+// on can only ever give a surface MORE height than it has today.
+
+/** Gutter left below a filled region so it never butts its container's edge (px). */
+const FILL_GUTTER_PX = 8;
+
+/**
+ * Nearest ancestor that BOUNDS visible height — scrolls (`auto`/`scroll`) or
+ * clips (`hidden`/`clip`). Unlike {@link findClipAncestor} this does NOT stop
+ * at a scroller: for fill we want the scroll PORT, because that is the box the
+ * user can actually see the region inside. Null → the viewport bounds it.
+ */
+export function findScrollport(el: HTMLElement): HTMLElement | null {
+  let node = el.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    const overflowY = window.getComputedStyle(node).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden' || overflowY === 'clip') {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Px available to `region`: from its top edge down to the visible bottom of its
+ * scrollport (capped by the viewport), minus the space its FOLLOWING SIBLINGS
+ * still need and a small gutter. Reserving the siblings is what keeps a filled
+ * canvas from shoving the rest of an editor column out of view.
+ *
+ * There is no feedback loop: growing the region moves what is BELOW it, never
+ * its own top edge, so the measurement is stable across re-measures.
+ */
+export function measureFillAvailable(region: HTMLElement, gutterPx: number = FILL_GUTTER_PX): number | null {
+  const regionTop = region.getBoundingClientRect().top;
+  const port = findScrollport(region);
+  let visibleBottom = window.innerHeight;
+  if (port) {
+    const portRect = port.getBoundingClientRect();
+    visibleBottom = Math.min(visibleBottom, portRect.top + port.clientTop + port.clientHeight);
+  }
+  let followingPx = 0;
+  for (let sib = region.nextElementSibling; sib != null; sib = sib.nextElementSibling) {
+    followingPx += (sib as HTMLElement).offsetHeight || 0;
+  }
+  const avail = Math.floor(visibleBottom - regionTop - followingPx - gutterPx);
+  return Number.isFinite(avail) && avail > 0 ? avail : null;
+}
+
+/**
+ * The auto height a `fill` region should follow: the measured availability,
+ * floored at the surface's designed `defaultPx` so the FILL CONTRIBUTION can
+ * never make a canvas shorter than it is today. (The shared 80vh / container
+ * ceiling is applied afterwards by the caller, identically with or without
+ * fill.) Null (nothing measured yet, e.g. SSR/first paint) falls back to the
+ * caller's own content-driven `autoPx`, or off entirely. Pure — unit tested.
+ */
+export function fillAutoHeight(
+  fill: boolean,
+  fillPx: number | null,
+  defaultPx: number,
+  autoPx?: number,
+): number | undefined {
+  if (fill && fillPx != null) return Math.max(defaultPx, fillPx);
+  return autoPx;
+}
+
 /**
  * Effective ceiling = the window/base ceiling capped by the measured container
  * availability (never below `minPx` so the region stays usable). Pure — unit
@@ -161,6 +234,11 @@ export interface UseResizableHeightResult {
  *                    + persists and permanently switches the key to
  *                    user-sized. A grip click with zero movement stays auto.
  *                    Omit for the classic fixed-default behavior.
+ * @param fill        G3 viewport fill: until the first resize on this key the
+ *                    region GROWS to the space available below its top edge
+ *                    (floored at `defaultPx`, capped by the same 80vh/container
+ *                    ceiling), and re-measures on window/container resize. Takes
+ *                    precedence over `autoPx` once a measurement exists.
  */
 export function useResizableHeight(
   storageKey: string,
@@ -168,6 +246,7 @@ export function useResizableHeight(
   minPx: number = MIN_PX_DEFAULT,
   maxPx?: number,
   autoPx?: number,
+  fill: boolean = false,
 ): UseResizableHeightResult {
   // Height init = defaultPx so server and first client render match; the
   // persisted value is read in an effect below (avoids a hydration mismatch).
@@ -180,17 +259,23 @@ export function useResizableHeight(
     () => maxPx ?? Math.max(MAX_PX_FALLBACK, defaultPx),
   );
   const [containerMax, setContainerMax] = useState<number | null>(null);
+  // G3 fill: px available below the region's top edge (null until measured).
+  const [fillPx, setFillPx] = useState<number | null>(null);
   const maxHeight = clampMaxToContainer(baseMax, containerMax, minPx);
   const [isDragging, setIsDragging] = useState(false);
   // True once THIS key has a user-chosen height (persisted earlier, or resized
-  // now). While false and `autoPx` is provided, the content-driven value wins.
+  // now). While false and `autoPx`/`fill` is provided, the driven value wins.
   const [userSized, setUserSized] = useState(false);
 
   const regionRef = useRef<HTMLDivElement | null>(null);
   const key = `${STORAGE_PREFIX}${storageKey}`;
 
+  // The height the region FOLLOWS while un-sized: the fill measurement (floored
+  // at defaultPx) when `fill` is on, else the caller's content-driven autoPx.
+  const effectiveAutoPx = fillAutoHeight(fill, fillPx, defaultPx, autoPx);
+
   // Auto-until-first-resize: content-driven display height while un-sized.
-  const autoActive = autoPx != null && !userSized;
+  const autoActive = effectiveAutoPx != null && !userSized;
 
   // Render-synced mirrors so pointer/keyboard handlers read live values
   // without being torn down and rebuilt on every height change.
@@ -200,7 +285,7 @@ export function useResizableHeight(
   // The DISPLAYED height (what handlers should treat as current): the clamped
   // content-driven value while auto is active, the committed state otherwise.
   const displayHeight =
-    autoPx != null && !userSized ? clamp(autoPx, minPx, maxHeight) : height;
+    effectiveAutoPx != null && !userSized ? clamp(effectiveAutoPx, minPx, maxHeight) : height;
   heightRef.current = displayHeight;
   const autoActiveRef = useRef(autoActive);
   autoActiveRef.current = autoActive;
@@ -262,6 +347,36 @@ export function useResizableHeight(
       window.removeEventListener('resize', measure);
     };
   }, []);
+
+  // G3 fill — measure the space genuinely available below the region's top edge
+  // and follow it (until the first user resize). Observes the scrollport, the
+  // parent, and the region's FOLLOWING SIBLINGS, because any of the three can
+  // change how much room is left without the window ever resizing. Entirely
+  // inert (no observers, no listeners) when `fill` is off.
+  useEffect(() => {
+    if (!fill) { setFillPx(null); return; }
+    const region = regionRef.current;
+    if (region == null || typeof window === 'undefined') return;
+    const measure = () => setFillPx(measureFillAvailable(region));
+    measure();
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(measure);
+      const port = findScrollport(region);
+      if (port) observer.observe(port);
+      if (region.parentElement) observer.observe(region.parentElement);
+      // NOT the region itself: it would observe its own growth. Its top edge
+      // never moves when it grows, so there is nothing to re-measure there.
+      for (let sib = region.nextElementSibling; sib != null; sib = sib.nextElementSibling) {
+        observer.observe(sib);
+      }
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [fill]);
 
   // Apply the persisted height once, after mount. A persisted value also means
   // the user HAS sized this key before — auto-until-first-resize stays off.
@@ -489,6 +604,14 @@ export interface ResizableCanvasRegionProps {
    * {@link useResizableHeight}). Nothing persists while auto is active.
    */
   autoPx?: number;
+  /**
+   * G3 viewport fill: until the user's first resize on this `storageKey`, the
+   * region GROWS to the height actually available below its top edge (floored
+   * at `defaultPx`, so it can never be shorter than today) and re-measures on
+   * window/container resize. Opt-in — a surface without it keeps the fixed
+   * `defaultPx` behaviour byte-for-byte.
+   */
+  fill?: boolean;
   /** Accessible label for the resize handle. */
   ariaLabel?: string;
   /** Optional extra class on the region wrapper. */
@@ -523,13 +646,14 @@ function ResizableCanvasRegionBody({
   minPx = MIN_PX_DEFAULT,
   maxPx,
   autoPx,
+  fill = false,
   ariaLabel,
   className,
   children,
 }: ResizableCanvasRegionProps) {
   const styles = useStyles();
   const { height, minHeight, maxHeight, regionRef, separatorProps, isDragging } =
-    useResizableHeight(storageKey, defaultPx, minPx, maxPx, autoPx);
+    useResizableHeight(storageKey, defaultPx, minPx, maxPx, autoPx, fill);
   const isFullscreen = useCanvasFullscreen()?.isFullscreen ?? false;
 
   return (

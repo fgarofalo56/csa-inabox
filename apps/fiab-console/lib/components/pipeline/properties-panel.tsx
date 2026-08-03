@@ -46,8 +46,8 @@ import { MappingTab } from './copy/mapping-tab';
 import { CopySettingsTab } from './copy/copy-settings-tab';
 import { useCopyResources } from './copy/use-copy-resources';
 import { getActivityVisual, CATEGORY_ICON } from '@/lib/components/canvas/canvas-node-kit';
-import { EmptyState } from '@/lib/components/empty-state';
 import { DockedInspector, type DockedInspectorTab } from '@/lib/components/shared/docked-inspector';
+import { usePipelineLevelTabs, type PipelineHostTab } from './pipeline-level-inspector';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
 const useStyles = makeStyles({
@@ -131,6 +131,24 @@ export interface PropertiesPanelProps {
    * navigates the existing canvas. Omit to render the affordance read-only.
    */
   onDrillInto?: (name: string) => void;
+  /**
+   * Select an activity on the canvas. Used by the no-selection (pipeline-level)
+   * dock's Activities list. Omit → the list renders read-only.
+   */
+  onSelectActivity?: (name: string) => void;
+  /**
+   * Navigate the host editor's pipeline-configurations tab row (Parameters /
+   * Variables / Settings / Output). Omit → the dock renders no navigation
+   * buttons at all, rather than dead ones (`no-vaporware.md`).
+   */
+  onOpenPipelineTab?: (tab: PipelineHostTab) => void;
+  /**
+   * Controlled bottom-dock collapse. Pass BOTH to let the host reclaim canvas
+   * height when the dock collapses (the designer sizes its SplitPane from the
+   * same flag); omit both to keep the panel's own internal collapse state.
+   */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 type TabId =
@@ -144,14 +162,28 @@ type TabId =
   | 'parameters'
   | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, pipelineId, workspaceId, apiSlug, parentActivity = null, onDrillInto }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, pipelineId, workspaceId, apiSlug, parentActivity = null, onDrillInto, onSelectActivity, onOpenPipelineTab, collapsed: collapsedProp, onToggleCollapse }: PropertiesPanelProps) {
   const s = useStyles();
   const [tab, setTab] = useState<TabId>('general');
   const [typePropsText, setTypePropsText] = useState('');
   const [typePropsErr, setTypePropsErr] = useState<string | null>(null);
   // Bottom-dock collapse (Fabric's dock is collapsible to reclaim canvas). Only
-  // meaningful in the dock layout; the rail layout ignores it.
-  const [collapsed, setCollapsed] = useState(false);
+  // meaningful in the dock layout; the rail layout ignores it. CONTROLLED when
+  // the host passes both `collapsed` + `onToggleCollapse` — the designer does,
+  // so collapsing also shrinks its SplitPane pane and gives the space back to
+  // the canvas. Uncontrolled (internal state) for every existing caller.
+  const [collapsedSelf, setCollapsedSelf] = useState(false);
+  const controlledCollapse = collapsedProp !== undefined && onToggleCollapse !== undefined;
+  const collapsed = controlledCollapse ? collapsedProp : collapsedSelf;
+  const toggleCollapse = controlledCollapse ? onToggleCollapse : () => setCollapsedSelf((c) => !c);
+
+  // Fabric parity: with NOTHING selected the dock shows pipeline-level settings
+  // (Parameters / Variables / Activities / Settings) rather than an empty card.
+  // Built unconditionally — hooks may not sit behind the early return below.
+  const [levelTab, setLevelTab] = useState('pipeline-parameters');
+  const pipelineLevelTabs = usePipelineLevelTabs({
+    parameters, variables, levelActivities: allActivities, onSelectActivity, onOpenPipelineTab,
+  });
 
   // Pre-run validation — per-tab counts of unmet required fields, so each tab can
   // carry Fabric's red superscript dot BEFORE the pipeline is ever run.
@@ -179,20 +211,34 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   }, [activity?.name, activity?.type]);
 
   if (!activity) {
+    // Fabric: "When no activity is selected, the configuration pane at the
+    // bottom of the canvas shows pipeline-level settings." — Parameters,
+    // Variables, Settings, Output.
+    // (learn.microsoft.com/fabric/data-factory/pipeline-canvas-experience)
+    //
+    // This used to render `tabs={[]}` + an `EmptyState`, whose `minHeight: 320px`
+    // is a hard floor under `box-sizing: border-box`. In the designer's dock —
+    // `flexShrink: 0` with no height — that floor took 320px of a 552px column
+    // and squeezed the canvas to ~96px. Real tabs carry no such floor: they
+    // scroll inside the dock body.
+    //
+    // Passing collapsed/onToggleCollapse also turns the collapse chevron ON in
+    // this branch (DockedInspector gates `showCollapse` on the handler being
+    // present, so the no-selection dock previously had no way to collapse).
     return (
       <DockedInspector
         layout={layout}
-        title="No activity selected"
-        tabs={[]}
-        selectedTab=""
-        onSelectTab={() => {}}
-        emptyState={
-          <EmptyState
-            icon={<Cursor20Regular />}
-            title="No activity selected"
-            body="Select an activity on the canvas to edit its properties — General, Source / Sink, Settings, Parameters, and User properties all appear here."
-          />
-        }
+        title="Pipeline"
+        icon={<Cursor20Regular />}
+        badges={<Badge appearance="tint" size="small">Nothing selected</Badge>}
+        learnMoreHref="https://learn.microsoft.com/fabric/data-factory/pipeline-canvas-experience"
+        learnMoreLabel="Pipeline canvas"
+        tabs={pipelineLevelTabs}
+        selectedTab={levelTab}
+        onSelectTab={setLevelTab}
+        collapsed={collapsed}
+        onToggleCollapse={toggleCollapse}
+        rootProps={{ 'data-pipeline-level-dock': 'true' } as React.HTMLAttributes<HTMLDivElement>}
       />
     );
   }
@@ -700,7 +746,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
       selectedTab={tab}
       onSelectTab={(id) => setTab(id as TabId)}
       collapsed={collapsed}
-      onToggleCollapse={() => setCollapsed((v) => !v)}
+      onToggleCollapse={toggleCollapse}
     />
   );
 }

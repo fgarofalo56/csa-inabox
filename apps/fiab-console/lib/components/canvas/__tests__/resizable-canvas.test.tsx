@@ -21,6 +21,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
 import {
   ResizableCanvasRegion, clampMaxToContainer, findClipAncestor, measureContainerCeiling,
+  findScrollport, fillAutoHeight,
 } from '../resizable-canvas';
 
 beforeAll(() => {
@@ -280,5 +281,137 @@ describe('ResizableCanvasRegion — autoPx (auto-until-first-resize)', () => {
     // A sibling key with no persisted height still auto-fits.
     wrap(auto(150, 't-auto-sibling'));
     expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '150');
+  });
+});
+
+
+/**
+ * G3 viewport fill — the opt-in that stops a region from being the SAME fixed
+ * height on every screen. `defaultPx` becomes a FLOOR: the region grows into the
+ * space actually available below its top edge until the user's first drag, so
+ * turning `fill` on can only ever give a canvas MORE height, never less. That
+ * "never less" property is what makes it safe to switch on across surfaces, so
+ * it is asserted directly.
+ */
+describe('G3 — viewport fill', () => {
+  describe('fillAutoHeight (pure)', () => {
+    it('floors the measured availability at defaultPx — fill NEVER shrinks a canvas', () => {
+      // Plenty of room → grow into it.
+      expect(fillAutoHeight(true, 900, 560)).toBe(900);
+      // Cramped container → hold the surface's designed default, do not shrink.
+      expect(fillAutoHeight(true, 300, 560)).toBe(560);
+      expect(fillAutoHeight(true, 560, 560)).toBe(560);
+    });
+
+    it('is inert until a measurement exists (SSR / first paint) and when fill is off', () => {
+      // Nothing measured yet → fall through to the caller's own autoPx, or off.
+      expect(fillAutoHeight(true, null, 560)).toBeUndefined();
+      expect(fillAutoHeight(true, null, 560, 220)).toBe(220);
+      // fill off → the content-driven autoPx contract is untouched.
+      expect(fillAutoHeight(false, 900, 560)).toBeUndefined();
+      expect(fillAutoHeight(false, 900, 560, 220)).toBe(220);
+    });
+  });
+
+  describe('findScrollport (pure, jsdom)', () => {
+    afterEach(() => { document.body.innerHTML = ''; });
+
+    const chain = (styles: string[]): HTMLElement => {
+      let parent: HTMLElement = document.body;
+      let leaf: HTMLElement = document.body;
+      for (const overflowY of styles) {
+        const el = document.createElement('div');
+        if (overflowY) el.style.overflowY = overflowY;
+        parent.appendChild(el);
+        parent = el;
+        leaf = el;
+      }
+      return leaf;
+    };
+
+    it('returns the nearest SCROLLING ancestor — unlike findClipAncestor, it does not stop there', () => {
+      const leaf = chain(['hidden', 'auto', '']);
+      const scroller = document.body.firstElementChild!.firstElementChild as HTMLElement;
+      // The scroll port is the box the user actually sees the region inside…
+      expect(findScrollport(leaf)).toBe(scroller);
+      // …which is exactly where the ceiling helper deliberately gives up.
+      expect(findClipAncestor(leaf)).toBeNull();
+    });
+
+    it('returns the nearest clipping ancestor when nothing scrolls', () => {
+      const leaf = chain(['hidden', '', '']);
+      expect(findScrollport(leaf)).toBe(document.body.firstElementChild as HTMLElement);
+    });
+
+    it('returns null when nothing bounds the region — the viewport does', () => {
+      expect(findScrollport(chain(['', '', '']))).toBeNull();
+    });
+  });
+
+  describe('ResizableCanvasRegion with fill', () => {
+    // jsdom's window is 1024x768 and every box reports a zero rect, so a filled
+    // region sees `768 - 0 top - 0 following - 8 gutter = 760px` available and
+    // is then held by the shared 80vh ceiling (0.8 * 768 = 614). That makes the
+    // difference between filled and unfilled directly observable here.
+    const VIEWPORT_CEILING = Math.round(768 * 0.8); // 614
+
+    it('GROWS past defaultPx into the space available — the whole point of G3', () => {
+      wrap(
+        <ResizableCanvasRegion storageKey="t-fill" defaultPx={560} minPx={360} fill>
+          {CANVAS}
+        </ResizableCanvasRegion>,
+      );
+      expect(screen.getByRole('separator'))
+        .toHaveAttribute('aria-valuenow', String(VIEWPORT_CEILING));
+      // Auto-until-first-resize: growing is not a user choice, so nothing persists.
+      expect(window.localStorage.getItem('loom.canvasHeight.t-fill')).toBeNull();
+    });
+
+    it('WITHOUT fill the same region stays pinned at defaultPx (the pre-fix behaviour)', () => {
+      wrap(
+        <ResizableCanvasRegion storageKey="t-nofill" defaultPx={560} minPx={360}>
+          {CANVAS}
+        </ResizableCanvasRegion>,
+      );
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '560');
+    });
+
+    it('re-measures on a window resize', () => {
+      wrap(
+        <ResizableCanvasRegion storageKey="t-fill-resize" defaultPx={400} minPx={200} maxPx={2000} fill>
+          {CANVAS}
+        </ResizableCanvasRegion>,
+      );
+      // maxPx pins the ceiling, so the value tracks availability directly.
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '760');
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 500 });
+      fireEvent(window, new Event('resize'));
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '492');
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
+    });
+
+    it('never renders SHORTER than defaultPx on account of fill', () => {
+      // Availability below the surface's designed default must not shrink it —
+      // this is what makes `fill` safe to switch on across surfaces. (The shared
+      // 80vh / container ceiling still applies, exactly as it does without fill.)
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 });
+      wrap(
+        <ResizableCanvasRegion storageKey="t-fill-small" defaultPx={560} minPx={200} maxPx={2000} fill>
+          {CANVAS}
+        </ResizableCanvasRegion>,
+      );
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '560');
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
+    });
+
+    it('still lets a persisted user height win over fill', () => {
+      window.localStorage.setItem('loom.canvasHeight.t-fill-persist', '640');
+      wrap(
+        <ResizableCanvasRegion storageKey="t-fill-persist" defaultPx={560} minPx={360} maxPx={900} fill>
+          {CANVAS}
+        </ResizableCanvasRegion>,
+      );
+      expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '640');
+    });
   });
 });

@@ -813,6 +813,9 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
       storageKey="catalog-lineage"
       defaultPx={560}
       minPx={320}
+      // G3: grow into the height actually available (and track window resizes)
+      // until the user's first drag on this key; `defaultPx` stays the FLOOR.
+      fill
       ariaLabel="Resize lineage canvas height"
     >
     <div className={s.shell} data-testid="lineage-canvas" aria-label="Data lineage canvas">

@@ -37,7 +37,10 @@ Source: `author-visually#authoring-canvas` + `concepts-pipelines-activities#crea
 | **Pipeline Parameters pane** | ✅ built — `ParametersPane`: add/type/default/delete | round-trips `properties.parameters` on PUT |
 | **Pipeline Variables pane** | ✅ built — `VariablesPane`: add/type/default/delete | round-trips `properties.variables` on PUT |
 | **Pipeline Settings pane** (concurrency, annotations, description) | ✅ built — `SettingsPane` | round-trips `properties.{concurrency,annotations,description}` on PUT |
-| **Canvas controls** — zoom in/out/fit, auto-align | ✅ built — `CanvasToolbar` (bottom-right) + toolbar Auto align / Zoom to fit | n/a (client) |
+| **Canvas navigation controls on the RIGHT side** (Fabric `pipeline-canvas-experience#canvas-navigation`: search, zoom in/out, zoom to fit, auto-align) | ✅ built — `CanvasRightRail` on a `center-right` React&nbsp;Flow `Panel` (was `bottom-left`), clear of the top-right power toolbar and the bottom-right MiniMap; toolbar Auto align / Zoom to fit mirror it | n/a (client) |
+| **Configuration pane shows PIPELINE-LEVEL settings when no activity is selected** (Fabric `pipeline-canvas-experience#canvas-and-pipeline-settings`: Parameters, Variables, Settings, Output) | ✅ built — `pipeline-level-inspector.tsx`: Parameters (live table: name/type/default), Variables (live table), Activities (clickable list with pre-run issue counts → selects the node), Settings (real derived pipeline facts + one-click jump to the host Settings / Output / Parameters panes). Replaces the former "No activity selected" `EmptyState`. Fabric's **Settings** and **Output** editing surfaces live in the host pipeline-configurations tab row (ADF Studio's own arrangement) and the dock links straight to them | client model + `PUT .../pipelines/{name}` on save |
+| **Collapsible bottom configuration pane** | ✅ built — chevron in the dock header (now present in the no-selection branch too); collapse is lifted to `PipelineDesigner` so it also shrinks the split pane and **returns the space to the canvas** | n/a (client) |
+| **Resizable canvas ↔ configuration split** (G3) | ✅ built — one vertical `SplitPane` (`loom.splitpane.pipeline-designer.config-dock`); the canvas fills everything above the divider, the dock is the sized pane with its own internal scroll | n/a (client) |
 | **Canvas keyboard shortcuts** (Fabric `data-factory/keyboard-shortcuts`) — `I`/`O` zoom, `F` fit, `A` auto-align, `N` toggle nested preview, `Shift`+arrows pan, `Backspace` = return to previous canvas | ✅ built — `PipelineCanvasInner.handleKeyDown` on the focusable (`tabIndex=0`) canvas shell; ignores keys while a text control is focused | n/a (client) |
 | **Inline nested-activity preview** (Fabric "updated canvas experience", `data-factory/pipeline-canvas-experience`) — container nodes summarise their inner activities (branch name + count + mini tiles) on the parent canvas; `N` / a "Nested" toolbar toggle shows/hides it | ✅ built — `FlowActivityNode` renders `miniPreviewSections()` (True/False, Default/Case, or Activities sections with `+N more`) when `showNestedPreview` is on | n/a (client) |
 | **Large-graph scalability** — 200-node pipeline pans smoothly | ✅ built — `shouldVirtualize()` (≥80 nodes) enables React Flow `onlyRenderVisibleElements` + a compact ELK layout variant (`LARGE_GRAPH_LAYOUT_OPTIONS`) | n/a (client) |
@@ -79,3 +82,44 @@ All routes 412 with `{ok:false, code:'unbound'}` when the item has no
 `state.pipelineName`, so the editor shows its bind picker. Every `res.json()`
 on the client goes through `safePipelineJson` (content-type guard) so a non-JSON
 error page never crashes the editor.
+
+## Canvas viewport — the layout defect fixed 2026-08 (and how to not re-introduce it)
+
+The designer rendered *every* control correctly and was still unusable: the
+canvas region was **~96px tall inside a 560px shell**, and React Flow was framing
+a **400px** viewport inside it, so the graph and both floating panels sat below
+the clip. "You can't even see the Canvas portion of it."
+
+Three compounding causes, all now closed:
+
+1. **An unbounded dock.** `pipeline-designer.tsx`'s dock was `flexShrink: 0` with
+   no height, so it took its CONTENT height. With nothing selected that content
+   was an `EmptyState` whose `minHeight: 320px` is a hard floor under
+   `box-sizing: border-box`. Arithmetic inside the 560px region:
+   `552 − 32 gaps − 50 nav − 36 errors − 320 dock − 18 status ≈ 96px` of canvas.
+   Fixed by the vertical `SplitPane` above — the dock is now the SIZED pane
+   (default **38% of the split**, floored at 200px), so the canvas always keeps
+   the majority. PR #2542 had already established this pattern in
+   `data-pipeline-editor.tsx`; it was never applied here, because that editor
+   only renders when `templateId` is set and `DEFAULT_PIPELINE_RUNTIME='adf'`
+   routes ordinary pipelines through `pipeline-designer.tsx` instead.
+2. **A React Flow shell floor larger than its clip.** `canvas.tsx`'s shell had
+   `minHeight: 400px`. A floor here is worse than useless: React Flow measures
+   the shell to frame `fitView`, so a floor bigger than the clip centres the
+   nodes off-screen and anchors the `CanvasRightRail` / `MiniMap` to an invisible
+   bottom edge. Now `minHeight: 0` — **every caller must render this canvas in a
+   height-bounded flex column.**
+3. **A region that never grew.** The region was a fixed 560px on every screen and
+   ignored window resizes (a G3 violation). `ResizableCanvasRegion` now takes an
+   opt-in `fill`: until the user's first drag on that storage key the region
+   grows into the height genuinely available below its top edge (floored at
+   `defaultPx`, so it can only ever gain height) and re-measures on window,
+   container, and following-sibling resize.
+
+Applied to the sibling canvases with the same fixed-region shape: eventstream
+visual designer, mapping data flow designer, ADX schema diagram, catalog lineage,
+network topology, mounted-ADF data flow, and the Databricks DLT pipeline editor.
+
+Regression cover: `lib/components/pipeline/__tests__/pipeline-canvas-viewport.test.tsx`
+(drives the real designer + the real `SplitPane`) and the `G3 — viewport fill`
+block in `lib/components/canvas/__tests__/resizable-canvas.test.tsx`.

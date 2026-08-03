@@ -553,6 +553,9 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
               storageKey="databricks-dlt-pipeline"
               defaultPx={520}
               minPx={320}
+              // G3: grow into the height actually available (and track window resizes)
+              // until the user's first drag on this key; `defaultPx` stays the FLOOR.
+              fill
               ariaLabel="Resize DLT pipeline canvas height"
               className={s.canvasWrap}
             >
