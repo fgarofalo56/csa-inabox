@@ -5,10 +5,12 @@
  *
  * These reach the catalog over the Databricks **SQL Statement Execution** API
  * (a SQL warehouse), NOT the UC REST surface, so they do NOT flow through the
- * LU-3 audit choke point (`ucFetch`) and produce no Loom audit row — they are
- * covered by Databricks' own `system.access.audit`. That asymmetry is declared in
- * `scripts/ci/check-unity-audit-chokepoint.mjs` (`SQL_EXIT_BASELINE`) and in
- * `docs/fiab/unity-gov.md`.
+ * LU-3 REST choke point (`ucFetch`). Since #2622 they DO produce a Loom audit
+ * row: the shared reader goes through `ucSql` (lib/azure/uc-sql.ts), whose
+ * `finally` records the statement — success, failure, or DENIED — without ever
+ * copying the SQL text onto the row. `scripts/ci/check-unity-audit-chokepoint.mjs`
+ * pins this file at ZERO raw `executeStatement(` exits so the wrapper cannot be
+ * bypassed again.
  *
  * ## Why this is its own module
  *
@@ -24,7 +26,8 @@
  * still resolves. Shared leaves (`UnityCatalogError`, `ucRows`, `clampInt`) live
  * in `./uc-primitives` so every import edge points one way and there is no cycle.
  */
-import { executeStatement, type DbxQueryParam } from './databricks-client';
+import type { DbxQueryParam } from './databricks-client';
+import { ucSql } from './uc-sql';
 import { UnityCatalogError, ucRows, clampInt } from './uc-primitives';
 
 export interface SystemReadResult {
@@ -48,7 +51,7 @@ async function runSystemTableRead(
   params?: DbxQueryParam[],
 ): Promise<SystemReadResult> {
   try {
-    const r = await executeStatement(warehouseId, sql, undefined, undefined, params);
+    const r = await ucSql(warehouseId, sql, { params, target: fullTable });
     return { columns: r.columns, rows: ucRows(r), rowCount: r.rowCount, executionMs: r.executionMs };
   } catch (e: any) {
     const msg = String(e?.message || e);

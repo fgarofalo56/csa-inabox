@@ -36,6 +36,11 @@
  *
  * No mocks, no `return []` placeholders. Every export hits the real account API
  * or throws a typed error carrying an honest gate (per .claude/rules/no-vaporware.md).
+ *
+ * AUDIT (LU-3 / issue #2622 gap 3): every call through {@link acctFetch} writes a
+ * Loom Unity access row from a `finally` block — see the comment on that
+ * function. Metastore assignment is an account-ADMIN mutation and was previously
+ * invisible to the trail.
  */
 import {
   ChainedTokenCredential,
@@ -44,6 +49,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { recordUnityAccountAccess } from '@/lib/azure/unity-audit';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -141,33 +147,69 @@ async function dbxToken(): Promise<string> {
   return t.token;
 }
 
+/**
+ * The account-plane transport — and the THIRD Unity Catalog audit choke point
+ * (issue #2622, gap 3).
+ *
+ * Metastore ASSIGNMENT decides which Unity Catalog metastore an entire Databricks
+ * workspace sees, and it is an account-ADMIN mutation. It never touches Loom
+ * Unity and its path (`/api/2.0/accounts/{id}/workspaces/{wsId}/metastore`) is
+ * not a `/api/2.x/unity-catalog/**` path, so neither `ucFetch` nor `dbxFetch`
+ * could ever have recorded it — it was un-audited by construction.
+ *
+ * `recordUnityAccountAccess` is called from `finally`, so a 403 "caller is not
+ * an account admin" — the highest-value row on this surface — is recorded
+ * exactly like a success. The write is fire-and-forget and never throws
+ * (lib/azure/unity-audit.ts), so it cannot turn a working call into a failure.
+ * `scripts/ci/check-unity-audit-chokepoint.mjs` brace-matches this `finally` and
+ * fails the build if the recorder leaves it.
+ */
 async function acctFetch<T = any>(
   path: string,
   init?: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
 ): Promise<T> {
-  const token = await dbxToken();
-  const url = `https://${accountHost()}/api/2.0/accounts/${accountId()}${path}`;
-  const res = await fetchWithTimeout(url, {
-    method: init?.method ?? 'GET',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-      accept: 'application/json',
-    },
-    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  if (!res.ok) {
-    const msg =
-      json?.message ||
-      json?.error_code ||
-      (typeof json === 'string' ? json : `${init?.method ?? 'GET'} ${path} failed ${res.status}`);
-    throw new UnityCatalogAccountError(msg, res.status, json, url);
+  const method = init?.method ?? 'GET';
+  const startedAt = Date.now();
+  let status = 0;
+  let failure: unknown;
+  try {
+    const token = await dbxToken();
+    const url = `https://${accountHost()}/api/2.0/accounts/${accountId()}${path}`;
+    const res = await fetchWithTimeout(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      cache: 'no-store',
+    });
+    status = res.status;
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+    if (!res.ok) {
+      const msg =
+        json?.message ||
+        json?.error_code ||
+        (typeof json === 'string' ? json : `${method} ${path} failed ${res.status}`);
+      throw new UnityCatalogAccountError(msg, res.status, json, url);
+    }
+    return (json as T) ?? ({} as T);
+  } catch (e) {
+    failure = e;
+    throw e;
+  } finally {
+    recordUnityAccountAccess({
+      path,
+      method,
+      status,
+      durationMs: Date.now() - startedAt,
+      error: failure,
+      accountHost: accountHost(),
+    });
   }
-  return (json as T) ?? ({} as T);
 }
 
 // ============================================================

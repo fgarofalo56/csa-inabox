@@ -3,20 +3,29 @@
  * ---------------------------------------------------------------------------
  * RULE:
  *
- *   EVERY Unity Catalog REST call the Console BFF makes must go through an
- *   AUDITED transport whose `finally` writes the WHO / WHAT / WHEN / OUTCOME
- *   (including DENIALS) row to the Cosmos `_auditLog` trail and the
- *   `LoomAudit_CL` SIEM stream. There are exactly TWO such transports:
+ *   EVERY Unity Catalog call the Console BFF makes must go through an AUDITED
+ *   transport whose `finally` writes the WHO / WHAT / WHEN / OUTCOME (including
+ *   DENIALS) row to the Cosmos `_auditLog` trail and the `LoomAudit_CL` SIEM
+ *   stream. There are exactly FOUR such transports ({@link AUDITED_TRANSPORTS}):
  *
  *     apps/fiab-console/lib/azure/unity-catalog-client.ts  →  ucFetch
- *         the backend-agnostic client (Loom Unity / OSS UC in Gov, Databricks
- *         UC in Commercial). Records via `recordUnityAccess(...)`.
+ *         the backend-agnostic UC REST client (Loom Unity / OSS UC in Gov,
+ *         Databricks UC in Commercial). Records via `recordUnityAccess(...)`.
  *     apps/fiab-console/lib/azure/databricks-client.ts     →  dbxFetch
  *         the Databricks workspace client. The Commercial DEFAULT routes call
  *         it DIRECTLY for catalog owner change (patchUcCatalog), catalog delete
  *         (deleteUcCatalog) and grant mutation (updateUcPermissions —
  *         `PATCH /api/2.1/unity-catalog/permissions/...`). Records via
  *         `recordDatabricksUnityAccess(...)`, which filters to catalog paths.
+ *     apps/fiab-console/lib/azure/uc-sql.ts                →  ucSql
+ *         the Databricks **SQL Statement Execution** transport — the governance
+ *         DDL half (GRANT/REVOKE, ABAC CREATE/DROP POLICY, ALTER … SET MASK /
+ *         SET ROW FILTER, governed tags, SET TAGS). Records via
+ *         `recordUnitySqlAccess(...)`, which NEVER copies the statement text.
+ *     apps/fiab-console/lib/azure/unity-catalog-account-client.ts → acctFetch
+ *         the Databricks ACCOUNT plane — metastore assignment, an account-admin
+ *         mutation on a non-`unity-catalog/` path. Records via
+ *         `recordUnityAccountAccess(...)`.
  *
  * WHY A GUARD AND NOT JUST A COMMENT:
  *   An audit choke point is only a choke point if bypassing it is HARD. A
@@ -111,6 +120,35 @@
  *      refactor that moves code out of a ratcheted file must move the ratchet
  *      with it, or the refactor IS the bypass.
  *
+ * ## HISTORY — round 5 (2026-08-02, issue #2622). Two declared gaps CLOSED.
+ *
+ *   9. THE SQL HALF WAS RATCHETED, NOT AUDITED. Rounds 2–4 froze the
+ *      `executeStatement(` count and called that coverage. A frozen count is not
+ *      a trail: 25 governance-DDL exits — `GRANT`/`REVOKE`, ABAC
+ *      `CREATE POLICY` / `DROP POLICY`, `ALTER … SET MASK` / `SET ROW FILTER`,
+ *      `CREATE`/`ALTER`/`DROP GOVERNED TAG`, `SET TAGS` — still produced NO Loom
+ *      row. Worse, the ratchet only pinned TWO files: the UC granular-security
+ *      route (`app/api/items/[type]/[id]/security/route.ts`), which is the
+ *      column-mask + row-filter wizard and therefore the SAME governance class,
+ *      had TEN un-audited exits and was not pinned at all.
+ *      FIXED: {@link SQL_CHOKEPOINT} (`ucSql`) wraps the transport and records
+ *      from a `finally`; every UC-governance file is pinned at ZERO raw exits;
+ *      the security route is now pinned too.
+ *  10. THE ACCOUNT PLANE WAS INVISIBLE BY CONSTRUCTION.
+ *      `unity-catalog-account-client.ts` targets `/api/2.0/accounts/{id}`, which
+ *      matches neither {@link UNITY_ADDRESS_RE} nor {@link UNITY_REST_PATH_RE},
+ *      so check 4 never saw it and it was not even in KNOWN_UNAUDITED — a gap
+ *      the guard could not report. Metastore ASSIGNMENT decides which metastore
+ *      an entire workspace sees and requires account admin.
+ *      FIXED: {@link ACCOUNT_CHOKEPOINT} records from `acctFetch`'s `finally`.
+ *      Lesson worth keeping: "the scan found nothing" is not "there is nothing"
+ *      when the scan's address vocabulary cannot express the surface.
+ *  11. FOUR TRANSPORTS, ONE CHECK. Checks 1 and 3 were two hand-written copies
+ *      of the same `finally` assertion; adding a third and fourth by copy would
+ *      invite the drift that produced bypass #7 (two vocabularies). Both are now
+ *      derived from {@link AUDITED_TRANSPORTS}, and the spec asserts per entry
+ *      that gutting THAT transport's finally fails the build.
+ *
  * ## LIMITS — what this guard is NOT
  *
  * READ THIS BEFORE CITING THE GUARD AS COVERAGE. It is a lexical scan over the
@@ -129,7 +167,13 @@
  *     that speaks HTTP itself, or a helper in a third file whose own module has
  *     no catalog address, still gets through;
  *   - it proves the recorder is CALLED, never that the row is CORRECT or that
- *     it reached Cosmos.
+ *     it reached Cosmos;
+ *   - and it proves the call is INSIDE the `finally`, never that it is
+ *     UNCONDITIONAL. `finally { if (ok) record(…) }` satisfies check 1 while
+ *     dropping every denied call — demonstrated, and caught instead by
+ *     `lib/azure/__tests__/unity-audit-sql.test.ts` ("records the DENIED row
+ *     even though it re-throws"). Guard and spec cover different halves; citing
+ *     either alone as coverage is the mistake this section exists to prevent.
  *
  * The un-bypassable half of this control is the transport itself: there is one
  * credential resolver (uc-backend.ts) and two audited transports, and code that
@@ -139,22 +183,23 @@
  * ## STILL NOT COVERED BY THE TRAIL (declared, not fixed)
  *
  *   - `lib/azure/shortcut-credentials.ts` — storage-credential + external-
- *     location CREATE/DELETE, un-audited. See KNOWN_UNAUDITED / issue #2622.
- *   - the ~25 `executeStatement(` governance-DDL exits (SQL_EXIT_BASELINE).
+ *     location CREATE/DELETE, un-audited. See KNOWN_UNAUDITED / issue #2622
+ *     gap 1: the file is covered by a repo-level credential-path read/write
+ *     deny, so the recorder has to be added by someone with write access to it.
  *   - `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` namespace/table
  *     CREATE + DROP: audited, but into a DIFFERENT trail
  *     (`logIcebergAccess` → `_auditLog itemType:'iceberg-catalog'`), so they do
  *     NOT appear in the system-tables pane. See docs/fiab/unity-gov.md.
  *
  * THE CHECKS
- *   1. INTEGRITY (ucFetch)   — `recordUnityAccess(` inside a `finally` block of
- *      `ucFetch`, and the import from lib/azure/unity-audit is present.
+ *   1. TRANSPORT INTEGRITY   — for EVERY entry of {@link AUDITED_TRANSPORTS}:
+ *      its recorder is called from inside a `finally` block of its transport
+ *      function, and the file imports from lib/azure/unity-audit.
  *   2. OUTBOUND RATCHET      — EVERY file this guard exempts from check 4
  *      (allowlisted OR declared-gap) has a frozen count of outbound TRANSPORT
  *      SITES (OUTBOUND_BASELINE), counted with the SAME {@link TRANSPORTS}
  *      vocabulary check 4 uses. A file exempted without a pin FAILS.
- *   3. INTEGRITY (dbxFetch)  — `recordDatabricksUnityAccess(` inside a `finally`
- *      block of `dbxFetch`.
+ *   3. (folded into 1.)
  *   4. NO BYPASS             — no file outside the ALLOWLIST may combine a Loom
  *      Unity address OR a Unity Catalog REST path with outbound-request code.
  *      Reading those for a GATE/CAPABILITY check is fine; issuing a REQUEST is not.
@@ -162,9 +207,10 @@
  *   5. ALLOWLISTED CALLERS MUST AUDIT.
  *   6. SINK REACHABILITY     — `unity-audit.ts` writes both sinks and still
  *      classifies denials.
- *   7. SQL-EXIT RATCHET      — the `executeStatement(` count in EVERY file
+ *   7. SQL-EXIT RATCHET      — the raw `executeStatement(` count in EVERY file
  *      pinned by SQL_EXIT_BASELINES must not grow, and a pinned file that
- *      disappears FAILS (see history #3 and #8).
+ *      disappears FAILS (see history #3, #8 and #9). Every UC-governance file
+ *      is pinned at ZERO; the only permitted exit is `ucSql`'s own.
  *
  * ALLOWLIST — a file that legitimately needs the catalog address AND makes
  *   requests must be added to CHOKEPOINT_FILES below WITH a justification, and
@@ -193,20 +239,70 @@ const APP_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 export const CHOKEPOINT = 'lib/azure/unity-catalog-client.ts';
 /** The Databricks workspace client — its dbxFetch audits the UC REST subset. */
 export const DBX_CHOKEPOINT = 'lib/azure/databricks-client.ts';
+/** The audited SQL Statement Execution transport — its ucSql records the DDL half. */
+export const SQL_CHOKEPOINT = 'lib/azure/uc-sql.ts';
+/** The Databricks ACCOUNT-plane client — its acctFetch records metastore assignment. */
+export const ACCOUNT_CHOKEPOINT = 'lib/azure/unity-catalog-account-client.ts';
 /** The recorder both choke points delegate to. */
 export const RECORDER = 'lib/azure/unity-audit.ts';
+
+/**
+ * The four audited transports, as `[file, transport function, recorder symbol]`.
+ *
+ * The integrity check is the SAME brace-accurate `finally` match for all four —
+ * pasting a fifth transport in here is what wires it up, so a new choke point
+ * cannot be added with a weaker check than the existing ones.
+ */
+export const AUDITED_TRANSPORTS = [
+  {
+    file: CHOKEPOINT,
+    fn: 'ucFetch',
+    recorder: 'recordUnityAccess',
+    why:
+      'Recording only on the success path drops every DENIED call — the highest-value audit row. '
+      + '(A call elsewhere in the file does NOT satisfy this check.)',
+  },
+  {
+    file: DBX_CHOKEPOINT,
+    fn: 'dbxFetch',
+    recorder: 'recordDatabricksUnityAccess',
+    why:
+      'Catalog OWNER CHANGE (patchUcCatalog), catalog DELETE (deleteUcCatalog) and GRANT MUTATION '
+      + '(updateUcPermissions) issue from this client on the Commercial default backend — without this '
+      + 'they reach Unity Catalog UNAUDITED.',
+  },
+  {
+    file: SQL_CHOKEPOINT,
+    fn: 'ucSql',
+    recorder: 'recordUnitySqlAccess',
+    why:
+      'The SQL half of the surface carries the governance DDL — GRANT/REVOKE, ABAC CREATE POLICY / '
+      + 'DROP POLICY, ALTER … SET MASK / SET ROW FILTER, governed tags, SET TAGS. Before #2622 none of '
+      + 'it produced a Loom row. Recording outside the finally would drop exactly the DENIED statements.',
+  },
+  {
+    file: ACCOUNT_CHOKEPOINT,
+    fn: 'acctFetch',
+    recorder: 'recordUnityAccountAccess',
+    why:
+      'Metastore ASSIGNMENT is an account-ADMIN mutation deciding which metastore a whole workspace '
+      + 'sees. Its path is not a /api/2.x/unity-catalog/** path, so no other choke point can ever see it.',
+  },
+];
 
 /**
  * `executeStatement(` occurrences allowed PER FILE that reaches Unity Catalog
  * over SQL.
  *
- * These are Databricks **SQL Statement Execution** calls, not UC REST, so they
- * do NOT produce a row in this trail — they are covered by Databricks'
- * `system.access.audit` instead. The counts are frozen so a NEW un-audited SQL
- * exit fails the build. Lowering one (by routing a call through an audited path)
- * is always welcome; raising one requires a security review and a note here.
- * Tracked: audit the governance DDL half (createUcPolicy / dropUcPolicy /
- * mutateUcGovernedTag / setUcTags).
+ * These are Databricks **SQL Statement Execution** calls, not UC REST. Until
+ * #2622 they produced no row in this trail at all, so the ratchet froze the
+ * count. They now route through `ucSql` ({@link SQL_CHOKEPOINT}), which records
+ * from a `finally`, so every UC-governance file is pinned at ZERO raw exits and
+ * the ONE remaining exit is the audited wrapper's own call.
+ *
+ * Lowering a ceiling is always welcome; raising one requires a security review
+ * and a note here — a raw `executeStatement(` in any of these files is an
+ * un-audited door to Unity Catalog governance DDL.
  *
  * ## Why this is a Map (round 4)
  *
@@ -221,9 +317,15 @@ export const RECORDER = 'lib/azure/unity-audit.ts';
  */
 export const SQL_EXIT_BASELINES = new Map([
   // Catalog REST client — the governance DDL (policies, governed tags, setUcTags).
-  ['lib/azure/unity-catalog-client.ts', 24],
-  // Databricks system-table readers — one shared runSystemTableRead exit.
-  ['lib/azure/uc-system-tables.ts', 1],
+  ['lib/azure/unity-catalog-client.ts', 0],
+  // Databricks system-table readers — the shared runSystemTableRead.
+  ['lib/azure/uc-system-tables.ts', 0],
+  // The UC granular-security wizard (column masks + row filters) — the ABAC
+  // CREATE FUNCTION + ALTER TABLE … SET MASK / SET ROW FILTER pair. It was never
+  // pinned before #2622 even though it is the same governance-DDL class.
+  ['app/api/items/[type]/[id]/security/route.ts', 0],
+  // The AUDITED wrapper itself: exactly ONE exit, inside ucSql's try/finally.
+  [SQL_CHOKEPOINT, 1],
 ]);
 
 /** Back-compat scalar: the primary choke point's own ceiling. */
@@ -267,6 +369,11 @@ export const OUTBOUND_BASELINE = new Map([
   // The recorder and the backend resolver build no requests at all.
   [RECORDER, 0],
   ['lib/azure/uc-backend.ts', 0],
+  // The audited SQL transport delegates to executeStatement — it builds no
+  // request of its own, and pinning it at 0 stops it growing one.
+  [SQL_CHOKEPOINT, 0],
+  // The account plane: exactly ONE exit, inside acctFetch.
+  [ACCOUNT_CHOKEPOINT, 1],
   // #2679: the one token-exchange POST to /api/1.0/unity-control/auth/tokens.
   ['lib/azure/uc-token-exchange.ts', 1],
   // The LU-2 anonymous probe + its two sibling probes.
@@ -297,6 +404,21 @@ export const CHOKEPOINT_FILES = new Map([
   [CHOKEPOINT, 'THE choke point — its single fetchWithTimeout is wrapped by recordUnityAccess in a finally block.'],
   [DBX_CHOKEPOINT, 'The Databricks workspace client. Its dbxFetch finally calls recordDatabricksUnityAccess, which audits the /api/2.x/unity-catalog/** subset (catalog owner change, catalog delete, grant mutation).'],
   [RECORDER, 'The recorder. Writes the audit sinks; issues no catalog requests.'],
+  [
+    SQL_CHOKEPOINT,
+    'THE SQL choke point (#2622 gap 2) — `ucSql` wraps the Databricks SQL Statement Execution transport and '
+    + 'records via recordUnitySqlAccess from a finally, so the governance DDL half (GRANT/REVOKE, ABAC '
+    + 'CREATE POLICY / DROP POLICY, ALTER … SET MASK / SET ROW FILTER, governed tags, SET TAGS) lands in the '
+    + 'same trail as UC REST. It NEVER copies the statement text onto the row: buildCreateConnection emits '
+    + 'OPTIONS (password \'…\'), and a mutation row egresses to tenant-registered third-party webhooks.',
+  ],
+  [
+    ACCOUNT_CHOKEPOINT,
+    'THE account-plane choke point (#2622 gap 3) — `acctFetch` targets /api/2.0/accounts/{id}, which is NOT a '
+    + '/api/2.x/unity-catalog/** path, so no other transport can see it. Metastore ASSIGNMENT is an '
+    + 'account-ADMIN mutation deciding which metastore a whole workspace sees; it records via '
+    + 'recordUnityAccountAccess from a finally, so the 403 "caller is not an account admin" is recorded too.',
+  ],
   ['lib/azure/uc-backend.ts', 'Resolves the backend + base URL + credential. Builds no request of its own.'],
   [
     'lib/azure/uc-token-exchange.ts',
@@ -335,6 +457,8 @@ export const CHOKEPOINT_FILES = new Map([
 export const MUST_AUDIT = new Map([
   ['lib/admin/health-probes.ts', 'recordUnityAccess'],
   [DBX_CHOKEPOINT, 'recordDatabricksUnityAccess'],
+  [SQL_CHOKEPOINT, 'recordUnitySqlAccess'],
+  [ACCOUNT_CHOKEPOINT, 'recordUnityAccountAccess'],
   ['lib/azure/dq-monitor-client.ts', 'recordDatabricksUnityAccess'],
   ['lib/azure/iceberg-catalog-client.ts', 'recordDatabricksUnityAccess'],
 ]);
@@ -667,20 +791,23 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
   if (opts.dbxOutboundBaseline != null) outboundBaseline.set(DBX_CHOKEPOINT, opts.dbxOutboundBaseline);
   const failures = [];
 
-  // ── 1. The ucFetch choke point ────────────────────────────────────────────
-  const chokeSrc = sources.get(CHOKEPOINT);
-  if (chokeSrc == null) {
-    failures.push(`MISSING CHOKE POINT: ${CHOKEPOINT} does not exist. Every Unity Catalog call must funnel through its ucFetch.`);
-  } else {
-    if (!/from\s+['"]@\/lib\/azure\/unity-audit['"]/.test(chokeSrc)) {
-      failures.push(`${CHOKEPOINT}: does not import from @/lib/azure/unity-audit — the audit choke point has been disconnected.`);
-    }
-    if (!callsSymbolInFinallyOf(chokeSrc, 'ucFetch', 'recordUnityAccess')) {
+  // ── 1. THE AUDITED TRANSPORTS ─────────────────────────────────────────────
+  // Same brace-accurate `finally` match for all four, driven off one table, so a
+  // choke point cannot be added with a weaker check than its siblings.
+  for (const t of AUDITED_TRANSPORTS) {
+    const src = sources.get(t.file);
+    if (src == null) {
       failures.push(
-        `${CHOKEPOINT}: recordUnityAccess( is not called from inside a \`finally\` block of ucFetch. ` +
-        `Recording only on the success path drops every DENIED call — the highest-value audit row. ` +
-        `(A call elsewhere in the file does NOT satisfy this check.)`,
+        `MISSING CHOKE POINT: ${t.file} does not exist. Its ${t.fn} is the audited transport for its half of `
+        + `the Unity Catalog surface.`,
       );
+      continue;
+    }
+    if (!/from\s+['"](?:@\/lib\/azure\/unity-audit|\.\/unity-audit)['"]/.test(src)) {
+      failures.push(`${t.file}: does not import from lib/azure/unity-audit — the audit choke point has been disconnected.`);
+    }
+    if (!callsSymbolInFinallyOf(src, t.fn, t.recorder)) {
+      failures.push(`${t.file}: ${t.recorder}( is not called from inside a \`finally\` block of ${t.fn}. ${t.why}`);
     }
   }
 
@@ -701,25 +828,17 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
     const sqlExits = countCalls(src, 'executeStatement');
     if (sqlExits > base) {
       failures.push(
-        `${rel}: ${sqlExits} executeStatement( exits (ratchet: ${base}). These reach the catalog over the ` +
-        `Databricks SQL Statement Execution API and produce NO row in the Loom Unity audit trail. Route the new call ` +
-        `through an audited path, or — if it genuinely must be raw SQL — raise this file's SQL_EXIT_BASELINES entry with ` +
-        `a security-review note. The count may go DOWN freely.`,
+        `${rel}: ${sqlExits} raw executeStatement( exits (ratchet: ${base}). A raw call reaches Unity Catalog over ` +
+        `the Databricks SQL Statement Execution API OUTSIDE the audited transport, so it produces NO row in the Loom ` +
+        `Unity trail — that is exactly the hole #2622 closed. Call ucSql( from ${SQL_CHOKEPOINT} instead (same ` +
+        `signature, plus an optional { target } for the securable). If it genuinely must be the raw transport, raise ` +
+        `this file's SQL_EXIT_BASELINES entry with a security-review note. The count may go DOWN freely.`,
       );
     }
   }
 
-  // ── 3. The dbxFetch choke point (the Commercial DEFAULT backend) ───────────
-  const dbxSrc = sources.get(DBX_CHOKEPOINT);
-  if (dbxSrc == null) {
-    failures.push(`MISSING CHOKE POINT: ${DBX_CHOKEPOINT} does not exist.`);
-  } else if (!callsSymbolInFinallyOf(dbxSrc, 'dbxFetch', 'recordDatabricksUnityAccess')) {
-    failures.push(
-      `${DBX_CHOKEPOINT}: recordDatabricksUnityAccess( is not called from inside a \`finally\` block of dbxFetch. ` +
-      `Catalog OWNER CHANGE (patchUcCatalog), catalog DELETE (deleteUcCatalog) and GRANT MUTATION (updateUcPermissions) ` +
-      `issue from this client on the Commercial default backend — without this they reach Unity Catalog UNAUDITED.`,
-    );
-  }
+  // ── 3. (folded into check 1 — AUDITED_TRANSPORTS covers dbxFetch, ucSql and
+  //        acctFetch with the same brace-accurate finally match as ucFetch.)
 
   // ── 2. PER-FILE OUTBOUND RATCHET on every exempted file ───────────────────
   // Applies to the audited allowlist AND the declared gaps. Without it an
@@ -864,7 +983,11 @@ if (invokedDirectly) {
     );
     process.exit(1);
   }
-  console.log('✓ unity-audit-chokepoint: ucFetch + dbxFetch both record, no bypass, sinks reachable, SQL exits ratcheted.');
+  console.log(
+    `✓ unity-audit-chokepoint: all ${AUDITED_TRANSPORTS.length} audited transports `
+    + `(${AUDITED_TRANSPORTS.map((t) => t.fn).join(', ')}) record from a finally, `
+    + 'no bypass, sinks reachable, raw SQL exits ratcheted.',
+  );
   if (KNOWN_UNAUDITED.size) {
     console.log(`\n  ! ${KNOWN_UNAUDITED.size} DECLARED, UN-AUDITED catalog path(s) remain — the trail is NOT complete:`);
     for (const [file, why] of KNOWN_UNAUDITED) console.log(`      - ${file}: ${why}`);

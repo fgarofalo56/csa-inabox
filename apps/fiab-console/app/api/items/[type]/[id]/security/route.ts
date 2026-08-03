@@ -21,7 +21,10 @@
  *            constrained principal sees the effect at query time.
  *
  * Backends dispatched by [type] (Azure-native — NO Microsoft Fabric):
- *   - databricks-sql-warehouse → Databricks Unity Catalog via executeStatement
+ *   - databricks-sql-warehouse → Databricks Unity Catalog via `ucSql`, the AUDITED
+ *     Statement-Execution wrapper (lib/azure/uc-sql.ts). Every mask/filter CREATE,
+ *     ALTER and DROP this route issues lands in the Loom Unity access trail
+ *     (`_auditLog itemType:'loom-unity'` + `LoomAudit_CL`) — issue #2622.
  *
  * AUTH: the Databricks client builds every request with the Container App MI's
  * Microsoft Entra bearer token (no PAT). The client NEVER sends raw SQL — it
@@ -37,11 +40,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  executeStatement,
   databricksConfigGate,
   listWarehouses,
   type QueryResult,
 } from '@/lib/azure/databricks-client';
+import { ucSql } from '@/lib/azure/uc-sql';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import {
   buildUcColumnMask,
@@ -163,7 +166,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
 
   async function safe(label: string, sql: string): Promise<{ rows: Record<string, unknown>[]; error?: string }> {
     try {
-      const r = await executeStatement(warehouseId, sql);
+      const r = await ucSql(warehouseId, sql, { target: catalog });
       return { rows: rowsToObjects(r) };
     } catch (e: any) {
       return { rows: [], error: `${label}: ${e?.message || String(e)}` };
@@ -246,10 +249,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
     }
     try {
-      const sample = await executeStatement(warehouseId, sampleSql);
-      const masks = rowsToObjects(await executeStatement(warehouseId, masksSql))
+      const target = [vCatalog, vSchema, vTable].filter(Boolean).join('.');
+      const sample = await ucSql(warehouseId, sampleSql, { target });
+      const masks = rowsToObjects(await ucSql(warehouseId, masksSql, { target }))
         .filter((m) => String(m.table_name) === vTable && String(m.schema_name) === vSchema);
-      const filters = rowsToObjects(await executeStatement(warehouseId, filtersSql))
+      const filters = rowsToObjects(await ucSql(warehouseId, filtersSql, { target }))
         .filter((f) => String(f.table_name) === vTable && String(f.schema_name) === vSchema);
       return NextResponse.json({
         ok: true,
@@ -292,7 +296,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
     }
     if (body?.preview === true) return NextResponse.json({ ok: true, preview: true, sql });
     try {
-      const r = await executeStatement(warehouseId, sql);
+      const r = await ucSql(warehouseId, sql, {
+        target: [params.catalog || catalog, params.schema, params.tableName, params.columnName]
+          .filter(Boolean).map(String).join('.'),
+      });
       return NextResponse.json({ ok: true, sql, executionMs: r.executionMs, executedBy: session.claims.upn });
     } catch (e: any) {
       return NextResponse.json({ ok: false, sql, error: e?.message || String(e), code: e?.code }, { status: 502 });
@@ -326,7 +333,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
   // Execute: CREATE OR REPLACE FUNCTION first, then ALTER TABLE … SET MASK/FILTER.
   const started = Date.now();
   try {
-    await executeStatement(warehouseId, ddl.functionSql);
+    await ucSql(warehouseId, ddl.functionSql, { target: ddl.functionName });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, sql: ddl.combined, stage: 'create-function', error: e?.message || String(e), code: e?.code },
@@ -334,7 +341,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
     );
   }
   try {
-    await executeStatement(warehouseId, ddl.alterSql);
+    await ucSql(warehouseId, ddl.alterSql, {
+      target: [params.catalog || catalog, params.schema, params.tableName, params.columnName]
+        .filter(Boolean).map(String).join('.'),
+    });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, sql: ddl.combined, stage: 'alter-table', error: e?.message || String(e), code: e?.code },

@@ -21,12 +21,16 @@ import {
   readSources,
   countOutbound,
   hasTransport,
+  referencesCatalogAddress,
   TRANSPORTS,
   CHOKEPOINT,
   DBX_CHOKEPOINT,
   RECORDER,
   SQL_EXIT_BASELINE,
   SQL_EXIT_BASELINES,
+  SQL_CHOKEPOINT,
+  ACCOUNT_CHOKEPOINT,
+  AUDITED_TRANSPORTS,
   OUTBOUND_BASELINE,
   CHOKEPOINT_FILES,
   KNOWN_UNAUDITED,
@@ -259,25 +263,31 @@ describe('ATTACK: round-3 reviewer bypasses (all three exited 0 against round 2)
 });
 
 describe('ATTACK: quieter regressions', () => {
-  it('fails when a new SQL exit is added to the catalog client', () => {
-    const s = realSources();
-    s.set(CHOKEPOINT, `${s.get(CHOKEPOINT)!}\nasync function sneak(w: string) { return executeStatement(w, 'DROP TABLE x'); }\n`);
-    const failures = analyzeUnityChokepoint(s);
-    expect(failures.join('\n')).toMatch(new RegExp(`executeStatement\\( exits \\(ratchet: ${SQL_EXIT_BASELINE}\\)`));
-  });
-
   // Round 4, #8: the LU-3 audit try/finally pushed unity-catalog-client.ts over
   // its check-file-size ceiling, so the 165-line system-table block moved to
   // uc-system-tables.ts — carrying one executeStatement( out of a ratchet that
   // was scoped to ONE file. A refactor must not be able to narrow a ratchet.
-  it('#19 — ratchets SQL exits in EVERY pinned file, not just the choke point', () => {
+  //
+  // Round 5 (#2622) widened this to EVERY pinned UC-governance file in one scan
+  // — including `app/api/items/[type]/[id]/security/route.ts`, the ABAC
+  // column-mask + row-filter wizard, which had TEN raw exits and no pin at all.
+  it('#19 — ratchets SQL exits in EVERY pinned governance file, not just the choke point', () => {
     const s = realSources();
-    const moved = 'lib/azure/uc-system-tables.ts';
-    expect(SQL_EXIT_BASELINES.has(moved), `${moved} is not pinned`).toBe(true);
-    expect(s.has(moved)).toBe(true);
-    s.set(moved, `${s.get(moved)!}\nexport async function sneak(w: string) { return executeStatement(w, 'DROP TABLE x'); }\n`);
-    expect(analyzeUnityChokepoint(s).join('\n'))
-      .toMatch(/uc-system-tables\.ts: \d+ executeStatement\( exits \(ratchet: \d+\)/);
+    const governance = [
+      'lib/azure/uc-system-tables.ts',
+      'lib/azure/unity-catalog-client.ts',
+      'app/api/items/[type]/[id]/security/route.ts',
+    ];
+    for (const moved of governance) {
+      expect(SQL_EXIT_BASELINES.has(moved), `${moved} is not pinned`).toBe(true);
+      expect(s.has(moved), `${moved} is not in the scanned tree`).toBe(true);
+      s.set(moved, `${s.get(moved)!}\nexport async function sneak(w: string) { return executeStatement(w, 'DROP TABLE x'); }\n`);
+    }
+    const found = analyzeUnityChokepoint(s).join('\n');
+    for (const moved of governance) {
+      expect(found, `${moved} grew a raw SQL exit without failing`)
+        .toMatch(new RegExp(`${moved.replace(/[.[\]/]/g, '\\$&')}: \\d+ raw executeStatement\\( exits \\(ratchet: 0\\)`));
+    }
   });
 
   it('#19 — fails when a pinned SQL-exit file disappears (a rename must move the ceiling)', () => {
@@ -492,5 +502,131 @@ describe('masking', () => {
     expect(masked.length).toBe(src.length);
     expect(masked.slice(0, 16).trim()).toBe(''); // the comment is gone…
     expect(masked).toContain("from 'undici'"); // …the real import is not.
+  });
+});
+
+/**
+ * ROUND 5 (issue #2622). Two declared gaps closed, and the check that used to be
+ * written TWICE by hand (ucFetch, dbxFetch) is now driven off one table so a
+ * third and fourth transport could not be added with a weaker assertion.
+ *
+ * Every attack below is ONE whole-tree scan for the whole block, not one per
+ * case — see the note on the TRANSPORTS test above: a spec file that runs past
+ * 60s fails the run on vitest's birpc `onTaskUpdate` deadline while every test
+ * still passes (PR #2785). Independent planted files assert the same thing in
+ * one scan as in N.
+ */
+describe('ROUND 5 — every audited transport must record from its finally', () => {
+  /**
+   * Reviewer bypass #1, applied generically: neuter every REAL call to the
+   * recorder and plant one decoy outside any `finally`.
+   *
+   * `__disabled_recordX(` does not match `\brecordX\s*\(` (no word boundary
+   * between `_` and a letter), so the transport genuinely stops recording — and
+   * the decoy keeps the file's recorder-symbol COUNT non-zero, so check 5
+   * (MUST_AUDIT, "the symbol appears somewhere") still passes. That is the
+   * point: only the brace-accurate finally check can catch this.
+   */
+  function gutFinally(src: string, symbol: string): string {
+    const neutered = src.split(`${symbol}(`).join(`__disabled_${symbol}(`);
+    return `${neutered}\nfunction __decoy_${symbol}() { void ${symbol}({} as never); }\n`;
+  }
+
+  it('covers all four transports from ONE table', () => {
+    expect(AUDITED_TRANSPORTS.map((t: { fn: string }) => t.fn).sort())
+      .toEqual(['acctFetch', 'dbxFetch', 'ucFetch', 'ucSql']);
+    for (const t of AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string; why: string }>) {
+      expect(typeof t.why, `${t.fn} has no explanation`).toBe('string');
+      expect(t.why.length).toBeGreaterThan(40);
+    }
+  });
+
+  it('fails for EVERY transport whose finally stops recording (one scan, four attacks)', () => {
+    const s = realSources();
+    for (const t of AUDITED_TRANSPORTS as Array<{ file: string; recorder: string }>) {
+      const src = s.get(t.file);
+      expect(src, `${t.file} is not in the scanned tree`).toBeTruthy();
+      const gutted = gutFinally(src!, t.recorder);
+      expect(gutted).not.toBe(src); // the mutation must have applied
+      s.set(t.file, gutted);
+    }
+    const found = analyzeUnityChokepoint(s).join('\n');
+    for (const t of AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string }>) {
+      expect(found, `${t.fn} walked past the finally check`)
+        .toMatch(new RegExp(`${t.recorder}\\( is not called from inside a \`finally\` block of ${t.fn}`));
+      // …and the weaker "symbol appears in the file" check did NOT fire, which
+      // is what makes this a real regression test for the finally match.
+      expect(found).not.toMatch(new RegExp(`${t.file.replace(/[.[\]/]/g, '\\$&')}: allowlisted`));
+    }
+  });
+});
+
+describe('ROUND 5 — the SQL half is AUDITED, not merely ratcheted', () => {
+  const GOVERNANCE_FILES = [
+    'lib/azure/unity-catalog-client.ts',
+    'lib/azure/uc-system-tables.ts',
+    'app/api/items/[type]/[id]/security/route.ts',
+  ];
+
+  it('pins every UC-governance file at ZERO raw executeStatement( exits', () => {
+    // A frozen non-zero count is not a trail — it only promises the hole will
+    // not GROW. #2622 closed it: the only permitted raw exit in the repo is the
+    // audited wrapper's own.
+    for (const f of GOVERNANCE_FILES) {
+      expect(SQL_EXIT_BASELINES.get(f), `${f} is not pinned at 0`).toBe(0);
+    }
+    expect(SQL_EXIT_BASELINES.get(SQL_CHOKEPOINT)).toBe(1);
+    expect(SQL_EXIT_BASELINE).toBe(0); // the back-compat scalar tracks the client
+    // The security route — the ABAC column-mask + row-filter wizard, 10 raw
+    // exits — was never pinned at all before this round.
+    expect(SQL_EXIT_BASELINES.has('app/api/items/[type]/[id]/security/route.ts')).toBe(true);
+  });
+
+  // The NEGATIVE half — a raw executeStatement( coming back to any of these
+  // three — is `#19 — ratchets SQL exits in EVERY pinned governance file`
+  // above: one scan, all three files. Not repeated here, because a whole-tree
+  // scan is ~1.2s and this file has a 60s birpc cliff (see PR #2785).
+
+  it('CONTROL — the SAME edit through the AUDITED wrapper passes', () => {
+    // Without this, a ratchet that simply banned all SQL from these files would
+    // look identical to a ratchet that bans the UN-AUDITED transport. The fix
+    // has to leave the audited path open or it is not a fix, it is a ban.
+    const s = realSources();
+    for (const f of GOVERNANCE_FILES) {
+      s.set(f, `${s.get(f)!}
+export async function auditedDdl(warehouseId: string) {
+  return ucSql(warehouseId, 'DROP POLICY \`p\` ON TABLE a.b.c', { target: 'a.b.c' });
+}
+`);
+    }
+    expect(analyzeUnityChokepoint(s)).toEqual([]);
+  });
+});
+
+describe('ROUND 5 — the account plane was invisible to the address vocabulary', () => {
+  it('is now allowlisted, pinned, and required to audit', () => {
+    // It targets /api/2.0/accounts/{id}, which matches NEITHER address regex, so
+    // check 4 could never have reported it and it was not even in
+    // KNOWN_UNAUDITED. "The scan found nothing" was not "there is nothing".
+    const s = realSources();
+    const src = s.get(ACCOUNT_CHOKEPOINT)!;
+    expect(src).toBeTruthy();
+    expect(referencesCatalogAddress(ACCOUNT_CHOKEPOINT, src)).toBe(false);
+    expect(hasTransport(src)).toBe(true);
+    expect(CHOKEPOINT_FILES.has(ACCOUNT_CHOKEPOINT)).toBe(true);
+    expect(OUTBOUND_BASELINE.get(ACCOUNT_CHOKEPOINT)).toBe(1);
+  });
+
+  it('fails when the account client grows a second un-audited outbound call', () => {
+    const s = realSources();
+    s.set(ACCOUNT_CHOKEPOINT, `${s.get(ACCOUNT_CHOKEPOINT)!}
+export async function rogueAssign(host: string, token: string, ws: string, ms: string) {
+  await fetch(\`https://\${host}/api/2.0/accounts/x/workspaces/\${ws}/metastore\`, {
+    method: 'PUT', headers: { authorization: \`Bearer \${token}\` }, body: JSON.stringify({ metastore_id: ms }),
+  });
+}
+`);
+    expect(analyzeUnityChokepoint(s).join('\n'))
+      .toMatch(/unity-catalog-account-client\.ts: \d+ outbound calls \(ratchet: 1\)/);
   });
 });

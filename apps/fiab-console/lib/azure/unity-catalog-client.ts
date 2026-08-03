@@ -9,7 +9,8 @@
  *        - metastores list (cross-workspace federation)
  *
  *   2. **SQL-warehouse GRANT/REVOKE statement execution**
- *        Reuses {@link executeStatement} from `databricks-client` because the
+ *        Reuses {@link ucSql} — the AUDITED wrapper around executeStatement —
+ *        because the
  *        REST permission update is not equivalent to a real `GRANT … TO` —
  *        some privilege grants (e.g. `EXECUTE ON FUNCTION`, dynamic mask
  *        functions) only work over SQL. We honor the user's "full UC CRUD"
@@ -42,7 +43,8 @@ import { isOssUc, ossUcBase, ossUcAuthHeader, ossUcUnsupportedPath, ossUcRewrite
 import { UnityCatalogError, ucRows, clampInt } from '@/lib/azure/uc-primitives';
 import { classifyUnityCall, recordUnityAccess, unityOutcomeForError } from '@/lib/azure/unity-audit';
 import type { UCEffectivePermissions } from '@/lib/azure/uc-effective-permissions';
-import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
+import type { QueryResult, DbxQueryParam } from './databricks-client';
+import { ucSql } from './uc-sql';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
   ucListTableTags, ucListColumnTags, ucListSchemaTags, ucListCatalogTags, ucListVolumeTags,
@@ -850,7 +852,7 @@ export async function grantPrivilegesSQL(
   // keyword and fail.
   const principalSql = /[\s@.\-]/.test(principal) ? `\`${principal.replace(/`/g, '``')}\`` : principal;
   const sql = `GRANT ${privList} ON ${obj} TO ${principalSql}`;
-  return executeStatement(warehouseId, sql);
+  return ucSql(warehouseId, sql, { target: securableName });
 }
 
 export async function revokePrivilegesSQL(
@@ -864,7 +866,7 @@ export async function revokePrivilegesSQL(
   const obj = `${secType} ${securableName}`;
   const principalSql = /[\s@.\-]/.test(principal) ? `\`${principal.replace(/`/g, '``')}\`` : principal;
   const sql = `REVOKE ${privList} ON ${obj} FROM ${principalSql}`;
-  return executeStatement(warehouseId, sql);
+  return ucSql(warehouseId, sql, { target: securableName });
 }
 
 // ============================================================
@@ -1001,9 +1003,10 @@ export async function getTableLineageSystemTables(
       WHERE source_table_full_name = :fn OR target_table_full_name = :fn
       LIMIT 1000`;
     try {
-      result = await executeStatement(warehouseId, sql, undefined, undefined, [
-        { name: 'fn', value: fullName, type: 'STRING' },
-      ]);
+      result = await ucSql(warehouseId, sql, {
+        params: [{ name: 'fn', value: fullName, type: 'STRING' }],
+        target: fullName,
+      });
       break;
     } catch (e: any) {
       const msg = String(e?.message || e);
@@ -1172,7 +1175,7 @@ export async function getColumnLineageSystemTables(
     LIMIT 1000`;
   let result: QueryResult;
   try {
-    result = await executeStatement(warehouseId, sql, undefined, undefined, params);
+    result = await ucSql(warehouseId, sql, { params, target: fullName });
   } catch (e: any) {
     const msg = String(e?.message || e);
     if (/TABLE_OR_VIEW_NOT_FOUND|system\.access|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS/i.test(msg)) {
@@ -1626,6 +1629,15 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
 // resolves a running warehouse id and handles config / Gov-boundary gates.
 // ============================================================
 
+/**
+ * Dotted securable name for an audit row — `catalog.schema.object[.column]`,
+ * skipping the parts a call does not name. Used ONLY to label the audit row;
+ * the executed SQL is built by the pure, injection-safe builders.
+ */
+function ucTarget(...parts: Array<string | undefined>): string {
+  return parts.filter((p) => !!p && String(p).trim()).join('.');
+}
+
 export interface UcTagRow {
   catalog_name?: string;
   schema_name?: string;
@@ -1643,8 +1655,8 @@ export async function readUcObjectTags(
   opts?: { schema?: string; table?: string },
 ): Promise<{ tableTags: UcTagRow[]; columnTags: UcTagRow[] }> {
   const [t, c] = await Promise.all([
-    executeStatement(warehouseId, ucListTableTags(catalog, opts?.schema, opts?.table)),
-    executeStatement(warehouseId, ucListColumnTags(catalog, opts?.schema, opts?.table)),
+    ucSql(warehouseId, ucListTableTags(catalog, opts?.schema, opts?.table), { target: ucTarget(catalog, opts?.schema, opts?.table) }),
+    ucSql(warehouseId, ucListColumnTags(catalog, opts?.schema, opts?.table), { target: ucTarget(catalog, opts?.schema, opts?.table) }),
   ]);
   return { tableTags: ucRows(t) as unknown as UcTagRow[], columnTags: ucRows(c) as unknown as UcTagRow[] };
 }
@@ -1656,9 +1668,9 @@ export async function readUcContainerTags(
   opts?: { schema?: string; volume?: string },
 ): Promise<{ catalogTags: UcTagRow[]; schemaTags: UcTagRow[]; volumeTags: UcTagRow[] }> {
   const [cat, sch, vol] = await Promise.all([
-    executeStatement(warehouseId, ucListCatalogTags(catalog)).then(ucRows).catch(() => []),
-    executeStatement(warehouseId, ucListSchemaTags(catalog, opts?.schema)).then(ucRows).catch(() => []),
-    executeStatement(warehouseId, ucListVolumeTags(catalog, opts?.schema, opts?.volume)).then(ucRows).catch(() => []),
+    ucSql(warehouseId, ucListCatalogTags(catalog), { target: catalog }).then(ucRows).catch(() => []),
+    ucSql(warehouseId, ucListSchemaTags(catalog, opts?.schema), { target: ucTarget(catalog, opts?.schema) }).then(ucRows).catch(() => []),
+    ucSql(warehouseId, ucListVolumeTags(catalog, opts?.schema, opts?.volume), { target: ucTarget(catalog, opts?.schema, opts?.volume) }).then(ucRows).catch(() => []),
   ]);
   return {
     catalogTags: cat as unknown as UcTagRow[],
@@ -1698,7 +1710,7 @@ export async function applyUcTags(
       ? buildUcSetObjectTags({ kind, catalog: p.catalog, schema: p.schema, name: p.name, tags: p.tags || [] })
       : buildUcUnsetObjectTags({ kind, catalog: p.catalog, schema: p.schema, name: p.name, keys: p.keys || [] });
   }
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: ucTarget(p.catalog, p.schema, p.name, p.column) });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -1706,12 +1718,12 @@ export async function applyUcTags(
 
 /** `SHOW GOVERNED TAGS [LIKE pattern]` → account-level governed-tag rows. */
 export async function listUcGovernedTags(warehouseId: string, pattern?: string): Promise<Record<string, unknown>[]> {
-  const r = await executeStatement(warehouseId, ucShowGovernedTags(pattern));
+  const r = await ucSql(warehouseId, ucShowGovernedTags(pattern));
   return ucRows(r);
 }
 
 export async function describeUcGovernedTag(warehouseId: string, key: string): Promise<Record<string, unknown>[]> {
-  const r = await executeStatement(warehouseId, ucDescribeGovernedTag(key));
+  const r = await ucSql(warehouseId, ucDescribeGovernedTag(key), { target: key });
   return ucRows(r);
 }
 
@@ -1738,7 +1750,7 @@ export async function mutateUcGovernedTag(
     default:
       throw new UnityCatalogError(`unknown governed-tag action: ${p.action}`, 400);
   }
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: p.key });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -1750,7 +1762,7 @@ export async function listUcPolicies(
   warehouseId: string,
   p: { securableType: UcPolicySecurableType; securableName: string; effective?: boolean },
 ): Promise<Record<string, unknown>[]> {
-  const r = await executeStatement(warehouseId, ucShowPolicies(p));
+  const r = await ucSql(warehouseId, ucShowPolicies(p), { target: p.securableName });
   return ucRows(r);
 }
 
@@ -1758,7 +1770,7 @@ export async function describeUcPolicy(
   warehouseId: string,
   p: { name: string; securableType: UcPolicySecurableType; securableName: string },
 ): Promise<Record<string, unknown>[]> {
-  const r = await executeStatement(warehouseId, ucDescribePolicy(p));
+  const r = await ucSql(warehouseId, ucDescribePolicy(p), { target: p.securableName });
   return ucRows(r);
 }
 
@@ -1770,7 +1782,7 @@ export async function createUcPolicy(
 ): Promise<{ sql: string; executionMs?: number }> {
   const sql = buildCreatePolicy(params);
   if (preview) return { sql };
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: params.securableName });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -1779,7 +1791,7 @@ export async function dropUcPolicy(
   p: { name: string; securableType: UcPolicySecurableType; securableName: string },
 ): Promise<{ sql: string; executionMs: number }> {
   const sql = buildDropPolicy(p);
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: p.securableName });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -1792,7 +1804,7 @@ export async function listUcViews(
   catalog: string,
   schema: string,
 ): Promise<Record<string, unknown>[]> {
-  const r = await executeStatement(warehouseId, buildShowViewsDdl(catalog, schema));
+  const r = await ucSql(warehouseId, buildShowViewsDdl(catalog, schema), { target: ucTarget(catalog, schema) });
   return ucRows(r);
 }
 
@@ -1805,7 +1817,7 @@ export async function createUcMetricView(
 ): Promise<{ sql: string; executionMs?: number }> {
   const sql = buildCreateMetricViewDdl(params);
   if (preview) return { sql };
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: ucTarget(params.catalog, params.schema, params.name) });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -1815,7 +1827,7 @@ export async function queryUcMetricView(
   p: { catalog: string; schema: string; name: string; dimensions: string[]; measures: string[]; limit?: number },
 ): Promise<{ sql: string; columns: string[]; rows: unknown[][]; rowCount: number; executionMs: number }> {
   const sql = compileMetricViewQuery(p);
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: ucTarget(p.catalog, p.schema, p.name) });
   return { sql, columns: r.columns, rows: r.rows, rowCount: r.rowCount, executionMs: r.executionMs };
 }
 
@@ -1825,7 +1837,7 @@ export async function dropUcMetricView(
   p: { catalog: string; schema: string; name: string },
 ): Promise<{ sql: string; executionMs: number }> {
   const sql = buildDropMetricViewDdl(p.catalog, p.schema, p.name);
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: ucTarget(p.catalog, p.schema, p.name) });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -1841,7 +1853,7 @@ export async function createUcTableWithFormat(
 ): Promise<{ sql: string; executionMs?: number }> {
   const sql = buildCreateTableFormatDdl(spec);
   if (preview) return { sql };
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: ucTarget(spec.catalog, spec.schema, spec.name) });
   return { sql, executionMs: r.executionMs };
 }
 
@@ -2022,7 +2034,7 @@ export async function createUcConnection(
   params: UcCreateConnectionParams,
 ): Promise<{ executionMs: number }> {
   const sql = buildCreateConnection(params);
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: params.name });
   return { executionMs: r.executionMs };
 }
 
@@ -2034,7 +2046,7 @@ export async function createUcForeignCatalog(
   params: UcForeignCatalogParams,
 ): Promise<{ sql: string; executionMs: number }> {
   const sql = buildCreateForeignCatalog(params);
-  const r = await executeStatement(warehouseId, sql);
+  const r = await ucSql(warehouseId, sql, { target: params.name });
   return { sql, executionMs: r.executionMs };
 }
 

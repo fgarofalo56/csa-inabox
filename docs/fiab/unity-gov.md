@@ -249,13 +249,25 @@ merge-blocking CI guard keeps it that way.
 
 **Where the trail comes from.** `loom-unity` has internal ingress and (post-LU-2)
 rejects anonymous callers, so the Console BFF is its only credentialed client.
-Loom leans on that: every Unity Catalog **REST** call goes through one of **two**
+Loom leans on that: every Unity Catalog call goes through one of **four**
 audited transports, each recording from a `finally` block:
 
 | Transport | File | Covers |
 |---|---|---|
-| `ucFetch` | `lib/azure/unity-catalog-client.ts` | the backend-agnostic client — Loom Unity in Gov, Databricks UC in Commercial. Holds that file's only outbound fetch. |
+| `ucFetch` | `lib/azure/unity-catalog-client.ts` | the backend-agnostic UC REST client — Loom Unity in Gov, Databricks UC in Commercial. Holds that file's only outbound fetch. |
 | `dbxFetch` | `lib/azure/databricks-client.ts` | the Databricks workspace client. The Commercial default routes call it **directly** for catalog owner change (`patchUcCatalog`), catalog delete (`deleteUcCatalog`) and grant mutation (`updateUcPermissions` → `PATCH /api/2.1/unity-catalog/permissions/…`). Only `/api/2.x/unity-catalog/**` paths are recorded; jobs/warehouses/SQL/Files are not catalog access. |
+| `ucSql` | `lib/azure/uc-sql.ts` | **(#2622)** the Databricks **SQL Statement Execution** transport — the governance DDL: `GRANT`/`REVOKE`, ABAC `CREATE POLICY` / `DROP POLICY`, `ALTER … SET MASK` / `SET ROW FILTER` (column masks + row filters), governed tags, `SET TAGS`, `CREATE CONNECTION` / `CREATE FOREIGN CATALOG`. Records via `recordUnitySqlAccess`. |
+| `acctFetch` | `lib/azure/unity-catalog-account-client.ts` | **(#2622)** the Databricks **account plane** — metastore assignment (`PUT /api/2.0/accounts/{id}/workspaces/{wsId}/metastore`), an account-admin mutation deciding which metastore a whole workspace sees. Records via `recordUnityAccountAccess`. |
+
+> **The SQL row never carries the statement.** `buildCreateConnection` emits
+> `CREATE CONNECTION … OPTIONS (host '…', password '…')`, and a MUTATION row is
+> fanned out to tenant-registered outbound webhooks. So `recordUnitySqlAccess`
+> classifies the statement into a **closed vocabulary** (`policy.create`,
+> `row-filter.set`, `grant.revoke`, …) and stamps `detail` from a validated
+> Databricks `error_code` token — never from the SQL and never from the error
+> message, which echoes the failing statement. An unrecognised statement records
+> as `sql.statement` and, per the affirmative-egress rule, does not leave the
+> estate.
 
 Two further modules keep their own transport for a real reason and record their
 own rows: `dq-monitor-client.ts` (Lakehouse Monitoring resolves a monitored table
@@ -323,18 +335,23 @@ fails the build when:
    undici `request`, node `https.request` and `axios.post` each walked past it with
    zero failures. Both consumers now derive from one exported list, and the spec
    asserts per entry that both see it, so they cannot diverge again;
-3. the recorder call leaves the `finally` of **either** `ucFetch` or `dbxFetch` —
-   the check brace-matches the real function body and the real `finally` block,
-   with comments and string literals masked, so a decoy call elsewhere in the
-   file does not satisfy it;
+3. a recorder call leaves the `finally` of **any** of the four audited
+   transports (`ucFetch`, `dbxFetch`, `ucSql`, `acctFetch`) — the check
+   brace-matches the real function body and the real `finally` block, with
+   comments and string literals masked, so a decoy call elsewhere in the file
+   does not satisfy it. All four are driven off one `AUDITED_TRANSPORTS` table,
+   so a fifth cannot be added with a weaker assertion than its siblings;
 4. `unity-audit.ts` stops writing either sink or stops classifying denials;
 5. any file pinned in `SQL_EXIT_BASELINES` grows a new `executeStatement(` exit,
    or a pinned file disappears. The pin is per FILE because a *refactor* can
    narrow a ratchet: LU-3's audit `try/finally` pushed `unity-catalog-client.ts`
    over its `check-file-size` ceiling, so the 165-line Databricks system-table
    block moved to `lib/azure/uc-system-tables.ts` — carrying one
-   `executeStatement(` out of view of a single-file ratchet. Both files are
-   pinned (24 + 1), and a vanished pin now fails.
+   `executeStatement(` out of view of a single-file ratchet. Since #2622 every
+   UC-governance file is pinned at **0** — `unity-catalog-client.ts`,
+   `uc-system-tables.ts` and `app/api/items/[type]/[id]/security/route.ts` — and
+   the only permitted raw exit in the repo is `ucSql`'s own. A vanished pin
+   fails.
 
 The guard's own bypasses are covered by negative tests in
 `apps/fiab-console/lib/azure/__tests__/unity-audit-guard.test.ts`, which replay
@@ -348,7 +365,7 @@ indirection it does not name (a hand-rolled `net.Socket` speaking HTTP; a helper
 in a third module that itself carries no catalog address); and it proves the
 recorder is *called*, never that the row is correct or that it reached Cosmos. The
 `## LIMITS` block at the top of the guard is the normative statement. Do not cite
-the guard as proof that the Databricks path is fully covered — cite the two
+the guard as proof that the Databricks path is fully covered — cite the four
 transports plus the gap list below.
 
 ### Audit (LU-3) — known gaps
@@ -356,25 +373,24 @@ transports plus the gap list below.
 The trail is **not** complete, and this section is the honest inventory. Trusting
 a trail with an undisclosed hole is worse than having none.
 
-- **SQL-DDL governance mutations are not in this trail.** Loom reaches the
-  catalog through 25 `executeStatement(...)` calls — 24 in
-  `unity-catalog-client.ts` and 1 in `uc-system-tables.ts` — over the Databricks
-  **SQL Statement Execution** API, a different surface from UC REST. These include
-  `createUcPolicy` / `dropUcPolicy` (ABAC row filters + column masks),
-  `mutateUcGovernedTag` and `setUcTags`. They produce **no Loom row**; both counts
-  are ratcheted per file (`SQL_EXIT_BASELINES`) so a new un-audited SQL exit fails
-  the build (issue #2622).
-  *Scope of the exposure:* `executeStatement` targets a Databricks **SQL
-  warehouse** (`POST /api/2.0/sql/statements`), and every caller route is gated
-  by `databricksConfigGate()` (and, for ABAC policies, `isGovCloud()`), so on the
-  Loom Unity / OSS backend these paths cannot execute at all — they are gated,
-  not silently unaudited. The exposure is Commercial-only, and there they are
-  covered by Databricks' own `system.access.audit`. What is missing is the
-  **Loom-side** row, i.e. single-pane completeness, not an unlogged mutation.
-- **`lib/azure/shortcut-credentials.ts` is un-audited.** Its own private
-  `ucFetch` issues storage-credential and external-location CREATE/DELETE. A
-  storage credential is a live cloud identity, which makes this the single most
-  privilege-relevant un-audited surface in the list. It is listed in the guard's
+- ~~**SQL-DDL governance mutations are not in this trail.**~~ **CLOSED (#2622,
+  2026-08-02).** All 25 `executeStatement(...)` calls now route through `ucSql`,
+  and so do the **ten** in `app/api/items/[type]/[id]/security/route.ts` — the
+  ABAC column-mask + row-filter wizard, which was the same governance class and
+  had never been ratcheted at all. `SQL_EXIT_BASELINES` pins every one of those
+  files at **0** raw exits; the only permitted raw exit in the repo is `ucSql`'s
+  own, and the guard brace-matches its `finally`.
+  *Residual caveat, stated plainly:* the guard proves the recorder is called
+  **inside** the `finally`, not that the call is **unconditional** —
+  `finally { if (ok) record(…) }` still passes it. That property is held by
+  `lib/azure/__tests__/unity-audit-sql.test.ts`, not by the guard.
+- **`lib/azure/shortcut-credentials.ts` is un-audited — the ONE gap still open.**
+  Its own private `ucFetch` issues storage-credential and external-location
+  CREATE/DELETE. A storage credential is a live cloud identity, which makes this
+  the single most privilege-relevant un-audited surface in the list. It is
+  unchanged by #2622 because the file is covered by a **repo-level
+  credential-path read/write deny**, so the recorder has to be added by someone
+  with write access to it. It is listed in the guard's
   `KNOWN_UNAUDITED` map, which prints the gap on every passing run, fails the
   build if any *other* file joins it, **and** — since round 3 — pins the file's
   outbound-call count so the un-audited surface cannot GROW while it waits
@@ -389,9 +405,15 @@ a trail with an undisclosed hole is worse than having none.
   Query them with the KQL/Cosmos filter `itemType == 'iceberg-catalog'` until the
   two trails are unified (issue #2622). (`listNamespaceGrants` in the same file
   is the one call that DOES record into this trail.)
-- **`unity-catalog-account-client.ts`** (Databricks account-plane metastore
-  assignment) never talks to Loom Unity and is not routed through the choke
-  point; its account-admin mutations are unaudited (issue #2622).
+- ~~**`unity-catalog-account-client.ts`** account-admin mutations are
+  unaudited.~~ **CLOSED (#2622, 2026-08-02).** `acctFetch` now records from a
+  `finally` via `recordUnityAccountAccess`; a metastore assignment lands as
+  `unity.metastore-assignment.assign` on `workspace:<id>`, and the 403 "caller
+  is not an account admin" lands as `denied`.
+  *Why it was invisible:* its paths are `/api/2.0/accounts/{id}/…`, which match
+  neither of the guard's address regexes, so check 4 could never have reported
+  it and it was not even in `KNOWN_UNAUDITED`. "The scan found nothing" was not
+  "there is nothing" — the scan's vocabulary could not express the surface.
 - **There is no in-product reader yet.** The `/catalog/unity → System tables`
   pane and `readUnitySystemTable()` are split out of this change: they had no
   in-browser E2E receipt, and `ux-baseline.md` **G1** makes that blocking.
