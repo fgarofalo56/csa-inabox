@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.10...csa-inabox-v0.82.11) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ci:** npm CVE-floor guard was satisfiable by a shell string; earn its claim ([#2887](https://github.com/fgarofalo56/csa-inabox/issues/2887)) ([06f3b93](https://github.com/fgarofalo56/csa-inabox/commit/06f3b9331440991b54034dad1b02898dd67e2fae))
+* **ci:** stop discarding the browser E2E verdict in loom-ui-verify (refs [#2875](https://github.com/fgarofalo56/csa-inabox/issues/2875)) ([#2888](https://github.com/fgarofalo56/csa-inabox/issues/2888)) ([2045417](https://github.com/fgarofalo56/csa-inabox/commit/20454177d7c2f8db043a41b5328495a5daae3fc8))
+* **deploy:** the nightly reconcile would have deleted the estate on its first success (refs [#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775)) ([#2897](https://github.com/fgarofalo56/csa-inabox/issues/2897)) ([144184a](https://github.com/fgarofalo56/csa-inabox/commit/144184a111aa449fc892c10ccaf2610d40d6ca91))
+* **security:** the containment guard missed two more shapes, and a layer that tests nothing satisfied it (refs [#2869](https://github.com/fgarofalo56/csa-inabox/issues/2869)) ([#2891](https://github.com/fgarofalo56/csa-inabox/issues/2891)) ([0be2600](https://github.com/fgarofalo56/csa-inabox/commit/0be26002429e9ffbb8c94b923a38c646b3d41f70))
+* **ui:** the Learn drawer opened itself over the canvas, and a NotFound rendered as a raw ARM body (refs [#2893](https://github.com/fgarofalo56/csa-inabox/issues/2893) refs [#2895](https://github.com/fgarofalo56/csa-inabox/issues/2895)) ([#2900](https://github.com/fgarofalo56/csa-inabox/issues/2900)) ([c17e857](https://github.com/fgarofalo56/csa-inabox/commit/c17e85725b022cdd59f864eb383c296e02204690))
+
 ## [0.82.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.9...csa-inabox-v0.82.10) (2026-08-03)
 
 
