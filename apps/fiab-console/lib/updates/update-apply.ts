@@ -100,6 +100,14 @@ export interface ImageProbe {
   app: string;
   ref: string;
   exists: boolean;
+  /**
+   * The HEAD could not determine presence — an auth failure (401/403), a
+   * network error (status 0), or a transient 5xx. Distinct from `exists:false`
+   * with a 404, which is a genuine "not published". A 401 must NEVER be reported
+   * as "missing" (→ "build the images"); it means the probe could not
+   * authenticate to look (#2905).
+   */
+  unverifiable: boolean;
   /** HTTP status the HEAD returned (for diagnostics), or 0 on network error. */
   status: number;
 }
@@ -313,21 +321,49 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
     } catch {
       status = 0;
     }
-    probes.push({ app: app.acaName, ref, exists: status === 200, status });
+    // 200 = confirmed present. 404 = genuinely not published. 401/403 = the probe
+    // could not authenticate to look; 0 = network error; 5xx = transient. The
+    // latter three are UNVERIFIABLE, not "missing" — reporting them as missing
+    // tells the operator to rebuild images that may already exist (#2905).
+    const exists = status === 200;
+    const unverifiable = !exists && (status === 401 || status === 403 || status === 0 || status >= 500);
+    probes.push({ app: app.acaName, ref, exists, unverifiable, status });
     plan.push({ app: app.image, acaName: app.acaName, toImage: ref });
   }
-  const missingImages = probes.filter((p) => !p.exists);
-  if (missingImages.length > 0) {
+  const unverifiableImages = probes.filter((p) => p.unverifiable);
+  const notPublished = probes.filter((p) => !p.exists && !p.unverifiable);
+
+  // Couldn't-verify takes precedence: rebuilding won't help if the real problem
+  // is that the probe can't authenticate to the registry.
+  if (unverifiableImages.length > 0) {
+    return {
+      ok: false,
+      reason: 'images-not-published',
+      message:
+        `Could not verify ${unverifiableImages.length}/${probes.length} of the ` +
+        `${target.tag_name} release images — the manifest HEAD returned an auth ` +
+        'failure (401/403) or could not connect, NOT a "not found". The images may ' +
+        'already be present. Confirm the console\'s user-assigned identity has AcrPull ' +
+        'on the deployment\'s registry (for a private ACR) or that the registry token / ' +
+        'network path is valid, then re-check. Do NOT rebuild until a probe returns a ' +
+        'real 404 for a specific image.',
+      missingImages: [...unverifiableImages, ...notPublished],
+      target,
+      imageVersion,
+    };
+  }
+
+  if (notPublished.length > 0) {
     return {
       ok: false,
       reason: 'images-not-published',
       message:
         `Target release ${target.tag_name} images are not all available yet ` +
-        `(${missingImages.length}/${probes.length} missing — the exact refs are listed below). ` +
+        `(${notPublished.length}/${probes.length} not published — the exact refs are listed below). ` +
         'The updater rolls each app to the registry it already pulls from: build/push the release images ' +
         'to your deployment\'s registry (private ACR: run the release image build workflow into it; ' +
         `public ghcr: publish + make the ${GHCR_REGISTRY}/${owner} packages public), then re-check.`,
-      missingImages,
+      missingImages: notPublished,
       target,
       imageVersion,
     };
