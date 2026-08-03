@@ -128,7 +128,13 @@ async function headGhcrImage(ref: string): Promise<number> {
  */
 async function headImage(ref: string): Promise<number> {
   const host = ref.split('/')[0];
-  if (host.endsWith('.azurecr.io')) {
+  // Azure Container Registry across ALL clouds — Public is .azurecr.io, but
+  // Government is .azurecr.us (and China .azurecr.cn). Recognising only .io meant
+  // every Gov (.azurecr.us) ref fell through to the ghcr anonymous-token HEAD,
+  // which authenticates as GitHub against an Azure registry → guaranteed 401 →
+  // reported as "image missing" (#2905). Route every ACR host to the UAMI AAD
+  // token exchange; acrManifestExists derives the registry endpoint from `host`.
+  if (isAcrHost(host)) {
     const withoutHost = ref.slice(host.length + 1);
     const lastColon = withoutHost.lastIndexOf(':');
     const repo = lastColon > 0 ? withoutHost.slice(0, lastColon) : withoutHost;
@@ -136,6 +142,14 @@ async function headImage(ref: string): Promise<number> {
     return acrManifestExists(host, repo, tag);
   }
   return headGhcrImage(ref);
+}
+
+/** True for an Azure Container Registry login server in any Azure cloud. */
+function isAcrHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h.endsWith('.azurecr.io')   // Azure Public
+    || h.endsWith('.azurecr.us')     // Azure Government
+    || h.endsWith('.azurecr.cn');    // Azure China
 }
 
 /**
