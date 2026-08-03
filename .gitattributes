@@ -32,3 +32,7 @@ scripts/ci/test-acr-firewall-lease.sh text eol=lf
 # CRLF checkout would break them with "$'\r': command not found".
 scripts/ci/assert-acr-image-tags.sh text eol=lf
 scripts/ci/test-assert-acr-image-tags.sh text eol=lf
+
+# #2837 — the login-health verdict is executed by `bash` in loom-ui-verify.yml
+# (in-VNet Linux runner) and by the node:test self-test. Same CRLF hazard.
+scripts/ci/login-health-verdict.sh text eol=lf

@@ -62,6 +62,15 @@ az containerapp update -n loom-console -g "$RG" \
 #    - interactive browser login on the live URL,
 #    - the loom-ui-verify login-health job (catches AADSTS7000215),
 #    - /admin/health Secret & credential health → the DRIFT flag clears.
+#
+#    NOTE (#2837): before 2026-08 that login-health step could not fail — it
+#    carried continue-on-error AND a trailing `exit 0`, so it printed
+#    "::error::LOGIN BROKEN" and still concluded success. A green run of it
+#    was NOT evidence that sign-in worked. It now exits non-zero on evidence
+#    of a broken sign-in path (invalid_client hits / an expired credential)
+#    and stays green only on "healthy" or "could not check" — so from that
+#    version on, a green conclusion is meaningful. If you are verifying a
+#    rotation against an older run, do not trust its green.
 
 # 5. AFTER verification, delete the OLD expiring credential:
 az ad app credential list --id "$APP_ID" --query "[].{keyId:keyId,end:endDateTime,name:displayName}" -o table
