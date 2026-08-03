@@ -15,12 +15,19 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  checkMergeBlockingLane,
   decide,
   discoverSuites,
+  extractJobBlock,
+  findInvocation,
   isOwnedByOtherRunner,
+  jobContextName,
   parseTapSummary,
+  pullRequestTriggerIsUnfiltered,
+  MERGE_BLOCKING_LANES,
   OTHER_RUNNER_TREES,
   REPO_ROOT,
+  RUNNER_PATH,
 } from '../check-node-test-suites.mjs';
 
 /** Build a throwaway tree and return its root. */
@@ -195,4 +202,184 @@ test('every exclusion names a runner and the workflow that executes it', () => {
       `${t.dir} claims ${t.workflow} runs it, but that workflow does not exist`,
     );
   }
+});
+
+// ── the lane must be able to BLOCK A MERGE (#2856) ──────────────────────────
+//
+// Running the suites is only half of it. #2838 wired this runner into a job
+// whose status context is not in the required set, so a red result could not
+// stop a merge. These drive the parser branches that decide that.
+
+const WF = [
+  'name: Demo',
+  'on:',
+  '  pull_request:',
+  '  push:',
+  '    branches: [main]',
+  'jobs:',
+  '  guardrails:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - name: something else',
+  '        run: node scripts/ci/check-other.mjs',
+  '      - name: the runner',
+  `        run: node ${RUNNER_PATH}`,
+  '  other-job:',
+  '    runs-on: ubuntu-latest',
+].join('\n');
+
+test('extractJobBlock: returns only the named job, stopping at the next job id', () => {
+  const block = extractJobBlock(WF, 'guardrails');
+  assert.ok(block.includes(RUNNER_PATH));
+  assert.ok(!block.includes('other-job'));
+  assert.equal(extractJobBlock(WF, 'no-such-job'), null);
+});
+
+test('extractJobBlock: a two-space COMMENT does not end the block', () => {
+  // Comments between steps are indented arbitrarily. Treating one as the next
+  // job id would truncate the block and lose the invocation below it — the
+  // parser bug that would make this guard pass while measuring nothing.
+  const wf = [
+    'jobs:',
+    '  guardrails:',
+    '    steps:',
+    '  # a stray two-space comment',
+    '      - name: the runner',
+    `        run: node ${RUNNER_PATH}`,
+  ].join('\n');
+  assert.ok(extractJobBlock(wf, 'guardrails').includes(RUNNER_PATH));
+});
+
+test('jobContextName: a job with no name: reports under its job id', () => {
+  assert.equal(jobContextName(extractJobBlock(WF, 'guardrails'), 'guardrails'), 'guardrails');
+});
+
+test('jobContextName: adding a name: RENAMES the status context', () => {
+  // This is the silent-drop trap: branch protection requires the context
+  // "guardrails"; giving the job a display name changes what it reports as,
+  // and the required check would simply never arrive.
+  const block = '    name: Loom Guardrails\n    steps: []';
+  assert.equal(jobContextName(block, 'guardrails'), 'Loom Guardrails');
+  assert.equal(jobContextName("    name: 'Quoted Name'", 'g'), 'Quoted Name');
+});
+
+test('findInvocation: finds the run line and reports it un-neutered', () => {
+  const r = findInvocation(extractJobBlock(WF, 'guardrails'), RUNNER_PATH);
+  assert.equal(r.found, true);
+  assert.deepEqual(r.neutered, []);
+});
+
+test('findInvocation: `|| true` on the run line is neutered', () => {
+  const block = `      - name: x\n        run: node ${RUNNER_PATH} || true`;
+  const r = findInvocation(block, RUNNER_PATH);
+  assert.equal(r.found, true);
+  assert.match(r.neutered.join(' '), /\|\| true/);
+});
+
+test('findInvocation: continue-on-error on the SAME step is neutered', () => {
+  const block = [
+    '      - name: x',
+    '        continue-on-error: true',
+    `        run: node ${RUNNER_PATH}`,
+  ].join('\n');
+  assert.match(findInvocation(block, RUNNER_PATH).neutered.join(' '), /continue-on-error/);
+});
+
+test('findInvocation: a NEIGHBOUR step\'s continue-on-error does not neuter ours', () => {
+  // Attribution matters. Scanning the whole job for continue-on-error would
+  // condemn a healthy invocation because some unrelated step tolerates failure
+  // — an over-broad guard that gets switched off rather than fixed.
+  const block = [
+    '      - name: flaky third-party thing',
+    '        continue-on-error: true',
+    '        run: node scripts/ci/other.mjs',
+    '      - name: the runner',
+    `        run: node ${RUNNER_PATH}`,
+  ].join('\n');
+  const r = findInvocation(block, RUNNER_PATH);
+  assert.equal(r.found, true);
+  assert.deepEqual(r.neutered, []);
+});
+
+test('findInvocation: a COMMENTED-OUT invocation does not count as wired', () => {
+  // A guard a comment can satisfy is not a guard.
+  const block = `      - name: x\n        # run: node ${RUNNER_PATH}\n        run: echo hi`;
+  assert.equal(findInvocation(block, RUNNER_PATH).found, false);
+});
+
+test('pullRequestTriggerIsUnfiltered: plain `pull_request:` passes', () => {
+  assert.equal(pullRequestTriggerIsUnfiltered(WF).ok, true);
+});
+
+test('pullRequestTriggerIsUnfiltered: a paths filter fails', () => {
+  // A path-filtered REQUIRED check never reports on unrelated PRs (deadlock)
+  // and cannot fire on the edit it exists to catch.
+  const wf = 'on:\n  pull_request:\n    paths:\n      - "apps/**"\njobs:\n';
+  const r = pullRequestTriggerIsUnfiltered(wf);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /path-filtered/);
+});
+
+test('pullRequestTriggerIsUnfiltered: push-only workflow fails', () => {
+  const r = pullRequestTriggerIsUnfiltered('on:\n  push:\n    branches: [main]\njobs:\n');
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /pull_request/);
+});
+
+// ── the real repo ───────────────────────────────────────────────────────────
+
+test('a merge-blocking lane really invokes this runner', () => {
+  // THE assertion for #2856. Before the loom-guardrails.yml step was added this
+  // failed: the only invocation was `node:test suites (node 20)` in
+  // fiab-console-ci.yml, which is not a required status check.
+  const r = checkMergeBlockingLane();
+  assert.equal(r.ok, true, `no merge-blocking lane runs the suites: ${r.problems.join(' | ')}`);
+});
+
+test('every declared merge-blocking lane carries verifiable evidence', () => {
+  assert.ok(MERGE_BLOCKING_LANES.length > 0, 'declaring no lane would pass vacuously');
+  for (const lane of MERGE_BLOCKING_LANES) {
+    assert.ok(lane.workflow && lane.job && lane.check, `incomplete lane: ${JSON.stringify(lane)}`);
+    const abs = path.join(REPO_ROOT, lane.workflow);
+    assert.ok(fs.existsSync(abs), `${lane.workflow} does not exist`);
+    const block = extractJobBlock(fs.readFileSync(abs, 'utf8'), lane.job);
+    assert.ok(block !== null, `${lane.workflow} declares no job "${lane.job}"`);
+    assert.equal(
+      jobContextName(block, lane.job),
+      lane.check,
+      `${lane.job} does not report as the required check "${lane.check}"`,
+    );
+  }
+});
+
+test('checkMergeBlockingLane fails when the lane workflow is missing entirely', () => {
+  // Point it at an empty root: the declared workflow cannot be found, so it
+  // must report a problem rather than pass by default.
+  const r = checkMergeBlockingLane(fs.mkdtempSync(path.join(os.tmpdir(), 'no-lanes-')));
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.length > 0);
+});
+
+// CONTROL — passes BOTH before and after this change, in both directions of the
+// mutation. It exists to catch an over-broad "fix" that gave the suites a
+// blocking lane by REMOVING the two independent controls #2838 deliberately
+// kept. Coverage must be added here, never traded.
+test('CONTROL: the pre-existing independent lanes are untouched', () => {
+  const consoleCi = fs.readFileSync(
+    path.join(REPO_ROOT, '.github/workflows/fiab-console-ci.yml'),
+    'utf8',
+  );
+  const nodeTestJob = extractJobBlock(consoleCi, 'node-test-suites');
+  assert.ok(nodeTestJob, 'fiab-console-ci.yml lost its node-test-suites job');
+  assert.equal(findInvocation(nodeTestJob, RUNNER_PATH).found, true);
+  assert.ok(extractJobBlock(consoleCi, 'loom-sharing'), 'the loom-sharing control job was removed');
+
+  const guardrails = fs.readFileSync(
+    path.join(REPO_ROOT, '.github/workflows/loom-guardrails.yml'),
+    'utf8',
+  );
+  assert.ok(
+    findInvocation(extractJobBlock(guardrails, 'guardrails'), 'scripts/ci/__tests__').found,
+    'the hand-listed scripts/ci self-test step was removed',
+  );
 });
