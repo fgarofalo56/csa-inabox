@@ -289,43 +289,32 @@ jobs:
           # publicNetworkAccess=Disabled (private), so the `az keyvault secret set`
           # calls the script makes (loom-msal-client-secret + session-secret) are
           # NOT reachable from this public ubuntu-latest runner and would fail
-          # silently, leaving login broken AFTER a "successful" deploy. Mirror the
-          # Synapse step: keep default-action Deny and punch a SINGLE-IP firewall
-          # allow scoped to THIS runner's egress IP for the write window (do NOT
-          # open the vault to the whole internet with --default-action Allow), and
-          # RESTORE it to Disabled/Deny via a trap so it runs even on failure. A
-          # workflow-level "Restore Loom Key Vault private (safety net)" step
-          # (if: always()) re-asserts the locked-down posture at job end. NOTE: use
-          # the CORRECT flag --public-network-access (NOT --public-network-enabled).
-          KV_ORIG_PNA=""
-          RUNNER_IP=""
+          # silently, leaving login broken AFTER a "successful" deploy. So: punch
+          # a SINGLE-IP firewall allow scoped to THIS runner's egress IP for the
+          # write window (default-action stays Deny — do NOT open the vault to the
+          # whole internet), and restore it via a trap so it runs even on failure.
+          #
+          # #2855: the open/close pair used to be inline `az` here, and the close
+          # ended in `-o none || true` with NO read-back — so an ARM error left the
+          # secret vault PUBLIC and this step still went green. Both halves now go
+          # through scripts/csa-loom/kv-firewall-window.sh, whose `close` RE-READS
+          # publicNetworkAccess + defaultAction + the ipRules count and returns
+          # non-zero unless all three verify. SOFT_FAIL keeps a transient miss here
+          # from aborting the rest of bootstrap; the authoritative, job-failing
+          # verdict is the always() "Restore Loom Key Vault private (verified)"
+          # step at the end of this job.
+          KV_ORIG_PNA="$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)"
+          echo "Key Vault $KV_NAME publicNetworkAccess=$KV_ORIG_PNA"
           restore_kv_pna() {
             if [ -n "${KV_NAME:-}" ] && [ "${KV_ORIG_PNA:-Enabled}" != "Enabled" ]; then
-              echo "-> restoring Key Vault $KV_NAME publicNetworkAccess=Disabled"
-              if [ -n "${RUNNER_IP:-}" ]; then
-                az keyvault network-rule remove -n "$KV_NAME" --ip-address "$RUNNER_IP" -o none 2>/dev/null || true
-              fi
-              az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none || true
+              LOOM_KV_WINDOW_SOFT_FAIL=1 bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME" || true
             fi
           }
           trap restore_kv_pna EXIT
-          KV_ORIG_PNA="$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)"
-          echo "Key Vault $KV_NAME publicNetworkAccess=$KV_ORIG_PNA"
           if [ "$KV_ORIG_PNA" != "Enabled" ]; then
             echo "-> temporarily enabling Key Vault public access (scoped to runner IP) for the secret-write window"
-            RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)
-            echo "Runner egress IP: ${RUNNER_IP:-<unresolved>}"
-            # Keep the firewall default at Deny; allow only this runner's IP.
-            az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none || \
-              echo "::warning::Could not enable Key Vault public access — secret writes may be unreachable from the runner."
-            if [ -n "${RUNNER_IP:-}" ]; then
-              az keyvault network-rule add -n "$KV_NAME" --ip-address "$RUNNER_IP" -o none || \
-                echo "::warning::Could not add runner-IP firewall rule to Key Vault — secret writes may be unreachable."
-            else
-              echo "::warning::Runner egress IP unresolved — falling back to default-action Allow for the write window."
-              az keyvault update -n "$KV_NAME" --default-action Allow -o none || true
-            fi
-            sleep 20
+            bash scripts/csa-loom/kv-firewall-window.sh open --vault "$KV_NAME" \
+              || echo "::warning::Could not open the Key Vault write window — secret writes may be unreachable from the runner."
           fi
           # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
           CONSOLE_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
@@ -1762,25 +1751,22 @@ jobs:
           if [ -n "$HOST_KEY" ] && [ -n "$KV_NAME" ]; then
             # KV is private — scope a single-IP firewall allow to this runner for
             # the write window (default-action stays Deny; do NOT open to the whole
-            # internet), then restore on exit.
+            # internet), then restore it. #2855: the close used to be inline
+            # `az keyvault update ... 2>/dev/null` inside a `set +e` step that is
+            # ALSO continue-on-error, so a failed re-lock was invisible three ways
+            # over and left the secret vault public. It now goes through the
+            # verified helper, and the always() restore step at the end of this job
+            # is the enforcing check.
             KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
-            KV_RUNNER_IP=""
             if [ "$KV_PNA" != "Enabled" ]; then
-              KV_RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)
-              az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none 2>/dev/null
-              if [ -n "${KV_RUNNER_IP:-}" ]; then
-                az keyvault network-rule add -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none 2>/dev/null || true
-              else
-                az keyvault update -n "$KV_NAME" --default-action Allow -o none 2>/dev/null || true
-              fi
-              sleep 15
+              bash scripts/csa-loom/kv-firewall-window.sh open --vault "$KV_NAME" \
+                || echo "::warning::Could not open the Key Vault write window for loom-posture-function-key."
             fi
             az keyvault secret set --vault-name "$KV_NAME" --name loom-posture-function-key --value "$HOST_KEY" -o none 2>/dev/null \
               && echo "  Stored host key in KV $KV_NAME/loom-posture-function-key." \
               || echo "::warning::Could not write loom-posture-function-key to $KV_NAME — the URL still works without the key if the Function allows anonymous; else set the secret manually."
             if [ "$KV_PNA" != "Enabled" ]; then
-              [ -n "${KV_RUNNER_IP:-}" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none 2>/dev/null || true
-              az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null
+              LOOM_KV_WINDOW_SOFT_FAIL=1 bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME" || true
             fi
           fi
           # Set the URL on the Console (and the key secretRef if a KV secret exists).
@@ -2032,30 +2018,44 @@ jobs:
             bash scripts/csa-loom/verify-console-runtime.sh \
             || echo "::warning::console-runtime verification reported drift — see log (probes/resources/telemetry)."
 
-      - name: Restore Loom Key Vault private (safety net)
-        # Runs always(). Several earlier steps flip the Loom Key Vault to
-        # publicNetworkAccess=Enabled (scoped to the runner IP) for a secret-write
-        # window and restore it inline via a trap. This job-level safety net
-        # mirrors the Synapse/Databricks "Restore ... disabled" steps: it
-        # re-asserts the locked-down posture (Disabled + default-action Deny) and
-        # strips any lingering runner-IP allow rules even if a step was cancelled
-        # before its own trap ran — so the vault is never left publicly reachable.
+      - name: Restore Loom Key Vault private (verified)
+        # Runs always() — including after a failed or cancelled earlier step,
+        # which is exactly when the vault is most likely to have been left open.
+        #
+        # This is the ENFORCING check for the Key Vault firewall (#2855). Earlier
+        # steps open a single-IP window for a secret write and close it inline;
+        # this step re-derives the posture FROM THE VAULT and fails the job if it
+        # is not verifiably private. It used to end in
+        #   `... -o none 2>/dev/null && echo ok || echo "::warning::Could not …"`
+        # which meant the step exited 0 no matter what, never re-read the ACLs,
+        # and printed "re-asserted private" over a vault it had not confirmed.
+        # A control whose verdict is discarded is not a control.
+        #
+        # NOTE deliberately NO continue-on-error and no trailing `exit 0`: the
+        # helper's exit status must be the step's, or this reverts to theatre.
         if: always()
         run: |
           set -uo pipefail
-          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
-          [ -z "${KV_NAME:-}" ] && KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].name" -o tsv 2>/dev/null || true)
+          # Enumerate with the rc CAPTURED. An `az` failure returns an empty list,
+          # and reading "empty" as "no vault, nothing to lock down" is bug #2836 —
+          # the same credential/ARM problem that breaks this call is a plausible
+          # cause of the failure that left the vault open in the first place.
+          KV_LIST="$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[].name" -o tsv)"
+          RC=$?
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::Could not enumerate Key Vaults in $ADMIN_RG (az exit $RC). Cannot confirm the Loom vault is private, so this is a FAILURE, not 'nothing to lock down'. Check the vault's firewall by hand."
+            exit 1
+          fi
+          KV_NAME="$(printf '%s\n' "$KV_LIST" | tr -d '\r' | grep '^kv-loom' | head -1)"
+          [ -z "${KV_NAME:-}" ] && KV_NAME="$(printf '%s\n' "$KV_LIST" | tr -d '\r' | grep . | head -1)"
           if [ -z "${KV_NAME:-}" ]; then
-            echo "No Loom Key Vault found in $ADMIN_RG — nothing to lock down."
+            echo "No Key Vault exists in $ADMIN_RG (az listed zero) — nothing to lock down."
             exit 0
           fi
-          # Drop any residual IP firewall allow rules, then re-assert private.
-          for ip in $(az keyvault network-rule list -n "$KV_NAME" --query "ipRules[].value" -o tsv 2>/dev/null || true); do
-            az keyvault network-rule remove -n "$KV_NAME" --ip-address "$ip" -o none 2>/dev/null || true
-          done
-          az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null \
-            && echo "Loom Key Vault $KV_NAME re-asserted private (publicNetworkAccess=Disabled, default-action=Deny)." \
-            || echo "::warning::Could not re-assert private posture on $KV_NAME — verify manually."
+          # Verified close: strips residual ip allow rules, re-asserts
+          # Disabled + Deny, RE-READS all three and returns non-zero unless they
+          # confirm. Non-zero here fails the step and therefore the job.
+          bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME" --subscription "$ADMIN_SUB"
 
       - name: Summary
         if: always()

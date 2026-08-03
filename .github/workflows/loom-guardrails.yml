@@ -113,6 +113,16 @@ jobs:
       # used to read an `az` failure as "nothing to sweep" and exit 0 (#2836).
       - name: acr-firewall-sweep-all (discovery must not read an az failure as "empty" — #2836)
         run: bash scripts/ci/test-acr-firewall-sweep-all.sh
+      # Key Vault's equivalent. Six call sites opened the secret vault's firewall
+      # for a write and re-locked it WITHOUT ever checking the re-lock applied, so
+      # a transient ARM error left it publicly reachable behind a green run
+      # (#2855). The suite drives the helper against a fake `az` — including the
+      # case where `az keyvault update` exits 0 and ARM silently drops it — and
+      # the chokepoint stops the next author writing another inline re-lock.
+      - name: kv-firewall-window (the re-lock must be VERIFIED, not merely attempted — #2855)
+        run: bash scripts/ci/test-kv-firewall-window.sh
+      - name: kv-firewall-restore (no unverified inline Key Vault firewall toggles — #2855)
+        run: node scripts/ci/check-kv-firewall-restore.mjs
       # LIC0 lives in license-scan.yml too, but THAT workflow is path-filtered to
       # package.json / requirements.txt / the manifest — it does NOT run on a
       # bicep change. The guard now also reviews UPSTREAM CONTAINER IMAGES pinned

@@ -101,20 +101,39 @@ jobs:
           KV_NAME=$(az keyvault list -g "$RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv | tr -d '\r')
           [ -z "$KV_NAME" ] && KV_NAME=$(az keyvault list -g "$RG" --query "[0].name" -o tsv | tr -d '\r')
           if [ -n "$HOST_KEY" ] && [ -n "$KV_NAME" ]; then
+            echo "KV_NAME=$KV_NAME" >> "$GITHUB_ENV"
+            # Private-KV single-IP write window. #2855: the open AND the close
+            # used to be inline `az` under `set +e` with `2>/dev/null`, so a
+            # failed re-lock left the Gov secret vault publicly reachable with no
+            # signal at all — and, unlike Commercial, this workflow had no
+            # always() backstop to catch it. Both halves now go through the
+            # verified helper, and the always() step below is the enforcing check.
             KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
-            RIP=""
             if [ "$KV_PNA" != "Enabled" ]; then
-              RIP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)
-              az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none 2>/dev/null
-              [ -n "$RIP" ] && az keyvault network-rule add -n "$KV_NAME" --ip-address "$RIP" -o none 2>/dev/null || az keyvault update -n "$KV_NAME" --default-action Allow -o none 2>/dev/null
-              sleep 15
+              bash scripts/csa-loom/kv-firewall-window.sh open --vault "$KV_NAME" \
+                || echo "::warning::could not open the Key Vault write window for loom-posture-function-key"
             fi
             az keyvault secret set --vault-name "$KV_NAME" --name loom-posture-function-key --value "$HOST_KEY" -o none 2>/dev/null \
               && echo "::notice::stored loom-posture-function-key in $KV_NAME"
             if [ "$KV_PNA" != "Enabled" ]; then
-              [ -n "$RIP" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$RIP" -o none 2>/dev/null
-              az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null
+              LOOM_KV_WINDOW_SOFT_FAIL=1 bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME" || true
             fi
           fi
           az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none \
             && echo "::notice::wired LOOM_POSTURE_FUNCTION_URL=$FUNC_URL — re-run gov-selfaudit to confirm svc-posture-refresh."
+
+      - name: Restore Gov Loom Key Vault private (verified)
+        # The always() backstop this workflow did not have (#2855). The step
+        # above opens a firewall window on the Gov secret vault; if it is
+        # cancelled or fails between the open and the close, nothing else in this
+        # job re-locks it. This re-derives the posture FROM THE VAULT and fails
+        # the job when it is not verifiably private.
+        # NO continue-on-error and no trailing `exit 0` on the enforcing path.
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -z "${KV_NAME:-}" ]; then
+            echo "No Key Vault window was opened by this run — nothing to restore."
+            exit 0
+          fi
+          bash scripts/csa-loom/kv-firewall-window.sh close --vault "$KV_NAME"
