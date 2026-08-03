@@ -118,8 +118,24 @@ jobs:
       #     workspace, unreadable count, missing Application.Read.All) and 1
       #     ONLY on evidence in hand that sign-in is broken. The az reads stay
       #     here; the verdict is a pure, unit-tested script.
+      #
+      #     ORDERING FIX (refs #2871). Because this step sits AHEAD of the
+      #     Playwright projects, a hard failure here aborted the job before a
+      #     single browser test ran — so while the estate carries a live
+      #     AADSTS7000215 signal there was NO obtainable browser-E2E receipt for
+      #     main at all, for any change, and a UI regression could land unseen.
+      #     One true signal was masking a second, independent one.
+      #     This is NOT a skip switch and NOT a re-added continue-on-error: the
+      #     step still runs first and still emits its ::error:: annotations, but
+      #     it RECORDS its verdict and lets the browser suite produce its own
+      #     result. `Enforce login-health verdict…` at the END of this job turns
+      #     a BROKEN verdict back into a red run, so the job's pass/fail outcome
+      #     is unchanged and the run simply carries both signals. Enforcement is
+      #     DEFERRED, NEVER DROPPED — deleting that step re-opens #2837, and
+      #     scripts/ci/__tests__/ui-verify-gate.test.mjs fails if it goes away.
       # -----------------------------------------------------------------------
       - name: Login-health preflight (MSAL secret expiry + callback errors)
+        id: login_health
         env:
           MSAL_APP_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '5c59f3f3-e26d-4122-a707-a04e21ff5255' }}
           CONSOLE_RG: ${{ vars.LOOM_ADMIN_RG || format('rg-csa-loom-admin-{0}', inputs.region) }}
@@ -140,6 +156,16 @@ jobs:
           LH_LAW="$LAW" LH_HITS_RAW="$HITS_RAW" LH_MIN_END="$MINEND" \
           LH_APP_ID="$MSAL_APP_ID" LH_CONSOLE_RG="$CONSOLE_RG" \
             bash scripts/ci/login-health-verdict.sh
+          rc=$?
+
+          # login-health-verdict.sh writes `verdict=ok|unknown|broken` to
+          # $GITHUB_OUTPUT itself. Record its raw exit status as a SECOND,
+          # independent signal: the enforcing step fails closed if the two ever
+          # disagree, or if no verdict was recorded at all.
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+          echo "Recorded login-health rc=$rc. Enforcement is DEFERRED to 'Enforce login-health verdict + blocking suite results' at the end of this job (refs #2871) so the browser E2E below still runs and yields its own receipt. A BROKEN verdict still fails this run."
+          exit 0
 
       # -----------------------------------------------------------------------
       # 3. Resolve Key Vault name, then fetch + mask SESSION_SECRET.
@@ -240,6 +266,7 @@ jobs:
       #    - `verify` tests run with the minted storageState
       # -----------------------------------------------------------------------
       - name: Run loom-ui-verify (--project=verify)
+        id: verify_project
         run: |
           # Prefer the baked browsers when the runner image carries them.
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
@@ -276,6 +303,7 @@ jobs:
       #      Each project now writes to test-results/<project>/ and survives.
       # -----------------------------------------------------------------------
       - name: Run extra Playwright projects
+        id: extra_projects
         if: inputs.extra_projects != ''
         # NO continue-on-error. It hid every result this step produced — a real
         # /admin/tenant-settings mount failure was reported as a green run
@@ -361,3 +389,34 @@ jobs:
             apps/fiab-console/playwright-report/
             apps/fiab-console/test-results/
           retention-days: 14
+
+      # -----------------------------------------------------------------------
+      # 8. FINAL GATE (refs #2871) — this is where a BROKEN login-health verdict
+      #    becomes a red run. It MUST stay last and MUST keep `if: always()`:
+      #    the whole point of recording the preflight verdict instead of
+      #    failing on it is that the browser suite gets to run and report, and
+      #    that only holds if the enforcement still happens afterwards
+      #    unconditionally. A gate that is skipped when an earlier step fails is
+      #    the same mask in a new place.
+      #
+      #    NO continue-on-error here, ever. This step is the teeth for #2837.
+      #    Deleting it, skipping it, or tolerating its failure restores exactly
+      #    the defect that made a live sign-in outage render as a green check.
+      #    scripts/ci/__tests__/ui-verify-gate.test.mjs asserts all of that
+      #    against this file, so the invariant is enforced, not just documented.
+      #
+      #    It does NOT swallow the suite's own status: a failed Playwright step
+      #    has already failed the job on its own, and the outcomes are passed in
+      #    so a red suite is re-reported here alongside the login-health verdict
+      #    — both causes visible, neither hiding the other. Only the steps that
+      #    are meant to block are listed; publish-version and the optional
+      #    receipt keep their deliberate continue-on-error tolerance.
+      # -----------------------------------------------------------------------
+      - name: Enforce login-health verdict + blocking suite results
+        if: always()
+        env:
+          UVG_PREFLIGHT_OUTCOME: ${{ steps.login_health.outcome }}
+          UVG_VERDICT: ${{ steps.login_health.outputs.verdict }}
+          UVG_RC: ${{ steps.login_health.outputs.rc }}
+          UVG_BLOCKING: 'verify=${{ steps.verify_project.outcome }},extra-projects=${{ steps.extra_projects.outcome }}'
+        run: bash scripts/ci/ui-verify-gate-verdict.sh
