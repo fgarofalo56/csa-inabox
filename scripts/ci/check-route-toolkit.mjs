@@ -58,6 +58,19 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // #2622 touched this route ONLY to swap ten raw `executeStatement(...)` calls
+  // for the AUDITED `ucSql(...)` wrapper, so the UC ABAC column-mask + row-filter
+  // DDL it issues finally produces a Loom Unity audit row. Same arguments, same
+  // returns, same error mapping; the auth prologue is untouched (getSession() →
+  // 401, then a cloud-boundary gate).
+  //
+  // THE CODEMOD DECLINES BOTH HANDLERS —
+  // `--file=app/api/items/[type]/[id]/security/route.ts` reports
+  // "DRY-RUN: 0 handlers across 0 files; 2 skipped", both with
+  // "route-ctx used beyond `await ctx.params` (unprovable)". Hand-migrating an
+  // auth prologue the codemod cannot prove safe, inside an audit-coverage fix,
+  // is unrelated churn with real 401 regression risk on a governance surface.
+  ['apps/fiab-console/app/api/items/[type]/[id]/security/route.ts', '#2622: executeStatement→ucSql audit fix; codemod reports 0 handlers, 2 skipped (route-ctx unprovable)'],
   // #2635 touched these two ONLY to widen ONE audit-log Cosmos predicate from
   // `c.tenantId = @t` (with @t = claims.oid) to the shared oid-OR-tid scope in
   // lib/audit/audit-scope.ts — the same scope the /admin/audit-logs reader
