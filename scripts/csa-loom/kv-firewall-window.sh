@@ -120,7 +120,17 @@ KVW_RETRY_SECONDS="${LOOM_KV_WINDOW_RETRY_SECONDS:-8}"
 #     the literal "unset" fails the Disabled/Deny assertion — which is the
 #     correct, fail-closed reading.
 # `|| `[]`` keeps length() valid when networkAcls.ipRules is null.
-KVW_STATE_QUERY='[properties.publicNetworkAccess || `"unset"`, properties.networkAcls.defaultAction || `"unset"`, length(properties.networkAcls.ipRules || `[]`)]'
+# MUST be a multiselect HASH, not a list. `az -o tsv` renders a top-level LIST as
+# one element PER LINE (verified: `[`"A"`,`"B"`,`0`]` -> "A
+B
+0
+"), so the
+# `head -1` + tab-split below would read pna="A", da="", rules="" and the numeric
+# sentinel would fire on EVERY call -- _kvw_read_state returning 1 unconditionally,
+# which aborts kvw_open before it ever opens the window. A multiselect hash is the
+# only form that yields a single tab-separated row ("A	B	0
+").
+KVW_STATE_QUERY='{pna: properties.publicNetworkAccess || `"unset"`, da: properties.networkAcls.defaultAction || `"unset"`, n: length(properties.networkAcls.ipRules || `[]`)}'
 
 # --- logging -----------------------------------------------------------------
 _kvw_note() {
