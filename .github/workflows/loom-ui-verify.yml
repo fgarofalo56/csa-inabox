@@ -127,29 +127,12 @@ jobs:
           set +e
           LAW=$(az monitor log-analytics workspace list -g "$CONSOLE_RG" --query "[?contains(name,'loom')].customerId | [0]" -o tsv 2>/dev/null | tr -d '\r')
           HITS_RAW=""
-          # `az … -o tsv` prints the LITERAL string "None" for a null JMESPath result,
-          # so an unresolvable workspace arrives non-empty (#2857). Without this the
-          # step queries a workspace named "None" and the verdict mis-reports an
-          # unresolvable workspace as "resolved but unreadable". The verdict script
-          # carries the same guard so its behaviour is unit-testable on its own.
-          if [ -n "$LAW" ] && [ "$LAW" != "None" ]; then
+          if [ -n "$LAW" ]; then
             # NO `|| echo 0` here, on purpose: an empty result means the query did
             # not run, and the verdict script reports that as unknown rather than
             # as a clean zero (the second half of #2837).
-            # `contains`, NOT `has` (#2857). `has` matches TERMS, and a Kusto term
-            # is a "maximal sequence of alphanumeric characters" — so 'auth/callback'
-            # (slash) and 'invalid_client' (underscore) are never terms, and both
-            # predicates were false for EVERY possible log line. The `where` filtered
-            # everything out, `| count` returned a confident 0, and the verdict printed
-            # "OK — no invalid_client callback errors" during a live outage. Docs:
-            # learn.microsoft.com/kusto/query/datatypes-string-operators#what-is-a-term
-            # Every sibling query on this table already uses substring semantics
-            # (loom-roll-and-validate, loom-synthetic-monitor, copilot-quality-evals);
-            # this step was the only `has '<delimiter literal>'` in the repo.
-            # scripts/ci/__tests__/login-health-detector.test.mjs pins these predicates
-            # against the line app/auth/callback/route.ts actually emits.
             HITS_RAW=$(az monitor log-analytics query --workspace "$LAW" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where Log_s contains 'auth/callback' and Log_s contains 'invalid_client' | count" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where Log_s has 'auth/callback' and Log_s has 'invalid_client' | count" \
               -o tsv 2>/dev/null | tr -d '\r')
           fi
           MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')
