@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.9...csa-inabox-v0.82.10) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ci:** a failing login-health preflight masked the entire browser E2E suite (refs [#2871](https://github.com/fgarofalo56/csa-inabox/issues/2871)) ([#2875](https://github.com/fgarofalo56/csa-inabox/issues/2875)) ([22a438a](https://github.com/fgarofalo56/csa-inabox/commit/22a438a7d78ffaa15117fccbdf139ad62314ddb9))
+* **ci:** the JS/TS CodeQL scan has analyzed nothing since 01:12Z (refs [#2850](https://github.com/fgarofalo56/csa-inabox/issues/2850)) ([#2876](https://github.com/fgarofalo56/csa-inabox/issues/2876)) ([8c964b0](https://github.com/fgarofalo56/csa-inabox/commit/8c964b085d92e763ef61b277cb79b50dec628df6))
+* **deploy:** lineage-extractor image cannot build — no lockfile for its npm ci (refs [#2816](https://github.com/fgarofalo56/csa-inabox/issues/2816)) ([#2882](https://github.com/fgarofalo56/csa-inabox/issues/2882)) ([1dbce18](https://github.com/fgarofalo56/csa-inabox/commit/1dbce185f8e029928966030e318b4007be5bffe0))
+* **report-editor:** stop minting a Power BI embed token for a `loom:` id (refs [#2830](https://github.com/fgarofalo56/csa-inabox/issues/2830)) ([#2878](https://github.com/fgarofalo56/csa-inabox/issues/2878)) ([369a32e](https://github.com/fgarofalo56/csa-inabox/commit/369a32e192aa75ca943a7269ee777cdd7c8d5be6))
+* **security:** close the property-injection class — and the reason 3 of its 4 alerts could never close ([#2848](https://github.com/fgarofalo56/csa-inabox/issues/2848)) ([df16840](https://github.com/fgarofalo56/csa-inabox/commit/df168404422bea2d1048697e06bc13954b189393))
+* **security:** floor 5 portal/react-webapp advisories (npm, not pnpm) + guard them ([#2877](https://github.com/fgarofalo56/csa-inabox/issues/2877)) ([d6b1c42](https://github.com/fgarofalo56/csa-inabox/commit/d6b1c4287307bcea3cc10e8b635d46a121ab608f)), closes [#2729](https://github.com/fgarofalo56/csa-inabox/issues/2729)
+* **security:** the path-containment guard was syntax-dependent, and a comment could satisfy it (refs [#2869](https://github.com/fgarofalo56/csa-inabox/issues/2869)) ([#2872](https://github.com/fgarofalo56/csa-inabox/issues/2872)) ([255d030](https://github.com/fgarofalo56/csa-inabox/commit/255d030ce8478572300ae0e5b500648caff7c8a2))
+
 ## [0.82.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.8...csa-inabox-v0.82.9) (2026-08-03)
 
 
