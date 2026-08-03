@@ -59,7 +59,7 @@ vi.mock('@/lib/thread/thread-edges', () => ({
   reconcileThreadEdgesOnDelete: vi.fn(), restoreThreadEdgesForItem: vi.fn(),
 }));
 
-import { listOwnedItems } from '../item-crud';
+import { listOwnedItems, listAllOwnedItems } from '../item-crud';
 
 const mine = { id: 'i-1', itemType: 't', workspaceId: ALLOWED_WS } as any;
 const theirs = { id: 'i-2', itemType: 't', workspaceId: FORBIDDEN_WS } as any;
@@ -104,5 +104,85 @@ describe('listOwnedItems — the workspaceId branch is a perf choice, NOT an aut
     const viaUnscoped = await listOwnedItems('t', 'tenant-1');
     expect(viaScoped).toEqual([]);
     expect(viaUnscoped).toEqual([]);
+  });
+});
+
+/**
+ * `listAllOwnedItems` — the SAME `if (workspaceId)` shape, one function down,
+ * and the site CodeQL js/user-controlled-bypass #755 flags (item-crud.ts:384).
+ *
+ * #625 (the `listOwnedItems` twin above) was reviewed and dismissed as a false
+ * positive on exactly this reasoning, and the tests above pinned it. Nothing
+ * pinned THIS one — the alert is on a different function that two more routes
+ * reach with a request-controlled `workspaceId`:
+ *
+ *   POST /api/catalog/register      body.workspaceId
+ *   GET  /api/git-integration/status ?workspaceId=  (via _lib/ctx.ts)
+ *
+ * Reading the code, `listAllOwnedItems` is STRICTLY STRONGER than its twin:
+ * where `listOwnedItems` returns the partition-keyed rows directly once the one
+ * workspace is authorized, `listAllOwnedItems` has no such early return — the
+ * per-row `resolveWorkspaceAccessByOid` filter runs on EVERY row on BOTH
+ * branches. So dropping `workspaceId` widens the SCAN and cannot widen the
+ * RESULT. The last test below is the one that says so: even on the scoped
+ * branch, a row the query should not have returned is still dropped.
+ */
+describe('listAllOwnedItems — the workspaceId branch is a perf choice, NOT an authz gate (CodeQL #755)', () => {
+  it('workspaceId ABSENT: filters out an item in a workspace the caller cannot see', async () => {
+    fetchAll.mockResolvedValue({ resources: [mine, theirs] });
+    const out = await listAllOwnedItems('tenant-1');
+    expect(out.map((i: any) => i.id)).toEqual(['i-1']);
+  });
+
+  it('workspaceId PRESENT and forbidden: returns nothing, and never runs the query', async () => {
+    fetchAll.mockResolvedValue({ resources: [theirs] });
+    const out = await listAllOwnedItems('tenant-1', FORBIDDEN_WS);
+    expect(out).toEqual([]);
+    expect(fetchAll).not.toHaveBeenCalled();
+  });
+
+  it('workspaceId PRESENT and allowed: returns that workspace’s items', async () => {
+    fetchAll.mockResolvedValue({ resources: [mine] });
+    const out = await listAllOwnedItems('tenant-1', ALLOWED_WS);
+    expect(out.map((i: any) => i.id)).toEqual(['i-1']);
+  });
+
+  it('BOTH branches agree: omitting workspaceId is not a way to reach a forbidden item', async () => {
+    fetchAll.mockResolvedValue({ resources: [theirs] });
+    const viaScoped = await listAllOwnedItems('tenant-1', FORBIDDEN_WS);
+    fetchAll.mockResolvedValue({ resources: [theirs] });
+    const viaUnscoped = await listAllOwnedItems('tenant-1');
+    expect(viaScoped).toEqual([]);
+    expect(viaUnscoped).toEqual([]);
+  });
+
+  it('the SCOPED branch still filters every row — an over-returning query cannot leak', async () => {
+    // Authorize the one workspace, then hand the caller a result set that also
+    // contains a foreign row (what a mis-scoped WHERE / partition-key drift
+    // would produce). The per-row filter is unconditional here, so the foreign
+    // row must not survive. This is the property that makes the branch a perf
+    // choice rather than a gate.
+    fetchAll.mockResolvedValue({ resources: [mine, theirs] });
+    const out = await listAllOwnedItems('tenant-1', ALLOWED_WS);
+    expect(out.map((i: any) => i.id)).toEqual(['i-1']);
+  });
+
+  it('a session-bearing caller goes through the authorizeWorkspaceList chokepoint', async () => {
+    // The ternary at item-crud.ts:385 is a CODE-level choice (does this caller
+    // hold a session?), not a security branch — but which resolver ran must
+    // still be observable, or a later refactor could quietly drop the session
+    // path without any test noticing.
+    fetchAll.mockResolvedValue({ resources: [mine] });
+    const session = { claims: { oid: 'tenant-1', tid: 'tid-1', groups: [] } } as any;
+    await listAllOwnedItems('tenant-1', ALLOWED_WS, { session });
+    expect(authorizeWorkspaceList).toHaveBeenCalledWith(session, ALLOWED_WS);
+
+    vi.clearAllMocks();
+    resolveWorkspaceAccessByOid.mockImplementation(async (_tid: string, ws: string) =>
+      (ws === ALLOWED_WS ? { canWrite: true } : null));
+    fetchAll.mockResolvedValue({ resources: [mine] });
+    await listAllOwnedItems('tenant-1', ALLOWED_WS);
+    expect(authorizeWorkspaceList).not.toHaveBeenCalled();
+    expect(resolveWorkspaceAccessByOid).toHaveBeenCalled();
   });
 });
