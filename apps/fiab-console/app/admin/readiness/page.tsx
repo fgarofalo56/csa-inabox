@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Badge, Body1, Button, Caption1, Card, Divider, MessageBar, MessageBarBody,
-  MessageBarTitle, Spinner, Subtitle2, Text, Title3, Tooltip,
+  MessageBarTitle, Spinner, Subtitle2, Title3, Tooltip,
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
@@ -83,7 +83,9 @@ const useStyles = makeStyles({
   },
   grid: {
     display: 'grid', gap: tokens.spacingHorizontalL, width: '100%',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+    // min(260px, 100%) so a single column never forces horizontal overflow on a
+    // narrow pane; minmax(260px,…) alone clips below 260px. (web3-ui.md: minmax(0,…))
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
     marginBottom: tokens.spacingVerticalL,
   },
   wlCard: {
@@ -149,14 +151,37 @@ const useStyles = makeStyles({
   nodeSub: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
   // inspector
   inspector: {
-    height: '100%', overflowY: 'auto', padding: tokens.spacingHorizontalL,
+    // minWidth:0 lets the pane shrink instead of forcing its content wider than
+    // graphShell (overflow:hidden), which clipped the right side unreachably.
+    // overflowWrap:anywhere breaks unbroken strings (a 68-char bicep path in
+    // `provisionedBy`, a 37-char env var) so nothing extends past the pane.
+    height: '100%', minWidth: 0, overflowY: 'auto', overflowX: 'hidden',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+    padding: tokens.spacingHorizontalL,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
     borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  inspectorHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  depBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  inspectorHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
+  depBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
   depLabel: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground2 },
-  badgeRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  // A 448-char monospace bicep path (svc-ducklake-catalog, the longest in the
+  // registry) rendered as one unbroken run and overflowed. Wrap it and cap the
+  // font so it reads as a path, not a wall.
+  depMono: {
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0,
+  },
+  // Body text (role, backends) can also be multi-hundred chars — wrap, don't clip.
+  depBody: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  // A single env-var Badge can be wider than the pane; Fluent Badge does not
+  // truncate, so flexWrap on the row cannot rescue one over-wide child. Cap it
+  // and ellipsize; the full value stays available via title.
+  envBadge: {
+    maxWidth: '100%', minWidth: 0,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  badgeRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0, maxWidth: '100%' },
   loading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalXXL },
 });
 
@@ -514,7 +539,7 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
       <div className={styles.depBlock}>
         <Caption1 className={styles.depLabel}><Server16Regular /> Backend surfaces</Caption1>
         {node.backends.length ? (
-          <Body1>{node.backends.join(' · ')}</Body1>
+          <Body1 className={styles.depBody}>{node.backends.join(' · ')}</Body1>
         ) : <Caption1>—</Caption1>}
       </div>
 
@@ -528,6 +553,8 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
                 appearance={e.present ? 'outline' : 'filled'}
                 color={e.present ? 'success' : 'warning'}
                 size="small"
+                className={styles.envBadge}
+                title={`${e.envVar}${e.required ? '' : ' (any-of)'}`}
               >
                 {e.envVar}{e.required ? '' : ' (any-of)'}
               </Badge>
@@ -539,14 +566,14 @@ function CapabilityInspector({ node, styles, onFix }: { node: CapabilityNode; st
       {node.role && (
         <div className={styles.depBlock}>
           <Caption1 className={styles.depLabel}><Key16Regular /> RBAC role</Caption1>
-          <Body1>{node.role}</Body1>
+          <Body1 className={styles.depBody}>{node.role}</Body1>
         </div>
       )}
 
       {node.provisionedBy && (
         <div className={styles.depBlock}>
           <Caption1 className={styles.depLabel}><Flowchart16Regular /> Provisioned by</Caption1>
-          <Text font="monospace">{node.provisionedBy}</Text>
+          <span className={styles.depMono}>{node.provisionedBy}</span>
         </div>
       )}
 
