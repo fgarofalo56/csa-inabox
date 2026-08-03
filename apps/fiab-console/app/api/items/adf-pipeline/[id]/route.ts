@@ -10,10 +10,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getPipeline, upsertPipeline, deletePipeline, type AdfPipeline } from '@/lib/azure/adf-client';
 import { withFactoryOverride } from '@/lib/azure/adf-factory-context';
 import { resolveBinding, bindingErrorResponse, pipelineDefinitionFromContent, loadPipelineItem, bindingFactoryOverride } from '@/lib/azure/pipeline-binding';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,10 +23,8 @@ const ITEM_TYPE = 'adf-pipeline';
 // see pipeline-binding.ts loadPipelineItem for why.
 const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
     binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
@@ -67,14 +65,25 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         backendError: e?.message || String(e),
       });
     }
+    // #2895 — a 404 here means the item IS bound but the factory has no
+    // pipeline by that name (never pushed, or deleted out from under us). That
+    // is an expected, recoverable state, not a backend failure: the editor
+    // renders a guided "create it or rebind" surface over a live canvas. Any
+    // OTHER status is a genuine error and still surfaces as one (502).
+    if (e?.status === 404) {
+      return NextResponse.json({
+        ok: false,
+        code: 'pipeline-missing',
+        pipelineName,
+        error: `The Data Factory has no pipeline named "${pipelineName}" yet.`,
+      }, { status: 404 });
+    }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const body = (await req.json().catch(() => null)) as AdfPipeline | null;
   if (!body || !body.properties) {
     return NextResponse.json({ ok: false, error: 'body must be { name?, properties: {...} }' }, { status: 400 });
@@ -93,12 +102,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
+  const { id } = params;
   let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
     binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
@@ -120,4 +127,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

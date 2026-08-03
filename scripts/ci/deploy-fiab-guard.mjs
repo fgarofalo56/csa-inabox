@@ -129,13 +129,17 @@ for (const [param, value] of Object.entries(flags)) {
 }
 
 if (flags.deployAppsEnabled === 'false' && eventName === 'schedule') {
-  // Say the limitation out loud in the log of the very run that has it, so a
-  // green reconcile is not mistaken for "the Console config was applied".
+  // This is the fail-safe BASE, not the final answer (refs #2775). The
+  // `Resolve reconcile target` step runs next and may upgrade it to 'true'
+  // once it has pinned appImageTags to the tags every app is actually running.
+  // Said out loud here so a reader of this step's log does not conclude the
+  // Console env was applied — or that it was not — before that step reports.
   console.log(
-    '::notice::Scheduled reconcile runs with deployAppsEnabled=false, so ' +
-    'app-deployments.bicep is skipped and loom-console env vars are NOT applied. ' +
-    'Applying them needs an operator dispatch that also pins appImageTags to the ' +
-    'RUNNING image tags (the bicep default is v0.1).',
+    '::notice::Scheduled reconcile starts at deployAppsEnabled=false (fail-safe base). ' +
+    'scripts/ci/reconcile-resolve.mjs decides the final value: it upgrades to true only ' +
+    'after reading the RUNNING image tag of every Container App and pinning appImageTags ' +
+    'to them, so the ARM PUT cannot re-image the estate. If it stays false, ' +
+    'app-deployments.bicep is skipped and loom-console env vars are NOT applied.',
   );
 }
 
