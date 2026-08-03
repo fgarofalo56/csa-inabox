@@ -133,10 +133,32 @@ export function apiHonestGateError(gateId: string, opts: GateEnvelopeOpts = {}):
  */
 export function backendGateResponse(gateId: string, opts: GateEnvelopeOpts = {}): NextResponse | null {
   const status = gateStatus(gateId);
+  // REFUSE, DON'T GUESS (#2624). `gateStatus` returns undefined for an id that
+  // is not an ENV_CHECKS spec — a typo, or a gate deleted from the registry
+  // while a route still references it. The original `if (status && …)` fell
+  // through to `return null` for that case, i.e. "not gated", so
+  // `withBackendGate('typo')` wrapped the route in a gate that COULD NOT FIRE:
+  // no error, no log, a green suite, and a surface that reports itself as gated
+  // while gating nothing — the same defect class as #2624's orphan codes.
+  //
+  // An unknown id means the gate is UNEVALUATED, which is not the same as
+  // "configured". Fail closed: return the honest envelope. This is safe to do
+  // unconditionally because lib/gates/__tests__/gate-id-resolution.test.ts
+  // asserts every gate id in shipped source resolves, so this branch is
+  // unreachable today and exists to catch the id that drifts tomorrow.
+  if (!status) {
+    // gateId is a source literal at every shipped call site; sanitize anyway so
+    // a dynamic caller can never inject control characters into the log.
+    console.error(
+      `[gate-envelope] gate id '${gateId.replace(/[^A-Za-z0-9._-]/g, '?')}' is not in the registry — ` +
+        'refusing to treat it as configured. Add it to ENV_CHECKS + lib/gates/registry.',
+    );
+    return apiHonestGateError(gateId, opts);
+  }
   // X2: 'cloud-unavailable' gates too — the route must not proceed to a
   // backend that does not exist in this cloud; the envelope carries the
   // fallbackNote so the surface renders the honest no-Fix-it bar.
-  if (status && status.status !== 'configured') {
+  if (status.status !== 'configured') {
     return apiHonestGateError(gateId, { missing: status.missing, ...opts });
   }
   return null;
