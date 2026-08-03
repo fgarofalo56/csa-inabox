@@ -157,7 +157,7 @@ export function withWorkspaceOwner<P extends { id: string } = { id: string }>(
  * with `withBackendGate` exactly like the other wrappers:
  *
  *   export const PUT = withTenantAdmin(
- *     withBackendGate('svc-purview', async (req, { session, params }) => { … }),
+ *     withBackendGate('svc-purview-uc', async (req, { session, params }) => { … }),
  *   );
  */
 export function withTenantAdmin<P = Record<string, string>>(handler: SessionHandler<P>): RouteHandler<P> {
@@ -181,7 +181,7 @@ export function withTenantAdmin<P = Record<string, string>>(handler: SessionHand
  * `withBackendGate` the same way:
  *
  *   export const GET = withDlzAccess('cost',
- *     withBackendGate('svc-costmgmt', async (req, { session }) => { … }),
+ *     withBackendGate('svc-cost-management', async (req, { session }) => { … }),
  *   );
  */
 export function withDlzAccess<P = Record<string, string>>(
