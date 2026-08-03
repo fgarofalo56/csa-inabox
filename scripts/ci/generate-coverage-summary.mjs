@@ -105,6 +105,20 @@ if (measuredPy === null && covXml) {
   }
 }
 
+// CARRY FORWARD the last-measured row when no coverage artefact is present
+// (refs #2860). coverage.json/xml are produced by `pytest --cov`, so they exist
+// on a machine that just ran the Python suite and NOWHERE ELSE — not in a fresh
+// clone, and not in the loom-guardrails lane. Without this, the generator's
+// output depended on the environment, `--check` compared a doc built WITH the
+// number against one built WITHOUT it, and the drift gate could only be made
+// green by deleting a real measured figure from the doc. That is why the gate
+// could not be wired, which is why the vitest floors in this doc were allowed
+// to drift 33 points from the config for weeks. A measurement we did not take
+// this run is not a measurement of zero: keep the committed row verbatim and
+// let the next real `pytest --cov` update it.
+const CARRIED_ROW = /^\|\s*(Last measured[^|]*?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/m;
+const carried = measuredPy === null ? (readOptional(OUT_REL) || '').match(CARRIED_ROW) : null;
+
 const genDate = new Date().toISOString().slice(0, 10);
 
 const vitestRows = ['statements', 'branches', 'functions', 'lines']
@@ -134,7 +148,7 @@ Companion narrative + the three-number reconciliation live in
 |---|---|---|
 | **Enforced (fails CI)** | **${enforcedPy}%** | \`pytest --cov-fail-under=${enforcedPy}\` in \`.github/workflows/test.yml\` |
 | Declared (pyproject) | ${declaredPy}% | \`fail_under = ${declaredPy}\` in \`pyproject.toml\` \`[tool.coverage.report]\` |
-${measuredPy ? `| ${measuredLabel} | ${measuredPy}% | latest \`pytest --cov\` (\`coverage.json\`/\`coverage.xml\`) |` : `| Last measured | _run \`pytest --cov\` to populate_ | \`coverage.json\` \`totals.percent_covered\` |`}
+${measuredPy ? `| ${measuredLabel} | ${measuredPy}% | latest \`pytest --cov\` (\`coverage.json\`/\`coverage.xml\`) |` : carried ? `| ${carried[1]} | ${carried[2]} | ${carried[3]} |` : `| Last measured | _run \`pytest --cov\` to populate_ | \`coverage.json\` \`totals.percent_covered\` |`}
 
 > The pytest-cov CLI flag **overrides** the pyproject value at runtime, so the
 > enforced number is the one to quote. They are kept in lockstep — both **${enforcedPy}%**.

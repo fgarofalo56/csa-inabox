@@ -2,7 +2,7 @@
      Source of truth: pyproject.toml, .github/workflows/test.yml,
      apps/fiab-console/vitest.config.ts.
      Regenerate: `node scripts/ci/generate-coverage-summary.mjs`.
-     Generated-on: 2026-07-20 -->
+     Generated-on: 2026-08-03 -->
 
 # CSA Loom — Coverage Summary
 
@@ -42,12 +42,13 @@ suites are still growing.
 - `csa_platform/functions/validation`
 - `csa_platform/ai_integration/rag`
 - `csa_platform/ai_integration/enrichment`
+- `apps/loom-duckdb/app`
 
 ### Ignored test suites (`pytest --ignore`)
 
-- `csa_platform/streaming/tests`
+_none — all discovered suites run._
 
-> Re-enabling these is tracked as WS-F2. See the `addopts` comment in `pyproject.toml` and ADR 0024 for the exact blocker per suite.
+
 
 ## Console (Vitest) coverage floor
 
@@ -57,9 +58,9 @@ below the floor in `apps/fiab-console/vitest.config.ts`.
 
 | Metric | Floor |
 |---|---|
-| statements | 30% |
-| branches | 54% |
-| functions | 28% |
+| statements | 27% |
+| branches | 21% |
+| functions | 22% |
 | lines | 30% |
 
 > These are FLOORS set a couple of points below the last measured reality

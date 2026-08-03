@@ -31,6 +31,20 @@
  * MODE:
  *   node scripts/ci/check-insecure-randomness.mjs
  *   node scripts/ci/check-insecure-randomness.mjs --update-baseline
+ *
+ * SELF-DEFENCE (added 2026-08-02, refs #2860). Until it was wired into
+ * loom-guardrails.yml this ratchet had NEVER RUN in CI — only its unit test
+ * did, and that test covers `stripComments` alone. Reading it before wiring
+ * surfaced the failure mode that makes an unrun ratchet worse than none: with
+ * every ROOT missing (a directory rename, a `cd` into the wrong tree, a
+ * partial checkout) `total` is 0, `0 > 156` is false, and it printed
+ *
+ *     OK — and the count DROPPED by 156. Lower BASELINE to 0 to lock the gain in.
+ *
+ * i.e. it congratulated you for scanning nothing. Same class as the 2026-07-28
+ * "gates that measure nothing" sweep, so it now refuses to pass vacuously:
+ * a missing ROOT, a missing exempt file, or a scan that finds no occurrences
+ * at all is a BROKEN SCANNER, not a clean tree.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -111,7 +125,32 @@ function walk(dir, out) {
 }
 
 const files = [];
-for (const r of ROOTS) if (fs.existsSync(r)) walk(r, files);
+const missingRoots = [];
+for (const r of ROOTS) {
+  if (fs.existsSync(r)) walk(r, files);
+  else missingRoots.push(r);
+}
+
+// A ratchet that scanned nothing is not a passing ratchet — it is a broken one.
+// Every one of these would previously have printed "OK — the count DROPPED".
+const brokenScanner = [];
+if (missingRoots.length > 0) {
+  brokenScanner.push(
+    `${missingRoots.length} of ${ROOTS.length} ROOTS do not exist: ${missingRoots.join(', ')}. ` +
+      'Renamed/moved? Update ROOTS — do NOT let the ratchet silently stop covering them.',
+  );
+}
+if (files.length === 0) {
+  brokenScanner.push('walked every ROOT and found ZERO .ts/.tsx files. The walk is broken.');
+}
+for (const [f] of STATISTICAL_EXEMPT) {
+  if (!fs.existsSync(f)) {
+    brokenScanner.push(
+      `STATISTICAL_EXEMPT names ${f}, which no longer exists — a stale exemption is a hole. ` +
+        'Remove the entry (and re-run; the count may ratchet DOWN).',
+    );
+  }
+}
 
 let total = 0;
 const per = [];
@@ -122,6 +161,25 @@ for (const f of files) {
     total += m.length;
     per.push([f, m.length]);
   }
+}
+
+// BASELINE > 0 means occurrences are known to exist. Finding none means the
+// MATCHER stopped matching, not that 156 call sites vanished in one commit.
+if (BASELINE > 0 && total === 0 && brokenScanner.length === 0) {
+  brokenScanner.push(
+    `scanned ${files.length} files and matched ZERO Math.random occurrences while BASELINE is ` +
+      `${BASELINE}. The matcher (or stripComments) has stopped matching.`,
+  );
+}
+
+if (brokenScanner.length > 0 && !process.argv.includes('--update-baseline')) {
+  console.error('\n[insecure-randomness] REFUSING TO PASS — the scanner is not measuring anything:\n');
+  for (const b of brokenScanner) console.error(`  - ${b}`);
+  console.error(
+    '\n  A ratchet that scans an empty tree reports the biggest win it has ever had.\n' +
+      '  Fix the scanner; do not ship a green check that measures nothing.\n',
+  );
+  process.exit(1);
 }
 
 if (process.argv.includes('--update-baseline')) {

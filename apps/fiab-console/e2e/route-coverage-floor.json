@@ -2,11 +2,11 @@
   "_owner": "platform-verification (loom-next-level WS-V, V4)",
   "_why": "Ratchet: every app/**/page.tsx route must stay under route-smoke coverage; the covered/total ratio may only move toward 1.0.",
   "_unblock": "node scripts/ci/check-route-smoke-floor.mjs --update-baseline (commit the regenerated file with a one-line justification in the PR).",
-  "capturedAt": "2026-07-22T23:39:57.018Z",
-  "total": 121,
-  "enumerable": 113,
-  "covered": 109,
-  "floorRatio": 0.9008,
+  "capturedAt": "2026-08-03T02:29:40.924Z",
+  "total": 135,
+  "enumerable": 127,
+  "covered": 123,
+  "floorRatio": 0.9111,
   "excludedDynamic": [
     {
       "route": "/apps/[id]",

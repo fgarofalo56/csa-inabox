@@ -45,11 +45,19 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Type-check
-        # Pre-existing errors in StepIngestion / StepSchema / StepSourceType
-        # are tracked separately (CSA-0125 follow-up). We still run tsc so
-        # new regressions surface immediately — the suppression list is
-        # intentionally narrow.
-        run: npm run type-check 2>&1 | tee tsc.log || true
+        # This gate could not fail, TWICE OVER (refs #2860): the pipe to `tee`
+        # made the step's status `tee`'s, and the trailing `|| true` discarded
+        # whatever survived that. `tsc` could report any number of errors and
+        # the step was green.
+        #
+        # The stated reason was a narrow suppression list — "pre-existing errors
+        # in StepIngestion / StepSchema / StepSourceType, tracked as CSA-0125".
+        # Checked against reality on 2026-08-02 rather than trusted: after
+        # `npm ci`, `npm run type-check` exits 0 with ZERO errors. All three
+        # components type-clean; the debt this masked was paid off at some
+        # point and nobody removed the mask. So there is nothing to ratchet and
+        # no allowlist to carry — the gate just runs.
+        run: npm run type-check
 
       - name: Jest with coverage
         run: npm test

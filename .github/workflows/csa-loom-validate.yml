@@ -40,6 +40,9 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # A probe that hangs is not a pass. Without this the job inherits GitHub's
+    # 6-hour default and a wedged fetch reads as "still running" all day.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -85,8 +88,16 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$SS"
-          cd apps/fiab-console
-          SESSION_SECRET="$SS" node tests/service-health.mjs | tee /tmp/health.txt
+          # Capture the probe's stdout AND its exit status explicitly. Piping
+          # straight into `tee` made the step's status tee's, so the probe's own
+          # status was only ever load-bearing through `pipefail` — one `set +o`
+          # away from being discarded (refs #2860).
+          set +e
+          ( cd apps/fiab-console && SESSION_SECRET="$SS" node tests/service-health.mjs ) > /tmp/health.txt 2>&1
+          PROBE_RC=$?
+          set -e
+          cat /tmp/health.txt
+          echo "probe exit status: $PROBE_RC"
           # Surface the per-family roll-up as the job summary
           {
             echo '## CSA Loom live validation'
@@ -94,14 +105,8 @@ jobs:
             sed -n '/Per family:/,$p' /tmp/health.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # Fail the job only on hard FAILs (not honest not-configured NOTEs)
-          FAILS=$(grep -oE '[0-9]+ fail' /tmp/health.txt | head -1 | grep -oE '[0-9]+' || echo 0)
-          echo "Hard failures: $FAILS"
-          # rel-T24: actually FAIL the job on hard failures. Previously this step
-          # computed FAILS but always exited 0, so a broken live console reported
-          # green. A hard FAIL (real backend error, not an honest not-configured
-          # NOTE) now fails the workflow.
-          if [ "${FAILS:-0}" -gt 0 ]; then
-            echo "::error::CSA Loom live validation found $FAILS hard failure(s) — see the job summary."
-            exit 1
-          fi
+          # The verdict lives in a pure, unit-tested script so the decision can
+          # be exercised without a live estate — including the two shapes that
+          # used to report green: a crashed probe, and a log with no summary
+          # line. See scripts/ci/__tests__/service-health-verdict.test.mjs.
+          SH_LOG=/tmp/health.txt SH_RC="$PROBE_RC" bash scripts/ci/service-health-verdict.sh
