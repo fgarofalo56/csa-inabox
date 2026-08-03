@@ -65,6 +65,7 @@ const SKIP_DIRS = new Set(['node_modules', '__tests__', '.next', 'dist', 'build'
 const STATISTICAL_EXEMPT = new Map([
   ['apps/fiab-console/lib/telemetry/rum.ts', 'RUM sample-rate decision — a probability, not an identifier. Nothing is guessed.'],
   ['apps/fiab-console/lib/clients/cost-client.ts', 'Retry-backoff jitter — spreads load. Predictability is harmless; a CSPRNG buys nothing.'],
+  ['apps/fiab-console/lib/azure/aoai-retry.ts', 'AOAI 429 retry-backoff jitter — de-synchronises replicas that were throttled together so they do not retry in lockstep. Not an identifier, not a secret, never leaves the process; the source is injectable (`opts.random`) so a caller may supply a CSPRNG. Same class as cost-client.ts above.'],
 ]);
 
 /**
