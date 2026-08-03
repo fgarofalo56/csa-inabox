@@ -3,6 +3,14 @@ name: deploy-fiab-commercial
 # CSA Loom — deploy validation against Azure Commercial.
 # Per PRP-11. Uses the existing `limitlessdata_deploy` SP.
 
+# The `Provision (idempotent)` step below is gated
+# `if: github.event_name == 'schedule' || inputs.run_mode == 'full'`, so a
+# whatif-only dispatch SUCCEEDS having applied nothing. That is exactly the run
+# that must not be allowed to clear this workflow's deploy-staleness entry, so
+# it is labelled with the marker check-deploy-staleness.mjs already filters on
+# (DRY_RUN_MARKER = 'DRY RUN'). Schedule runs provision, so they carry no marker.
+run-name: deploy-fiab-commercial${{ (github.event_name == 'workflow_dispatch' && inputs.run_mode != 'full') && ' — DRY RUN (whatif-only, applies nothing)' || '' }}
+
 on:
   schedule:
     - cron: '0 6 * * *'   # 06:00 UTC daily
@@ -147,34 +155,44 @@ jobs:
       # the UI/orchestrator at the CI layer. A topology=tenant run that targets a
       # subscription already holding an Admin Plane RG is rejected; a dlz-attach
       # run must target a NEW subscription via target_subscription.
-      - name: Topology guard
+      #
+      # MOVED OUT OF YAML (refs #2775). This step used to be an inline shell
+      # block, and it carried two bugs that only a test could have caught:
+      #
+      #   1. It decided a TRIGGER question by reading an INPUT:
+      #        [ "${{ inputs.allow_existing_hub }}" != "true" ]
+      #      On a `schedule` event there are no inputs, so that expanded to
+      #      `[ "" != "true" ]` -- always true -- and the nightly reconcile
+      #      refused itself against the very hub it was scheduled to reconcile.
+      #      EVERY scheduled run since this workflow was created failed here, in
+      #      ~30-80s, and the last real application of the admin-plane template
+      #      was 2026-07-23 (which itself Failed). This is the only workflow that
+      #      runs `az deployment sub create` on main.bicep, so nothing else was
+      #      applying Console configuration in the meantime.
+      #
+      #   2. Its hub-count query ended `... -o tsv 2>/dev/null || echo "0"`, so
+      #      an az/Graph/auth failure was indistinguishable from "no hub here"
+      #      and the guard PASSED. The guard's failure mode was permissive.
+      #
+      # The protective intent is unchanged: an operator-initiated dispatch
+      # against an existing hub STILL has to pass allow_existing_hub=true, and an
+      # UNKNOWN hub count now refuses on dispatch instead of proceeding. Only the
+      # scheduled reconcile -- whose whole purpose is to run against the existing
+      # hub -- is allowed through on the trigger.
+      #
+      # Decision logic + tests: scripts/ci/deploy-trigger-policy.mjs and
+      # scripts/ci/__tests__/deploy-trigger-policy.test.mjs.
+      - name: Topology guard + trigger-aware parameter resolution
         id: topology_guard
-        run: |
-          set -e
-          TOPOLOGY="${CSA_LOOM_TOPOLOGY:-tenant}"
-          echo "topology=$TOPOLOGY"
-          if [ "$TOPOLOGY" = "dlz-attach" ]; then
-            if [ -z "$CSA_LOOM_TARGET_SUBSCRIPTION" ]; then
-              echo "::error::dlz-attach requires target_subscription (the new DLZ subscription)."; exit 1
-            fi
-            echo "deploy_sub=$CSA_LOOM_TARGET_SUBSCRIPTION" >> "$GITHUB_OUTPUT"
-          else
-            # topology=tenant: refuse if an Admin Plane (hub) RG already exists
-            # IN THE TARGET SUBSCRIPTION. The guard is scoped to the deploy sub
-            # (not tenant-wide) so a deliberate migration to a new hub sub is not
-            # blocked by an old hub still running elsewhere as a UAT/staging ring
-            # (audit-t156 D3/Q10). The "one Console per tenant" end-state is then
-            # reached operationally by tearing the old hub down after cutover.
-            # This still prevents the common footgun: re-running a tenant deploy
-            # against a sub that already holds a hub (an accidental double-stamp).
-            SCOPE_SUB="${CSA_LOOM_SUBSCRIPTION_OVERRIDE}"
-            EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
-            if [ "${EXISTING:-0}" != "0" ] && [ "${{ inputs.allow_existing_hub }}" != "true" ]; then
-              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription to add a DLZ, or target a fresh subscription. To idempotently reconcile/retry a partially-deployed hub in this sub, re-run with allow_existing_hub=true."; exit 1
-            fi
-            if [ "${EXISTING:-0}" != "0" ]; then echo "::warning::Reconciling existing hub in target sub (allow_existing_hub=true) — incremental deploy, no second Console."; fi
-            echo "deploy_sub=${CSA_LOOM_SUBSCRIPTION_OVERRIDE}" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          INPUT_ALLOW_EXISTING_HUB: ${{ inputs.allow_existing_hub }}
+          INPUT_PURVIEW_ENABLED: ${{ inputs.purview_enabled }}
+          INPUT_AZURE_MAPS_ENABLED: ${{ inputs.azure_maps_enabled }}
+          INPUT_FIREWALL_ENABLED: ${{ inputs.firewall_enabled }}
+          INPUT_DEPLOY_APPS_ENABLED: ${{ inputs.deploy_apps_enabled }}
+          INPUT_SKIP_ROLE_GRANTS: ${{ inputs.skip_role_grants }}
+          INPUT_FRONT_DOOR_ENABLED: ${{ inputs.front_door_enabled }}
+        run: node scripts/ci/deploy-fiab-guard.mjs
 
       - name: Register resource providers + features (deploy sub)
         run: |
@@ -303,7 +321,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
-            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} deployAppsEnabled=${{ inputs.deploy_apps_enabled }} skipRoleGrants=${{ inputs.skip_role_grants }} frontDoorEnabled=${{ inputs.front_door_enabled }} \
+            --parameters purviewEnabled=${{ steps.topology_guard.outputs.purview_enabled }} azureMapsEnabled=${{ steps.topology_guard.outputs.azure_maps_enabled }} hubFirewallEnabled=${{ steps.topology_guard.outputs.firewall_enabled }} deployAppsEnabled=${{ steps.topology_guard.outputs.deploy_apps_enabled }} skipRoleGrants=${{ steps.topology_guard.outputs.skip_role_grants }} frontDoorEnabled=${{ steps.topology_guard.outputs.front_door_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
@@ -337,7 +355,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
-            --parameters purviewEnabled=${{ inputs.purview_enabled }} azureMapsEnabled=${{ inputs.azure_maps_enabled }} hubFirewallEnabled=${{ inputs.firewall_enabled }} deployAppsEnabled=${{ inputs.deploy_apps_enabled }} skipRoleGrants=${{ inputs.skip_role_grants }} frontDoorEnabled=${{ inputs.front_door_enabled }} \
+            --parameters purviewEnabled=${{ steps.topology_guard.outputs.purview_enabled }} azureMapsEnabled=${{ steps.topology_guard.outputs.azure_maps_enabled }} hubFirewallEnabled=${{ steps.topology_guard.outputs.firewall_enabled }} deployAppsEnabled=${{ steps.topology_guard.outputs.deploy_apps_enabled }} skipRoleGrants=${{ steps.topology_guard.outputs.skip_role_grants }} frontDoorEnabled=${{ steps.topology_guard.outputs.front_door_enabled }} \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
