@@ -10,6 +10,7 @@
  *   POST {LOOM_CONSOLE_ENDPOINT}/api/internal/copilot/tools/<name>/invoke
  * Auth: x-loom-internal-token: {LOOM_INTERNAL_TOKEN}  (+ x-user-oid on invoke)
  */
+import { publicErrorMessage } from './safe-error.js';
 import type { ToolSchema } from './types.js';
 
 function consoleBase(): string | null {
@@ -84,8 +85,10 @@ export async function invokeTool(
       },
       body: JSON.stringify({ args: args ?? {} }),
     });
-  } catch (e: any) {
-    return { ok: false, error: `tool dispatch to Console failed: ${e?.message || e}` };
+  } catch (e) {
+    // The fetch failure text names the internal Console endpoint (and on a DNS
+    // / TLS failure, the resolved host). Sanitize — the detail is logged.
+    return { ok: false, error: publicErrorMessage(e, 'Tool dispatch to the Console failed.') };
   }
   const body: any = await res.json().catch(() => ({}));
   if (!res.ok || body?.ok === false) {

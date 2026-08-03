@@ -22,6 +22,7 @@
  */
 import { callAoai, resolveAoaiTargetFromEnv, type AoaiTarget } from './aoai.js';
 import { fetchToolSchemas, toAoaiTools, invokeTool } from './tools.js';
+import { publicErrorMessage } from './safe-error.js';
 import type { ChatMessage } from './types.js';
 
 /** Mirrors `RunStepToolCall` in the Console's foundry-agent-client.ts. */
@@ -96,10 +97,15 @@ export async function runAgentInspectMaf(
   let target: AoaiTarget;
   try {
     target = resolveAoaiTargetFromEnv();
-  } catch (e: any) {
+  } catch (e) {
     return {
       threadId, runId, status: 'failed', answer: '', steps,
-      usage, lastError: e?.message || String(e), tier: 'maf',
+      usage,
+      lastError: publicErrorMessage(
+        e,
+        'MAF tier is not configured — set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT on the copilot-maf app.',
+      ),
+      tier: 'maf',
     };
   }
   // Per-agent model override wins over the env default deployment.
@@ -120,10 +126,10 @@ export async function runAgentInspectMaf(
     let resp: any;
     try {
       resp = await callAoai(target, messages, tools);
-    } catch (e: any) {
+    } catch (e) {
       return {
         threadId, runId, status: 'failed', answer: '', steps,
-        usage, lastError: e?.message || String(e), tier: 'maf',
+        usage, lastError: publicErrorMessage(e, 'The Azure OpenAI chat-completions call failed.'), tier: 'maf',
       };
     }
     const u = resp?.usage || {};

@@ -25,6 +25,29 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.7...csa-inabox-v0.82.8) (2026-08-03)
+
+
+### Bug Fixes
+
+* **bicep:** migrate Redis to Azure Managed Redis in Commercial, keep classic in Gov (refs [#2642](https://github.com/fgarofalo56/csa-inabox/issues/2642)) ([#2851](https://github.com/fgarofalo56/csa-inabox/issues/2851)) ([54319fc](https://github.com/fgarofalo56/csa-inabox/commit/54319fc260896ff827a7a139e9ef9606c4737136))
+* **ci:** give loom-sharing an image producer — and make the image buildable at all ([#2619](https://github.com/fgarofalo56/csa-inabox/issues/2619)) ([#2843](https://github.com/fgarofalo56/csa-inabox/issues/2843)) ([ab70e37](https://github.com/fgarofalo56/csa-inabox/commit/ab70e3731fde608ef0913f3de3e1a4a9074d7aa1))
+* **ci:** run every node:test suite, not the two somebody remembered ([#2838](https://github.com/fgarofalo56/csa-inabox/issues/2838)) ([b85af21](https://github.com/fgarofalo56/csa-inabox/commit/b85af21d0a1d2a74ad9af6aaeeea5f4e6eb942c4)), closes [#2835](https://github.com/fgarofalo56/csa-inabox/issues/2835)
+* **ci:** the login-health preflight can now fail (refs [#2837](https://github.com/fgarofalo56/csa-inabox/issues/2837)) ([#2840](https://github.com/fgarofalo56/csa-inabox/issues/2840)) ([8c0b10b](https://github.com/fgarofalo56/csa-inabox/commit/8c0b10b1c6217a08a61ae2af6342519c44dd3246))
+* **csa-loom:** loom-verify job was uncreatable — secretRef with no declared secret, create stderr discarded (refs [#2816](https://github.com/fgarofalo56/csa-inabox/issues/2816)) ([#2839](https://github.com/fgarofalo56/csa-inabox/issues/2839)) ([f43a895](https://github.com/fgarofalo56/csa-inabox/commit/f43a895afdc9cade1912fdd4ab5503bab16c8065))
+* **deps:** floor six dev-toolchain advisories, per brace-expansion major ([#2847](https://github.com/fgarofalo56/csa-inabox/issues/2847)) ([9116618](https://github.com/fgarofalo56/csa-inabox/commit/9116618dbcbdcf6595ee17093e5c3547ade0d17e))
+* **gates:** UC system-tables codes carried no gate — register them and wire the Fix-it (refs [#2624](https://github.com/fgarofalo56/csa-inabox/issues/2624)) ([#2853](https://github.com/fgarofalo56/csa-inabox/issues/2853)) ([9e5bc14](https://github.com/fgarofalo56/csa-inabox/commit/9e5bc141831b87d1855443e3a39ed0bede82f8bb))
+* **purview:** item custom tags wrote the ACCOUNT-GLOBAL LoomCustomTags bag (refs [#2633](https://github.com/fgarofalo56/csa-inabox/issues/2633)) ([#2846](https://github.com/fgarofalo56/csa-inabox/issues/2846)) ([28c8370](https://github.com/fgarofalo56/csa-inabox/commit/28c8370470bc1da594dbdca46c372ac40b6cd0ad))
+* **security:** ACR sweeper read an az failure as "nothing to sweep" (refs [#2836](https://github.com/fgarofalo56/csa-inabox/issues/2836)) ([#2841](https://github.com/fgarofalo56/csa-inabox/issues/2841)) ([7040f5f](https://github.com/fgarofalo56/csa-inabox/commit/7040f5f82f5168b625b53ff5a287773313cdf4e0))
+* **security:** close the regex-anchor + insecure-tempfile class (refs [#2672](https://github.com/fgarofalo56/csa-inabox/issues/2672)) ([#2845](https://github.com/fgarofalo56/csa-inabox/issues/2845)) ([704d3bd](https://github.com/fgarofalo56/csa-inabox/commit/704d3bdf628c254766bec2b63a08bc1aa265d52f))
+* **security:** close the stack-trace-and-bypass CodeQL class (5 alerts: 2 fixed + 13 unflagged siblings, 3 dismissed with evidence) ([#2849](https://github.com/fgarofalo56/csa-inabox/issues/2849)) ([b737634](https://github.com/fgarofalo56/csa-inabox/commit/b737634cc4a92b5046897fde05bc2d68c1f2a74a))
+* **security:** the CLI wrote build-context files wherever the server pointed ([#2842](https://github.com/fgarofalo56/csa-inabox/issues/2842)) ([8022cec](https://github.com/fgarofalo56/csa-inabox/commit/8022cec610a67aed72d15abc1a4e39a376706230)), closes [#2672](https://github.com/fgarofalo56/csa-inabox/issues/2672)
+
+
+### Tests
+
+* **console:** fix the wall-clock/race flakes that blocked the roll ([#2834](https://github.com/fgarofalo56/csa-inabox/issues/2834)) ([#2844](https://github.com/fgarofalo56/csa-inabox/issues/2844)) ([d494e22](https://github.com/fgarofalo56/csa-inabox/commit/d494e228d70265e15b166339ccbcfab2d781c6f4))
+
 ## [0.82.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.6...csa-inabox-v0.82.7) (2026-08-02)
 
 

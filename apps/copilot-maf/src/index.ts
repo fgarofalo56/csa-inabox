@@ -14,6 +14,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomUUID } from 'node:crypto';
 import { orchestrateMaf } from './agent-loop.js';
 import { runAgentInspectMaf } from './agent-run.js';
+import { publicErrorMessage } from './safe-error.js';
 import { isGovCloud } from './cloud-scope.js';
 
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -74,8 +75,8 @@ async function handleOrchestrate(req: IncomingMessage, res: ServerResponse): Pro
       send('step', step);
       if (step.kind === 'final' || step.kind === 'error') break;
     }
-  } catch (e: any) {
-    send('step', { kind: 'error', error: e?.message || String(e) });
+  } catch (e) {
+    send('step', { kind: 'error', error: publicErrorMessage(e, 'The MAF orchestration run failed.') });
   } finally {
     send('done', { sessionId });
     res.end();
@@ -132,7 +133,7 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && url === '/orchestrate') {
     handleOrchestrate(req, res).catch((e) => {
-      if (!res.headersSent) sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: publicErrorMessage(e, 'The /orchestrate request failed.') });
       else res.end();
     });
     return;
@@ -140,7 +141,7 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && url === '/agent-run') {
     handleAgentRun(req, res).catch((e) => {
-      if (!res.headersSent) sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: publicErrorMessage(e, 'The /agent-run request failed.') });
       else res.end();
     });
     return;
