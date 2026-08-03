@@ -150,11 +150,27 @@ const BASE_IMAGE_PREFIXES = [
   'mcr.microsoft.com/', 'gcr.io/distroless/',
 ];
 
-/** Strip the tag/digest and any `AS stage` suffix off a FROM line's image ref. */
+/**
+ * The image REF out of a FROM line — the first token that is not a flag.
+ *
+ * The flag skip is load-bearing, not defensive. It used to be written as
+ * `raw.replace(/^--platform=\S+\s+/, '')` AFTER `split(/\s+/)[0]` had already
+ * discarded everything past the first token, so the pattern's trailing `\s+`
+ * could never match: the "strip" was dead code and `--platform=linux/arm64`
+ * WAS the repo. The first `FROM --platform=` in this tree
+ * (apps/loom-sharing/Dockerfile, #2619) made the gate demand a licence review
+ * for an image named "--platform=linux/arm64". BuildKit also accepts other FROM
+ * flags, so skip any leading `--*` token rather than special-casing one.
+ */
+function fromRef(fromLine) {
+  const tokens = fromLine.replace(/^\s*FROM\s+/i, '').trim().split(/\s+/);
+  return tokens.find((t) => !t.startsWith('--')) || '';
+}
+
+/** Strip the tag/digest off a FROM line's image ref. */
 function imageRepo(fromLine) {
-  const raw = fromLine.replace(/^FROM\s+/i, '').trim().split(/\s+/)[0];
-  const noPlatform = raw.replace(/^--platform=\S+\s+/, '');
-  return noPlatform.split('@')[0].replace(/:[^/:]+$/, '');
+  const ref = fromRef(fromLine);
+  return ref.split('@')[0].replace(/:[^/:]+$/, '');
 }
 
 function isBaseImage(repo) {
@@ -196,8 +212,11 @@ function* dockerfileInstructions(src) {
     if (/^\s*(#|$)/.test(line)) continue;           // comment / blank
     const alias = line.match(/^\s*FROM\s+.*?\sAS\s+(\S+)\s*$/i);
     if (alias) stages.add(alias[1].toLowerCase());
-    const ref = line.match(/^\s*FROM\s+(\S+)/i);
-    if (ref && stages.has(ref[1].toLowerCase())) continue;
+    // Resolve the ref past any FROM flags, or `FROM --platform=$X builder`
+    // would not be recognised as a stage reference and the internal stage would
+    // be reported as an unreviewed third-party image.
+    const ref = fromRef(line);
+    if (ref && stages.has(ref.toLowerCase())) continue;
     yield { line, lineNo: i + 1 };
   }
 }

@@ -102,9 +102,33 @@ grant list and audit history survive for the investigation.
 
 ### 1. Build the image
 
+Dispatch **`.github/workflows/deploy-loom-sharing.yml`** with `apply=build-only` (the default).
+It takes the ACR firewall lease (#2603), builds the image server-side with `az acr build` — the
+only mechanism that reaches a `publicNetworkAccess=Disabled` registry, and the only Gov-capable
+path at all — asserts the manifest actually landed, and runs the Trivy CRITICAL scan.
+
+> **This workflow is the producer.** Before it existed, nothing in CI built this image: the
+> command below was the whole deploy path, i.e. a workstation with `az` write access
+> ([#2619](https://github.com/fgarofalo56/csa-inabox/issues/2619)). `scripts/ci/check-image-producer-coverage.mjs`
+> now fails the build if any `apps/*/Dockerfile` loses its producer.
+
+> **The Trivy CRITICAL gate will fail, and that is the honest state.** The upstream payload's
+> own jars carry CRITICAL findings no packaging change clears — see "Upstream image caveats"
+> below. Read the printed list, then re-dispatch with `accept_upstream_cves=true` if you accept
+> them for an internal-ingress-only deployment. Nothing is added to `.trivyignore`.
+
+The equivalent by hand, if you are working outside CI:
+
 ```bash
 az acr build -r <acr> -t loom-sharing:<tag> -f apps/loom-sharing/Dockerfile apps/loom-sharing
 ```
+
+#### Upstream image caveats (measured 2026-08-02)
+
+| | |
+|---|---|
+| **Architecture** | Every published `deltaio/delta-sharing-server` tag from **0.6.8 (2023-06-16)** onward is a single-platform **`linux/arm64/v8`** manifest; the last amd64 publication is **0.6.7**. Azure Container Apps runs amd64. `apps/loom-sharing/Dockerfile` therefore uses the upstream image as a **payload source only** (`COPY --from`, never executed on the builder) and re-bases `/opt/docker` — pure Java 8 bytecode plus a bash launcher — onto a current amd64 `eclipse-temurin:8-jre-noble`. Before that change the build died with `exec format error` on any amd64 builder. |
+| **CVEs** | `trivy --ignore-unfixed --severity CRITICAL,HIGH` on `deltaio/delta-sharing-server:0.7.8`: **75 CRITICAL / 353 HIGH**, split **37 C / 216 H in the Debian 11.4 OS layer** and **38 C / 137 H inside `/opt/docker/lib`**. The re-base replaces the OS half outright — the same scan on `eclipse-temurin:8-jre-noble` (Ubuntu 24.04) reports **0 CRITICAL / 0 HIGH** before the build's `dist-upgrade` even runs. The jar half is carried verbatim and **remains**: `htrace-core4-4.1.0` (shading `jackson-databind` 2.4.0), `hadoop-common-2.10.1`, `spark-core_2.12-2.4.7`, `zookeeper-3.4.14`, `netty-3.10.6`, `avro-1.8.2` — all six verified present at identical versions in the built image, among 286 payload jars. Only an upstream rebuild clears them, and upstream has published no image since April 2024. This is the concrete reason ingress is internal-only with an IP allow-list and recipients terminate on the Console BFF. |
 
 ### 2. Create the two Key Vault secrets
 
@@ -125,6 +149,13 @@ Secrets User** on the vault.
 > correct in review and fail at runtime.
 
 ### 3. Deploy the Container App
+
+> **The first deploy is deliberately manual.** `deploy-loom-sharing.yml` refuses to create this
+> app, because creating it fixes two parameters that must not be guessed by a workflow:
+> `sharingBearerSecretUri` (the single global Console→server bearer — its holder can read every
+> published share) and `consoleAllowedCidrs` (`[]` means *no* IP pin). Once the app exists,
+> dispatch the workflow with `apply=full` to rebuild + roll it; it carries both values forward
+> from the running app and hard-stops rather than writing a default over either.
 
 ```bash
 az deployment group create -g <admin-rg> \

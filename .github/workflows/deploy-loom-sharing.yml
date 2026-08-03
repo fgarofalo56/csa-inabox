@@ -1,0 +1,454 @@
+name: deploy-loom-sharing
+
+run-name: >-
+  deploy-loom-sharing
+  ${{ format('({0}) {1}', inputs.apply || 'build-only', inputs.boundary || 'Commercial') }}
+
+# CSA Loom — the IMAGE PRODUCER (and optional deploy path) for `loom-sharing`,
+# the OSS Delta Sharing reference server that gives Azure Government an
+# open-protocol sharing endpoint over the SAME ADLS Gen2 Delta tables the Loom
+# lakehouse writes (LU-9).
+#
+# ── WHY THIS EXISTS (#2619) ────────────────────────────────────────────────
+# `apps/loom-sharing` shipped a Dockerfile, a bicep module, a threat model, a
+# runbook and a CI job that unit-tests its entrypoint — and NOTHING built the
+# image. `git grep loom-sharing .github/workflows` returned exactly one hit: the
+# `node --test` job in fiab-console-ci.yml. The only documented way to produce
+# the artifact was a hand-typed `az acr build` in docs/fiab/delta-sharing-gov.md,
+# i.e. a workstation with `az` write access. Same class as #2814/#2816, one layer
+# down: there, deploy SCRIPTS no workflow ran; here, an IMAGE no workflow built.
+#
+# The consequence is not subtle. A Container App pointing at an image nobody
+# built fails its ARM PUT with MANIFEST_UNKNOWN, so every byte of LU-9 — the
+# recipient BFF, the grant enforcement, the audit rows — was inert by
+# construction: there was no server to proxy to.
+#
+# Enforced going forward by scripts/ci/check-image-producer-coverage.mjs.
+#
+# ── WHAT THE FIRST BUILD REVEALED (and #2619 did not know) ─────────────────
+# The image could not have been built here even if a workflow had existed. Every
+# published `deltaio/delta-sharing-server` tag from 0.6.8 (2023-06-16) onward is
+# a SINGLE-PLATFORM linux/arm64/v8 manifest — the last amd64 publication is
+# 0.6.7. Azure Container Apps runs amd64, and `az acr build` builds on amd64
+# agents, so the old single-stage Dockerfile died at BUILD time with
+# `exec format error`. apps/loom-sharing/Dockerfile now takes the payload out of
+# the arm64 image without ever executing it and re-bases it onto a current
+# amd64 Temurin 8 JRE. Read that file's header before changing anything here.
+#
+# ── SUPPLY CHAIN — READ THIS BEFORE DISPATCHING ────────────────────────────
+# The Trivy CRITICAL gate below WILL FAIL on this image, and that is the honest
+# state, not a misconfiguration. Measured with `--ignore-unfixed --severity
+# CRITICAL` on 2026-08-02: the upstream payload's own jars in /opt/docker/lib
+# (htrace-core4-4.1.0 shading jackson-databind 2.4.0, hadoop-common-2.10.1,
+# spark-core 2.4.7, zookeeper-3.4.14, netty-3.10.6, avro-1.8.2) carry 38 CRITICAL
+# findings that no packaging change clears — only an upstream rebuild would, and
+# upstream has published no image since April 2024.
+#
+# NOTHING is added to .trivyignore for them. That baseline is deliberately empty
+# (all three historical entries were burned down by fixing images, not muting
+# findings), and 38 entries would turn a reviewed exception into a policy change
+# made by a workflow author. So this lane REPORTS and REFUSES: the gate prints
+# every CRITICAL and fails, and shipping anyway is an explicit, per-dispatch,
+# run-title-recorded operator decision (`accept_upstream_cves`), never a default
+# and never a repo-level file. The image lands in ACR either way — `az acr build`
+# pushes before anything can scan it — so this gate governs whether CI declares
+# the artifact fit to deploy, not whether it exists.
+#
+# That posture is why the Container App is INTERNAL-ingress-only with an IP
+# allow-list and is never the recipient-facing endpoint. See
+# docs/fiab/security/loom-sharing-threat-model.md.
+#
+# ── AUTH ───────────────────────────────────────────────────────────────────
+# Service-principal `creds:` login, matching deploy-copilot-evaluator.yml (the
+# #2815 template) and every gov-provision-* sibling. NOT OIDC: this repo's
+# federated credential is scoped to `repo:...:ref:refs/heads/main`, so an OIDC
+# login would authenticate only on a main-ref dispatch and fail for a branch
+# dispatch during a fix. `contents: read` only — this workflow signs nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'build-only = build + push + scan the image (this alone closes the #2619 prerequisite). whatif = + ACA what-if. full = + deploy loom-sharing and wire LOOM_SHARING_URL on the console.'
+        type: choice
+        default: build-only
+        options: [build-only, whatif, full]
+      boundary:
+        description: 'Which cloud/boundary ACR to build into. Commercial uses the AZURE_* secret set; GCC-High / IL5 use AZURE_GOV_* + `az cloud set --name AzureUSGovernment`.'
+        type: choice
+        default: Commercial
+        options: [Commercial, GCC-High, IL5]
+      region:
+        description: 'Region of the target Admin Plane (blank = eastus2 for Commercial, usgovvirginia for Gov).'
+        type: string
+        required: false
+      tag:
+        description: 'Deploy-referenced image tag. Pushed alongside :<full-sha>.'
+        type: string
+        default: v0.1
+      accept_upstream_cves:
+        description: 'Proceed past the Trivy CRITICAL gate. The image ALWAYS lands in ACR (acr build pushes first) — this only decides whether the run is allowed to report success. Set ONLY after reading the CRITICAL list this run prints. Recorded in the run log.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never cancel in flight: this holds the ACR firewall lease while the image
+# builds (#2603). A cancelled run releases the concurrency slot while its
+# `always()` release step is still pending, which is the exact race the lease
+# exists to survive.
+concurrency:
+  group: deploy-loom-sharing-${{ inputs.boundary || 'Commercial' }}
+  cancel-in-progress: false
+
+env:
+  BOUNDARY: ${{ inputs.boundary || 'Commercial' }}
+  APP: loom-sharing
+  CONSOLE_APP: loom-console
+  IMAGE: loom-sharing
+  # This lane holds the lease across a JVM-payload copy plus a dist-upgrade;
+  # size it so a legitimate run is never swept out from under itself.
+  LOOM_ACR_LEASE_TTL_MINUTES: '60'
+
+jobs:
+  produce:
+    name: Build + push loom-sharing (${{ inputs.apply || 'build-only' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Commercial)
+        if: env.BOUNDARY == 'Commercial'
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (Gov)
+        if: env.BOUNDARY != 'Commercial'
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        if: env.BOUNDARY != 'Commercial'
+        run: az cloud set --name AzureUSGovernment
+
+      # ── Resolve coordinates ───────────────────────────────────────────────
+      # PUBLIC REPO: the subscription id and every ARM resource id are masked
+      # before any step can echo one.
+      - name: Resolve admin RG / ACR / CAE / UAMI
+        env:
+          INPUT_REGION: ${{ inputs.region }}
+          VAR_ADMIN_RG: ${{ vars.LOOM_ADMIN_RG }}
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --only-show-errors 2>/dev/null || true
+
+          LOCATION="${INPUT_REGION:-}"
+          if [ -z "$LOCATION" ]; then
+            if [ "$BOUNDARY" = "Commercial" ]; then LOCATION=eastus2; else LOCATION=usgovvirginia; fi
+          fi
+
+          RG="${VAR_ADMIN_RG:-}"
+          if [ "$BOUNDARY" != "Commercial" ]; then RG=""; fi
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${LOCATION}"
+          if ! az group show -n "$RG" -o none 2>/dev/null; then
+            RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
+          fi
+          if [ -z "$RG" ]; then
+            echo "::error::Admin RG not found (looked for rg-csa-loom-admin-${LOCATION}, then any rg-csa-loom-admin* prefix). The Admin Plane must be provisioned before an app image can be built into its registry."
+            exit 1
+          fi
+
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          echo "::add-mask::$SUB"
+
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$ACR" ] || ACR=$(az acr list -g "$RG" --query "[0].name" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$ACR" ]; then
+            echo "::error::No container registry found in $RG."
+            exit 1
+          fi
+          # Read the login server from ARM rather than appending '.azurecr.io':
+          # the Government suffix is '.azurecr.us', and hard-coding the Commercial
+          # one is what makes a "Gov build" silently scan the wrong thing.
+          ACR_LOGIN=$(az acr show -n "$ACR" -g "$RG" --query loginServer -o tsv | tr -d '\r')
+          if [ -z "$ACR_LOGIN" ]; then
+            echo "::error::could not read the login server for $ACR"
+            exit 1
+          fi
+
+          CAE_ID=$(az containerapp show -n "$CONSOLE_APP" -g "$RG" --query properties.environmentId -o tsv 2>/dev/null | tr -d '\r' || true)
+          UAMI_ID=$(az containerapp show -n "$CONSOLE_APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv 2>/dev/null | tr -d '\r' || true)
+          [ -n "$CAE_ID" ] && echo "::add-mask::$CAE_ID"
+          [ -n "$UAMI_ID" ] && echo "::add-mask::$UAMI_ID"
+
+          {
+            echo "ADMIN_RG=$RG"
+            echo "LOCATION=$LOCATION"
+            echo "ACR=$ACR"
+            echo "ACR_LOGIN=$ACR_LOGIN"
+            echo "CAE_ID=$CAE_ID"
+            echo "UAMI_ID=$UAMI_ID"
+          } >> "$GITHUB_ENV"
+          echo "::notice::boundary=$BOUNDARY rg=$RG acr=$ACR location=$LOCATION (ids masked)"
+
+      # ── Build + push ──────────────────────────────────────────────────────
+      # `az acr build` runs SERVER-SIDE inside Azure. That is the only mechanism
+      # that reaches a registry provisioned publicNetworkAccess=Disabled, and it
+      # is the only Gov-capable path at all (a client-side docker push from a
+      # GitHub-hosted runner cannot reach a Gov ACR).
+      #
+      # #2603: lease the ACR firewall rather than toggling it, so this run's
+      # re-lock cannot deny another run's in-flight push.
+      - name: Build + push loom-sharing via ACR Tasks
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-v0.1}"
+          SHA="${GITHUB_SHA}"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
+          bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+
+          az acr build --registry "$ACR" \
+            --image "${IMAGE}:${TAG}" \
+            --image "${IMAGE}:${SHA}" \
+            --file apps/loom-sharing/Dockerfile \
+            apps/loom-sharing
+
+          # `az acr build` exiting 0 is not proof a manifest landed — this repo
+          # has had a build exit 0 while pushing nothing (#2706). Assert it
+          # INSIDE the same lease window: `az acr repository show` is a
+          # data-plane call, and the registry is publicNetworkAccess=Disabled.
+          DIGEST=$(az acr repository show --name "$ACR" --image "${IMAGE}:${TAG}" --query digest -o tsv 2>/dev/null | tr -d '\r\n' || true)
+
+          # The lease is deliberately NOT released here. The Trivy step below
+          # PULLS this image from the registry, so it must run while the data
+          # plane is still reachable — the same ordering full-app-deploy-commercial
+          # and build-fiab-images-acr-tasks use ("runs while the ACR is still
+          # OPEN"). Releasing here would make the scan fail on a network/auth
+          # error, which the verdict step would then read as CRITICAL findings:
+          # a gate reporting a security verdict it never actually measured. The
+          # `always()` release AFTER the scan owns the unlock on every path.
+
+          if [ -z "$DIGEST" ]; then
+            echo "::error::az acr build exited 0 but ${IMAGE}:${TAG} does NOT exist on $ACR — the build silently produced nothing (#2706)."
+            exit 1
+          fi
+          echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "::notice::${IMAGE}:${TAG} + ${IMAGE}:${SHA} pushed to $ACR ($DIGEST)."
+
+      # ── Supply chain: REPORT, then REFUSE unless explicitly accepted ──────
+      # Deliberately NOT `trivy-action` with `exit-code: 1` alone: the point is to
+      # print the CRITICAL set so the operator decides against evidence, and a
+      # step that dies inside the action ends the job before the verdict below
+      # can explain what to do. Same scanner, same flags, same .trivyignore as
+      # every sibling lane. Runs under the still-open lease (see above).
+      - name: Trivy CRITICAL scan (report)
+        id: trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ env.ACR_LOGIN }}/loom-sharing@${{ env.IMAGE_DIGEST }}
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          scanners: vuln
+          trivyignores: .trivyignore
+          format: table
+
+      # Unlock the registry on EVERY path, including a failed build or a scan
+      # that never ran. This is the only release step; the build deliberately
+      # holds the lease through the Trivy pull above.
+      - name: Release the ACR firewall lease (always)
+        if: always()
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+
+      - name: Supply-chain verdict
+        env:
+          ACCEPT: ${{ inputs.accept_upstream_cves }}
+          TRIVY: ${{ steps.trivy.outcome }}
+        run: |
+          set -euo pipefail
+          echo "trivy outcome: $TRIVY"
+          if [ "$TRIVY" = "success" ]; then
+            echo "::notice::Trivy CRITICAL gate PASSED for ${IMAGE}:${IMAGE_TAG}."
+            exit 0
+          fi
+          # A non-success outcome means EITHER CRITICAL findings OR the scan
+          # itself failed (Trivy DB outage, registry unreachable). The action
+          # does not distinguish them, so neither does this message: a gate that
+          # asserted "CRITICAL CVEs found" when it had actually failed to measure
+          # anything would be stating a security verdict it never reached.
+          if [ "$ACCEPT" = "true" ]; then
+            echo "::warning::The Trivy CRITICAL step did not pass for ${IMAGE}:${IMAGE_TAG} and accept_upstream_cves=true was set for THIS dispatch, so the run continues. Read the step above to see WHICH it was — findings, or a scan that never ran. Nothing was added to .trivyignore; any findings remain open. This image must stay INTERNAL-ingress-only behind the Console BFF (docs/fiab/security/loom-sharing-threat-model.md)."
+            exit 0
+          fi
+          echo "::error::The Trivy CRITICAL step did not pass for ${IMAGE}:${IMAGE_TAG} — read the step above to tell CRITICAL FINDINGS apart from a scan that failed to run. The image IS in $ACR (az acr build pushes before anything can scan), but CI will not declare it fit to deploy. Expected known-unfixable set as of 2026-08-02: 38 CRITICAL inside the upstream payload jars in /opt/docker/lib (hadoop-common 2.10.1, spark-core 2.4.7, zookeeper 3.4.14, netty 3.10.6, avro 1.8.2, htrace-core4 4.1.0 shading jackson-databind 2.4.0). Only an upstream rebuild clears those, and upstream has published no image since 2024-04. Do NOT add them to .trivyignore — that baseline is deliberately empty. If you have read the list and accept it for an internal-ingress-only deployment, re-dispatch with accept_upstream_cves=true."
+          exit 1
+
+      # ── Optional deploy ───────────────────────────────────────────────────
+      # Carried forward from the RUNNING app, never best-effort resolved (#2815).
+      # loom-sharing-app.bicep takes a FULL parameter set and ARM applies the
+      # module as a whole, so any value this step leaves unresolved is not "left
+      # alone" — it takes the parameter DEFAULT, which for adlsAccount /
+      # adlsClientId / adlsClientSecretUri is the EMPTY STRING. That flips
+      # `adlsWired` false, and the redeployed server then serves share metadata
+      # for tables it can no longer read: every recipient gets a storage-layer
+      # failure while the Container App reports Healthy. So an existing app whose
+      # config cannot be read is a hard stop.
+      #
+      # sharingBearerSecretUri and consoleAllowedCidrs are NEVER invented. The
+      # bearer is the single global credential that makes every published share
+      # readable to its holder, and empty CIDRs mean no IP pin — guessing either
+      # is a security posture decision, not a deploy detail.
+      - name: Resolve deploy config (carry forward — never guess a security parameter)
+        if: ${{ inputs.apply != 'build-only' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CAE_ID:-}" ] || [ -z "${UAMI_ID:-}" ]; then
+            echo "::error::Could not read the Container Apps environment and/or UAMI off $CONSOLE_APP in $ADMIN_RG. loom-sharing must land in the SAME VNet-integrated CAE as the console (its ingress is internal-only and the console is the only permitted caller), and it pulls its image and resolves its Key Vault secretrefs with the console UAMI. Refusing to deploy without both."
+            exit 1
+          fi
+
+          if ! az containerapp show -g "$ADMIN_RG" -n "$APP" -o none 2>/dev/null; then
+            echo "::error::$APP does not exist in $ADMIN_RG, so there is no existing configuration to carry forward, and this workflow will not invent one. The FIRST deploy is an operator action because it fixes two security parameters that must not be guessed: sharingBearerSecretUri (the Key Vault secret URI for the single global Console->server bearer) and consoleAllowedCidrs (the IP allow-list; [] means NO ip pin). Follow docs/fiab/delta-sharing-gov.md 'Deploy' steps 2-4 once, then this workflow refreshes it on every subsequent image build."
+            exit 1
+          fi
+
+          APP_JSON=$(az containerapp show -g "$ADMIN_RG" -n "$APP" -o json 2>/dev/null || echo '')
+          if [ -z "$APP_JSON" ] || ! printf '%s' "$APP_JSON" | jq -e 'type=="object"' >/dev/null 2>&1; then
+            echo "::error::$APP exists in $ADMIN_RG but could not be read. REFUSING to deploy: every parameter this workflow does not resolve takes its bicep DEFAULT, which for the ADLS trio is the empty string — the redeploy would leave a server that lists shares it cannot read while reporting Healthy. Fix the read (RBAC / az) and re-dispatch."
+            exit 1
+          fi
+
+          # `tr -d '\r\n'` on every extracted value is not cosmetic: these are
+          # written to $GITHUB_ENV as `NAME=value` lines, and one embedded
+          # newline there would silently truncate the value and inject the rest
+          # as another variable. sharesManifestB64 is the realistic carrier.
+          env_of() { printf '%s' "$APP_JSON" | jq -r --arg n "$1" 'first((.properties.template.containers[0].env // [])[] | select(.name==$n) | (.value // "")) // ""' | tr -d '\r\n'; }
+          secret_kv() { printf '%s' "$APP_JSON" | jq -r --arg n "$1" 'first((.properties.configuration.secrets // [])[] | select(.name==$n) | (.keyVaultUrl // "")) // ""' | tr -d '\r\n'; }
+
+          BEARER_URI=$(secret_kv sharing-bearer)
+          if [ -z "$BEARER_URI" ]; then
+            echo "::error::the running $APP has no Key-Vault-backed 'sharing-bearer' secret, so the bearer URI cannot be carried forward. loom-sharing-app.bicep requires it and the container REFUSES TO BOOT without a bearer — the upstream server treats a missing bearer as 'no authentication required', which would expose every published share to anything on the CAE network. This workflow will not mint or guess one."
+            exit 1
+          fi
+
+          CIDRS=$(printf '%s' "$APP_JSON" | jq -c '[(.properties.configuration.ingress.ipSecurityRestrictions // [])[] | .ipAddressRange]')
+          ADLS_SECRET_URI=$(secret_kv sharing-adls-client-secret)
+
+          {
+            echo "P_BEARER_URI=$BEARER_URI"
+            echo "P_CIDRS=$CIDRS"
+            echo "P_ADLS_ACCOUNT=$(env_of LOOM_SHARING_ADLS_ACCOUNT)"
+            echo "P_ADLS_TENANT=$(env_of LOOM_SHARING_ADLS_TENANT)"
+            echo "P_ADLS_CLIENT_ID=$(env_of LOOM_SHARING_ADLS_CLIENT_ID)"
+            echo "P_ADLS_SECRET_URI=$ADLS_SECRET_URI"
+            echo "P_SHARES_B64=$(env_of LOOM_SHARING_SHARES_B64)"
+            echo "P_ENDPOINT=$(env_of LOOM_SHARING_ENDPOINT)"
+          } >> "$GITHUB_ENV"
+
+          if [ "$CIDRS" = "[]" ]; then
+            echo "::warning::the running $APP has NO ingress IP allow-list. That is a deliberate opt-out in the bicep module (threat-model row E2) and is carried forward unchanged — internal ingress becomes the sole control."
+          fi
+          echo "carried forward: bearer secretref, ${CIDRS} CIDR rule(s), adls=$(env_of LOOM_SHARING_ADLS_ACCOUNT), shares manifest $( [ -n "$(env_of LOOM_SHARING_SHARES_B64)" ] && echo present || echo empty )"
+
+      - name: What-if the loom-sharing deployment
+        if: ${{ inputs.apply != 'build-only' }}
+        run: |
+          set -uo pipefail
+          az deployment group what-if -g "$ADMIN_RG" \
+            -f platform/fiab/bicep/modules/compute/loom-sharing-app.bicep \
+            -p location="$LOCATION" environmentId="$CAE_ID" sharingUamiId="$UAMI_ID" \
+               acrLoginServer="$ACR_LOGIN" image="$ACR_LOGIN/$IMAGE:$IMAGE_TAG" \
+               sharingBearerSecretUri="$P_BEARER_URI" consoleAllowedCidrs="$P_CIDRS" \
+               adlsAccount="$P_ADLS_ACCOUNT" adlsTenantId="$P_ADLS_TENANT" \
+               adlsClientId="$P_ADLS_CLIENT_ID" adlsClientSecretUri="$P_ADLS_SECRET_URI" \
+               sharesManifestB64="$P_SHARES_B64" \
+            --mode Incremental 2>&1 | tail -40 || true
+
+      - name: Deploy loom-sharing + verify it serves the protocol
+        if: ${{ inputs.apply == 'full' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$ADMIN_RG" -n "loom-sharing-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/compute/loom-sharing-app.bicep \
+            -p location="$LOCATION" environmentId="$CAE_ID" sharingUamiId="$UAMI_ID" \
+               acrLoginServer="$ACR_LOGIN" image="$ACR_LOGIN/$IMAGE:$IMAGE_TAG" \
+               sharingBearerSecretUri="$P_BEARER_URI" consoleAllowedCidrs="$P_CIDRS" \
+               adlsAccount="$P_ADLS_ACCOUNT" adlsTenantId="$P_ADLS_TENANT" \
+               adlsClientId="$P_ADLS_CLIENT_ID" adlsClientSecretUri="$P_ADLS_SECRET_URI" \
+               sharesManifestB64="$P_SHARES_B64" \
+            --mode Incremental -o none
+
+          # The Delta Sharing protocol has no unauthenticated health path, and
+          # `az containerapp exec` does not return the command's stdout in Gov —
+          # so the honest readiness signal is the container's OWN logs plus the
+          # revision state, exactly as gov-provision-maps.yml does for tileserver.
+          # A fabricated 200 here would be worse than no check.
+          OK=0
+          for p in $(seq 1 20); do
+            REV=$(az containerapp show -n "$APP" -g "$ADMIN_RG" --query properties.latestRevisionName -o tsv 2>/dev/null | tr -d '\r' || true)
+            RS=$(az containerapp revision show -n "$APP" -g "$ADMIN_RG" --revision "$REV" --query properties.runningState -o tsv 2>/dev/null | tr -d '\r' || true)
+            LOGS=$(az containerapp logs show -n "$APP" -g "$ADMIN_RG" --tail 120 --type console 2>/dev/null || true)
+            if printf '%s' "$LOGS" | grep -q "Serving HTTP" \
+               && ! printf '%s' "$LOGS" | grep -q "\[loom-sharing\] FATAL" \
+               && { [ "$RS" = "Running" ] || [ "$RS" = "Processing" ]; }; then
+              OK=1; echo "  loom-sharing verified (Armeria 'Serving HTTP' + running=$RS)"; break
+            fi
+            echo "  verify attempt $p -> running=$RS (waiting for the server to bind)"
+            sleep 15
+          done
+          echo "===== loom-sharing diagnostics ====="
+          az containerapp logs show -n "$APP" -g "$ADMIN_RG" --tail 60 --type console 2>&1 | tail -60 || true
+          az containerapp logs show -n "$APP" -g "$ADMIN_RG" --tail 30 --type system 2>&1 | tail -30 || true
+          echo "===== end diagnostics ====="
+          if [ "$OK" != "1" ]; then
+            echo "::error::loom-sharing did not reach a serving state — NOT wiring LOOM_SHARING_URL on the console (a dead sharing backend is worse than an honest gate: the BFF's LoomSharingNotConfiguredError tells a recipient the truth, a 502 does not)."
+            exit 1
+          fi
+
+          FQDN=$(az containerapp show -n "$APP" -g "$ADMIN_RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          CURRENT=$(az containerapp show -n "$CONSOLE_APP" -g "$ADMIN_RG" --query "properties.template.containers[0].env[?name=='LOOM_SHARING_URL'].value | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ "$CURRENT" = "https://$FQDN" ]; then
+            echo "::notice::console already points at https://$FQDN — no console revision needed."
+          else
+            az containerapp update -n "$CONSOLE_APP" -g "$ADMIN_RG" --set-env-vars "LOOM_SHARING_URL=https://$FQDN" -o none
+            echo "::notice::wired LOOM_SHARING_URL=https://$FQDN on $CONSOLE_APP."
+          fi
+          echo "::warning::LOOM_SHARING_BEARER on the console and LOOM_SHARING_AUDIENCE / LOOM_SHARING_SCOPE are NOT set by this workflow. Without the bearer secretref the BFF cannot authenticate to the server; without the audience/scope pin /api/delta-sharing/* fails CLOSED with 503. See docs/fiab/delta-sharing-gov.md steps 2 and 4."
+
+      - name: Summary
+        if: always()
+        run: |
+          set -uo pipefail
+          echo "boundary      : $BOUNDARY"
+          echo "admin RG      : ${ADMIN_RG:-<unresolved>}"
+          echo "registry      : ${ACR:-<unresolved>}"
+          echo "image         : ${IMAGE}:${IMAGE_TAG:-<not built>}"
+          echo "apply mode    : ${{ inputs.apply || 'build-only' }}"
+          echo "build commit  : ${GITHUB_SHA}"

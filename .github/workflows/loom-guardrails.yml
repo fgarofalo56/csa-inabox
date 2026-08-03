@@ -82,6 +82,8 @@ jobs:
       # were violated by scripts that reachability passed (#2816 residual).
       - name: deploy-job-scripts (the job create can actually succeed — #2816 residual)
         run: node scripts/ci/check-deploy-job-scripts.mjs
+      - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
+        run: node scripts/ci/check-image-producer-coverage.mjs
       - name: afd-endpoint-discovery (no CDN endpoint addressed by a name CI never discovered — #2828)
         run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
