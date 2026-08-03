@@ -26,6 +26,7 @@
 import http from 'node:http';
 import { parseLoomUri, resolvePhysical, deriveStorageConfig } from './resolver.mjs';
 import { OneLakeRegistry } from './registry.mjs';
+import { publicErrorMessage, BadRequestError, isBadRequest } from './safe-error.mjs';
 
 const PORT = parseInt(process.env.PORT || process.env.LOOM_ONELAKE_PORT || '8080', 10);
 const VERSION = '0.1.0';
@@ -55,7 +56,7 @@ async function readJson(req, limit = 1_000_000) {
       try {
         resolve(JSON.parse(data));
       } catch {
-        reject(new Error('invalid JSON body'));
+        reject(new BadRequestError('invalid JSON body'));
       }
     });
     req.on('error', reject);
@@ -73,10 +74,12 @@ async function doResolve(uri, tenantHint) {
   try {
     entry = await registry.lookup(parsed.tenant, parsed.workspace, parsed.item, parsed.itemType);
   } catch (e) {
-    // A registry read failure must not fake a result — surface it honestly.
+    // A registry read failure must not fake a result — surface it honestly,
+    // but the Cosmos exception text (account endpoint, RBAC diagnostic,
+    // activity id) is NOT the honest part. Sanitize; the detail is logged.
     return {
       status: 502,
-      body: { ok: false, error: `registry lookup failed: ${e && e.message ? e.message : String(e)}` },
+      body: { ok: false, error: publicErrorMessage(e, 'registry lookup failed') },
     };
   }
   const resolved = resolvePhysical(parsed, entry, storage);
@@ -162,11 +165,14 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 404, { ok: false, error: 'not found' });
   } catch (e) {
-    // Never leak stack traces to the client.
-    // eslint-disable-next-line no-console
-    console.error('[loom-onelake] error:', e && e.stack ? e.stack : String(e));
-    const msg = e && e.message === 'invalid JSON body' ? e.message : 'internal error';
-    return send(res, e && e.message === 'invalid JSON body' ? 400 : 500, { ok: false, error: msg });
+    // Never leak stack traces to the client. `publicErrorMessage` logs the
+    // detail server-side and returns a literal + correlation ref; the
+    // BadRequestError branch is a CLASS check, not the old
+    // `e.message === 'invalid JSON body'` string compare that stopped matching
+    // the moment the thrower was reworded.
+    return isBadRequest(e)
+      ? send(res, 400, { ok: false, error: 'invalid JSON body' })
+      : send(res, 500, { ok: false, error: publicErrorMessage(e, 'internal error') });
   }
 });
 
