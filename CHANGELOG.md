@@ -25,6 +25,22 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.8...csa-inabox-v0.82.9) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ci:** four controls that never ran, or could not fail (refs [#2860](https://github.com/fgarofalo56/csa-inabox/issues/2860)) ([#2863](https://github.com/fgarofalo56/csa-inabox/issues/2863)) ([e80e79b](https://github.com/fgarofalo56/csa-inabox/commit/e80e79b4957f376fed5b2ecee75d230ba490ff2c))
+* **ci:** give the node:test suites a lane that can actually block a merge (refs [#2856](https://github.com/fgarofalo56/csa-inabox/issues/2856)) ([#2858](https://github.com/fgarofalo56/csa-inabox/issues/2858)) ([942b6bc](https://github.com/fgarofalo56/csa-inabox/commit/942b6bcc1422acca3979270a4b4a49b38c7714a7))
+* **ci:** the login-health detector could not match its own emitter (refs [#2857](https://github.com/fgarofalo56/csa-inabox/issues/2857)) ([#2859](https://github.com/fgarofalo56/csa-inabox/issues/2859)) ([41ec053](https://github.com/fgarofalo56/csa-inabox/commit/41ec053ef09ad02a0261aa286b7bc652d178e2f0))
+* **ci:** the roll gate accepted a green check that never ran (refs [#2632](https://github.com/fgarofalo56/csa-inabox/issues/2632)) ([#2862](https://github.com/fgarofalo56/csa-inabox/issues/2862)) ([2cc8310](https://github.com/fgarofalo56/csa-inabox/commit/2cc831026f069013582464f2c6a77428bb3dc015))
+* **deploy:** KV firewall helper read state via a JMESPath LIST — broke every deploy path ([#2868](https://github.com/fgarofalo56/csa-inabox/issues/2868)) ([eb00be9](https://github.com/fgarofalo56/csa-inabox/commit/eb00be96146a746ee5d790a3e954e7da7557bdbe))
+* **deps:** floor console vite at ^6.4.3 to close 4 advisories ([#2671](https://github.com/fgarofalo56/csa-inabox/issues/2671)) ([#2852](https://github.com/fgarofalo56/csa-inabox/issues/2852)) ([b88c2d2](https://github.com/fgarofalo56/csa-inabox/commit/b88c2d21036d182e94e440231709b65d7a1ca9f1))
+* **purview:** the business-metadata sink had no runtime namespace backstop (refs [#2633](https://github.com/fgarofalo56/csa-inabox/issues/2633)) ([#2865](https://github.com/fgarofalo56/csa-inabox/issues/2865)) ([7e21f34](https://github.com/fgarofalo56/csa-inabox/commit/7e21f3461c42c7b49988d6ad801856a394a394ac))
+* **security:** audit the SQL-DDL and account-plane Unity Catalog exits (refs [#2622](https://github.com/fgarofalo56/csa-inabox/issues/2622)) ([#2866](https://github.com/fgarofalo56/csa-inabox/issues/2866)) ([c2fafe8](https://github.com/fgarofalo56/csa-inabox/commit/c2fafe841c26efd89560d1f0d3e57fc68c4f72ad))
+* **security:** close the log-injection class — the [#2768](https://github.com/fgarofalo56/csa-inabox/issues/2768) sanitizer was invisible to CodeQL ([#2850](https://github.com/fgarofalo56/csa-inabox/issues/2850)) ([3efc93b](https://github.com/fgarofalo56/csa-inabox/commit/3efc93be235dd18e3bee1371b08b154aea9f8c63))
+* **security:** verify the Key Vault firewall re-lock instead of assuming it (refs [#2855](https://github.com/fgarofalo56/csa-inabox/issues/2855)) ([#2861](https://github.com/fgarofalo56/csa-inabox/issues/2861)) ([c3cc7da](https://github.com/fgarofalo56/csa-inabox/commit/c3cc7da000b957621e6d4c5b85531ffd9a04cefc))
+
 ## [0.82.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.7...csa-inabox-v0.82.8) (2026-08-03)
 
 
