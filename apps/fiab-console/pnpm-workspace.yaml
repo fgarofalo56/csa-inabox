@@ -87,3 +87,36 @@ overrides:
   'brace-expansion@1': '>=1.1.16 <2'
   'brace-expansion@2': '>=2.1.2 <3'
   'brace-expansion@5': '>=5.0.7 <6'
+  # THE ONE DELIBERATE EXCEPTION TO THE `>=` CONVENTION ABOVE — read before
+  # "fixing" this to match its neighbours.
+  #
+  # Four advisories land on the vite/esbuild pair resolved here (dev-scope: vite
+  # arrives only via vitest and @vitejs/plugin-react; `next build` is webpack,
+  # and neither package appears under .next/standalone):
+  #   vite  <6.4.3  server.fs.deny bypass on Windows alternate paths   (high)
+  #   vite  <6.4.3  launch-editor NTLMv2 hash disclosure via UNC paths (medium)
+  #   vite  <6.4.2  path traversal in optimized-deps `.map` handling   (medium)
+  #   esbuild <0.25.0  dev server answers any origin's requests        (medium)
+  #
+  # There is NO patched release in the 5.x line — GitHub's advisory matrix gives
+  # patched floors only at 6.4.3 / 7.3.5 / 8.0.16 — so the resolved 5.4.21
+  # cannot be fixed in place. An override is the only route.
+  #
+  # WHY A CARET AND NOT `>=6.4.3`. pnpm resolves an override to the HIGHEST
+  # matching version. `>=6.4.3` resolves to vite 8.2.0 today, and vitest@3.2.7
+  # declares vite as a DEPENDENCY with range '^5.0.0 || ^6.0.0 || ^7.0.0-0' —
+  # 8.x is outside it, so the "floor" would break the test runner rather than
+  # patch it. The bound is load-bearing; do not relax it to `>=`.
+  #
+  # WHY 6.x AND NOT 7.x. vite 7.3.6 also closes all four, but its engines are
+  # '^20.19.0 || >=22.12.0' against the plain '20' used by 14 workflow files,
+  # and it pulls esbuild ^0.27 — a larger jump on a vitest setup with documented
+  # fragility, for zero extra CVE coverage. 6.4.3 is the newest 6.x, is patched
+  # for all three vite advisories, and its engines '^18 || ^20 || >=22' are safe
+  # on both node 20 (CI) and node 22 (the image).
+  #
+  # NO esbuild ENTRY ON PURPOSE. vite@6.4.3 declares esbuild '^0.25.0', which
+  # resolves 0.25.x and closes the esbuild advisory by itself. An explicit
+  # 'esbuild: >=0.25.0' would resolve 0.27.x into a vite that asked for ^0.25.0
+  # — widening a fix into a break.
+  vite: '^6.4.3'
