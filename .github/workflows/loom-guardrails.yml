@@ -136,3 +136,17 @@ jobs:
       # a gate that measures nothing — it reads as coverage and enforces nothing.
       - name: scripts/ci self-tests (roll-gate, ratchet comment-stripping, FD purge target, login-health verdict, annotation-teeth, bff-errors RULE 3)
         run: node --test scripts/ci/__tests__/*.test.mjs
+      # EVERY node:test suite in the tree, not just the one directory above
+      # (#2856). The discovery runner was added by #2838 and wired ONLY into
+      # `node:test suites (node 20)` in fiab-console-ci.yml — a context that is
+      # not a required status check, and that the `Protect main` ruleset does
+      # not add either. So the 41 fail-closed assertions in apps/loom-unity
+      # (Unity Catalog authorization is DEFAULT-ON) and apps/loom-onelake
+      # (path traversal) could go red while the PR merged on green required
+      # checks. `guardrails` IS required, so running it here gives them teeth —
+      # no branch-protection change needed.
+      #
+      # The step above is deliberately left in place as an independent control:
+      # it proves this one changed no existing behaviour. The overlap is ~5s.
+      - name: 'node:test suites (every suite in the tree — #2856)'
+        run: node scripts/ci/check-node-test-suites.mjs

@@ -203,6 +203,185 @@ export function decide({ status, summary, ci }) {
   return { code: 0, reason: `${summary.pass} tests passed` };
 }
 
+// ── the lane must be able to BLOCK A MERGE (#2856) ─────────────────────────
+//
+// Running the suites is only half the job. When this runner was first wired it
+// was invoked from a NEW job in fiab-console-ci.yml named `node:test suites
+// (node 20)` — a context that is not in the repository's required status
+// checks, and that the `Protect main` ruleset does not add either (its rules
+// are deletion / non_fast_forward / pull_request only). So the 41 fail-closed
+// assertions in apps/loom-unity + apps/loom-onelake could go RED and the pull
+// request would still merge with every required check green.
+//
+// The sibling half of the very same fix did not have that problem:
+// scripts/ci/__tests__ was wired into the `guardrails` job, which IS required.
+// fiab-console-ci.yml is an easy place to get this wrong precisely because it
+// already hosts two required contexts (`next build (node 20)`,
+// `vitest (node 20)`), so a job added beside them looks merge-blocking.
+//
+// This check asserts the runner is invoked from a lane that can actually stop a
+// merge. Each entry carries its evidence, and every claim in it is verified
+// against the workflow on disk rather than trusted.
+
+/** This file's repo-relative path, as it appears in a workflow `run:`. */
+export const RUNNER_PATH = 'scripts/ci/check-node-test-suites.mjs';
+
+/**
+ * Lanes whose status check is REQUIRED on `main` (branch protection). At least
+ * one of these must invoke RUNNER_PATH, un-neutered.
+ *
+ * `check` is the status-check CONTEXT as branch protection sees it. A job with
+ * no `name:` reports under its job id, so for `guardrails` the two coincide —
+ * and adding a `name:` to that job would RENAME the context out of the required
+ * list without touching branch protection. checkMergeBlockingLane() verifies
+ * this rather than assuming it.
+ *
+ * NOTE (honest limitation): branch protection lives in repo settings, not in
+ * the tree, and the default GITHUB_TOKEN cannot read it. This list is a
+ * DECLARATION. If the required set is edited, this guard does not find out —
+ * it can only prove the tree matches what we declared. Everything downstream of
+ * the declaration is verified.
+ */
+export const MERGE_BLOCKING_LANES = [
+  {
+    workflow: '.github/workflows/loom-guardrails.yml',
+    job: 'guardrails',
+    check: 'guardrails',
+  },
+];
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Extract the body of a `jobs:` entry. Job ids sit at two-space indent, so the
+ * block ends at the next two-space key — but NOT at a two-space comment, which
+ * is still inside the block.
+ * @returns {string|null} the block body, or null when the job is absent
+ */
+export function extractJobBlock(yamlText, jobId) {
+  const lines = yamlText.split(/\r?\n/);
+  const head = new RegExp(`^ {2}${escapeRe(jobId)}:\\s*(#.*)?$`);
+  const start = lines.findIndex((l) => head.test(l));
+  if (start === -1) return null;
+  const body = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {2}[^\s#]/.test(lines[i])) break; // next job id at the same level
+    body.push(lines[i]);
+  }
+  return body.join('\n');
+}
+
+/**
+ * The status-check context a job reports under: its `name:` when it declares
+ * one, otherwise its job id.
+ */
+export function jobContextName(jobBlock, jobId) {
+  const m = jobBlock.match(/^ {4}name:\s*(.+?)\s*$/m);
+  if (!m) return jobId;
+  return m[1].replace(/^['"]|['"]$/g, '');
+}
+
+/**
+ * Find an invocation of `needle` in a job block and report whether it can fail.
+ *
+ * A step that runs the command but discards its verdict is worse than no step:
+ * it reads as coverage. Both known ways to do that are rejected here.
+ * @returns {{found:boolean, neutered:string[]}}
+ */
+export function findInvocation(jobBlock, needle) {
+  // Steps are list items at six-space indent; split so continue-on-error is
+  // attributed to the step that declares it and not to its neighbours.
+  const chunks = jobBlock.split(/^ {6}- /m);
+  let found = false;
+  const neutered = [];
+  for (const chunk of chunks) {
+    const runLine = chunk
+      .split(/\r?\n/)
+      .find((l) => l.includes(needle) && !/^\s*#/.test(l));
+    if (!runLine) continue;
+    found = true;
+    if (/^\s*continue-on-error:\s*true\s*$/m.test(chunk)) {
+      neutered.push('the step declares continue-on-error: true');
+    }
+    if (/\|\|\s*true/.test(runLine)) {
+      neutered.push('the run line ends in `|| true`');
+    }
+  }
+  return { found, neutered };
+}
+
+/**
+ * A required check must report on EVERY pull request. A path-filtered one both
+ * deadlocks unrelated PRs (the context never reports) and cannot fire on the
+ * edit it exists to catch.
+ */
+export function pullRequestTriggerIsUnfiltered(yamlText) {
+  const lines = yamlText.split(/\r?\n/);
+  const onIdx = lines.findIndex((l) => /^(on|'on'|"on"):\s*$/.test(l));
+  if (onIdx === -1) return { ok: false, reason: 'no `on:` block' };
+  const block = [];
+  for (let i = onIdx + 1; i < lines.length; i++) {
+    if (/^[^\s#]/.test(lines[i])) break; // next top-level key
+    block.push(lines[i]);
+  }
+  const prIdx = block.findIndex((l) => /^ {2}pull_request:\s*$/.test(l));
+  if (prIdx === -1) return { ok: false, reason: 'no `pull_request:` trigger' };
+  for (let i = prIdx + 1; i < block.length; i++) {
+    if (/^ {2}[^\s#]/.test(block[i])) break; // next trigger
+    if (/^ {4}paths(-ignore)?:/.test(block[i])) {
+      return { ok: false, reason: 'the pull_request trigger is path-filtered' };
+    }
+  }
+  return { ok: true, reason: 'pull_request runs unfiltered' };
+}
+
+/**
+ * Assert at least one declared merge-blocking lane really invokes this runner.
+ * @returns {{ok:boolean, problems:string[], lane:object|null}}
+ */
+export function checkMergeBlockingLane(root = REPO_ROOT, needle = RUNNER_PATH) {
+  const problems = [];
+  if (MERGE_BLOCKING_LANES.length === 0) {
+    return { ok: false, problems: ['no merge-blocking lane is declared'], lane: null };
+  }
+  for (const lane of MERGE_BLOCKING_LANES) {
+    const abs = path.join(root, lane.workflow);
+    if (!fs.existsSync(abs)) {
+      problems.push(`${lane.workflow} does not exist (declared for check "${lane.check}")`);
+      continue;
+    }
+    const text = fs.readFileSync(abs, 'utf8');
+    const block = extractJobBlock(text, lane.job);
+    if (block === null) {
+      problems.push(`${lane.workflow} declares no job "${lane.job}"`);
+      continue;
+    }
+    const context = jobContextName(block, lane.job);
+    if (context !== lane.check) {
+      problems.push(
+        `${lane.workflow} job "${lane.job}" reports as "${context}", not the required check "${lane.check}" — renaming a job renames its status context out of branch protection`,
+      );
+      continue;
+    }
+    const trigger = pullRequestTriggerIsUnfiltered(text);
+    if (!trigger.ok) {
+      problems.push(`${lane.workflow}: ${trigger.reason} — a required check must report on every PR`);
+      continue;
+    }
+    const { found, neutered } = findInvocation(block, needle);
+    if (!found) {
+      problems.push(`${lane.workflow} job "${lane.job}" does not invoke ${needle}`);
+      continue;
+    }
+    if (neutered.length > 0) {
+      problems.push(`${lane.workflow} job "${lane.job}" invokes ${needle} but ${neutered.join('; ')}`);
+      continue;
+    }
+    return { ok: true, problems: [], lane }; // one good lane is enough
+  }
+  return { ok: false, problems, lane: null };
+}
+
 function main(argv) {
   const listOnly = argv.includes('--list');
   const ci = Boolean(process.env.CI);
@@ -227,6 +406,18 @@ function main(argv) {
   }
 
   if (listOnly) return 0;
+
+  // FAIL CLOSED #3: the lane running all this must be able to BLOCK A MERGE.
+  // Checked before the suites so the reason is visible even when they pass —
+  // green suites in a non-blocking lane is exactly the shape being guarded.
+  const lane = checkMergeBlockingLane();
+  if (lane.ok) {
+    console.log(
+      `[node-test-suites] merge-blocking lane: ${lane.lane.workflow} job "${lane.lane.job}" (required check "${lane.lane.check}")`,
+    );
+  } else {
+    for (const p of lane.problems) console.error(`[node-test-suites] lane problem: ${p}`);
+  }
 
   // FAIL CLOSED #2: without a POSIX `sh`, the loom-unity and loom-sharing
   // entrypoint suites self-skip — the fail-closed authorization assertions go
@@ -254,7 +445,16 @@ function main(argv) {
   const summary = parseTapSummary(out);
   const { code, reason } = decide({ status: child.status, summary, ci });
   console.log(`[node-test-suites] ${code === 0 ? 'OK' : 'FAIL'}: ${reason}`);
-  return code;
+  // A real test failure keeps its own exit status (never downgraded). Only when
+  // the suites are clean does the lane verdict decide the outcome.
+  if (code !== 0) return code;
+  if (!lane.ok) {
+    console.error(
+      '[node-test-suites] FAIL: every suite passed, but no merge-blocking lane invokes this runner — a red result here could not stop a merge.',
+    );
+    return 1;
+  }
+  return 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
