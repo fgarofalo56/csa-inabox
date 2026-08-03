@@ -383,3 +383,193 @@ describe('WS-1.1 per-cloud default reasoning binding (Commercial + Gov)', () => 
     expect(gov.standard).toBeTruthy();
   });
 });
+
+// ── Last-resort tier resolution from the account's LIVE deployments ──────────
+//
+// REGRESSION CONTEXT: with LOOM_AOAI_MINI_DEPLOYMENT / LOOM_AOAI_STRONG_DEPLOYMENT
+// absent, the router silently collapsed EVERY task class onto the single base
+// deployment and emitted no signal. In the live console that funnelled 100% of
+// Copilot traffic onto a 10K-TPM `gpt-4o-mini` while three 1000-capacity
+// `gpt-5.6-*` reasoning deployments sat idle on the SAME account — 5,704 AOAI
+// errors over three days, every one a 429.
+describe('tierPolicyFromConfig — live-deployment fallback', () => {
+  const savedMini = process.env.LOOM_AOAI_MINI_DEPLOYMENT;
+  const savedStrong = process.env.LOOM_AOAI_STRONG_DEPLOYMENT;
+  const savedChat = process.env.LOOM_AOAI_DEPLOYMENT;
+
+  beforeEach(() => {
+    delete process.env.LOOM_AOAI_MINI_DEPLOYMENT;
+    delete process.env.LOOM_AOAI_STRONG_DEPLOYMENT;
+    process.env.LOOM_AOAI_DEPLOYMENT = 'gpt-4o-mini';
+  });
+  afterEach(() => {
+    if (savedMini === undefined) delete process.env.LOOM_AOAI_MINI_DEPLOYMENT;
+    else process.env.LOOM_AOAI_MINI_DEPLOYMENT = savedMini;
+    if (savedStrong === undefined) delete process.env.LOOM_AOAI_STRONG_DEPLOYMENT;
+    else process.env.LOOM_AOAI_STRONG_DEPLOYMENT = savedStrong;
+    if (savedChat === undefined) delete process.env.LOOM_AOAI_DEPLOYMENT;
+    else process.env.LOOM_AOAI_DEPLOYMENT = savedChat;
+  });
+
+  it('CONTROL — with env unset AND no live list, every tier still collapses to the base', () => {
+    const p = tierPolicyFromConfig(null);
+    expect(p.tiers.mini).toBeUndefined();
+    expect(p.tiers.strong).toBeUndefined();
+    expect(p.tiers.standard).toBe('gpt-4o-mini');
+  });
+
+  it('resolves the STRONG tier from the live deployment list (the live-console case)', () => {
+    // VERIFIED against the real estate via a read-only
+    // `az cognitiveservices account deployment list`: the account carries
+    // gpt-4o-mini at capacity 10 (taking 100% of turns) alongside THREE
+    // 1000-capacity siblings whose `properties.model.name` is the SUFFIXED
+    // 'gpt-5.6-sol' — NOT the bare 'gpt-5.6' the matrix chain is written in.
+    // An exact-only match finds nothing here, which is why the variant match
+    // exists.
+    const p = tierPolicyFromConfig(null, {
+      cloud: 'Commercial',
+      region: 'centralus',
+      liveDeployments: [
+        { name: 'gpt-4o-mini', modelName: 'gpt-4o-mini' },
+        { name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' },
+        { name: 'gpt-5.6-luna', modelName: 'gpt-5.6-luna' },
+      ],
+    });
+    expect(p.tiers.strong).toBe('gpt-5.6-sol');
+  });
+
+  it('also resolves an EXACT chain model (deployment named for its bare model)', () => {
+    const p = tierPolicyFromConfig(null, {
+      cloud: 'Commercial',
+      liveDeployments: [{ name: 'my-reasoner', modelName: 'gpt-5.6' }],
+    });
+    // Returns the DEPLOYMENT name — what the AOAI URL path needs.
+    expect(p.tiers.strong).toBe('my-reasoner');
+  });
+
+  it('CONTROL — a WEAKER variant never satisfies a chain entry', () => {
+    // The strong chain ends at the gpt-4.1 floor. A `gpt-4.1-mini` deployment
+    // must NOT bind the reasoning tier — that would silently downgrade every
+    // hard turn, which is the opposite of the fix.
+    const p = tierPolicyFromConfig(null, {
+      cloud: 'Commercial',
+      liveDeployments: [{ name: 'cheap', modelName: 'gpt-4.1-mini' }],
+    });
+    expect(p.tiers.strong).toBeUndefined();
+    // ...but it is a perfectly good MINI tier (exact head of the mini chain).
+    expect(p.tiers.mini).toBe('cheap');
+  });
+
+  it('resolves the MINI tier from the live deployment list', () => {
+    const p = tierPolicyFromConfig(null, {
+      cloud: 'Commercial',
+      liveDeployments: [
+        { name: 'my-mini', modelName: 'gpt-4.1-mini' },
+        { name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' },
+      ],
+    });
+    expect(p.tiers.mini).toBe('my-mini');
+  });
+
+  it('NEVER invents a deployment — nothing in the chain deployed ⇒ undefined', () => {
+    const p = tierPolicyFromConfig(null, {
+      cloud: 'Commercial',
+      liveDeployments: [{ name: 'llama-3', modelName: 'llama-3' }],
+    });
+    // An undeployed model would 404 — strictly worse than riding the base.
+    expect(p.tiers.strong).toBeUndefined();
+    expect(p.tiers.mini).toBeUndefined();
+  });
+
+  it('CONTROL — an explicitly configured env deployment WINS over discovery', () => {
+    process.env.LOOM_AOAI_STRONG_DEPLOYMENT = 'operator-choice';
+    const p = tierPolicyFromConfig(null, {
+      cloud: 'Commercial',
+      liveDeployments: [{ name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' }],
+    });
+    expect(p.tiers.strong).toBe('operator-choice');
+  });
+
+  it('CONTROL — tenant config WINS over both env and discovery', () => {
+    process.env.LOOM_AOAI_STRONG_DEPLOYMENT = 'env-choice';
+    const p = tierPolicyFromConfig(
+      { modelTiers: { strong: 'tenant-choice' } },
+      { cloud: 'Commercial', liveDeployments: [{ name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' }] },
+    );
+    expect(p.tiers.strong).toBe('tenant-choice');
+  });
+
+  it('an empty live list changes nothing', () => {
+    const p = tierPolicyFromConfig(null, { cloud: 'Commercial', liveDeployments: [] });
+    expect(p.tiers.strong).toBeUndefined();
+  });
+
+  it('routeTurnTier UPSHIFTS a hard turn onto the discovered strong deployment', () => {
+    const sel = routeTurnTier({
+      cfg: null,
+      messages: [{ role: 'user', content: 'Design an architecture for a medallion lakehouse and debug the root cause' }],
+      baseDeployment: 'gpt-4o-mini',
+      resolution: {
+        cloud: 'Commercial',
+        liveDeployments: [
+          { name: 'gpt-4o-mini', modelName: 'gpt-4o-mini' },
+          { name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' },
+        ],
+      },
+    });
+    expect(sel.taskClass).toBe('reasoning');
+    expect(sel.tier).toBe('strong');
+    expect(sel.routed).toBe(true);
+    expect(sel.deployment).toBe('gpt-5.6-sol');
+  });
+
+  it('CONTROL — without the live list the SAME hard turn stays on the base (the bug)', () => {
+    const sel = routeTurnTier({
+      cfg: null,
+      messages: [{ role: 'user', content: 'Design an architecture for a medallion lakehouse and debug the root cause' }],
+      baseDeployment: 'gpt-4o-mini',
+    });
+    expect(sel.taskClass).toBe('reasoning');
+    expect(sel.routed).toBe(false);
+    expect(sel.deployment).toBe('gpt-4o-mini');
+  });
+
+  it('CONTROL — escalate-only still holds: a lightweight turn is never downshifted', () => {
+    const sel = routeTurnTier({
+      cfg: null,
+      messages: [{ role: 'user', content: 'hi' }],
+      baseDeployment: 'gpt-4o-mini',
+      resolution: {
+        cloud: 'Commercial',
+        liveDeployments: [
+          { name: 'my-mini', modelName: 'gpt-4.1-mini' },
+          { name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' },
+        ],
+      },
+    });
+    expect(sel.taskClass).toBe('lightweight');
+    expect(sel.routed).toBe(false);
+    expect(sel.deployment).toBe('gpt-4o-mini');
+  });
+
+  it('CONTROL — the opt-out kill switch still disables discovery-driven routing', () => {
+    const sel = routeTurnTier({
+      cfg: { modelTierRoutingEnabled: false },
+      messages: [{ role: 'user', content: 'Design an architecture and debug the root cause' }],
+      baseDeployment: 'gpt-4o-mini',
+      resolution: { cloud: 'Commercial', liveDeployments: [{ name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' }] },
+    });
+    expect(sel.routed).toBe(false);
+    expect(sel.deployment).toBe('gpt-4o-mini');
+  });
+
+  it('reasoningTierConfigured sees a discovered strong tier', () => {
+    expect(reasoningTierConfigured(null)).toBe(false);
+    expect(
+      reasoningTierConfigured(null, {
+        cloud: 'Commercial',
+        liveDeployments: [{ name: 'gpt-5.6-sol', modelName: 'gpt-5.6-sol' }],
+      }),
+    ).toBe(true);
+  });
+});

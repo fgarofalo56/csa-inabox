@@ -106,6 +106,27 @@ export function _resetAvailabilityCache(seed?: DeploymentCache | null): void {
 }
 
 /**
+ * The account's LIVE model deployments, for callers that need to resolve a
+ * deployment themselves rather than degrade an existing target (the AIF-12 tier
+ * router's last-resort mini/strong resolution).
+ *
+ * SYNCHRONOUS + non-blocking, exactly like {@link applyAvailabilityFallback}:
+ * a cold/stale cache kicks off a background refresh and returns `null` for THIS
+ * call, so it can never add latency to a turn. Returns `null` when the
+ * availability check is opted out (`LOOM_AOAI_AVAILABILITY_CHECK=false`) so one
+ * switch disables every live-deployment behaviour.
+ */
+export function peekLiveDeployments(): { deployments: AvailableDeployment[]; region: string } | null {
+  if (!availabilityCheckEnabled()) return null;
+
+  const fresh = _cache && Date.now() - _cache.at < ttlMs();
+  if (!fresh) refresh(); // background; does not block this call.
+  if (!_cache || _cache.deployments.length === 0) return null;
+
+  return { deployments: _cache.deployments, region: _cache.region };
+}
+
+/**
  * Degrade `target.deployment` to a model that is actually deployed when the
  * configured one is missing (the Gov-lag 404 class). SYNCHRONOUS + non-blocking:
  *   • disabled or cold cache → returns `target` unchanged (and kicks off a
