@@ -73,7 +73,7 @@ import {
   resolvePurviewEndpoints,
 } from './purview-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
-import { assertNamespacedTypedefNames, SENSITIVITY_LABEL_TYPEDEF_PREFIX,
+import { assertNamespacedBusinessMetadataName, assertNamespacedTypedefNames, SENSITIVITY_LABEL_TYPEDEF_PREFIX,
   type AtlasBusinessMetadataName, type AtlasClassificationTypedefName } from './purview-typedef-namespace';
 import { derivePurviewArmResourceId, purviewArmProviderForKind } from './purview-source-mapping';
 import { dfsUrl, getBlobSuffix } from './cloud-endpoints';
@@ -1465,7 +1465,7 @@ export async function createGlossaryTerm(payload: {
 // ensureBusinessMetadataDef creates the typedef and grows it with any missing
 // attribute keys (idempotent), so a free-form "Custom tags" key/value UI can
 // use arbitrary keys. Needs the Loom UAMI "Data Curator" on the root collection.
-// ACCOUNT-GLOBAL + isOverwrite=true (whole-bag replace) ⇒ `bmName` is REQUIRED and branded: ./purview-typedef-namespace (#2633).
+// ACCOUNT-GLOBAL + isOverwrite=true (whole-bag replace) ⇒ `bmName` is REQUIRED, branded AND runtime-asserted: ./purview-typedef-namespace (#2633).
 // ------------------------------------------------------------
 
 /** LEGACY, READ-ONLY (#2633): the pre-per-tenant account-global bag. Readable so old values aren't orphaned; not brandable, so no longer writable. */
@@ -1509,6 +1509,7 @@ export async function ensureBusinessMetadataDef(
   bmName: AtlasBusinessMetadataName,
 ): Promise<void> {
   purviewAccount();
+  assertNamespacedBusinessMetadataName(bmName); // #2633 layer 2 — the brand is erased at runtime.
   const wantKeys = [...new Set((attributeKeys || []).map(businessMetadataAttrName).filter(Boolean))];
   let existing: any = null;
   try { existing = await getBusinessMetadataDef(bmName); } catch { /* treat as missing → create */ }
@@ -1559,6 +1560,7 @@ export async function setBusinessMetadata(
   bmName: AtlasBusinessMetadataName,
 ): Promise<void> {
   purviewAccount();
+  assertNamespacedBusinessMetadataName(bmName); // #2633 layer 2 — refuses BEFORE the isOverwrite=true whole-bag POST.
   if (!guid) throw new PurviewError(400, null, 'guid is required');
   const entries = Object.entries(tags || {})
     .map(([k, v]) => [businessMetadataAttrName(k), String(v ?? '')] as const)

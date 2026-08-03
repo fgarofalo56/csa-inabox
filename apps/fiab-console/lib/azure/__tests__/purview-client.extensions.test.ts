@@ -482,4 +482,130 @@ describe('purview-client (classic Data Map)', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
+
+  // ── business metadata — the OTHER ACCOUNT-GLOBAL typedef SINK (#2633) ─────
+  // `ensureClassificationDefs` has called `assertNamespacedTypedefNames` since
+  // LU-5 r4. Its sibling in this same file did NOT, even though it guards the
+  // strictly MORE destructive call: `setBusinessMetadata` POSTs
+  // `…/businessmetadata/{bm}?isOverwrite=true`, a WHOLE-BAG replace, where
+  // `addAssetClassification` only adds. PR #2846 gave this half the branded
+  // parameter (layer 1) but not the runtime assert (layer 2) that
+  // purview-typedef-namespace's own header prescribes for "the paths TypeScript
+  // cannot see (an `any`-typed payload, a JS caller, a `as any` cast)" — and a
+  // brand is erased in the emitted JS, so every `as any` below is a call the
+  // shipped bundle accepted.
+  describe('business-metadata sinks — namespace guard (#2633)', () => {
+    const GOOD = 'LoomCustomTags_deadbeef'; // what loomTenantBusinessMetadataName mints
+
+    /**
+     * Atlas answers every call SUCCESSFULLY: the typedef is missing (404), the
+     * create succeeds (200), the entity write succeeds (204). So nothing except
+     * Loom's own guard stands between the caller and the account-global bag —
+     * which is the pre-fix world exactly. Without this, an un-guarded call
+     * would die on an unmocked `fetch` and the spec would go red for a test
+     * artefact instead of for the defect.
+     */
+    function atlasAcceptsEverything() {
+      fetchMock.mockImplementation(async (url: any) => {
+        const u = String(url);
+        if (u.includes('/types/businessmetadatadef/name/')) return new Response(null, { status: 404 });
+        if (u.includes('/types/typedefs')) return new Response(JSON.stringify({}), { status: 200 });
+        if (u.includes('/businessmetadata/')) return new Response(null, { status: 204 });
+        return new Response(JSON.stringify({}), { status: 200 });
+      });
+    }
+
+    /** Every Atlas URL touched that writes or grows an account-global typedef. */
+    const globalWritesHit = () => fetchMock.mock.calls
+      .map((c: any[]) => String(c[0]))
+      .filter((u: string) => u.includes('/types/typedefs') || u.includes('/businessmetadata/'))
+      .map((u: string) => u.replace(/^https?:\/\/[^/]+/, ''));
+
+    it('ATTACK: ensureBusinessMetadataDef REFUSES the account-global bag, growing nothing', async () => {
+      atlasAcceptsEverything();
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      const outcome = await mod
+        .ensureBusinessMetadataDef(['owner'], mod.LOOM_BUSINESS_METADATA_NAME as any)
+        .then(() => 'RESOLVED' as const, (e: unknown) => e);
+      // Asserted FIRST so a regression prints the typedef URL it grew.
+      expect(globalWritesHit()).toEqual([]);
+      expect(outcome).toBeInstanceOf(ns.UnnamespacedTypedefError);
+    });
+
+    it('ATTACK: setBusinessMetadata REFUSES it too — no isOverwrite=true whole-bag POST', async () => {
+      atlasAcceptsEverything();
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      const outcome = await mod
+        .setBusinessMetadata('guid-1', { owner: 'alice' }, 'LoomCustomTags' as any)
+        .then(() => 'RESOLVED' as const, (e: unknown) => e);
+      // A whole-bag replace on a shared account destroys every other tenant's
+      // attributes on this entity. Asserted first so a regression prints the
+      // exact `…/businessmetadata/LoomCustomTags?isOverwrite=true` it issued.
+      expect(globalWritesHit()).toEqual([]);
+      expect(outcome).toBeInstanceOf(ns.UnnamespacedTypedefError);
+    });
+
+    it('ATTACK: near-miss bag names are refused (the shape is exact, not a prefix match)', async () => {
+      atlasAcceptsEverything();
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      for (const bad of [
+        'LoomCustomTags_',          // empty discriminator
+        'LoomCustomTags_DEADBEEF',  // wrong case — not what the minter emits
+        'LoomCustomTags_deadbee',   // 7 hex
+        'LoomCustomTags_deadbeef1', // 9 hex
+        'CustomTags_deadbeef',      // wrong stem
+        'LoomCustomTags_deadbeef_x',
+      ]) {
+        const outcome = await mod
+          .setBusinessMetadata('guid-1', { k: 'v' }, bad as any)
+          .then(() => 'RESOLVED' as const, (e: unknown) => e);
+        expect(outcome, `bag "${bad}" must be refused`).toBeInstanceOf(ns.UnnamespacedTypedefError);
+      }
+      expect(globalWritesHit()).toEqual([]);
+    });
+
+    it('ATTACK: an EMPTY tag map does not smuggle a bad bag past the guard', async () => {
+      // setBusinessMetadata early-returns on empty entries BEFORE it would reach
+      // ensureBusinessMetadataDef, so a guard placed only on the transitive call
+      // would silently accept the account-global name here. It refuses instead.
+      atlasAcceptsEverything();
+      const mod = await import('../purview-client');
+      const ns = await import('../purview-typedef-namespace');
+      await expect(mod.setBusinessMetadata('guid-1', {}, 'LoomCustomTags' as any))
+        .rejects.toBeInstanceOf(ns.UnnamespacedTypedefError);
+    });
+
+    it('CONTROL: a tenant-namespaced bag still creates the typedef and writes the entity', async () => {
+      atlasAcceptsEverything();
+      const mod = await import('../purview-client');
+      await mod.setBusinessMetadata('guid-1', { cost_center: 'CC-1' }, GOOD as any);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const createBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+      expect(createBody.businessMetadataDefs[0].name).toBe(GOOD);
+      const [entityUrl, entityInit] = fetchMock.mock.calls[2];
+      expect(String(entityUrl)).toContain(`/businessmetadata/${GOOD}`);
+      expect(String(entityUrl)).toContain('isOverwrite=true');
+      expect(JSON.parse(entityInit.body)).toEqual({ cost_center: 'CC-1' });
+    });
+
+    it('CONTROL: empty tags on a VALID bag is still a cheap no-op (guard is not a blanket refusal)', async () => {
+      atlasAcceptsEverything();
+      const mod = await import('../purview-client');
+      await expect(mod.setBusinessMetadata('guid-1', {}, GOOD as any)).resolves.toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: "not configured" still wins over the namespace error (precedence unchanged)', async () => {
+      delete process.env.LOOM_PURVIEW_ACCOUNT;
+      const mod = await import('../purview-client');
+      // Bad bag AND no account: the caller must still be told what is actually
+      // actionable. This pins the assert BELOW purviewAccount(), not above it.
+      await expect(mod.setBusinessMetadata('guid-1', { k: 'v' }, 'LoomCustomTags' as any))
+        .rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+    });
+  });
 });
