@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { AasError } from '@/lib/azure/aas-client';
+import { logSafe } from '@/lib/util/log-safe';
 import {
   modelBindingGate,
   buildReadViewDax,
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
       executionMs: result.executionMs,
       truncated: result.truncated,
     };
-    try { console.info(`[rayfin-app/preview.POST] receipt: model=${model} rows=${result.rowCount} ms=${result.executionMs}`); } catch { /* noop */ }
+    try { console.info(`[rayfin-app/preview.POST] receipt: model=${logSafe(model)} rows=${logSafe(result.rowCount)} ms=${logSafe(result.executionMs)}`); } catch { /* noop */ }
     return NextResponse.json(out);
   } catch (e: any) {
     const status = e instanceof AasError ? e.status : 502;

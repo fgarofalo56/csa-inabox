@@ -376,7 +376,7 @@ export async function GET(req: NextRequest) {
       .update(`${process.env.SESSION_SECRET}:${claims.upn}`)
       .digest('hex')
       .slice(0, 12);
-    console.log('[auth/callback] session encoded for upn#', upnFingerprint, '— cookie length', cookieValue.length);
+    console.log('[auth/callback] session encoded for upn#', logSafe(upnFingerprint), '— cookie length', cookieValue.length);
     // Additive + non-breaking: capture the user's ARM token for per-user RBAC.
     // Never await-throws into the login path (the helper swallows all errors).
     await captureUserArmToken(client, account, claims.oid);
@@ -410,7 +410,7 @@ export async function GET(req: NextRequest) {
     // Do NOT reflect it into the browser URL — a generic `exchange_failed` code is
     // enough for the user; the detail lives in console.error for operators.
     const msg = (e as Error).message ?? 'unknown';
-    console.error('[auth/callback] exception:', msg);
+    console.error('[auth/callback] exception:', logSafe(msg));
     return htmlRedirect(`/?auth_error=exchange_failed`, undefined, clearAuthflow);
   }
 }

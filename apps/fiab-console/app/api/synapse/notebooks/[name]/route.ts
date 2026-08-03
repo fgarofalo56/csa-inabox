@@ -28,6 +28,7 @@ import {
   type SynapseNotebook,
 } from '@/lib/azure/synapse-artifacts-client';
 import { uploadFile } from '@/lib/azure/adls-client';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,7 +59,7 @@ async function adlsBackup(name: string, properties: SynapseNotebook['properties'
     await uploadFile('silver', path, body, 'application/x-ipynb+json');
     return { ok: true, path: `silver/${path}` };
   } catch (e: any) {
-    console.warn('[synapse-notebook] ADLS backup failed (non-fatal):', e?.message || e);
+    console.warn('[synapse-notebook] ADLS backup failed (non-fatal):', logSafe(e?.message || e));
     return { ok: false, error: e?.message || String(e) };
   }
 }

@@ -33,6 +33,7 @@ import {
   type LoomAppDefinition,
 } from '@/lib/editors/loom-app-model';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -167,7 +168,7 @@ export const POST = withWorkspaceOwner(NOTEBOOK_TYPE, async (req: NextRequest, {
     const url = appConsumerUrl(appId);
     try {
       // eslint-disable-next-line no-console
-      console.info(`[notebook/deploy-app.POST] receipt: notebook=${item.id} app=${appId} version=${stamped.version} url=${url}`);
+      console.info(`[notebook/deploy-app.POST] receipt: notebook=${logSafe(item.id)} app=${logSafe(appId)} version=${logSafe(stamped.version)} url=${logSafe(url)}`);
     } catch { /* noop */ }
     return apiOk({
       published: true, appId, displayName: appName,

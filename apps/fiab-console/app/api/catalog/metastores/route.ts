@@ -51,6 +51,7 @@ import {
   PurviewNotConfiguredError, PurviewError,
 } from '@/lib/azure/purview-client';
 import { withSession } from '@/lib/api/route-toolkit';
+import { logSafe } from '@/lib/util/log-safe';
 
 /** Detect the "calling identity is not a Databricks account admin" 403 that
  *  the UC account/metastore API returns. Databricks phrases this a few ways
@@ -103,7 +104,7 @@ async function listRegistrations(tenantId: string): Promise<MetastoreRegistratio
     // Log the underlying Cosmos error so an outage is diagnosable in the
     // Console logs (not swallowed); the caller turns the null into an honest
     // degraded envelope instead of a silent empty registrations list.
-    console.warn(`[catalog/metastores] registration read failed for tenant ${tenantId}: ${e?.message || e}`);
+    console.warn(`[catalog/metastores] registration read failed for tenant ${logSafe(tenantId)}: ${logSafe(e?.message || e)}`);
     return null;
   }
 }

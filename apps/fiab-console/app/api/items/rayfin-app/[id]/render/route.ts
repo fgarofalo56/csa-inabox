@@ -19,6 +19,7 @@ import { getSession } from '@/lib/auth/session';
 import { AasError } from '@/lib/azure/aas-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { modelBindingGate, buildReadViewDax, previewReadView } from '@/lib/azure/rayfin-model-binding';
+import { logSafe } from '@/lib/util/log-safe';
 import {
   gbParse, isDataComponent,
   type RayfinAppDefinition, type RayfinComponent,
@@ -116,7 +117,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     const componentCount = pages.reduce((n, p) => n + p.components.length, 0);
     const out = { ok: true as const, backend: 'analysis-services' as const, model, pages };
-    try { console.info(`[rayfin-app/render.POST] receipt: model=${model} pages=${pages.length} components=${componentCount}`); } catch { /* noop */ }
+    try { console.info(`[rayfin-app/render.POST] receipt: model=${logSafe(model)} pages=${pages.length} components=${logSafe(componentCount)}`); } catch { /* noop */ }
     return NextResponse.json(out);
   } catch (e: any) {
     const status = e instanceof AasError ? e.status : 502;

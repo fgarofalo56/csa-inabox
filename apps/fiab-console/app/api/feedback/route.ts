@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
   if (body.kind === 'auto-error') {
     const forwardingOn = await getAutoErrorForwarding();
     if (!forwardingOn) {
-      console.log(`[feedback] auto-error forwarding disabled by tenant admin; accepted locally tenant=${tenantHash()}`);
+      console.log(`[feedback] auto-error forwarding disabled by tenant admin; accepted locally tenant=${logSafe(tenantHash())}`);
       return NextResponse.json({ status: 'accepted-local', forwarded: false, reason: 'auto-error-forwarding-disabled' });
     }
   }
@@ -153,7 +153,7 @@ export async function POST(req: NextRequest) {
   if (!token) {
     // Air-gapped / unconfigured: log a short summary and accept.
     // kind + title come from the request body — logSafe prevents log forging.
-    console.log(`[feedback] kind=${logSafe(body.kind)} tenant=${tenantHash()} title=${logSafe(issueTitle)}`);
+    console.log(`[feedback] kind=${logSafe(body.kind)} tenant=${logSafe(tenantHash())} title=${logSafe(issueTitle)}`);
     return NextResponse.json({ status: 'accepted-local', forwarded: false });
   }
 
@@ -169,13 +169,13 @@ export async function POST(req: NextRequest) {
     });
     if (!r.ok) {
       const txt = await r.text();
-      console.error('[feedback] upstream forward failed', r.status, txt.slice(0, 200));
+      console.error('[feedback] upstream forward failed', logSafe(r.status), logSafe(txt.slice(0, 200)));
       return NextResponse.json({ status: 'accepted-queue-only', forwarded: false }, { status: 202 });
     }
     const j = (await r.json()) as { number?: number; html_url?: string };
     return NextResponse.json({ status: 'forwarded', issueNumber: j.number, issueUrl: j.html_url });
   } catch (e) {
-    console.error('[feedback] upstream forward exception', (e as Error).message);
+    console.error('[feedback] upstream forward exception', logSafe((e as Error).message));
     return NextResponse.json({ status: 'accepted-queue-only', forwarded: false }, { status: 202 });
   }
 }

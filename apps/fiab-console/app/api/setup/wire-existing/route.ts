@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { execSync } from 'child_process';
+import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
         execSync(grantCmd, { stdio: 'pipe' });
       } catch (e) {
         // RBAC grant may fail due to permissions, but don't block; env patching can continue
-        console.warn(`RBAC grant for ${dlzRg} failed (may lack permissions):`, e);
+        console.warn(`RBAC grant for ${logSafe(dlzRg)} failed (may lack permissions):`, logSafeError(e));
       }
 
       // Attempt env var patching
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
       try {
         execSync(patchCmd, { stdio: 'pipe' });
       } catch (e) {
-        console.warn(`Env patching for ${dlzRg} failed:`, e);
+        console.warn(`Env patching for ${logSafe(dlzRg)} failed:`, logSafeError(e));
       }
 
       wireResults.push({

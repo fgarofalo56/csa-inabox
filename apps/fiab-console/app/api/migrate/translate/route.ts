@@ -35,6 +35,7 @@ import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { registerMetric } from '@/lib/azure/semantic-contract';
 import { translateBatch, type TranslateInput, type TranslationResult } from '@/lib/migrate/translate';
+import { logSafe } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -78,7 +79,7 @@ async function writeAuditRow(row: Record<string, unknown>): Promise<void> {
     await al.items.create({ id: crypto.randomUUID(), ...row });
   } catch (e) {
     // eslint-disable-next-line no-console
-    console.warn('[migrate.translate] audit row write failed:', (e as Error)?.message || e);
+    console.warn('[migrate.translate] audit row write failed:', logSafe((e as Error)?.message || e));
   }
 }
 

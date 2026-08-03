@@ -32,6 +32,7 @@ import {
 } from '@/lib/taskflow/step-runner';
 import { launchItemRun, type LaunchedRun } from '@/lib/taskflow/launch-item';
 import { apiServerError } from '@/lib/api/respond';
+import { logSafe } from '@/lib/util/log-safe';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -42,16 +43,15 @@ export const dynamic = 'force-dynamic';
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLLS_PER_ITEM = 240; // ~20 min ceiling per item (Spark cold-start safe)
 
-/** Sanitize a value for logging: replace control chars, cap length (CodeQL log-injection). */
-function safeLog(v: unknown): string {
-  const str = String(v ?? '');
-  let out = '';
-  for (let i = 0; i < str.length && out.length < 200; i += 1) {
-    const c = str.charCodeAt(i);
-    out += c < 0x20 || c === 0x7f ? ' ' : str[i];
-  }
-  return out;
-}
+/**
+ * Sanitize a value for logging: replace control chars, cap length (CodeQL
+ * log-injection). Delegates to the SHARED `logSafe` helper — this used to be a
+ * hand-rolled charCodeAt loop, one of three separate implementations of the
+ * same idea in this repo. Identical behaviour (C0 + DEL -> space, 200-char cap),
+ * one implementation, and only the shared one is recognised by CodeQL as a
+ * sanitizer.
+ */
+const safeLog = (v: unknown): string => logSafe(v);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

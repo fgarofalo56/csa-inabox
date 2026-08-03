@@ -7,7 +7,7 @@
  * alert rule.
  */
 import { describe, it, expect } from 'vitest';
-import { logSafe } from '../log-safe';
+import { logSafe, logSafeError } from '../log-safe';
 
 describe('logSafe', () => {
   it('defeats the forged-record attack (the reason this exists)', () => {
@@ -51,5 +51,39 @@ describe('logSafe', () => {
     expect(logSafe(undefined)).toBe('');
     expect(logSafe(42)).toBe('42');
     expect(logSafe(false)).toBe('false');
+  });
+
+  it('DOCUMENTS THE HAZARD: never wrap an object — it becomes [object Object]', () => {
+    // This is why check-log-injection.mjs exempts object/array arguments instead
+    // of demanding a wrapper: wrapping one destroys the log entry. Structured
+    // args are already safe — Node's util.inspect quotes nested strings and
+    // escapes control characters, so they cannot forge a line.
+    expect(logSafe({ haveCookie: true })).toBe('[object Object]');
+  });
+});
+
+describe('logSafeError', () => {
+  it('flattens a forged stack to ONE record', () => {
+    // Node prints an Error's `.stack` VERBATIM — unlike a plain object it is not
+    // quoted or escaped — so a newline in the message forges a record.
+    const err = new Error('boom\n[api] FORGED admin=true');
+    err.stack = 'Error: boom\n[api] FORGED admin=true\n    at h (/app/r.ts:1:1)';
+    const out = logSafeError(err);
+    expect(out.split('\n')).toHaveLength(1);
+  });
+
+  it('KEEPS the stack — the whole point of not using logSafe(err)', () => {
+    // logSafe(err) alone coerces via String(err) -> "Error: boom", discarding the
+    // stack. A safe log still has to be a useful log.
+    const err = new Error('boom');
+    err.stack = 'Error: boom\n    at handler (/app/route.ts:42:7)';
+    const out = logSafeError(err);
+    expect(out).toContain('at handler (/app/route.ts:42:7)');
+    expect(logSafe(err)).not.toContain('at handler');
+  });
+
+  it('handles a non-Error throw', () => {
+    expect(logSafeError('plain string')).toBe('plain string');
+    expect(logSafeError(null)).toBe('');
   });
 });
