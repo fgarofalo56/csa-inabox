@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.11...csa-inabox-v0.82.12) (2026-08-03)
+
+
+### Bug Fixes
+
+* **readiness:** the inspector clipped its right side and DuckLake's 448-char path overflowed ([#2902](https://github.com/fgarofalo56/csa-inabox/issues/2902)) ([544f0b3](https://github.com/fgarofalo56/csa-inabox/commit/544f0b304daf47c1084add1a7c4ae49c697459a6)), closes [#2896](https://github.com/fgarofalo56/csa-inabox/issues/2896)
+
+
+### Documentation
+
+* **prp:** CSA Loom developer toolkit — Skills, MCP servers, agents, CLI/SDK ([#2898](https://github.com/fgarofalo56/csa-inabox/issues/2898)) ([a989057](https://github.com/fgarofalo56/csa-inabox/commit/a989057758dda3c7292d4e71195a67ea59761dee))
+* **prp:** CSA Loom VS Code extension — parity spec vs the Fabric extension family ([#2899](https://github.com/fgarofalo56/csa-inabox/issues/2899)) ([99fcf97](https://github.com/fgarofalo56/csa-inabox/commit/99fcf97f3e11b580462ce5ab2252ad4f9a8d8176)), closes [#59](https://github.com/fgarofalo56/csa-inabox/issues/59)
+
 ## [0.82.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.10...csa-inabox-v0.82.11) (2026-08-03)
 
 
