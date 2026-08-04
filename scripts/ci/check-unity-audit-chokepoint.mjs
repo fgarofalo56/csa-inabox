@@ -6,7 +6,7 @@
  *   EVERY Unity Catalog call the Console BFF makes must go through an AUDITED
  *   transport whose `finally` writes the WHO / WHAT / WHEN / OUTCOME (including
  *   DENIALS) row to the Cosmos `_auditLog` trail and the `LoomAudit_CL` SIEM
- *   stream. There are exactly FOUR such transports ({@link AUDITED_TRANSPORTS}):
+ *   stream. There are exactly FIVE such transports ({@link AUDITED_TRANSPORTS}):
  *
  *     apps/fiab-console/lib/azure/unity-catalog-client.ts  →  ucFetch
  *         the backend-agnostic UC REST client (Loom Unity / OSS UC in Gov,
@@ -26,6 +26,14 @@
  *         the Databricks ACCOUNT plane — metastore assignment, an account-admin
  *         mutation on a non-`unity-catalog/` path. Records via
  *         `recordUnityAccountAccess(...)`.
+ *     apps/fiab-console/lib/azure/uc-securable.ts          →  ucSecurable
+ *         the audited FACADE over storage-credential + external-location
+ *         CREATE/DELETE — the securables that hand a workload access to a
+ *         storage account. Records via `recordUnitySecurableAccess(...)`. It is
+ *         a facade rather than a `try/finally` because the module that holds the
+ *         transport (`shortcut-credentials.ts`) is covered by a repo-level
+ *         credential-path read/write deny and cannot be edited; check 8 makes
+ *         the facade the only door to it.
  *
  * WHY A GUARD AND NOT JUST A COMMENT:
  *   An audit choke point is only a choke point if bypassing it is HARD. A
@@ -149,8 +157,38 @@
  *      derived from {@link AUDITED_TRANSPORTS}, and the spec asserts per entry
  *      that gutting THAT transport's finally fails the build.
  *
- * ## LIMITS — what this guard is NOT
+ * ## HISTORY — round 6 (2026-08-04, issue #2622). The LAST declared gap closed.
  *
+ *  12. AN UN-INSTRUMENTABLE FILE IS NOT AN UN-AUDITABLE SURFACE.
+ *      Rounds 2–5 recorded `shortcut-credentials.ts` as gap 1 and left it, twice,
+ *      for the same stated reason: the path is covered by a repo-level
+ *      credential-path read/write deny (the glob that protects `.env` and
+ *      `secrets/` also matches `*credentials*`), so the `try/finally` every other
+ *      transport got could not be added INSIDE it. That reasoning silently
+ *      assumed the only place to audit a call is at its transport.
+ *      It is not. Those five exports have exactly ONE production consumer
+ *      (`shortcut-engines.ts`), so an audited FACADE — {@link SECURABLE_CHOKEPOINT}
+ *      — puts every real call site behind the recorder without touching the
+ *      denied file. FIXED: `ucSecurable` is the fifth {@link AUDITED_TRANSPORTS}
+ *      entry, so check 1 holds its `finally` to the same brace-accurate standard
+ *      as the other four.
+ *  13. A FACADE NOBODY MUST USE IS A COMMENT. #12 on its own is a convention:
+ *      any module could keep importing the raw functions, and the audit row
+ *      would simply not happen — the "audit call that is added but never
+ *      reached" failure. FIXED: check 8 (SECURABLE IMPORT CHOKE POINT) makes the
+ *      facade the ONLY module allowed to import a UC-mutating symbol from
+ *      {@link SECURABLE_RAW}. It is stated as an ALLOWLIST of the two non-catalog
+ *      exports ({@link SECURABLE_RAW_PUBLIC}) rather than a denylist of today's
+ *      five, because this is the one file in the tree the guard's author cannot
+ *      READ: a new un-audited export added to it by someone who does have write
+ *      access must be denied by DEFAULT, not by having been anticipated.
+ *      {@link securableRawImports} counts namespace and dynamic imports as `*`,
+ *      since either hands over every export at once.
+ *      The `KNOWN_UNAUDITED` entry is deliberately KEPT: no un-audited call PATH
+ *      remains, but the transport is still un-instrumented, and the honest
+ *      statement of that is the entry, not its removal.
+ *
+ * ## LIMITS — what this guard is NOT *
  * READ THIS BEFORE CITING THE GUARD AS COVERAGE. It is a lexical scan over the
  * source tree. It raises the cost of an ACCIDENTAL bypass to "red build" and
  * makes a deliberate one leave a diff a reviewer can see. It is NOT an
@@ -182,10 +220,13 @@
  *
  * ## STILL NOT COVERED BY THE TRAIL (declared, not fixed)
  *
- *   - `lib/azure/shortcut-credentials.ts` — storage-credential + external-
- *     location CREATE/DELETE, un-audited. See KNOWN_UNAUDITED / issue #2622
- *     gap 1: the file is covered by a repo-level credential-path read/write
- *     deny, so the recorder has to be added by someone with write access to it.
+ *   - `lib/azure/shortcut-credentials.ts` — its storage-credential +
+ *     external-location exits ARE audited as of round 6 (every one is wrapped by
+ *     {@link SECURABLE_CHOKEPOINT}, and check 8 makes that the only door), but
+ *     the file's own TRANSPORT is still un-instrumented, so it remains in
+ *     KNOWN_UNAUDITED. What is genuinely left of #2622 gap 1 is moving the
+ *     `try/finally` inside the file, which needs write access to a
+ *     credential-path-denied path.
  *   - `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` namespace/table
  *     CREATE + DROP: audited, but into a DIFFERENT trail
  *     (`logIcebergAccess` → `_auditLog itemType:'iceberg-catalog'`), so they do
@@ -211,6 +252,10 @@
  *      pinned by SQL_EXIT_BASELINES must not grow, and a pinned file that
  *      disappears FAILS (see history #3, #8 and #9). Every UC-governance file
  *      is pinned at ZERO; the only permitted exit is `ucSql`'s own.
+ *   8. SECURABLE IMPORT CHOKE POINT — only {@link SECURABLE_CHOKEPOINT} may
+ *      import a UC-mutating symbol from {@link SECURABLE_RAW} (allowlist:
+ *      {@link SECURABLE_RAW_PUBLIC}). This is what makes the facade in history
+ *      #12 a control rather than a convention (#13).
  *
  * ALLOWLIST — a file that legitimately needs the catalog address AND makes
  *   requests must be added to CHOKEPOINT_FILES below WITH a justification, and
@@ -243,6 +288,10 @@ export const DBX_CHOKEPOINT = 'lib/azure/databricks-client.ts';
 export const SQL_CHOKEPOINT = 'lib/azure/uc-sql.ts';
 /** The Databricks ACCOUNT-plane client — its acctFetch records metastore assignment. */
 export const ACCOUNT_CHOKEPOINT = 'lib/azure/unity-catalog-account-client.ts';
+/** The AUDITED facade over the storage-credential / external-location surface. */
+export const SECURABLE_CHOKEPOINT = 'lib/azure/uc-securable.ts';
+/** The write-denied module whose UC exports the facade above is the only door to. */
+export const SECURABLE_RAW = 'lib/azure/shortcut-credentials.ts';
 /** The recorder both choke points delegate to. */
 export const RECORDER = 'lib/azure/unity-audit.ts';
 
@@ -287,6 +336,17 @@ export const AUDITED_TRANSPORTS = [
     why:
       'Metastore ASSIGNMENT is an account-ADMIN mutation deciding which metastore a whole workspace '
       + 'sees. Its path is not a /api/2.x/unity-catalog/** path, so no other choke point can ever see it.',
+  },
+  {
+    file: SECURABLE_CHOKEPOINT,
+    fn: 'ucSecurable',
+    recorder: 'recordUnitySecurableAccess',
+    why:
+      'Storage-credential and external-location CREATE/DELETE are the securables that hand a workload '
+      + 'access to a storage account — the closest thing in Unity Catalog to minting access. They issue from '
+      + `${SECURABLE_RAW}'s OWN private transport, which no other choke point can see and which cannot be `
+      + 'instrumented in place (repo-level credential-path write deny), so this facade is the audited door to '
+      + 'them. Recording outside the finally would drop exactly the DENIED mint attempts.',
   },
 ];
 
@@ -382,9 +442,15 @@ export const OUTBOUND_BASELINE = new Map([
   ['lib/azure/dq-monitor-client.ts', 1],
   // ircFetch + the listNamespaceGrants UC read.
   ['lib/azure/iceberg-catalog-client.ts', 2],
-  // DECLARED GAP: its own private ucFetch + one sibling. Pinned so the
-  // un-audited surface cannot GROW while it waits to be fixed (issue #2622).
-  ['lib/azure/shortcut-credentials.ts', 2],
+  // DECLARED GAP: its own private ucFetch + one sibling. Its UC exits are now
+  // audited at the facade (check 8), but the pin stays so the un-audited
+  // TRANSPORT cannot grow new exits (issue #2622).
+  [SECURABLE_RAW, 2],
+  // NOT pinned: SECURABLE_CHOKEPOINT. It is deliberately NOT exempted from
+  // check 4 — it references the two UC REST paths but issues no request of its
+  // own (it delegates), so check 4 already fails the build the moment it grows a
+  // transport. A pin here would be a ceiling that can never be reached, which
+  // reads like coverage and measures nothing.
 ]);
 
 /**
@@ -475,11 +541,15 @@ export const MUST_AUDIT = new Map([
  */
 export const KNOWN_UNAUDITED = new Map([
   [
-    'lib/azure/shortcut-credentials.ts',
+    SECURABLE_RAW,
     'Its own private ucFetch issues storage-credential + external-location CREATE/DELETE '
-    + '(POST/DELETE /api/2.1/unity-catalog/storage-credentials|external-locations) with NO audit row. '
-    + 'Found by this guard on 2026-07-28; the file sits under a repo-level credential-path write deny, '
-    + 'so the recorder has to be added by someone with write access to it. TRACKED: issue #2622.',
+    + '(POST/DELETE /api/2.1/unity-catalog/storage-credentials|external-locations). The file sits under a '
+    + 'repo-level credential-path read/write deny, so the recorder could NOT be added inside it. '
+    + 'STATUS (#2622 round 6): those exits ARE now audited — every one of them is wrapped by '
+    + `${SECURABLE_CHOKEPOINT}'s ucSecurable, and check 8 makes that facade the ONLY module permitted to import a `
+    + 'UC-mutating symbol from here, so no un-audited call path remains. This entry stays because the TRANSPORT '
+    + 'itself is still un-instrumented: a future export added inside this file could reach the catalog without a '
+    + 'row of its own. Removing the entry requires the try/finally to move INTO the file. TRACKED: issue #2622.',
   ],
 ]);
 
@@ -636,6 +706,73 @@ export function referencesCatalogAddress(rel, src) {
   if (UNITY_ADDRESS_RE.test(src)) return true;
   if (isClientComponent(src)) return false;
   return UNITY_REST_PATH_RE.test(src);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Check 8 — the SECURABLE IMPORT CHOKE POINT (#2622 gap 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Exports of {@link SECURABLE_RAW} that any module may import: the two that do
+ * NOT touch Unity Catalog. `getKeyVaultSecret` reads a Key Vault secret and
+ * `keyVaultConfigGate` is a pure env check; both are consumed directly by the
+ * lakehouse-shortcut routes.
+ *
+ * ## Why this is an ALLOWLIST of the harmless two, not a denylist of the five
+ *
+ * A denylist (`ensureUcAwsStorageCredential`, `ensureUcGcpStorageCredential`,
+ * `ensureUcExternalLocation`, `deleteUcExternalLocation`,
+ * `deleteUcStorageCredential`) would be exactly as strong as the guard author's
+ * memory on the day it was written, and this is the one file in the tree the
+ * guard's author CANNOT READ — it is covered by a repo-level credential-path
+ * read/write deny. A new un-audited UC export could be added to it (by someone
+ * who does have write access) and consumed anywhere, and a denylist would say
+ * nothing. Stated in the affirmative, the default for anything new is DENIED:
+ * either it is not a catalog call and belongs on this list after a review, or it
+ * is, and it belongs behind {@link SECURABLE_CHOKEPOINT}.
+ *
+ * This is the same lesson as history #10 — "the scan found nothing" is not
+ * "there is nothing" when the vocabulary cannot express the surface — applied to
+ * a file whose surface cannot be read at all.
+ */
+export const SECURABLE_RAW_PUBLIC = new Set(['getKeyVaultSecret', 'keyVaultConfigGate']);
+
+/** Module specifiers that resolve to {@link SECURABLE_RAW}. */
+const SECURABLE_RAW_SPECIFIER = "(?:@/lib/azure/shortcut-credentials|(?:\\.{1,2}/)+shortcut-credentials)";
+
+/**
+ * Every binding a file imports from {@link SECURABLE_RAW}.
+ *
+ * Returns `['*']` for a namespace or dynamic import, because both hand the
+ * importer EVERY export including the un-audited ones — a `import * as creds`
+ * would otherwise be a one-token bypass of the named-import scan.
+ *
+ * Read against comments-masked source with STRING BODIES INTACT (the specifier
+ * only exists inside a string), so a doc comment naming the module is not an
+ * import. Exported for the guard's own spec.
+ */
+export function securableRawImports(src) {
+  const masked = maskComments(src);
+  const names = [];
+
+  const namespaceRe = new RegExp(`\\bimport\\s+\\*\\s+as\\s+\\w+\\s+from\\s*['"]${SECURABLE_RAW_SPECIFIER}['"]`);
+  const dynamicRe = new RegExp(`(?:\\bimport\\s*\\(|\\brequire\\s*\\()\\s*['"]${SECURABLE_RAW_SPECIFIER}['"]`);
+  if (namespaceRe.test(masked) || dynamicRe.test(masked)) names.push('*');
+
+  const namedRe = new RegExp(
+    `\\bimport\\s+(?:type\\s+)?\\{([^}]*)\\}\\s*from\\s*['"]${SECURABLE_RAW_SPECIFIER}['"]`,
+    'g',
+  );
+  let m;
+  while ((m = namedRe.exec(masked)) !== null) {
+    for (const raw of m[1].split(',')) {
+      // `foo as bar` / `type foo` — the EXPORTED name is what matters, and a
+      // rename is exactly how an author would try to slip one past a name scan.
+      const name = raw.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim();
+      if (name) names.push(name);
+    }
+  }
+  return names;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -902,6 +1039,36 @@ export function analyzeUnityChokepoint(sources, opts = {}) {
       failures.push(
         `${file}: allowlisted to call the catalog outside ucFetch but no longer calls ${symbol}( — ` +
         `its catalog access would be UNAUDITED. Restore the audit call or remove the allowlist entry.`,
+      );
+    }
+  }
+
+  // ── 8. SECURABLE IMPORT CHOKE POINT (#2622 gap 1) ─────────────────────────
+  // `shortcut-credentials.ts` cannot be instrumented in place (credential-path
+  // write deny), so the audit lives in a FACADE. A facade nobody is obliged to
+  // use is a comment — this is what obliges them. Stated as an allowlist of the
+  // two non-catalog exports, so a NEW un-audited export added to that file
+  // (which this guard's author cannot even read) is denied by DEFAULT.
+  if (sources.has(SECURABLE_RAW) && !sources.has(SECURABLE_CHOKEPOINT)) {
+    failures.push(
+      `MISSING CHOKE POINT: ${SECURABLE_CHOKEPOINT} does not exist, but ${SECURABLE_RAW} does. Its ucSecurable is the `
+      + `only audited door to the storage-credential + external-location surface.`,
+    );
+  }
+  for (const [r, src] of sources) {
+    if (r === SECURABLE_CHOKEPOINT) continue; // THE facade — the one permitted importer
+    if (isTestFile(r)) continue; // specs legitimately vi.mock the raw module
+    for (const name of securableRawImports(src)) {
+      if (SECURABLE_RAW_PUBLIC.has(name)) continue;
+      failures.push(
+        `${r}: imports \`${name}\` from ${SECURABLE_RAW}. That module writes NO Loom audit row — its private `
+        + `transport issues storage-credential + external-location CREATE/DELETE, the securables that hand a workload `
+        + `access to a storage account. Import it from ${SECURABLE_CHOKEPOINT} instead (same signature, audited via `
+        + `recordUnitySecurableAccess from a finally). If \`${name}\` genuinely does not touch Unity Catalog, add it to `
+        + `SECURABLE_RAW_PUBLIC in this guard — that is a security review, not a formality.`
+        + (name === '*'
+          ? ' (A namespace or dynamic import hands over EVERY export, so it can never be allowlisted by name.)'
+          : ''),
       );
     }
   }
