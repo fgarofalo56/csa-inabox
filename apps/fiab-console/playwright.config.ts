@@ -266,5 +266,26 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // #2623 (LU-4) — the G1 in-browser E2E + no-vaporware receipt for the Unity
+      // Catalog effective-permissions RESOLVER: drives /catalog/unity → Grants →
+      // "Effective (inherited)", captures the real BFF answer, and exercises the
+      // self/third-party authorization matrix (uc-principal-probe) + the
+      // uc-access-review audit render. Minted-session auth via `mint`. Wide viewport
+      // so the grants grid + badge row have room; the spec resizes to 820px itself
+      // for its badge-overlap pass. NOT a required check — it is the #2623 receipt.
+      // Run: pnpm exec playwright test --project=uc-effective-permissions
+      // CI:  gh workflow run loom-ui-verify.yml --ref main \
+      //        -f extra_projects="uc-effective-permissions"
+      name: 'uc-effective-permissions',
+      testDir: './e2e',
+      testMatch: /uc-effective-permissions\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
