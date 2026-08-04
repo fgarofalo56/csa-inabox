@@ -20,6 +20,13 @@ import { ExplorerTreeProvider } from './tree/explorer';
 import { StatusBar } from './status-bar';
 import { registerCommands } from './commands';
 import type { CommandContext } from './commands/context';
+import type { LoomApi } from './api/loom-client';
+import { LoomFileSystemProvider } from './fs/loom-fs-provider';
+import { LoomDecorationProvider } from './fs/decoration-provider';
+import { MirrorStore } from './mirror/mirror-store';
+import { NotebookLinkStore } from './notebook/notebook-link';
+import { RunHistory } from './notebook/run-history';
+import { SparkNotebookController } from './notebook/spark-controller';
 
 export function activate(context: vscode.ExtensionContext): void {
   initLogger(context);
@@ -37,6 +44,14 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // Resolve a deployment id → its authenticated LoomApi (shared by the FS
+  // provider, the notebook controller, and the mirror commands).
+  const resolveApi = async (deploymentId: string): Promise<LoomApi | undefined> => {
+    const dep = getDeployments().find((d) => d.id === deploymentId);
+    if (!dep) return undefined;
+    return auth.apiFor(dep);
+  };
+
   // Tree.
   const tree = new ExplorerTreeProvider(context, auth, getDeployments);
   const view = vscode.window.createTreeView('loom.explorer', {
@@ -48,6 +63,30 @@ export function activate(context: vscode.ExtensionContext): void {
   // Status bar.
   const statusBar = new StatusBar(context, auth, getDeployments);
 
+  // Phase 2 — the `loom:` virtual filesystem (P1.5 / W6).
+  const fs = new LoomFileSystemProvider(resolveApi);
+  context.subscriptions.push(fs);
+  context.subscriptions.push(
+    vscode.workspace.registerFileSystemProvider(LoomFileSystemProvider.scheme, fs, {
+      isCaseSensitive: true,
+      isReadonly: false,
+    }),
+  );
+
+  // Local-work-folder mirror + 4-state decorations (N2/N4/N7).
+  const mirror = new MirrorStore(context);
+  context.subscriptions.push(mirror);
+  const decorations = new LoomDecorationProvider(mirror);
+  context.subscriptions.push(decorations);
+  context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorations));
+
+  // Notebook execution (N10/N11/N13) — a real "CSA Loom Spark" controller.
+  const links = new NotebookLinkStore(context);
+  const runs = new RunHistory();
+  context.subscriptions.push(runs);
+  const controller = new SparkNotebookController(resolveApi, links, runs, context);
+  context.subscriptions.push(controller);
+
   const syncAuthState = async (): Promise<void> => {
     const deps = getDeployments();
     await vscode.commands.executeCommand('setContext', 'loom.hasDeployments', deps.length > 0);
@@ -55,7 +94,20 @@ export function activate(context: vscode.ExtensionContext): void {
     await statusBar.update();
   };
 
-  const cx: CommandContext = { extension: context, auth, tree, statusBar, getDeployments, syncAuthState };
+  const cx: CommandContext = {
+    extension: context,
+    auth,
+    tree,
+    statusBar,
+    getDeployments,
+    syncAuthState,
+    resolveApi,
+    fs,
+    mirror,
+    links,
+    runs,
+    controller,
+  };
   registerCommands(cx);
 
   // React to session + configuration changes.

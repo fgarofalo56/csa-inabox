@@ -21,6 +21,8 @@ import type { Deployment } from '../config/deployments';
 import { cloudLabel } from '../config/deployments';
 import type { LoomAuthenticationProvider } from '../auth/loom-auth-provider';
 import { iconIdForItemType } from './icons';
+import { buildDefinitionPath } from '../fs/definition-uri';
+import { LoomFileSystemProvider } from '../fs/loom-fs-provider';
 import { isLoomApiError, type Workspace, type Item } from '../api/loom-client';
 import { logError } from '../logger';
 
@@ -313,9 +315,28 @@ export class ExplorerTreeProvider implements vscode.TreeDataProvider<LoomNode> {
   private itemTreeItem(node: ItemNode): vscode.TreeItem {
     const { item } = node;
     const ti = new vscode.TreeItem(item.displayName, vscode.TreeItemCollapsibleState.None);
-    ti.contextValue = 'item';
+    // A notebook gets an extra tag so notebook-only menus (Run on Spark) match;
+    // `viewItem =~ /^item/` still matches both so the generic item menus persist.
+    ti.contextValue = item.itemType === 'notebook' ? 'item-notebook' : 'item';
     ti.iconPath = new vscode.ThemeIcon(iconIdForItemType(item.itemType));
+    // The `loom:` definition URI drives the M/L/C mirror decoration (N7). The
+    // explicit label above keeps the display name (a resourceUri would otherwise
+    // title the row by basename).
+    ti.resourceUri = vscode.Uri.from({
+      scheme: LoomFileSystemProvider.scheme,
+      path: buildDefinitionPath({
+        deploymentId: node.dep.id,
+        itemType: item.itemType,
+        itemId: item.id,
+        displayName: item.displayName,
+      }),
+    });
     ti.description = this.groupByType ? undefined : item.itemType;
+    ti.command = {
+      command: 'loom.openDefinition',
+      title: 'Open definition',
+      arguments: [node],
+    };
     ti.tooltip = new vscode.MarkdownString(
       [`**${item.displayName}**`, `type: \`${item.itemType}\``, item.description ?? '', '', `id: \`${item.id}\``].join('\n'),
     );
