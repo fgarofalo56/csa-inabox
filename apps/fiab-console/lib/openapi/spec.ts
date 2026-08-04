@@ -281,6 +281,65 @@ export function buildOpenApiSpec(baseUrl?: string): OpenApiDocument {
           },
         },
       },
+      '/api/items/{type}/{id}/definition': {
+        parameters: [
+          { name: 'type', in: 'path', required: true, schema: { type: 'string' }, description: 'Item type (e.g. `notebook`, `lakehouse`). See `GET /api/v1/whoami` docs / `loom item types`.' },
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' }, description: 'Item id.' },
+        ],
+        get: {
+          tags: ['Items'],
+          operationId: 'getItemDefinition',
+          summary: 'Get an item\'s editable, secret-scrubbed definition',
+          description:
+            'The item\'s portable definition — secret-keyed `state` leaves and per-estate `state.provisioning` are excluded by construction, and the exact exclusion paths are listed in `scrubbedPaths`. The strong `ETag` (returned both as a header and in the body) must be echoed on a subsequent `PUT` via `If-Match`. Owner-scoped: a caller who cannot reach the item gets 404, never a cross-item read. Backs the CSA Loom VS Code extension\'s `loom:` virtual filesystem (W6).',
+          responses: {
+            '200': {
+              description: 'The editable definition + exclusion manifest + ETag.',
+              headers: {
+                ETag: { description: 'Strong validator to echo as `If-Match` on `PUT`.', schema: { type: 'string' } },
+              },
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ItemDefinitionResult' } } },
+            },
+            '401': UNAUTHORIZED,
+            '404': ERROR_RESPONSE,
+          },
+        },
+        put: {
+          tags: ['Items'],
+          operationId: 'updateItemDefinition',
+          summary: 'Write an edited definition back (optimistic concurrency)',
+          description:
+            'Persist an edited definition. `If-Match` is REQUIRED (428 without it) and must carry the ETag from a preceding `GET`; a stale tag → 412 (the VS Code client opens a diff rather than clobbering a concurrent edit). The write re-attaches the item\'s scrubbed secrets + per-estate `provisioning`, so a GET→edit→PUT round-trip never destroys a value the client could not see. A body whose `schemaVersion` is newer than the deployment understands is refused (409).',
+          security: [{ cookieAuth: [] }, { bearerAuth: ['read-write'] }],
+          parameters: [
+            {
+              name: 'If-Match',
+              in: 'header',
+              required: true,
+              schema: { type: 'string' },
+              description: 'The ETag from a preceding `GET …/definition` (or `*` to force-write). Missing → 428.',
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateItemDefinition' } } },
+          },
+          responses: {
+            '200': {
+              description: 'The persisted definition + exclusion manifest + new ETag.',
+              headers: {
+                ETag: { description: 'The new strong validator after the write.', schema: { type: 'string' } },
+              },
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ItemDefinitionResult' } } },
+            },
+            '401': UNAUTHORIZED,
+            '404': ERROR_RESPONSE,
+            '409': ERROR_RESPONSE,
+            '412': ERROR_RESPONSE,
+            '428': ERROR_RESPONSE,
+          },
+        },
+      },
       '/api/catalog/search': {
         get: {
           tags: ['Catalog'],
@@ -537,6 +596,39 @@ export function buildOpenApiSpec(baseUrl?: string): OpenApiDocument {
             displayName: { type: 'string' },
             description: { type: 'string' },
             state: { type: 'object', additionalProperties: true },
+          },
+        },
+        ItemDefinition: {
+          type: 'object',
+          required: ['schemaVersion', 'itemType', 'displayName', 'state'],
+          description: 'A single item\'s portable, secret-scrubbed, provisioning-free definition.',
+          properties: {
+            schemaVersion: { type: 'integer', description: 'Definition schema version this document conforms to (currently 1). A PUT declaring a higher version is refused (409).' },
+            itemType: { type: 'string' },
+            displayName: { type: 'string' },
+            description: { type: 'string' },
+            state: { type: 'object', additionalProperties: true, description: 'Portable editor state with secret-keyed leaves and `provisioning` excluded.' },
+          },
+        },
+        ItemDefinitionResult: {
+          type: 'object',
+          required: ['ok', 'itemType', 'definition', 'schemaVersion', 'etag', 'scrubbedPaths', 'provisioningExcluded'],
+          properties: {
+            ok: { type: 'boolean', const: true },
+            itemType: { type: 'string' },
+            definition: { $ref: '#/components/schemas/ItemDefinition' },
+            schemaVersion: { type: 'integer' },
+            etag: { type: 'string', description: 'Strong validator (also sent as the `ETag` header) to echo as `If-Match` on write.' },
+            scrubbedPaths: { type: 'array', items: { type: 'string' }, description: '`state/<dot.path>` for every secret leaf excluded from `definition.state`.' },
+            provisioningExcluded: { type: 'boolean', description: 'True when `state.provisioning` was present and excluded.' },
+          },
+        },
+        UpdateItemDefinition: {
+          type: 'object',
+          required: ['definition'],
+          description: 'Body of `PUT …/definition`. The edited definition — a bare definition object is also accepted for backwards compatibility.',
+          properties: {
+            definition: { $ref: '#/components/schemas/ItemDefinition' },
           },
         },
         CatalogSearchResult: {

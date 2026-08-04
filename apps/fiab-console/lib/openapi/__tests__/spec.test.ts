@@ -34,6 +34,7 @@ describe('buildOpenApiSpec', () => {
       '/api/workspaces',
       '/api/workspaces/{workspaceId}/items',
       '/api/cosmos-items/{type}/{id}',
+      '/api/items/{type}/{id}/definition',
       '/api/catalog/search',
       '/api/thread/edges',
       '/api/developer/tokens',

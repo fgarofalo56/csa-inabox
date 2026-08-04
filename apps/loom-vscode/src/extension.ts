@@ -31,6 +31,7 @@ import { ActiveDeploymentStore } from './mcp/active-deployment';
 import { registerMcpProvider } from './mcp/mcp-provider';
 import { registerLoomChatParticipant } from './chat/chat-participant';
 import { QueryEditorStore } from './query/query-editor-store';
+import { LoomUriHandler } from './uri/uri-handler';
 
 export function activate(context: vscode.ExtensionContext): void {
   initLogger(context);
@@ -127,6 +128,13 @@ export function activate(context: vscode.ExtensionContext): void {
     queryEditors,
   };
   registerCommands(cx);
+
+  // Deep-link handler (N9): vscode://csa-loom.loom-vscode/open?deployment=&type=&id=
+  // opens the item from a Console "Open in VS Code" button. `onUri` in the
+  // manifest activates the extension first on a cold-start link.
+  context.subscriptions.push(
+    vscode.window.registerUriHandler(new LoomUriHandler({ getDeployments, auth })),
+  );
 
   // React to session + configuration changes.
   context.subscriptions.push(

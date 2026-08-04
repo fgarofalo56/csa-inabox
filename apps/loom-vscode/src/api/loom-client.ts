@@ -173,12 +173,107 @@ export interface NotebookExecResult {
   progress?: number;
 }
 
+/**
+ * `GET /api/items/lakehouse/[id]/abfss` — the lakehouse's resolved ADLS Gen2
+ * root. `resolved:false` is an honest gate (no storage configured yet), NOT an
+ * error — the tree renders the `hint` as a guided message node (L1/L4).
+ */
+export interface LakehouseAbfssResult {
+  ok: boolean;
+  resolved: boolean;
+  /** `abfss://<container>@<account>.dfs.<suffix>/<root>` — sovereign-correct. */
+  abfss?: string;
+  /** The ADLS container (one of the DLZ medallion containers). */
+  container?: string;
+  /** The lakehouse's root path within the container ('' when it is the root). */
+  root?: string;
+  /** Present when `resolved:false` — names the exact remediation. */
+  hint?: string;
+}
+
+/** One Delta/Parquet table under a lakehouse's `Tables/` root (`CatalogTable`). */
+export interface LakehouseTable {
+  schema: string;
+  name: string;
+  adlsPath: string;
+  bulkUrl: string;
+  format: 'delta' | 'parquet' | 'unknown';
+  status: 'ok' | 'empty' | 'broken';
+  latestVersion: number | null;
+  rowCount: number | null;
+  sizeBytes: number | null;
+  lastModified: string | null;
+}
+
+/** `GET /api/lakehouse/tables` — real tables, or an honest empty+gate. */
+export interface LakehouseTablesResult {
+  ok: boolean;
+  tables: LakehouseTable[];
+  /** Present when storage is not configured — the exact remediation. */
+  gate?: string;
+  scannedAt?: string;
+}
+
+/** One ADLS path entry (`PathEntry`) under a lakehouse's `Files/` root. */
+export interface LakehousePathEntry {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  lastModified?: string;
+  etag?: string;
+  tier?: string;
+}
+
+/** `GET /api/lakehouse/paths` — a flat ADLS directory listing. */
+export interface LakehousePathsResult {
+  ok: boolean;
+  container: string;
+  prefix: string;
+  paths: LakehousePathEntry[];
+  identity?: 'user' | 'service';
+}
+
+/** A downloaded lakehouse file — bytes + the resolved filename (L3). */
+export interface LakehouseDownload {
+  bytes: Uint8Array;
+  filename: string;
+  contentType: string;
+}
+
 /** Build a query string from a param map (values URL-encoded). */
 function qs(params: Record<string, string | number>): string {
   return Object.entries(params)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
     .join('&');
 }
+
+/** Leaf (basename) of an ADLS path — the download fallback filename. */
+function leafName(path: string): string {
+  const trimmed = path.replace(/\/+$/, '');
+  const i = trimmed.lastIndexOf('/');
+  const leaf = i >= 0 ? trimmed.slice(i + 1) : trimmed;
+  return leaf || 'download.bin';
+}
+
+/**
+ * Extract the filename from a `Content-Disposition` header. Handles the RFC 5987
+ * `filename*=UTF-8''…` form (what the BFF emits for non-ASCII names) and the
+ * plain `filename="…"` form. Returns '' when absent/unparseable.
+ */
+function filenameFromDisposition(header: string | null): string {
+  if (!header) return '';
+  const star = /filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star && star[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ''));
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(header);
+  return plain && plain[1] ? plain[1].trim() : '';
+}
+
 
 export class LoomApi implements DefinitionTransport {
   readonly baseUrl: string;
@@ -378,6 +473,70 @@ export class LoomApi implements DefinitionTransport {
   /** Read a bounded, sampled data preview (rows + column profile) for a data asset. */
   queryPreview(itemType: string, id: string, top: number): Promise<QueryResult> {
     return this.client.query.preview(id, { type: itemType, top });
+  }
+
+  // --- lakehouse Tables/Files explorer (Phase 6, L1/L3/L4) ------------------
+  // The SAME Azure-native ADLS Gen2 + Delta routes the Console lakehouse editor
+  // uses (adls-client / synapse-catalog-client). No OneLake on the default path
+  // (no-fabric-dependency.md). Every read is owner-scoped server-side; an
+  // unconfigured backend answers an honest gate (resolved:false / tables:[]+gate)
+  // the tree renders as a guided node — never a fabricated row.
+
+  /** `GET /api/items/lakehouse/[id]/abfss` — the lakehouse's resolved ADLS root. */
+  lakehouseAbfss(id: string, workspaceId: string): Promise<LakehouseAbfssResult> {
+    return this.raw<LakehouseAbfssResult>(
+      'GET',
+      `/api/items/lakehouse/${encodeURIComponent(id)}/abfss?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+  }
+
+  /** `GET /api/lakehouse/tables` — real Delta/Parquet tables under `Tables/`. */
+  lakehouseTables(lakehouseId: string, workspaceId: string): Promise<LakehouseTablesResult> {
+    return this.raw<LakehouseTablesResult>(
+      'GET',
+      `/api/lakehouse/tables?${qs({ lakehouseId, workspaceId })}`,
+    );
+  }
+
+  /** `GET /api/lakehouse/paths` — a flat ADLS directory listing under `Files/`. */
+  lakehousePaths(container: string, prefix: string): Promise<LakehousePathsResult> {
+    return this.raw<LakehousePathsResult>(
+      'GET',
+      `/api/lakehouse/paths?${qs({ container, prefix })}`,
+    );
+  }
+
+  /**
+   * `GET /api/lakehouse/download` — stream a file's bytes through the BFF (L3).
+   * The client NEVER holds a storage credential; the byte stream (and any MIP
+   * label stamp) is the BFF's. Returns bytes + the server-resolved filename.
+   */
+  async downloadLakehouseFile(container: string, path: string): Promise<LakehouseDownload> {
+    const url = `${this.baseUrl}/api/lakehouse/download?${qs({ container, path })}`;
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: this.authHeaders(false) });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new LoomApiError(`Network error downloading file: ${msg}`, 0, 'network_error');
+    }
+    if (!res.ok) {
+      // The route answers JSON `{ ok:false, error }` on failure.
+      const text = await res.text();
+      let parsed: unknown = text;
+      try {
+        parsed = text ? JSON.parse(text) : text;
+      } catch {
+        /* keep raw text */
+      }
+      throw this.errorFrom(parsed, res);
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    return {
+      bytes: buf,
+      filename: filenameFromDisposition(res.headers.get('content-disposition')) || leafName(path),
+      contentType: res.headers.get('content-type') || 'application/octet-stream',
+    };
   }
 
   /**

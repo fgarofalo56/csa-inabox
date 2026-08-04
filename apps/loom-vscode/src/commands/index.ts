@@ -25,7 +25,9 @@ import { manageMcpServers } from './mcp';
 import { queryData, runQuery, previewData } from './query';
 import { findItem } from './estate-search';
 import { gitStatus, gitCommit, gitPull, gitResolve } from './git';
+import { cloneWorkspaceRepo } from './clone-workspace';
 import { configureSparkJob, uploadSparkJobFile, runSparkJob, viewSparkJobRuns } from './spark-job';
+import { copyAbfsPath, copyRelativePath, downloadLakehouseFile } from './lakehouse';
 
 export function registerCommands(cx: CommandContext): void {
   const reg = (id: string, handler: (...args: unknown[]) => unknown) =>
@@ -73,4 +75,10 @@ export function registerCommands(cx: CommandContext): void {
   reg('loom.uploadSparkJobFile', (node) => uploadSparkJobFile(cx, node as never));
   reg('loom.runSparkJob', (node) => runSparkJob(cx, node as never));
   reg('loom.viewSparkJobRuns', (node) => viewSparkJobRuns(cx, node as never));
+
+  // Phase 6 — lakehouse Tables/Files explorer (L3/L4) + clone-to-disk (W9).
+  reg('loom.copyAbfsPath', (node) => copyAbfsPath(cx, node as never));
+  reg('loom.copyRelativePath', (node) => copyRelativePath(cx, node as never));
+  reg('loom.downloadLakehouseFile', (node) => downloadLakehouseFile(cx, node as never));
+  reg('loom.cloneWorkspaceRepo', (node) => cloneWorkspaceRepo(cx, node as never));
 }

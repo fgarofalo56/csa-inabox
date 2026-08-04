@@ -30,7 +30,8 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
-    "onFileSystem:loom"
+    "onFileSystem:loom",
+    "onUri"
   ],
   "contributes": {
     "authentication": [
@@ -385,6 +386,30 @@
         "title": "Upload Spark job file…",
         "category": "CSA Loom",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "loom.copyAbfsPath",
+        "title": "Copy ABFS path",
+        "category": "CSA Loom",
+        "icon": "$(link)"
+      },
+      {
+        "command": "loom.copyRelativePath",
+        "title": "Copy relative path",
+        "category": "CSA Loom",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "loom.downloadLakehouseFile",
+        "title": "Download file",
+        "category": "CSA Loom",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "loom.cloneWorkspaceRepo",
+        "title": "Clone workspace repo…",
+        "category": "CSA Loom",
+        "icon": "$(repo-clone)"
       }
     ],
     "menus": {
@@ -443,6 +468,18 @@
         },
         {
           "command": "loom.uploadSparkJobFile",
+          "when": "false"
+        },
+        {
+          "command": "loom.copyAbfsPath",
+          "when": "false"
+        },
+        {
+          "command": "loom.copyRelativePath",
+          "when": "false"
+        },
+        {
+          "command": "loom.downloadLakehouseFile",
           "when": "false"
         }
       ],
@@ -545,6 +582,11 @@
           "command": "loom.gitPull",
           "when": "view == loom.explorer && viewItem =~ /^workspace/",
           "group": "4_git@3"
+        },
+        {
+          "command": "loom.cloneWorkspaceRepo",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "4_git@4"
         },
         {
           "command": "loom.openDefinition",
@@ -650,6 +692,26 @@
           "command": "loom.deleteItem",
           "when": "view == loom.explorer && viewItem =~ /^item/",
           "group": "9_item@2"
+        },
+        {
+          "command": "loom.downloadLakehouseFile",
+          "when": "view == loom.explorer && viewItem == lh-file",
+          "group": "inline@1"
+        },
+        {
+          "command": "loom.downloadLakehouseFile",
+          "when": "view == loom.explorer && viewItem == lh-file",
+          "group": "1_lakehouse@1"
+        },
+        {
+          "command": "loom.copyAbfsPath",
+          "when": "view == loom.explorer && viewItem =~ /^lh-(table|dir|file)$/",
+          "group": "1_lakehouse@2"
+        },
+        {
+          "command": "loom.copyRelativePath",
+          "when": "view == loom.explorer && viewItem =~ /^lh-(table|dir|file)$/",
+          "group": "1_lakehouse@3"
         }
       ]
     }

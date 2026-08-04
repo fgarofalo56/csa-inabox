@@ -30,6 +30,7 @@ from .models import (
     CreateTokenResult,
     CreateWorkspace,
     Item,
+    ItemDefinitionResult,
     Ok,
     ScimGroup,
     ScimListResponse,
@@ -38,6 +39,7 @@ from .models import (
     ThreadEdges,
     TokenList,
     UpdateItem,
+    UpdateItemDefinition,
     WhoAmI,
     Workspace,
 )
@@ -243,6 +245,63 @@ class _GeneratedOperations:
             accept="application/json",
         )
         return cast(Ok, result)
+
+    def get_item_definition(
+        self,
+        type_: str,
+        id_: str,
+    ) -> ItemDefinitionResult:
+        """Get an item's editable, secret-scrubbed definition.
+
+        ``GET /api/items/{type}/{id}/definition`` (operationId ``getItemDefinition``).
+
+        The item's portable definition — secret-keyed `state` leaves and per-estate
+        `state.provisioning` are excluded by construction, and the exact exclusion paths
+        are listed in `scrubbedPaths`. The strong `ETag` (returned both as a header and
+        in the body) must be echoed on a subsequent `PUT` via `If-Match`. Owner-scoped:
+        a caller who cannot reach the item gets 404, never a cross-item read. Backs the
+        CSA Loom VS Code extension's `loom:` virtual filesystem (W6).
+        """
+        path = expand("/api/items/{type}/{id}/definition", {"type": type_, "id": id_})
+        query: dict[str, Any] | None = None
+        result = self._request(
+            "GET",
+            path,
+            query=query,
+            body=None,
+            accept="application/json",
+        )
+        return cast(ItemDefinitionResult, result)
+
+    def update_item_definition(
+        self,
+        type_: str,
+        id_: str,
+        *,
+        body: UpdateItemDefinition,
+    ) -> ItemDefinitionResult:
+        """Write an edited definition back (optimistic concurrency).
+
+        ``PUT /api/items/{type}/{id}/definition`` (operationId ``updateItemDefinition``).
+
+        Persist an edited definition. `If-Match` is REQUIRED (428 without it) and must
+        carry the ETag from a preceding `GET`; a stale tag → 412 (the VS Code client
+        opens a diff rather than clobbering a concurrent edit). The write re-attaches
+        the item's scrubbed secrets + per-estate `provisioning`, so a GET→edit→PUT
+        round-trip never destroys a value the client could not see. A body whose
+        `schemaVersion` is newer than the deployment understands is refused (409).
+        """
+        path = expand("/api/items/{type}/{id}/definition", {"type": type_, "id": id_})
+        query: dict[str, Any] | None = None
+        result = self._request(
+            "PUT",
+            path,
+            query=query,
+            body=body,
+            content_type="application/json",
+            accept="application/json",
+        )
+        return cast(ItemDefinitionResult, result)
 
     def search_catalog(
         self,

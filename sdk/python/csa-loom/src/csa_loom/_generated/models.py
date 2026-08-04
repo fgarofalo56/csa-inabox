@@ -30,6 +30,8 @@ __all__ = [
     "CreateWorkspace",
     "Error",
     "Item",
+    "ItemDefinition",
+    "ItemDefinitionResult",
     "Ok",
     "ScimError",
     "ScimGroup",
@@ -41,6 +43,7 @@ __all__ = [
     "TokenList",
     "TokenView",
     "UpdateItem",
+    "UpdateItemDefinition",
     "WhoAmI",
     "Workspace",
 ]
@@ -138,6 +141,39 @@ class UpdateItem(TypedDict):
     displayName: NotRequired[str]
     description: NotRequired[str]
     state: NotRequired[Mapping[str, Any]]
+
+
+class ItemDefinition(TypedDict):
+    """A single item's portable, secret-scrubbed, provisioning-free definition."""
+
+    #: Definition schema version this document conforms to (currently 1). A PUT declaring a higher version is refused (409).
+    schemaVersion: int
+    itemType: str
+    displayName: str
+    description: NotRequired[str]
+    #: Portable editor state with secret-keyed leaves and `provisioning` excluded.
+    state: Mapping[str, Any]
+
+
+class ItemDefinitionResult(TypedDict):
+    """``ItemDefinitionResult`` — ``components.schemas.ItemDefinitionResult`` of the Loom OpenAPI document."""
+
+    ok: bool
+    itemType: str
+    definition: ItemDefinition
+    schemaVersion: int
+    #: Strong validator (also sent as the `ETag` header) to echo as `If-Match` on write.
+    etag: str
+    #: `state/<dot.path>` for every secret leaf excluded from `definition.state`.
+    scrubbedPaths: list[str]
+    #: True when `state.provisioning` was present and excluded.
+    provisioningExcluded: bool
+
+
+class UpdateItemDefinition(TypedDict):
+    """Body of `PUT …/definition`. The edited definition — a bare definition object is also accepted for backwards compatibility."""
+
+    definition: ItemDefinition
 
 
 class CatalogSearchResult(TypedDict):
