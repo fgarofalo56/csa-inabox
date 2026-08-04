@@ -245,5 +245,47 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // G1 receipt for the UC system-tables pane (#2624). Creates a real
+      // sql-warehouse item + PATCHes it, so retry to keep an intermittent
+      // timeout under the shared-console sweep from reading as a regression.
+      name: 'uc-system-tables-clickwalk',
+      testDir: './e2e',
+      testMatch: /uc-system-tables-clickwalk\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // G1 receipt for the U7/U8/U13 Help Center guides (#2573). Walkthroughs
+      // are client-bundled (no backend) — a missing/empty guide is a real fail.
+      name: 'help-center-guides',
+      testDir: './e2e',
+      testMatch: /help-center-guides\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // G1 receipt for the UC effective-permissions resolver (#2623). Drives the
+      // live BFF + authz probe-guard; retry for the shared-console sweep.
+      name: 'uc-effective-permissions',
+      testDir: './e2e',
+      testMatch: /uc-effective-permissions\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
