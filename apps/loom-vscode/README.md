@@ -73,6 +73,45 @@ Offline is honest: the tree renders the last-synced data marked *offline* plus a
 reason; a signed-out deployment shows a Sign-in node; an empty workspace shows a
 "create an item" node. Nothing is ever a fabricated row.
 
+## MCP servers + `@loom` chat (Phase 4)
+
+**MCP servers, zero `mcp.json` editing.** The extension contributes the shipped
+[`@csa-loom/mcp`](../loom-mcp) servers to VS Code's MCP registry via a
+`McpServerDefinitionProvider`, wired to the **active deployment**'s `apiUrl` and
+your stored PAT. By **blast radius**, only the two read-only servers are enabled
+by default:
+
+| Server | Blast radius | Default |
+|---|---|---|
+| `loom-catalog` | read metadata (workspaces, items, catalog) | **ON** |
+| `loom-query` | read bounded, capped data rows (SQL/KQL/preview) | **ON** |
+| `loom-author` | WRITE — create/modify items (dry-run default) | opt-in |
+| `loom-ops` | runs/logs + start/cancel | opt-in |
+| `loom-admin` | ADMIN — grant access (default-OFF, refuses a PAT) | opt-in |
+
+The write/admin servers appear only after you enable them in **CSA Loom: Manage
+MCP servers** (or the `loom.mcp.enabledServers` setting) — the extension never
+auto-enables them. A server is contributed only for a deployment you've signed
+into **with a PAT** (the MCP servers authenticate with `LOOM_TOKEN`); the PAT is
+injected at start time, keyed to that deployment, so a token never reaches a
+server pointed at another deployment. The servers ship bundled in the `.vsix`
+(`dist/mcp/*.mjs`) — no external tool, no `node` on PATH required.
+
+**`@loom` chat participant.** Type `@loom` in Copilot Chat to ask about your
+estate. It answers by calling the **real backend** against the active deployment
+and streaming grounded results — never a fabricated answer. Backed by Loom's own
+data plane (not GitHub Copilot's model), so it works with no Copilot licence:
+
+- `@loom <question>` / `@loom /find <query>` — catalog search.
+- `@loom /item <type>/<id>` — item metadata + definition keys.
+- `@loom /query <type>/<id> :: <SQL>` — bounded, read-only query grid.
+- `@loom /preview <type>/<id>` — data-asset preview.
+
+When there's no configured deployment or no live session, `@loom` shows an honest
+gate naming the fix (add a deployment / sign in) — it does not answer from memory.
+Pick which deployment MCP + `@loom` act against with **CSA Loom: Select active
+deployment**.
+
 ## Architecture
 
 - **Transport** wraps [`@csa-loom/sdk`](../loom-sdk) (`LoomClient` — bearer-PAT or
@@ -86,7 +125,7 @@ reason; a signed-out deployment shows a Sign-in node; an empty workspace shows a
 
 - **Phase 2** — notebooks (remote Spark `NotebookController`, mirror mode, M/L/C).
 - **Phase 3** — lakehouse/data explorer, SQL/KQL/Trino query grid, environments.
-- **Phase 4** — MCP servers + `@loom` chat participant + LM tools.
+- **Phase 4 ✅** — MCP servers (`McpServerDefinitionProvider`) + `@loom` chat participant.
 - **Phase 5** — Git/ALM, Spark job definitions, functions, Marketplace + Open VSX.
 
 Full spec + parity matrix: `PRPs/active/loom-vscode-extension.md`.

@@ -134,6 +134,23 @@ export class LoomAuthenticationProvider implements vscode.AuthenticationProvider
     return this.meta[deploymentId]?.scope === 'read-only';
   }
 
+  /** Synchronous "is this deployment signed in with a PAT?" — the MCP inclusion filter. */
+  hasPat(deploymentId: string): boolean {
+    return this.meta[deploymentId]?.kind === 'pat';
+  }
+
+  /**
+   * The stored PAT for a deployment, or undefined. Returns a value ONLY for a
+   * PAT session (a cookie session is never exposed as a bearer token) — this is
+   * how the MCP provider gets a `LOOM_TOKEN` for exactly the target deployment
+   * and nothing else.
+   */
+  async getPatFor(deploymentId: string): Promise<string | undefined> {
+    if (this.meta[deploymentId]?.kind !== 'pat') return undefined;
+    const cred = await this.readCredential(deploymentId);
+    return cred?.kind === 'pat' ? cred.value : undefined;
+  }
+
   /** Build an authenticated {@link LoomApi} for a deployment, or undefined. */
   async apiFor(dep: Deployment): Promise<LoomApi | undefined> {
     const cred = await this.readCredential(dep.id);

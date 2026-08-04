@@ -29,10 +29,13 @@ import {
   type Workspace,
   type Item,
   type WhoAmI,
+  type CatalogSearchResult,
+  type CatalogSearchOptions,
+  type QueryResult,
 } from '@csa-loom/sdk';
 
 export { LoomApiError, isLoomApiError };
-export type { Workspace, Item, WhoAmI };
+export type { Workspace, Item, WhoAmI, CatalogSearchResult, QueryResult };
 
 import type { DefinitionPayload, DefinitionTransport } from '../fs/loom-fs-core';
 
@@ -142,6 +145,35 @@ export class LoomApi implements DefinitionTransport {
   /** Identity + PAT scope probe (`/api/v1/whoami`) — accepts cookie or PAT. */
   whoami(): Promise<WhoAmI> {
     return this.client.whoami();
+  }
+
+  // --- read grounding for the @loom chat participant (PRP M3) ---------------
+  // All read-only, all through the SDK's typed client — the SAME routes the
+  // shipped M1 `loom-catalog` / M2 `loom-query` MCP servers call. Never a mock.
+
+  /** Federated catalog search (`GET /api/catalog/search`). */
+  catalogSearch(query: string, opts?: CatalogSearchOptions): Promise<CatalogSearchResult> {
+    return this.client.catalog.search(query, opts);
+  }
+
+  /** Get an item by type + id (`GET /api/cosmos-items/:type/:id`). */
+  getItem(itemType: string, itemId: string): Promise<Item> {
+    return this.client.items.get(itemType, itemId);
+  }
+
+  /** Bounded, read-only T-SQL against a SQL-capable item (`POST /api/items/:type/:id/query`). */
+  querySql(itemType: string, itemId: string, sql: string): Promise<QueryResult> {
+    return this.client.query.sql(itemId, sql, { type: itemType });
+  }
+
+  /** Bounded, read-only KQL against an ADX-backed item (`POST /api/items/:type/:id/query`). */
+  queryKql(itemType: string, itemId: string, kql: string): Promise<QueryResult> {
+    return this.client.query.kql(itemId, kql, { type: itemType });
+  }
+
+  /** Bounded data preview for a data asset (`GET /api/items/:type/:id/preview`). */
+  preview(itemType: string, itemId: string, top?: number): Promise<QueryResult> {
+    return this.client.query.preview(itemId, { type: itemType, top });
   }
 
   // --- Routes the SDK class does not model (reuse the SDK error contract) ---

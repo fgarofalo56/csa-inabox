@@ -2,11 +2,13 @@
 .vscode-test/**
 src/**
 test/**
+temp/**
 node_modules/**
 build.mjs
 tsconfig.json
 vitest.config.ts
 **/*.ts
 **/*.map
+*.vsix
 .gitignore
 .eslintrc*

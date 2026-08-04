@@ -12,6 +12,7 @@ import type { MirrorStore } from '../mirror/mirror-store';
 import type { NotebookLinkStore } from '../notebook/notebook-link';
 import type { RunHistory } from '../notebook/run-history';
 import type { SparkNotebookController } from '../notebook/spark-controller';
+import type { ActiveDeploymentStore } from '../mcp/active-deployment';
 import { LoomFileSystemProvider as LoomFs } from '../fs/loom-fs-provider';
 import { buildDefinitionPath } from '../fs/definition-uri';
 
@@ -35,6 +36,10 @@ export interface CommandContext {
   runs: RunHistory;
   /** The "CSA Loom Spark" NotebookController (N10/N11). */
   controller: SparkNotebookController;
+  /** The active deployment for the MCP servers + @loom chat participant (Phase 4). */
+  activeDeployment: ActiveDeploymentStore;
+  /** Re-provide the MCP server list (after an enabled-set / active-deployment change). */
+  refreshMcp: () => void;
 }
 
 export type { DeploymentNode, WorkspaceNode, ItemNode };

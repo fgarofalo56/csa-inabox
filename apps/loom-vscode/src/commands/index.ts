@@ -20,6 +20,8 @@ import { createNotebook } from './create-notebook';
 import { setWorkFolder, downloadItem, deleteMirrored } from './mirror';
 import { publishItem, updateItem } from './publish-update';
 import { runOnSpark, setSparkCompute, viewRecentRuns } from './notebook-run';
+import { selectActiveDeployment } from './select-deployment';
+import { manageMcpServers } from './mcp';
 
 export function registerCommands(cx: CommandContext): void {
   const reg = (id: string, handler: (...args: unknown[]) => unknown) =>
@@ -48,4 +50,8 @@ export function registerCommands(cx: CommandContext): void {
   reg('loom.runOnSpark', (node) => runOnSpark(cx, node as never));
   reg('loom.setSparkCompute', (node) => setSparkCompute(cx, node as never));
   reg('loom.viewRecentRuns', () => viewRecentRuns(cx));
+
+  // Phase 4 — MCP servers + @loom chat participant.
+  reg('loom.selectActiveDeployment', () => selectActiveDeployment(cx));
+  reg('loom.manageMcpServers', () => manageMcpServers(cx));
 }
