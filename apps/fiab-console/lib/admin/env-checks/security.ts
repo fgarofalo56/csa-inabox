@@ -139,18 +139,53 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
   // (a) visible on /admin/gates with an inline Fix-it, and (b) resolvable through
   // the one shared env-apply write path.
   //
-  // SCOPE NOTE (honest): ENV_CHECKS has no "applies only when X" predicate, so on a
-  // Commercial estate that never deploys loom-unity this row reads as an unset
-  // optional gate. The SHARP verdict lives in the live probe
-  // `probe-loom-unity-authz` (health-probes.ts), which passes when LOOM_UNITY_URL
-  // is absent and FAILS with real evidence — an unauthenticated HTTP 200 — when a
-  // deployed catalog answers anonymous callers.
+  // SCOPE NOTE (resolved 2026-08-04, readiness 97→100). This row used to be
+  // wrong in BOTH directions, and the two errors cancelled out into a number
+  // nobody questioned:
+  //
+  //   * COMMERCIAL — false RED. `admin-plane/main.bicep` never deploys
+  //     loom-unity (compute/loom-unity-app.bicep is orphan-allowlisted in
+  //     scripts/ci/check-bicep-sync.mjs; Commercial runs Databricks Unity
+  //     Catalog). With no catalog there is no anonymous surface, yet the row
+  //     reported "Blocked, 1 missing" — it was the single largest deduction on
+  //     /admin/readiness. `appliesWhenPresent` now scopes the spec to estates
+  //     that actually run the catalog.
+  //   * GOV — false GREEN, and this is the serious one.
+  //     `.github/workflows/gov-uc-purview-wire.yml:253` sets
+  //     `LOOM_UNITY_AUTH_MODE=anonymous` (the value that makes the Console send
+  //     NO credential, alongside a catalog deployed with authMode=disabled —
+  //     issue #2643). Because that var is in the anyOf group and `has()` is
+  //     presence-only, the gate read CONFIGURED. The check that exists to catch
+  //     an anonymous catalog was SATISFIED BY an anonymous catalog.
+  //     `rejectValues` closes that.
+  //
+  // The sharp verdict still lives in the live probe `probe-loom-unity-authz`
+  // (health-probes.ts) — an unauthenticated GET that FAILS critical on an HTTP
+  // 200 — which is now wired through readiness.ts GATE_PROBE_MAP so a deployed
+  // catalog is judged on measured evidence, not on env presence.
   {
     id: 'svc-loom-unity-authz', category: 'security',
     title: 'Loom Unity — catalog authorization (Entra bearer)', severity: 'recommended',
+    // LOOM_UNITY_TOKEN is deliberately NOT in this group, and that is not an
+    // oversight: EDITABLE_ENV derives from ENV_CHECKS, so adding it would put a
+    // bearer token on the /admin/env-config plaintext form. It is a Key Vault
+    // secretref (same treatment as LOOM_ICEBERG_CATALOG_TOKEN /
+    // LOOM_SHARING_BEARER). The remediation below now steers to the Entra
+    // exchange path instead of prescribing a credential this gate cannot accept.
     anyOf: [['LOOM_UNITY_CLIENT_ID', 'LOOM_UNITY_AUDIENCE', 'LOOM_UNITY_AUTH_MODE']],
+    // 'anonymous' means the Console presents no credential; 'disabled'/'none'/
+    // 'off' are the same intent spelled differently. None of them authorizes
+    // anything, so none of them may satisfy an authorization gate.
+    rejectValues: { LOOM_UNITY_AUTH_MODE: ['anonymous', 'disabled', 'none', 'off'] },
+    // LOOM_UNITY_URL is what compute/loom-unity-app.bicep wires when the
+    // catalog is stood up; unset = no Loom Unity in this estate.
+    appliesWhenPresent: {
+      envVar: 'LOOM_UNITY_URL',
+      notDeployedDetail:
+        'Loom Unity (the OSS sovereign catalog) is not stood up here, so there is no catalog surface to authorize and no anonymous endpoint to expose. Commercial estates use Databricks Unity Catalog (svc-databricks). If you deploy Loom Unity, this check applies in full and probe-loom-unity-authz proves the posture with an unauthenticated request.',
+    },
     warnOnMiss: true,
-    remediation: 'Loom Unity (the Unity-Catalog-compatible OSS catalog Loom deploys for the sovereign path) must not be reachable anonymously. (1) SERVER — redeploy platform/fiab/bicep/modules/compute/loom-unity-app.bicep with authMode=entra (the default; it no longer silently downgrades to an anonymous catalog when no audience is pinnable — it deploys SEALED instead) plus consoleAllowedCidrs=<the Container Apps infrastructure subnet> to pin ingress. (2) CLIENT — LOOM_UNITY_TOKEN (a server-minted token delivered as a Key Vault secretref) is currently the ONLY credential upstream accepts: verified against unitycatalog v0.5.0 AND v0.5.1, the server rejects any bearer whose issuer is not its own internal issuer, so an Entra access token presented directly is answered 403 even with an exact audience match (proof: docs/fiab/security/loom-unity-authz-proof.md). Setting LOOM_UNITY_CLIENT_ID / LOOM_UNITY_AUDIENCE alone makes the BFF mint a token this server will reject — the fix is the OAuth token-exchange client (POST /api/1.0/unity-control/auth/tokens), tracked as a follow-up. Leave unset ONLY where loom-unity is not deployed (Commercial estates on the Databricks Unity Catalog path). Threat model: docs/fiab/security/loom-unity-threat-model.md.',
+    remediation: 'Loom Unity (the Unity-Catalog-compatible OSS catalog Loom deploys for the sovereign path) must not be reachable anonymously. This check applies only where the catalog is actually deployed (LOOM_UNITY_URL set). (1) SERVER — redeploy platform/fiab/bicep/modules/compute/loom-unity-app.bicep with authMode=entra (the default; it no longer silently downgrades to an anonymous catalog when no audience is pinnable — it deploys SEALED instead) plus consoleAllowedCidrs=<the Container Apps infrastructure subnet> to pin ingress. (2) CLIENT — set LOOM_UNITY_CLIENT_ID (or LOOM_UNITY_AUDIENCE) so the Console mints an Entra bearer; ossUcAuthHeader() then exchanges it at POST /api/1.0/unity-control/auth/tokens for the server-minted internal token the catalog accepts (lib/azure/uc-token-exchange.ts, #2679 — the raw Entra token is answered 403 by design, proof: docs/fiab/security/loom-unity-authz-proof.md). The exchange additionally needs the Console principal registered as an ENABLED Unity Catalog user. LOOM_UNITY_TOKEN (a pre-shared server-minted token) also satisfies this gate, but note NO bicep module in this repo emits it and no Key Vault secret backs it — it is minted by the upstream server into etc/conf/token.txt on ephemeral container storage, so it does not survive a restart and is wrong under maxReplicas>1. Prefer the Entra path. LOOM_UNITY_AUTH_MODE=anonymous does NOT satisfy this gate — it is the finding, not the fix. Verify with the live probe-loom-unity-authz health check: it must report that an unauthenticated read is rejected. Threat model: docs/fiab/security/loom-unity-threat-model.md.',
     provisionedBy: 'modules/compute/loom-unity-app.bicep (authMode / entraClientId / entraClientSecretUri / consoleAllowedCidrs — standalone out-of-band entrypoint, admin-plane/main.bicep is at the 256-param ceiling) → LOOM_UNITY_TOKEN (or, once the token-exchange client lands, LOOM_UNITY_CLIENT_ID) on the Console app',
     role: 'Key Vault Secrets User (loom-unity UAMI) on the vault holding the Entra / ADLS-vending client secrets; no role is needed for the Console to mint its own bearer',
     docs: 'https://docs.unitycatalog.io/server/auth/',
