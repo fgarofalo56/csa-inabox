@@ -23,6 +23,7 @@ import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/t
 import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import { cosmosIdFromLoomId } from './loom-content-id';
+import { autoBindOnCreate } from '@/lib/azure/auto-bind';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
@@ -476,6 +477,13 @@ export async function createOwnedItem(
   };
   const items = await itemsContainer();
   const { resource } = await items.items.create<WorkspaceItem>(item);
+  // AUTO-BIND (auto-bind-by-default §1: "Creating a Loom item PROVISIONS AND
+  // BINDS its backing resource"). Create-or-attach the Azure object named after
+  // this item and stamp the binding onto its state. Awaited (so an editor
+  // opened straight after create already has a canvas) but DEADLINE-BOUNDED and
+  // never-throwing, so a slow control plane cannot make item creation hang or
+  // fail. A no-op for the item types that have no backing service.
+  await autoBindOnCreate(resource!);
   // Mirror to AI Search (best-effort; no-throw).
   void upsertLoomDoc(docForItem(resource!, session.claims.oid));
   // Mirror a data-product into the consumer-discovery index (best-effort; no-throw).

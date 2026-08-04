@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import { autoBindOnCreate } from '@/lib/azure/auto-bind';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -69,6 +70,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
     const items = await itemsContainer();
     const { resource } = await items.items.create<WorkspaceItem>(item);
     if (resource) void upsertLoomDoc(docForItem(resource, session.claims.oid));
+    // AUTO-BIND (auto-bind-by-default §1). This is the INTERACTIVE create path
+    // — the "New item" tile in the console — so it is the first place a user
+    // can produce an item whose backing Azure object does not exist yet.
+    // Create-or-attach it now, named after the item, so the editor that opens
+    // next already has a canvas. Deadline-bounded and never-throwing.
+    if (resource) await autoBindOnCreate(resource);
     return NextResponse.json({ ok: true, item: resource });
   } catch (e: any) {
     return err(e?.message || 'Failed to create item', 500, 'cosmos_error');
