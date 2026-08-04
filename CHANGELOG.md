@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.84.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.83.0...csa-inabox-v0.84.0) (2026-08-04)
+
+
+### Features
+
+* **devtools:** loom-vscode Phase 3 — data explorer + query grid + estate search ([#2932](https://github.com/fgarofalo56/csa-inabox/issues/2932)) ([79321a5](https://github.com/fgarofalo56/csa-inabox/commit/79321a52912a29a94cc48660d6fb038f28d5cbb9))
+* **devtools:** loom-vscode Phase 4 — Loom MCP servers + [@loom](https://github.com/loom) chat participant ([#2933](https://github.com/fgarofalo56/csa-inabox/issues/2933)) ([18f3c8d](https://github.com/fgarofalo56/csa-inabox/commit/18f3c8d7bad8b9a4dd5cabe590022436a29b9eb2))
+* **devtools:** loom-vscode Phase 5 — Git/ALM + Spark job definitions + Open VSX distribution ([#2934](https://github.com/fgarofalo56/csa-inabox/issues/2934)) ([a8c0f6b](https://github.com/fgarofalo56/csa-inabox/commit/a8c0f6b6a4d877cf190b23458b6c71c28e52abcc))
+
+
+### Bug Fixes
+
+* **copilot:** route AI Search retrieval through the proven BM25 ranker ([#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929)) ([#2930](https://github.com/fgarofalo56/csa-inabox/issues/2930)) ([432070a](https://github.com/fgarofalo56/csa-inabox/commit/432070a94fa3f69a5d58bbd44a010b3939241792))
+
 ## [0.83.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.14...csa-inabox-v0.83.0) (2026-08-04)
 
 
