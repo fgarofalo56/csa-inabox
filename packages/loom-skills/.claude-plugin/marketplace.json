@@ -27,6 +27,12 @@
         "./skills/loom-search-and-catalog",
         "./skills/loom-items-bff"
       ],
+      "agents": [
+        "./agents/loom-triage.md",
+        "./agents/loom-item-builder.md",
+        "./agents/loom-rule-auditor.md",
+        "./agents/loom-parity-analyst.md"
+      ],
       "mcpServers": {
         "loom-bridge": {
           "type": "http",
