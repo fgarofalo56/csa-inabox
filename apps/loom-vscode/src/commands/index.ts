@@ -22,6 +22,8 @@ import { publishItem, updateItem } from './publish-update';
 import { runOnSpark, setSparkCompute, viewRecentRuns } from './notebook-run';
 import { selectActiveDeployment } from './select-deployment';
 import { manageMcpServers } from './mcp';
+import { queryData, runQuery, previewData } from './query';
+import { findItem } from './estate-search';
 
 export function registerCommands(cx: CommandContext): void {
   const reg = (id: string, handler: (...args: unknown[]) => unknown) =>
@@ -54,4 +56,9 @@ export function registerCommands(cx: CommandContext): void {
   // Phase 4 — MCP servers + @loom chat participant.
   reg('loom.selectActiveDeployment', () => selectActiveDeployment(cx));
   reg('loom.manageMcpServers', () => manageMcpServers(cx));
+  // Phase 3 — data explorer / query grid + estate search.
+  reg('loom.queryData', (node) => queryData(cx, node as never));
+  reg('loom.runQuery', () => runQuery(cx));
+  reg('loom.previewData', (node) => previewData(cx, node as never));
+  reg('loom.findItem', () => findItem(cx));
 }

@@ -30,6 +30,7 @@ import { SparkNotebookController } from './notebook/spark-controller';
 import { ActiveDeploymentStore } from './mcp/active-deployment';
 import { registerMcpProvider } from './mcp/mcp-provider';
 import { registerLoomChatParticipant } from './chat/chat-participant';
+import { QueryEditorStore } from './query/query-editor-store';
 
 export function activate(context: vscode.ExtensionContext): void {
   initLogger(context);
@@ -97,6 +98,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // With no MCP provider API, resolveApi is still what @loom needs; the chat
   // participant registers independently (its own capability check).
   registerLoomChatParticipant({ context, activeDeployment, resolveApi });
+  // Phase 3 — query editor ↔ item links (drives the ▶ Run button context key).
+  const queryEditors = new QueryEditorStore();
+  context.subscriptions.push(queryEditors);
 
   const syncAuthState = async (): Promise<void> => {
     const deps = getDeployments();
@@ -120,6 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
     controller,
     activeDeployment,
     refreshMcp: mcp.refresh,
+    queryEditors,
   };
   registerCommands(cx);
 

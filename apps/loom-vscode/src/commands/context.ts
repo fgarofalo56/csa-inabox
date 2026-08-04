@@ -13,6 +13,7 @@ import type { NotebookLinkStore } from '../notebook/notebook-link';
 import type { RunHistory } from '../notebook/run-history';
 import type { SparkNotebookController } from '../notebook/spark-controller';
 import type { ActiveDeploymentStore } from '../mcp/active-deployment';
+import type { QueryEditorStore } from '../query/query-editor-store';
 import { LoomFileSystemProvider as LoomFs } from '../fs/loom-fs-provider';
 import { buildDefinitionPath } from '../fs/definition-uri';
 
@@ -40,6 +41,8 @@ export interface CommandContext {
   activeDeployment: ActiveDeploymentStore;
   /** Re-provide the MCP server list (after an enabled-set / active-deployment change). */
   refreshMcp: () => void;
+  /** Untitled-query-doc → target-item links for the SQL/KQL editor (Phase 3). */
+  queryEditors: QueryEditorStore;
 }
 
 export type { DeploymentNode, WorkspaceNode, ItemNode };

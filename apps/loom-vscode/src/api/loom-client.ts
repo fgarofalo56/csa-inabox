@@ -53,6 +53,27 @@ export interface MeResult {
   name?: string;
 }
 
+/** Raw `GET /api/catalog/find` envelope (mapped by `query/search-model.ts`). */
+export interface CatalogFindResponse {
+  ok?: boolean;
+  q?: string;
+  backend?: string;
+  total?: number;
+  workspacesSearched?: number;
+  hits?: Array<{
+    id: string;
+    workspaceId: string;
+    workspaceName: string;
+    itemType: string;
+    displayName: string;
+    description?: string;
+    tags?: string[];
+    updatedAt?: string;
+    url?: string;
+    score?: number;
+  }>;
+}
+
 /**
  * A 412 from `PUT …/definition` — the item changed since the client last read
  * it. The Publish command catches this to open a diff (N5) instead of clobbering.
@@ -159,16 +180,6 @@ export class LoomApi implements DefinitionTransport {
   /** Get an item by type + id (`GET /api/cosmos-items/:type/:id`). */
   getItem(itemType: string, itemId: string): Promise<Item> {
     return this.client.items.get(itemType, itemId);
-  }
-
-  /** Bounded, read-only T-SQL against a SQL-capable item (`POST /api/items/:type/:id/query`). */
-  querySql(itemType: string, itemId: string, sql: string): Promise<QueryResult> {
-    return this.client.query.sql(itemId, sql, { type: itemType });
-  }
-
-  /** Bounded, read-only KQL against an ADX-backed item (`POST /api/items/:type/:id/query`). */
-  queryKql(itemType: string, itemId: string, kql: string): Promise<QueryResult> {
-    return this.client.query.kql(itemId, kql, { type: itemType });
   }
 
   /** Bounded data preview for a data asset (`GET /api/items/:type/:id/preview`). */
@@ -294,6 +305,41 @@ export class LoomApi implements DefinitionTransport {
   /** `GET …/execute?…` — poll a submitted statement for its output. */
   getNotebookCell(id: string, query: Record<string, string | number>): Promise<NotebookExecResult> {
     return this.raw<NotebookExecResult>('GET', `/api/notebook/${encodeURIComponent(id)}/execute?${qs(query)}`);
+  }
+
+  // --- bounded read: query + preview + estate search (Phase 3) --------------
+  // Thin delegates onto the SDK `query` resource — the SAME per-item routes the
+  // M2 `loom-query` MCP server calls (POST /api/items/{type}/{id}/query and
+  // GET /api/items/{type}/{id}/preview). The read-only parse + row/byte caps
+  // live in `query/query-caps.ts` and are applied by the command BEFORE/AFTER
+  // these calls (kept out of transport so they are unit-testable in isolation).
+
+  /** Run bounded T-SQL against a SQL-capable item and read the result set. */
+  querySql(itemType: string, id: string, sql: string, database?: string): Promise<QueryResult> {
+    return this.client.query.sql(id, sql, { type: itemType, database });
+  }
+
+  /** Run bounded KQL against an ADX-backed item; `take` is the server-side row window. */
+  queryKql(itemType: string, id: string, kql: string, take: number, database?: string): Promise<QueryResult> {
+    return this.client.query.kql(id, kql, { type: itemType, database, page: { skip: 0, take } });
+  }
+
+  /** Read a bounded, sampled data preview (rows + column profile) for a data asset. */
+  queryPreview(itemType: string, id: string, top: number): Promise<QueryResult> {
+    return this.client.query.preview(id, { type: itemType, top });
+  }
+
+  /**
+   * Estate-wide catalog search (`GET /api/catalog/find`) — the `loom find`
+   * backend, ACL/tenant-scoped server-side. Returns the raw envelope; the
+   * command maps + ranks it (`query/search-model.ts`).
+   */
+  catalogFind(q: string, opts: { type?: string; limit?: number } = {}): Promise<CatalogFindResponse> {
+    const params = new URLSearchParams();
+    params.set('q', q ?? '');
+    if (opts.type) params.set('type', opts.type);
+    if (opts.limit != null) params.set('limit', String(opts.limit));
+    return this.raw<CatalogFindResponse>('GET', `/api/catalog/find?${params.toString()}`);
   }
 
   private authHeaders(hasBody: boolean): Record<string, string> {

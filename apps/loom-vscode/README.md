@@ -6,10 +6,11 @@ one sign-in, one tree. Azure-native: **no Microsoft Fabric tenant required**, an
 because Fabric is not GA in Azure Government, this is the only Fabric-class
 in-editor data surface that exists there at all.
 
-> This is **Phase 1** — the functional core (sign in, browse, create/rename/
-> delete, open in Console). Notebooks, query, lakehouse, MCP and Copilot land in
-> later phases (see the roadmap below). Phase-1 surfaces are real end-to-end; no
-> tab shows a stub.
+> Through **Phase 3** — the functional core (sign in, browse, create/rename/
+> delete, open in Console), notebooks on remote Spark, and the data explorer
+> (query editor + results grid, preview, estate search). MCP, Copilot and Git/ALM
+> land in later phases (see the roadmap below). Every shipped surface is real
+> end-to-end; no tab shows a stub.
 
 ## Why one extension
 
@@ -111,6 +112,21 @@ When there's no configured deployment or no live session, `@loom` shows an hones
 gate naming the fix (add a deployment / sign in) — it does not answer from memory.
 Pick which deployment MCP + `@loom` act against with **CSA Loom: Select active
 deployment**.
+## Data explorer, query grid + estate search (Phase 3)
+
+| Command | Backend |
+|---|---|
+| **Query data…** → **Run query** (▶) — SQL/KQL editor for a data item | `POST /api/items/{type}/{id}/query` (`{sql}` or `{kql, page}`) |
+| **Preview data** — bounded sampled preview of a dataset / lake view | `GET /api/items/{type}/{id}/preview?top=` |
+| **Find item (estate search)** — search across every signed-in deployment | `GET /api/catalog/find?q=` (merged + ranked client-side) |
+
+Results render in one type-badged grid webview (column type badges, row count,
+elapsed-time, cap badge). Reads are **bounded, capped and read-only** — the same
+controls the M2 `loom-query` MCP enforces (DDL/DML & KQL-control rejected at
+parse; default 500 rows, hard cap 5000 a caller can only *lower*; 512 KiB byte
+cap; 65 s client time cap). An unconfigured backend renders the route's exact
+remediation, never a mock grid. The webview receives only column/row/meta data —
+no credential ever crosses the boundary.
 
 ## Architecture
 
@@ -118,14 +134,23 @@ deployment**.
   cookie auth, envelope normalization, `LoomApiError`). No direct Azure calls; the
   extension holds no ARM/storage/Kusto credential.
 - **Auth** mirrors the [`loom` CLI](../loom-cli) device-code + PAT flow.
-- **No webviews** in Phase 1 — native tree, quick-picks, and notifications only.
-  Rich editors stay in the Console via **Open in Console**.
+- **One webview only** — the result grid (type-badged columns, timing status bar),
+  built with the host theme's tokens under a strict nonce'd CSP. It receives only
+  already-fetched, already-authorized data via `postMessage` — no credential
+  crosses the boundary. Every rich editor stays in the Console via **Open in
+  Console**; the native tree, notebook editor, quick-picks and notifications do
+  the rest.
 
 ## Roadmap
 
 - **Phase 2** — notebooks (remote Spark `NotebookController`, mirror mode, M/L/C).
 - **Phase 3** — lakehouse/data explorer, SQL/KQL/Trino query grid, environments.
 - **Phase 4 ✅** — MCP servers (`McpServerDefinitionProvider`) + `@loom` chat participant.
+- **Phase 2** ✅ — notebooks (remote Spark `NotebookController`, mirror mode, M/L/C).
+- **Phase 3** ✅ (this release) — data explorer / query editor + type-badged
+  results grid, bounded preview, estate-wide search. Lakehouse Tables/Files tree,
+  file download, Copy-path, and Spark environments are stated as deferred.
+- **Phase 4** — MCP servers + `@loom` chat participant + LM tools.
 - **Phase 5** — Git/ALM, Spark job definitions, functions, Marketplace + Open VSX.
 
 Full spec + parity matrix: `PRPs/active/loom-vscode-extension.md`.
