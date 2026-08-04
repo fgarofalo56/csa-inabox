@@ -13,10 +13,10 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1666 |
+| Total routes | 1667 |
 | Public (no session) | 100 |
 | Session-only | 576 |
-| Owner-scoped | 699 |
+| Owner-scoped | 700 |
 | Admin | 291 |
 | Gated (backend config) | 531 |
 | Areas | 120 |
@@ -1003,6 +1003,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/[type]/[id]/classifications/route.ts` | GET PUT | owner-scoped | ● | Cosmos, Purview |
 | `items/[type]/[id]/collab/stream/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/comments/route.ts` | GET POST PATCH DELETE | owner-scoped |  | Cosmos |
+| `items/[type]/[id]/definition/route.ts` | GET PUT | owner-scoped |  | Cosmos |
 | `items/[type]/[id]/endorsement/route.ts` | GET PATCH | admin |  | — |
 | `items/[type]/[id]/explain/route.ts` | POST | session-only | ● | — |
 | `items/[type]/[id]/export-check/route.ts` | POST | owner-scoped |  | Cosmos |
