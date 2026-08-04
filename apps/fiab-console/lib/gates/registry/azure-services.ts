@@ -93,6 +93,14 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     surfaces: [
       { path: '/items/mirrored-database', label: 'Mirrored database (ADF CDC)' },
       { path: '/api/adf/*', label: 'ADF CDC routes' },
+      // auto-bind-by-default: the pipeline editors PROVISION their backing ADF
+      // pipeline on open (lib/azure/auto-bind-providers.adfPipelineAutoBind).
+      // That provider only reports this gate after Resource Graph discovery
+      // finds NO factory the Loom identity can read anywhere — i.e. the one
+      // case the platform genuinely cannot self-serve. Listed here so the Fix-it
+      // is reachable from /admin/gates and discoverable by Copilot (G2).
+      { path: '/items/data-pipeline', label: 'Data pipeline editor (auto-bound ADF pipeline)' },
+      { path: '/items/adf-pipeline', label: 'ADF pipeline editor (auto-bound ADF pipeline)' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_ADF_FACTORY: L.adf },

@@ -76,6 +76,7 @@ import {
   type KnownContainer,
 } from '@/lib/azure/adls-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { safeAdlsRelPath, lakehouseRootPath } from '@/lib/azure/backing-name';
 import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
@@ -305,16 +306,16 @@ async function fabricCall(path: string, method: 'GET' | 'POST', body?: unknown):
   return { status: res.status, body: json ?? text, location: res.headers.get('location') || undefined };
 }
 
-/** Sanitise a bundle folder/table path to a safe ADLS relative path (no
- * leading/trailing slashes, no traversal, forward-slash separated). */
-function safeRelPath(p: string): string {
-  return String(p)
-    .replace(/\\/g, '/')
-    .split('/')
-    .map((seg) => seg.trim())
-    .filter((seg) => seg && seg !== '.' && seg !== '..')
-    .join('/');
-}
+/**
+ * Sanitise a bundle folder/table path to a safe ADLS relative path (no
+ * leading/trailing slashes, no traversal, forward-slash separated).
+ *
+ * Delegates to the SHARED mapping in `lib/azure/backing-name` — the open-time
+ * auto-bind provider (`auto-bind-providers.lakehouseAutoBind`) computes this
+ * item's root with the same function, so an installed lakehouse is ATTACHED on
+ * open rather than duplicated under a differently-sanitized root.
+ */
+const safeRelPath = safeAdlsRelPath;
 
 /** Declared shape of a bundle lakehouse shortcut (mirror of LakehouseShortcutDecl). */
 interface ShortcutDecl {
@@ -637,8 +638,10 @@ async function provisionAzureNative(
   const declaredSchemas: Array<{ name: string }> = Array.isArray(content?.schemas) ? content.schemas : [];
 
   // Root path for this lakehouse inside the container — keeps multiple
-  // installed lakehouses isolated and browsable side-by-side.
-  const root = `lakehouses/${safeRelPath(input.displayName) || input.cosmosItemId}`;
+  // installed lakehouses isolated and browsable side-by-side. THE shared
+  // definition (lib/azure/backing-name), so open-time auto-bind resolves this
+  // exact directory instead of creating a second root.
+  const root = lakehouseRootPath(input.displayName, input.cosmosItemId);
 
   // 1. Create the lakehouse root + every declared folder as real directories.
   try {

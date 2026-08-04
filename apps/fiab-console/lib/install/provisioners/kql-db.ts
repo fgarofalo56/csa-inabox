@@ -19,6 +19,7 @@ import { createDatabase, executeMgmtCommand, executeQuery, ingestInline, KustoEr
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { safeAdxDatabaseName } from '@/lib/azure/backing-name';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -333,9 +334,11 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
     };
   }
 
-  // 1. Provision the database via ARM.  Database name = slug-friendly
-  // version of the displayName.
-  const dbName = input.displayName.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 50) || 'loomdb';
+  // 1. Provision the database via ARM. Database name = the SHARED Loom→ADX
+  // name mapping (lib/azure/backing-name), which the open-time auto-bind
+  // provider also calls — so auto-bind attaches to THIS database instead of
+  // creating a second one beside it.
+  const dbName = safeAdxDatabaseName(input.displayName);
   let provisioningState = '';
   try {
     const r = await createDatabase(dbName, { hotCacheDays: 7, softDeleteDays: 30 });
