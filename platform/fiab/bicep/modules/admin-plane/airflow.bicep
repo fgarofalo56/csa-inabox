@@ -54,8 +54,18 @@ param uamiId string
 @description('Console UAMI client ID — injected as AZURE_CLIENT_ID for managed-identity auth from DAGs.')
 param uamiClientId string
 
-@description('Apache Airflow container image. Defaults to the upstream OSS image on Docker Hub; override with an ACR-mirrored tag (e.g. <acr>.azurecr.io/apache/airflow:2.10.5) in locked-egress / sovereign estates.')
+@description('Estate ACR login server (e.g. <name>.azurecr.io) the Airflow image is pulled from. The deploy workflow (full-app-deploy-commercial.yml / gov-provision-dataplane-images.yml) mirrors the upstream image into THIS registry with `az acr import`, and the host pulls the mirrored copy via the Console UAMI — NO public-registry egress on any shipped lane. REQUIRED: the admin-plane call site always supplies registry.outputs.acrLoginServer, so the effective image is always <acrLoginServer>/<airflowImage>.')
+param acrLoginServer string
+
+@description('Apache Airflow container image REPOSITORY:TAG (no registry host), mirrored UNCHANGED into the estate ACR. The upstream Docker Hub coordinate is recorded here as the mirror source-of-truth AND the LIC0 licence record (github.com/apache/airflow = Apache-2.0); the EFFECTIVE pull is always <acrLoginServer>/<this> — never docker.io. Bump this to re-point the mirror; the workflow imports exactly this ref.')
 param airflowImage string = 'apache/airflow:2.10.5-python3.12'
+
+// EFFECTIVE image ref: the estate-ACR mirror, ALWAYS. Composed from the ACR
+// login server + the reviewed upstream repo:tag, so the container image the
+// host pulls is <acr>.azurecr.io/apache/airflow:<tag> and never a public
+// registry. no-fabric-dependency.md / issue #2682 (supply-chain: no third-party
+// public pull on a deploy path).
+var airflowImageRef = '${acrLoginServer}/${airflowImage}'
 
 @description('Airflow admin (and REST Basic-auth) username the Console authenticates as.')
 param adminUsername string = 'loom'
@@ -288,6 +298,15 @@ resource airflow 'Microsoft.App/containerApps@2025-02-02-preview' = {
         { name: 'admin-password', value: adminPassword }
         { name: 'webserver-secret-key', value: webserverSecretKey }
       ]
+      // Pull the mirrored Airflow image from the estate ACR with the Console
+      // UAMI — the ONLY registry this host authenticates to. No admin-enabled
+      // registry, no public-registry egress (issue #2682).
+      registries: [
+        {
+          server: acrLoginServer
+          identity: uamiId
+        }
+      ]
     }
     template: {
       containers: [
@@ -295,7 +314,7 @@ resource airflow 'Microsoft.App/containerApps@2025-02-02-preview' = {
           // Webserver — serves the UI + REST API and runs the one-time DB
           // migrate + admin-user create on boot (official image entrypoint).
           name: 'webserver'
-          image: airflowImage
+          image: airflowImageRef
           args: [ 'webserver' ]
           env: concat(airflowSharedEnv, [
             { name: '_AIRFLOW_DB_MIGRATE', value: 'true' }
@@ -336,7 +355,7 @@ resource airflow 'Microsoft.App/containerApps@2025-02-02-preview' = {
           // file shares. On a cold DB it retries until the webserver migrate
           // completes (ACA restarts a crashed container), then runs steadily.
           name: 'scheduler'
-          image: airflowImage
+          image: airflowImageRef
           args: [ 'scheduler' ]
           env: airflowSharedEnv
           resources: { cpu: json('1.0'), memory: '2Gi' }
