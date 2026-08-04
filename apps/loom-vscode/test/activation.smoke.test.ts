@@ -270,6 +270,19 @@ describe('activate() — shipped bundle registers everything (P1 + P2)', () => {
       expect(reg.commands).toContain(id);
     }
 
+    // Phase 5 — Git/ALM + Spark job definition commands each have a handler.
+    const p5 = [
+      'loom.gitStatus',
+      'loom.gitCommit',
+      'loom.gitPull',
+      'loom.gitResolve',
+      'loom.configureSparkJob',
+      'loom.uploadSparkJobFile',
+      'loom.runSparkJob',
+      'loom.viewSparkJobRuns',
+    ];
+    for (const id of p5) expect(reg.commands).toContain(id);
+
     expect(context.subscriptions.length).toBeGreaterThan(0);
   });
 });

@@ -317,7 +317,12 @@ export class ExplorerTreeProvider implements vscode.TreeDataProvider<LoomNode> {
     const ti = new vscode.TreeItem(item.displayName, vscode.TreeItemCollapsibleState.None);
     // A notebook gets an extra tag so notebook-only menus (Run on Spark) match;
     // `viewItem =~ /^item/` still matches both so the generic item menus persist.
-    ti.contextValue = item.itemType === 'notebook' ? 'item-notebook' : 'item';
+    ti.contextValue =
+      item.itemType === 'notebook'
+        ? 'item-notebook'
+        : item.itemType === 'spark-job-definition'
+          ? 'item-spark-job-definition'
+          : 'item';
     ti.iconPath = new vscode.ThemeIcon(iconIdForItemType(item.itemType));
     // The `loom:` definition URI drives the M/L/C mirror decoration (N7). The
     // explicit label above keeps the display name (a resourceUri would otherwise

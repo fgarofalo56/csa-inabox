@@ -337,6 +337,54 @@
         "title": "Find item (estate search)…",
         "category": "CSA Loom",
         "icon": "$(search)"
+      },
+      {
+        "command": "loom.gitStatus",
+        "title": "Git: status",
+        "category": "CSA Loom",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "loom.gitCommit",
+        "title": "Git: commit…",
+        "category": "CSA Loom",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "loom.gitPull",
+        "title": "Git: pull",
+        "category": "CSA Loom",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "loom.gitResolve",
+        "title": "Git: resolve conflict…",
+        "category": "CSA Loom",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "loom.runSparkJob",
+        "title": "Run Spark job",
+        "category": "CSA Loom",
+        "icon": "$(run)"
+      },
+      {
+        "command": "loom.viewSparkJobRuns",
+        "title": "View Spark job runs",
+        "category": "CSA Loom",
+        "icon": "$(history)"
+      },
+      {
+        "command": "loom.configureSparkJob",
+        "title": "Configure Spark job…",
+        "category": "CSA Loom",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "loom.uploadSparkJobFile",
+        "title": "Upload Spark job file…",
+        "category": "CSA Loom",
+        "icon": "$(cloud-upload)"
       }
     ],
     "menus": {
@@ -375,6 +423,26 @@
         },
         {
           "command": "loom.runOnSpark",
+          "when": "false"
+        },
+        {
+          "command": "loom.gitResolve",
+          "when": "false"
+        },
+        {
+          "command": "loom.runSparkJob",
+          "when": "false"
+        },
+        {
+          "command": "loom.viewSparkJobRuns",
+          "when": "false"
+        },
+        {
+          "command": "loom.configureSparkJob",
+          "when": "false"
+        },
+        {
+          "command": "loom.uploadSparkJobFile",
           "when": "false"
         }
       ],
@@ -464,6 +532,21 @@
           "group": "9_workspace@1"
         },
         {
+          "command": "loom.gitStatus",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "4_git@1"
+        },
+        {
+          "command": "loom.gitCommit",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "4_git@2"
+        },
+        {
+          "command": "loom.gitPull",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "4_git@3"
+        },
+        {
           "command": "loom.openDefinition",
           "when": "view == loom.explorer && viewItem =~ /^item/",
           "group": "inline@1"
@@ -532,6 +615,36 @@
           "command": "loom.deleteDownloaded",
           "when": "view == loom.explorer && viewItem =~ /^item/",
           "group": "9_item@1"
+        },
+        {
+          "command": "loom.gitResolve",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "4_git@1"
+        },
+        {
+          "command": "loom.runSparkJob",
+          "when": "view == loom.explorer && viewItem == item-spark-job-definition",
+          "group": "inline@2"
+        },
+        {
+          "command": "loom.runSparkJob",
+          "when": "view == loom.explorer && viewItem == item-spark-job-definition",
+          "group": "3_spark@1"
+        },
+        {
+          "command": "loom.viewSparkJobRuns",
+          "when": "view == loom.explorer && viewItem == item-spark-job-definition",
+          "group": "3_spark@2"
+        },
+        {
+          "command": "loom.configureSparkJob",
+          "when": "view == loom.explorer && viewItem == item-spark-job-definition",
+          "group": "3_spark@3"
+        },
+        {
+          "command": "loom.uploadSparkJobFile",
+          "when": "view == loom.explorer && viewItem == item-spark-job-definition",
+          "group": "3_spark@4"
         },
         {
           "command": "loom.deleteItem",
