@@ -24,6 +24,8 @@ import { selectActiveDeployment } from './select-deployment';
 import { manageMcpServers } from './mcp';
 import { queryData, runQuery, previewData } from './query';
 import { findItem } from './estate-search';
+import { gitStatus, gitCommit, gitPull, gitResolve } from './git';
+import { configureSparkJob, uploadSparkJobFile, runSparkJob, viewSparkJobRuns } from './spark-job';
 
 export function registerCommands(cx: CommandContext): void {
   const reg = (id: string, handler: (...args: unknown[]) => unknown) =>
@@ -61,4 +63,14 @@ export function registerCommands(cx: CommandContext): void {
   reg('loom.runQuery', () => runQuery(cx));
   reg('loom.previewData', (node) => previewData(cx, node as never));
   reg('loom.findItem', () => findItem(cx));
+
+  // Phase 5 — Git/ALM + Spark job definitions.
+  reg('loom.gitStatus', (node) => gitStatus(cx, node as never));
+  reg('loom.gitCommit', (node) => gitCommit(cx, node as never));
+  reg('loom.gitPull', (node) => gitPull(cx, node as never));
+  reg('loom.gitResolve', (node) => gitResolve(cx, node as never));
+  reg('loom.configureSparkJob', (node) => configureSparkJob(cx, node as never));
+  reg('loom.uploadSparkJobFile', (node) => uploadSparkJobFile(cx, node as never));
+  reg('loom.runSparkJob', (node) => runSparkJob(cx, node as never));
+  reg('loom.viewSparkJobRuns', (node) => viewSparkJobRuns(cx, node as never));
 }

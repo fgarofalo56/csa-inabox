@@ -13,6 +13,11 @@ name: publish-loom-vscode
 # Secrets (optional; publish is skipped without them):
 #   VSCE_PAT  — Azure DevOps PAT with Marketplace publish rights (vsce)
 #   OVSX_PAT  — Open VSX token (ovsx) for the sovereign/air-gapped mirror
+#
+# On a version tag the packaged .vsix is ALSO attached to the GitHub Release so a
+# user behind a blocked Marketplace can `code --install-extension` it in-boundary
+# (PRP P5.5 / R-3). That step uses the built-in GITHUB_TOKEN and is tag-gated, so
+# a fork/PR can never publish a release to this repo.
 
 on:
   push:
@@ -37,6 +42,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # contents:write is needed ONLY to attach the .vsix to the GitHub Release on a
+    # version tag (below). Every write path in this job is tag-gated, so a PR/fork
+    # run keeps the effective read-only posture.
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: apps/loom-vscode
@@ -68,6 +78,16 @@ jobs:
           name: loom-vscode-vsix
           path: apps/loom-vscode/*.vsix
           if-no-files-found: error
+
+      - name: Attach .vsix to the GitHub Release (in-boundary / air-gapped install)
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loom-vscode-v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" loom-vscode.vsix \
+            --title "loom-vscode $GITHUB_REF_NAME" \
+            --notes "CSA Loom VS Code extension $GITHUB_REF_NAME. Install in-boundary: code --install-extension loom-vscode.vsix" \
+          || gh release upload "$GITHUB_REF_NAME" loom-vscode.vsix --clobber
 
       - name: Publish to VS Marketplace
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loom-vscode-v') && env.VSCE_PAT != '' }}

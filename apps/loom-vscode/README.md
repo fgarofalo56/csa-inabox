@@ -6,11 +6,12 @@ one sign-in, one tree. Azure-native: **no Microsoft Fabric tenant required**, an
 because Fabric is not GA in Azure Government, this is the only Fabric-class
 in-editor data surface that exists there at all.
 
-> Through **Phase 3** — the functional core (sign in, browse, create/rename/
-> delete, open in Console), notebooks on remote Spark, and the data explorer
-> (query editor + results grid, preview, estate search). MCP, Copilot and Git/ALM
-> land in later phases (see the roadmap below). Every shipped surface is real
-> end-to-end; no tab shows a stub.
+> Through **Phase 5** — the functional core (sign in, browse, create/rename/
+> delete, open in Console), notebooks on remote Spark, the data explorer (query
+> editor + results grid, preview, estate search), MCP servers + the `@loom` chat
+> participant, and now **Git/ALM** and **Spark job definitions** plus a
+> tag-driven **Open VSX / Marketplace / GitHub-Release** distribution path. Every
+> shipped surface is real end-to-end; no tab shows a stub.
 
 ## Why one extension
 
@@ -22,11 +23,20 @@ commands that don't share a session, plus a global .NET tool and a hand-edited
 
 ## Install
 
-Until the Marketplace listing is live (Phase 5), install the packaged `.vsix`:
+Once the Marketplace / Open VSX listing is live, install the usual way. Until
+then (and for air-gapped estates where the Marketplace is blocked), grab the
+`.vsix` attached to the `loom-vscode-v*` GitHub Release and install it
+in-boundary:
 
 ```bash
-code --install-extension loom-vscode-0.1.0.vsix
+code --install-extension loom-vscode.vsix
 ```
+
+The [`publish-loom-vscode.yml`](../../.github/workflows/publish-loom-vscode.yml)
+workflow builds + type-checks + tests + packages on every PR, and on a
+`loom-vscode-v*` tag it publishes to VS Marketplace (`vsce`) and Open VSX
+(`ovsx`) **only when the matching token secret is present** and attaches the
+`.vsix` to the GitHub Release — so a fork or PR can never publish.
 
 ## Configure a deployment
 
@@ -128,6 +138,36 @@ cap; 65 s client time cap). An unconfigured backend renders the route's exact
 remediation, never a mock grid. The webview receives only column/row/meta data —
 no credential ever crosses the boundary.
 
+## Git/ALM + Spark job definitions (Phase 5)
+
+**Git / ALM** — version-control your workspace items against the connected Azure
+DevOps or GitHub repo (Azure-native; no Fabric git surface). On a workspace:
+
+| Command | Backend |
+|---|---|
+| **Git: status** — repo + changed items | `GET /api/git-integration/status?workspaceId=` |
+| **Git: commit…** — pick changed items + message, commit | `POST /api/git-integration/commit` |
+| **Git: pull** — pull repo → apply to items | `POST /api/git-integration/pull` |
+| **Git: resolve conflict…** (on an item) — keep local / keep remote | `POST /api/git-integration/resolve` |
+
+When no repo is bound (or no PAT / no Key Vault) the route answers `424 {gated}`,
+which the extension turns into a **named remediation + a Fix-it** that opens the
+Console workspace Git settings — never a fabricated status.
+
+**Spark job definitions** — the real Synapse-Livy **batch** API (Azure-native
+Spark; never OneLake). On a `spark-job-definition` item:
+
+| Command | Backend |
+|---|---|
+| **Configure Spark job…** — guided pool + main file + language | `PUT /api/items/spark-job-definition/:id` (merged `state.spec`) |
+| **Upload Spark job file…** — main / reference → ADLS, records `spec.file` | `POST /api/items/spark-job-definition/:id/files` |
+| **Run Spark job** — submit a real Livy batch from the spec | `POST /api/items/spark-job-definition/:id/submit` |
+| **View Spark job runs** — batch history; a running batch can be cancelled | `GET …/runs`, `POST …/runs/:batch/cancel` |
+
+An unset pool / main file surfaces the route's honest `400` with a **Configure
+Spark job** Fix-it; an unconfigured Synapse workspace surfaces its exact `503`
+remediation. No fake kernel — nothing is reported as run that did not run.
+
 ## Architecture
 
 - **Transport** wraps [`@csa-loom/sdk`](../loom-sdk) (`LoomClient` — bearer-PAT or
@@ -143,15 +183,18 @@ no credential ever crosses the boundary.
 
 ## Roadmap
 
-- **Phase 2** — notebooks (remote Spark `NotebookController`, mirror mode, M/L/C).
-- **Phase 3** — lakehouse/data explorer, SQL/KQL/Trino query grid, environments.
+- **Phase 1 ✅** — sign in, browse, create/rename/delete, open definition, Open in Console.
+- **Phase 2 ✅** — notebooks (remote Spark `NotebookController`, mirror mode, M/L/C decorations, run history).
+- **Phase 3 ✅** — data explorer / query editor + type-badged results grid, bounded preview, estate-wide search.
 - **Phase 4 ✅** — MCP servers (`McpServerDefinitionProvider`) + `@loom` chat participant.
-- **Phase 2** ✅ — notebooks (remote Spark `NotebookController`, mirror mode, M/L/C).
-- **Phase 3** ✅ (this release) — data explorer / query editor + type-badged
-  results grid, bounded preview, estate-wide search. Lakehouse Tables/Files tree,
-  file download, Copy-path, and Spark environments are stated as deferred.
-- **Phase 4** — MCP servers + `@loom` chat participant + LM tools.
-- **Phase 5** — Git/ALM, Spark job definitions, functions, Marketplace + Open VSX.
+- **Phase 5 ✅ (this release)** — Git/ALM (status / commit / pull / resolve), Spark
+  job definitions (configure / upload / run / runs+cancel), and the tag-driven
+  Open VSX + VS Marketplace + GitHub-Release distribution workflow.
+
+Deferred, stated honestly: the lakehouse Tables/Files tree, file download and
+Copy-path (P3); user-data-function local debug and the read-only pipeline tree
+(P5). See the parity doc `docs/fiab/parity/loom-vscode.md` for the row-by-row
+built / honest-gate / deferred status.
 
 Full spec + parity matrix: `PRPs/active/loom-vscode-extension.md`.
 

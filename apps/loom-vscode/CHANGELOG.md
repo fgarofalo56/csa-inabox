@@ -3,6 +3,39 @@
 All notable changes to the CSA Loom VS Code extension are documented here. This
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — Phase 5 (Git/ALM + Spark job definitions + distribution)
+
+### Added
+
+- **Git / ALM** (W9/W10) — `CSA Loom: Git: status / commit… / pull` on a
+  workspace and `Git: resolve conflict…` on an item, over the real workspace-
+  scoped `/api/git-integration/{status,commit,pull,resolve}` routes (Azure-native
+  ADO / GitHub). Commit picks the changed items + a message; resolve chooses keep-
+  local vs keep-remote. An honest `424 {gated,missing}` (no repo bound / no PAT /
+  no Key Vault) becomes a named remediation + a **Fix-it** that opens the Console
+  workspace Git settings — never a fabricated status. Writes are blocked up front
+  under a read-only PAT.
+- **Spark job definitions** (J1–J6) — on a `spark-job-definition` item:
+  `Configure Spark job…` (guided pool + main file + language → merged `PUT
+  …/[id]`), `Upload Spark job file…` (main/reference → ADLS via `POST …/files`,
+  records `spec.file`; honest `adls_not_configured` gate offers pasting an
+  `abfss://` URI), `Run Spark job` (real Synapse-Livy batch submit via `POST
+  …/submit`), and `View Spark job runs` (real batch history via `GET …/runs`, with
+  cancel via `POST …/runs/:batch/cancel`). No fake kernel; an unset pool / main
+  file / Synapse workspace surfaces the route's own 400/503 with a Fix-it.
+- **Distribution** — the `publish-loom-vscode.yml` workflow now also attaches the
+  packaged `.vsix` to the `loom-vscode-v*` **GitHub Release** (in-boundary /
+  air-gapped install), in addition to the existing tag-gated **Open VSX** (`ovsx`)
+  and **VS Marketplace** (`vsce`) publish. Every publish path is gated on a tag
+  push **and** its token secret being present, so a fork/PR can never publish; the
+  Release attach is tag-gated and uses the built-in `GITHUB_TOKEN`.
+- **Tests** — `test/git-integration.test.ts` (git model + transport gate
+  mapping), `test/spark-job-def.test.ts` (SJD request shaping + run normalization
+  + transport, incl. multipart upload), `test/publish-workflow.test.ts` (parses
+  the workflow and asserts every publish step is token-guarded — mutation-proof),
+  and the activation smoke test extended to assert the eight new commands register
+  in the shipped bundle.
+
 ## [Unreleased] — Phase 4 (MCP servers + `@loom` chat)
 
 ### Added

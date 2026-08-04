@@ -38,6 +38,15 @@ export { LoomApiError, isLoomApiError };
 export type { Workspace, Item, WhoAmI, CatalogSearchResult, QueryResult };
 
 import type { DefinitionPayload, DefinitionTransport } from '../fs/loom-fs-core';
+import type {
+  GitStatusResponse,
+  GitCommitResponse,
+  GitPullResponse,
+  GitResolveResponse,
+  GitGateReason,
+} from '../git/git-model';
+import { isGitGateBody } from '../git/git-model';
+import type { SparkBatchJob } from '../spark-job/spark-job-model';
 
 /** A per-deployment credential held in SecretStorage. */
 export type Credential =
@@ -83,6 +92,48 @@ export class DefinitionConflictError extends LoomApiError {
     super('The item changed since you loaded it (412 Precondition Failed).', 412, 'precondition_failed');
     this.name = 'DefinitionConflictError';
   }
+}
+
+/**
+ * An honest Git gate (Phase 5, W9/W10) — the `/api/git-integration/*` routes
+ * answer 424 `{ gated:true, missing }` (or a KV 503) when no repo is bound / no
+ * PAT / no Key Vault. The command turns `missing` into a named remediation +
+ * Fix-it, NEVER a fabricated status.
+ */
+export class GitGateError extends LoomApiError {
+  constructor(
+    readonly missing: GitGateReason,
+    readonly detail: string | undefined,
+    status: number,
+  ) {
+    super(detail || `Git integration is not configured (${missing}).`, status, String(missing));
+    this.name = 'GitGateError';
+  }
+}
+
+/** `POST …/spark-job-definition/[id]/submit` result. */
+export interface SparkSubmitResult {
+  ok: boolean;
+  pool?: string;
+  job?: SparkBatchJob;
+}
+
+/** `GET …/spark-job-definition/[id]/runs` result. */
+export interface SparkRunsResult {
+  ok: boolean;
+  pool?: string;
+  from?: number;
+  total?: number;
+  sessions?: SparkBatchJob[];
+}
+
+/** `POST …/spark-job-definition/[id]/files` result. */
+export interface SparkFileUploadResult {
+  ok: boolean;
+  filename?: string;
+  path?: string;
+  abfssPath?: string;
+  size?: number;
 }
 
 /** Normalized rich output for a notebook statement (mirrors the route). */
@@ -340,6 +391,153 @@ export class LoomApi implements DefinitionTransport {
     if (opts.type) params.set('type', opts.type);
     if (opts.limit != null) params.set('limit', String(opts.limit));
     return this.raw<CatalogFindResponse>('GET', `/api/catalog/find?${params.toString()}`);
+  }
+
+  // --- Git / ALM integration (Phase 5, W9/W10) ------------------------------
+  // Workspace-scoped ADO/GitHub over the REAL /api/git-integration/* routes. A
+  // 424 `{gated:true,missing}` becomes a typed {@link GitGateError} the command
+  // turns into a named remediation — never a fabricated status.
+
+  /** `GET …/status?workspaceId=` — repo + changed items (or an honest gate). */
+  gitStatus(workspaceId: string): Promise<GitStatusResponse> {
+    return this.gitRequest<GitStatusResponse>(
+      'GET',
+      `/api/git-integration/status?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+  }
+
+  /** `POST …/commit` — commit the selected items as one commit; returns the sha. */
+  gitCommit(workspaceId: string, itemIds: string[], message: string): Promise<GitCommitResponse> {
+    return this.gitRequest<GitCommitResponse>('POST', '/api/git-integration/commit', {
+      workspaceId,
+      itemIds,
+      message,
+    });
+  }
+
+  /** `POST …/pull` — pull repo → apply to Loom items; returns applied count. */
+  gitPull(workspaceId: string, itemIds?: string[]): Promise<GitPullResponse> {
+    const body: Record<string, unknown> = { workspaceId };
+    if (itemIds && itemIds.length) body.itemIds = itemIds;
+    return this.gitRequest<GitPullResponse>('POST', '/api/git-integration/pull', body);
+  }
+
+  /** `POST …/resolve` — resolve one item's conflict (keep local | keep remote). */
+  gitResolve(
+    workspaceId: string,
+    itemId: string,
+    resolution: 'local' | 'remote',
+  ): Promise<GitResolveResponse> {
+    return this.gitRequest<GitResolveResponse>('POST', '/api/git-integration/resolve', {
+      workspaceId,
+      itemId,
+      resolution,
+    });
+  }
+
+  /** Like {@link raw} but maps an honest git gate body to a {@link GitGateError}. */
+  private async gitRequest<T>(method: string, apiPath: string, body?: unknown): Promise<T> {
+    const res = await this.rawResponse(method, apiPath, body);
+    if (isGitGateBody(res.json)) {
+      throw new GitGateError(res.json.missing, res.json.detail, res.status);
+    }
+    if (res.status < 200 || res.status >= 300) throw this.errorFrom(res.json, res.response);
+    if (res.json && typeof res.json === 'object' && (res.json as { ok?: unknown }).ok === false) {
+      throw this.errorFrom(res.json, res.response);
+    }
+    return res.json as T;
+  }
+
+  // --- Spark job definitions (Phase 5, J1-J6) -------------------------------
+  // The dedicated, REAL Synapse-Livy BATCH API the Console's SJD editor uses.
+  // No fake kernel; the submit route returns an honest 400/502 (pool/main file
+  // unset, or Synapse not configured) which the command surfaces verbatim.
+
+  /** `GET …/spark-job-definition/[id]` — the persisted item (spec in state.spec). */
+  async getSparkJobItem(id: string): Promise<Item> {
+    const out = await this.raw<{ ok: boolean; item: Item }>(
+      'GET',
+      `/api/items/spark-job-definition/${encodeURIComponent(id)}`,
+    );
+    return out.item;
+  }
+
+  /** `PUT …/spark-job-definition/[id]` — persist a merged `state` (J1 configure). */
+  async putSparkJobState(id: string, state: Record<string, unknown>): Promise<Item> {
+    const out = await this.raw<{ ok: boolean; item: Item }>(
+      'PUT',
+      `/api/items/spark-job-definition/${encodeURIComponent(id)}`,
+      { state },
+    );
+    return out.item;
+  }
+
+  /** `POST …/spark-job-definition/[id]/submit` — real Livy batch submit (J5). */
+  submitSparkJob(id: string, body: Record<string, unknown> = {}): Promise<SparkSubmitResult> {
+    return this.raw<SparkSubmitResult>(
+      'POST',
+      `/api/items/spark-job-definition/${encodeURIComponent(id)}/submit`,
+      body,
+    );
+  }
+
+  /** `GET …/spark-job-definition/[id]/runs` — Livy batch history (J4). */
+  listSparkJobRuns(id: string, size = 20, from = 0): Promise<SparkRunsResult> {
+    return this.raw<SparkRunsResult>(
+      'GET',
+      `/api/items/spark-job-definition/${encodeURIComponent(id)}/runs?${qs({ size, from })}`,
+    );
+  }
+
+  /** `POST …/spark-job-definition/[id]/runs/[runId]/cancel` — cancel a batch. */
+  async cancelSparkJobRun(id: string, runId: number | string): Promise<void> {
+    await this.raw<{ ok: boolean }>(
+      'POST',
+      `/api/items/spark-job-definition/${encodeURIComponent(id)}/runs/${encodeURIComponent(String(runId))}/cancel`,
+    );
+  }
+
+  /**
+   * `POST …/spark-job-definition/[id]/files` — multipart upload of the main
+   * definition / a reference file to ADLS (J2). Returns the `abfss://` URI the
+   * caller records in `spec.file`. Honest gate: 400 `adls_not_configured`.
+   */
+  async uploadSparkJobFile(
+    id: string,
+    kind: 'main' | 'reference',
+    filename: string,
+    bytes: Uint8Array,
+    contentType = 'application/octet-stream',
+  ): Promise<SparkFileUploadResult> {
+    const form = new FormData();
+    form.set('kind', kind);
+    // A fresh ArrayBuffer copy — a Uint8Array view over a larger buffer would
+    // upload trailing bytes.
+    const copy = bytes.slice();
+    form.set('file', new Blob([copy], { type: contentType }), filename);
+    const url = `${this.baseUrl}/api/items/spark-job-definition/${encodeURIComponent(id)}/files`;
+    // NOTE: do NOT set Content-Type — fetch sets the multipart boundary itself.
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (this.cred.kind === 'pat') headers.Authorization = `Bearer ${this.cred.value}`;
+    else headers.Cookie = `${COOKIE_NAME}=${this.cred.value}`;
+    let res: Response;
+    try {
+      res = await fetch(url, { method: 'POST', headers, body: form });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new LoomApiError(`Network error uploading file: ${msg}`, 0, 'network_error');
+    }
+    const text = await res.text();
+    let parsed: unknown;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text;
+      }
+    }
+    if (!res.ok) throw this.errorFrom(parsed, res);
+    return parsed as SparkFileUploadResult;
   }
 
   private authHeaders(hasBody: boolean): Record<string, string> {
