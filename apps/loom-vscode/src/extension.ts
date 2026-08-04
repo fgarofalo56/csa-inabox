@@ -27,6 +27,7 @@ import { MirrorStore } from './mirror/mirror-store';
 import { NotebookLinkStore } from './notebook/notebook-link';
 import { RunHistory } from './notebook/run-history';
 import { SparkNotebookController } from './notebook/spark-controller';
+import { QueryEditorStore } from './query/query-editor-store';
 
 export function activate(context: vscode.ExtensionContext): void {
   initLogger(context);
@@ -87,6 +88,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const controller = new SparkNotebookController(resolveApi, links, runs, context);
   context.subscriptions.push(controller);
 
+  // Phase 3 — query editor ↔ item links (drives the ▶ Run button context key).
+  const queryEditors = new QueryEditorStore();
+  context.subscriptions.push(queryEditors);
+
   const syncAuthState = async (): Promise<void> => {
     const deps = getDeployments();
     await vscode.commands.executeCommand('setContext', 'loom.hasDeployments', deps.length > 0);
@@ -107,6 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
     links,
     runs,
     controller,
+    queryEditors,
   };
   registerCommands(cx);
 

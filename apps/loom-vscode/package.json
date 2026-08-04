@@ -238,6 +238,30 @@
         "title": "View recent notebook runs",
         "category": "CSA Loom",
         "icon": "$(history)"
+      },
+      {
+        "command": "loom.queryData",
+        "title": "Query data…",
+        "category": "CSA Loom",
+        "icon": "$(database)"
+      },
+      {
+        "command": "loom.runQuery",
+        "title": "Run query",
+        "category": "CSA Loom",
+        "icon": "$(play)"
+      },
+      {
+        "command": "loom.previewData",
+        "title": "Preview data",
+        "category": "CSA Loom",
+        "icon": "$(table)"
+      },
+      {
+        "command": "loom.findItem",
+        "title": "Find item (estate search)…",
+        "category": "CSA Loom",
+        "icon": "$(search)"
       }
     ],
     "menus": {
@@ -309,6 +333,18 @@
           "command": "loom.viewRecentRuns",
           "when": "view == loom.explorer",
           "group": "2_mirror@2"
+        },
+        {
+          "command": "loom.findItem",
+          "when": "view == loom.explorer",
+          "group": "navigation@0"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "loom.runQuery",
+          "when": "loom.queryDocActive",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -361,6 +397,16 @@
           "command": "loom.openDefinition",
           "when": "view == loom.explorer && viewItem =~ /^item/",
           "group": "1_item@1"
+        },
+        {
+          "command": "loom.queryData",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "1_data@1"
+        },
+        {
+          "command": "loom.previewData",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "1_data@2"
         },
         {
           "command": "loom.openInConsole",

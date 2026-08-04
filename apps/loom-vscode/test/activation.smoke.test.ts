@@ -130,6 +130,14 @@ function fakeVscode(reg: Registry): Record<string, unknown> {
         reg.decorationProviders++;
         return new Disposable();
       },
+      onDidChangeActiveTextEditor: () => new Disposable(),
+      createWebviewPanel: () => ({
+        webview: { html: '', asWebviewUri: (u: unknown) => u, cspSource: '', postMessage() {}, onDidReceiveMessage: () => new Disposable() },
+        title: '',
+        reveal() {},
+        onDidDispose: () => new Disposable(),
+        dispose() {},
+      }),
     },
     workspace: {
       getConfiguration: () => ({ get: (_k: string, def: unknown) => def }),
@@ -138,6 +146,7 @@ function fakeVscode(reg: Registry): Record<string, unknown> {
         return new Disposable();
       },
       onDidChangeConfiguration: () => new Disposable(),
+      onDidCloseTextDocument: () => new Disposable(),
     },
     commands: {
       registerCommand: (id: string) => {
@@ -224,6 +233,9 @@ describe('activate() — shipped bundle registers everything (P1 + P2)', () => {
       'loom.viewRecentRuns',
     ];
     for (const id of p2) expect(reg.commands).toContain(id);
+    // Every P3 command (data explorer / query grid + estate search) has a handler.
+    const p3 = ['loom.queryData', 'loom.runQuery', 'loom.previewData', 'loom.findItem'];
+    for (const id of p3) expect(reg.commands).toContain(id);
     // P1 commands still registered.
     for (const id of ['loom.signIn', 'loom.createItem', 'loom.refresh']) expect(reg.commands).toContain(id);
 

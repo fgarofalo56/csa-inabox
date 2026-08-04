@@ -20,6 +20,8 @@ import { createNotebook } from './create-notebook';
 import { setWorkFolder, downloadItem, deleteMirrored } from './mirror';
 import { publishItem, updateItem } from './publish-update';
 import { runOnSpark, setSparkCompute, viewRecentRuns } from './notebook-run';
+import { queryData, runQuery, previewData } from './query';
+import { findItem } from './estate-search';
 
 export function registerCommands(cx: CommandContext): void {
   const reg = (id: string, handler: (...args: unknown[]) => unknown) =>
@@ -48,4 +50,10 @@ export function registerCommands(cx: CommandContext): void {
   reg('loom.runOnSpark', (node) => runOnSpark(cx, node as never));
   reg('loom.setSparkCompute', (node) => setSparkCompute(cx, node as never));
   reg('loom.viewRecentRuns', () => viewRecentRuns(cx));
+
+  // Phase 3 — data explorer / query grid + estate search.
+  reg('loom.queryData', (node) => queryData(cx, node as never));
+  reg('loom.runQuery', () => runQuery(cx));
+  reg('loom.previewData', (node) => previewData(cx, node as never));
+  reg('loom.findItem', () => findItem(cx));
 }
