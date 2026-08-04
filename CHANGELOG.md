@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.83.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.14...csa-inabox-v0.83.0) (2026-08-04)
+
+
+### Features
+
+* **devtools:** 4 purpose-built loom toolkit agents, shipped via the loom-skills marketplace ([#2922](https://github.com/fgarofalo56/csa-inabox/issues/2922)) ([adbd2dc](https://github.com/fgarofalo56/csa-inabox/commit/adbd2dcf00bf09bd9c36fb6481913268de33d97d))
+* **devtools:** loom-mcp foundation + M1 loom-catalog read-only MCP server ([#2923](https://github.com/fgarofalo56/csa-inabox/issues/2923)) ([6281a66](https://github.com/fgarofalo56/csa-inabox/commit/6281a66e8f0cac575132b19ae14052a9050c04bb))
+* **devtools:** loom-vscode extension — Phase 1 (auth + multi-deployment explorer + item CRUD) ([#2925](https://github.com/fgarofalo56/csa-inabox/issues/2925)) ([5fd47cc](https://github.com/fgarofalo56/csa-inabox/commit/5fd47cc25a615b8c336a72cc9f4bc9cda882a358))
+* **devtools:** loom-vscode Phase 2 — notebooks + loom: item-definition filesystem ([#2928](https://github.com/fgarofalo56/csa-inabox/issues/2928)) ([18a7e1d](https://github.com/fgarofalo56/csa-inabox/commit/18a7e1d64fc3c2131c745490e437bb3f27af4a3e))
+* **devtools:** MCP suite — M2 loom-query / M3 loom-author / M4 loom-ops / M5 loom-admin ([#2927](https://github.com/fgarofalo56/csa-inabox/issues/2927)) ([059c886](https://github.com/fgarofalo56/csa-inabox/commit/059c88674f4c7d56f8fece5746bdc135df21e071))
+
 ## [0.82.14](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.13...csa-inabox-v0.82.14) (2026-08-04)
 
 
