@@ -168,3 +168,98 @@ export interface GrantCapabilityInput {
 
 /** Open result shapes — the admin routes return heterogeneous envelopes. */
 export type AdminResult = { ok: boolean; [k: string]: unknown };
+/**
+ * A bounded query / preview result. The concrete `columns`/`rows` shape differs
+ * per engine (ADX returns `columns:{name,type}[]` + `rows:unknown[][]`; the
+ * Synapse SQL / dataset-preview routes return `columns:string[]` +
+ * `rows:Record<string,unknown>[]`), so this type is intentionally permissive and
+ * carries the common fields the query MCP tools rely on. `rows` is always an
+ * array when present, which is what the M2 row-cap clamps.
+ */
+export interface QueryResult {
+  ok: boolean;
+  /** Engine-specific column descriptors (`string[]` or `{name,type}[]`). */
+  columns?: unknown;
+  /** The result rows (array when present). */
+  rows?: unknown[];
+  rowCount?: number;
+  /** The engine truncated at its own server-side cap. */
+  truncated?: boolean;
+  /** Echoed database / target, when the route returns it. */
+  database?: string;
+  [k: string]: unknown;
+}
+
+/** One run/job execution summary (open shape — fields vary per backend). */
+export type RunSummary = Record<string, unknown>;
+
+/** The per-run drill-down (activity receipts / status) for one run id. */
+export interface RunDetail {
+  ok: boolean;
+  runId: string;
+  /** Per-activity receipts (status, timing, and — for the owner — input/output). */
+  activities?: unknown[];
+  [k: string]: unknown;
+}
+
+/** A list of runs, filtered to the bound item. */
+export interface RunList {
+  ok: boolean;
+  runs: RunSummary[];
+  boundTo?: string;
+  window?: { after?: string | null; before?: string | null; status?: string | null };
+  [k: string]: unknown;
+}
+
+/** A slice of a run's driver log (tail by re-requesting from `total - size`). */
+export interface RunLogSlice {
+  ok: boolean;
+  from: number;
+  total: number;
+  lines: string[];
+  [k: string]: unknown;
+}
+
+/** Result of starting a run — the bound target + backend run handle. */
+export interface RunStartResult {
+  ok: boolean;
+  boundTo?: string;
+  runId?: string;
+  [k: string]: unknown;
+}
+
+/** Options for a bounded SQL query. */
+export interface SqlQueryOptions {
+  /** Database / catalog to target (route default is engine-specific). */
+  database?: string;
+  /** Named `@param` bindings (bound via the driver, never concatenated). */
+  parameters?: Array<{ name: string; value: string | null }>;
+}
+
+/** Options for a bounded KQL query. */
+export interface KqlQueryOptions {
+  /** Database override (else the item's resolved database). */
+  database?: string;
+  /** Server-side page window — `{ skip, take }`. The MCP tool sets `take` to its row cap. */
+  page?: { skip: number; take: number };
+}
+
+/** Options for a run-list query. */
+export interface RunListOptions {
+  /** ISO lower bound (default: last 7 days). */
+  after?: string;
+  /** ISO upper bound. */
+  before?: string;
+  /** Status filter, e.g. `Succeeded` | `Failed` | `InProgress`. */
+  status?: string;
+}
+
+/** Options for a driver-log slice. */
+export interface RunLogOptions {
+  /** Owning workspace id (required by the notebook/spark driver-log route). */
+  workspaceId?: string;
+  /** Byte/line offset to start from (tailing). */
+  from?: number;
+  /** Max lines to return (route caps at 1000). */
+  size?: number;
+}

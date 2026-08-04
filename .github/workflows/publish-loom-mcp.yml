@@ -1,10 +1,13 @@
 name: publish-loom-mcp
 
 # Publishes the @csa-loom/mcp npm package (the Loom MCP servers, split by blast
-# radius). The package ships three bins today: `loom-catalog-mcp` (M1, read-only),
-# `loom-author-mcp` (M3, write / dry-run-default), and `loom-admin-mcp` (M5, admin
-# / escalation, default-OFF). This workflow is package-level: `npm run build` +
-# `npm test` cover every server, so adding a bin needs no new job.
+# radius). The package ships five bins: `loom-catalog-mcp` (M1, read metadata),
+# `loom-query-mcp` (M2, bounded read-only data), `loom-author-mcp` (M3, write /
+# dry-run-default), `loom-ops-mcp` (M4, read runs/logs + start/cancel), and
+# `loom-admin-mcp` (M5, admin / escalation, default-OFF). This workflow is
+# package-level: `npm run build` compiles every server and `npm test` exercises
+# each bin's stdio smoke test, so adding a bin needs no new job — it still gates
+# on build + test.
 #
 # Mirrors publish-loom-cli.yml: tag-triggered so cutting an MCP release never
 # touches the shared release-please machinery. Also runs on PRs that touch the

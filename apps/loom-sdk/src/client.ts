@@ -23,6 +23,8 @@ import { CatalogResource } from './resources/catalog.js';
 import { ThreadResource } from './resources/thread.js';
 import { TokensResource } from './resources/tokens.js';
 import { AdminResource } from './resources/admin.js';
+import { QueryResource } from './resources/query.js';
+import { RunsResource } from './resources/runs.js';
 import type { WhoAmI, SessionResult } from './types.js';
 
 export class LoomClient {
@@ -35,6 +37,10 @@ export class LoomClient {
   readonly tokens: TokensResource;
   /** Admin (escalation) operations — the M5 `loom-admin` surface. */
   readonly admin: AdminResource;
+  /** Bounded data-read (SQL / KQL / preview) — the M2 `loom-query` surface. */
+  readonly query: QueryResource;
+  /** Run / job read + trigger — the M4 `loom-ops` surface. */
+  readonly runs: RunsResource;
 
   constructor(options: LoomClientOptions) {
     this.http = new HttpTransport(options);
@@ -44,6 +50,8 @@ export class LoomClient {
     this.thread = new ThreadResource(this.http);
     this.tokens = new TokensResource(this.http);
     this.admin = new AdminResource(this.http);
+    this.query = new QueryResource(this.http);
+    this.runs = new RunsResource(this.http);
   }
 
   /** The resolved base URL (trailing slash stripped). */

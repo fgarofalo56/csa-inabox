@@ -33,6 +33,16 @@ export type {
   FeatureRole,
   GrantCapabilityInput,
   AdminResult,
+  QueryResult,
+  SqlQueryOptions,
+  KqlQueryOptions,
+  RunSummary,
+  RunDetail,
+  RunList,
+  RunLogSlice,
+  RunStartResult,
+  RunListOptions,
+  RunLogOptions,
 } from './types.js';
 
 // Resource classes (exported for advanced typing / DI).
@@ -42,3 +52,5 @@ export { CatalogResource } from './resources/catalog.js';
 export { ThreadResource } from './resources/thread.js';
 export { TokensResource } from './resources/tokens.js';
 export { AdminResource } from './resources/admin.js';
+export { QueryResource } from './resources/query.js';
+export { RunsResource } from './resources/runs.js';

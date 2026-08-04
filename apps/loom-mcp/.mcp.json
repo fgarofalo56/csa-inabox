@@ -1,5 +1,5 @@
 {
-  "//": "Registration examples for the Loom MCP servers, split by blast radius. Copy the entry you need into your client's .mcp.json (Claude Code / Cursor / Windsurf). Build first: see apps/loom-mcp/README.md. Replace LOOM_TOKEN with a loom_pat_<id>_<secret> from Settings -> Developer -> API tokens, and LOOM_API_URL with your estate. Do NOT commit a real token. M3 loom-author is WRITE (dry-run by default; needs read-write scope). M5 loom-admin is ADMIN (default-OFF, never accepts a PAT — sign in with the loom CLI; enable with LOOM_MCP_ADMIN_ENABLED=1).",
+  "//": "Registration examples for the Loom MCP servers, split by blast radius (M1 catalog · M2 query · M3 author · M4 ops · M5 admin). Copy the entry you need into your client's .mcp.json (Claude Code / Cursor / Windsurf). Build first: see apps/loom-mcp/README.md. Replace LOOM_TOKEN with a loom_pat_<id>_<secret> from Settings -> Developer -> API tokens, and LOOM_API_URL with your estate. Do NOT commit a real token. loom-query is read-only. loom-ops + loom-author are WRITE (need read-write scope; loom-author is dry-run by default). M5 loom-admin is ADMIN (default-OFF, never accepts a PAT — sign in with the loom CLI; enable with LOOM_MCP_ADMIN_ENABLED=1).",
   "mcpServers": {
     "loom-catalog": {
       "command": "node",
@@ -7,6 +7,23 @@
       "env": {
         "LOOM_API_URL": "https://csa-loom.limitlessdata.ai",
         "LOOM_TOKEN": "loom_pat_REPLACE_ME"
+      }
+    },
+    "loom-query": {
+      "command": "node",
+      "args": ["./apps/loom-mcp/dist/servers/loom-query/bin.js"],
+      "env": {
+        "LOOM_API_URL": "https://csa-loom.limitlessdata.ai",
+        "LOOM_TOKEN": "loom_pat_REPLACE_ME"
+      }
+    },
+    "loom-ops": {
+      "command": "node",
+      "args": ["./apps/loom-mcp/dist/servers/loom-ops/bin.js"],
+      "env": {
+        "LOOM_API_URL": "https://csa-loom.limitlessdata.ai",
+        "LOOM_TOKEN": "loom_pat_REPLACE_ME",
+        "LOOM_TOKEN_SCOPE": "read-write"
       }
     },
     "loom-catalog-docker": {

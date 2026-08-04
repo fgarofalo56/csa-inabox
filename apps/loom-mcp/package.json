@@ -1,7 +1,7 @@
 {
   "name": "@csa-loom/mcp",
   "version": "0.1.0",
-  "description": "CSA Loom MCP servers — deployable Model Context Protocol servers over the Loom SDK, split by blast radius: M1 `loom-catalog` (read-only), M3 `loom-author` (write, dry-run-default), M5 `loom-admin` (admin/escalation, default-OFF). Azure-native; no Microsoft Fabric tenant required.",
+  "description": "CSA Loom MCP servers — deployable Model Context Protocol servers over the Loom SDK, split by blast radius: M1 `loom-catalog` (read metadata), M2 `loom-query` (bounded, capped, read-only data), M3 `loom-author` (write, dry-run-default), M4 `loom-ops` (read runs/logs + start/cancel), M5 `loom-admin` (admin/escalation, default-OFF). All five reuse one shared core (auth, authz, scrub, audit). Azure-native; no Microsoft Fabric tenant required.",
   "keywords": [
     "csa-loom",
     "loom",
@@ -15,7 +15,9 @@
   "type": "module",
   "bin": {
     "loom-catalog-mcp": "dist/servers/loom-catalog/bin.js",
+    "loom-query-mcp": "dist/servers/loom-query/bin.js",
     "loom-author-mcp": "dist/servers/loom-author/bin.js",
+    "loom-ops-mcp": "dist/servers/loom-ops/bin.js",
     "loom-admin-mcp": "dist/servers/loom-admin/bin.js"
   },
   "files": [
@@ -35,7 +37,9 @@
     "prepublishOnly": "npm run build",
     "test": "npm run build && node --import tsx --test test/*.test.ts",
     "start:catalog": "node dist/servers/loom-catalog/bin.js",
+    "start:query": "node dist/servers/loom-query/bin.js",
     "start:author": "node dist/servers/loom-author/bin.js",
+    "start:ops": "node dist/servers/loom-ops/bin.js",
     "start:admin": "node dist/servers/loom-admin/bin.js"
   },
   "dependencies": {
