@@ -350,6 +350,62 @@ jobs:
             echo "LOOM_MSAL_CLIENT_ID=$APP_ID" >> "$GITHUB_ENV"
           fi
 
+      - name: Reindex loom-docs on the freshly-rolled console (Copilot index freshness — #2929)
+        # A fresh deploy rolls a NEW console image whose baked docs corpus the
+        # Help Copilot's AI Search index must reflect — otherwise /copilot answers
+        # (and the copilot-quality-evals gate) query a STALE index until an admin
+        # manually POSTs the reindex. This warms it once, right after sign-in is
+        # wired. Best-effort like every bootstrap step: a miss never fails the
+        # deploy (the eval workflow's own pre-run reindex is the fail-loud path).
+        # Auth = LOOM_INTERNAL_TOKEN (the same VNet-internal trust token the
+        # evaluator uses); NO hardcoded estate host — the console URL is resolved
+        # from repo vars → Front Door → ACA ingress, and the step skips cleanly
+        # when none resolves. See docs/fiab/copilot-retrieval-remediation.md §9.
+        env:
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+          VERIFY_URL: ${{ vars.LOOM_VERIFY_URL || '' }}
+        run: |
+          set -uo pipefail
+          if [ -z "${INTERNAL_TOKEN:-}" ]; then
+            echo "::notice::LOOM_INTERNAL_TOKEN not available to this bootstrap — skipping the loom-docs reindex (an admin can POST /api/help-copilot/reindex, or dispatch copilot-quality-evals which reindexes before its run)."
+            exit 0
+          fi
+          # Resolve the console base URL with NO estate host baked in.
+          BASE=""
+          if [ -n "${VERIFY_URL:-}" ]; then
+            BASE="$VERIFY_URL"
+          elif [ -n "${CSA_LOOM_CONSOLE_HOSTS:-}" ]; then
+            BASE="https://${CSA_LOOM_CONSOLE_HOSTS%%,*}"
+          else
+            for AFD_PROFILE in $(az afd profile list -g "$ADMIN_RG" --query "[].name" -o tsv 2>/dev/null || true); do
+              FD_HOST=$(az afd endpoint list --profile-name "$AFD_PROFILE" -g "$ADMIN_RG" --query "[0].hostName" -o tsv 2>/dev/null || true)
+              [ -n "$FD_HOST" ] && { BASE="https://$FD_HOST"; break; }
+            done
+            if [ -z "$BASE" ]; then
+              ACA_FQDN=$(az containerapp show -n loom-console -g "$ADMIN_RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+              [ -n "$ACA_FQDN" ] && BASE="https://$ACA_FQDN"
+            fi
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::notice::Could not resolve a console URL (no LOOM_VERIFY_URL / vanity / Front Door / ACA ingress) — skipping the loom-docs reindex."
+            exit 0
+          fi
+          echo "Reindexing loom-docs on ${BASE%/}"
+          CODE=$(curl -sS -o /tmp/reindex.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $INTERNAL_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --max-time 300 \
+            "${BASE%/}/api/help-copilot/reindex" || echo 000)
+          echo "reindex HTTP $CODE"
+          head -c 600 /tmp/reindex.json 2>/dev/null || true
+          echo ""
+          case "$CODE" in
+            2*)  echo "::notice::loom-docs index refreshed on the fresh deploy (HTTP $CODE).";;
+            401) echo "::warning::reindex 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env; the Copilot index stays stale until refreshed. Non-fatal.";;
+            000) echo "::warning::console unreachable at ${BASE%/} — reindex skipped (non-fatal; dispatch copilot-quality-evals or POST the reindex once the console is reachable).";;
+            *)   echo "::warning::reindex returned $CODE — the Copilot index may be stale (non-fatal). See body above.";;
+          esac
+
       - name: Grant Console UAMI Purview Data Map roles (data-plane)
         env:
           # De-hardcoded so a non-eastus2 / non-Commercial deploy grants the right

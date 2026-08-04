@@ -480,10 +480,34 @@ scoring profile, which §4 measured as *not* a free win.
 2. **Live confirmation is deploy-gated (G1).** The realised `copilot-quality-evals`
    numbers confirm only after (a) a **`loom-docs` reindex** so the index carries
    the current corpus, and (b) a real eval run against that reindexed target.
-3. **Automated reindex is still a follow-up.** Today `loom-docs` is refreshed
-   only by a manual admin `POST /api/help-copilot/reindex`; nothing in deploy or
-   CI triggers it. A reindex step must run before the eval run (post-deploy or
-   inside `copilot-quality-evals.yml`) or the gate measures a stale index. See
-   the #2929 PR for the tracked follow-up.
+3. **Automated reindex is now wired (#2929 secondary).** Previously `loom-docs`
+   was refreshed only by a manual admin `POST /api/help-copilot/reindex`, and
+   nothing in CI/deploy triggered it — the unrelated `rag-reindex.yml` reindexes
+   the Python `apps/copilot` vector store, NOT this console index. Two triggers
+   now keep the index fresh:
+   * **`copilot-quality-evals.yml` reindexes BEFORE every eval run** — a step
+     (`id: reindex`) POSTs `/api/help-copilot/reindex` on the live console URL
+     using the SAME `LOOM_INTERNAL_TOKEN` the evaluator uses on
+     `/api/internal/copilot/eval-probe`, so the gate always measures a FRESH
+     index. It is **fail-loud** on a real failure (401/5xx → the job fails) but
+     tolerant of an honest "not configured" (Cosmos fallback) and a transient
+     Front-Door blip; the pass/warn/FAIL decision is the unit-tested
+     `scripts/ci/classify-reindex-result.mjs`.
+   * **`csa-loom-post-deploy-bootstrap.yml` reindexes on a fresh deploy** —
+     best-effort, right after sign-in is wired, so a newly-rolled console image
+     indexes its baked corpus once without waiting for the first eval or an
+     admin click.
+   To make this reusable, `/api/help-copilot/reindex` now accepts EITHER an
+   admin session OR the internal trust token (Bearer / `x-loom-internal-token`),
+   the same machine-to-machine pattern as `eval-probe` and the three existing
+   Copilot cron workflows (memory-consolidate / spark-keepwarm / skill-learner).
+
+   **HONEST SCOPE — a reindex alone does NOT confirm #2929.** The #2929 ranker
+   fix re-ranks AI Search results **in-app** (no index-schema change), so it
+   takes effect from the rolled console **IMAGE**, not from a reindex. The
+   reindex wiring fixes index **FRESHNESS** (the eval self-heals on a stale
+   index); the image **ROLL** delivers the ranker. **Both are needed** — live
+   `copilot-quality-evals` confirmation still requires a console roll carrying
+   the §9 ranker change AND a reindexed target.
 4. **Floors untouched.** As with P0–P2, nothing here licenses a floor change; P4
    still requires ≥3 real runs through the raise-only ratchet.

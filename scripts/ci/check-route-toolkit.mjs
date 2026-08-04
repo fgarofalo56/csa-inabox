@@ -305,6 +305,16 @@ const TOUCH_EXEMPT = new Map([
   // prologue inside a load-latency fix is unrelated churn with real regression
   // risk on the admin readiness surface.
   ['apps/fiab-console/app/api/admin/readiness/route.ts', '#2896: load-latency cache only; codemod reports SKIPPED (enforceCapability gate, no getSession→401 shape)'],
+  // #2929 (secondary) gave this reindex route a DUAL auth prologue: a signed-in
+  // admin session OR the VNet-internal trust token (isValidInternalToken, the
+  // same credential the copilot-evaluator uses on eval-probe), so
+  // copilot-quality-evals.yml can trigger the loom-docs reindex before its run.
+  // withSession is SEMANTICALLY INCOMPATIBLE here, not merely codemod-resistant:
+  // it checks the session ONLY, so migrating would DROP the internal-token path
+  // that is the entire point of the change. Migrate when the toolkit grows a
+  // session-OR-internal-token wrapper (the eval-probe route hand-rolls the same
+  // check for the same reason).
+  ['apps/fiab-console/app/api/help-copilot/reindex/route.ts', '#2929: dual session-OR-internal-token auth; withSession checks the session only and would drop the token path (needed for the CI reindex trigger)'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
