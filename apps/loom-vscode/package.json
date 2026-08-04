@@ -6,7 +6,7 @@
   "publisher": "csa-loom",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.102.0"
   },
   "categories": [
     "Azure",
@@ -84,9 +84,72 @@
           "type": "boolean",
           "default": false,
           "description": "Off by default. When on AND VS Code telemetry is on, command names + durations (never file contents, query text, item names or identity) go to the operator's own Loom Application Insights via the BFF. No independent endpoint."
+        },
+        "loom.mcp.enabledServers": {
+          "type": "array",
+          "default": [
+            "loom-catalog",
+            "loom-query"
+          ],
+          "markdownDescription": "Which CSA Loom MCP servers to contribute to Copilot / agents, by blast radius. **Read-only `loom-catalog` + `loom-query` are the safe defaults.** The write/admin servers (`loom-author`, `loom-ops`, `loom-admin`) are opt-in only — enable them here (or via **CSA Loom: Manage MCP servers**) after weighing the blast radius. Servers are wired to the active deployment's `apiUrl` + your stored PAT; `loom-admin` is default-OFF and refuses a PAT server-side.",
+          "scope": "application",
+          "items": {
+            "type": "string",
+            "enum": [
+              "loom-catalog",
+              "loom-query",
+              "loom-author",
+              "loom-ops",
+              "loom-admin"
+            ],
+            "enumDescriptions": [
+              "Read metadata (workspaces, items, catalog). Read-only.",
+              "Read bounded, capped data rows (SQL/KQL/preview). Read-only.",
+              "WRITE — create/modify items (dry-run default). Needs a read-write PAT.",
+              "MIXED — runs/logs + start/cancel. Write tools need a read-write PAT.",
+              "ADMIN — grant access / resolve gates. Default-OFF; refuses a PAT."
+            ]
+          }
         }
       }
     },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "loom",
+        "label": "CSA Loom"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "csa-loom.loom",
+        "name": "loom",
+        "fullName": "CSA Loom",
+        "description": "Ask about your CSA Loom estate — grounded on the live backend (catalog, items, bounded queries)",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "find",
+            "description": "Search the catalog (workspaces, items, data assets)"
+          },
+          {
+            "name": "item",
+            "description": "Show an item and its definition keys — /item <type>/<id>"
+          },
+          {
+            "name": "query",
+            "description": "Run a bounded read-only query — /query <type>/<id> :: <SQL>"
+          },
+          {
+            "name": "preview",
+            "description": "Preview a data asset's first rows — /preview <type>/<id>"
+          },
+          {
+            "name": "help",
+            "description": "What @loom can do"
+          }
+        ]
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -240,6 +303,18 @@
         "icon": "$(history)"
       },
       {
+        "command": "loom.selectActiveDeployment",
+        "title": "Select active deployment (MCP + @loom)…",
+        "category": "CSA Loom",
+        "icon": "$(target)"
+      },
+      {
+        "command": "loom.manageMcpServers",
+        "title": "Manage MCP servers…",
+        "category": "CSA Loom",
+        "icon": "$(server)"
+      },
+      {
         "command": "loom.queryData",
         "title": "Query data…",
         "category": "CSA Loom",
@@ -333,6 +408,16 @@
           "command": "loom.viewRecentRuns",
           "when": "view == loom.explorer",
           "group": "2_mirror@2"
+        },
+        {
+          "command": "loom.selectActiveDeployment",
+          "when": "view == loom.explorer",
+          "group": "3_mcp@1"
+        },
+        {
+          "command": "loom.manageMcpServers",
+          "when": "view == loom.explorer",
+          "group": "3_mcp@2"
         },
         {
           "command": "loom.findItem",
@@ -465,11 +550,13 @@
     "vscode:prepublish": "node build.mjs --production"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "@types/node": "^20.16.0",
-    "@types/vscode": "^1.95.0",
+    "@types/vscode": "^1.102.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.6.0",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "zod": "^3.23.8"
   }
 }

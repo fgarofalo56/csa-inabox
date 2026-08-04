@@ -25,6 +25,8 @@ interface Registry {
   decorationProviders: number;
   authProviders: string[];
   controllers: Array<{ id: string; notebookType: string }>;
+  mcpProviders: string[];
+  chatParticipants: string[];
 }
 
 function fakeVscode(reg: Registry): Record<string, unknown> {
@@ -108,6 +110,7 @@ function fakeVscode(reg: Registry): Record<string, unknown> {
     },
     TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
     StatusBarAlignment: { Left: 1, Right: 2 },
+    ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
     FileChangeType: { Changed: 0, Created: 1, Deleted: 2 },
     ProgressLocation: { Notification: 15 },
@@ -173,6 +176,25 @@ function fakeVscode(reg: Registry): Record<string, unknown> {
         };
       },
     },
+    // Phase 4 — MCP server-definition provider API (finalized 1.102).
+    McpStdioServerDefinition: class {
+      constructor(o: Record<string, unknown>) {
+        Object.assign(this, o);
+      }
+    },
+    lm: {
+      registerMcpServerDefinitionProvider: (id: string) => {
+        reg.mcpProviders.push(id);
+        return new Disposable();
+      },
+    },
+    // Phase 4 — chat participant API.
+    chat: {
+      createChatParticipant: (id: string) => {
+        reg.chatParticipants.push(id);
+        return { id, iconPath: undefined, dispose() {} };
+      },
+    },
   };
 }
 
@@ -193,6 +215,8 @@ function fakeContext() {
     globalState: { get: (_k: string, def: unknown) => def, update: async () => undefined },
     workspaceState: { get: (_k: string, def: unknown) => def, update: async () => undefined },
     secrets: { get: async () => undefined, store: async () => undefined, delete: async () => undefined },
+    extensionUri: { scheme: 'file', path: appRoot, fsPath: appRoot, with: () => undefined },
+    extension: { packageJSON: { version: '0.1.0' } },
   };
 }
 
@@ -204,7 +228,7 @@ describe('activate() — shipped bundle registers everything (P1 + P2)', () => {
   });
 
   it('registers the auth provider, FS scheme, decoration provider, notebook controller, and all commands', async () => {
-    const reg: Registry = { commands: [], fsSchemes: [], decorationProviders: 0, authProviders: [], controllers: [] };
+    const reg: Registry = { commands: [], fsSchemes: [], decorationProviders: 0, authProviders: [], controllers: [], mcpProviders: [], chatParticipants: [] };
     const ext = loadExtension(fakeVscode(reg));
     const context = fakeContext();
     ext.activate(context);
@@ -238,6 +262,13 @@ describe('activate() — shipped bundle registers everything (P1 + P2)', () => {
     for (const id of p3) expect(reg.commands).toContain(id);
     // P1 commands still registered.
     for (const id of ['loom.signIn', 'loom.createItem', 'loom.refresh']) expect(reg.commands).toContain(id);
+
+    // Phase 4 — MCP provider + @loom chat participant + their commands.
+    expect(reg.mcpProviders).toContain('loom');
+    expect(reg.chatParticipants).toContain('csa-loom.loom');
+    for (const id of ['loom.selectActiveDeployment', 'loom.manageMcpServers']) {
+      expect(reg.commands).toContain(id);
+    }
 
     expect(context.subscriptions.length).toBeGreaterThan(0);
   });

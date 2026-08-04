@@ -27,6 +27,9 @@ import { MirrorStore } from './mirror/mirror-store';
 import { NotebookLinkStore } from './notebook/notebook-link';
 import { RunHistory } from './notebook/run-history';
 import { SparkNotebookController } from './notebook/spark-controller';
+import { ActiveDeploymentStore } from './mcp/active-deployment';
+import { registerMcpProvider } from './mcp/mcp-provider';
+import { registerLoomChatParticipant } from './chat/chat-participant';
 import { QueryEditorStore } from './query/query-editor-store';
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -88,6 +91,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const controller = new SparkNotebookController(resolveApi, links, runs, context);
   context.subscriptions.push(controller);
 
+  // Phase 4 — MCP servers (default: read-only catalog + query) + @loom chat.
+  const activeDeployment = new ActiveDeploymentStore(context, getDeployments);
+  context.subscriptions.push(activeDeployment);
+  const mcp = registerMcpProvider({ context, auth, getDeployments, activeDeployment });
+  // With no MCP provider API, resolveApi is still what @loom needs; the chat
+  // participant registers independently (its own capability check).
+  registerLoomChatParticipant({ context, activeDeployment, resolveApi });
   // Phase 3 — query editor ↔ item links (drives the ▶ Run button context key).
   const queryEditors = new QueryEditorStore();
   context.subscriptions.push(queryEditors);
@@ -112,6 +122,8 @@ export function activate(context: vscode.ExtensionContext): void {
     links,
     runs,
     controller,
+    activeDeployment,
+    refreshMcp: mcp.refresh,
     queryEditors,
   };
   registerCommands(cx);
