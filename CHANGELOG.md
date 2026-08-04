@@ -25,6 +25,25 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.85.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.84.0...csa-inabox-v0.85.0) (2026-08-04)
+
+
+### Features
+
+* **devtools:** loom-vscode Phase 6 — lakehouse explorer + deep-links + deferred-row drain + definition-route OpenAPI ([#2936](https://github.com/fgarofalo56/csa-inabox/issues/2936)) ([f26e7db](https://github.com/fgarofalo56/csa-inabox/commit/f26e7db96e1adfcf7268625559a24a2f0fa34036))
+
+
+### Bug Fixes
+
+* **deploy:** the staleness watchdog did not watch what the three [#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775) paths deploy (refs [#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775)) ([#2939](https://github.com/fgarofalo56/csa-inabox/issues/2939)) ([3297de5](https://github.com/fgarofalo56/csa-inabox/commit/3297de5736d16856164cc660507729073e56664f))
+* **gov:** the 4-hour-build fix lived in a dispatch input, not the repo (refs [#2706](https://github.com/fgarofalo56/csa-inabox/issues/2706)) ([#2938](https://github.com/fgarofalo56/csa-inabox/issues/2938)) ([2325a4a](https://github.com/fgarofalo56/csa-inabox/commit/2325a4a6f9347ac73f35b57b00df02eaa3380572))
+* **security,bicep:** postcss floor for CVE-2026-69153 + correct the retracted Redis retirement dates (refs [#2671](https://github.com/fgarofalo56/csa-inabox/issues/2671), [#2642](https://github.com/fgarofalo56/csa-inabox/issues/2642)) ([#2940](https://github.com/fgarofalo56/csa-inabox/issues/2940)) ([d8093d1](https://github.com/fgarofalo56/csa-inabox/commit/d8093d189cf9cbbbdab40d8412be72e96aab6e31))
+
+
+### Continuous Integration
+
+* **copilot:** auto-reindex loom-docs before the quality-evals run ([#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929) secondary) ([#2935](https://github.com/fgarofalo56/csa-inabox/issues/2935)) ([33c0b42](https://github.com/fgarofalo56/csa-inabox/commit/33c0b428770fa8d84b49f41d4b84b7525ac47958))
+
 ## [0.84.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.83.0...csa-inabox-v0.84.0) (2026-08-04)
 
 
