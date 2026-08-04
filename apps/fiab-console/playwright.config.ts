@@ -266,5 +266,22 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // LU-8 (#2626) — the G1 live receipt for the OpenLineage emitters. Drives
+      // the pipeline Output pane + SJD Runs routes on a real estate and asserts
+      // the `lineage` receipt bodies (succeeded harvest, failed-run gate, runId
+      // ownership 404, pool-scoped batch attribution + redaction, no SAS in the
+      // store), with honest Azure infra-gates when a backed item/run is absent.
+      // Read-only discovery (no workspaces created); NOT a required check.
+      name: 'openlineage-emitters',
+      testDir: './e2e',
+      testMatch: /openlineage-emitters\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
