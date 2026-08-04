@@ -437,6 +437,17 @@ export interface EnvSpec {
    * 'unavailable' in the active cloud produces the cloud-unavailable gate;
    * 'limited' is a non-blocking info note (see the Avail doc above). */
   availability?: ServiceAvailability;
+  /** #2678 — vars whose PRESENCE with a listed value is a misconfiguration
+   * (values compared lower-cased), distinct from a missing var. Used by
+   * svc-loom-trino to stop reporting GREEN when the engine is deployed in the
+   * anonymous, unauthenticated posture (LOOM_TRINO_AUTH_MODE=disabled): a
+   * default-ON query engine that any in-VNet workload can query as any user is a
+   * security defect the health surface must show, not a clean pass. Only
+   * evaluated once the spec's required vars are satisfied. */
+  forbidValues?: Record<string, string[]>;
+  /** Security remediation surfaced when a {@link forbidValues} match fires
+   * (distinct from the missing-var `remediation`). */
+  forbidRemediation?: string;
 }
 
 export function evalEnv(spec: EnvSpec): CheckResult {
@@ -444,6 +455,13 @@ export function evalEnv(spec: EnvSpec): CheckResult {
   for (const k of spec.required || []) if (!has(k)) missing.push(k);
   for (const group of spec.anyOf || []) if (!group.some(has)) missing.push(group.join(' | '));
   const ok = missing.length === 0;
+  // #2678 §3 — a var SET to a FORBIDDEN value is a misconfiguration even though
+  // it is "present". Only meaningful once the feature's required vars are wired.
+  const forbidden: string[] = [];
+  for (const [k, bad] of Object.entries(spec.forbidValues || {})) {
+    const v = (process.env[k] || '').trim().toLowerCase();
+    if (v && bad.some((b) => b.toLowerCase() === v)) forbidden.push(`${k}=${v}`);
+  }
   // Optional silent-fallback substrate (H-band): an unset var is the intended,
   // fully-functional day-one default — the console falls back to a built-in path
   // with no loss of function (loom_default_on_opt_out: the feature is ON via the
@@ -457,6 +475,21 @@ export function evalEnv(spec: EnvSpec): CheckResult {
         ? `Built-in fallback active (fully functional) — ${spec.optionalDefaultDetail}`
         : `Built-in fallback active (fully functional) — the ${missing.join(', ')} scale-out substrate is optional and deployed out-of-band.`,
       remediation: spec.remediation,
+      docs: spec.docs,
+    };
+  }
+  // #2678 §3 — the vars are wired, but one holds an explicitly-unsafe value.
+  // Surface it LOUDLY (never the clean 'pass' it used to report). Warn rather
+  // than fail because it is an audited, explicit operator opt-out — but the
+  // health surface now shows it instead of hiding it green.
+  if (ok && forbidden.length) {
+    const remediation = spec.forbidRemediation || spec.remediation;
+    return {
+      id: spec.id, category: spec.category, title: spec.title, severity: spec.severity,
+      status: 'warn',
+      detail: `SECURITY: ${forbidden.join(', ')} — an explicitly unsafe value is set. ${remediation}`,
+      remediation,
+      redeploy: true,
       docs: spec.docs,
     };
   }

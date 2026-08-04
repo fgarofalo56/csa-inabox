@@ -108,6 +108,14 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     docs: 'https://trino.io/docs/current/connector/iceberg.html',
     provisionedBy: 'modules/data-plane/loom-trino-aca.bicep (default-ON, invoked by admin-plane/main.bicep via loomBackends.trino) → apps[] env LOOM_TRINO_URL; the lake read grant is modules/data-plane/loom-trino-lake-rbac.bicep, deployed at the LAKE resource group\'s scope. Opt-in scale-out alternative: modules/data-plane/loom-trino-aks.bicep',
     role: 'Storage Blob Data Reader (Console UAMI) on the DLZ lake — granted by loom-trino-lake-rbac.bicep at the lake RG\'s scope; the Iceberg connector reads data files in place with the managed identity (no keys, no SAS).',
+    // #2678 §3 — a deploy that opted the engine into the anonymous posture
+    // (loomBackends.trinoAuthMode='disabled' -> LOOM_TRINO_AUTH_MODE=disabled)
+    // used to report GREEN because the check only observed LOOM_TRINO_URL. An
+    // engine any in-VNet workload can query as any user is a security defect the
+    // health surface must SHOW. entra/sealed are safe (enforced); only disabled
+    // trips this.
+    forbidValues: { LOOM_TRINO_AUTH_MODE: ['disabled'], LOOM_TRINO_ACCESS_CONTROL: ['none'] },
+    forbidRemediation: 'The Federated SQL (Trino) engine is deployed in an UNAUTHENTICATED / unauthorized posture: LOOM_TRINO_AUTH_MODE=disabled makes it queryable by anything on the VNet as an arbitrary X-Trino-User, and/or LOOM_TRINO_ACCESS_CONTROL=none disables the engine\'s deny-by-default catalog authorization. This is an explicit opt-out. Restore the default by removing loomBackends.trinoAuthMode/trinoAccessControl (the engine deploys SEALED until an Entra app registration is pinned, then ENFORCED) and redeploy. The BFF still enforces per-caller catalog authorization regardless.',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own Container Apps environment inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. Both Gov params set containerPlatform=containerApps, so the engine deploys in GCC-High and IL5 exactly as in Commercial. SaaS-only external connectors stay honestly gated in IL5.',

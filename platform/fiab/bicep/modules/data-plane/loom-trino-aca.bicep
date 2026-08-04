@@ -144,6 +144,13 @@ param jwksUrl string = ''
 @description('Trino session user every authenticated principal is mapped onto. Trino\'s default system access control denies impersonation, so the session user must equal the mapped principal; the real Loom UPN is carried in X-Trino-Client-Info / client tags and is what the Cosmos _auditLog row records.')
 param sessionUser string = 'loom-console'
 
+@description('Engine-level catalog authorization (#2678). "file" (DEFAULT) renders a DENY-BY-DEFAULT file-based system access control from the catalogs the entrypoint wires: only those catalogs are reachable (read-only, except the `memory` scratch catalog), everything else — including a phantom catalog — is denied, and impersonation is denied. This is the engine floor for a DIRECT in-VNet caller that bypasses the BFF; per-caller narrowing is enforced at the BFF (trino-authz.ts). "none" is an explicit, audited opt-out (Trino AllowAll) that logs a SECURITY WARNING on every boot.')
+@allowed([
+  'file'
+  'none'
+])
+param accessControl string = 'file'
+
 // The lake READ grant is NOT created here. It lives in loom-trino-lake-rbac.bicep
 // and is deployed at the LAKE account's own resource-group scope — this module is
 // invoked in the ADMIN RG, where the lake account does not exist.
@@ -241,6 +248,8 @@ resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
               { name: 'LOOM_TRINO_REQUIRED_AUDIENCE', value: requiredAudience }
               { name: 'LOOM_TRINO_JWKS_URL', value: authEnabled ? effectiveJwksUrl : '' }
               { name: 'LOOM_TRINO_SESSION_USER', value: sessionUser }
+              // #2678 — deny-by-default engine catalog authorization (opt-out).
+              { name: 'LOOM_TRINO_ACCESS_CONTROL', value: accessControl }
             ],
             empty(appInsightsConnectionString) ? [] : [
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }

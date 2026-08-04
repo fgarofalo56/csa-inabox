@@ -123,7 +123,7 @@ here rather than left implied by "internal ingress".
 The coordinator has **internal ingress only** — and internal ingress is a network
 control, not an authorization one.
 
-## Authorization: on by default, sealed when it cannot be pinned
+## Authentication: on by default, sealed when it cannot be pinned
 
 Round 1 of this work shipped the engine with **no**
 `http-server.authentication.type`, so anything already on the VNet (a sibling
@@ -155,6 +155,70 @@ pinned by default. Entra issues v1 (`sts.windows.net/<tid>/`) or v2
 registration, and Trino's `required-issuer` takes a single value — pinning the
 wrong form would seal the engine permanently. Set
 `LOOM_TRINO_REQUIRED_ISSUER` once you know which form your tenant issues.
+
+Fail-closed (#2678): when the engine is enforcing (`entra`) but the Console
+cannot mint a bearer for the pinned audience — the expected state until the App
+ID URI is a registered resource (`api://<clientId>` is not registered anywhere
+in this repo yet, so token acquisition fails with **AADSTS500011** before the
+engine sees the request) — the BFF returns the honest gate and **never sends an
+unauthenticated statement**. It does not earn an opaque 401 while claiming the
+posture is "enforced + reachable."
+
+## Catalog authorization: who may query which catalogs (#2678)
+
+Authentication proves *who* a caller is; it does not decide *what* they may
+query. Before #2678 the engine had **no system access control**, so any
+authenticated caller could query **every** catalog — the authorization posture
+was provably incomplete. Authorization is now enforced in **two layers, both
+deny-by-default**:
+
+**1. BFF (`lib/azure/trino-authz.ts`) — per-caller, the layer with the real
+identity.** The route resolves the signed-in Loom caller (`oid` / Entra
+`groups` / tenant-admin tier, exactly the identity model
+`resolveDomainTier` uses) to the set of catalogs they may reach, and **refuses a
+statement that references anything outside it (403), before the coordinator is
+touched** — an audited security event.
+
+* **Built-in catalogs** — `system`, `jmx`, `memory`, and the Loom lake catalog
+  (`iceberg`) — are open to any signed-in caller. They are the deployment's own
+  resources, exactly like the DuckDB / Synapse-Serverless SQL Lab tiers.
+* **External federation catalogs** (an operator-wired Postgres/MySQL/Kafka
+  source) are **deny-by-default**. Wiring a source is not the same as
+  authorizing every user to read it. Grant it in `LOOM_TRINO_CATALOG_POLICY`
+  (`loomBackends.trinoCatalogPolicy`): either `"signed-in"` (any authenticated
+  user) or a principal set — `{ "groups": ["<entra-group-oid>"] }` /
+  `{ "oids": [...] }` / `{ "upns": [...] }`:
+
+  ```json
+  { "sales": "signed-in", "hr": { "groups": ["<hr-entra-group-oid>"] } }
+  ```
+
+  A fresh install has no external catalogs, so no policy is needed day one — this
+  is never a day-one gate.
+
+A statement that is not fully catalog-qualified (a bare `schema.table` that
+resolves against the session catalog) is allowed only for a caller who may
+already reach every configured catalog; a **restricted** caller must fully
+qualify every table (`"catalog"."schema"."table"`) or use the structured
+cross-source join, so authorization can be enforced — otherwise it is denied
+fail-closed.
+
+**2. Engine (`apps/loom-trino/docker-entrypoint.sh`) — the deny-by-default
+floor for a DIRECT in-VNet caller that bypasses the BFF.** The entrypoint renders
+a Trino **file-based system access control** (`access-control.name=file`) from
+exactly the catalogs it wired: each is `read-only` (the `memory` scratch catalog
+is `all`), everything else — including a phantom catalog or a properties file
+dropped in later without a rule — is denied, and impersonation is denied. This
+is uniform across callers (every caller maps to the one `loom-console` Trino
+user), so **per-caller** narrowing lives at the BFF; the engine floor guarantees
+no in-VNet caller can reach an unconfigured catalog. Opt out (Trino AllowAll)
+with `loomBackends.trinoAccessControl='none'` — an audited SECURITY WARNING.
+
+Honest follow-up: because every caller maps to one Trino user, the engine cannot
+narrow a catalog to a specific Loom group by itself — per-group engine rules need
+the signed-in principal at the engine (delegated tokens / an impersonation rules
+file). Until then, per-group narrowing is BFF-enforced and the engine floor is
+the uniform catalog allow-list.
 
 ## Idle cost — the real number
 

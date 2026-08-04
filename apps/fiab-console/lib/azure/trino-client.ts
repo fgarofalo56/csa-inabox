@@ -305,7 +305,7 @@ async function trinoFetch(
  */
 export async function runTrinoQuery(
   sql: string,
-  opts: { maxRows?: number; actorUpn?: string; catalog?: string; schema?: string },
+  opts: { maxRows?: number; actorUpn?: string; catalog?: string; schema?: string; knownCatalogs?: string[] },
 ): Promise<TrinoQueryResult> {
   if (!isTrinoConfigured()) {
     throw new TrinoError(
@@ -335,6 +335,31 @@ export async function runTrinoQuery(
   const started = Date.now();
   const maxRows = Math.max(1, Math.min(opts.maxRows ?? 5_000, 200_000));
   const enforcing = trinoAuthMode() === 'entra';
+  const authHeaders = await trinoAuthHeader();
+  // ROUND-4 (#2678) — FAIL CLOSED, do not fall through unauthenticated.
+  //
+  // When the engine is ENFORCING (authMode=entra) but no bearer could be minted
+  // — the pinned audience `api://<clientId>` is not a registered Application ID
+  // URI yet, so the token request fails with AADSTS500011 (see #2678 §1) — the
+  // old code sent the statement with NO Authorization header and earned an
+  // opaque 401 from the coordinator WHILE the operator was told the posture was
+  // "enforced + reachable". A default-ON query engine must never quietly send an
+  // unauthenticated request. Return the honest gate instead and never touch the
+  // coordinator. (In `disabled` mode the engine is not enforcing, so no bearer
+  // is required — the anonymous VNet-only opt-out; the env-check flags it.)
+  if (enforcing && !authHeaders.authorization) {
+    throw new TrinoError(
+      'The Federated SQL (Trino) engine is ENFORCING Entra authorization but the Console could not mint a '
+      + 'bearer for the pinned audience (LOOM_TRINO_AUDIENCE). This is the expected state until the audience '
+      + 'is a registered Application ID URI on the accepting app registration — an unregistered resource URI '
+      + 'fails token acquisition with AADSTS500011 before the engine ever sees the request. The query was NOT '
+      + 'sent unauthenticated. Fix: register the App ID URI (or pin loomBackends.trinoAudienceClientId to an '
+      + 'app that exposes one) and confirm the decoded token `aud`. SQL Lab keeps serving on DuckDB / Synapse '
+      + 'Serverless meanwhile.',
+      503,
+      'auth_unavailable',
+    );
+  }
   const headers: Record<string, string> = {
     'content-type': 'text/plain',
     accept: 'application/json',
@@ -347,12 +372,16 @@ export async function runTrinoQuery(
     'x-trino-client-tags': `loom-user=${trinoUser(opts.actorUpn)}`,
     ...(opts.catalog ? { 'x-trino-catalog': opts.catalog } : {}),
     ...(opts.schema ? { 'x-trino-schema': opts.schema } : {}),
-    ...(await trinoAuthHeader()),
+    ...authHeaders,
   };
 
   const columns: TrinoColumn[] = [];
   const rows: unknown[][] = [];
-  const catalogs = new Set<string>();
+  // The catalogs the AUTHORIZED statement referenced — supplied by the route's
+  // authorization pass (trino-authz.extractReferencedCatalogs), which is the
+  // same set the caller was authorized against. Falls back to any catalogs the
+  // planner reports inline. This is the federation receipt on the audit row.
+  const catalogs = new Set<string>((opts.knownCatalogs || []).filter(Boolean));
   let truncated = false;
 
   // POST the statement, then walk the nextUri chain (bounded: 5000 pages).

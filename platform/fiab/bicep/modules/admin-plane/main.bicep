@@ -780,6 +780,25 @@ var trinoAuthPosture = trinoAuthMode == 'disabled' ? 'disabled' : (empty(trinoAu
 // scope form. Empty whenever the engine is not enforcing a pinnable audience.
 var trinoConsoleAudience = trinoAuthPosture == 'entra' ? 'api://${trinoAudienceClientId}/.default' : ''
 
+// ── N7e catalog AUTHORIZATION (round-4 of #2678) ──────────────────────────────
+// The JWT authenticator above authenticates a caller; it does NOT decide WHICH
+// catalogs that caller may query (round 3 shipped no system access control, so
+// every authenticated caller could query every catalog). loomBackends.
+// trinoCatalogPolicy is the deployment's per-catalog grant table, forwarded to
+// the Console as LOOM_TRINO_CATALOG_POLICY and enforced by the BFF
+// (lib/azure/trino-authz.ts): built-in catalogs (system/jmx/memory + the Loom
+// lake) are open to any signed-in caller; each EXTERNAL federation catalog is
+// DENY-BY-DEFAULT and reachable only through an explicit grant here — "signed-in"
+// (any authenticated user) or a {groups|oids|upns} principal set. The engine's
+// own file-based access control (apps/loom-trino/docker-entrypoint.sh) is the
+// deny-by-default floor for a direct in-VNet caller that bypasses the BFF. Shape:
+//   { "sales": "signed-in", "hr": { "groups": ["<entra-group-oid>"] } }
+// An OBJECT in the params bag is serialized to the JSON string the BFF parses; a
+// pre-serialized string is passed through unchanged. Empty => only the built-in
+// catalogs are reachable (fully functional on a fresh install: no external
+// catalog exists yet, so this is never a day-one gate).
+var trinoCatalogPolicy = string(loomBackends.?trinoCatalogPolicy ?? '')
+
 // ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
 // mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
 // rationale as wranglerEnabled/scriptRunnerEnabled above): deploys the
@@ -3657,6 +3676,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             //   disabled = explicit anonymous opt-out   -> failing env-check
             { name: 'LOOM_TRINO_AUTH_MODE', value: trinoEngineActive ? trinoAuthPosture : '' }
             { name: 'LOOM_TRINO_AUDIENCE', value: trinoEngineActive ? trinoConsoleAudience : '' }
+            // ROUND-4 (#2678): the per-catalog grant table the BFF enforces
+            // (trino-authz.ts). Built-in catalogs are open to any signed-in
+            // caller; external federation catalogs are deny-by-default and need a
+            // grant here. Empty on a fresh install (no external catalog yet).
+            { name: 'LOOM_TRINO_CATALOG_POLICY', value: trinoEngineActive ? trinoCatalogPolicy : '' }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
@@ -5227,6 +5251,10 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // 'disabled' opt-out means authorization is ENFORCED.
     authMode: trinoAuthMode == 'disabled' ? 'disabled' : 'entra'
     entraClientId: trinoAudienceClientId
+    // #2678 — engine-level catalog authorization is deny-by-default (file-based
+    // system access control rendered from the wired catalogs). Opt out with
+    // loomBackends.trinoAccessControl='none' (audited SECURITY WARNING).
+    accessControl: string(loomBackends.?trinoAccessControl ?? 'file') == 'none' ? 'none' : 'file'
     complianceTags: complianceTags
   }
 }

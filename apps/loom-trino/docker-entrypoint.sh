@@ -114,6 +114,40 @@ else
   fi
 fi
 
+# ── ENGINE-LEVEL CATALOG AUTHORIZATION — file-based system access control ─────
+# Round-4 fix (#2678). Authentication (the JWT block above) proves WHO a caller
+# is; it does NOT decide WHAT they may query. Round 3 shipped no
+# `access-control.properties`, so the engine fell through to Trino's built-in
+# AllowAllSystemAccessControl: any authenticated caller could query EVERY
+# catalog. This block renders a DENY-BY-DEFAULT file-based system access control:
+# only the catalogs actually rendered below are reachable (read-only, except the
+# `memory` scratch catalog); every other catalog — including a phantom or a
+# properties file dropped in later without a matching rule — is denied. Trino
+# evaluates rules top-to-bottom and DENIES anything unmatched, and with no
+# impersonation/principal rules present impersonation is denied too.
+#
+# The rule matches ANY Trino user (no `user` field), so it is uniform across the
+# entra-mapped `loom-console` user AND a disabled-mode caller — the engine floor
+# does not depend on the mapping. PER-CALLER narrowing (which Loom group may
+# reach which catalog) is enforced at the BFF (lib/azure/trino-authz.ts), because
+# every caller maps to one Trino user here; restoring the signed-in principal at
+# the engine (for per-group engine rules) needs delegated tokens / an
+# impersonation file and is the documented follow-up.
+#
+# Reversible without an image rebuild: LOOM_TRINO_ACCESS_CONTROL=none disables it
+# (allow-all) and logs a SECURITY WARNING — an env flip, so a config problem can
+# never hard-brick the engine.
+ACCESS_CONTROL_MODE=$(printf '%s' "${LOOM_TRINO_ACCESS_CONTROL:-file}" | tr '[:upper:]' '[:lower:]')
+RULES_TMP="$CONFIG_DIR/.loom-catalog-rules.jsonl"
+: > "$RULES_TMP"
+add_catalog_rule() {
+  # $1 = catalog name (verbatim), $2 = allow (all|read-only|none). The name is a
+  # regex in Trino's matcher; anchor it so "sales" cannot also match "sales_pii".
+  printf '    {"catalog": "^%s$", "allow": "%s"},\n' "$1" "$2" >> "$RULES_TMP"
+}
+# `system` is always present (built-in); read-only for user queries.
+add_catalog_rule "system" "read-only"
+
 # ── Always-present, zero-dependency catalogs ─────────────────────────────────
 # jmx: engine self-observability (queries against the running JVM's MBeans).
 # memory: a real, writable scratch catalog so CREATE TABLE AS / temp joins work
@@ -122,10 +156,13 @@ fi
 cat > "$CATALOG_DIR/jmx.properties" <<'EOF'
 connector.name=jmx
 EOF
+add_catalog_rule "jmx" "read-only"
 cat > "$CATALOG_DIR/memory.properties" <<'EOF'
 connector.name=memory
 memory.max-data-per-node=512MB
 EOF
+# memory is a writable scratch catalog (CREATE TABLE AS / temp joins) -> `all`.
+add_catalog_rule "memory" "all"
 
 # ── Iceberg over the Loom lake, via the N1 Iceberg REST Catalog ───────────────
 # Emitted ONLY when the IRC is wired. Storage auth is the container's
@@ -151,6 +188,8 @@ if [ -n "$IRC_URL" ]; then
     echo "fs.azure.enabled=true"
     echo "azure.auth-type=DEFAULT"
   } > "$CATALOG_DIR/${CATALOG_NAME}.properties"
+  # The Loom lake is read-only federation (writes go through the item editors).
+  add_catalog_rule "$CATALOG_NAME" "read-only"
   log "wired Iceberg catalog '${CATALOG_NAME}' -> ${IRC_URL}${IRC_PREFIX}"
 else
   log "LOOM_ICEBERG_CATALOG_URL unset — no lake catalog wired; jmx + memory serve."
@@ -173,10 +212,38 @@ env | while IFS= read -r LINE; do
       NAME=$(printf '%s' "${VAR#LOOM_TRINO_CATALOG_}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
       [ -n "$NAME" ] || continue
       printf '%b\n' "$VAL" > "$CATALOG_DIR/${NAME}.properties"
+      # External federation sources are read-only at the engine floor; the BFF
+      # (trino-authz.ts) additionally decides WHICH callers may reach them.
+      add_catalog_rule "$NAME" "read-only"
       log "wired operator catalog '${NAME}'"
       ;;
   esac
 done
 
 log "catalogs: $(ls -1 "$CATALOG_DIR" | tr '\n' ' ')"
+
+# ── Emit the deny-by-default access control (rendered from the catalogs above) ─
+if [ "$ACCESS_CONTROL_MODE" = "none" ]; then
+  rm -f "$RULES_TMP"
+  log "SECURITY WARNING: LOOM_TRINO_ACCESS_CONTROL=none — engine catalog authorization is DISABLED (Trino AllowAll). Any authenticated caller can query EVERY catalog. This is an explicit opt-out of the deny-by-default engine floor; the BFF still enforces per-caller catalog authorization."
+else
+  RULES_FILE="$CONFIG_DIR/access-control-rules.json"
+  {
+    echo '{'
+    echo '  "catalogs": ['
+    cat "$RULES_TMP"
+    # Trailing catch-all: any catalog not rendered above is DENIED (belt-and-
+    # suspenders — Trino already denies an unmatched catalog).
+    echo '    {"catalog": ".*", "allow": "none"}'
+    echo '  ]'
+    echo '}'
+  } > "$RULES_FILE"
+  rm -f "$RULES_TMP"
+  cat > "$CONFIG_DIR/access-control.properties" <<EOF
+access-control.name=file
+security.config-file=${RULES_FILE}
+EOF
+  log "engine authorization: file-based system access control ENABLED (deny-by-default); rules -> ${RULES_FILE}"
+fi
+
 exec "$@"

@@ -13,21 +13,39 @@
  * functional meanwhile because DuckDB (N2b) is the engine the picker starts on;
  * Trino only ADDS the "Federated SQL" choice.
  *
- * AUDIT: every execution — success or failure — writes an `_auditLog`
- * data-access row (principal, statement scope, catalogs, rows, outcome, ts) and
- * fans out through the audit stream BEFORE the response is sent. There is no
- * unaudited path to the cluster.
+ * AUDIT: every execution — success, authorization DENY, or failure — writes an
+ * `_auditLog` data-access row (principal, statement scope, catalogs, rows,
+ * outcome, ts) and fans out through the audit stream BEFORE the response is sent.
+ * There is no unaudited path to the cluster.
+ *
+ * AUTHORIZATION (#2678): the caller's Loom identity is resolved to the set of
+ * catalogs they may reach (deny-by-default — built-in catalogs open to any
+ * signed-in caller, external federation catalogs require an explicit grant in
+ * LOOM_TRINO_CATALOG_POLICY). A statement referencing a catalog outside that set
+ * is REFUSED 403 before the coordinator is touched. See lib/azure/trino-authz.ts.
  *
  * 200 → { ok:true, engine:'trino', columns, rows, rowCount, totalMs, catalogs, … }
  * 400 → bad request / statement error from the coordinator
  * 401 → unauthenticated
- * 503 → honest gate envelope (LOOM_TRINO_URL unset) — Fix-it names the wiring
+ * 403 → not authorized for a referenced catalog (deny-by-default catalog authz)
+ * 503 → honest gate envelope (LOOM_TRINO_URL unset / SEALED / auth unavailable)
  * 502 → cluster unreachable
  */
 import { apiError, apiOk } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiHonestGateError, backendGateResponse } from '@/lib/api/gate-envelope';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { recordQueryRun } from '@/lib/finops/query-run';
+import {
+  CATALOG_POLICY_ENV,
+  authorizeTrinoCatalogs,
+  builtinOpenCatalogs,
+  configuredCatalogs,
+  extractReferencedCatalogs,
+  parseCatalogPolicy,
+  resolveAllowedCatalogs,
+  type TrinoPrincipal,
+} from '@/lib/azure/trino-authz';
 import {
   TRINO_GATE_ID,
   TrinoError,
@@ -144,12 +162,56 @@ export const POST = withSession(async (req, { session }) => {
     workspaceId,
   };
 
+  // ── ENGINE-LEVEL CATALOG AUTHORIZATION (#2678) ──────────────────────────────
+  // The gap that kept #2641 red for three rounds: round 3 shipped AUTHENTICATION
+  // (Trino JWT authenticator) but NO authorization — the engine had no system
+  // access control, so any authenticated caller could query EVERY catalog, and
+  // this route ran whatever SQL it was handed. Resolve THIS caller's allowed
+  // catalogs and REFUSE a statement that reaches outside them, before the
+  // coordinator is touched. Deny-by-default: built-in catalogs
+  // (system/jmx/memory + the Loom lake) are open to any signed-in caller;
+  // external federation catalogs require an explicit grant in
+  // LOOM_TRINO_CATALOG_POLICY. (The engine's own file access control is the
+  // defense-in-depth floor for a direct in-VNet caller that bypasses this route.)
+  const principal: TrinoPrincipal = {
+    oid: session.claims.oid,
+    upn: session.claims.upn,
+    groups: session.claims.groups || [],
+    tenantId,
+    tenantAdmin: isTenantAdmin(session),
+  };
+  const catalogPolicy = parseCatalogPolicy(process.env[CATALOG_POLICY_ENV]);
+  const builtinCatalogs = builtinOpenCatalogs(trinoIcebergCatalog());
+  const allowedCatalogs = resolveAllowedCatalogs(principal, catalogPolicy, builtinCatalogs);
+  const referenced = extractReferencedCatalogs(sql, { defaultCatalog: catalog });
+  const decision = authorizeTrinoCatalogs({
+    referenced,
+    allowed: allowedCatalogs,
+    configured: configuredCatalogs(catalogPolicy, builtinCatalogs),
+  });
+  if (decision.effect === 'deny') {
+    // A denied federated query is a security event — write the audited failure
+    // row (Cosmos _auditLog + audit stream) BEFORE responding. No coordinator hop.
+    await logTrinoAccess({
+      ...audit,
+      catalogs: referenced.catalogs,
+      outcome: 'failure',
+      detail: `authorization denied (${decision.code}): ${decision.reason}`,
+    });
+    return apiError(decision.reason, 403, {
+      code: decision.code,
+      catalog: decision.catalog,
+      allowedCatalogs: decision.allowed,
+    });
+  }
+
   try {
     const result = await runTrinoQuery(sql, {
       maxRows,
       actorUpn: session.claims.upn,
       catalog,
       schema,
+      knownCatalogs: referenced.catalogs,
     });
     await logTrinoAccess({
       ...audit,
