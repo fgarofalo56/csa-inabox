@@ -289,8 +289,11 @@ test.describe('AOAI target-resolution G1 receipt (#2557 / #2568 / #2583)', () =>
   // --------------------------------------------------------------------------
   test('copilot UI — the surface reflects resolution and a real turn resolves the target or gates honestly', async ({ page, context }, testInfo) => {
     // A real AOAI turn behind Front Door on a shared console is variable; give
-    // it room so a slow-but-successful turn is not a false fail.
-    test.setTimeout(180_000);
+    // it room so a slow-but-successful turn is not a false fail. Raised
+    // 180s→240s to also cover the slow COLD-LOAD landing render measured below
+    // (the /copilot page can take ~30s to commit its first data render on a cold
+    // Front Door replica) plus the orchestrate turn, without a false timeout.
+    test.setTimeout(240_000);
     await signIn(context).catch(() => { /* storageState already set */ });
 
     // The callback RETURNS the outcome (read back off `.result`) rather than
@@ -303,12 +306,40 @@ test.describe('AOAI target-resolution G1 receipt (#2557 / #2568 / #2583)', () =>
       // (a) THE LANDING SURFACE reflects the resolution outcome — no blank box.
       // Either the "Ready" chip (page.tsx:326) OR the honest-gate MessageBar
       // "Orchestrator not fully ready" (page.tsx:391) must appear once status
-      // settles. The status fetch is async, so wait for one of them.
+      // settles. Both are gated on the client `/api/copilot/status` fetch: while
+      // it is in flight the chip reads "Checking orchestrator…" (page.tsx:323),
+      // and ONLY once `statusLoading` clears does one of the two states render.
+      //
+      // DIAGNOSTIC FIRST: confirm the data path actually answered. The page fires
+      // the status fetch from a mount effect a few seconds after DOMContentLoaded,
+      // so register the wait AFTER goto (the response cannot precede it). A route
+      // that never answers is the real vaporware/backend tell — surface it as a
+      // clear annotation instead of a vague "blank box" (the failure that a prior
+      // reviewer misread as an orchestrate-turn failure when it was really this
+      // landing check timing out).
+      const statusResp = await page
+        .waitForResponse((r) => r.url().includes('/api/copilot/status'), { timeout: 60_000 })
+        .catch(() => null);
+      testInfo.annotations.push({
+        type: 'landing-status',
+        description: statusResp ? `status ${statusResp.status()} answered` : 'status route did not answer within 60s',
+      });
+
+      // Then wait for the rendered state. TIMEOUT GROUNDED IN THE LIVE COLD-LOAD
+      // PROFILE (loom-ui-verify trace 30875024127): the status network resolves
+      // in <0.5s, but on a cold Front Door replica the client render that clears
+      // `statusLoading` and paints the "Ready" chip commits ~30s after
+      // navigation (both fetch results — status AND sessions — land together, a
+      // main-thread/hydration lag, not an AOAI failure). A 30s inner budget
+      // therefore false-failed a page that DOES render "Ready"; 90s gives margin
+      // while still failing a genuinely blank page (bounded by the 240s test
+      // budget above). The status/turn assertions this spec exists to make are
+      // NOT held hostage to the cold-hydration budget.
       const readyChip = page.getByText(/^Ready$/).first();
       const gateBar = page.getByText(/Orchestrator not fully ready|Azure OpenAI is not reachable/i).first();
       const surfaced = await Promise.race([
-        readyChip.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'ready').catch(() => ''),
-        gateBar.waitFor({ state: 'visible', timeout: 30_000 }).then(() => 'gate').catch(() => ''),
+        readyChip.waitFor({ state: 'visible', timeout: 90_000 }).then(() => 'ready').catch(() => ''),
+        gateBar.waitFor({ state: 'visible', timeout: 90_000 }).then(() => 'gate').catch(() => ''),
       ]);
       await page.screenshot({ path: testInfo.outputPath('copilot-landing.png') }).catch(() => {});
       expect(
