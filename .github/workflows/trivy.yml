@@ -220,6 +220,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 # v3.8.0
 
+      - name: Stage Copilot RAG corpus (loom-console only)
+        if: matrix.component == 'loom-console'
+        shell: bash
+        run: |
+          # #2929 — scan the image we actually SHIP. The console Dockerfile COPYs
+          # ./copilot-corpus (staged from repo-root docs/ + PRPs/, which sit
+          # outside the apps/fiab-console build context). Skipping the staging
+          # here would scan a materially different image from the deployed one,
+          # which is the same "the gate does not cover the artifact" gap the
+          # matrix comment above describes.
+          # Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+
       - name: Build image
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
         with:

@@ -53,16 +53,46 @@ export interface AdmitResult {
 export class BrokerNotConfiguredError extends Error {
   constructor() {
     super(
-      'Loom Capacity Broker not deployed. Set LOOM_CAPACITY_BROKER_URL (deploy ' +
-        'platform/fiab/bicep/modules/compute/loom-capacity-broker-app.bicep, minReplicas 2).',
+      'Loom Capacity Broker not deployed. Set LOOM_BROKER_URL (deploy ' +
+        'platform/fiab/bicep/modules/compute/loom-capacity-broker-app.bicep, minReplicas 2). ' +
+        'LOOM_CAPACITY_BROKER_URL is accepted as a legacy alias.',
     );
     this.name = 'BrokerNotConfiguredError';
   }
 }
 
-/** The configured broker base URL (internal ACA ingress), or null when unset. */
+/**
+ * The configured broker base URL (internal ACA ingress), or null when unset.
+ *
+ * READS BOTH NAMES, and that is a FIX, not sloppiness (measured 2026-08-04).
+ * The H-band capacity broker had a split-brain: everything that *describes* the
+ * binding used `LOOM_BROKER_URL` —
+ *   - `admin-plane/main.bicep:3816  { name: 'LOOM_BROKER_URL', value: '' }`
+ *     (the only name any bicep emits),
+ *   - the readiness gate `svc-capacity-broker`
+ *     (`env-checks/azure-services.ts: required: ['LOOM_BROKER_URL', …]`),
+ *   - EDITABLE_ENV / self-audit / docs/fiab/hyperscale.md,
+ * while this client — the only code that actually *consumes* it — read
+ * `LOOM_CAPACITY_BROKER_URL`. So an operator who followed the remediation text
+ * exactly drove the readiness gate GREEN while the broker stayed disabled: a
+ * gate satisfied by a value its own subject never reads.
+ *
+ * It was not theoretical. The live Commercial console carries BOTH vars set —
+ * the bicep-emitted `LOOM_BROKER_URL` plus a hand-added
+ * `LOOM_CAPACITY_BROKER_URL` — which is what hitting this mismatch and patching
+ * around it by hand looks like.
+ *
+ * The env-sync guard could not see any of it: `LOOM_CAPACITY_BROKER_URL`
+ * appeared "emitted by bicep" purely because `loom-capacity-broker-app.bicep`
+ * mentions it in a comment and an `@description`. Teaching that guard to ignore
+ * prose (see `stripBicepDocs` in scripts/ci/check-env-sync.mjs) is what surfaced
+ * this.
+ *
+ * The historical name is checked FIRST so no estate that already set it
+ * regresses; the documented/emitted name now works, which is the actual fix.
+ */
 export function capacityBrokerUrl(): string | null {
-  const raw = process.env.LOOM_CAPACITY_BROKER_URL;
+  const raw = process.env.LOOM_CAPACITY_BROKER_URL || process.env.LOOM_BROKER_URL;
   if (!raw || !raw.trim()) return null;
   return raw.trim().replace(/\/+$/, '');
 }

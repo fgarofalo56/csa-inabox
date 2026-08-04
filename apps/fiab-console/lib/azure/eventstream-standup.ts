@@ -43,6 +43,7 @@ import {
 } from './stream-analytics-client';
 import { clusterUri, defaultDatabase } from './kusto-client';
 import { trimEdges } from '@/lib/util/trim';
+import { EVENT_HUB_NAME_RULES, sanitizeBackingName } from './backing-name';
 
 // ── Topology shapes (mirror the visual designer + bundle EventstreamContent) ──
 export interface EsSourceNode { kind?: string; name?: string; namespace?: string; consumerGroup?: string; }
@@ -91,10 +92,17 @@ export interface EsStandUpResult {
   steps: string[];
 }
 
-/** Event Hub entity names: alnum, -, ., _ ; ≤ 250. Keep it portable. */
+/**
+ * Event Hub entity names: alnum, -, ., _ ; ≤ 250. Keep it portable.
+ *
+ * Delegates to the SHARED Loom→Azure name mapping in `./backing-name` so this
+ * stand-up path and the open-time auto-bind provider
+ * (`auto-bind-providers.eventstreamAutoBind`) compute the SAME hub name. When
+ * they differed, auto-bind's attach-if-exists would miss the hub this function
+ * created and provision a second one beside it.
+ */
 export function safeHubName(s: string): string {
-  const cleaned = trimEdges((s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), '-').slice(0, 200);
-  return cleaned || 'loom-eventstream';
+  return sanitizeBackingName(s || '', EVENT_HUB_NAME_RULES).name;
 }
 export function safeCgName(s: string, i: number): string {
   const c = trimEdges((s || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-'), '-').slice(0, 50);

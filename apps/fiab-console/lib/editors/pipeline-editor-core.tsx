@@ -67,17 +67,17 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
-// Common Azure regions for the "Create new factory" location picker (Commercial
-// + US Government). The default is the chosen resource group's location.
-const ADF_FACTORY_REGIONS = [
-  'eastus', 'eastus2', 'centralus', 'southcentralus', 'westus', 'westus2', 'westus3',
-  'northcentralus', 'westcentralus', 'canadacentral', 'northeurope', 'westeurope',
-  'uksouth', 'francecentral', 'germanywestcentral', 'switzerlandnorth',
-  'norwayeast', 'swedencentral', 'eastasia', 'southeastasia', 'japaneast',
-  'australiaeast', 'centralindia', 'koreacentral', 'brazilsouth', 'uaenorth',
-  // US Government
-  'usgovvirginia', 'usgovarizona', 'usgovtexas',
-];
+/**
+ * The auto-bind surfaces (progress / retry / rebind / gate / fallback) live in
+ * their own module — see its header for why each exists and which is allowed to
+ * be a form. `AutoBindWire` is the shape the bind GET's `autoBind` block carries.
+ */
+import {
+  AutoBindProgress, AutoBindRetry, AutoBindRebindNotice, AutoBindUnavailable,
+  AutoBindFallbackGate, type AutoBindWire,
+} from './pipeline-autobind-surfaces';
+/** The create-new-factory branch of the factory picker — its own module. */
+import { CreateFactoryForm } from './pipeline-create-factory-form';
 
 const useStyles = makeStyles({
   // `flex: '1 0 auto'` (G3): the editor column FILLS the chrome's mainPanel
@@ -95,6 +95,11 @@ const useStyles = makeStyles({
   starterGraphHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  // #2942 — the PROVISIONING surface. Auto-bind runs while the editor opens, so
+  // the wait must happen ON the real surface (ux-baseline: "show progress on
+  // the real surface — not a configuration form in its place"), full width like
+  // the canvas it is about to become, not a 720px form column.
+  provisioning: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
 });
 
 export interface ActivityTemplate {
@@ -166,6 +171,14 @@ export function PipelineEditorCore({
   const [newName, setNewName] = useState<string>('');       // create-new input
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  // #2942 / auto-bind-by-default — the AUTO-BIND result reported by the bind
+  // GET, which now provisions the backing pipeline instead of handing the user
+  // an empty picker. Drives the progress / honest-gate surfaces below.
+  const [autoBind, setAutoBind] = useState<AutoBindWire | null>(null);
+  // TRUE only when the user explicitly asked to re-map this item to a different
+  // factory/pipeline. The manual bind form is reachable ONLY through this flag
+  // (or a genuine `unavailable` gate) — it is never the default surface again.
+  const [rebinding, setRebinding] = useState(false);
 
   // ---- New-item create gate (isNew only) ----
   // A `/new` route has no Cosmos item, so binding can't run. The gate picks a
@@ -265,7 +278,20 @@ export function PipelineEditorCore({
   // ------------------------------------------------------------------
   // Binding
   // ------------------------------------------------------------------
-  const loadBinding = useCallback(async () => {
+  /**
+   * Resolve this item's binding.
+   *
+   * DEFAULT (`manual` false): the GET AUTO-BINDS — it creates-or-attaches the
+   * ADF/Synapse pipeline named after this item and persists the binding, so
+   * this returns a real `bound` name and the canvas opens. That is the #2942
+   * fix: the editor no longer opens on a "Bind to an existing pipeline" form
+   * whose dropdown reads "No pipelines found" and whose Bind button is disabled.
+   *
+   * MANUAL (`manual` true): sends `?autoBind=0` so the platform does NOT bind
+   * underneath the user. Used only by the demoted "Rebind" affordance, where
+   * the point is to SEE the candidate list and pick a different factory.
+   */
+  const loadBinding = useCallback(async (opts?: { manual?: boolean }) => {
     // Never GET /api/items/<slug>/new/bind — the route 404s on the literal "new"
     // (no Cosmos doc), which used to paint a spurious red bind-error banner on a
     // fresh /new before any user action. The create-gate handles `isNew`.
@@ -276,10 +302,13 @@ export function PipelineEditorCore({
       // appended when a factory is picked), so the dropdown matches the Factory
       // Resources tree instead of always showing the env-default factory. Absent
       // selection → env default (unchanged).
-      const res = await fetch(appendFactoryCoords(`${apiBase}/bind`, factory));
+      const base = appendFactoryCoords(`${apiBase}/bind`, factory);
+      const url = opts?.manual ? `${base}${base.includes('?') ? '&' : '?'}autoBind=0` : base;
+      const res = await fetch(url);
       const { ok, data, error: e } = await safePipelineJson(res);
       if (!ok || !data) { setBindError(e || 'failed to load binding'); return; }
       setBound(data.bound ?? null);
+      setAutoBind((data.autoBind as AutoBindWire) ?? null);
       setAvailable(Array.isArray(data.pipelines) ? data.pipelines : []);
       setListError(data.listError || null);
       setPreview(data.preview ?? null);
@@ -303,6 +332,25 @@ export function PipelineEditorCore({
   }, [apiBase, pickName, isNew, factory, isAdf]);
 
   useEffect(() => { loadBinding(); }, [loadBinding]);
+
+  /**
+   * The DEMOTED manual re-map affordance. Power users can still point this item
+   * at a different factory/pipeline — but it is an explicit action, never the
+   * state the editor opens in. `autoBind=0` stops the platform re-binding
+   * underneath the picker while it is open.
+   */
+  const startRebind = useCallback(() => {
+    setRebinding(true);
+    setMissing(false);
+    setBound(null);
+    void loadBinding({ manual: true });
+  }, [loadBinding]);
+
+  /** Leave the manual picker without changing anything; re-runs auto-bind. */
+  const cancelRebind = useCallback(() => {
+    setRebinding(false);
+    void loadBinding();
+  }, [loadBinding]);
 
   // Load the Loom workspace catalog for the create-gate picker (isNew only).
   // Reuses the {ok, workspaces:[{id,name}]} shape every editor's picker expects.
@@ -362,6 +410,8 @@ export function PipelineEditorCore({
       if (!ok || !data) { setBindError(e || 'bind failed'); return; }
       setBound(data.bound);
       setNewName('');
+      // The explicit re-map is done — hand the surface back to the canvas.
+      setRebinding(false);
       setFactoryRefreshKey((k) => k + 1);
       setWorkspaceRefreshKey((k) => k + 1);
       await loadBinding();
@@ -772,15 +822,13 @@ export function PipelineEditorCore({
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
+  // The LAST-RESORT surface, not the default one — see AutoBindFallbackGate.
   const bindGate = (
-    <MessageBar intent="warning">
-      <MessageBarBody>
-        <MessageBarTitle>This pipeline isn’t bound to a real Azure pipeline yet</MessageBarTitle>
-        A Loom pipeline item is a handle — bind it to an existing {config.containerLabel} pipeline, or create a
-        new one. Every action below (Run, Debug, Validate, Triggers, Save) targets the bound pipeline.
-        {listError && (<><br /><strong>Listing pipelines failed:</strong> {listError}</>)}
-      </MessageBarBody>
-    </MessageBar>
+    <AutoBindFallbackGate
+      containerLabel={config.containerLabel}
+      listError={listError}
+      onRetry={() => void loadBinding()}
+    />
   );
 
   // ------------------------------------------------------------------
@@ -908,11 +956,31 @@ export function PipelineEditorCore({
       main={
         <div className={s.pad}>
           {bindingLoading ? (
-            <div className={s.gate}><Spinner label="Resolving pipeline binding…" /></div>
-          ) : !bound ? (
+            // PROVISIONING, on the real surface — never a configuration form
+            // standing in for the canvas the user asked for.
+            <div className={s.provisioning} data-testid="pipeline-autobind-progress">
+              <AutoBindProgress containerLabel={config.containerLabel} rebinding={rebinding} />
+            </div>
+          ) : !bound && !rebinding && autoBind?.status === 'retry' ? (
+            <div className={s.provisioning} data-testid="pipeline-autobind-retry">
+              <AutoBindRetry
+                containerLabel={config.containerLabel}
+                reason={autoBind.reason}
+                onRetry={() => void loadBinding()}
+                onRebind={startRebind}
+              />
+            </div>
+          ) : !bound || rebinding ? (
             <>
             <div className={s.gate}>
-              {bindGate}
+              {/* The manual picker is reachable ONLY by an explicit Rebind, or
+                  when auto-bind reported a genuine estate gate it cannot
+                  self-serve. It is no longer the state the editor opens in. */}
+              {rebinding ? (
+                <AutoBindRebindNotice containerLabel={config.containerLabel} onCancel={cancelRebind} />
+              ) : autoBind?.status === 'unavailable' ? (
+                <AutoBindUnavailable reason={autoBind.reason} onRetry={() => void loadBinding()} />
+              ) : bindGate}
               {isAdf && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
                   <Subtitle2>Data Factory</Subtitle2>
@@ -953,59 +1021,24 @@ export function PipelineEditorCore({
                       )}
                     </>
                   ) : (
-                    // Create-new factory wizard — name + target resource group
-                    // (carries the subscription) + location. Real ARM PUT via
-                    // /api/adf/factories/create (Contract E#1). No JSON textarea.
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '560px' }}>
-                      <Field label="New factory name" required hint="Globally unique within Azure; 3-63 chars, letters/digits/hyphens.">
-                        <Input
-                          value={newFactoryName}
-                          onChange={(_, d) => { setNewFactoryName(d.value); setFactoryCreateError(null); }}
-                          placeholder="adf-loom-myteam"
-                        />
-                      </Field>
-                      <AzureResourcePicker
-                        type="Microsoft.Resources/subscriptions/resourceGroups"
-                        label="Target resource group"
-                        placeholder="Select a resource group (across all subscriptions)"
-                        value={newFactoryRg?.id}
-                        onChange={(r) => {
-                          setNewFactoryRg(r);
-                          // Default the factory's region to the resource group's
-                          // location; the operator can override below.
-                          if (r?.location && !newFactoryLocation) setNewFactoryLocation(r.location);
-                          setFactoryCreateError(null);
-                        }}
-                      />
-                      <Field label="Location" required hint="Azure region for the new Data Factory.">
-                        <Dropdown
-                          placeholder="Select a region"
-                          value={newFactoryLocation}
-                          selectedOptions={newFactoryLocation ? [newFactoryLocation] : []}
-                          onOptionSelect={(_, d) => setNewFactoryLocation(d.optionValue || '')}
-                        >
-                          {ADF_FACTORY_REGIONS.map((r) => (<Option key={r} value={r} text={r}>{r}</Option>))}
-                        </Dropdown>
-                      </Field>
-                      <div className={s.row}>
-                        <Button
-                          appearance="primary"
-                          icon={<Add20Regular />}
-                          disabled={factoryCreateBusy || !newFactoryName.trim() || !newFactoryRg || !(newFactoryLocation || newFactoryRg?.location)}
-                          onClick={createFactory}
-                        >
-                          {factoryCreateBusy ? 'Creating…' : 'Create factory'}
-                        </Button>
-                      </div>
-                      {factoryCreateError && (
-                        <MessageBar intent="error">
-                          <MessageBarBody>
-                            <MessageBarTitle>Could not create the factory</MessageBarTitle>
-                            {factoryCreateError}
-                          </MessageBarBody>
-                        </MessageBar>
-                      )}
-                    </div>
+                    <CreateFactoryForm
+                      name={newFactoryName}
+                      onNameChange={(v) => { setNewFactoryName(v); setFactoryCreateError(null); }}
+                      rg={newFactoryRg}
+                      onRgChange={(r) => {
+                        setNewFactoryRg(r);
+                        // Default the factory's region to the resource group's
+                        // location; the operator can override below.
+                        if (r?.location && !newFactoryLocation) setNewFactoryLocation(r.location);
+                        setFactoryCreateError(null);
+                      }}
+                      location={newFactoryLocation}
+                      onLocationChange={setNewFactoryLocation}
+                      busy={factoryCreateBusy}
+                      error={factoryCreateError}
+                      onCreate={createFactory}
+                      rowClassName={s.row}
+                    />
                   )}
                 </div>
               )}
@@ -1135,7 +1168,7 @@ export function PipelineEditorCore({
                 <Badge appearance="outline">{activityCount} activit{activityCount === 1 ? 'y' : 'ies'}</Badge>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
                 {validation && <Badge appearance="filled" color={validation.ok ? 'success' : 'danger'}>{validation.ok ? 'Validated' : 'Invalid'}</Badge>}
-                <Button size="small" appearance="subtle" icon={<Link20Regular />} onClick={() => { setBound(null); loadBinding(); }}>Rebind</Button>
+                <Button size="small" appearance="subtle" icon={<Link20Regular />} onClick={startRebind}>Rebind</Button>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => { loadPipeline(); loadRuns(); }} style={{ marginLeft: 'auto' }}>Refresh</Button>
               </div>
               {/* #2895 — bound but not yet present in the backend. An expected
@@ -1152,7 +1185,7 @@ export function PipelineEditorCore({
                     <strong>Save</strong> to create it, or rebind this item to a different pipeline.
                     <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                       <Button size="small" appearance="primary" icon={<Link20Regular />}
-                        onClick={() => { setMissing(false); setBound(null); loadBinding(); }}>
+                        onClick={startRebind}>
                         Rebind or create
                       </Button>
                       <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />}

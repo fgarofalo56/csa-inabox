@@ -126,6 +126,30 @@ export function isAmlConfigured(): boolean {
 }
 
 /**
+ * Stable GA api-version for the `Microsoft.MachineLearningServices` CONTROL
+ * PLANE — the single source of truth for every caller in the app.
+ *
+ * WHY THIS LIVES HERE AND IS EXPORTED (readiness 97→100). It used to be a
+ * module-private `ML_API` in `aml-client.ts`, so `lib/admin/health-probes.ts`
+ * `probeAml()` hand-wrote its own literal — and hand-wrote `2024-09-01`, an
+ * api-version that **does not exist** for this resource type. Microsoft Learn's
+ * version list for `Microsoft.MachineLearningServices/workspaces` runs
+ * … 2024-04-01, 2024-07-01-preview, **2024-10-01**, 2024-10-01-preview,
+ * 2025-01-01-preview … — there is no 2024-09-01 (2025-09-01 exists, which is
+ * the likely origin of the typo). ARM answers that GET with a 400, and
+ * `probeAml`'s catch classifies any non-401/403/404 as `warn`, which
+ * `lib/admin/readiness.ts` maps to capability state `'partial'`. That one token
+ * was the sole reason `/admin/readiness` reported "1 partial": the workspace,
+ * its RBAC and its env vars were all correctly provisioned.
+ *
+ * Two literals in two files cannot be kept in sync by review, so there is now
+ * one constant. `aml-client.ts` and `health-probes.ts` both import it, and
+ * `__tests__/aml-arm-api-version.test.ts` pins it to a version ARM actually
+ * publishes AND asserts the probe carries no api-version literal of its own.
+ */
+export const AML_ARM_API_VERSION = '2024-10-01';
+
+/**
  * The bare ARM resource path for the workspace (no scheme / host — prepend
  * `armBase()`). Mirrors `foundry-client.ts::workspaceArmBase()` but uses the
  * standalone AML coordinates.

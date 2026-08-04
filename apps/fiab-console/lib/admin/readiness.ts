@@ -277,6 +277,14 @@ export const GATE_PROBE_MAP: Record<string, string> = {
   'svc-dab-runtime': 'probe-dab-runtime',
   'svc-udf-function': 'probe-udf-runtime',
   'svc-mcp-catalog': 'probe-builtin-mcp',
+  // The env half of this gate can only ever observe that SOME authorization var
+  // is set. It cannot see whether a DEPLOYED catalog actually rejects an
+  // anonymous caller — and that is the only question worth asking (issue #2643).
+  // probe-loom-unity-authz makes a real unauthenticated GET against
+  // LOOM_UNITY_URL and returns fail/critical on an HTTP 200, so a catalog that
+  // answers anonymous callers now drives this capability to 'blocked' with
+  // verified:'live-probe' instead of resting on env presence.
+  'svc-loom-unity-authz': 'probe-loom-unity-authz',
 };
 
 // ── weighting ────────────────────────────────────────────────────────────────

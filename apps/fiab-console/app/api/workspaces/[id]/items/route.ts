@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
+import { autoBindOnCreate } from '@/lib/azure/auto-bind';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
@@ -157,6 +158,11 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const items = await itemsContainer();
     const { resource } = await items.items.create<WorkspaceItem>(item);
     if (resource) void upsertLoomDoc(docForItem(resource, session.claims.oid));
+    // AUTO-BIND (auto-bind-by-default §1) — the workspace "New item" path.
+    // Create-or-attach the Azure object named after this item before returning,
+    // so no editor can open on a "bind me first" form. Deadline-bounded,
+    // never-throwing, and a no-op for types with no backing service.
+    if (resource) await autoBindOnCreate(resource);
 
     // Fabric parity: creating a Lakehouse also provisions a paired SQL
     // analytics endpoint (a Warehouse-typed item). Both live in the same
