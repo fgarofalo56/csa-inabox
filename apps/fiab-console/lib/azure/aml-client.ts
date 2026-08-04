@@ -56,11 +56,14 @@ import {
   resolveAmlTarget,
   amlWorkspaceArmPath,
   AmlNotConfiguredError,
+  AML_ARM_API_VERSION,
   type AmlTarget,
 } from './resolve-aml-target';
 
-/** Stable GA api-version for Microsoft.MachineLearningServices control plane. */
-const ML_API = '2024-10-01';
+/** Stable GA api-version for Microsoft.MachineLearningServices control plane.
+ *  Re-exported from resolve-aml-target so the health probe and this client can
+ *  never drift apart again (see AML_ARM_API_VERSION for the 2024-09-01 bug). */
+const ML_API = AML_ARM_API_VERSION;
 /**
  * api-version that ships the Compute Instance `updateIdleShutdownSetting`
  * control-plane action (it isn't exposed under the 2024-10-01 GA compute
