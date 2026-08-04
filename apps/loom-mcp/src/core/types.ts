@@ -54,6 +54,19 @@ export interface AuditEvent {
   outcome: 'ok' | 'error';
   /** Row/record count returned, when the tool reports one. */
   count?: number;
+  /**
+   * For a mutating tool (M3/M5): whether this call only PLANNED the change
+   * (dry-run, `apply:false`) or APPLIED it (`apply:true`). Absent for reads.
+   * Makes the plan-vs-apply distinction explicit in the audit trail rather than
+   * leaving it implicit in `args_hash`.
+   */
+  mutation?: 'planned' | 'applied';
+  /**
+   * The non-secret target principal / resource an admin action affects (M5,
+   * §5.4 "audit … includes the target principal") — e.g. the grantee id, the
+   * assigned principal, or the gate id. Never a secret.
+   */
+  target?: string;
   /** Wall-clock duration of the tool call. */
   duration_ms: number;
   /** Deny reason or error code, for triage. */
@@ -101,6 +114,14 @@ export interface ToolSpec {
    * first) and the validated args, call the SDK and return the raw data plus an
    * optional record count. The core scrubs the returned `data` before it leaves
    * the process.
+   *
+   * A mutating tool (M3/M5) may also return `audit` metadata — `mutation`
+   * (`planned` for a dry-run, `applied` for a real mutation) and a non-secret
+   * `target` principal — which the core copies into the audit event so the
+   * plan-vs-apply distinction and the affected principal are recorded (§5.4/§5.7).
    */
-  run(ctx: { auth: AuthContext; args: Record<string, unknown> }): Promise<{ data: unknown; count?: number }>;
+  run(ctx: {
+    auth: AuthContext;
+    args: Record<string, unknown>;
+  }): Promise<{ data: unknown; count?: number; audit?: { mutation?: 'planned' | 'applied'; target?: string } }>;
 }

@@ -11,6 +11,7 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { buildToolHandler } from './tool.js';
+import type { AuthzPolicy } from './authz.js';
 import type { AuditSink, AuthContext, ToolSpec } from './types.js';
 
 export interface CreateServerOptions {
@@ -24,6 +25,13 @@ export interface CreateServerOptions {
   auth: AuthContext | null;
   /** Audit sink override (defaults to the stderr JSON sink). */
   audit?: AuditSink;
+  /**
+   * Per-server authorization policy. Omitted ⇒ the M1 read-only default
+   * (no mutations, PAT allowed, always enabled). M3 passes `{allowMutations:true}`;
+   * M5 passes the strict admin policy (`requireAdmin`, `rejectPat`, `enabled`).
+   * The same audited gate serves every server — there is no per-server authz fork.
+   */
+  authz?: AuthzPolicy;
 }
 
 /** Build a fully-wired MCP server (not yet connected to a transport). */
@@ -31,7 +39,12 @@ export function createLoomMcpServer(opts: CreateServerOptions): McpServer {
   const server = new McpServer({ name: opts.name, version: opts.version });
 
   for (const spec of opts.tools) {
-    const handler = buildToolHandler(spec, { server: opts.name, auth: opts.auth, audit: opts.audit });
+    const handler = buildToolHandler(spec, {
+      server: opts.name,
+      auth: opts.auth,
+      audit: opts.audit,
+      authz: opts.authz,
+    });
     server.registerTool(
       spec.name,
       {

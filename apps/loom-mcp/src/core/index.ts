@@ -5,7 +5,7 @@
  */
 export { createLoomMcpServer, type CreateServerOptions } from './server.js';
 export { buildToolHandler, type ToolHandler, type ToolHandlerOptions } from './tool.js';
-export { authorize, scopeSatisfies, type AuthzDecision } from './authz.js';
+export { authorize, scopeSatisfies, type AuthzDecision, type AuthzPolicy } from './authz.js';
 export { resolveAuth, patPrincipal, isTransportAllowed, type ResolveAuthOptions } from './auth.js';
 export { scrub, scrubString, isSecretKey } from './scrub.js';
 export { normalizeError, toErrorResult, errorResult, type NormalizedError } from './errors.js';
