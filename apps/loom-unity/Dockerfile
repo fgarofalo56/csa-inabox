@@ -10,34 +10,47 @@
 # Base image is PINNED to a released tag (never :latest). The official image is
 # published on Docker Hub (unitycatalog/unitycatalog).
 #
-# IMAGE-TAG PIN — re-verified 2026-07-28 (LU-1), pin UNCHANGED at v0.5.0:
+# IMAGE-TAG PIN — re-verified 2026-08-04. Base image PINNED at v0.5.0; the #1603
+# permission-GET fix is applied by OVERLAYING the upstream v0.5.1 unitycatalog-
+# server ARTIFACT (see stage 2, lib-loom-override) — NOT by bumping the base tag:
 #   Upstream cut GitHub release v0.5.1 on 2026-07-18 (credential-cache scoping in
 #   unitycatalog-hadoop, plus a fix for the permission GET routes returning HTTP
-#   500 when server-side authorization is ENABLED — directly relevant to LU-2).
-#   BUT the Docker Hub repository publishes no such image:
+#   500 when server-side authorization is ENABLED — issue #1603).
+#   The Docker Hub IMAGE for v0.5.1 was never published:
 #     GET https://hub.docker.com/v2/repositories/unitycatalog/unitycatalog/tags/v0.5.1
 #       -> 404 {"message":"httperror 404: tag 'v0.5.1' not found"}
-#     Released tags actually published there: v0.5.0, v0.4.0, v0.3.1, v0.3.0,
-#     v0.2.1 (plus `latest` and main-<sha> dev tags); v0.5.0 last pushed 2026-07-03.
-#   There is therefore nothing to bump TO. The pin stays at v0.5.0 rather than
-#   moving to `latest` (unpinned) or rebuilding the server from source (that
-#   would end "packaging, not a fork"). Re-check when upstream publishes the
-#   image — the permissions-GET-with-authorization fix is the reason to move
-#   promptly once it exists.
+#     (v0.5.0 is still the newest published tag.) The earlier note "there is
+#     therefore nothing to bump TO" checked ONLY Docker Hub and was incomplete:
+#   the v0.5.1 SERVER MODULE *is* published on Maven Central —
+#     io.unitycatalog:unitycatalog-server:0.5.1  (upstream's own released binary).
+#   That is the same "packaging, not a fork" seam this image already uses for the
+#   Postgres JDBC driver, so stage 2 OVERLAYS it instead of forking or rebuilding
+#   from source. The published jar is THIN — only `io.unitycatalog.*` classes plus
+#   the `jcasbin_auth_model.conf` authorization-model resource, no shaded third-
+#   party packages — and it BUNDLES the server + control model classes. Prepended
+#   to the server classpath (ahead of the v0.5.0 `server/target/classes`), its
+#   classes WIN the first-match scan, so the whole UC server module — the fixed
+#   PermissionService + UnityAccessDecorator + JCasbinAuthorizer, the bundled
+#   models, and the auth-model resource — runs at v0.5.1 as a self-consistent set,
+#   while every THIRD-PARTY dependency stays exactly as the pinned base ships it.
+#   The v0.5.0 and v0.5.1 server POMs are byte-identical except their own version
+#   strings (ZERO third-party dependency changes — verified 2026-08-04), so the
+#   v0.5.1 classes link cleanly against the base image's v0.5.0 dependency jars.
+#   Building the server from source is still NOT done here (that would end
+#   "packaging, not a fork") — this consumes upstream's released artifact verbatim.
 #   Note also (carried from LU-2): `server.access-token-timeout` exists on
 #   upstream main but NOT in v0.5.0/v0.5.1, so the entrypoint does not render it.
 #
-#   CONSEQUENCE OF STAYING ON v0.5.0, MEASURED (svc-loom-unity-authz round 4):
-#   the #1603 bug above is not latent — it fires the moment authorization is
-#   enabled. On this pinned image,
+#   MEASURED, on the BARE v0.5.0 image before the overlay (svc-loom-unity-authz
+#   round 4): the #1603 bug is not latent — it fires the moment authorization is
+#   enabled.
 #     GET /api/2.1/unity-catalog/permissions/{securable}/{name}
-#   returns HTTP 500 "No authorization expression found." while
-#   server.authorization=enable, and 200 while it is disabled. PATCH on the same
-#   path returns 200 in both states, so grant/revoke works and READS do not.
-#   That breaks the Console's Grants pane and the LU-4 effective-permissions
-#   resolver (which reads that route for the target and every ancestor) on any
-#   catalog running with authorization on. Transcript + control case:
-#   docs/fiab/security/loom-unity-authz-proof.md.
+#   returned HTTP 500 "No authorization expression found." while
+#   server.authorization=enable, and 200 while disabled (PATCH 200 in both). That
+#   broke the Console's Grants pane and the LU-4 effective-permissions resolver.
+#   WITH the v0.5.1 server overlay that GET returns 200 with authorization enabled
+#   — apps/loom-unity/tests/authz/authz-e2e.sh case 9 (now expects 200). Transcript
+#   + control cases: docs/fiab/security/loom-unity-authz-proof.md.
 #
 #   ALSO MEASURED: upstream `AuthDecorator` (v0.5.0 AND v0.5.1) rejects any
 #   bearer whose `iss` is not the server's own `internal` issuer, so a Microsoft
@@ -94,6 +107,25 @@ RUN curl -fsSL -o /build/postgresql.jar \
       "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PG_JDBC_VERSION}/postgresql-${PG_JDBC_VERSION}.jar" \
  && echo "${PG_JDBC_SHA256}  /build/postgresql.jar" | sha256sum -c -
 
+# ── #1603 overlay — upstream v0.5.1 unitycatalog-server (permission-GET fix) ────
+# The permission GET routes 500 under server.authorization=enable on v0.5.0
+# (issue #1603). Docker Hub never published the v0.5.1 IMAGE, but Maven Central
+# publishes the v0.5.1 SERVER MODULE — io.unitycatalog:unitycatalog-server:0.5.1,
+# upstream's own released binary. Stage 2 PREPENDS this thin jar to the server
+# classpath so its (fixed) classes shadow the v0.5.0 base copies; see the header
+# rationale for why this is packaging, not a fork.
+#
+# Pin the artifact AND its SHA-256. The digest below was verified by downloading
+# the jar from Maven Central on 2026-08-04 and hashing it locally — it matched
+# both the value hashed locally and the published `.jar.sha256` sidecar. A
+# tampered or truncated download fails the build instead of shipping the bug back.
+ARG UC_SERVER_VERSION=0.5.1
+ARG UC_SERVER_SHA256=df8647d5a0e2b72c623fff5c2cf6f08a739a33e34aea960dfbd862495ef3b027
+RUN mkdir -p /build/override \
+ && curl -fsSL -o /build/override/unitycatalog-server.jar \
+      "https://repo1.maven.org/maven2/io/unitycatalog/unitycatalog-server/${UC_SERVER_VERSION}/unitycatalog-server-${UC_SERVER_VERSION}.jar" \
+ && echo "${UC_SERVER_SHA256}  /build/override/unitycatalog-server.jar" | sha256sum -c -
+
 COPY java/ /build/src/
 RUN mkdir -p /build/classes /build/lib \
  && javac -Xlint:all -cp /build/postgresql.jar -d /build/classes \
@@ -132,32 +164,52 @@ RUN apk upgrade --no-cache \
 # Only relevant to the legacy H2 fallback — Postgres owns its own schema.
 RUN cp -a /home/unitycatalog/etc/db /home/unitycatalog/etc/db.seed 2>/dev/null || true
 
-# Postgres driver + Entra auth plugin, appended to the server classpath.
+# Server classpath overlay + Loom jars.
 #
 # The upstream start script runs `java -cp $(cat <classpath-file>)`, where the
-# classpath file is a single line written by sbt under server/target. We rewrite
-# that file IN PLACE (not `mv`) so its ownership and mode survive, and use
-# `$(cat ...)` so a trailing newline is stripped — a newline inside the -cp
-# argument would word-split the java command and break the boot.
+# classpath file is a single colon-separated line written by sbt under
+# server/target — and it includes `server/target/classes`, the image's own
+# compiled v0.5.0 server classes. Java resolves a class from the FIRST classpath
+# entry that contains it, so ORDER decides which copy wins. We rewrite the file
+# IN PLACE (not `mv`) so its ownership and mode survive, and use `$(cat ...)` so a
+# trailing newline is stripped — a newline inside the -cp argument would
+# word-split the java command and break the boot.
 #
-# The build FAILS LOUDLY if the classpath file is missing or the rewrite does not
-# take: silently shipping an image whose Postgres driver is not on the classpath
-# would be a catalog that quietly boots on H2 while the deployment claims Postgres.
+#   PREPEND  lib-loom-override/unitycatalog-server.jar (upstream v0.5.1) — placed
+#            BEFORE the v0.5.0 server/target/classes so the #1603-fixed classes
+#            (PermissionService, UnityAccessDecorator, …) win the first-match
+#            scan. This is the whole point of the overlay. The v0.5.0 classes stay
+#            on the path as a fallback for anything the jar does not carry — the
+#            jar only ADDS/SHADOWS, never removes, so there is no not-found risk.
+#   APPEND   lib-loom/* (Postgres driver + Entra auth plugin) — purely additive,
+#            unique classes, so their position does not matter.
+#
+# The build FAILS LOUDLY if the classpath file is missing, the Postgres/Entra
+# rewrite does not take, or the v0.5.1 override is not FIRST on the path — a
+# shadowed override would silently ship the v0.5.0 500-on-permission-GET bug while
+# claiming to fix it, which is exactly the failure this assertion exists to catch.
 COPY --from=jdbcplugin /build/lib/ /home/unitycatalog/lib-loom/
+COPY --from=jdbcplugin /build/override/ /home/unitycatalog/lib-loom-override/
 RUN set -eu; \
     CP_FILE="$(find /home/unitycatalog -type f -name classpath -path '*server/target*' | head -n 1)"; \
     if [ -z "${CP_FILE}" ]; then \
-      echo "FATAL: upstream classpath file not found under /home/unitycatalog/server/target — cannot install the Postgres driver" >&2; \
+      echo "FATAL: upstream classpath file not found under /home/unitycatalog/server/target — cannot install the #1603 server override or the Postgres driver" >&2; \
       exit 1; \
     fi; \
+    OVERRIDE="$(find /home/unitycatalog/lib-loom-override -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
     EXTRA="$(find /home/unitycatalog/lib-loom -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
-    printf '%s:%s' "$(cat "${CP_FILE}")" "${EXTRA}" > /tmp/loom-classpath; \
+    if [ -z "${OVERRIDE}" ]; then echo "FATAL: v0.5.1 unitycatalog-server override jar not found in lib-loom-override" >&2; exit 1; fi; \
+    printf '%s:%s:%s' "${OVERRIDE}" "$(cat "${CP_FILE}")" "${EXTRA}" > /tmp/loom-classpath; \
     cat /tmp/loom-classpath > "${CP_FILE}"; \
     rm -f /tmp/loom-classpath; \
-    chmod 0555 /home/unitycatalog/lib-loom; \
-    chmod 0444 /home/unitycatalog/lib-loom/*.jar; \
-    chown -R unitycatalog:unitycatalog /home/unitycatalog/lib-loom; \
-    grep -q 'loom-unity-entra-auth.jar' "${CP_FILE}" || { echo "FATAL: classpath rewrite did not take" >&2; exit 1; }
+    chmod 0555 /home/unitycatalog/lib-loom /home/unitycatalog/lib-loom-override; \
+    chmod 0444 /home/unitycatalog/lib-loom/*.jar /home/unitycatalog/lib-loom-override/*.jar; \
+    chown -R unitycatalog:unitycatalog /home/unitycatalog/lib-loom /home/unitycatalog/lib-loom-override; \
+    grep -q 'loom-unity-entra-auth.jar' "${CP_FILE}" || { echo "FATAL: classpath rewrite did not take (Postgres/Entra jars missing)" >&2; exit 1; }; \
+    case "$(cat "${CP_FILE}")" in \
+      "${OVERRIDE}:"*) : ;; \
+      *) echo "FATAL: the v0.5.1 unitycatalog-server override is not FIRST on the classpath — the v0.5.0 #1603 permission-GET-500 bug would still ship" >&2; exit 1 ;; \
+    esac
 
 # ── SC1 supply-chain gate — Java layer ────────────────────────────────────────
 # The upstream image bakes its whole sbt/coursier build cache (864 jars, 1.3 GB)
@@ -204,3 +256,4 @@ LABEL org.opencontainers.image.source="https://github.com/fgarofalo56/csa-inabox
 LABEL csa.loom.component="loom-unity"
 LABEL csa.loom.version="0.2.0"
 LABEL csa.loom.upstream="unitycatalog/unitycatalog:v0.5.0"
+LABEL csa.loom.upstream.server-override="io.unitycatalog:unitycatalog-server:0.5.1 (Maven Central overlay — #1603 permission-GET fix)"

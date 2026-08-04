@@ -155,6 +155,25 @@ the **v0.5.1** release whose container image Docker Hub has never published
 the fix as "directly relevant to LU-2" — what neither said is that **turning
 authorization on is what triggers the bug**.
 
+> **UPDATE 2026-08-04 — RESOLVED without waiting for the Docker image.** The
+> earlier disposition ("nothing to bump to; wait for the v0.5.1 image") checked
+> only Docker Hub. The v0.5.1 **server module** *is* published on Maven Central —
+> `io.unitycatalog:unitycatalog-server:0.5.1`, upstream's own released binary —
+> and it carries this exact fix (the jar contains the corrected
+> `PermissionService`, `UnityAccessDecorator`, `JCasbinAuthorizer`, and
+> `jcasbin_auth_model.conf`). `apps/loom-unity/Dockerfile` now OVERLAYS it: the
+> thin jar (only `io.unitycatalog.*` classes + the jCasbin auth-model resource,
+> and it bundles the server + control model classes) is **prepended** to the
+> server classpath so its classes shadow the v0.5.0 base copies as a
+> self-consistent set, while every third-party dependency stays as the pinned
+> base ships it. The v0.5.0 and v0.5.1 server POMs are byte-identical except their
+> own version strings (zero third-party dependency changes, verified), so the
+> overlay links cleanly — this is packaging (as with the Postgres driver), not a
+> fork or a from-source build. `authz-e2e.sh` case 9 now asserts **200**. This is
+> a Loom-side, code-fixable defect after all. Final gate: an image rebuild + the
+> `authz-e2e.sh` run in Docker/CI (that harness is the live proof); a catalog
+> running an image built before this overlay still 500s until redeployed.
+
 Surfaces affected on the OSS backend once authorization is enabled:
 
 * `/catalog/unity — Grants` (`listPermissions`);
@@ -179,4 +198,4 @@ bash apps/loom-unity/tests/authz/authz-e2e.sh
 | Finding | Closes when |
 | --- | --- |
 | 2 — Console cannot authenticate | A UC token-exchange client in `uc-backend.ts` (mint Entra token → `POST /api/1.0/unity-control/auth/tokens` → cache the internal token), **plus** registration of the Console principal as an enabled Unity Catalog user. Then `authMode=entra` can be turned on for the live estate and case 4 becomes a 200. |
-| 3 — permission GET 500 | Upstream publishes the v0.5.1 image and the Dockerfile pin moves (re-check the Docker Hub tag list; the release notes name this fix explicitly). Until then, grants reads require `server.authorization=disable`. |
+| 3 — permission GET 500 | **RESOLVED 2026-08-04** by overlaying the upstream v0.5.1 `unitycatalog-server` artifact from Maven Central (`apps/loom-unity/Dockerfile`) — Docker Hub never published the v0.5.1 *image*, but the *server module* is on Maven Central and carries the fix. `authz-e2e.sh` case 9 now asserts 200. Confirm live with an image rebuild + the `authz-e2e.sh` Docker run; a catalog on an image built before the overlay still requires `server.authorization=disable` for grants reads until it is redeployed. |
