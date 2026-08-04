@@ -256,6 +256,26 @@ export default defineConfig({
       },
     },
     {
+      // #2573 — Help Center guides CLICK-WALK. Opens the three guides #2566
+      // rewrote (U7 mapping-dataflow / U8 kql-dashboard / U13 data-pipeline) in
+      // the /learn Guides & reference tab with a real button click, and asserts
+      // each "View walkthrough" dialog renders its authored steps (the "<N>
+      // steps" badge + the first authored step caption) — the G1 browser receipt
+      // #2566 could not produce from source inspection alone. Deliberately NOT a
+      // required check: it is the G1 receipt for #2573.
+      name: 'help-center-guides',
+      testDir: './e2e',
+      testMatch: /help-center-guides\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        // Wide enough that the Guides tab renders its full toolbar + card grid
+        // (the Copilot rail hides below 1100px; guides render regardless).
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
       // L5 — column fan-out canvas + impact analysis receipts.
       name: 'lineage-columns',
       testDir: './e2e',
