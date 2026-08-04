@@ -123,14 +123,14 @@ export interface LoomWsBundle {
  * name (see SECRET_REF_KEY_RE) — `secretRef` etc. export verbatim, exactly
  * like the `.loomapp` env convention.
  */
-const SECRET_KEY_RE =
+export const SECRET_KEY_RE =
   /(secret|password|passwd|credential|accountkey|account_key|apikey|api_key|connectionstring|connection_string|sastoken|sas_token|sharedaccesskey|shared_access_key|primarykey|primary_key|clientsecret|client_secret|accesstoken|access_token|bearertoken|bearer_token|privatekey|private_key)/i;
 
 /** Reference-name keys (pointers into a vault — safe to export). */
-const SECRET_REF_KEY_RE = /ref(erence)?(name)?$/i;
+export const SECRET_REF_KEY_RE = /ref(erence)?(name)?$/i;
 
 /** Recursion bound for pathological state blobs. */
-const MAX_SCRUB_DEPTH = 32;
+export const MAX_SCRUB_DEPTH = 32;
 
 /**
  * Deep-copy `value`, EXCLUDING every property whose key names a secret (and is
