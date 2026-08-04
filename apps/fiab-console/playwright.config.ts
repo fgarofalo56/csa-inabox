@@ -266,5 +266,24 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // #2624 — Unity Catalog "Audit & system tables" pane CLICK-WALK. The G1
+      // browser receipt (walk all five tabs with real clicks + drive Run) and
+      // the G2 receipt (a blocked HonestGate renders an inline Fix-it that
+      // launches the wizard; a cloud-unavailable gate names the Loom-native
+      // fallback instead). Honest-gate tolerant. Deliberately NOT a required
+      // check — it is the G1/G2 receipt for issue #2624.
+      name: 'uc-system-tables-clickwalk',
+      testDir: './e2e',
+      testMatch: /uc-system-tables-clickwalk\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        // Wide default so the five-tab strip + filter row lay out as measured;
+        // the spec re-runs a 900px narrow pass in-test for the badge-overlap gate.
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
