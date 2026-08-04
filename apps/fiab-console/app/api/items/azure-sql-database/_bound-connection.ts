@@ -33,8 +33,9 @@ export function boundSqlConnection(item: WorkspaceItem): { server: string; datab
 /**
  * True when a submitted host names the SAME logical Azure SQL server as the
  * bound host. Tolerant of bare-name vs FQDN (the editor binds and queries with
- * the bare server name, but a caller could send `<name>.database.windows.net`),
- * so the comparison is on the first DNS label, case-insensitively. An empty
+ * the bare server name, but a caller could send the fully-qualified host), so
+ * the comparison is on the first DNS label, case-insensitively — which keeps it
+ * cloud-agnostic (Commercial and Gov SQL suffixes both compare equal). An empty
  * `submitted` is treated as "no conflict" (the caller left the target implicit).
  */
 export function sqlHostsMatch(submitted: string, bound: string): boolean {
