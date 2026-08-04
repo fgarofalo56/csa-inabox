@@ -564,7 +564,7 @@ async function probeAas(h: ProbeHelpers): Promise<CheckResult> {
 async function probeAml(h: ProbeHelpers): Promise<CheckResult> {
   const base = { id: 'probe-aml', category: 'azure-services' as const, title: 'Azure ML workspace reachable + authorized (Data Science family)', severity: 'optional' as const };
   try {
-    const { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } = await import('@/lib/azure/resolve-aml-target');
+    const { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError, AML_ARM_API_VERSION } = await import('@/lib/azure/resolve-aml-target');
     let target;
     try { target = resolveAmlTarget(); }
     catch (e) {
@@ -572,7 +572,13 @@ async function probeAml(h: ProbeHelpers): Promise<CheckResult> {
       throw e;
     }
     const { armGet } = await import('@/lib/azure/arm-client');
-    const r: any = await withTimeout(armGet(`${amlWorkspaceArmPath(target)}?api-version=2024-09-01`), 6000);
+    // api-version comes from the SHARED constant, never a literal here. This
+    // line used to read `?api-version=2024-09-01` — a version ARM does not
+    // publish for Microsoft.MachineLearningServices/workspaces — so every run
+    // got a 400, the catch below classified it 'warn', and /admin/readiness
+    // reported Azure ML as the deployment's only "partial" capability while the
+    // workspace, its RBAC and its env vars were all correctly provisioned.
+    const r: any = await withTimeout(armGet(`${amlWorkspaceArmPath(target)}?api-version=${AML_ARM_API_VERSION}`), 6000);
     return { ...base, status: 'pass', detail: `Azure ML workspace reachable + authorized (${target.workspace} in ${target.resourceGroup}, ${r?.properties?.provisioningState || 'state n/a'}).` };
   } catch (e: any) {
     const msg = e?.message || String(e); const denied = DENIED.test(msg); const notFound = /404|not found/i.test(msg);

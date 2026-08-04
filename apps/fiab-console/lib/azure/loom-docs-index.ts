@@ -1049,6 +1049,24 @@ export function evaluateFreshness(
 }
 
 /**
+ * How many source files the corpus walker can currently SEE — a stat-only
+ * enumeration, no file reads, no network. Milliseconds.
+ *
+ * This is the reindex PREFLIGHT (#2929). `reindex()` returns
+ * `ok:false … 'No corpus chunks discovered'` when the walker finds nothing,
+ * which is exactly what the live console did on 2026-08-04: the image that
+ * routine builds produce ships `copilot-corpus/` holding only `.gitkeep`
+ * (only full-app-deploy-commercial.yml ran stage-copilot-corpus.sh), so
+ * `detectRoots()` found no bundled corpus, fell through to the dev walk-up for
+ * `mkdocs.yml`, found no repo either, and enumerated ZERO files. Checking that
+ * BEFORE going async keeps the failure loud and IMMEDIATE (a 502 in ~160ms)
+ * instead of burying it behind a poll that can only time out.
+ */
+export function corpusSourceCount(): number {
+  return enumerateSourceFiles(detectRoots()).length;
+}
+
+/**
  * Compare the staged/source corpus against what was last indexed. Cheap: a
  * stat-only walk + a single manifest read (no file contents re-hashed). Used by
  * the copilot-corpus health probe so a stale corpus is detectable at runtime.

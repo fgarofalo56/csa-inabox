@@ -34,14 +34,19 @@ import {
 } from '@/lib/azure/adf-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
-import { trimEdges } from '@/lib/util/trim';
+import { safePipelineName } from '@/lib/azure/backing-name';
 
-/** ADF pipeline names: letters/digits/_/- only, ≤ 140 chars (matches the
- * editor's bind NAME_RE). */
-function safePipelineName(displayName: string): string {
-  const cleaned = trimEdges(displayName.replace(/[^A-Za-z0-9_-]+/g, '-'), '-').slice(0, 140);
-  return cleaned || 'loom-adf-pipeline';
-}
+/**
+ * ADF pipeline names: letters/digits/_/- only, ≤ 140 chars (matches the
+ * editor's bind NAME_RE).
+ *
+ * Delegates to the SHARED mapping in `lib/azure/backing-name` so this
+ * install-time name and the open-time auto-bind name (`auto-bind-providers.
+ * adfPipelineAutoBind.backingNameFor`) can never diverge. When they diverged,
+ * auto-bind's attach-if-exists would miss the installer's pipeline and create a
+ * duplicate beside it.
+ */
+const ADF_PIPELINE_FALLBACK = 'loom-adf-pipeline';
 
 const adapter: DevPipelineAdapter = {
   label: 'ADF',
@@ -85,7 +90,7 @@ export const adfPipelineProvisioner: Provisioner = async (input): Promise<Provis
     };
   }
 
-  const pipelineName = safePipelineName(input.displayName);
+  const pipelineName = safePipelineName(input.displayName, ADF_PIPELINE_FALLBACK);
   const seed = await upsertAndRunDevPipeline(adapter, pipelineName, input.content);
   steps.push(...seed.steps);
 

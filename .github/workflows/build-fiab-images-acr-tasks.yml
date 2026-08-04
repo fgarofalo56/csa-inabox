@@ -337,6 +337,22 @@ jobs:
         if: env.BOUNDARY != 'Commercial'
         run: az cloud set --name AzureUSGovernment
 
+      - name: Stage Copilot RAG corpus (loom-console only)
+        if: matrix.name == 'loom-console'
+        shell: bash
+        run: |
+          # #2929 — WITHOUT THIS THE CONSOLE IMAGE SHIPS AN EMPTY COPILOT INDEX.
+          # The corpus lives at repo-root docs/ + PRPs/, which are OUTSIDE the
+          # apps/fiab-console build context, so the Dockerfile can only COPY what
+          # this script stages into apps/fiab-console/copilot-corpus (that dir is
+          # otherwise just a tracked .gitkeep). Until 2026-08-04 only
+          # full-app-deploy-commercial.yml ran it, so every image built HERE — the
+          # routine path — carried a corpus of exactly zero files, and
+          # POST /api/help-copilot/reindex answered 502 "No corpus chunks
+          # discovered" in ~160ms while the eval measured a stale index.
+          # Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+
       - name: Build + push via ACR Tasks
         run: |
           set -e

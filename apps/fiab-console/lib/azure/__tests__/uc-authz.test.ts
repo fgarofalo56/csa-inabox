@@ -134,15 +134,27 @@ describe('unityAuthorizationPosture', () => {
   // exact audience match — proven by running the image
   // (docs/fiab/security/loom-unity-authz-proof.md). Reporting it as hardened told
   // an operator the catalog hop was secured when in fact it was broken.
-  it('reports entra as NOT hardened — upstream rejects a directly-presented Entra bearer', () => {
+  it('reports entra as NOT hardened — the exchange lands, but the UC-user prerequisite is unproven', () => {
     process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';
     const p = unityAuthorizationPosture();
     expect(p.mode).toBe('entra');
+    // Still false, and deliberately: ossUcAuthHeader() now exchanges the Entra
+    // token for the server-minted internal token (uc-token-exchange.ts, #2679),
+    // but the exchange additionally requires the Console principal to be an
+    // ENABLED Unity Catalog user, which no deploy step performs. Claiming
+    // hardened before that is proven on a live catalog is a fabricated green.
     expect(p.hardened).toBe(false);
     expect(p.audience).toBe('api://unity-app-id/.default');
-    expect(p.detail).toMatch(/REJECTS/);
-    expect(p.remediation).toMatch(/LOOM_UNITY_TOKEN/);
-    expect(p.remediation).toMatch(/unity-control\/auth\/tokens/);
+    // The detail used to say the client "does not exist yet" and the
+    // remediation prescribed LOOM_UNITY_TOKEN — a credential no bicep module in
+    // the repo emits and no Key Vault secret backs. Both are corrected: the
+    // posture now names the exchange and the real outstanding prerequisite.
+    expect(p.detail).toMatch(/unity-control\/auth\/tokens/);
+    expect(p.detail).toMatch(/enabled Unity Catalog user/i);
+    expect(p.remediation).toMatch(/uc-token-exchange/);
+    expect(p.remediation).toMatch(/enabled Unity Catalog user/i);
+    // and it must NOT send operators back to the dead pre-shared-token path
+    expect(p.remediation).not.toMatch(/Set LOOM_UNITY_TOKEN/);
   });
 
   it('reports token mode as the one currently-working hardened posture', () => {

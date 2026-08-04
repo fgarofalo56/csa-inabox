@@ -103,6 +103,14 @@ jobs:
         run: node scripts/ci/check-deploy-job-scripts.mjs
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         run: node scripts/ci/check-image-producer-coverage.mjs
+      # image-producer-coverage says the image gets BUILT. This says the console
+      # image gets built with its CONTENTS: docs/ + PRPs/ sit outside the
+      # apps/fiab-console build context and copilot-corpus/ is a tracked
+      # .gitkeep, so an unstaged build COPYs an empty corpus with no error at
+      # all — which is how 7 of 8 console builders shipped a dead loom-docs
+      # index and the quality evals measured a stale one (#2929).
+      - name: console-corpus-staged (the console image ships its Copilot corpus — #2929)
+        run: node scripts/ci/check-console-corpus-staged.mjs
       - name: afd-endpoint-discovery (no CDN endpoint addressed by a name CI never discovered — #2828)
         run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)

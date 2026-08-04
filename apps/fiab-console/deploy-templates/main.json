@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "15302375898924664934"
+      "templateHash": "16403567563506056751"
     }
   },
   "definitions": {
@@ -2574,7 +2574,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "163375350743939371"
+              "templateHash": "9973456995908994130"
             }
           },
           "definitions": {
@@ -5167,6 +5167,54 @@
                 }
               }
             },
+            "mcpStoragePe": {
+              "condition": "[variables('mcpFilesActive')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('pe-{0}-file', variables('mcpStorageAccountName'))]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('complianceTags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[reference('network').outputs.privateEndpointsSubnetId.value]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "file-link",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('mcpStorageAccountName'))]",
+                      "groupIds": [
+                        "file"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "mcpStorage",
+                "network"
+              ]
+            },
+            "mcpStoragePeDnsGroup": {
+              "condition": "[variables('mcpFilesActive')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('pe-{0}-file', variables('mcpStorageAccountName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "file-zone",
+                    "properties": {
+                      "privateDnsZoneId": "[reference('network').outputs.privateDnsZoneIds.value.file]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "mcpStoragePe",
+                "network"
+              ]
+            },
             "mcpEnvStorage": {
               "condition": "[variables('mcpFilesActive')]",
               "type": "Microsoft.App/managedEnvironments/storages",
@@ -5182,7 +5230,8 @@
               },
               "dependsOn": [
                 "containerPlatformModule",
-                "mcpStorage"
+                "mcpStorage",
+                "mcpStoragePeDnsGroup"
               ]
             },
             "aiSearchDebugStorage": {
@@ -6232,7 +6281,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "2881113548566291117"
+                      "templateHash": "12069896971683010077"
                     }
                   },
                   "parameters": {
@@ -6513,7 +6562,8 @@
                       "[format('privatelink.purviewstudio.azure.{0}', if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'us', 'com'))]",
                       "[format('privatelink.{0}', if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'databricks.azure.us', 'azuredatabricks.net'))]",
                       "[format('privatelink.redis.cache.{0}', if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'usgovcloudapi.net', 'windows.net'))]",
-                      "privatelink.redis.azure.net"
+                      "privatelink.redis.azure.net",
+                      "[format('privatelink.file.{0}', environment().suffixes.storage)]"
                     ],
                     "vnetDiagLogs": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), createArray(), createArray(createObject('category', 'VMProtectionAlerts', 'enabled', true())))]"
                   },
@@ -6905,7 +6955,8 @@
                         "purviewStudio": "[resourceId('Microsoft.Network/privateDnsZones', variables('dnsZones')[22])]",
                         "databricks": "[resourceId('Microsoft.Network/privateDnsZones', variables('dnsZones')[23])]",
                         "redis": "[resourceId('Microsoft.Network/privateDnsZones', variables('dnsZones')[24])]",
-                        "redisManaged": "[resourceId('Microsoft.Network/privateDnsZones', variables('dnsZones')[25])]"
+                        "redisManaged": "[resourceId('Microsoft.Network/privateDnsZones', variables('dnsZones')[25])]",
+                        "file": "[resourceId('Microsoft.Network/privateDnsZones', variables('dnsZones')[26])]"
                       }
                     }
                   }
