@@ -41,9 +41,7 @@ import {
   bm25Rank,
   diversifyByDocument,
   rankSubstring,
-  surfaceBoostFactor,
   surfaceTopicTerms,
-  sourceWeightFor,
   DEFAULT_MAX_CHUNKS_PER_DOC,
   DEFAULT_SURFACE_BOOST,
   DEFAULT_SOURCE_WEIGHTS,
@@ -402,6 +400,67 @@ function bm25IndexFor(chunks: DocChunk[]): Bm25Index {
  */
 const RETRIEVAL_OVERFETCH = 4;
 
+/**
+ * How wide a candidate window to pull from AI Search before the shared ranker
+ * re-orders it (#2929). AI Search's `simple`/`any` scoring decides only which
+ * documents are CANDIDATES here — NOT their final order — so this must be wide
+ * enough that a specific gold document (buried by AI Search under same-named
+ * siblings) is still inside the window for `rankChunks` to surface. 100 covers
+ * the observed miss (`parity/lakehouse.md` sat well below AI Search's top ~32,
+ * giving hit-rate ~0.07); it is never smaller than the diversification
+ * over-fetch. AI Search caps `top` at 1000, so this is comfortably in range.
+ */
+export const AI_SEARCH_CANDIDATE_WINDOW = 100;
+
+/**
+ * The ONE ranking pipeline both retrieval backends run (issue #2585 ranker,
+ * wired to the AI Search path for #2929). Given a set of candidate chunks it
+ * returns the top `top` as DocHits under BM25 (IDF · TF-saturation · length
+ * normalisation) + the surface boost + source-class weighting — identical
+ * knobs, identical code — normalised to the documented 0..1 `DocHit.score`.
+ *
+ * Extracted from `searchCosmos` so the AI Search path can REUSE it verbatim
+ * rather than re-sorting AI Search's short returned window by a multiplier: for
+ * the SAME candidate documents the two backends now produce the SAME ordering,
+ * so the offline-measured Cosmos numbers (measure-retrieval.mjs, ~0.83) carry
+ * to the live AI Search path.
+ *
+ * `buildIndex` is injectable ONLY so the Cosmos path can keep its
+ * corpus-signature memoiser (`bm25IndexFor`): it always ranks the SAME full
+ * ~50k-chunk corpus, so the ~850 ms index build must be amortised across
+ * queries. The AI Search path ranks a small, per-query candidate window, so it
+ * uses the default fresh `buildBm25Index` — there is nothing stable to cache
+ * and a per-window build is microseconds.
+ */
+function rankChunks(
+  resources: DocChunk[],
+  query: string,
+  top: number,
+  opts: { bm25: boolean; surfaceTerms?: readonly string[]; sourceWeights: boolean },
+  buildIndex: (chunks: DocChunk[]) => Bm25Index = buildBm25Index,
+): DocHit[] {
+  if (opts.bm25 === false) {
+    // Kill-switch path — byte-identical to the pre-#2585 ranker.
+    return resources
+      .map((r) => ({ ...r, score: rankSubstring(query, r.content, r.heading) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, top);
+  }
+  const index = buildIndex(resources);
+  const ranked = bm25Rank(index, query, top, {
+    surfaceTerms: opts.surfaceTerms,
+    surfaceBoost: opts.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
+    // #2585 P2 — rank published product docs above the engineering ledger.
+    sourceWeights: opts.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
+  });
+  // Normalise to the 0..1 `DocHit.score` contract (BM25 is unbounded above and
+  // only comparable within one result set) — citations and the Copilot tool
+  // render this number.
+  const max = ranked.length > 0 ? ranked[0].score : 1;
+  return ranked.map((r) => ({ ...resources[r.index], score: max > 0 ? r.score / max : 0 }));
+}
+
 async function searchCosmos(
   query: string,
   top: number,
@@ -417,26 +476,15 @@ async function searchCosmos(
       ? { query: 'SELECT * FROM c WHERE c.kind = @k', parameters: [{ name: '@k', value: kind }] }
       : { query: 'SELECT * FROM c WHERE c.kind != @meta', parameters: [{ name: '@meta', value: META_KIND }] };
     const { resources } = await c.items.query<DocChunk>(q).fetchAll();
-    if (opts?.bm25 === false) {
-      // Kill-switch path — byte-identical to the pre-#2585 ranker.
-      return resources
-        .map((r) => ({ ...r, score: rankSubstring(query, r.content, r.heading) }))
-        .filter((r) => r.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, top);
-    }
-    const index = bm25IndexFor(resources);
-    const ranked = bm25Rank(index, query, top, {
+    // Ranking lives in the shared `rankChunks` (also used by the AI Search
+    // path, #2929); the memoiser is passed so the full-corpus index is built
+    // once and reused. `bm25 !== false` preserves the original default (a
+    // missing flag ranks with BM25).
+    return rankChunks(resources, query, top, {
+      bm25: opts?.bm25 !== false,
       surfaceTerms: opts?.surfaceTerms,
-      surfaceBoost: opts?.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
-      // #2585 P2 — rank published product docs above the engineering ledger.
-      sourceWeights: opts?.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
-    });
-    // Normalise to the 0..1 `DocHit.score` contract the AI Search path also
-    // honours (BM25 is unbounded above and only comparable within one result
-    // set) — citations and the Copilot tool render this number.
-    const max = ranked.length > 0 ? ranked[0].score : 1;
-    return ranked.map((r) => ({ ...resources[r.index], score: max > 0 ? r.score / max : 0 }));
+      sourceWeights: !!opts?.sourceWeights,
+    }, bm25IndexFor);
   } catch (e: any) {
     console.warn('[loom-docs-index] cosmos search failed', e?.message);
     return [];
@@ -470,15 +518,20 @@ export interface SearchDocsOptions {
  * Hybrid: try AI Search first; fall back to Cosmos substring if Search
  * isn't configured or returns nothing.
  *
- * Pipeline (#2585 P0/P1): over-fetch `top * RETRIEVAL_OVERFETCH` candidates →
- * apply the surface boost → cap chunks-per-document → slice to `top`.
+ * Pipeline (#2585 P0/P1): over-fetch candidates → rank via BM25 + surface boost
+ * + source weighting (`rankChunks`) → cap chunks-per-document → slice to `top`.
  *
- * Backend asymmetry, stated plainly: on the Cosmos/BM25 path the surface boost
- * is folded into SCORING, so it can promote a document from anywhere in the
- * corpus. On the AI Search path the ranking happens in the service, so the
- * boost can only re-sort the over-fetched window. The offline harness
- * (`scripts/csa-loom/measure-retrieval.mjs`) exercises the Cosmos path only —
- * the AI Search variant is a weaker approximation that has NOT been measured.
+ * Backend symmetry (#2929): BOTH paths now decide the final order with the SAME
+ * ranker (`rankChunks`). AI Search is used for RECALL only — it returns a WIDE
+ * candidate window (`AI_SEARCH_CANDIDATE_WINDOW`) which is then re-ranked by the
+ * identical BM25 + surface-boost + source-weight pipeline the Cosmos path uses,
+ * so the two backends produce the same ordering for the same candidate
+ * documents. The one residual asymmetry: BM25 corpus statistics (IDF, avgdl)
+ * are computed over the full corpus on the Cosmos path but over the AI-Search
+ * candidate window on the AI Search path. The offline harness
+ * (`scripts/csa-loom/measure-retrieval.mjs`) exercises the Cosmos path; per G1
+ * the AI Search path's live numbers confirm only after a `loom-docs` reindex +
+ * a real `copilot-quality-evals` run.
  */
 export async function searchDocs(
   query: string,
@@ -513,24 +566,29 @@ export async function searchDocs(
 
   if (isSearchConfigured()) {
     try {
-      const raw = await searchSearch(query, overfetch, kind);
-      if (raw.length > 0) {
-        // AI Search ranks server-side, so the surface prior and the source
-        // weighting can only re-sort the window we were given (see the note
-        // above). Both multipliers are applied together so one pass settles the
-        // order.
-        const boosted = surfaceTerms.length || weightSources
-          ? [...raw]
-              .map((h) => ({
-                h,
-                s: h.score
-                  * (surfaceTerms.length ? surfaceBoostFactor(surfaceTerms, h) : 1)
-                  * (weightSources ? sourceWeightFor(h.path) : 1),
-              }))
-              .sort((a, b) => b.s - a.s)
-              .map(({ h, s }) => ({ ...h, score: s }))
-          : raw;
-        const hits = finish(boosted);
+      // #2929 — retrieve-then-rerank. AI Search does RECALL: pull a WIDE
+      // candidate window (not the short top-N the old path merely re-sorted).
+      // The final ORDER is decided by `rankChunks` — the SAME BM25 + surface
+      // boost + source-weight pipeline the Cosmos path proves offline
+      // (measure-retrieval.mjs, ~0.83) — so the live AI Search path inherits
+      // that ordering instead of AI Search's un-weighted `simple` scoring,
+      // which buried specific gold docs (e.g. parity/lakehouse.md, hit-rate
+      // ~0.07) under same-named siblings. When the BM25 kill-switch is OFF we
+      // preserve AI Search's native order (pre-#2929 behaviour).
+      const candidateWindow = bm25Enabled
+        ? Math.max(AI_SEARCH_CANDIDATE_WINDOW, overfetch)
+        : overfetch;
+      const candidates = await searchSearch(query, candidateWindow, kind);
+      if (candidates.length > 0) {
+        // Re-rank to `overfetch`, then diversify to `want` in finish() — the
+        // same two-step the Cosmos path runs, so both backends agree for the
+        // same candidate set.
+        const ordered = bm25Enabled
+          ? rankChunks(candidates, query, overfetch, {
+              bm25: true, surfaceTerms, sourceWeights: weightSources,
+            })
+          : candidates;
+        const hits = finish(ordered);
         recordRetrieval({ backend: 'ai-search', latencyMs: Date.now() - started, resultCount: hits.length, fallback: false });
         return { hits, backend: 'ai-search' };
       }
@@ -1146,4 +1204,8 @@ export const __testInternals = {
   enumerateSourceFiles,
   statFingerprint,
   detectRoots,
+  // #2929 — the shared candidate re-rank both backends run. Exposed so a unit
+  // test can prove the AI Search path and the Cosmos path produce the same
+  // ordering for the same candidate documents.
+  rankChunks,
 };

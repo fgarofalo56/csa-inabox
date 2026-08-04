@@ -2,8 +2,9 @@
 
 **Issue:** [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585) ·
 **Diagnosis:** [`copilot-quality-triage.md`](copilot-quality-triage.md) ·
-**Status:** P0, P1, P1b, P2, P3 implemented and measured offline; P4 (floor
-re-baseline) NOT started ·
+**Status:** P0, P1, P1b, P2, P3 implemented and measured offline; the AI Search
+retrieval path is now wired through the same ranker (#2929, §9 — deploy-gated);
+P4 (floor re-baseline) NOT started ·
 **Floors:** `content/evals/eval-floors.json` is **unchanged** — re-baselining is
 P4 and happens last, from ≥3 real runs through the existing raise-only ratchet.
 
@@ -423,3 +424,66 @@ reachable, which was the reason they were indexed in the first place.
    document the golden set expects. The `parity/monitor-alert-rules.md` finding
    in §8.4 is the honest counterweight: where fitting would have helped the
    score, it was left alone.
+
+---
+
+## 9. The AI Search path is now wired through the ranker (#2929)
+
+**Status:** implemented; live confirmation is deploy-gated (see below).
+
+§3, §7.3 and §8.5.2 all state the same gap: P0–P2 shipped the ranker into the
+**Cosmos-fallback path only**, so on a deployment where `LOOM_AI_SEARCH_SERVICE`
+is set — which the live console is — retrieval was served by AI Search's
+un-weighted `simple`/`any` scoring, re-sorted at most by a multiplier over its
+short returned window. That is the regression [#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929)
+observed on `copilot-quality-evals`: `lakehouse` hit-rate ≈ 1/15 = **0.07**,
+because plain AI Search buried the specific `parity/lakehouse.md` gold doc under
+its same-named siblings, while the offline harness kept measuring the Cosmos
+path (~0.83) that never runs live.
+
+**What changed (`apps/fiab-console/lib/azure/loom-docs-index.ts`).** The AI
+Search branch is now **retrieve-then-rerank**:
+
+1. AI Search is used for **recall only** — it returns a WIDE candidate window
+   (`AI_SEARCH_CANDIDATE_WINDOW = 100`, never smaller than the diversification
+   over-fetch), wide enough that a buried gold doc is still *inside* the window.
+2. Those candidates are re-ranked by **the exact same pipeline the Cosmos path
+   uses** — the Cosmos re-rank core was extracted into a shared pure function
+   `rankChunks` (BM25 IDF · TF-saturation · length-normalisation + the surface
+   boost + source-class weighting), and BOTH backends now call it. For the SAME
+   candidate documents the two paths return the SAME ordering.
+3. The result is diversified per-document and sliced to `top`, unchanged.
+
+The `copilot-bm25-retrieval` kill-switch still governs it: OFF reverts the AI
+Search branch to its pre-#2929 native order.
+
+**The one residual asymmetry, stated plainly.** BM25 corpus statistics (IDF,
+avgdl) are computed over the **full corpus** on the Cosmos path but over the
+**AI-Search candidate window** on the AI Search path. So the two are identical
+*given the same candidate set*, but the AI Search path's IDF is a per-window
+approximation of the full-corpus IDF. The dominant levers (TF-saturation,
+length-normalisation, surface boost, source weighting) apply identically
+regardless; IDF is a within-set relative weight. This is the sanctioned,
+lowest-risk design (reuse the proven ranker) rather than adding an AI Search
+scoring profile, which §4 measured as *not* a free win.
+
+**Limits — what this does NOT yet establish.**
+
+1. **The offline harness structurally cannot measure this path.**
+   `measure-retrieval.mjs` builds a corpus and ranks it directly — there is no
+   AI Search service to query. The offline evidence for #2929 is therefore a
+   **unit test** (`loom-docs-index-aisearch-rerank.test.ts`) proving the WIRING:
+   for a candidate set that mimics AI Search burying `parity/lakehouse.md`, the
+   AI Search path routes candidates through `rankChunks` and returns the SAME
+   top-N as the Cosmos path — the gold doc surfaces. It is decisive (reverting
+   the wiring turns it RED), but it is a wiring proof, not a hit-rate.
+2. **Live confirmation is deploy-gated (G1).** The realised `copilot-quality-evals`
+   numbers confirm only after (a) a **`loom-docs` reindex** so the index carries
+   the current corpus, and (b) a real eval run against that reindexed target.
+3. **Automated reindex is still a follow-up.** Today `loom-docs` is refreshed
+   only by a manual admin `POST /api/help-copilot/reindex`; nothing in deploy or
+   CI triggers it. A reindex step must run before the eval run (post-deploy or
+   inside `copilot-quality-evals.yml`) or the gate measures a stale index. See
+   the #2929 PR for the tracked follow-up.
+4. **Floors untouched.** As with P0–P2, nothing here licenses a floor change; P4
+   still requires ≥3 real runs through the raise-only ratchet.
