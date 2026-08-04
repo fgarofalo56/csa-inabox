@@ -1,0 +1,52 @@
+{
+  "name": "@csa-loom/mcp",
+  "version": "0.1.0",
+  "description": "CSA Loom MCP servers — deployable Model Context Protocol servers over the Loom SDK. M1 `loom-catalog` is the read-only foundation (catalog/search/get-item/list-workspaces). Azure-native; no Microsoft Fabric tenant required.",
+  "keywords": [
+    "csa-loom",
+    "loom",
+    "mcp",
+    "model-context-protocol",
+    "azure",
+    "catalog",
+    "agent"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "loom-catalog-mcp": "dist/servers/loom-catalog/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "prepublishOnly": "npm run build",
+    "test": "npm run build && node --import tsx --test test/*.test.ts",
+    "start:catalog": "node dist/servers/loom-catalog/bin.js"
+  },
+  "dependencies": {
+    "@csa-loom/sdk": "file:../loom-sdk",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Limitless-Data-LLC/csa-inabox.git",
+    "directory": "apps/loom-mcp"
+  }
+}

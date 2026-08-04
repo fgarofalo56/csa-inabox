@@ -1,0 +1,4 @@
+# Build output + deps (this is an isolated package; never commit installed state)
+dist/
+node_modules/
+*.tsbuildinfo
