@@ -101,6 +101,19 @@ describe('POST /api/items/azure-sql-database/[id]/query — authority binding (#
     );
   });
 
+  // Running T-SQL is a WRITE. `expect.objectContaining` above is permissive, so
+  // it does NOT catch a handler that opts into `{ allowReadRoles: true }` — a
+  // tsc-valid weakening that would let a read-only VIEWER of a shared workspace
+  // execute arbitrary T-SQL (DROP/UPDATE included) as the Console UAMI. Assert
+  // the write scope directly so that mutation goes red.
+  //   MUTATION: withWorkspaceOwner('azure-sql-database', { allowReadRoles: true }, …)
+  it('(a) stays WRITE-scoped — a read-only viewer can never execute T-SQL', async () => {
+    const { POST } = await import('../route');
+    await POST(postReq({ sql: 'SELECT 1' }), PARAMS);
+    const opts = loadOwnedItemMock.mock.calls.at(-1)?.[3] as { allowReadRoles?: boolean } | undefined;
+    expect(opts?.allowReadRoles).toBeFalsy();
+  });
+
   // (b) A body whose server/database DIFFER from the owned item's binding → 403,
   //   NO execution against the attacker-chosen DB.
   //   MUTATION: pass the raw body server/database to executeQueryBatch instead of

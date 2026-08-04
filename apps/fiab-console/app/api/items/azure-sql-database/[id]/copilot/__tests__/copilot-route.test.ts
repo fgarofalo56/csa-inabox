@@ -212,6 +212,18 @@ describe('POST /api/items/azure-sql-database/[id]/copilot — authority binding 
     expect(executeQueryMock).not.toHaveBeenCalled();
   });
 
+  // This Copilot reads INFORMATION_SCHEMA over the LIVE TDS path, so it must stay
+  // write-scoped like its /query sibling: a read-only viewer of a shared
+  // workspace must not be able to pull another member's schema through it.
+  //   MUTATION: loadOwnedItem(id, …, { session, allowReadRoles: true })
+  it('stays WRITE-scoped — loads the item without allowReadRoles', async () => {
+    stubAoaiStream(['SELECT 1']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    await POST(postReq({ command: 'explain', sql: 'SELECT 1' }), PARAMS);
+    const opts = loadOwnedItemMock.mock.calls.at(-1)?.[3] as { allowReadRoles?: boolean } | undefined;
+    expect(opts?.allowReadRoles).toBeFalsy();
+  });
+
   // MUTATION: replace `resolveOwnedSqlTarget(item, {server,database})`-derived
   // server/database with the raw body server/database. → the mismatch is not
   // rejected and the foreign DB's INFORMATION_SCHEMA is read.
