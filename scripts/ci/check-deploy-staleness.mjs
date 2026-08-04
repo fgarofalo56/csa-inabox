@@ -52,22 +52,94 @@ export const WATCHED = [
   {
     workflow: 'gov-uc-purview-wire.yml',
     why: 'Deploys loom-unity + Purview wiring into Gov. Carried the #2643 authorization fix undeployed for 15 days.',
+    // apps/loom-unity IS a deploy source of this workflow, not a bystander: the
+    // `Build loom-unity image on the Gov ACR` step runs
+    //   az acr build --file apps/loom-unity/Dockerfile apps/loom-unity
+    // so the image the Gov catalog runs is built from that directory and reaches
+    // production through this workflow and no other.
+    //
+    // It was MISSING here until #2775's follow-up, which is the sharpest possible
+    // version of this bug: the watchdog written because a #2643 fix sat merged
+    // and undeployed did not watch the directory the #2643 fix lives in. Commit
+    // b4dcf1e4 (2026-08-04) changed apps/loom-unity for #2643/#2680 and could not
+    // have registered as drift. check-deploy-paths-coverage.mjs now asserts this
+    // list stays complete.
     paths: [
       '.github/workflows/gov-uc-purview-wire.yml',
       'platform/fiab/bicep/modules/compute/loom-unity-app.bicep',
+      'apps/loom-unity/**',
     ],
     maxDays: 14,
   },
   {
     workflow: 'gov-workspace-identity.yml',
     why: 'The ONLY lane proving workspace-scoped managed identity against real Gov endpoints. Commercial lanes cannot prove it.',
-    paths: ['.github/workflows/gov-workspace-identity.yml'],
+    // This lane APPLIES nothing — it exercises a running Gov Console and records
+    // a receipt — so check-deploy-paths-coverage.mjs finds no executable deploy
+    // source in it. That is not the same as "nothing to watch".
+    //
+    // Its `Derive the expected grant matrix from workspace-grants.ts` step does
+    //   const SRC = 'apps/fiab-console/lib/azure/workspace-grants.ts';
+    //   fs.readFileSync(SRC, 'utf-8')  →  WORKSPACE_GRANTS
+    // and then asserts every backend in that matrix was evaluated against live
+    // Gov RBAC. So the file IS what this lane certifies: add a backend to
+    // WORKSPACE_GRANTS and the last run certified a DIFFERENT matrix — the new
+    // backend has never been proven in Gov, which is consequence #2 of #2775.
+    // Listed by hand because a readFileSync-of-a-const is not a mechanically
+    // detectable deploy shape.
+    paths: [
+      '.github/workflows/gov-workspace-identity.yml',
+      'apps/fiab-console/lib/azure/workspace-grants.ts',
+    ],
     maxDays: 30,
   },
   {
     workflow: 'csa-loom-post-deploy-bootstrap.yml',
     why: 'Applies every post-deploy grant + the day-one service wiring (Iceberg catalog, posture Function, Graph app-roles).',
-    paths: ['.github/workflows/csa-loom-post-deploy-bootstrap.yml'],
+    // This entry watched exactly ONE path — its own YAML — while the workflow
+    // executes ~28 scripts/csa-loom/*.sh, applies two bicep templates and
+    // publishes two Function-App codebases. Every one of those is a way the
+    // estate diverges from main without this entry noticing.
+    //
+    // Named explicitly rather than as a bare `scripts/csa-loom/**` glob: that
+    // directory holds ~90 scripts, most of which this workflow never runs, and a
+    // glob would mark this entry stale on edits it does not deploy — cry-wolf,
+    // which trains people to ignore the signal (the failure mode of this whole
+    // class). check-deploy-paths-coverage.mjs keeps the list honest in the other
+    // direction, failing if a NEW source is executed but not listed here.
+    //
+    // iceberg-catalog-aca.bicep is the #2757 Iceberg deploy #2775 names as never
+    // having executed; it was invisible to this watchdog until now.
+    paths: [
+      '.github/workflows/csa-loom-post-deploy-bootstrap.yml',
+      'platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep',
+      'platform/fiab/grafana/**',
+      'azure-functions/posture-refresh/**',
+      'azure-functions/report-subscriptions/**',
+      'scripts/csa-loom/bootstrap-msal-app-reg.sh',
+      'scripts/csa-loom/bootstrap-weave-pg.sh',
+      'scripts/csa-loom/dataverse-add-appuser.sh',
+      'scripts/csa-loom/enable-all-diagnostics.sh',
+      'scripts/csa-loom/enable-unity-catalog.sh',
+      'scripts/csa-loom/ensure-ai-private-endpoints.sh',
+      'scripts/csa-loom/ensure-search-index.sh',
+      'scripts/csa-loom/ensure-vpn-dns-resolver.sh',
+      'scripts/csa-loom/fix-synapse-spark-storage-access.sh',
+      'scripts/csa-loom/grant-console-rbac.sh',
+      'scripts/csa-loom/grant-identity-graph-approles.sh',
+      'scripts/csa-loom/grant-purview-datamap-role.sh',
+      'scripts/csa-loom/grant-purview-uc-role.sh',
+      'scripts/csa-loom/grant-shortcut-graph-approles.sh',
+      'scripts/csa-loom/grant-synapse-rbac-invnet-job.sh',
+      'scripts/csa-loom/grant-uami-graph-roles.sh',
+      'scripts/csa-loom/patch-navigator-env.sh',
+      'scripts/csa-loom/provision-databricks-compute.sh',
+      'scripts/csa-loom/provision-scc-labels-sidecar.sh',
+      'scripts/csa-loom/run-spark-storage-fix-invnet-job.sh',
+      'scripts/csa-loom/seed-governance.sh',
+      'scripts/csa-loom/upsert-hub-dns-arecords.sh',
+      'scripts/csa-loom/wire-spark-telemetry.sh',
+    ],
     maxDays: 21,
   },
   {
