@@ -241,7 +241,17 @@ const ALLOWLIST = new Set([
   'LOOM_DLP_GRAPH_BASE',            // derived from cloud endpoints (Graph)
   'LOOM_DEVOPS_BASE',               // derived from cloud endpoints (Azure DevOps)
   'LOOM_DOCS_BASE_URL',             // derived from public docs site
-  'LOOM_POWER_PLATFORM_BAP_BASE',   // derived from cloud endpoints (BAP)
+  // LEGACY ALIAS, and the comment on this line used to be a LIE that hid a real bug.
+  // It read "derived from cloud endpoints (BAP)" — but no code derived anything:
+  // copilot-studio-client read THIS var directly while bicep emitted the DIFFERENT
+  // var LOOM_BAP_BASE, so the entire Copilot Studio family was pinned to the
+  // Commercial host in every sovereign boundary. Seven parity docs told operators
+  // to set this name; this exemption is why nobody noticed nothing consumed it.
+  // The claim is now TRUE: lib/azure/cloud-endpoints.powerPlatformEndpoints()
+  // derives the BAP host from the detected cloud and accepts this name only as a
+  // back-compat alias for LOOM_BAP_BASE, so an estate that set it is not regressed.
+  // Keep the entry (nothing emits the alias); do NOT restore the old wording.
+  'LOOM_POWER_PLATFORM_BAP_BASE',
   'LOOM_POWERBI_EMBED_HOST',        // derived from cloud endpoints (Power BI)
   'LOOM_AZURE_MAPS_SEARCH_HOST',    // derived from cloud endpoints (Azure Maps)
   'LOOM_AML_DATAPLANE_HOST',        // derived from AML workspace region
