@@ -27,6 +27,7 @@ interface Registry {
   controllers: Array<{ id: string; notebookType: string }>;
   mcpProviders: string[];
   chatParticipants: string[];
+  uriHandlers: number;
 }
 
 function fakeVscode(reg: Registry): Record<string, unknown> {
@@ -134,6 +135,10 @@ function fakeVscode(reg: Registry): Record<string, unknown> {
         return new Disposable();
       },
       onDidChangeActiveTextEditor: () => new Disposable(),
+      registerUriHandler: () => {
+        reg.uriHandlers++;
+        return new Disposable();
+      },
       createWebviewPanel: () => ({
         webview: { html: '', asWebviewUri: (u: unknown) => u, cspSource: '', postMessage() {}, onDidReceiveMessage: () => new Disposable() },
         title: '',
@@ -228,7 +233,7 @@ describe('activate() — shipped bundle registers everything (P1 + P2)', () => {
   });
 
   it('registers the auth provider, FS scheme, decoration provider, notebook controller, and all commands', async () => {
-    const reg: Registry = { commands: [], fsSchemes: [], decorationProviders: 0, authProviders: [], controllers: [], mcpProviders: [], chatParticipants: [] };
+    const reg: Registry = { commands: [], fsSchemes: [], decorationProviders: 0, authProviders: [], controllers: [], mcpProviders: [], chatParticipants: [], uriHandlers: 0 };
     const ext = loadExtension(fakeVscode(reg));
     const context = fakeContext();
     ext.activate(context);
@@ -282,6 +287,17 @@ describe('activate() — shipped bundle registers everything (P1 + P2)', () => {
       'loom.viewSparkJobRuns',
     ];
     for (const id of p5) expect(reg.commands).toContain(id);
+
+    // Phase 6 — lakehouse explorer (L3/L4) + clone-to-disk (W9) + the UriHandler (N9).
+    const p6 = [
+      'loom.copyAbfsPath',
+      'loom.copyRelativePath',
+      'loom.downloadLakehouseFile',
+      'loom.cloneWorkspaceRepo',
+    ];
+    for (const id of p6) expect(reg.commands).toContain(id);
+    // The deep-link handler (N9) is registered so a Console "Open in VS Code" link resolves.
+    expect(reg.uriHandlers).toBeGreaterThanOrEqual(1);
 
     expect(context.subscriptions.length).toBeGreaterThan(0);
   });

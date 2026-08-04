@@ -39,7 +39,7 @@ class GeneratedOperation(NamedTuple):
 SPEC_TITLE: Final[str] = "CSA Loom API"
 SPEC_VERSION: Final[str] = "1.0.0"
 #: SHA-256 of sdk/openapi.json at generation time (drift tripwire).
-SPEC_SHA256: Final[str] = "b8bea4acf34d5bf3623668c0398527882914c7f9aa374e37ec8566fa05dca798"
+SPEC_SHA256: Final[str] = "1b40edf7cbe8abe0131ebb2bdfcf8c66590aedaed73efb1f9d902eb1e7a67477"
 
 OPERATIONS: Final[tuple[GeneratedOperation, ...]] = (
     GeneratedOperation(
@@ -131,6 +131,26 @@ OPERATIONS: Final[tuple[GeneratedOperation, ...]] = (
         query_params=(),
         request_schema=None,
         response_schema="Ok",
+    ),
+    GeneratedOperation(
+        operation_id="getItemDefinition",
+        method="GET",
+        path="/api/items/{type}/{id}/definition",
+        python_name="get_item_definition",
+        path_params=("type", "id"),
+        query_params=(),
+        request_schema=None,
+        response_schema="ItemDefinitionResult",
+    ),
+    GeneratedOperation(
+        operation_id="updateItemDefinition",
+        method="PUT",
+        path="/api/items/{type}/{id}/definition",
+        python_name="update_item_definition",
+        path_params=("type", "id"),
+        query_params=(),
+        request_schema="UpdateItemDefinition",
+        response_schema="ItemDefinitionResult",
     ),
     GeneratedOperation(
         operation_id="searchCatalog",
