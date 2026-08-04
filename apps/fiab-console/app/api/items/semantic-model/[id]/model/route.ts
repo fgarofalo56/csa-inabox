@@ -2,8 +2,9 @@
  * /api/items/semantic-model/[id]/model — the unified "Model view" surface for a
  * Loom semantic model. It serves several complementary editor surfaces over ONE
  * route (the BFF dispatches on request shape). This route is a THIN DISPATCHER
- * (rel-T64): the session/owner guard + the shape-based dispatch live here; every
- * concern's implementation lives in a reusable lib/semantic-model/ module:
+ * (rel-T64): the session + workspace guard and the shape-based dispatch live
+ * here; every concern's implementation lives in a reusable lib/semantic-model/
+ * module:
  *
  *  A) Relationship diagram + drill hierarchies (the model.bim canvas):
  *       GET                       → tables + relationships + hierarchies + tmslPreview
@@ -37,8 +38,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { withQueryCache } from '@/lib/azure/query-cache';
 import { type ModelWriteRequest } from '@/lib/azure/powerbi-client';
 import {
@@ -59,14 +59,23 @@ import {
   handleWhatIfPost, handleCalculatedTablePost, handleDateTableMarkPost, handleMeasurePost,
 } from '@/lib/semantic-model/modeling-objects';
 import { handleMeasurePut, handleColumnPatch } from '@/lib/semantic-model/xmla-writes';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+/**
+ * #2941 — the workspace guard. `?workspaceId=` is OPTIONAL on the wire, so the
+ * guard resolves the workspace from the ITEM when the param is absent rather
+ * than skipping authorization; `SM_NOT_FOUND` keeps the existing 404 wording so
+ * the editor's error handling and the not-403 (no existence leak) shape are
+ * unchanged.
+ */
+const SM_ITEM_TYPE = 'semantic-model';
+const SM_NOT_FOUND = 'semantic model not found';
+
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   if (!id || id === 'new') {
     return NextResponse.json({
       ok: true, tables: [], measures: [], relationships: [], hierarchies: [], tmslPreview: '',
@@ -76,7 +85,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
   }
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+  // READ surface → `allowReadRoles` (any workspace role may look at the model).
+  // The guard is UNSKIPPABLE: with no `?workspaceId=` it resolves the workspace
+  // from the item itself. See authorizeItemWorkspace (#2941).
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: id, itemType: SM_ITEM_TYPE,
+      allowReadRoles: true, notFound: SM_NOT_FOUND,
+    });
+    if (denied) return denied;
+  }
   const tenantId = session.claims.oid;
 
   // Expensive Fields-pane read (Cosmos/PBI tables + relationships + calc objects)
@@ -117,14 +135,20 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     ...(mctx.notice ? { notice: mctx.notice } : {}),
     ...backendAvailability(mctx.liveDataset, workspaceId),
   });
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+  // WRITE surface → intentionally NO `allowReadRoles`: a read-only Viewer must
+  // not be able to author relationships/hierarchies/measures just because the
+  // GET above admits them (#2941).
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: id, itemType: SM_ITEM_TYPE, notFound: SM_NOT_FOUND,
+    });
+    if (denied) return denied;
+  }
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -194,14 +218,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const merged = mergeRelationships(mctx.baseRels, state.relationships);
   const backend = await writeBackendRelationship(mctx, workspaceId, id, { kind: 'upsert', rel: storedToCanvas(rel) }, merged, state);
   return NextResponse.json({ ok: true, relationship: rel, relationships: merged, tmslPreview: buildPreview(mctx, merged, state), ...(backend ? { backend } : {}), ...backendAvailability(mctx.liveDataset, workspaceId) });
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+  // WRITE surface → write-scoped (no `allowReadRoles`), unskippable (#2941).
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: id, itemType: SM_ITEM_TYPE, notFound: SM_NOT_FOUND,
+    });
+    if (denied) return denied;
+  }
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -228,14 +256,18 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const merged = mergeRelationships(mctx.baseRels, state.relationships);
   const backend = await writeBackendRelationship(mctx, workspaceId, id, { kind: 'upsert', rel: storedToCanvas(updated) }, merged, state);
   return NextResponse.json({ ok: true, relationship: updated, relationships: merged, tmslPreview: buildPreview(mctx, merged, state), ...(backend ? { backend } : {}), ...backendAvailability(mctx.liveDataset, workspaceId) });
-}
+});
 
-export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const DELETE = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+  // WRITE surface → write-scoped (no `allowReadRoles`), unskippable (#2941).
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: id, itemType: SM_ITEM_TYPE, notFound: SM_NOT_FOUND,
+    });
+    if (denied) return denied;
+  }
   const tenantId = session.claims.oid;
   const relId = req.nextUrl.searchParams.get('relId');
   const hierarchyId = req.nextUrl.searchParams.get('hierarchyId');
@@ -257,10 +289,8 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   const merged = mergeRelationships(mctx.baseRels, state.relationships);
   const backend = removed ? await writeBackendRelationship(mctx, workspaceId, id, { kind: 'delete', name: removed.name }, merged, state) : null;
   return NextResponse.json({ ok: true, relationships: merged, tmslPreview: buildPreview(mctx, merged, state), ...(backend ? { backend } : {}), ...backendAvailability(mctx.liveDataset, workspaceId) });
-}
+});
 
-export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest) => {
   return handleColumnPatch(req);
-}
+});

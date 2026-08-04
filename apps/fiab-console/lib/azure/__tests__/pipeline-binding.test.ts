@@ -49,12 +49,45 @@ vi.mock('@/lib/azure/cosmos-client', () => {
       }),
     }),
     workspacesContainer: async () => ({
-      item: (_wsId: string, _tenant: string) => ({
-        read: async () => ({ resource: state.workspaceDoc }),
+      // #2942 — this mock USED TO return `state.workspaceDoc` for ANY partition
+      // key, which does not model real Cosmos: `workspaces` is partitioned by
+      // `/tenantId`, so a point read with a partition key other than the doc's
+      // own `tenantId` resolves to `undefined`. That fixture modelled the buggy
+      // code's assumption rather than the service, which is exactly how an
+      // owner-only guard shipped past its own test file. It is now
+      // partition-accurate, plus the cross-partition `items.query` that
+      // `readWorkspaceById` uses on the non-owner path.
+      item: (id: string, pk: string) => ({
+        read: async () => {
+          const doc = state.workspaceDoc;
+          return { resource: doc && doc.id === id && doc.tenantId === pk ? doc : undefined };
+        },
       }),
+      items: {
+        query: (spec: any) => ({
+          fetchAll: async () => {
+            const doc = state.workspaceDoc;
+            const idParam = (spec?.parameters || []).find((p: any) => p.name === '@id');
+            return { resources: doc && (!idParam || doc.id === idParam.value) ? [doc] : [] };
+          },
+        }),
+      },
+    }),
+    // Reached only on the non-owner ACL path; no grants exist in these fixtures.
+    workspaceRolesContainer: async () => ({
+      items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
     }),
   };
 });
+
+// The ACL leg of the access ladder. These are binding-resolution tests, not
+// sharing tests: nobody holds a workspace role, so a non-owner is refused.
+vi.mock('@/lib/azure/workspace-roles-client', () => ({
+  resolveEffectiveRole: vi.fn(async () => null),
+}));
+// No ambient request session in a unit test → no tenant-admin bypass, which is
+// the pre-existing behavior these fixtures assert.
+vi.mock('@/lib/auth/feature-gate', () => ({ isTenantAdmin: () => false }));
 
 const TENANT = 'tenant-oid-1';
 
