@@ -19,6 +19,7 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Title1, Body1, Caption1, Badge, Button, Spinner, Text,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
@@ -36,7 +37,22 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
-import { CopilotConsoleView } from '@/lib/editors/cross-item-copilot-editor';
+
+// ── Code-split the heavy console out of the landing chunk (issue #2583) ──────
+// `CopilotConsoleView` is the SHARED orchestrator console and is only rendered
+// AFTER the user clicks "Launch Copilot" (the `launched` branch below). It
+// transitively pulls the entire console subtree into whatever bundle imports it:
+// Transcript → CopilotMarkdown → MonacoTextarea (whose module top eagerly
+// `require('@monaco-editor/react')`), plus ToolsPanel, SessionList,
+// ContextUsagePanel, ConversationMcpPanel, the ItemEditorChrome ribbon, and the
+// receipt/citation panels. A top-level static import forced all of that into the
+// /copilot LANDING chunk, so the status-driven landing (the "Ready" hero chip /
+// honest AOAI gate) could not paint promptly on a cold Front Door replica
+// (issue #2583). Loading it via next/dynamic with `ssr:false` (the console is
+// browser-only — SSE streaming, `window`, the Monaco loader) moves that subtree
+// into a separate chunk fetched ONLY when the console is actually rendered. The
+// landing surface (hero, badges, capability cards, sessions) is untouched — none
+// of its imports are removed — so its bundle shrinks to just what it renders.
 
 // ── Real data shapes (mirror the API routes) ────────────────────────────────
 interface OrchestratorStatus {
@@ -192,6 +208,13 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalL, paddingRight: tokens.spacingHorizontalL,
   },
   consoleTitle: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // Full-height, centered placeholder shown while the code-split console chunk
+  // downloads after "Launch Copilot" (next/dynamic `loading:` fallback). The
+  // 52px offset matches the app-header height used by `consoleWrap` above.
+  consoleLoading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    height: 'calc(100vh - 52px)', minHeight: 0,
+  },
   // ── Residual inline-style extractions ─────────────────────────────────
   brandIcon: { color: tokens.colorBrandForeground1 },
   flushTitle: { margin: 0 },
@@ -224,6 +247,27 @@ const EXAMPLES = [
   'Run a KQL query for the 5 slowest requests in the last hour on the prod Eventhouse.',
   'Trigger the nightly ADF ingestion pipeline and report its run status.',
 ];
+
+// Designed loading fallback for the code-split console (web3-ui.md — every
+// loading state is styled, never a bare spinner). Rendered only for the brief
+// window between the "Launch Copilot" click and the console chunk resolving.
+function ConsoleLoading() {
+  const styles = useStyles();
+  return (
+    <div className={styles.consoleLoading} role="status" aria-label="Opening Copilot">
+      <Spinner size="large" label="Opening Copilot…" />
+    </div>
+  );
+}
+
+// Lazy console — see the block comment on the imports above (issue #2583). Prop
+// type (`{ embedded?; contextSlug?; onBack? }`) is inferred from the named
+// export, so the `<CopilotConsoleView onBack={…} />` usage below type-checks
+// unchanged.
+const CopilotConsoleView = dynamic(
+  () => import('@/lib/editors/cross-item-copilot-editor').then((m) => m.CopilotConsoleView),
+  { ssr: false, loading: () => <ConsoleLoading /> },
+);
 
 export default function CopilotPage() {
   const styles = useStyles();
