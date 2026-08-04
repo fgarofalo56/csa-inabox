@@ -769,6 +769,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [dbLoading, setDbLoading] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const [bindMsg, setBindMsg] = useState<string | null>(null);
+  // #2723 — remembers the `${family}|${server}|${database}` last persisted to
+  // this item so `run()` binds the connection at most once per selection.
+  const boundKeyRef = useRef<string>('');
 
   const serverFqdn = useMemo(() => {
     if (!inv) return '';
@@ -870,10 +873,26 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     return `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`;
   }, [family, id]);
 
-  const run = useCallback((sqlOverride?: string) => {
+  const run = useCallback(async (sqlOverride?: string) => {
     const sqlToRun = sqlOverride ?? sqlText;
     if (!server) { setQResult({ ok: false, error: 'select a server first' }); return; }
     if (family !== 'postgres' && !database) { setQResult({ ok: false, error: 'select a database first' }); return; }
+    // #2723 — the azure-sql /query route DERIVES its target from THIS item's
+    // bound connection (authority comes from the item id, not the request body),
+    // so persist the current selection before running. A freshly-picked
+    // server/database thus becomes the item's bound authority. Bound once per
+    // selection (boundKeyRef); PostgreSQL uses its own route/binding.
+    if (family !== 'postgres' && id !== 'new') {
+      const key = `${family}|${server}|${database}`;
+      if (boundKeyRef.current !== key) {
+        const jb = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/connect`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ family, server, database }),
+        }).catch(() => ({ ok: false as const }));
+        if (jb?.ok) boundKeyRef.current = key;
+        else { setQResult({ ok: false, error: (jb as { error?: string })?.error || 'could not bind the connection to this item' }); return; }
+      }
+    }
     const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -897,7 +916,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       },
     });
     setActiveJobId(jobId);
-  }, [queryUrl, server, database, family, sqlText, startSqlQuery]);
+  }, [queryUrl, server, database, family, sqlText, startSqlQuery, id]);
 
   // Cancel an in-flight query by sending a TDS ATTENTION packet to the BFF. The
   // running fetch in the jobs-store then resolves with { ok:false, code:'ECANCEL' }
@@ -1136,6 +1155,17 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
 
     let res: Response;
     try {
+      // #2723 — keep the Copilot's schema-read target bound to this item (parity
+      // with run()): persist the current selection first, so the route's
+      // derive-from-item schema grounding matches the editor's selection and
+      // never 403s on a stale binding. copilotEligible ⇒ family === 'azure-sql'.
+      if (id !== 'new' && boundKeyRef.current !== `azure-sql|${server}|${database}`) {
+        const jb = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/connect`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ family: 'azure-sql', server, database }),
+        }).catch(() => ({ ok: false as const }));
+        if (jb?.ok) boundKeyRef.current = `azure-sql|${server}|${database}`;
+      }
       res = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/copilot`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ server, database, command, sql: snippet, selection }),
@@ -1608,7 +1638,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     </Table>
                   </div>
                 )}
-              <Caption1>Pick a server, then <strong>Bind connection</strong> (ribbon) to persist it to this item, or open the <strong>Query</strong> tab.</Caption1>
+              <Caption1>Pick a server and database, then open the <strong>Query</strong> tab — running a query binds the connection to this item automatically (or use <strong>Bind connection</strong> in the ribbon).</Caption1>
 
               {/* ---- Connection strings (ADO.NET / JDBC / ODBC / PHP / Go) ---- */}
               {family === 'azure-sql' && serverFqdn && (

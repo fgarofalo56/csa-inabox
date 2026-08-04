@@ -18,6 +18,19 @@ import { NextRequest } from 'next/server';
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 }) as any);
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
+// #2723 — the Copilot's schema-read target is DERIVED from the OWNED item's
+// bound connection (state.connection), not the request body. The item-crud
+// owner-scoped loader is mocked so the route's authority check is exercised
+// without Cosmos; the default item is bound to server 's' / database 'd'.
+const OWNED_ITEM = {
+  id: 'item1', workspaceId: 'ws1', itemType: 'azure-sql-database',
+  displayName: 'Mine', state: { connection: { family: 'azure-sql', server: 's', database: 'd' } },
+} as any;
+const loadOwnedItemMock = vi.fn(async () => OWNED_ITEM);
+vi.mock('@/app/api/items/_lib/item-crud', () => ({
+  loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...a),
+}));
+
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
@@ -98,6 +111,7 @@ async function readSse(res: Response): Promise<string> {
 
 beforeEach(() => {
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
+  loadOwnedItemMock.mockResolvedValue(OWNED_ITEM);
   resolveAoaiTargetMock.mockResolvedValue({ endpoint: 'https://aoai.example.com', deployment: 'chat', apiVersion: '2024-10-21' });
   getOpenAiSuffixMock.mockReturnValue('openai.azure.us');
   executeQueryMock.mockResolvedValue({
@@ -177,5 +191,74 @@ describe('POST /api/items/azure-sql-database/[id]/copilot', () => {
     expect(r.status).toBe(200);
     const body = await readSse(r);
     expect(body).toMatch(/event: done/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2723 — the id conveys authority: the Copilot reads the schema of the OWNED
+// item's bound DB, never a body-chosen server/database. Each spec asserts a
+// DENIAL or a NON-CALL and names the mutation that turns it red.
+// ---------------------------------------------------------------------------
+describe('POST /api/items/azure-sql-database/[id]/copilot — authority binding (#2723)', () => {
+  // MUTATION: delete the `const item = await loadOwnedItem(...); if (!item) 404`
+  // block. → the route reads the schema of a body-chosen DB for a caller who
+  // does not own the item.
+  it('404s when the caller does not own the item, and reads NO schema', async () => {
+    loadOwnedItemMock.mockResolvedValueOnce(null);
+    stubAoaiStream(['SELECT 1']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    const r = await POST(postReq({ command: 'explain', server: 'victim-srv', database: 'victim-db', sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(404);
+    expect(executeQueryMock).not.toHaveBeenCalled();
+  });
+
+  // MUTATION: replace `resolveOwnedSqlTarget(item, {server,database})`-derived
+  // server/database with the raw body server/database. → the mismatch is not
+  // rejected and the foreign DB's INFORMATION_SCHEMA is read.
+  it('403s when the body names a server different from the item’s bound connection', async () => {
+    stubAoaiStream(['SELECT 1']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    const r = await POST(postReq({ command: 'explain', server: 'attacker-srv', database: 'd', sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(403);
+    const j = await r.json();
+    expect(j.code).toBe('server_mismatch');
+    // The attacker's DB is never read.
+    expect(executeQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('403s when the body names a different database than the bound one', async () => {
+    stubAoaiStream(['SELECT 1']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    const r = await POST(postReq({ command: 'explain', server: 's', database: 'attacker-db', sql: 'SELECT 1' }), PARAMS);
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('database_mismatch');
+    expect(executeQueryMock).not.toHaveBeenCalled();
+  });
+
+  it('reads the schema of the item’s OWN bound DB — never the body-supplied names', async () => {
+    // Item is bound to bound-srv/bound-db; the body tries to smuggle a foreign
+    // server that HAPPENS to share the first DNS label so it is not a mismatch —
+    // the read must still target the bound coordinates, not the body's.
+    loadOwnedItemMock.mockResolvedValueOnce({
+      ...OWNED_ITEM, state: { connection: { server: 'bound-srv', database: 'bound-db' } },
+    });
+    stubAoaiStream(['ok']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    const r = await POST(postReq({ command: 'explain', sql: 'SELECT 1' }), PARAMS);
+    await readSse(r);
+    expect(executeQueryMock).toHaveBeenCalledWith('bound-srv', 'bound-db', expect.stringContaining('INFORMATION_SCHEMA.COLUMNS'));
+  });
+
+  // A CONTROL (passing) proving the suite is wired: an unbound item still runs
+  // the Copilot (soft-fail to no schema) and never executes a body-chosen read.
+  it('an unbound item still streams, with NO schema read against any DB', async () => {
+    loadOwnedItemMock.mockResolvedValueOnce({ ...OWNED_ITEM, state: {} });
+    stubAoaiStream(['SELECT 1']);
+    const { POST } = await import('@/app/api/items/azure-sql-database/[id]/copilot/route');
+    const r = await POST(postReq({ command: 'nl2sql', server: 'anything', database: 'anything', sql: 'count rows' }), PARAMS);
+    expect(r.status).toBe(200);
+    const body = await readSse(r);
+    expect(body).toMatch(/event: done/);
+    expect(executeQueryMock).not.toHaveBeenCalled();
   });
 });
