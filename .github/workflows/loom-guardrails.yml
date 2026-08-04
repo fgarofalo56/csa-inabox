@@ -86,6 +86,15 @@ jobs:
         run: node scripts/ci/check-bicep-sync.mjs
       - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
         run: node scripts/ci/check-deploy-script-reachability.mjs
+      # Reachability says the deploy script RUNS. This says the staleness
+      # watchdog can SEE it: every source a watched workflow executes or applies
+      # must be in that entry's `paths`, or a commit touching it can never
+      # register as drift. gov-uc-purview-wire watched 2 paths while building its
+      # image from apps/loom-unity, and post-deploy-bootstrap watched 1 while
+      # running ~28 scripts and 2 bicep templates — so the watchdog written for
+      # #2775 could not see the #2643 fix change (#2775 residual).
+      - name: deploy-paths-coverage (the staleness watchdog measures what it claims — #2775)
+        run: node scripts/ci/check-deploy-paths-coverage.mjs
       # Reachability says the script is INVOKED. This says the command it invokes
       # can SUCCEED: secrets declared before they are referenced, the mutating
       # create/update not swallowing its own stderr, the container named. All three
