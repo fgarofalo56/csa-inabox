@@ -457,12 +457,66 @@ export interface EnvSpec {
    * 'unavailable' in the active cloud produces the cloud-unavailable gate;
    * 'limited' is a non-blocking info note (see the Avail doc above). */
   availability?: ServiceAvailability;
+  /** Per-var values whose PRESENCE must NOT satisfy the gate.
+   *
+   * WHY THIS EXISTS. `has()` is presence-only, so a var set to the literal value
+   * that means "the protection is OFF" satisfied the very gate that exists to
+   * detect it. Measured case: `svc-loom-unity-authz` accepts
+   * `LOOM_UNITY_AUTH_MODE` in its anyOf group, and
+   * `.github/workflows/gov-uc-purview-wire.yml` sets
+   * `LOOM_UNITY_AUTH_MODE=anonymous` — the value that makes the Console send NO
+   * credential — so the Gov estate reported "catalog authorization: Ready"
+   * while the catalog ran with authorization disabled (issue #2643). A gate that
+   * is satisfied by its own failure mode measures nothing.
+   *
+   * Values are compared case-insensitively against the trimmed env value. */
+  rejectValues?: Record<string, string[]>;
+  /** Names the env var whose PRESENCE means the component this spec guards is
+   * actually deployed in this estate.
+   *
+   * When that var is ABSENT the component does not exist here, so the spec's
+   * other vars are not a configuration gap — there is nothing to configure. The
+   * check reports pass with `notDeployedDetail`.
+   *
+   * THIS IS NOT AN ESCAPE HATCH, and it is deliberately NOT `optIn`. It only
+   * ever suppresses the gate when the component is provably ABSENT. The moment
+   * the component IS deployed (the var is set) the gate applies in FULL —
+   * including `rejectValues` — so it can only ever get stricter, never laxer,
+   * on an estate that actually runs the thing. Reserved for specs that guard a
+   * component some boundaries genuinely do not deploy (Loom Unity is the OSS
+   * sovereign catalog; Commercial estates run Databricks Unity Catalog and
+   * never stand it up). The sharp verdict for a DEPLOYED component must live in
+   * a live probe wired through readiness.ts GATE_PROBE_MAP. */
+  appliesWhenPresent?: { envVar: string; notDeployedDetail: string };
+}
+
+/** True when `k` is set AND its value is not one this spec explicitly rejects. */
+function hasSatisfying(spec: EnvSpec, k: string): boolean {
+  if (!has(k)) return false;
+  const rejected = spec.rejectValues?.[k];
+  if (!rejected?.length) return true;
+  const v = env(k).toLowerCase();
+  return !rejected.some((r) => r.trim().toLowerCase() === v);
 }
 
 export function evalEnv(spec: EnvSpec): CheckResult {
+  // The component this spec guards is not deployed in this estate → there is
+  // nothing to configure and nothing exposed. Reported BEFORE the missing-var
+  // walk so an absent component never renders as a red misconfiguration. See
+  // EnvSpec.appliesWhenPresent for why this cannot be used to hide a deployed
+  // component: the moment its var IS set, the full check (including
+  // rejectValues) applies.
+  if (spec.appliesWhenPresent && !has(spec.appliesWhenPresent.envVar)) {
+    return {
+      id: spec.id, category: spec.category, title: spec.title, severity: spec.severity,
+      status: 'pass',
+      detail: `Not deployed in this estate (${spec.appliesWhenPresent.envVar} is unset) — ${spec.appliesWhenPresent.notDeployedDetail}`,
+      docs: spec.docs,
+    };
+  }
   const missing: string[] = [];
-  for (const k of spec.required || []) if (!has(k)) missing.push(k);
-  for (const group of spec.anyOf || []) if (!group.some(has)) missing.push(group.join(' | '));
+  for (const k of spec.required || []) if (!hasSatisfying(spec, k)) missing.push(k);
+  for (const group of spec.anyOf || []) if (!group.some((k) => hasSatisfying(spec, k))) missing.push(group.join(' | '));
   const ok = missing.length === 0;
   // Optional silent-fallback substrate (H-band): an unset var is the intended,
   // fully-functional day-one default — the console falls back to a built-in path

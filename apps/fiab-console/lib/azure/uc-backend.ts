@@ -217,22 +217,34 @@ export function unityAuthorizationPosture(): UnityAuthorizationPosture {
     };
   }
   if (mode === 'entra') {
-    // NOT hardened, and saying otherwise was wrong. Upstream unitycatalog
-    // rejects any bearer whose `iss` is not its own `internal` issuer —
-    // identical in v0.5.0 (the pinned image) and v0.5.1 — so the Entra token
-    // this mode mints is answered 403 PERMISSION_DENIED on
-    // /api/2.1/unity-catalog/* even when its audience matches
-    // `server.audiences` byte for byte. Verified by running the image:
-    // docs/fiab/security/loom-unity-authz-proof.md. A client has to exchange
-    // the Entra token at POST /api/1.0/unity-control/auth/tokens first and use
-    // the `internal` token that comes back; that client does not exist yet.
+    // Upstream unitycatalog rejects any bearer whose `iss` is not its own
+    // `internal` issuer — identical in v0.5.0 (the pinned image) and v0.5.1 —
+    // so an Entra token presented DIRECTLY is answered 403 PERMISSION_DENIED on
+    // /api/2.1/unity-catalog/* even when its audience matches `server.audiences`
+    // byte for byte. Verified by running the image:
+    // docs/fiab/security/loom-unity-authz-proof.md.
+    //
+    // The OAuth token-exchange client that closes this HAS LANDED (#2679):
+    // ossUcAuthHeader() now POSTs the Entra token to
+    // /api/1.0/unity-control/auth/tokens and sends the `internal` token that
+    // comes back (lib/azure/uc-token-exchange.ts). This branch used to say the
+    // client "does not exist yet" and told operators to set LOOM_UNITY_TOKEN —
+    // a credential NO bicep module in the repo emits and no Key Vault secret
+    // backs, so following it changed nothing. That text is corrected here.
+    //
+    // `hardened` stays FALSE deliberately, and this is NOT a leftover: the
+    // exchange additionally requires the Console principal to be registered as
+    // an enabled Unity Catalog user (AuthService.verifyPrincipal — proof doc
+    // §"verifyPrincipal"), which no deploy step performs yet. Claiming hardened
+    // before that is proven on a live catalog would be a fabricated green. The
+    // live probe `probe-loom-unity-authz` is the authority either way.
     return {
       mode,
       hardened: false,
       audience: unityAudience(),
-      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${unityAudience()} — and the upstream OSS Unity Catalog server REJECTS it (HTTP 403), because it only accepts tokens issued by its own internal issuer. This mode does not authenticate today; catalog calls fail.`,
+      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${unityAudience()}, exchanged at /api/1.0/unity-control/auth/tokens for the server-minted internal token the catalog accepts (the raw Entra token is rejected 403 by design). Not yet confirmed hardened on a live catalog: the exchange also requires the Console principal to be an enabled Unity Catalog user.`,
       remediation:
-        'Set LOOM_UNITY_TOKEN (a server-minted token, delivered as a Key Vault secretref) — that is the only credential upstream v0.5.0/v0.5.1 accepts on the catalog API. The durable fix is the OAuth token-exchange client: POST the Entra token to /api/1.0/unity-control/auth/tokens (grant_type=urn:ietf:params:oauth:grant-type:token-exchange) and present the returned internal token, which additionally needs the Console principal registered as an enabled Unity Catalog user. Evidence for both directions: docs/fiab/security/loom-unity-authz-proof.md.',
+        'Register the Console managed identity as an enabled Unity Catalog user on the catalog (AuthService.verifyPrincipal requires the token subject to be `admin` or an enabled user), then confirm with the probe-loom-unity-authz health check that an unauthenticated read is rejected. The token-exchange client itself is already wired (lib/azure/uc-token-exchange.ts, #2679) — no LOOM_UNITY_TOKEN is required for this path, and no bicep module emits one. Evidence: docs/fiab/security/loom-unity-authz-proof.md.',
     };
   }
   return {

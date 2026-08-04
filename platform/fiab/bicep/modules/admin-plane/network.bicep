@@ -593,6 +593,31 @@ var dnsZones = [
   // created but inert (nothing there resolves *.redis.azure.net).
   //   https://learn.microsoft.com/azure/private-link/private-endpoint-dns
   'privatelink.redis.azure.net'
+  // #2958 (2026-08-04) — Azure Files private-link zone, sub-resource 'file'.
+  // The MCP persistence account (samcp…, inline in admin-plane/main.bicep) is
+  // mounted by loom-mcp as an SMB volume through the managed environment's
+  // azureFile storage registration. Loom's bicep does NOT set
+  // publicNetworkAccess on it, but the platform Azure Policy assignment
+  // `StorageAccount_PublicNetwork_Modify` (effect: modify) does — verified live
+  // on 2026-08-04, where the account reports NonCompliant against exactly that
+  // assignment, i.e. the seal is pending and lands on the next ARM write. With
+  // no `file` private endpoint the SMB mount would then have no network path in.
+  // Index 26. Gov suffix comes from environment().suffixes.storage, the same
+  // derivation the blob/dfs zones at indices 2/3 already use, so this is correct
+  // in every cloud without a boundary conditional.
+  //
+  // EMPTY-ZONE SAFETY (the hazard in csa_loom_gov_purview_dns_empty_zone): a
+  // linked-but-empty privatelink zone only shadows a name when PUBLIC DNS
+  // CNAMEs that name into the zone. For Microsoft.Storage that CNAME is created
+  // BY the private endpoint, not at account creation — verified empirically on
+  // 2026-08-04 against a PE-less, publicNetworkAccess=Disabled account in this
+  // estate, whose blob host resolves straight to `blob.<cluster>.store.core.
+  // windows.net` with no privatelink hop. So the sibling Azure Files accounts
+  // that have no `file` PE (airflow dags/logs, the optional Unity Catalog H2
+  // share) keep resolving publicly and are NOT shadowed by this zone. Contrast
+  // Purview, where the CNAME exists regardless — which is why an empty zone
+  // broke it there and does not here.
+  'privatelink.file.${environment().suffixes.storage}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -824,4 +849,9 @@ output privateDnsZoneIds object = {
   // default). Distinct from `redis` above — the classic zone cannot resolve an
   // AMR private endpoint.
   redisManaged: privateDnsZones[25].id
+  // #2958 — Azure Files zone (index 26), sub-resource 'file'. admin-plane/
+  // main.bicep consumes this for the MCP persistence account's `file` private
+  // endpoint DNS group, so the loom-mcp SMB mount survives the platform
+  // policy sealing the account's public network access.
+  file: privateDnsZones[26].id
 }

@@ -124,7 +124,93 @@ export async function discoverResourceCoordsByName(
   return null;
 }
 
+/** A discovered resource: where it lives AND what it is called. */
+export interface DiscoveredResource extends ResourceCoords {
+  name: string;
+}
+
+// Per-process cache for by-TYPE discovery, keyed by the lower-cased type. Null
+// is not cached, for the same reason as above.
+const firstOfTypeCache = new Map<string, DiscoveredResource>();
+
+/**
+ * Discover the FIRST resource of a given ARM type anywhere the Console identity
+ * can read, via Azure Resource Graph. The sibling of
+ * {@link discoverResourceCoordsByName} for the case where we do not yet know a
+ * name to look for.
+ *
+ * Why this exists (auto-bind-by-default §5, "Infra prerequisites are DEPLOYED,
+ * not requested"): `adfConfigGate()` fails closed when `LOOM_ADF_NAME` is unset,
+ * and the terminal user-facing state used to be "set LOOM_ADF_NAME". But bicep
+ * (`platform/fiab/bicep/modules/landing-zone/adf.bicep`) DEPLOYS a factory in
+ * every real estate — the value was simply never plumbed into the Console's env.
+ * Asking the user for a value the deploy already produced is precisely the
+ * violation the rule names. So instead of gating, we FIND it.
+ *
+ * Ordering is `name asc` so the choice is STABLE across calls and processes —
+ * an unordered `limit 1` could hand two replicas different factories and bind
+ * two Loom items to different estates. Determinism matters more than which
+ * particular resource wins.
+ *
+ * Returns null when the identity can see none of that type (a genuine estate
+ * gate the caller should surface as a Fix-it).
+ */
+export async function discoverFirstResourceOfType(opts: {
+  resourceType: string;
+  armBase?: string;
+  credential?: TokenCredential;
+}): Promise<DiscoveredResource | null> {
+  const { resourceType } = opts;
+  if (!resourceType) return null;
+
+  const key = resourceType.toLowerCase();
+  const cached = firstOfTypeCache.get(key);
+  if (cached) return cached;
+
+  const base = (opts.armBase || armBase()).replace(/\/+$/, '');
+  const credential = opts.credential || loomServerCredential;
+  const typeLit = kqlEscapeSingle(resourceType);
+  const query = [
+    'Resources',
+    `| where type =~ '${typeLit}'`,
+    '| project name, subscriptionId, resourceGroup',
+    '| order by name asc',
+    '| limit 1',
+  ].join('\n');
+
+  try {
+    const token = await credential.getToken(armScope());
+    if (!token?.token) return null;
+    const res = await fetchWithTimeout(
+      `${base}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token.token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ query, options: { resultFormat: 'objectArray', $top: 1 } }),
+      },
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    const row = Array.isArray(json?.data) ? json.data[0] : undefined;
+    const name = row?.name ? String(row.name) : '';
+    const subscriptionId = row?.subscriptionId ? String(row.subscriptionId) : '';
+    const resourceGroup = row?.resourceGroup ? String(row.resourceGroup) : '';
+    if (name && subscriptionId && resourceGroup) {
+      const found: DiscoveredResource = { name, subscriptionId, resourceGroup };
+      firstOfTypeCache.set(key, found);
+      return found;
+    }
+  } catch {
+    /* fall through to null — the caller surfaces the honest gate */
+  }
+  return null;
+}
+
 /** Test-only: clear the per-process discovery cache. */
 export function __clearResourceCoordsCache(): void {
+  firstOfTypeCache.clear();
   cache.clear();
 }

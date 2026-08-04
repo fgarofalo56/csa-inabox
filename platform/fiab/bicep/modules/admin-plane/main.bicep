@@ -2373,11 +2373,23 @@ resource mcpStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (mcpFile
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
     largeFileSharesState: 'Enabled'
-    // The Container Apps SMB mount reaches the share over the Azure backbone;
-    // AzureServices bypass keeps the account closed to the public internet for
-    // ad-hoc access while permitting the managed-environment mount. Production
-    // hardening (a private endpoint on the `file` sub-resource +
-    // privatelink.file DNS zone) is the follow-up for fully-locked-down tenants.
+    // #2958 — the `file` PRIVATE ENDPOINT below is now the durable path in.
+    //
+    // Loom's bicep deliberately does NOT set publicNetworkAccess here. The
+    // platform Azure Policy assignment `StorageAccount_PublicNetwork_Modify`
+    // (effect: modify) does — the same behaviour copilot-evaluator-job.bicep:
+    // 19-21 already documents. Verified live 2026-08-04: this account reports
+    // NonCompliant against exactly that assignment while both sibling accounts
+    // in the RG are already Disabled, i.e. the seal is PENDING and lands on the
+    // next ARM write. Until #2958 the account had no private endpoint, so that
+    // write would have left the loom-mcp SMB mount with no network path in.
+    //
+    // We keep declaring defaultAction 'Allow' + AzureServices bypass rather
+    // than pre-emptively sealing it ourselves: that is the strictly safer
+    // ordering. If policy seals the account, the PE carries the mount; if it
+    // does not, nothing changes and the PE is belt-and-braces. Writing
+    // publicNetworkAccess:'Disabled' from here would make Loom the actor for a
+    // cut-over we cannot rehearse without a deploy.
     networkAcls: {
       defaultAction: 'Allow'
       bypass: 'AzureServices'
@@ -2393,12 +2405,69 @@ resource mcpStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (mcpFile
   }
 }
 
+// #2958 — `file` private endpoint for the MCP persistence account.
+//
+// Same shape as every other private endpoint in this repo (see
+// admin-plane/uat-results-storage.bicep's peBlob/peBlobDnsGroup, which this is
+// modelled on): a privateEndpoints resource naming the storage account as the
+// privateLinkServiceId with the sub-resource in groupIds, plus a
+// privateDnsZoneGroups child that registers the A record on the shared,
+// hub-VNet-linked zone from network.bicep. NOTHING new is invented here.
+//
+// The zone (privatelink.file.<storage suffix>, network.bicep dnsZones index 26)
+// is derived from environment().suffixes.storage, so it is correct in
+// Commercial and in Gov without a boundary conditional — identical to the
+// blob/dfs zones at indices 2/3.
+//
+// The DNS zone group is what POPULATES the zone. It is not optional decoration:
+// without it the zone stays empty and the PE's private IP is unreachable by
+// name. Both resources are gated on the same conditions so the pair is created
+// together or not at all — a PE with no zone group is the failure mode
+// csa_loom_gov_purview_dns_empty_zone records.
+//
+// No new top-level param: the subnet and zone id come from the `network` module
+// outputs already in scope (admin-plane/main.bicep is at the R0 param budget —
+// scripts/ci/check-bicep-param-cap.mjs).
+resource mcpStoragePe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (mcpFilesActive) {
+  name: 'pe-${mcpStorageAccountName}-file'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: network.outputs.privateEndpointsSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'file-link'
+        properties: {
+          privateLinkServiceId: mcpStorage!.id
+          groupIds: ['file']
+        }
+      }
+    ]
+  }
+}
+
+resource mcpStoragePeDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (mcpFilesActive) {
+  parent: mcpStoragePe
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      { name: 'file-zone', properties: { privateDnsZoneId: network.outputs.privateDnsZoneIds.file } }
+    ]
+  }
+}
+
 // Register the share on the managed environment. The console's
 // container-apps-arm-client re-PUTs this exact resource on the "Mount
 // persistence" admin action (same accountKey-from-listKeys path).
+//
+// #2958 — ordered AFTER the private endpoint + its DNS zone group. The
+// registration itself is a control-plane PUT, but the revision that mounts the
+// share resolves <account>.file.<suffix> from the VNet; creating the PE first
+// means the name already resolves privately the first time anything mounts,
+// instead of racing the policy seal.
 resource mcpEnvStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = if (mcpFilesActive) {
   name: '${mcpCaeName}/${mcpStorageRegistrationName}'
-  dependsOn: [ containerPlatformModule ]
+  dependsOn: [ containerPlatformModule, mcpStoragePeDnsGroup ]
   properties: {
     azureFile: {
       accountName: mcpStorageAccountName

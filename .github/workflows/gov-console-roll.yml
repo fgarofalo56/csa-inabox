@@ -210,6 +210,14 @@ jobs:
             POOL_ARGS=()
           fi
 
+          # #2929 — stage the Copilot RAG corpus INTO the build context first.
+          # docs/ + PRPs/ live at repo root, outside apps/fiab-console, so
+          # without this the Gov console image ships copilot-corpus/ holding only
+          # .gitkeep and POST /api/help-copilot/reindex 502s with "No corpus
+          # chunks discovered". Commercial hit exactly this on 2026-08-04.
+          # Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+
           az acr build --registry "$ACR" "${POOL_ARGS[@]}" \
             --image "loom-console:$SHA" --image "loom-console:latest" \
             --file apps/fiab-console/Dockerfile \

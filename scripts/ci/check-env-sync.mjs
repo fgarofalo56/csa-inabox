@@ -17,7 +17,11 @@
  *   1. Collects every LOOM_* name read under apps/fiab-console/{app,lib}.
  *   2. Collects every LOOM_* name emitted anywhere under
  *      platform/fiab/bicep/**\/*.bicep  (env-array `name: 'LOOM_..'` AND any
- *      other textual reference — params, vars, string interpolation).
+ *      other CODE reference — params, vars, string interpolation) — with
+ *      DOCUMENTATION excluded: `//` comments, block comments, and the argument
+ *      of `@description(…)` / `@metadata(…)`. See `stripBicepDocs` for why
+ *      (until 2026-08-04 this scanned raw text, so a var merely NAMED in prose
+ *      read as "the deploy sets this"; the guard was measuring documentation).
  *   3. Reports read-but-never-emitted names that are NOT covered by an
  *      ALLOWLIST_PATTERN or the explicit ALLOWLIST below. Exits 1 if any.
  *
@@ -121,8 +125,20 @@ const ALLOWLIST = new Set([
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)
   'LOOM_SPARK_POOL_REAP_GRACE',      // opt-in tune: grace seconds before an untracked Livy session is reaped (default 600)              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
   'LOOM_ICEBERG_CATALOG_URL',        // N1 opt-in Iceberg REST Catalog service URL (internal-ingress Unity Catalog OSS container). Deployed out-of-band via data-plane/iceberg-catalog-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the lakehouse Interop tab still writes real Delta<->Iceberg dual metadata into the customer's own ADLS Gen2 and every surface renders with an honest Fix-it gate; only catalog DISCOVERY is absent. (LOOM_ICEBERG_CATALOG_TOKEN auto-allowed by /_TOKEN$/.)
-  'LOOM_RISINGWAVE_URL',             // N7a opt-in stateful streaming-SQL tier URL (internal-ingress single-node RisingWave Container App, Apache-2.0; Postgres-wire frontend on :4566). Deployed out-of-band via data-plane/loom-risingwave-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the streaming-sql editor renders fully (guided empty state) and /api/streaming-sql/* honest-gates with a Fix-it; Azure Stream Analytics (stream-analytics-job) still covers simple jobs. ~$150-300/mo/cloud when deployed (opt-in STATEFUL tier, NOT the N7e Trino carve-out). No Fabric.
-  'LOOM_DUCKDB_URL',                 // N2b opt-in DuckDB serving-tier URL (internal-ingress loom-duckdb Container App: embedded DuckDB reading Delta/Iceberg/Parquet in place on the DLZ lake). Deployed out-of-band via data-plane/duckdb-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => SQL Lab executes the IDENTICAL statement on Synapse Serverless and names the engine in its status bar, so nothing is blocked — only latency changes. (LOOM_DUCKDB_MAX_ROWS auto-allowed by /_MAX_[A-Z0-9_]+$/.)
+  // LOOM_RISINGWAVE_URL and LOOM_DUCKDB_URL were allowlisted here as "opt-in …
+  // deployed out-of-band via data-plane/*.bicep (admin-plane/main.bicep at the
+  // 256-param ceiling), then set on the console app". BOTH reasons are stale —
+  // admin-plane/main.bicep deploys each tier by DEFAULT and emits the var:
+  //   LOOM_RISINGWAVE_URL  main.bicep:3796  (module :5808, `risingwaveActive`)
+  //   LOOM_DUCKDB_URL      main.bicep:5005  (`duckdbTierActive`)
+  // The note immediately below already CLAIMED LOOM_DUCKDB_URL had been removed
+  // in #2640 round 2; it had not — the entry survived, so the claim in the file
+  // and the contents of the file disagreed, and nothing enforced the default-ON
+  // promise for either var. An allowlisted var is INVISIBLE to this guard: if a
+  // future edit drops the bicep emission, the guard stays green. Both entries
+  // are REMOVED so the guard enforces the emission it is here to enforce.
+  // (LOOM_RISINGWAVE_DATABASE / _USER stay below — they are genuine code-default
+  // runtime knobs, not deploy dependencies.)
   'LOOM_RISINGWAVE_DATABASE',        // N7a opt-in RisingWave database override (code default 'dev') — runtime-only knob, never a deploy dependency
   'LOOM_RISINGWAVE_USER',            // N7a opt-in RisingWave user override (code default 'root') — runtime-only knob, never a deploy dependency
   // LOOM_RISINGWAVE_PASSWORD was allowlisted here as "opt-in; single-node default
@@ -160,6 +176,14 @@ const ALLOWLIST = new Set([
   'LOOM_UNITY_AUDIENCE',            // LU-2 explicit Entra scope override for the Loom Unity hop (defaults to api://<LOOM_UNITY_CLIENT_ID>/.default, else api://<LOOM_MSAL_CLIENT_ID>/.default) — runtime-only knob, same shape as LOOM_ICEBERG_CATALOG_AUDIENCE
   'LOOM_SHARING_AUDIENCE',          // LU-9 the Entra AUDIENCE an external Delta Sharing RECIPIENT's token must carry: a DEDICATED app registration (App ID URI) for the sharing API. When set it REPLACES the fallback (api://<LOOM_MSAL_CLIENT_ID>) rather than adding to it, so the Console's own API stops being a data-export credential. One of this or LOOM_SHARING_SCOPE is REQUIRED once LOOM_SHARING_URL is set (env-check svc-loom-sharing anyOf) — /api/delta-sharing/* fails CLOSED with 503 otherwise. Runtime-only (an Entra app registration, not an ARM resource), never a deploy dependency.
   'LOOM_SHARING_SCOPE',             // LU-9 the alternative half of the same pin: a scope or app role (comma/space separated) that a recipient token must carry in scp/roles. Lets an estate keep the Console's own registration as the audience while still separating recipient tokens from ordinary Console API tokens — expose the scope on the Console app registration and consent it ONLY to recipient apps. Runtime-only. See lib/sharing/store.sharingAudiencePinned + docs/fiab/delta-sharing-gov.md.
+  // LU-9 the sharing SERVER's own URL. Surfaced by the doc-blindness fix: it
+  // appeared "emitted" only through comments + an @description in
+  // compute/loom-sharing-app.bicep. That module is a STANDALONE out-of-band
+  // entrypoint (admin-plane/main.bicep is at the ARM 256-param ceiling), so no
+  // orchestrator invokes it and no template can emit its FQDN. Its two audience
+  // pins above are already allowlisted for the same reason. Unset (the default)
+  // => /api/delta-sharing/* honest-gates; nothing else changes.
+  'LOOM_SHARING_URL',
   'LOOM_UNITY_AUTH_MODE',           // LU-2 explicit Loom Unity auth posture ('entra' | 'token' | 'anonymous'); unset => inferred from LOOM_UNITY_TOKEN / LOOM_UNITY_CLIENT_ID. Runtime-only declaration, never a deploy dependency — the server half lives on the loom-unity app (loom-unity-app.bicep authMode).
   'LOOM_POWERBI_USER_PASSTHROUGH',  // opt-out kill switch for Power BI user-passthrough (OBO) auth (#1800 PBI slice; default ON in code — all Power BI tie-ins authenticate as the signed-in user, Synapse-style); set 'false' to revert every Power BI call to the console service principal
   'LOOM_POWERPLATFORM_USER_PASSTHROUGH', // opt-out kill switch for the SAME passthrough on the Power Platform / Copilot Studio clients (default ON in code). Those clients now try the signed-in user FIRST and RETRY as the service principal on 401/403 (lib/azure/powerplatform-client.ts ppFetch), because only a licensed USER can author Power Automate flows / act as a Dataverse application user, while only the registered management app can use the BAP admin scope. Set 'false' to revert both clients to the pure service-principal path.
@@ -168,6 +192,30 @@ const ALLOWLIST = new Set([
   'LOOM_RESULT_CACHE_REDIS_BREAKER_THRESHOLD', // opt-in tune: consecutive Redis-tier failures before the cache circuit breaker opens (default 3 in redis-cache-client.ts)
   'LOOM_SETUP_DISCOVERY_CACHE_DISABLED', // opt-out kill switch for the in-process cross-sub discovery SWR cache (Setup / Add-landing-zone wizards); default on in code (lib/azure/cross-sub-cache.ts) — a latency-only memo, no infra
   'LOOM_BATCH_SUB',                 // opt-in subscription override for the Azure Batch account (SVC-5); default = LOOM_SUBSCRIPTION_ID
+  // The three remaining names the doc-blindness fix surfaced, each genuinely
+  // un-emittable by the shipped orchestrators:
+  //
+  // LOOM_CAPACITY_BROKER_URL — a LEGACY ALIAS, not a deploy dependency. The
+  //   name the deploy emits is LOOM_BROKER_URL (admin-plane/main.bicep:3816,
+  //   empty default), which is also the name the readiness gate, EDITABLE_ENV,
+  //   self-audit and docs/fiab/hyperscale.md all use. lib/azure/
+  //   capacity-broker-client.ts historically read ONLY this alias, so following
+  //   the documented remediation turned the gate green while leaving the client
+  //   disabled; the client now reads LOOM_BROKER_URL as well (see its header),
+  //   and this entry keeps estates that already set the alias working.
+  'LOOM_CAPACITY_BROKER_URL',
+  // LOOM_EVENTGRID_SAS_AUTH — an opt-IN to the LESS secure posture. Entra-only
+  //   publish is the deployed default and is MANDATORY at GCC-High/IL5
+  //   (landing-zone/eventgrid*.bicep disableLocalAuth). Emitting it would mean
+  //   shipping a var whose only purpose is to weaken auth; unset is correct.
+  'LOOM_EVENTGRID_SAS_AUTH',
+  // LOOM_PERF_DCR_ENDPOINT / LOOM_PERF_DCR_ID — outputs of
+  //   admin-plane/perf-benchmarks-dcr.bicep, which NO orchestrator invokes: its
+  //   own header documents a standalone `az deployment group create` and the
+  //   operator then sets these two values. Verified: the only repo references
+  //   are inside that module. Unset => the perf-benchmark publisher no-ops.
+  'LOOM_PERF_DCR_ENDPOINT',
+  'LOOM_PERF_DCR_ID',
   'LOOM_CANVAS_AI_SUGGEST',         // opt-out kill switch for the W7 AOAI ghost-suggestion engine (default on in code)
   'LOOM_COPILOT_MEMORY',            // opt-out kill switch for the CTS-06 dump-to-memory action (default on in code)
   'LOOM_COPILOT_MEMORY_AGENT_ID',   // opt-in override for the memory agent identity (CTS-06); unset default in code
@@ -190,6 +238,14 @@ const ALLOWLIST = new Set([
   'LOOM_RESULT_CACHE_REDIS',           // opt-in Redis host:port for the shared result-cache tier (PSR-5/6)
   'LOOM_RESULT_CACHE_REDIS_PASSWORD',  // opt-in Redis access key (PSR-5/6); prefer KV/secretRef when wired into bicep
   'LOOM_RESULT_CACHE_REDIS_TLS',       // opt-in TLS toggle for the Redis tier (default on for :6380)
+  // Same H-band shared-Redis family as LOOM_RESULT_CACHE_REDIS above, and the
+  // one member of it that was never allowlisted — it read as "emitted" only via
+  // an @description in compute/hband-shared.bicep:423 and a comment in
+  // landing-zone/cosmos.bicep:336, both of which merely NAME it. Surfaced by the
+  // doc-blindness fix in stripBicepDocs(). Opt-in exactly like its siblings:
+  // unset = the Spark session pool keeps its lease ledger in Cosmos
+  // (LOOM_SPARK_POOL_LEASE_CONTAINER, which IS emitted) and nothing gates.
+  'LOOM_SPARK_POOL_REDIS',
   'LOOM_QUERY_CACHE_TTL_MS_DEDICATED', // opt-in tuning knob: dedicated-pool result TTL override (PSR-5)
   'LOOM_QUERY_CACHE_TTL_MS_SERVERLESS',// opt-in tuning knob: serverless result TTL override (PSR-5)
   // OBS-CACHE — per-backend result-TTL overrides for the observability routes'
@@ -293,6 +349,16 @@ const ALLOWLIST = new Set([
   'LOOM_COST_SUBSCRIPTIONS',        // opt-in cost-scope subscription list
   'LOOM_DATABRICKS_CATALOG',        // UC catalog default (code default)
   'LOOM_DATABRICKS_CLUSTER_ID',     // derived / opt-in default cluster
+  // Surfaced by the comment-blindness fix in collectEmitted() (2026-08-04): it
+  // was "emitted" only by admin-plane/spark-session-pool.bicep:27, a comment
+  // DOCUMENTING that an operator sets it. Same family as
+  // LOOM_DATABRICKS_CLUSTER_ID above and genuinely un-emittable: the value is a
+  // Databricks all-purpose cluster id created by the user INSIDE their
+  // workspace, which no ARM template can know. It gates nothing — when unset,
+  // spark-session-pool.ts simply skips Databricks pre-warm (`if (gate.backend
+  // === 'databricks' && !process.env.LOOM_DATABRICKS_DEFAULT_CLUSTER) return;`)
+  // and the prove-warm route answers 200 with `configured:false`.
+  'LOOM_DATABRICKS_DEFAULT_CLUSTER',
   'LOOM_DATABRICKS_DEFAULT_CATALOG',// UC catalog default (code default)
   'LOOM_DATABRICKS_DEFAULT_SCHEMA', // UC schema default (code default)
   'LOOM_DATABRICKS_SCHEMA',         // UC schema default (code default)
@@ -336,6 +402,17 @@ const ALLOWLIST = new Set([
   'LOOM_IOTHUB_SUB',                // opt-in IoT Hub subscription
   'LOOM_KUSTO_FABRIC_MANAGED',      // opt-in Fabric-managed Kusto flag
   'LOOM_LOGIC_LOCATION',            // Logic App region (derived)
+  // The THIRD member of the LOOM_LOGIC_* trio, and the one that was never
+  // allowlisted — it passed only because deploy-planner/logic-app.bicep:55 says
+  // "…into LOOM_LOGIC_RG (== this DLZ RG)" in a COMMENT. Its two siblings
+  // (LOOM_LOGIC_SUB, LOOM_LOGIC_LOCATION) are both explicitly allowlisted right
+  // here as derived/opt-in, so the guard was treating one third of one gate
+  // differently purely by accident of prose. It is derived exactly like they
+  // are: lib/install/provisioners/logic-app.ts:86 reads
+  // `LOOM_LOGIC_RG || LOOM_DLZ_RG`, and LOOM_DLZ_RG IS bicep-emitted — so a
+  // from-scratch deploy resolves a resource group with this var unset. It is an
+  // OVERRIDE for installing workflows into a different RG, never a day-one gate.
+  'LOOM_LOGIC_RG',
   'LOOM_MIRROR_SOURCE_CONNECTION_ID', // opt-in mirror source binding
   'LOOM_OPEN_MIRROR_POOL',          // opt-in open-mirror pool
   'LOOM_PGVECTOR_DATABASE',         // opt-in pgvector db
@@ -389,6 +466,22 @@ const ALLOWLIST = new Set([
   'LOOM_SKILL_LEARNER_MIN_SAMPLES', // CTS-11 opt-in tuning knob: min recurring prompts on a pane before the skill self-evolution learner proposes a SUGGESTED skill (default 5 in lib/azure/skill-learner.ts); admin-reviewed, never auto-published. (LOOM_SKILL_LEARNER_ENABLED matched by /_ENABLED$/, LOOM_SKILL_LEARNER_MAX_* by /_MAX_.../)
   'LOOM_AGENT_MEMORY_RETENTION_DAYS', // B-N14d opt-in tuning knob: default lifetime of an agent memory (default 180 in lib/copilot/agent-memory-core.ts; 0 = keep forever). Read via an injected `env` param, never a gate — unset just uses the code default. (LOOM_AGENT_MEMORY_MAX_RETENTION_DAYS matched by /_MAX_.../; LOOM_AGENT_MEMORY_CAP / _TOPK are read dynamically by the AIF-14 client.)
   'LOOM_AGENT_MEMORY_CAP',          // B-N14d/AIF-14 tuning knob: per-scope memory count cap (default 200); unset = code default, never a gate
+  // Same family, same rationale — surfaced by the comment-blindness fix, which
+  // found it "emitted" by landing-zone/cosmos.bicep:295, a comment explaining
+  // what the cap DOES. lib/azure/agent-memory-client.ts:26 reads it as
+  // `intEnv('LOOM_AGENT_THREAD_CAP', 50)`: a pure tuning knob with a code
+  // default that gates nothing.
+  'LOOM_AGENT_THREAD_CAP',
+  // L2 OpenLineage per-pool principal registrations
+  // (`<pool-app-client-id>=<workspace-id>[,…]`). Cannot be a bicep literal by
+  // construction: each pair is minted at runtime by
+  // scripts/csa-loom/openlineage-pool-setup.sh when an operator registers a
+  // Spark pool, so the value does not exist at template-authoring time. It was
+  // passing only on admin-plane/main.bicep:4425, a comment naming it alongside
+  // the per-workspace token secret. Its sibling LOOM_OPENLINEAGE_AUDIENCE is
+  // already allowlisted for the same runtime-only reason. Unset => the ingest
+  // rejects an unregistered principal with the exact remediation text.
+  'LOOM_OPENLINEAGE_POOL_PRINCIPALS',
   'LOOM_AGENT_MEMORY_TOPK',         // B-N14d/AIF-14 tuning knob: memories packed into one agent turn (default 8); unset = code default, never a gate
 ]);
 
@@ -414,6 +507,9 @@ export function walk(dir, exts, out = []) {
 
 const ENV_READ_RE = /process\.env\.(LOOM_[A-Z0-9_]+)/g;
 const LOOM_TOKEN_RE = /LOOM_[A-Z0-9_]+/g;
+// Written as a code point so the literal never has to survive a shell heredoc
+// or an editor that re-escapes it.
+const BACKSLASH = String.fromCharCode(92);
 
 /** Every LOOM_* name read under apps/fiab-console/{app,lib}. */
 export function collectReads() {
@@ -431,12 +527,120 @@ export function collectReads() {
   return reads;
 }
 
-/** Every LOOM_* name referenced anywhere under the platform bicep. */
+/**
+ * Strip bicep DOCUMENTATION — `//` and block comments, plus the argument of the
+ * `@description(…)` / `@metadata(…)` decorators — before scanning for emitted
+ * names.
+ *
+ * WHY (measured 2026-08-04, mutation-proved twice). `collectEmitted()` used to
+ * tokenize the RAW file text, so a var merely MENTIONED in prose counted as
+ * "emitted by platform bicep" — the one thing this guard exists to establish.
+ *
+ * Proof, round 1 (comments). With `LOOM_RISINGWAVE_URL` removed from the
+ * ALLOWLIST below — i.e. the guard is now supposed to enforce its emission —
+ * renaming the SOLE real emission
+ *
+ *   admin-plane/main.bicep:3796  { name: 'LOOM_RISINGWAVE_URL', value: … }
+ *
+ * left the guard GREEN, because line 744 of the same file says
+ * `// Backs LOOM_RISINGWAVE_URL (the streaming-sql item …)`.
+ *
+ * Proof, round 2 (decorator docs). With comments stripped, the SAME mutation
+ * was STILL green, because data-plane/loom-risingwave-aca.bicep:426 says
+ * `@description('Internal FQDN — set on the Console app as LOOM_RISINGWAVE_URL …')`.
+ * `@description` is bicep's doc-comment idiom; its argument is prose that no
+ * deployment ever emits, so it must be treated exactly like a comment.
+ *
+ * In both rounds a from-scratch deploy would have shipped the var unset and the
+ * guard would not have noticed. Removing an allowlist entry bought NOTHING
+ * until both were fixed — the repo's recurring "guard that cannot fail" shape:
+ * the check ran, printed a number, and measured prose.
+ *
+ * ORDINARY string literals are PRESERVED, and must be: the real emission is
+ * itself a string (`name: 'LOOM_RISINGWAVE_URL'`), and a bicep author can
+ * legitimately assemble an env name inside one. The scanner tracks single-quoted
+ * and ''' multi-line strings so a `//` inside a URL literal (`https://…`) is
+ * never mistaken for the start of a comment.
+ */
+export function stripBicepDocs(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  // `@description(` / `@sys.description(` / `@metadata(` / `@sys.metadata(`
+  const DOC_DECORATOR = /@(?:sys\.)?(?:description|metadata)\s*\(/y;
+  while (i < n) {
+    const c = src[i];
+    // Documentation decorator: skip its whole argument list, string-aware so a
+    // ')' inside the prose does not end it early.
+    if (c === '@') {
+      DOC_DECORATOR.lastIndex = i;
+      if (DOC_DECORATOR.test(src)) {
+        let j = DOC_DECORATOR.lastIndex; // just past the '('
+        let depth = 1;
+        while (j < n && depth > 0) {
+          if (src.startsWith("'''", j)) {
+            const end = src.indexOf("'''", j + 3);
+            j = end === -1 ? n : end + 3;
+            continue;
+          }
+          if (src[j] === "'") {
+            let k = j + 1;
+            while (k < n && src[k] !== "'" && src[k] !== '\n') {
+              if (src[k] === BACKSLASH) k++;
+              k++;
+            }
+            j = Math.min(k + 1, n);
+            continue;
+          }
+          if (src[j] === '(') depth++;
+          else if (src[j] === ')') depth--;
+          j++;
+        }
+        i = j;
+        continue;
+      }
+    }
+    // ''' multi-line string
+    if (c === "'" && src.startsWith("'''", i)) {
+      const end = src.indexOf("'''", i + 3);
+      const stop = end === -1 ? n : end + 3;
+      out += src.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    // single-quoted string (bicep strings never span a newline)
+    if (c === "'") {
+      let j = i + 1;
+      while (j < n && src[j] !== "'" && src[j] !== '\n') {
+        if (src[j] === BACKSLASH) j++;
+        j++;
+      }
+      const stop = Math.min(j + 1, n);
+      out += src.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '/') {
+      while (i < n && src[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? n : end + 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/** Every LOOM_* name referenced in the platform bicep OUTSIDE of documentation. */
 export function collectEmitted() {
   const emitted = new Set();
   const files = walk(BICEP_ROOT, ['.bicep', '.bicepparam']);
   for (const f of files) {
-    const src = fs.readFileSync(f, 'utf8');
+    const src = stripBicepDocs(fs.readFileSync(f, 'utf8'));
     let m;
     LOOM_TOKEN_RE.lastIndex = 0;
     while ((m = LOOM_TOKEN_RE.exec(src)) !== null) emitted.add(m[0]);
