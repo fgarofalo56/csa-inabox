@@ -310,6 +310,16 @@ jobs:
           for t in $TAG_LIST; do IMG_ARGS="$IMG_ARGS --image $APP:$t"; done
           echo "TAG_LIST=$TAG_LIST" >> "$GITHUB_ENV"
           echo "::notice::$APP will be pushed as: $TAG_LIST"
+          # #2929 — the console (and the UAT image built from the same context)
+          # need the Copilot RAG corpus staged INTO apps/fiab-console before the
+          # build: docs/ + PRPs/ live at repo root, outside that build context,
+          # so without this the image ships copilot-corpus/ holding only
+          # .gitkeep and POST /api/help-copilot/reindex 502s with "No corpus
+          # chunks discovered". Commercial hit exactly this on 2026-08-04.
+          # Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          if [ "$APP" = "loom-console" ] || [ "$APP" = "loom-uat" ]; then
+            bash scripts/csa-loom/stage-copilot-corpus.sh
+          fi
           case "$APP" in
             loom-console)
               # #2706 — logs STREAM for the console build (no `--no-logs`). This

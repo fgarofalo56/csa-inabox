@@ -17,6 +17,16 @@ const amlMock = {
   resolveAmlTarget: vi.fn(() => ({ subscriptionId: 's', resourceGroup: 'rg', workspace: 'ws-aml', region: 'eastus2' })),
   amlWorkspaceArmPath: vi.fn(() => '/subscriptions/s/resourceGroups/rg/providers/Microsoft.MachineLearningServices/workspaces/ws-aml'),
   AmlNotConfiguredError,
+  // DELIBERATELY NOT the real api-version. `armGet` is mocked here, so this
+  // test cannot and does not validate what ARM would accept — it validates
+  // probe WIRING. A realistic-looking value would imply otherwise, and that
+  // implication is exactly how `?api-version=2024-09-01` (a version ARM does
+  // not publish for MachineLearningServices/workspaces) shipped and made
+  // /admin/readiness report Azure ML as 'partial' while this test read green.
+  // The api-version is pinned against ARM's published set — and the probe is
+  // proven to carry no literal of its own — in
+  // lib/azure/__tests__/aml-arm-api-version.test.ts.
+  AML_ARM_API_VERSION: 'MOCKED-NOT-VALIDATED-HERE',
 };
 vi.mock('@/lib/azure/resolve-aml-target', () => amlMock);
 const aasMock = { aasAvailabilityGate: vi.fn(() => null as any) };

@@ -149,32 +149,40 @@ jobs:
         # on /api/internal/copilot/eval-probe — LOOM_INTERNAL_TOKEN as a Bearer
         # token — exactly like csa-loom-memory-consolidate / -spark-keepwarm /
         # -skill-learner. The console does the reindex in-process (it holds the
-        # AI Search creds + the baked corpus); this only TRIGGERS it. Fail-loud
-        # on a real failure (401/5xx), tolerant of an honest "not configured"
-        # (Cosmos fallback) and a transient Front-Door blip — the pass/warn/FAIL
-        # decision is the unit-tested scripts/ci/classify-reindex-result.mjs.
+        # AI Search creds + the baked corpus); this only TRIGGERS it.
+        #
+        # ── POST → POLL, and why (2026-08-04) ────────────────────────────────
+        # This used to be ONE blocking POST with `--max-time 300`, and it could
+        # not distinguish two very different HTTP 502s:
+        #   * the route's OWN 502 in ~160ms — the corpus was not in the image at
+        #     all (run 30937670794), a hard failure; and
+        #   * a Front Door EDGE 502 at 60s (the AFD default origin timeout, which
+        #     front-door.bicep does not override) on a perfectly healthy rebuild
+        #     that simply takes longer than a minute.
+        # The route is now async: it ACCEPTS the work (202) and the script polls
+        # GET for the DURABLE cross-replica freshness signal, so no gateway
+        # timeout sits on the critical path. A POLL TIMEOUT FAILS — it is a
+        # refusal, not a pass: proceeding would measure exactly the stale index
+        # this step exists to prevent.
+        #
+        # The POST/poll glue and the pass/warn/FAIL verdict both live in ONE
+        # place — scripts/ci/reindex-loom-docs.sh over the unit-tested
+        # scripts/ci/classify-reindex-result.mjs — shared with
+        # loom-docs-reindex.yml, the console rolls, and the post-deploy
+        # bootstrap. An inline copy here is how one of those quietly ends up
+        # dropping the verdict; the script's failure paths are mutation-proved
+        # in scripts/ci/__tests__/reindex-loom-docs.test.mjs.
         env:
+          CONSOLE_URL: ${{ env.LOOM_CONSOLE_URL }}
           INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
-        run: |
-          set -uo pipefail
-          if [ -z "${INTERNAL_TOKEN:-}" ]; then
-            echo "::warning::LOOM_INTERNAL_TOKEN secret not set — cannot refresh the loom-docs index; the eval will measure whatever the console last indexed. Add the repo secret (it must match the console env). See docs/fiab/copilot-retrieval-remediation.md §9."
-            echo "reindexed=skipped" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          CODE=$(curl -sS -o /tmp/reindex.json -w '%{http_code}' -X POST \
-            -H "Authorization: Bearer $INTERNAL_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --max-time 300 \
-            "${LOOM_CONSOLE_URL%/}/api/help-copilot/reindex" || echo 000)
-          echo "reindex POST ${LOOM_CONSOLE_URL%/}/api/help-copilot/reindex -> HTTP $CODE"
-          head -c 800 /tmp/reindex.json 2>/dev/null || true
-          echo ""
-          echo "reindexed=$CODE" >> "$GITHUB_OUTPUT"
-          # Fail-loud verdict lives in the tested classifier: exit 1 (real
-          # failure) reds this step; exit 0 (ok / honest-gate / transient) passes.
-          HTTP_CODE="$CODE" RESP_BODY="$(cat /tmp/reindex.json 2>/dev/null || true)" \
-            node scripts/ci/classify-reindex-result.mjs
+          # Cap the wait for a full corpus rebuild (~2.5k md → tens of thousands
+          # of AI Search docs). Generous, and bounded by the job's 90m timeout.
+          POLL_TIMEOUT_S: '900'
+          POLL_INTERVAL_S: '15'
+          # This gate MUST red on a failed refresh: measuring a stale index is
+          # the failure mode. Never set FATAL=false here.
+          FATAL: 'true'
+        run: bash scripts/ci/reindex-loom-docs.sh
 
       - name: Run evals (start ONE job execution; lift the run receipt from its logs)
         id: run

@@ -391,20 +391,25 @@ jobs:
             exit 0
           fi
           echo "Reindexing loom-docs on ${BASE%/}"
-          CODE=$(curl -sS -o /tmp/reindex.json -w '%{http_code}' -X POST \
-            -H "Authorization: Bearer $INTERNAL_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --max-time 300 \
-            "${BASE%/}/api/help-copilot/reindex" || echo 000)
-          echo "reindex HTTP $CODE"
-          head -c 600 /tmp/reindex.json 2>/dev/null || true
-          echo ""
-          case "$CODE" in
-            2*)  echo "::notice::loom-docs index refreshed on the fresh deploy (HTTP $CODE).";;
-            401) echo "::warning::reindex 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env; the Copilot index stays stale until refreshed. Non-fatal.";;
-            000) echo "::warning::console unreachable at ${BASE%/} — reindex skipped (non-fatal; dispatch copilot-quality-evals or POST the reindex once the console is reachable).";;
-            *)   echo "::warning::reindex returned $CODE — the Copilot index may be stale (non-fatal). See body above.";;
-          esac
+          # #2929: the route is ASYNC — 202 means ACCEPTED, not finished. The
+          # shared driver POSTs, then polls GET for the DURABLE cross-replica
+          # freshness signal, so this step can never REPORT a refresh it did not
+          # observe. Same script + same tested verdict as loom-docs-reindex.yml,
+          # copilot-quality-evals.yml and the console rolls — one implementation,
+          # never a divergent inline copy.
+          #
+          # FATAL=false is deliberate and is THE ONLY call site allowed to set
+          # it: a fresh-deploy bootstrap must not be blocked by a Copilot index
+          # refresh. The real verdict is still printed in full, and the downgrade
+          # announces itself as a ::warning:: — it changes the exit code, nothing
+          # else. (scripts/ci/__tests__/reindex-loom-docs.test.mjs pins exactly
+          # that, so the downgrade can never become a silent pass.)
+          CONSOLE_URL="$BASE" \
+          INTERNAL_TOKEN="$INTERNAL_TOKEN" \
+          POLL_TIMEOUT_S=600 \
+          POLL_INTERVAL_S=15 \
+          FATAL=false \
+            bash scripts/ci/reindex-loom-docs.sh
 
       - name: Grant Console UAMI Purview Data Map roles (data-plane)
         env:

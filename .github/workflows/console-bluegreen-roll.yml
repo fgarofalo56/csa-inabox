@@ -162,6 +162,13 @@ jobs:
           CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
           [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # #2929 — stage the Copilot RAG corpus INTO the build context before
+          # the build. docs/ + PRPs/ live at repo root, outside apps/fiab-console,
+          # so without this the image's copilot-corpus/ is just .gitkeep and
+          # POST /api/help-copilot/reindex 502s with "No corpus chunks discovered"
+          # while the quality evals measure a stale index.
+          # Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          bash scripts/csa-loom/stage-copilot-corpus.sh
           az acr build --registry "$ACR" --no-logs --agent-pool loombuild \
             --image "loom-console:$SHA" --image "loom-console:latest" \
             --file apps/fiab-console/Dockerfile \
@@ -264,6 +271,41 @@ jobs:
             az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$GREEN=100" -o none
           fi
           echo "::notice::BR-BLUEGREEN ${{ steps.build.outputs.sha }} LIVE — 100% traffic on $GREEN; $BLUE retained at 0% for instant rollback."
+
+      # ── Refresh the Copilot index against the image we just put live ─────────
+      # #2929. The image carries a NEWLY STAGED corpus (the build step above runs
+      # stage-copilot-corpus.sh), so the `loom-docs` AI Search index is stale the
+      # moment traffic shifts. Nothing used to refresh it on a roll: the only
+      # trigger lived inside copilot-quality-evals.yml, which does not run on a
+      # roll at all — so a rolled console served retrieval over whatever corpus
+      # was indexed last, however many rolls ago.
+      #
+      # POST → poll GET for the DURABLE cross-replica freshness signal, verdict
+      # from the unit-tested classifier, via the SAME shared driver every other
+      # call site uses. FATAL is left at its default (true): a roll that leaves
+      # the Copilot index unrefreshed is a roll that half-shipped, and saying so
+      # is the entire point.
+      #
+      # COMMERCIAL ONLY, deliberately. `vars.LOOM_VERIFY_URL` and the
+      # `LOOM_INTERNAL_TOKEN` secret both address the COMMERCIAL console; there
+      # is no confirmed Gov equivalent of either, and pointing a Gov roll at the
+      # Commercial vanity would reindex the wrong estate while a mismatched token
+      # would red the roll on a 401. Gov refreshes via an explicit dispatch of
+      # loom-docs-reindex.yml with `console_url` set — an honest scoping, not a
+      # silent skip: the notice below fires on every Gov roll.
+      - name: Reindex loom-docs on the new revision (Commercial)
+        if: ${{ steps.gate.outputs.gate == 'pass' && inputs.cloud == 'commercial' }}
+        env:
+          CONSOLE_URL: ${{ vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+          POLL_TIMEOUT_S: '900'
+          POLL_INTERVAL_S: '15'
+        run: bash scripts/ci/reindex-loom-docs.sh
+
+      - name: loom-docs reindex not wired for Gov (notice)
+        if: ${{ steps.gate.outputs.gate == 'pass' && inputs.cloud != 'commercial' }}
+        run: |
+          echo "::notice::Gov console rolled with a freshly staged Copilot corpus, but the loom-docs index was NOT refreshed here — LOOM_VERIFY_URL / LOOM_INTERNAL_TOKEN address the Commercial estate. Refresh it by dispatching loom-docs-reindex.yml with console_url set to the Gov console base URL (refs #2929)."
 
       # ── Auto-rollback: green failed the gate → deactivate it; blue never moved ─
       - name: Auto-rollback (green failed the gate)

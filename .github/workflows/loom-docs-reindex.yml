@@ -1,0 +1,102 @@
+name: loom-docs reindex
+
+# THE DEDICATED `loom-docs` REINDEX (#2929).
+#
+# WHAT WAS MISSING
+# ----------------
+# `rag-reindex.yml` ("Copilot RAG Reindex") reindexes the **Python apps/copilot**
+# vector store on docs pushes. It has nothing to do with the `loom-docs` AI
+# Search index the in-product Console Copilot actually retrieves from — that one
+# is rebuilt by the CONSOLE, in-process, via POST /api/help-copilot/reindex.
+#
+# Before this workflow the only thing that ever triggered a loom-docs reindex was
+# a step buried inside `copilot-quality-evals.yml` (and a best-effort one in the
+# post-deploy bootstrap). That coupling had two consequences:
+#   * the index was only ever refreshed when the eval lane ran — and the eval
+#     lane skips whenever the `loom-copilot-evaluator` job is absent, on forks,
+#     and outside its own path filter; and
+#   * there was no way to refresh the index on demand, or to verify a reindex,
+#     without spending judge tokens on a full eval sweep.
+# Meanwhile the reindex it did trigger had been failing 502 for every routine
+# console image, because those images shipped with no staged corpus at all.
+#
+# So: one owner, callable three ways.
+#   * `workflow_dispatch` — refresh (and PROVE the refresh of) any console.
+#   * `workflow_call`     — reusable; console rolls invoke it after traffic
+#                           shifts, because a new image means a new corpus.
+#   * `schedule`          — a nightly safety net at 05:40 UTC, deliberately
+#                           ~3h BEFORE copilot-quality-evals' 08:30 cron so a
+#                           failed refresh is visible on its own before the eval
+#                           lane measures anything.
+#
+# All of the real work is `scripts/ci/reindex-loom-docs.sh` — POST, then poll GET
+# for the DURABLE cross-replica `freshness.state === 'fresh'`, with the verdict
+# rendered by the unit-tested `scripts/ci/classify-reindex-result.mjs`. A poll
+# timeout FAILS: leaving a stale index while reporting success is the exact
+# defect this whole chain exists to close. The script's own failure paths are
+# mutation-proved end-to-end in `scripts/ci/__tests__/reindex-loom-docs.test.mjs`
+# against a real HTTP server and the real curl binary.
+#
+# NOT a duplicate of the evals' reindex step: that one must run immediately
+# before it measures (an ordering guarantee it cannot outsource to another
+# workflow). Both now call the SAME script, so there is one implementation and
+# one tested verdict — never two copies that drift.
+
+on:
+  workflow_dispatch:
+    inputs:
+      console_url:
+        description: 'Console base URL to reindex (blank → LOOM_VERIFY_URL var, then the Commercial vanity)'
+        type: string
+        required: false
+        default: ''
+      poll_timeout_s:
+        description: 'Seconds to wait for freshness before failing'
+        type: string
+        required: false
+        default: '900'
+  workflow_call:
+    inputs:
+      console_url:
+        description: 'Console base URL to reindex'
+        type: string
+        required: false
+        default: ''
+      poll_timeout_s:
+        type: string
+        required: false
+        default: '900'
+      fatal:
+        description: "'false' only for documented non-blocking callers"
+        type: string
+        required: false
+        default: 'true'
+  schedule:
+    # Nightly safety net, ahead of the 08:30 copilot-quality-evals cron.
+    - cron: '40 5 * * *'
+
+# Never two rebuilds at once against the same console: concurrent full rebuilds
+# race on the shared corpus manifest that freshness is read from.
+concurrency:
+  group: loom-docs-reindex-${{ inputs.console_url || 'default' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  reindex:
+    name: Reindex loom-docs + wait for freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reindex + poll to completion
+        env:
+          CONSOLE_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+          POLL_TIMEOUT_S: ${{ inputs.poll_timeout_s || '900' }}
+          POLL_INTERVAL_S: '15'
+          FATAL: ${{ inputs.fatal || 'true' }}
+        run: bash scripts/ci/reindex-loom-docs.sh
