@@ -28,14 +28,30 @@ import {
   ClientSecretCredential, type TokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { powerPlatformEndpoints, assertPowerPlatformAvailable } from '@/lib/azure/cloud-endpoints';
 
-const BAP_BASE = process.env.LOOM_BAP_BASE || 'https://api.bap.microsoft.com';
-const POWERAPPS_BASE = process.env.LOOM_POWERAPPS_BASE || 'https://api.powerapps.com';
-const FLOW_BASE = process.env.LOOM_FLOW_BASE || 'https://api.flow.microsoft.com';
-
-const BAP_SCOPE = 'https://api.bap.microsoft.com/.default';
-const POWERAPPS_SCOPE = 'https://service.powerapps.com/.default';
-const FLOW_SCOPE = 'https://service.flow.microsoft.com/.default';
+// CLOUD-AWARE ENDPOINTS (single source of truth). These were module-level
+// `process.env` reads that ONLY understood the Commercial hosts unless an
+// operator set every var by hand; the sibling copilot-studio-client read a
+// DIFFERENT (unwired) var for the same host. Both clients now resolve through
+// `powerPlatformEndpoints()` so a sovereign boundary routes correctly, an
+// operator override applies to BOTH clients, and an unknown sovereign host
+// raises a named remediation instead of silently calling a Commercial host.
+// Lazily evaluated (functions, not consts) so a runtime env change and unit
+// tests both take effect.
+function bapBase(): string { return powerPlatformEndpoints().bapBase; }
+function bapScope(): string { return powerPlatformEndpoints().bapScope; }
+function powerAppsScope(): string { return powerPlatformEndpoints().powerAppsScope; }
+function flowScope(): string { return powerPlatformEndpoints().flowScope; }
+/** Throws an honest, named remediation when this cloud has no known host. */
+function powerAppsBase(): string {
+  assertPowerPlatformAvailable('powerapps');
+  return powerPlatformEndpoints().powerAppsBase as string;
+}
+function flowBase(): string {
+  assertPowerPlatformAvailable('flow');
+  return powerPlatformEndpoints().flowBase as string;
+}
 
 // UAMI credential — used for BAP / PowerApps / Flow control-plane calls.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -145,17 +161,86 @@ export class PowerPlatformError extends Error {
   }
 }
 
-async function getToken(scope: string): Promise<string> {
-  // Route Dataverse-scope tokens through the MSAL Web App SP when
-  // configured (Dataverse refuses UAMI-issued tokens — the SP must
-  // be registered as an Application User on the env). Falls back to
-  // UAMI credential if the dedicated Dataverse SP isn't configured,
-  // which then surfaces a 403 with "user is not a member of the
-  // organization" — actionable.
+/** Which identity produced the token an outbound call actually used. */
+export type PpCallIdentity = 'user' | 'sp';
+
+/**
+ * Acquire the SERVICE-PRINCIPAL bearer token for a Power Platform REST call.
+ *
+ * Route Dataverse-scope tokens through the MSAL Web App SP when configured
+ * (Dataverse refuses UAMI-issued tokens — the SP must be registered as an
+ * Application User on the env). Falls back to the UAMI credential if the
+ * dedicated Dataverse SP isn't configured, which then surfaces a 403 with
+ * "user is not a member of the organization" — actionable.
+ */
+async function getSpToken(scope: string): Promise<string> {
   const cred = (isDataverseScope(scope) && dataverseCredential) ? dataverseCredential : uamiCredential;
   const t = await cred.getToken(scope);
   if (!t?.token) throw new PowerPlatformError(`Failed to acquire AAD token for ${scope}`, 401);
   return t.token;
+}
+
+function withBearer(init: RequestInit, token: string): RequestInit {
+  return {
+    ...init,
+    headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${token}` },
+  };
+}
+
+/**
+ * Issue a Power Platform REST call under DUAL IDENTITY.
+ *
+ * WHY BOTH IDENTITIES ARE REQUIRED — neither one alone can serve this client:
+ *
+ *   - Only a LICENSED USER can author Power Automate flows. "APIs related to
+ *     Flow are supported for service principal authentication in situations
+ *     where a license isn't required, as it isn't possible to assign licenses
+ *     to service principal identities in Microsoft Entra ID."
+ *     (learn.microsoft.com/power-platform/admin/powerplatform-api-create-service-principal
+ *      #limitations-of-service-principals). And a UAMI-issued token is never a
+ *     valid Dataverse Application User.
+ *   - Only the registered MANAGEMENT APPLICATION can use the BAP *admin* scope
+ *     (`/scopes/admin/...`). An ordinary signed-in user is not a Power Platform
+ *     administrator, so a user token 403s there — while the SP succeeds.
+ *
+ * A "user token first, SP only if no user token could be MINTED" design (the
+ * shape this file briefly carried) therefore REGRESSES the admin control plane:
+ * once a user token mints successfully, every admin listing 403s and the SP is
+ * never tried. That is the difference between "Power Platform works" and "the
+ * environment list is empty", which is exactly the reported symptom.
+ *
+ * So: try the user, and on a 401/403 RETRY the same request as the service
+ * principal. Both legs are pre-existing behaviors, so this can only ever turn a
+ * failure into a success:
+ *   - no signed-in user / kill switch / mint failure → SP only (today's path);
+ *   - user allowed                                   → user (correct licensing + RBAC);
+ *   - user denied, SP allowed                        → SP (today's path).
+ *
+ * The bodies we send are always JSON strings, so re-issuing the request is safe.
+ * Kill switch: LOOM_POWERPLATFORM_USER_PASSTHROUGH=false → pure SP behavior.
+ */
+async function ppFetch(
+  url: string,
+  scope: string,
+  init: RequestInit,
+): Promise<{ res: Response; identity: PpCallIdentity; triedUser: boolean }> {
+  const { tryUserTokenForPowerPlatform } = await import('@/lib/auth/obo');
+  const userToken = await tryUserTokenForPowerPlatform(scope);
+  if (userToken) {
+    const res = await fetchWithTimeout(url, withBearer(init, userToken));
+    if (res.status !== 401 && res.status !== 403) return { res, identity: 'user', triedUser: true };
+    // The delegated identity is not authorized for this surface — retry as the
+    // service principal before surfacing the denial.
+    let spToken: string | null = null;
+    try { spToken = await getSpToken(scope); } catch { spToken = null; }
+    if (!spToken) return { res, identity: 'user', triedUser: true };
+    return { res: await fetchWithTimeout(url, withBearer(init, spToken)), identity: 'sp', triedUser: true };
+  }
+  return {
+    res: await fetchWithTimeout(url, withBearer(init, await getSpToken(scope))),
+    identity: 'sp',
+    triedUser: false,
+  };
 }
 
 interface CallOpts {
@@ -167,7 +252,6 @@ interface CallOpts {
 
 async function call<T = any>(url: string, scope: string, opts: CallOpts = {}): Promise<T> {
   const method = opts.method ?? 'GET';
-  const token = await getToken(scope);
   let full = url;
   if (opts.query) {
     const qs = new URLSearchParams();
@@ -177,10 +261,9 @@ async function call<T = any>(url: string, scope: string, opts: CallOpts = {}): P
     const s = qs.toString();
     if (s) full += (full.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetchWithTimeout(full, {
+  const { res, identity, triedUser } = await ppFetch(full, scope, {
     method,
     headers: {
-      'authorization': `Bearer ${token}`,
       'content-type': 'application/json',
       'accept': 'application/json',
       ...(opts.headers || {}),
@@ -195,7 +278,14 @@ async function call<T = any>(url: string, scope: string, opts: CallOpts = {}): P
     const msg = (json?.error?.message || json?.message || text || `${method} ${url} failed`).toString();
     let hint: string | undefined;
     if (res.status === 401 || res.status === 403) {
-      hint = 'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow group in Power Platform admin centre, and (for Dataverse) added as an Application User in the target environment with the System Administrator role.';
+      // Name the principal(s) actually refused. `triedUser` — NOT `identity` —
+      // is the right discriminator: after a retry `identity` is 'sp', so keying
+      // off it would report an SP-only denial even though the signed-in user was
+      // refused first, and send the operator to fix the wrong grant.
+      void identity;
+      hint = triedUser
+        ? 'Both identities were refused: your signed-in account, then the Console service principal. Confirm your account has a Power Platform licence and a role on this environment, AND that the Console SP is registered as a Power Platform management application (New-PowerAppManagementApp) and — for Dataverse — added as an Application User with the System Administrator role.'
+        : 'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow group in Power Platform admin centre, and (for Dataverse) added as an Application User in the target environment with the System Administrator role.';
     }
     throw new PowerPlatformError(msg, res.status, json || text, full, hint);
   }
@@ -341,8 +431,8 @@ const ENV_API_VERSION = '2020-10-01';
 
 export async function listEnvironments(): Promise<PpEnvironment[]> {
   const j = await call<{ value: any[] }>(
-    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
-    BAP_SCOPE,
+    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
+    bapScope(),
     { query: { 'api-version': ENV_API_VERSION } },
   );
   return (j.value || []).map(mapEnvironment);
@@ -350,8 +440,8 @@ export async function listEnvironments(): Promise<PpEnvironment[]> {
 
 export async function getEnvironment(name: string): Promise<PpEnvironment> {
   const j = await call<any>(
-    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(name)}`,
-    BAP_SCOPE,
+    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(name)}`,
+    bapScope(),
     { query: { 'api-version': ENV_API_VERSION, '$expand': 'permissions,properties/billingPolicy' } },
   );
   return mapEnvironment(j);
@@ -439,7 +529,6 @@ async function bapCallWithHeaders<T = any>(
   opts: CallOpts = {},
 ): Promise<{ body: T; status: number; operationUrl?: string }> {
   const method = opts.method ?? 'GET';
-  const token = await getToken(BAP_SCOPE);
   let full = url;
   if (opts.query) {
     const qs = new URLSearchParams();
@@ -447,10 +536,11 @@ async function bapCallWithHeaders<T = any>(
     const s = qs.toString();
     if (s) full += (full.includes('?') ? '&' : '?') + s;
   }
-  const res = await fetchWithTimeout(full, {
+  // Dual-identity (see ppFetch): the BAP *admin* scope is management-app-only,
+  // so a signed-in non-admin user 403s here and MUST fall through to the SP.
+  const { res } = await ppFetch(full, bapScope(), {
     method,
     headers: {
-      'authorization': `Bearer ${token}`,
       'content-type': 'application/json',
       'accept': 'application/json',
       ...(opts.headers || {}),
@@ -500,7 +590,7 @@ export async function createEnvironment(spec: CreateEnvironmentSpec): Promise<En
     properties.linkedEnvironmentMetadata = linked;
   }
   const { body, operationUrl } = await bapCallWithHeaders<any>(
-    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
+    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
     {
       method: 'POST',
       query: { 'api-version': ENV_LIFECYCLE_API_VERSION, location: spec.location },
@@ -533,7 +623,7 @@ export async function updateEnvironment(
     properties.linkedEnvironmentMetadata = { securityGroupId: patch.securityGroupId };
   }
   const { body, operationUrl } = await bapCallWithHeaders<any>(
-    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
+    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
     {
       method: 'PATCH',
       query: { 'api-version': ENV_LIFECYCLE_API_VERSION },
@@ -552,7 +642,7 @@ export async function updateEnvironment(
  */
 export async function deleteEnvironment(id: string): Promise<EnvironmentLifecycleOperation> {
   const { body, operationUrl, status: httpStatus } = await bapCallWithHeaders<any>(
-    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
+    `${bapBase()}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
     { method: 'DELETE', query: { 'api-version': ENV_LIFECYCLE_API_VERSION } },
   );
   const status = body?.properties?.provisioningState || body?.status || (httpStatus === 202 ? 'Running' : 'Succeeded');
@@ -930,11 +1020,11 @@ export async function addColumn(
   const body = buildAttributeMetadata(spec);
   const endpoint = `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')/Attributes`;
   // Use the raw fetch path so we can read the OData-EntityId header on the 204.
-  const token = await getToken(scope);
-  const res = await fetchWithTimeout(endpoint, {
+  // Dual-identity (see ppFetch): a Dataverse write succeeds as whichever of the
+  // signed-in user / the registered Application User actually holds the privilege.
+  const { res } = await ppFetch(endpoint, scope, {
     method: 'POST',
     headers: {
-      'authorization': `Bearer ${token}`,
       'content-type': 'application/json',
       'accept': 'application/json',
       'OData-MaxVersion': '4.0', 'OData-Version': '4.0',
@@ -1063,11 +1153,11 @@ export async function createTable(
   const { url, scope } = await dataverseBase(envId);
   const body = buildEntityMetadata(spec);
   const endpoint = `${url}/api/data/v9.2/EntityDefinitions`;
-  const token = await getToken(scope);
-  const res = await fetchWithTimeout(endpoint, {
+  // Dual-identity (see ppFetch): a Dataverse write succeeds as whichever of the
+  // signed-in user / the registered Application User actually holds the privilege.
+  const { res } = await ppFetch(endpoint, scope, {
     method: 'POST',
     headers: {
-      'authorization': `Bearer ${token}`,
       'content-type': 'application/json',
       'accept': 'application/json',
       'OData-MaxVersion': '4.0', 'OData-Version': '4.0',
@@ -1153,8 +1243,8 @@ export function powerAppPlayerEmbedUri(
 
 export async function listPowerApps(envId: string): Promise<PowerApp[]> {
   const j = await call<{ value: any[] }>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps`,
+    powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION } },
   );
   return (j.value || []).map((a) => mapPowerApp(a));
@@ -1162,8 +1252,8 @@ export async function listPowerApps(envId: string): Promise<PowerApp[]> {
 
 export async function getPowerApp(envId: string, name: string, opts?: { instanceUrl?: string }): Promise<PowerApp> {
   const j = await call<any>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
+    powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION } },
   );
   return mapPowerApp(j, opts);
@@ -1177,8 +1267,8 @@ export async function getPowerApp(envId: string, name: string, opts?: { instance
  */
 export async function publishPowerApp(envId: string, name: string): Promise<{ ok: true; body?: any }> {
   const body = await call<any>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}/publishAppRevision`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}/publishAppRevision`,
+    powerAppsScope(),
     { method: 'POST', query: { 'api-version': APPS_API_VERSION }, body: {} },
   );
   return { ok: true, body };
@@ -1236,8 +1326,8 @@ export async function listFlows(envId: string): Promise<PowerAutomateFlow[]> {
   // /flows and returns identifying info only (displayName/state/timestamps);
   // the full definition is fetched per-flow via getFlow/getFlowDefinition.
   const j = await call<{ value: any[] }>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/v2/flows`,
-    FLOW_SCOPE,
+    `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/v2/flows`,
+    flowScope(),
     { query: { 'api-version': FLOW_API_VERSION } },
   );
   return (j.value || []).map(mapFlow);
@@ -1245,8 +1335,8 @@ export async function listFlows(envId: string): Promise<PowerAutomateFlow[]> {
 
 export async function getFlow(envId: string, name: string): Promise<PowerAutomateFlow> {
   const j = await call<any>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
-    FLOW_SCOPE,
+    `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
+    flowScope(),
     { query: { 'api-version': FLOW_API_VERSION } },
   );
   return mapFlow(j);
@@ -1270,8 +1360,8 @@ function mapFlow(f: any): PowerAutomateFlow {
 export async function runFlow(envId: string, name: string, inputs?: Record<string, unknown>): Promise<{ ok: true; runName?: string }> {
   // Admin trigger — uses the manual trigger if present.
   const res = await call<any>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/triggers/manual/run`,
-    FLOW_SCOPE,
+    `${flowBase()}/providers/Microsoft.ProcessSimple/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/triggers/manual/run`,
+    flowScope(),
     { method: 'POST', query: { 'api-version': FLOW_API_VERSION }, body: inputs ?? {} },
   );
   return { ok: true, runName: res?.name };
@@ -1279,8 +1369,8 @@ export async function runFlow(envId: string, name: string, inputs?: Record<strin
 
 export async function listFlowRuns(envId: string, name: string, top = 50): Promise<FlowRun[]> {
   const j = await call<{ value: any[] }>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/runs`,
-    FLOW_SCOPE,
+    `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/runs`,
+    flowScope(),
     { query: { 'api-version': FLOW_API_VERSION, '$top': top } },
   );
   return (j.value || []).map((r: any) => ({
@@ -1475,11 +1565,11 @@ export async function createFlow(
     statuscode: 1,        // Draft
     clientdata: encodeClientData(def),
   };
-  const token = await getToken(scope);
-  const res = await fetchWithTimeout(endpoint, {
+  // Dual-identity (see ppFetch): a Dataverse write succeeds as whichever of the
+  // signed-in user / the registered Application User actually holds the privilege.
+  const { res } = await ppFetch(endpoint, scope, {
     method: 'POST',
     headers: {
-      'authorization': `Bearer ${token}`,
       'content-type': 'application/json',
       'accept': 'application/json',
       'OData-MaxVersion': '4.0', 'OData-Version': '4.0',
@@ -1788,8 +1878,8 @@ export interface PowerConnector {
 
 export async function listConnections(envId: string): Promise<PowerConnection[]> {
   const j = await call<{ value: any[] }>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections`,
+    powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION } },
   );
   return (j.value || []).map((c: any) => {
@@ -1815,15 +1905,15 @@ export async function listConnectors(envId: string): Promise<PowerConnector[]> {
   // We surface CUSTOM connectors prominently (isCustomApi) but return all so
   // the count + filter match the maker portal Connectors list.
   const j = await call<{ value: any[] }>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
+    powerAppsScope(),
     { query: { 'api-version': APPS_API_VERSION, '$filter': "environment eq '" + envId + "'" } },
   ).catch(async (e) => {
     // Some tenants reject the $filter form; retry without it.
     if (e instanceof PowerPlatformError && (e.status === 400 || e.status === 404)) {
       return call<{ value: any[] }>(
-        `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
-        POWERAPPS_SCOPE,
+        `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
+        powerAppsScope(),
         { query: { 'api-version': APPS_API_VERSION } },
       );
     }
@@ -1848,8 +1938,8 @@ export async function listConnectors(envId: string): Promise<PowerConnector[]> {
 /** Delete an API connection (real Power Apps admin REST). */
 export async function deleteConnection(envId: string, connectorId: string, connectionName: string): Promise<{ ok: true }> {
   await call<any>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections/${encodeURIComponent(connectorId)}/${encodeURIComponent(connectionName)}`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections/${encodeURIComponent(connectorId)}/${encodeURIComponent(connectionName)}`,
+    powerAppsScope(),
     { method: 'DELETE', query: { 'api-version': APPS_API_VERSION } },
   );
   return { ok: true };
@@ -1858,8 +1948,8 @@ export async function deleteConnection(envId: string, connectorId: string, conne
 /** Delete a Power App (real Power Apps admin REST). */
 export async function deletePowerApp(envId: string, name: string): Promise<{ ok: true }> {
   await call<any>(
-    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
-    POWERAPPS_SCOPE,
+    `${powerAppsBase()}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
+    powerAppsScope(),
     { method: 'DELETE', query: { 'api-version': APPS_API_VERSION } },
   );
   return { ok: true };
@@ -1868,8 +1958,8 @@ export async function deletePowerApp(envId: string, name: string): Promise<{ ok:
 /** Delete a cloud flow (real Power Automate admin REST). */
 export async function deleteFlow(envId: string, name: string): Promise<{ ok: true }> {
   await call<any>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
-    FLOW_SCOPE,
+    `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
+    flowScope(),
     { method: 'DELETE', query: { 'api-version': FLOW_API_VERSION } },
   );
   return { ok: true };
@@ -1878,8 +1968,8 @@ export async function deleteFlow(envId: string, name: string): Promise<{ ok: tru
 /** Start/stop a cloud flow (real Power Automate admin REST: turnOn / turnOff). */
 export async function setFlowState(envId: string, name: string, on: boolean): Promise<{ ok: true }> {
   await call<any>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/${on ? 'start' : 'stop'}`,
-    FLOW_SCOPE,
+    `${flowBase()}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/${on ? 'start' : 'stop'}`,
+    flowScope(),
     { method: 'POST', query: { 'api-version': FLOW_API_VERSION }, body: {} },
   );
   return { ok: true };

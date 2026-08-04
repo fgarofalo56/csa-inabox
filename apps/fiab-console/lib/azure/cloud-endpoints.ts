@@ -1353,3 +1353,145 @@ export function parseAasServer(
 export function aasModelUrl(region: string, serverName: string, modelName: string): string {
   return `https://${region}.${aasSuffix()}/servers/${encodeURIComponent(serverName)}/models/${encodeURIComponent(modelName)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Power Platform control plane (BAP / Power Apps / Power Automate)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE BUG THIS RESOLVER FIXES (a silent, cloud-breaking divergence).
+ *
+ * Two clients call the Power Platform control plane and each read a DIFFERENT
+ * env var for the same host:
+ *
+ *   lib/azure/powerplatform-client.ts   ->  process.env.LOOM_BAP_BASE
+ *   lib/azure/copilot-studio-client.ts  ->  process.env.LOOM_POWER_PLATFORM_BAP_BASE
+ *
+ * Only the FIRST is produced by anything: bicep sets `LOOM_BAP_BASE` on the
+ * Console app (modules/admin-plane/main.bicep line ~4730).
+ * `LOOM_POWER_PLATFORM_BAP_BASE` has NO producer anywhere in the repo - yet
+ * seven parity docs (docs/fiab/parity/copilot-studio-*.md,
+ * copilot-template-library.md, power-platform.md) tell the operator it is how
+ * the Copilot Studio family is routed to a sovereign cloud, and
+ * scripts/ci/check-env-sync.mjs EXEMPTS it from the "must be wired in bicep"
+ * check with the comment "derived from cloud endpoints (BAP)" - which was not
+ * true of any code. So an operator who configured the platform exactly as
+ * documented still had the ENTIRE Copilot Studio family pinned to the
+ * Commercial host, with no gate and no error naming the cause.
+ *
+ * This resolver makes that exemption TRUE: the bases are genuinely derived from
+ * the detected cloud, in ONE place, consumed by BOTH clients, with the
+ * historical env vars honored as overrides (the legacy name is accepted as an
+ * alias so any estate that set it is not regressed).
+ *
+ * Per-cloud hosts come from the Microsoft Learn allowlist table "IP address
+ * configuration for Power Automate -> Allow users on your network to use Power
+ * Automate" (learn.microsoft.com/power-automate/ip-address-configuration),
+ * which enumerates the Power Platform API domains per boundary:
+ *
+ *   Commercial : api.bap.microsoft.com        / *.api.powerplatform.com
+ *   GCC        : *.gov.api.bap.microsoft.us   / *.api.gov.powerplatform.microsoft.us
+ *   GCC High   : *.high.api.bap.microsoft.us  / *.api.high.powerplatform.microsoft.us
+ *   DoD        : *.api.bap.appsplatform.us    / *.api.appsplatform.us
+ *
+ * HONESTY ABOUT WHAT IS *NOT* DOCUMENTED. Learn publishes the sovereign BAP
+ * domains above, but it does NOT publish sovereign REST bases for the Power Apps
+ * (`api.powerapps.com`) and Power Automate (`api.flow.microsoft.com`) management
+ * surfaces - only the MAKER PORTAL URLs (make.gov.powerapps.us,
+ * gov.flow.microsoft.us, ...), which are not the REST bases. Rather than invent
+ * a hostname - a wrong host fails opaquely, which is worse than no host - the
+ * sovereign defaults for those two are left UNSET and
+ * `assertPowerPlatformAvailable` raises a precise, named remediation. Both are
+ * already deploy parameters, so setting them is a redeploy, not a manual edit.
+ */
+export interface PowerPlatformEndpoints {
+  /** BAP admin control-plane base, no trailing slash. */
+  bapBase: string;
+  /** Power Apps management API base, or null when undetermined in this cloud. */
+  powerAppsBase: string | null;
+  /** Power Automate (Flow) management API base, or null when undetermined. */
+  flowBase: string | null;
+  /** AAD `.default` scopes matching each surface. */
+  bapScope: string;
+  powerAppsScope: string;
+  flowScope: string;
+}
+
+/** Trim a trailing slash; treat an empty/whitespace value as absent. */
+function ppHostOrNull(raw: string | undefined): string | null {
+  const s = (raw || '').trim().replace(/\/+$/, '');
+  return s || null;
+}
+
+/**
+ * Resolve every Power Platform control-plane base + scope for the active cloud.
+ *
+ * Precedence per host: explicit env override -> per-cloud default -> null
+ * (sovereign clouds where Microsoft does not publish the API host). Pure -
+ * depends only on env, so it is unit-testable without the credential chain.
+ */
+export function powerPlatformEndpoints(): PowerPlatformEndpoints {
+  const cloud = detectLoomCloud();
+
+  // BAP - `LOOM_BAP_BASE` is canonical (bicep-wired); the legacy
+  // `LOOM_POWER_PLATFORM_BAP_BASE` is accepted so an estate that set the
+  // documented-but-unwired name keeps working.
+  const bapOverride = ppHostOrNull(process.env.LOOM_BAP_BASE)
+    ?? ppHostOrNull(process.env.LOOM_POWER_PLATFORM_BAP_BASE);
+  const bapDefault =
+    cloud === 'GCC' ? 'https://gov.api.bap.microsoft.us'
+      : cloud === 'GCC-High' ? 'https://high.api.bap.microsoft.us'
+        : cloud === 'DoD' ? 'https://api.bap.appsplatform.us'
+          : 'https://api.bap.microsoft.com';
+  const bapBase = bapOverride ?? bapDefault;
+
+  // Power Apps / Flow - the Commercial hosts are the long-standing defaults and
+  // also serve GCC (which runs on the worldwide Power Platform tenant); no
+  // sovereign default is invented for GCC-High / DoD.
+  const powerAppsBase = ppHostOrNull(process.env.LOOM_POWERAPPS_BASE)
+    ?? (cloud === 'Commercial' || cloud === 'GCC' ? 'https://api.powerapps.com' : null);
+  const flowBase = ppHostOrNull(process.env.LOOM_FLOW_BASE)
+    ?? (cloud === 'Commercial' || cloud === 'GCC' ? 'https://api.flow.microsoft.com' : null);
+
+  return {
+    bapBase,
+    powerAppsBase,
+    flowBase,
+    bapScope: `${bapBase}/.default`,
+    // The Power Apps / Flow AAD audiences are `service.*` hosts, which are NOT
+    // the REST hosts, so they are their own overridable values rather than being
+    // derived from the bases above.
+    powerAppsScope: ppHostOrNull(process.env.LOOM_POWERAPPS_SCOPE)
+      ?? 'https://service.powerapps.com/.default',
+    flowScope: ppHostOrNull(process.env.LOOM_FLOW_SCOPE)
+      ?? 'https://service.flow.microsoft.com/.default',
+  };
+}
+
+/**
+ * Honest availability gate for a Power Platform surface, mirroring
+ * `assertFabricFamilyAvailable`. Returns when the surface is reachable; THROWS
+ * an Error naming the EXACT env var to set when this cloud has no derivable
+ * host - so the operator sees a precise remediation instead of an opaque
+ * cross-boundary failure against a Commercial host.
+ *
+ * `bap` is always resolvable (documented for every boundary), so only the Power
+ * Apps / Flow management surfaces can gate here.
+ */
+export function assertPowerPlatformAvailable(kind: 'bap' | 'powerapps' | 'flow'): void {
+  if (kind === 'bap') return; // always resolvable
+  const ep = powerPlatformEndpoints();
+  const base = kind === 'powerapps' ? ep.powerAppsBase : ep.flowBase;
+  if (base) return;
+  const envVar = kind === 'powerapps' ? 'LOOM_POWERAPPS_BASE' : 'LOOM_FLOW_BASE';
+  const bicepParam = kind === 'powerapps' ? 'powerPlatformPowerAppsBase' : 'powerPlatformFlowBase';
+  const service = kind === 'powerapps' ? 'Power Apps' : 'Power Automate';
+  throw new Error(
+    `The ${service} management API host is not known for ${detectLoomCloud()}. Microsoft publishes the `
+    + `sovereign maker-portal URLs but not the ${service} REST base, so CSA Loom will not guess one `
+    + `(a wrong host fails opaquely). Set ${envVar} to this boundary's ${service} API host - it is `
+    + `already a deploy parameter (${bicepParam} in platform/fiab/bicep/modules/admin-plane/main.bicep), `
+    + 'so setting it there wires it on the next deploy with no manual app edit. The Power Platform BAP '
+    + 'control plane (environments) and Dataverse are unaffected and keep working in this cloud.',
+  );
+}

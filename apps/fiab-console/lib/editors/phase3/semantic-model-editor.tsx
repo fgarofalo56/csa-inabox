@@ -42,6 +42,7 @@ import { loomDocUrl } from '@/lib/learn/content';
 import { ModelTabsExtra } from '../components/model-tabs-extra';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
+import { resolveEditorPbiBinding } from '@/lib/azure/powerbi-editor-binding';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 // WAVE 2 — "Pick a Loom item" ingest source: resolves a PBI_SOURCEABLE Loom item
@@ -147,6 +148,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   //   editor in this folder already does (paginated-report-editor.tsx).
   const [pbiWorkspaceId, setPbiWorkspaceId] = useState('');
   const [loomWorkspaceId, setLoomWorkspaceId] = useState('');
+  // The Power BI workspace this item's Loom workspace is MAPPED to
+  // (`pbiWorkspaceMapping.pbiWorkspaceId`, set in Workspace settings). `''`
+  // once resolution finishes with no mapping; `null` while still resolving so
+  // the auto-pick below can WAIT rather than race ahead to an arbitrary group.
+  const [mappedPbiWorkspaceId, setMappedPbiWorkspaceId] = useState<string | null>(null);
   useEffect(() => {
     if (!id || id === 'new') return;
     let cancelled = false;
@@ -157,6 +163,27 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
       .catch(() => { /* leave loomWorkspaceId unresolved */ });
     return () => { cancelled = true; };
   }, [item.slug, id]);
+  // Resolve the workspace→Power BI mapping so the auto-pick below binds the
+  // MAPPED group instead of an arbitrary one (see the auto-pick comment).
+  //
+  // NO-FABRIC-DEPENDENCY: gated on `pbiOptIn` exactly like `usePowerBiWorkspaces`
+  // above, so the DEFAULT (Loom-native) render still makes ZERO extra requests
+  // for a Power BI concern. When Power BI is off, `ws.workspaces` is empty and
+  // the binding resolver returns undefined regardless, so leaving this state at
+  // `null` blocks nothing.
+  useEffect(() => {
+    if (!pbiOptIn) return;
+    if (!loomWorkspaceId) return;
+    let cancelled = false;
+    clientFetch(`/api/workspaces/${encodeURIComponent(loomWorkspaceId)}/powerbi-mapping`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        setMappedPbiWorkspaceId(j?.ok ? (j.mapping?.pbiWorkspaceId || '') : '');
+      })
+      .catch(() => { if (!cancelled) setMappedPbiWorkspaceId(''); });
+    return () => { cancelled = true; };
+  }, [pbiOptIn, loomWorkspaceId]);
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
@@ -258,7 +285,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     if (!q) return;
     setDaxCopilotBusy(true); setDaxCopilotResult(null); setDaxCopilotErr(null);
     try {
-      const res = await fetch('/api/copilot/dax', {
+      const res = await clientFetch('/api/copilot/dax', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ prompt: q, itemId: id, itemType: item.slug || 'semantic-model' }),
       });
@@ -731,16 +758,41 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     finally { setFpBusy(false); }
   }, [datasetId, loomWorkspaceId, fieldParams]);
 
-  // Auto-pick the first Power BI workspace once loaded so the list fetch fires
-  // and a dataset binds — enabling New measure / Refresh / Open immediately
-  // instead of leaving them disabled behind a manual pick. Matches the
-  // Eventstream/Activator auto-pick pattern. Users can still switch.
+  // Bind the Power BI workspace once loaded so the list fetch fires and a
+  // dataset binds — enabling New measure / Refresh / Open immediately instead
+  // of leaving them disabled behind a manual pick. Users can still switch.
+  //
   // #2649: this auto-pick is POWER BI-ONLY. It must never reach a Loom item
   // route — `loomWorkspaceId` (resolved from the item record above) is the only
   // value those accept, and the auto-picked groupId 404'd all of them.
+  //
+  // BINDING PRECEDENCE (auto-bind-by-default.md — the platform owns the
+  // binding, and it must be the RIGHT one). Previously this unconditionally
+  // took `ws.workspaces[0].id` — the first group the tenant listing happened to
+  // return. That is an ARBITRARY third workspace: not the item's workspace and
+  // not the one an operator mapped in Workspace settings. Every
+  // /api/powerbi/{datasets,reports,dashboards,dataflows} call then addressed a
+  // group the signed-in user may have no role on, which Power BI answers 401
+  // (learn.microsoft.com/power-bi/developer/embedded/troubleshoot-rest-api
+  // #troubleshoot-401-errors-in-power-bi-rest-api-calls). Now we follow the
+  // documented precedence in lib/azure/powerbi-workspace-mapping.ts:
+  //   1. the workspace→Power BI MAPPING (pbiWorkspaceMapping.pbiWorkspaceId)
+  //   2. only if unmapped, the first listed group (previous behavior)
+  // and we WAIT for mapping resolution (`null`) so the arbitrary fallback can
+  // never win a race against the mapped value.
+  //
+  // The rule itself lives in lib/azure/powerbi-editor-binding.ts as a PURE
+  // function so its unit test executes the real thing instead of a copy (a test
+  // that re-implements its subject cannot fail).
   useEffect(() => {
-    if (!pbiWorkspaceId && ws.workspaces && ws.workspaces.length > 0) setPbiWorkspaceId(ws.workspaces[0].id);
-  }, [pbiWorkspaceId, ws.workspaces]);
+    if (pbiWorkspaceId) return;
+    const next = resolveEditorPbiBinding({
+      mapped: mappedPbiWorkspaceId,
+      listed: ws.workspaces ?? [],
+      loomWorkspaceId,
+    });
+    if (next) setPbiWorkspaceId(next);
+  }, [pbiWorkspaceId, ws.workspaces, mappedPbiWorkspaceId, loomWorkspaceId]);
   useEffect(() => { if (pbiWorkspaceId) loadList(pbiWorkspaceId); }, [pbiWorkspaceId, loadList]);
   useEffect(() => {
     // #2649: BOTH of these forward straight to Power BI REST — `getDataset` and

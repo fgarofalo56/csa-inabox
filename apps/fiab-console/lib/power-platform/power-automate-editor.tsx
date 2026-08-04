@@ -31,6 +31,7 @@ import {
 import { Save20Regular, Play20Regular, Stop20Regular, Open16Regular, ChevronDown20Regular, ChevronUp20Regular } from '@fluentui/react-icons';
 import { openMaker } from './maker-studio';
 import { FlowBuilder, parseDefinition } from './flow-builder';
+import { clientFetch } from '@/lib/client-fetch';
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -130,7 +131,7 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
     if (!apiBase) return;
     setLoading(true); setMsg(null);
     try {
-      const r = await fetch(apiBase);
+      const r = await clientFetch(apiBase);
       const j = await r.json().catch(() => null);
       if (!j?.ok) {
         setMsg({ kind: 'error', text: `${j?.error || `HTTP ${r.status}`}${j?.hint ? ` — ${j.hint}` : ''}` });
@@ -171,7 +172,7 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
     catch (e: any) { setMsg({ kind: 'error', text: `Definition is not valid JSON: ${e?.message || String(e)}` }); return; }
     setBusy(true); setMsg({ kind: 'info', text: 'Saving definition…' });
     try {
-      const r = await fetch(apiBase, {
+      const r = await clientFetch(apiBase, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim() || undefined, definition: { definition, connectionReferences: connReferences } }),
       });
@@ -188,7 +189,7 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
     if (!apiBase) return;
     setBusy(true); setMsg({ kind: 'info', text: on ? 'Turning flow on…' : 'Turning flow off…' });
     try {
-      const r = await fetch(apiBase, {
+      const r = await clientFetch(apiBase, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: on ? 'on' : 'off' }),
       });
@@ -442,7 +443,7 @@ export function NewFlowAuthor({
       connectionReferences: {},
     };
     try {
-      const r = await fetch(`/api/items/power-automate-flow/new/definition?envId=${encodeURIComponent(envId)}`, {
+      const r = await clientFetch(`/api/items/power-automate-flow/new/definition?envId=${encodeURIComponent(envId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), definition }),
       });

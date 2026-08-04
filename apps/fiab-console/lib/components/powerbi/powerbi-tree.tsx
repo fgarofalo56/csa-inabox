@@ -150,10 +150,10 @@ export function PowerBiTree({
     try {
       const q = `?workspaceId=${encodeURIComponent(workspaceId)}`;
       const [dsr, rr, dbr, dfr] = await Promise.all([
-        fetch(`${DATASETS}${q}`).then(readJson),
-        fetch(`${REPORTS}${q}`).then(readJson),
-        fetch(`${DASHBOARDS}${q}`).then(readJson),
-        fetch(`${DATAFLOWS}${q}`).then(readJson),
+        clientFetch(`${DATASETS}${q}`).then(readJson),
+        clientFetch(`${REPORTS}${q}`).then(readJson),
+        clientFetch(`${DASHBOARDS}${q}`).then(readJson),
+        clientFetch(`${DATAFLOWS}${q}`).then(readJson),
       ]);
       for (const b of [dsr, rr, dbr, dfr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
@@ -177,7 +177,7 @@ export function PowerBiTree({
   const refreshDataset = useCallback(async (id: string, name: string) => {
     setBusy(true); setActionMsg(null);
     try {
-      const res = await fetch(DATASETS, {
+      const res = await clientFetch(DATASETS, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, id, action: 'refresh' }),
       });
@@ -192,7 +192,7 @@ export function PowerBiTree({
   const refreshDataflow = useCallback(async (id: string, name: string) => {
     setBusy(true); setActionMsg(null);
     try {
-      const res = await fetch(DATAFLOWS, {
+      const res = await clientFetch(DATAFLOWS, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, id, action: 'refresh' }),
       });
@@ -207,7 +207,7 @@ export function PowerBiTree({
   const del = useCallback(async (route: string, id: string, name: string) => {
     setBusy(true); setActionMsg(null);
     try {
-      const res = await fetch(`${route}?workspaceId=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const res = await clientFetch(`${route}?workspaceId=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setActionMsg({ ok: false, text: body.error || 'delete failed' }); setBusy(false); return; }

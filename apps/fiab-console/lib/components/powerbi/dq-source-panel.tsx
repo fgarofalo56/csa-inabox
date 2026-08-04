@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { clientFetch } from '@/lib/client-fetch';
 import {
   Button, Input, Field, Select, Badge, Spinner, Caption1, Subtitle2, Checkbox,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
@@ -84,7 +85,7 @@ export function DqSourcePanel({
   // Hydrate from any previously-applied config persisted on the item.
   const loadConfig = useCallback(async () => {
     try {
-      const body = await fetch(base).then(readJson);
+      const body = await clientFetch(base).then(readJson);
       if (body?.ok && body.config) {
         const c = body.config as DqConfig;
         setConfig(c);
@@ -97,7 +98,7 @@ export function DqSourcePanel({
   useEffect(() => { if (datasetId && itemId) loadConfig(); }, [datasetId, itemId, loadConfig]);
 
   const call = useCallback(async (action: 'test' | 'tables' | 'apply', extra?: Record<string, unknown>) => {
-    const body = await fetch(base, {
+    const body = await clientFetch(base, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action, sourceType, server: server.trim(), database: database.trim(), secretRef: secretRef.trim() || undefined, ...extra }),
     }).then(readJson);

@@ -214,6 +214,91 @@ export function userPassthroughEnabled(): boolean {
 /** Re-export so callers needing the read-only MCP scope form don't reach into msal. */
 export { pbiOboScopes };
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * POWER PLATFORM / COPILOT STUDIO user-passthrough.
+ *
+ * Same engine as the Power BI path above (`getUserPbiToken` is already
+ * scope-generic — it mints a delegated token for ANY resource `.default`
+ * scope), exposed under a provider-neutral name plus its own kill switch.
+ *
+ * WHY this is REQUIRED, not a nicety — two documented Microsoft constraints
+ * make the service-principal-only path unable to do the work:
+ *
+ *   1. Power Automate / Flow. "APIs related to Flow are supported for service
+ *      principal authentication in situations where a license isn't required,
+ *      as it isn't possible to assign licenses to service principal identities
+ *      in Microsoft Entra ID."
+ *      — learn.microsoft.com/power-platform/admin/powerplatform-api-create-service-principal
+ *        (#limitations-of-service-principals)
+ *      So authoring/saving a cloud flow as the Console UAMI cannot succeed;
+ *      it must run as a LICENSED USER.
+ *
+ *   2. Dataverse (Copilot Studio agents/topics/actions/knowledge all live in
+ *      Dataverse). A UAMI-issued token is not a valid Dataverse Application
+ *      User, which is why the sibling clients keep a separate client-secret SP
+ *      registered as an app user. A signed-in user is a first-class Dataverse
+ *      principal with their own row-level security — strictly better.
+ *
+ * FALLBACK SEMANTICS — deliberately DIFFERENT from the Power BI path.
+ * Power BI throws on `consent_required` / `exchange_failed` so a delegated
+ * failure can never silently downgrade to the SP's broader rights. Here we
+ * fall back to the service principal on ANY user-token failure, because these
+ * clients ALREADY shipped as SP-only: throwing would REGRESS every call that
+ * works today as the SP (e.g. BAP environment listing). This wiring is
+ * therefore strictly ADDITIVE — every call that succeeds today still succeeds,
+ * and calls that only a licensed user can make now also succeed. The resolved
+ * identity is returned so callers can attribute a failure to the right
+ * principal in their remediation copy.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Provider-neutral alias for the delegated-token engine. Identical behavior to
+ *  {@link getUserPbiToken} — the resource is chosen entirely by `scope`. */
+export const getUserDelegatedToken = getUserPbiToken;
+
+/** True unless explicitly disabled — user-passthrough is the DEFAULT for the
+ *  Power Platform / Copilot Studio clients (default-on / opt-out, per the
+ *  default-ON rule). `LOOM_POWERPLATFORM_USER_PASSTHROUGH=false` reverts every
+ *  Power Platform + Copilot Studio call to the pure service-principal path
+ *  (byte-for-byte the pre-passthrough behavior). */
+export function powerPlatformPassthroughEnabled(): boolean {
+  return (process.env.LOOM_POWERPLATFORM_USER_PASSTHROUGH ?? 'true').toLowerCase() !== 'false';
+}
+
+/** Which identity produced a Power Platform / Copilot Studio token. */
+export type PpTokenIdentity = 'user' | 'sp';
+
+/**
+ * Resolve a delegated USER token for `scope`, or `null` to tell the caller to
+ * use its service principal. Never throws — a failure to mint a user token is
+ * always a fall-back signal here, never a hard error (see the fallback
+ * semantics note above).
+ */
+export async function tryUserTokenForPowerPlatform(scope: string): Promise<string | null> {
+  if (!powerPlatformPassthroughEnabled()) return null;
+  try {
+    const res = await getUserDelegatedToken(scope);
+    return res.ok ? res.token : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The delegated scopes the Loom app registration should carry so Power
+ * Platform / Copilot Studio passthrough can mint tokens. Surfaced in honest
+ * gates + the tenant-bootstrap doc.
+ *
+ * NOTE these are RESOURCE audiences, not individual permission names: a token
+ * minted for `<resource>/.default` carries whichever delegated permissions the
+ * tenant has consented on that resource.
+ */
+export const PP_PASSTHROUGH_RESOURCES = [
+  'https://api.bap.microsoft.com/.default',
+  'https://service.powerapps.com/.default',
+  'https://service.flow.microsoft.com/.default',
+  '<org>.crm.dynamics.com/.default (per Dataverse environment)',
+] as const;
+
 /** Test-only: clear the in-memory token cache between cases. */
 export function __clearOboCacheForTests(): void {
   tokenCache.clear();
