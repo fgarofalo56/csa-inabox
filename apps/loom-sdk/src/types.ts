@@ -56,6 +56,15 @@ export interface CreateItemInput {
   description?: string;
 }
 
+/** Body for the type-scoped create route (`POST /api/cosmos-items/{type}`). */
+export interface CreateByTypeInput {
+  workspaceId: string;
+  displayName: string;
+  description?: string;
+  /** Initial item definition/state (structured; the route stores it verbatim). */
+  state?: Record<string, unknown>;
+}
+
 export interface UpdateItemInput {
   displayName?: string;
   description?: string;
@@ -125,3 +134,37 @@ export interface SessionResult {
   expiresAt: number;
   claims?: { oid?: string; name?: string; upn?: string; email?: string };
 }
+
+// ─── Admin (M5 loom-admin escalation surface) ────────────────────────────────
+// These wrap the Console's real, server-side-guarded admin routes. The BFF is
+// the authoritative escalation boundary — each route re-checks tenant/workspace
+// admin (`isTenantAdmin` / `enforceCapability` / PDP) and caps the grant to the
+// caller's own rights server-side. The SDK is a thin, typed caller.
+
+/** Principal kind for a workspace role assignment. */
+export type WorkspacePrincipalType = 'User' | 'Group' | 'ServicePrincipal';
+/** Workspace RBAC role names (`POST /api/workspaces/{id}/role-assignments`). */
+export type WorkspaceRoleName = 'Admin' | 'Member' | 'Contributor' | 'Viewer';
+
+export interface AssignWorkspaceRoleInput {
+  principalId: string;
+  principalType: WorkspacePrincipalType;
+  displayName: string;
+  role: WorkspaceRoleName;
+}
+
+/** Feature-capability role (`POST /api/admin/permissions/grants`). */
+export type FeatureRole = 'Reader' | 'Contributor' | 'Admin';
+
+export interface GrantCapabilityInput {
+  capabilityId: string;
+  principalId: string;
+  /** `user` (default) or `group`. */
+  principalType?: 'user' | 'group';
+  role: FeatureRole;
+  principalDisplayName?: string;
+  principalUpn?: string;
+}
+
+/** Open result shapes — the admin routes return heterogeneous envelopes. */
+export type AdminResult = { ok: boolean; [k: string]: unknown };

@@ -22,6 +22,7 @@ import { ItemsResource } from './resources/items.js';
 import { CatalogResource } from './resources/catalog.js';
 import { ThreadResource } from './resources/thread.js';
 import { TokensResource } from './resources/tokens.js';
+import { AdminResource } from './resources/admin.js';
 import type { WhoAmI, SessionResult } from './types.js';
 
 export class LoomClient {
@@ -32,6 +33,8 @@ export class LoomClient {
   readonly catalog: CatalogResource;
   readonly thread: ThreadResource;
   readonly tokens: TokensResource;
+  /** Admin (escalation) operations — the M5 `loom-admin` surface. */
+  readonly admin: AdminResource;
 
   constructor(options: LoomClientOptions) {
     this.http = new HttpTransport(options);
@@ -40,6 +43,7 @@ export class LoomClient {
     this.catalog = new CatalogResource(this.http);
     this.thread = new ThreadResource(this.http);
     this.tokens = new TokensResource(this.http);
+    this.admin = new AdminResource(this.http);
   }
 
   /** The resolved base URL (trailing slash stripped). */

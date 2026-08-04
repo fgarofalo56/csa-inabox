@@ -1,7 +1,7 @@
 import { HttpTransport, enc } from '../http.js';
 import { LoomApiError } from '../errors.js';
 import { isKnownItemType } from '../item-types.js';
-import type { Item, CreateItemInput, UpdateItemInput } from '../types.js';
+import type { Item, CreateItemInput, UpdateItemInput, CreateByTypeInput } from '../types.js';
 
 /**
  * Item operations. Mirrors the CLI split:
@@ -29,6 +29,25 @@ export class ItemsResource {
   async create(workspaceId: string, input: CreateItemInput): Promise<Item> {
     this.assertType(input.itemType);
     return this.http.request<Item>('POST', `/api/workspaces/${enc(workspaceId)}/items`, input);
+  }
+
+  /**
+   * Create an item via the generic type-scoped Cosmos route
+   * (`POST /api/cosmos-items/{type}`), the same endpoint the Console's shared
+   * NewItemGate uses. Body is `{ workspaceId, displayName, description?, state? }`;
+   * the route returns `{ ok, item }` and this unwraps the item. `state` carries
+   * the item's initial definition. Distinct from {@link create} (which posts to
+   * `/api/workspaces/{id}/items`) — this matches the type-scoped route M3
+   * `loom-author` builds on.
+   */
+  async createByType(type: string, input: CreateByTypeInput): Promise<Item> {
+    this.assertType(type);
+    const res = await this.http.request<{ ok: boolean; item: Item }>(
+      'POST',
+      `/api/cosmos-items/${enc(type)}`,
+      { workspaceId: input.workspaceId, displayName: input.displayName, description: input.description, state: input.state },
+    );
+    return res.item;
   }
 
   /** Get an item by type + id. */

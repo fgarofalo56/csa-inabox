@@ -16,6 +16,7 @@ export type {
   CreateWorkspaceInput,
   Item,
   CreateItemInput,
+  CreateByTypeInput,
   UpdateItemInput,
   CatalogHit,
   CatalogSearchResult,
@@ -26,6 +27,12 @@ export type {
   CreateTokenInput,
   CreateTokenResult,
   SessionResult,
+  WorkspacePrincipalType,
+  WorkspaceRoleName,
+  AssignWorkspaceRoleInput,
+  FeatureRole,
+  GrantCapabilityInput,
+  AdminResult,
 } from './types.js';
 
 // Resource classes (exported for advanced typing / DI).
@@ -34,3 +41,4 @@ export { ItemsResource } from './resources/items.js';
 export { CatalogResource } from './resources/catalog.js';
 export { ThreadResource } from './resources/thread.js';
 export { TokensResource } from './resources/tokens.js';
+export { AdminResource } from './resources/admin.js';

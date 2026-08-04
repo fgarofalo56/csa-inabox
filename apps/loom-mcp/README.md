@@ -11,15 +11,16 @@ Azure-native — **no Microsoft Fabric tenant required** (`.claude/rules/no-fabr
 
 Loom's MCP surface is split into five servers by **blast radius** (PRP
 `loom-devtools` §4.2) so a single leaked token never grants everything. This
-package ships **M1** today; M2–M5 reuse the same shared core (`src/core/`).
+package ships **M1**, **M3**, and **M5** today; M2/M4 reuse the same shared core
+(`src/core/`).
 
 | # | Server | Blast radius | Status |
 |---|--------|--------------|--------|
-| **M1** | `loom-catalog` | Read metadata (this package) | **shipped** |
+| **M1** | `loom-catalog` | Read metadata | **shipped** |
 | M2 | `loom-query` | Read data rows | deferred |
-| M3 | `loom-author` | Create/modify items | deferred |
+| **M3** | `loom-author` | Create/modify items (dry-run default) | **shipped** |
 | M4 | `loom-ops` | Read runs/logs, trigger reruns | deferred |
-| M5 | `loom-admin` | Provision infra, grant access | deferred |
+| **M5** | `loom-admin` | Provision/grant access (default-OFF) | **shipped** |
 
 ### M1 · `loom-catalog` (read-only)
 
@@ -36,6 +37,49 @@ client (never raw REST), metadata only:
 
 No tool mutates, and none returns data rows, secrets, connection strings, or ARM
 ids (see Security).
+
+### M3 · `loom-author` (write — dry-run by default)
+
+The write surface — create and modify items. Every tool is a mutation
+(`readOnly:false`, `minScope:'read-write'`) and is **dry-run by default**: an
+`apply` argument (default `false`) returns the PLANNED change WITHOUT calling the
+mutating endpoint; only `apply:true` writes. Never deletes, never provisions.
+
+| Tool | SDK call | Loom endpoint | Auth floor |
+|------|----------|---------------|-----------|
+| `loom.item.create` | `items.createByType(type, input)` | `POST /api/cosmos-items/{type}` | PAT `read-write` |
+| `loom.item.update` | `items.update(type, id, patch)` | `PATCH /api/cosmos-items/{type}/{id}` | PAT `read-write` |
+| `loom.item.definition.update` | `items.update(type, id, {state})` | `PATCH /api/cosmos-items/{type}/{id}` | PAT `read-write` |
+
+A `read-only` token is refused (`insufficient_scope`). An item's definition is
+its structured `state`, so `definition.update` is uniform across all item types —
+Azure-native, no Fabric/Power BI workspace required.
+
+### M5 · `loom-admin` (admin / escalation — default-OFF)
+
+The highest-blast-radius server: it grants access and resolves deployment gates.
+Its controls are layered and deny-by-default (PRP §5.4):
+
+- **default-OFF** — `LOOM_MCP_ADMIN_ENABLED=1` required, else every call is
+  denied (`admin_disabled`);
+- **no PAT** — an API token never reaches an admin tool (`forbidden_principal`);
+- **admin scope** — the caller must be `admin` (a cookie session must explicitly
+  assert `LOOM_TOKEN_SCOPE=admin`);
+- **dry-run by default** — `apply` (default false) returns the plan; `apply:true`
+  mutates;
+- **mandatory audit with the target principal**.
+
+| Tool | SDK call | Loom endpoint (server-guarded) | Auth floor |
+|------|----------|--------------------------------|-----------|
+| `loom.admin.role.assign` | `admin.assignWorkspaceRole(wsId, input)` | `POST /api/workspaces/{id}/role-assignments` | Entra `admin`, no PAT |
+| `loom.admin.grant` | `admin.grantCapability(input)` | `POST /api/admin/permissions/grants` | Entra `admin`, no PAT |
+| `loom.admin.gate.resolve` | `admin.resolveGate(gateId, values)` | `POST /api/admin/gates/{id}/resolve` | Entra `admin`, no PAT |
+
+Each route performs its OWN authoritative server-side admin check
+(`isTenantAdmin` / `enforceCapability` / PDP) and caps the action to the caller's
+own rights — the MCP layer adds a stricter LOCAL floor, it does not re-implement
+that check. `gate.resolve` is allow-listed server-side to the gate's own
+registered settings (no arbitrary env/secret writes).
 
 ## Authentication
 
@@ -58,7 +102,8 @@ Environment:
 |-----|---------|
 | `LOOM_API_URL` | Loom base URL, e.g. `https://csa-loom.limitlessdata.ai`. |
 | `LOOM_TOKEN` | A `loom_pat_…` PAT (bearer). |
-| `LOOM_TOKEN_SCOPE` | Optional hint (`read-only`\|`read-write`\|`admin`); default `read-only`. |
+| `LOOM_TOKEN_SCOPE` | Optional hint (`read-only`\|`read-write`\|`admin`); default `read-only`. M3 needs `read-write`; M5 needs `admin`. |
+| `LOOM_MCP_ADMIN_ENABLED` | M5 only — `1`/`true` to enable the admin server (default-OFF). |
 | `LOOM_CONFIG_DIR` | Override the `~/.loom` credential-store location. |
 
 ## Register it
@@ -160,11 +205,14 @@ source and the stdio smoke test against the compiled binary.
   `ToolSpec[]` + auth.
 
 A new server supplies a `ToolSpec[]` and (for write/admin) a stricter auth
-resolver; it inherits the scrub, audit, gate, and error handling for free.
+policy; it inherits the scrub, audit, gate, and error handling for free. The
+gate is one shared, audited decision point — `AuthzPolicy` tunes it per server
+(`allowMutations` for M3; `requireAdmin` + `rejectPat` + `enabled` for M5) with
+the M1 read-only behavior as the default.
 
 ## Deferred (not in this package)
 
-- M2 `loom-query`, M3 `loom-author`, M4 `loom-ops`, M5 `loom-admin`.
+- M2 `loom-query`, M4 `loom-ops`.
 - The four purpose-built agents (`loom-item-builder`, `loom-triage`,
   `loom-rule-auditor`, `loom-parity-analyst`), PRP §4.3.
 - npm publish: blocked until `@csa-loom/sdk` is published (PRP D0) and this
