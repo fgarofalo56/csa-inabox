@@ -189,3 +189,57 @@ param loomSynapseEnabled = true
 param loomDatabricksEnabled = true
 param loomDataFactoryEnabled = true
 param loomSelfHostedIrEnabled = true
+
+// =====================================================================
+// Container image tags (refs #2775) — THE RECONCILE'S IMAGE-IMMUTABILITY PIN.
+//
+// This block did not exist, so `appImageTags` fell through to main.bicep's
+// default of 'v0.1' for every app while production runs commit-SHA tags. That
+// is the single reason the nightly reconcile had to run with
+// `deployAppsEnabled=false`: turning it on is the ONLY way any LOOM_* env var
+// reaches the running Console (app-deployments.bicep is gated on it), but doing
+// so would also have rewritten loom-console to a `v0.1` that does not exist.
+// Infra reconciled; configuration never did. That is what "185 of 192
+// configured" was measuring — LOOM_RISINGWAVE_URL and
+// LOOM_DUCKLAKE_CATALOG_URL are declared in admin-plane/main.bicep and gated on
+// `deployAppsEnabled`, so they had never been applied.
+//
+// `.github/workflows/deploy-fiab-commercial.yml` now reads the tag every
+// Container App is ACTUALLY running (read-only `az containerapp list`, via
+// scripts/ci/reconcile-resolve.mjs) and exports these env vars, so each
+// readEnvironmentVariable below resolves to the tag already deployed and the
+// ARM PUT is a no-op for the image. Same mechanism gcc-high.bicepparam and
+// commercial-full.bicepparam already use — this file was simply missing it.
+//
+// EVERY value here MUST stay a readEnvironmentVariable(...). A literal tag is
+// applied over whatever is running, which is the outage this block prevents;
+// check-reconcile-safety.mjs (I4) fails the build if one appears, and pins each
+// env-var name to the one reconcile-resolve.mjs exports.
+//
+// The 'v0.1' fallbacks match what full-app-deploy-commercial.yml and
+// build-fiab-images-acr-tasks.yml push by default, so a FIRST-RUN install (no
+// running estate to read tags from) still resolves to real images.
+// =====================================================================
+param appImageTags = {
+  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v0.1')
+  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.1')
+  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
+  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.1')
+  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.1')
+  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.1')
+  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.1')
+  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
+  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')
+  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
+  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
+  // dbtRunner is NOT a duplicate of console. admin-plane/main.bicep used to pass
+  // `appImageTags.console` to integration/dbt-runner.bicep, which builds
+  // `loom-dbt-runner:${imageTag}` — one key, two repositories, two different
+  // running tags. Split in the same PR that added this block.
+  dbtRunner: readEnvironmentVariable('LOOM_DBT_RUNNER_TAG', 'v0.1')
+  transformRunner: readEnvironmentVariable('LOOM_TRANSFORM_RUNNER_TAG', 'v0.1')
+  mapsTiles: readEnvironmentVariable('LOOM_MAPS_TILES_TAG', 'v1')
+  duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
+  loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
+  risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
+}

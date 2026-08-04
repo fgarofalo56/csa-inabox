@@ -154,6 +154,47 @@ const WATCHED = [
     ],
     maxDays: 14,
   },
+  // ── The estate reconcile ITSELF (refs #2775) ─────────────────────────────
+  // Every entry above watches one app or job. This one watches the thing that
+  // applies the TEMPLATE: deploy-fiab-commercial.yml is the only workflow that
+  // runs `az deployment sub create -f platform/fiab/bicep/main.bicep`.
+  // full-app-deploy-commercial.yml states in-line that it deliberately does not
+  // run the bicep, and console-bluegreen-roll.yml only swaps `--image`. So when
+  // this path stops applying, NOTHING is reconciling the estate against main --
+  // every bicep change merged since then is inert, and the only visible symptom
+  // is a nightly red X that looks identical to the previous night's.
+  //
+  // That is what happened: the workflow carries a daily `cron: '0 6 * * *'`, and
+  // every scheduled run it has ever had failed inside the topology guard in
+  // ~30-80s, because the guard tested `inputs.allow_existing_hub` -- an input
+  // that does not exist on a schedule event. The last actual application of the
+  // admin-plane template was 2026-07-23, and that deployment Failed.
+  //
+  // WHY 7 DAYS. The other entries are dispatch-only lanes where a couple of
+  // weeks of lag is ordinary. This one is SCHEDULED DAILY: if the schedule is
+  // working at all, a successful run exists every day and drift sits near zero.
+  // 7 days is therefore not a tolerance for normal lag -- it is the assertion
+  // that the daily reconcile is running. A week of drift means the cron is dead
+  // again, which is precisely the condition that went unnoticed here.
+  //
+  // NOTE ON THE DRY-RUN FILTER: this workflow's `Provision (idempotent)` step is
+  // gated `if: github.event_name == 'schedule' || inputs.run_mode == 'full'`, and
+  // run_mode DEFAULTS to whatif-only. So a default dispatch succeeds having
+  // applied nothing. Without a marker such a run would clear this entry while
+  // deploying nothing -- the exact "green on nothing" shape this file exists to
+  // catch. deploy-fiab-commercial.yml therefore sets a `run-name` carrying
+  // DRY_RUN_MARKER on whatif-only dispatches, so only real applies count here.
+  {
+    workflow: 'deploy-fiab-commercial.yml',
+    why: 'The ONLY workflow that applies platform/fiab/bicep/main.bicep to the Commercial estate — every env var, role grant and module the Console depends on reaches production through this path and no other. Stale here means main and the running estate have silently diverged: merged bicep is inert, and the daily cron that should be reconciling it is failing in a way that looks like yesterday.',
+    paths: [
+      '.github/workflows/deploy-fiab-commercial.yml',
+      'platform/fiab/bicep/main.bicep',
+      'platform/fiab/bicep/modules/admin-plane/**',
+      'platform/fiab/bicep/params/commercial.bicepparam',
+    ],
+    maxDays: 7,
+  },
 ];
 
 /**

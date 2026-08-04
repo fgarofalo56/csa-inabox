@@ -716,15 +716,42 @@ resource dnsResolverInbound 'Microsoft.Network/dnsResolvers/inboundEndpoints@202
   properties: {
     ipConfigurations: [
       {
-        privateIpAllocationMethod: 'Static'
-        privateIpAddress: '${prefix}.9.4'
+        // Dynamic, NOT Static (refs #2775). The allocation method of a DNS
+        // private resolver inbound endpoint is IMMUTABLE, and the live endpoint
+        // was created Dynamic. Declaring Static made every subsequent deploy
+        // fail PREFLIGHT — not at apply time, at validation — with:
+        //
+        //   Microsoft.Network/dnsResolvers (2022-07-01) reported preflight
+        //   validation errors ... IP allocation method cannot be changed after
+        //   creation. ipAllocationMethod=Static, existingIpAllocationMethod=Dynamic
+        //
+        // That aborted the whole nested `network` template, and with it the
+        // 2026-07-23 admin-plane deployment (the last time this template was
+        // applied). It is a preflight error, so it would equally have failed the
+        // `az deployment sub what-if` step that runs on every trigger.
+        //
+        // Nothing is lost by matching the live state. snet-dns-inbound is a
+        // DEDICATED /28 delegated to Microsoft.Network/dnsResolvers whose only
+        // occupant is this endpoint, and Azure reserves x.x.x.0-3, so dynamic
+        // allocation lands on `${prefix}.9.4` — the address the Static block
+        // asked for, and the address the live endpoint actually holds.
+        //
+        // Switching back to Static is NOT a code change: it needs the inbound
+        // endpoint deleted and recreated, which drops VPN DNS resolution for the
+        // hub while it is gone. That is an operator decision with an outage
+        // window, for no functional gain.
+        privateIpAllocationMethod: 'Dynamic'
         subnet: { id: '${hubVnet.id}/subnets/snet-dns-inbound' }
       }
     ]
   }
 }
 
-output dnsResolverInboundIp string = '${prefix}.9.4'
+// Report the address Azure actually assigned rather than the one we assumed.
+// scripts/csa-loom/ensure-vpn-dns-resolver.sh points the hub VNet's custom DNS
+// at this endpoint, so a hard-coded literal that drifted from reality would
+// break VPN name resolution silently.
+output dnsResolverInboundIp string = dnsResolverInbound.properties.ipConfigurations[0].privateIpAddress
 
 output hubVnetId string = hubVnet.id
 output hubVnetName string = hubVnet.name

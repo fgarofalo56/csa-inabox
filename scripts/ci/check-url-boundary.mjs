@@ -47,6 +47,36 @@ const SKIP_DIR = new Set(['node_modules', '.next', 'dist', 'build', '__tests__',
 const BAD = /\.(includes|indexOf|startsWith)\(\s*(['"`])((?:https?:\/\/)?[A-Za-z0-9*.-]*\.(?:com|net|us|io|org|ai|dev|gov))[^'"`]*\2/g;
 
 /**
+ * `.endsWith('registrable.tld')` — the shape with NO leading dot.
+ *
+ * WHY THIS IS A SEPARATE PATTERN, AND WHY IT WAS MISSING. `host-match.ts` opens
+ * by naming five spellings of this bug. Four of them appear in the header above;
+ * the fifth is
+ *
+ *     host.endsWith('azconfig.io')   → evilazconfig.io
+ *
+ * and it is the ORIGIN of the class — CodeQL #540, the alert `cloud-endpoints.ts`
+ * was changed for, and the reason `hostHasSuffix` exists at all. The guard
+ * written to close the class never included `endsWith` in its method list, so
+ * the one spelling that started it was the one spelling it could not see. A new
+ * `host.endsWith('azconfig.io')` anywhere under lib/ or app/ passed silently.
+ *
+ * The leading dot is the whole distinction, so it is matched precisely rather
+ * than by adding `endsWith` to BAD:
+ *
+ *     host.endsWith('.ghe.com')     SAFE   — the dot IS the label boundary
+ *     host.endsWith('ghe.com')      UNSAFE — `evilghe.com` matches
+ *
+ * Three live sites use the safe form (git-integration-client, updates/apply,
+ * git-credential). Folding `endsWith` into BAD would have flagged all three, and
+ * three false positives is how a guard gets switched off.
+ *
+ * Still prefer `hostHasSuffix` for the safe form: `endsWith('.ghe.com')` also
+ * rejects the apex `ghe.com`, which is usually not what the author meant.
+ */
+const BAD_ENDSWITH = /\.endsWith\(\s*(['"`])((?:https?:\/\/)?[A-Za-z0-9*-]+(?:\.[A-Za-z0-9*-]+)*\.(?:com|net|us|io|org|ai|dev|gov))[^'"`]*\1/g;
+
+/**
  * Allowed hits, each with a REASON. An entry here is a claim that the string is
  * not a host boundary check — not a "this one is fine, trust me".
  */
@@ -79,35 +109,64 @@ function walk(dir, exts, out = []) {
   return out;
 }
 
-const violations = [];
-for (const { dir, exts } of SCAN) {
-  for (const file of walk(join(ROOT, dir), exts)) {
-    const rel = relative(ROOT, file).split(sep).join('/');
-    const lines = readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, i) => {
-      BAD.lastIndex = 0;
-      let m;
-      while ((m = BAD.exec(line)) !== null) {
-        const allowed = ALLOW.find((a) => a.match(line));
-        if (allowed) continue;
-        violations.push({ file: rel, line: i + 1, snippet: line.trim().slice(0, 120), needle: m[3] });
-      }
+/**
+ * Findings for one source line. Exported so the self-test can drive the real
+ * matcher with fixtures instead of asserting on a copy of the regex — a guard
+ * whose test re-implements it is a guard that cannot fail (see #2729).
+ *
+ * @param {string} line
+ * @returns {{needle:string, why:string}[]}
+ */
+export function scanLine(line) {
+  const out = [];
+  if (ALLOW.some((a) => a.match(line))) return out;
+  BAD.lastIndex = 0;
+  let m;
+  while ((m = BAD.exec(line)) !== null) {
+    out.push({
+      needle: m[3],
+      why: 'is matched against the whole string — the path, query and fragment are attacker-controlled, so this is not a host check',
     });
   }
+  BAD_ENDSWITH.lastIndex = 0;
+  while ((m = BAD_ENDSWITH.exec(line)) !== null) {
+    out.push({
+      needle: m[2],
+      why: 'has no leading dot, so it matches a DIFFERENT registrable domain too (evil<suffix>) — the missing label boundary is CodeQL #540',
+    });
+  }
+  return out;
 }
 
-if (violations.length === 0) {
-  console.log('[url-boundary] OK — no substring URL validation found.');
-  process.exit(0);
+function main() {
+  const violations = [];
+  for (const { dir, exts } of SCAN) {
+    for (const file of walk(join(ROOT, dir), exts)) {
+      const rel = relative(ROOT, file).split(sep).join('/');
+      const lines = readFileSync(file, 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        for (const f of scanLine(line)) {
+          violations.push({ file: rel, line: i + 1, snippet: line.trim().slice(0, 120), ...f });
+        }
+      });
+    }
+  }
+
+  if (violations.length === 0) {
+    console.log('[url-boundary] OK — no substring URL validation found.');
+    return 0;
+  }
+
+  console.error(`\n[url-boundary] FAIL — ${violations.length} substring URL check(s).\n`);
+  for (const v of violations) {
+    console.error(`  ${v.file}:${v.line}`);
+    console.error(`    ${v.snippet}`);
+    console.error(`    "${v.needle}" ${v.why}.\n`);
+  }
+  console.error("  Fix: import { urlHostHasSuffix, hostHasSuffix } from '@/lib/util/host-match'");
+  console.error('  It parses the URL and matches the host at a DNS label boundary.\n');
+  return 1;
 }
 
-console.error(`\n[url-boundary] FAIL — ${violations.length} substring URL check(s).\n`);
-for (const v of violations) {
-  console.error(`  ${v.file}:${v.line}`);
-  console.error(`    ${v.snippet}`);
-  console.error(`    "${v.needle}" is matched against the whole string — the path, query and`);
-  console.error('    fragment are attacker-controlled, so this is not a host check.\n');
-}
-console.error("  Fix: import { urlHostHasSuffix, hostHasSuffix } from '@/lib/util/host-match'");
-console.error('  It parses the URL and matches the host at a DNS label boundary.\n');
-process.exit(1);
+// Only run when invoked directly, so the self-test can import scanLine().
+if (process.argv[1] && process.argv[1].endsWith('check-url-boundary.mjs')) process.exit(main());

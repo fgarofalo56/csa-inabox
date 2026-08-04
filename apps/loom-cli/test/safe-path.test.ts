@@ -7,10 +7,37 @@
  * to `path.join(dir, …)`, which resolves `..` — so a response could write
  * anywhere the CLI user can write.
  *
- * MUTATION CONTRACT: restoring `join(dir, f.path)` in `writeBuildContext` must
- * turn the `refuses` + `writes nothing outside` cases RED. The `CONTROL` block
- * passes both before and after, so a fix that simply refuses everything is
- * caught too.
+ * MUTATION CONTRACT, verified by applying it. Restoring `join(dir, f.path)` in
+ * `writeBuildContext` turns exactly THREE tests RED — `3 failed | 24 passed
+ * (27)` — all of them in this block:
+ *   `writeBuildContext does not write outside the output directory`
+ *
+ *   - a traversal entry leaves the neighbouring file byte-identical
+ *     → AssertionError: expected 'PWNED' to be 'ORIGINAL'
+ *   - creates NOTHING when any entry in the context is hostile (all-or-nothing)
+ *     → expected [Function] to throw an error
+ *   - an absolute path does not overwrite the file it names
+ *     → expected 'ENOENT…' to match /Refusing to write a file/
+ *
+ * The `containedJoin refuses every escape a build context could carry` cases do
+ * NOT go red, and cannot: they call `containedJoin` directly, so no mutation of
+ * `writeBuildContext` can reach them. They are the helper's own contract; the
+ * block above is the call site's. An earlier version of this comment claimed
+ * both halves went red, and named a block that does not exist in this file, so
+ * a reader who tried to check it found nothing to check. A proof that does not
+ * hold is worse than no proof (#2869 F4). Every block and test name above is
+ * quoted verbatim from a `describe`/`it` string below — grep for it.
+ *
+ * The `CONTROL` block passes both before and after, so a "fix" that simply
+ * refuses everything is caught too.
+ *
+ * WHAT THIS SUITE DOES NOT CATCH, established by mutation rather than assumed:
+ * emptying the `..` rejection inside `containedJoin` — leaving the `if` and
+ * deleting its `refuse` — keeps all 27 tests GREEN, because the post-resolve
+ * `base + sep` layer still rejects those same inputs. Defence in depth means no
+ * single layer's loss is observable here. That is why the CI guard asserts each
+ * layer separately AND asserts that each one actually refuses
+ * (`scripts/ci/check-remote-path-containment.mjs`, M14-M16).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';

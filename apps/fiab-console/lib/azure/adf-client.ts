@@ -224,9 +224,9 @@ async function call(url: string, init?: RequestInit): Promise<Response> {
 }
 
 async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
-  if (!r.ok && r.status !== 202) {
-    throw new Error(`${label} failed ${r.status}: ${await r.text()}`);
-  }
+  // `status` rides along so a BFF route can classify a 404 without regexing the
+  // message — synapse-dev-client's twin carries the full note (#2895).
+  if (!r.ok && r.status !== 202) throw Object.assign(new Error(`${label} failed ${r.status}: ${await r.text()}`), { status: r.status });
   const text = await r.text();
   if (!text) return {} as T;
   try { return JSON.parse(text) as T; }

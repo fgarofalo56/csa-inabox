@@ -39,6 +39,7 @@
  */
 
 import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
+import { sendWithAoaiRetry } from './aoai-retry';
 import {
   resolveAoaiTarget,
   aoaiToken,
@@ -49,7 +50,9 @@ import {
 } from './copilot-orchestrator';
 import { buildAoaiBody, type AoaiChatMessage, type AoaiResponseFormat } from './aoai-model-contract';
 import type { TenantCopilotConfig } from '../types/copilot-config';
-import { routeTurnTier, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
+import { routeTurnTier, tierPolicyFromConfig, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass, type TierResolutionContext } from '@/lib/foundry/model-tier-router';
+import { peekLiveDeployments } from '@/lib/foundry/model-availability-runtime';
+import { detectLoomCloud } from './cloud-endpoints';
 import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
 // N13 — per-workspace/per-agent token budgets. Enforced AFTER the E6 tier router
 // has chosen the deployment (the tier is an INPUT here — the price coefficient
@@ -122,6 +125,93 @@ async function withApimFallback<T>(
 }
 
 /**
+ * The LAST-RESORT tier-resolution context for {@link routeTurn}: the account's
+ * live deployments, read from the cache `resolveAoaiTarget` already warms on
+ * every turn (via `applyAvailabilityFallback`). SYNCHRONOUS and non-blocking —
+ * a cold cache returns `undefined` and this turn simply routes as it did
+ * before, while a background refresh warms the next one. Never throws.
+ */
+function liveTierResolution(): TierResolutionContext | undefined {
+  try {
+    const live = peekLiveDeployments();
+    if (!live) return undefined;
+    return { liveDeployments: live.deployments, cloud: detectLoomCloud(), region: live.region };
+  } catch {
+    return undefined; // availability discovery is best-effort, never fatal
+  }
+}
+
+// ── Tier-router POSTURE trace ────────────────────────────────────────────────
+// The per-turn `[tier-router]` debug below only fires when routing actively
+// SWAPS the deployment. That made the failure mode invisible: with mini/strong
+// unresolved the router silently funnels 100% of turns onto the base deployment
+// and emits NOTHING — three days of chronic 429s produced zero tier-router
+// lines. These two module-level fields make the ABSENCE of routing as loud as
+// its presence, and log the collapsed→active transition once discovery warms.
+let _lastPosture = '';
+let _lastPostureAt = 0;
+const POSTURE_REPEAT_MS = 10 * 60 * 1000;
+
+/**
+ * Log the router's posture whenever it CHANGES, and at most every ten minutes
+ * otherwise. A collapsed router (every task class on one deployment) is a
+ * `console.warn` naming the exact env vars; an active one is a single info
+ * line. Pure trace — never throws, never affects routing.
+ */
+function logTierPosture(
+  base: AoaiTarget,
+  cfg: TenantCopilotConfig | null | undefined,
+  resolution: TierResolutionContext | undefined,
+): void {
+  try {
+    const policy = tierPolicyFromConfig(cfg ?? null, resolution);
+    const { mini, standard, strong } = policy.tiers;
+    const posture = !policy.enabled
+      ? `disabled:${base.deployment}`
+      : `${mini ?? '-'}|${standard ?? '-'}|${strong ?? '-'}|${base.deployment}`;
+
+    const now = Date.now();
+    if (posture === _lastPosture && now - _lastPostureAt < POSTURE_REPEAT_MS) return;
+    _lastPosture = posture;
+    _lastPostureAt = now;
+
+    if (!policy.enabled) {
+      console.warn(
+        `[tier-router] DISABLED by opt-out — every Copilot turn rides "${base.deployment}".`,
+      );
+      return;
+    }
+    // "Collapsed" = no tier resolves to anything other than the base, so every
+    // task class lands on one deployment no matter how it classifies.
+    const collapsed = ![mini, strong].some((d) => d && d !== base.deployment);
+    if (collapsed) {
+      console.warn(
+        `[tier-router] NOT ROUTING — every Copilot turn rides the single deployment ` +
+          `"${base.deployment}" (mini=${mini ?? 'unset'} standard=${standard ?? 'unset'} ` +
+          `strong=${strong ?? 'unset'}). Set LOOM_AOAI_MINI_DEPLOYMENT / ` +
+          `LOOM_AOAI_STRONG_DEPLOYMENT (or Admin → Copilot & Agents → Model tiers, gate ` +
+          `svc-model-reasoning-tier) so hard turns leave the base deployment. One ` +
+          `small-capacity deployment serving 100% of turns is the classic source of ` +
+          `chronic AOAI 429s.`,
+      );
+    } else {
+      console.info(
+        `[tier-router] active — base="${base.deployment}" mini="${mini ?? '(base)'}" ` +
+          `standard="${standard ?? '(base)'}" strong="${strong ?? '(base)'}"`,
+      );
+    }
+  } catch {
+    /* trace only */
+  }
+}
+
+/** Test seam: reset the posture-trace throttle. */
+export function _resetTierPostureTrace(): void {
+  _lastPosture = '';
+  _lastPostureAt = 0;
+}
+
+/**
  * WS-1.1 — apply the Loom-native tier router to a resolved target on the SHARED
  * client path, so EVERY copilot / agent / data-agent turn is tier-aware (not
  * just the streaming orchestrator).
@@ -169,6 +259,8 @@ function routeTurn(
     // Explicit target = per-call override; never re-route (unchanged).
     return { target: base, tier: opts.tier ?? (opts.taskClass ? DEFAULT_TASK_TIER_MAP[opts.taskClass] : 'standard') };
   }
+  const resolution = liveTierResolution();
+  logTierPosture(base, opts.cfg, resolution);
   const sel = routeTurnTier({
     cfg: opts.cfg ?? null,
     tier: opts.tier,
@@ -176,6 +268,7 @@ function routeTurn(
     messages: opts.messages as readonly { role?: string; content?: unknown }[] | undefined,
     hasTools: !!(opts.tools && opts.tools.length),
     baseDeployment: base.deployment,
+    resolution,
   });
   if (sel.routed && sel.deployment && sel.deployment !== base.deployment) {
     try {
@@ -332,14 +425,14 @@ export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
           }),
         ),
       }, LLM_FETCH_TIMEOUT_MS);
-    let res = await send(true);
+    let res = await sendWithAoaiRetry(() => send(true), { label: 'chat' });
     if (res.status === 400) {
       const t = await res.text();
-      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      if (isUnsupportedSamplingParam(t)) res = await sendWithAoaiRetry(() => send(false), { label: 'chat' });
       else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`);
     }
     if (!res.ok) {
-      const t = await res.text();
+      const t = await res.text().catch(() => '');
       throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
     }
     const j = await res.json();
@@ -387,14 +480,14 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
           }),
         ),
       }, LLM_FETCH_TIMEOUT_MS);
-    let res = await send(true);
+    let res = await sendWithAoaiRetry(() => send(true), { label: 'chat-json' });
     if (res.status === 400) {
       const t = await res.text();
-      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      if (isUnsupportedSamplingParam(t)) res = await sendWithAoaiRetry(() => send(false), { label: 'chat-json' });
       else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`);
     }
     if (!res.ok) {
-      const t = await res.text();
+      const t = await res.text().catch(() => '');
       throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
     }
     const j = await res.json();
@@ -457,7 +550,7 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
 
     let res: Response;
     try {
-      res = await send(true);
+      res = await sendWithAoaiRetry(() => send(true), { label: 'chat-raw' });
     } catch (e: any) {
       // Transport failure — let it propagate (NOT an AoaiResponseError) so the APIM
       // fallback can retry direct-with-MI when routing through the gateway.
@@ -469,13 +562,13 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
     if (res.status === 400) {
       const t = await res.text();
       if (isUnsupportedSamplingParam(t)) {
-        res = await send(false);
+        res = await sendWithAoaiRetry(() => send(false), { label: 'chat-raw' });
       } else {
         throw new AoaiResponseError(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
       }
     }
     if (!res.ok) {
-      const t = await res.text();
+      const t = await res.text().catch(() => '');
       throw new AoaiResponseError(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
     }
     const j = await res.json();
@@ -536,14 +629,18 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
   const token = await aoaiToken();
   return withApimFallback(base, async (call) => {
     const url = `${call.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${call.apiVersion}`;
-    const res = await fetchWithTimeout(
-      url,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) },
-        body: JSON.stringify({ input: opts.input }),
-      },
-      LLM_FETCH_TIMEOUT_MS,
+    const res = await sendWithAoaiRetry(
+      () =>
+        fetchWithTimeout(
+          url,
+          {
+            method: 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) },
+            body: JSON.stringify({ input: opts.input }),
+          },
+          LLM_FETCH_TIMEOUT_MS,
+        ),
+      { label: 'embeddings' },
     );
     if (res.status === 404) {
       const t = await res.text().catch(() => '');
@@ -613,10 +710,10 @@ export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
           }),
         ),
       }, LLM_FETCH_TIMEOUT_MS);
-    let res = await send(true);
+    let res = await sendWithAoaiRetry(() => send(true), { label: 'stream' });
     if (res.status === 400) {
       const t = await res.text();
-      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      if (isUnsupportedSamplingParam(t)) res = await sendWithAoaiRetry(() => send(false), { label: 'stream' });
       else throw new AoaiResponseError(`AOAI stream 400: ${t.slice(0, 300)}`);
     }
     if (!res.ok || !res.body) {

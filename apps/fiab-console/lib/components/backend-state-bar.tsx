@@ -22,6 +22,7 @@
  */
 
 import { MessageBar, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
+import { humanizeBackendError } from './backend-error-text';
 
 type Props = {
   error: string | null | undefined;
@@ -31,6 +32,15 @@ type Props = {
 
 export function BackendStateBar({ error, status, title }: Props) {
   if (!error) return null;
+
+  // #2895 — Azure clients throw with the verbatim response body so the SERVER
+  // log keeps the full receipt. Rendering that body is a no-vaporware
+  // violation (stringified JSON instead of a remediation sentence) and puts
+  // ARM subscription / resource-group / resource names on screen. Humanize at
+  // the render boundary so every caller is covered. Intent is still decided
+  // from the ORIGINAL text so a not-configured / permission error keeps its
+  // quiet warning classification.
+  const shown = humanizeBackendError(error);
 
   const lower = error.toLowerCase();
   const isNotConfigured =
@@ -59,7 +69,7 @@ export function BackendStateBar({ error, status, title }: Props) {
     <MessageBar intent={intent}>
       <MessageBarBody>
         <MessageBarTitle>{heading}</MessageBarTitle>
-        {error}
+        {shown}
       </MessageBarBody>
     </MessageBar>
   );

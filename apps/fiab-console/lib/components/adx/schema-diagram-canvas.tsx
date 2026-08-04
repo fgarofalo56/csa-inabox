@@ -436,6 +436,9 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
       storageKey="adx-schema-diagram"
       defaultPx={560}
       minPx={320}
+      // G3: grow into the height actually available (and track window resizes)
+      // until the user's first drag on this key; `defaultPx` stays the FLOOR.
+      fill
       ariaLabel="Resize schema diagram canvas height"
     >
       <div className={s.shell} data-testid="schema-diagram-canvas" aria-label="KQL database entity diagram">

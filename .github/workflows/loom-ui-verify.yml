@@ -118,8 +118,24 @@ jobs:
       #     workspace, unreadable count, missing Application.Read.All) and 1
       #     ONLY on evidence in hand that sign-in is broken. The az reads stay
       #     here; the verdict is a pure, unit-tested script.
+      #
+      #     ORDERING FIX (refs #2871). Because this step sits AHEAD of the
+      #     Playwright projects, a hard failure here aborted the job before a
+      #     single browser test ran — so while the estate carries a live
+      #     AADSTS7000215 signal there was NO obtainable browser-E2E receipt for
+      #     main at all, for any change, and a UI regression could land unseen.
+      #     One true signal was masking a second, independent one.
+      #     This is NOT a skip switch and NOT a re-added continue-on-error: the
+      #     step still runs first and still emits its ::error:: annotations, but
+      #     it RECORDS its verdict and lets the browser suite produce its own
+      #     result. `Enforce login-health verdict…` at the END of this job turns
+      #     a BROKEN verdict back into a red run, so the job's pass/fail outcome
+      #     is unchanged and the run simply carries both signals. Enforcement is
+      #     DEFERRED, NEVER DROPPED — deleting that step re-opens #2837, and
+      #     scripts/ci/__tests__/ui-verify-gate.test.mjs fails if it goes away.
       # -----------------------------------------------------------------------
       - name: Login-health preflight (MSAL secret expiry + callback errors)
+        id: login_health
         env:
           MSAL_APP_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '5c59f3f3-e26d-4122-a707-a04e21ff5255' }}
           CONSOLE_RG: ${{ vars.LOOM_ADMIN_RG || format('rg-csa-loom-admin-{0}', inputs.region) }}
@@ -132,7 +148,7 @@ jobs:
             # not run, and the verdict script reports that as unknown rather than
             # as a clean zero (the second half of #2837).
             HITS_RAW=$(az monitor log-analytics query --workspace "$LAW" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where Log_s has 'auth/callback' and Log_s has 'invalid_client' | count" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where ContainerAppName_s == 'loom-console' | where Log_s contains '[auth/callback] exception:' and Log_s has 'invalid_client' | count" \
               -o tsv 2>/dev/null | tr -d '\r')
           fi
           MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')
@@ -140,6 +156,16 @@ jobs:
           LH_LAW="$LAW" LH_HITS_RAW="$HITS_RAW" LH_MIN_END="$MINEND" \
           LH_APP_ID="$MSAL_APP_ID" LH_CONSOLE_RG="$CONSOLE_RG" \
             bash scripts/ci/login-health-verdict.sh
+          rc=$?
+
+          # login-health-verdict.sh writes `verdict=ok|unknown|broken` to
+          # $GITHUB_OUTPUT itself. Record its raw exit status as a SECOND,
+          # independent signal: the enforcing step fails closed if the two ever
+          # disagree, or if no verdict was recorded at all.
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+          echo "Recorded login-health rc=$rc. Enforcement is DEFERRED to 'Enforce login-health verdict + blocking suite results' at the end of this job (refs #2871) so the browser E2E below still runs and yields its own receipt. A BROKEN verdict still fails this run."
+          exit 0
 
       # -----------------------------------------------------------------------
       # 3. Resolve Key Vault name, then fetch + mask SESSION_SECRET.
@@ -240,6 +266,7 @@ jobs:
       #    - `verify` tests run with the minted storageState
       # -----------------------------------------------------------------------
       - name: Run loom-ui-verify (--project=verify)
+        id: verify_project
         run: |
           # Prefer the baked browsers when the runner image carries them.
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
@@ -252,13 +279,6 @@ jobs:
           LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
           CI: 'true'
 
-      # -----------------------------------------------------------------------
-      # 6a2. Publish-version E2E (task #7) — live front-end version-history +
-      #      restore across publishing object types, with the SAME minted
-      #      session. Separate project so its heavier per-type create/save flow
-      #      is its own signal; continue-on-error so a per-type selector hiccup
-      #      annotates the run but does not mask the core verify gate.
-      # -----------------------------------------------------------------------
       # -----------------------------------------------------------------------
       # 6a1. Optional extra projects (apex A4): the full page-by-page sweep
       #      (`route-smoke` asserts a clean mount + zero console errors + zero
@@ -276,6 +296,7 @@ jobs:
       #      Each project now writes to test-results/<project>/ and survives.
       # -----------------------------------------------------------------------
       - name: Run extra Playwright projects
+        id: extra_projects
         if: inputs.extra_projects != ''
         # NO continue-on-error. It hid every result this step produced — a real
         # /admin/tenant-settings mount failure was reported as a green run
@@ -305,8 +326,36 @@ jobs:
           LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
           CI: 'true'
 
+      # -----------------------------------------------------------------------
+      # 6a2. Publish-version E2E (task #7) — live front-end version-history +
+      #      restore across publishing object types, with the SAME minted
+      #      session. Separate project so its heavier per-type create/save flow
+      #      is its own signal.
+      #
+      #      THIRD OCCURRENCE OF THE SAME DEFECT, IN THIS SAME FILE (refs #2875).
+      #      This step carried `continue-on-error: true` AND had no `id:`, so its
+      #      outcome was not merely tolerated — it was UNREFERENCEABLE. The final
+      #      gate below could not have consumed it even if someone had thought
+      #      to. Run 30824614880 therefore concluded SUCCESS while Playwright
+      #      printed "1 failed, 6 passed" for `version timeline + restore —
+      #      report`. #2787 fixed exactly this shape on the sibling step 30 lines
+      #      up and did not look at this one; that is how the class recurred.
+      #
+      #      The flag is gone AND the ambiguity it existed for is gone: the
+      #      publish-version project now carries `retries: 2`
+      #      (apps/fiab-console/playwright.config.ts), so a per-type selector
+      #      hiccup is reported FLAKY and exits 0, while a type that fails every
+      #      attempt fails this step. Removing the flag WITHOUT the retries would
+      #      have traded a silent-green for a noisy-red and someone would have
+      #      put the flag back.
+      #
+      #      `id:` + inclusion in the gate's UVG_BLOCKING is belt-and-braces: the
+      #      step failing is already enough to fail the job, and the gate
+      #      re-asserts it so that re-adding tolerance here cannot silently undo
+      #      this fix a fourth time.
+      # -----------------------------------------------------------------------
       - name: Run publish-version E2E (--project=publish-version)
-        continue-on-error: true
+        id: publish_version
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           PLAYWRIGHT_JSON_OUTPUT_NAME="test-results/publish-version/report.json" \
@@ -326,12 +375,23 @@ jobs:
       #     path (scripts/csa-loom/e2e-receipt.mjs shares the exact cookie mint)
       #     to capture a light+dark screenshot + Playwright trace of the route
       #     against the live console, into apps/fiab-console/test-results/receipts/.
-      #     continue-on-error so an UNREACHABLE/REJECTED receipt annotates the run
-      #     but does not mask the smoke-verify result above.
+      #
+      #     Its `continue-on-error: true` is gone too (refs #2875) — same sweep,
+      #     same reasoning as the step above. The stated rationale ("so an
+      #     UNREACHABLE/REJECTED receipt annotates the run but does not mask the
+      #     smoke-verify result above") did not hold: a failing step never masked
+      #     an earlier one, GitHub reports both. What it actually did was discard
+      #     a real verdict. scripts/csa-loom/e2e-receipt.mjs exits 2 on
+      #     UNREACHABLE and 3 on SESSION REJECTED — a route the operator
+      #     explicitly asked to receipt failing to load, or bouncing a valid
+      #     minted session to sign-in, is precisely the finding this dispatch
+      #     exists to surface, not noise to swallow. The artifact upload below is
+      #     `if: always()`, so the screenshots and trace are still collected on
+      #     the failing path; nothing diagnostic is lost by letting it go red.
       # -----------------------------------------------------------------------
       - name: Capture browser-E2E receipt (optional)
+        id: receipt
         if: ${{ inputs.target_route != '' }}
-        continue-on-error: true
         run: |
           if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
           SLUG_ARG=""
@@ -361,3 +421,41 @@ jobs:
             apps/fiab-console/playwright-report/
             apps/fiab-console/test-results/
           retention-days: 14
+
+      # -----------------------------------------------------------------------
+      # 8. FINAL GATE (refs #2871) — this is where a BROKEN login-health verdict
+      #    becomes a red run. It MUST stay last and MUST keep `if: always()`:
+      #    the whole point of recording the preflight verdict instead of
+      #    failing on it is that the browser suite gets to run and report, and
+      #    that only holds if the enforcement still happens afterwards
+      #    unconditionally. A gate that is skipped when an earlier step fails is
+      #    the same mask in a new place.
+      #
+      #    NO continue-on-error here, ever. This step is the teeth for #2837.
+      #    Deleting it, skipping it, or tolerating its failure restores exactly
+      #    the defect that made a live sign-in outage render as a green check.
+      #    scripts/ci/__tests__/ui-verify-gate.test.mjs asserts all of that
+      #    against this file, so the invariant is enforced, not just documented.
+      #
+      #    It does NOT swallow the suite's own status: a failed Playwright step
+      #    has already failed the job on its own, and the outcomes are passed in
+      #    so a red suite is re-reported here alongside the login-health verdict
+      #    — both causes visible, neither hiding the other.
+      #
+      #    EVERY browser step in this job is listed (refs #2875). It used to list
+      #    only the two that had ids, with a comment saying "publish-version and
+      #    the optional receipt keep their deliberate continue-on-error
+      #    tolerance" — which described the very hole that let run 30824614880
+      #    conclude green over a failed Playwright test. Both are now blocking
+      #    steps with ids, and check-ui-verify-step-teeth.mjs fails the build if
+      #    a browser step is ever added here without one, or if one acquires
+      #    tolerance without the gate consuming its outcome.
+      # -----------------------------------------------------------------------
+      - name: Enforce login-health verdict + blocking suite results
+        if: always()
+        env:
+          UVG_PREFLIGHT_OUTCOME: ${{ steps.login_health.outcome }}
+          UVG_VERDICT: ${{ steps.login_health.outputs.verdict }}
+          UVG_RC: ${{ steps.login_health.outputs.rc }}
+          UVG_BLOCKING: 'verify=${{ steps.verify_project.outcome }},extra-projects=${{ steps.extra_projects.outcome }},publish-version=${{ steps.publish_version.outcome }},receipt=${{ steps.receipt.outcome }}'
+        run: bash scripts/ci/ui-verify-gate-verdict.sh

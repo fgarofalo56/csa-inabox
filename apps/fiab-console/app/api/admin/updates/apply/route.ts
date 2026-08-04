@@ -16,8 +16,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import {
@@ -43,6 +41,7 @@ import {
   resolveDeployRegion,
   dispatchBuildRoll,
 } from '@/lib/updates/pipeline-dispatch';
+import { withDlzAccess } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -128,7 +127,13 @@ async function headGhcrImage(ref: string): Promise<number> {
  */
 async function headImage(ref: string): Promise<number> {
   const host = ref.split('/')[0];
-  if (host.endsWith('.azurecr.io')) {
+  // Azure Container Registry across ALL clouds — Public is .azurecr.io, but
+  // Government is .azurecr.us (and China .azurecr.cn). Recognising only .io meant
+  // every Gov (.azurecr.us) ref fell through to the ghcr anonymous-token HEAD,
+  // which authenticates as GitHub against an Azure registry → guaranteed 401 →
+  // reported as "image missing" (#2905). Route every ACR host to the UAMI AAD
+  // token exchange; acrManifestExists derives the registry endpoint from `host`.
+  if (isAcrHost(host)) {
     const withoutHost = ref.slice(host.length + 1);
     const lastColon = withoutHost.lastIndexOf(':');
     const repo = lastColon > 0 ? withoutHost.slice(0, lastColon) : withoutHost;
@@ -136,6 +141,14 @@ async function headImage(ref: string): Promise<number> {
     return acrManifestExists(host, repo, tag);
   }
   return headGhcrImage(ref);
+}
+
+/** True for an Azure Container Registry login server in any Azure cloud. */
+function isAcrHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h.endsWith('.azurecr.io')   // Azure Public
+    || h.endsWith('.azurecr.us')     // Azure Government
+    || h.endsWith('.azurecr.cn');    // Azure China
 }
 
 /**
@@ -227,11 +240,7 @@ function withPipelineInfo(pre: PreflightGate): PreflightGate {
   };
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = await denyIfNoDlzAccess(s, 'scaling');
-  if (denied) return denied;
+export const GET = withDlzAccess('scaling', async (_req, { session: s }) => {
   try {
     const pre = await preflight(deps(), DEFAULT_GHCR_OWNER);
     // A gate is a legitimate 200 response with ok:false + reason — the UI renders
@@ -243,13 +252,9 @@ export async function GET() {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const denied = await denyIfNoDlzAccess(s, 'scaling');
-  if (denied) return denied;
+export const POST = withDlzAccess('scaling', async (req: NextRequest, { session: s }) => {
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
 
@@ -395,4 +400,4 @@ export async function POST(req: NextRequest) {
     imageVersion: ok.imageVersion,
     results,
   }, { status: allSucceeded ? 200 : 207 });
-}
+});

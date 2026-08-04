@@ -112,6 +112,20 @@ describe('honest gate when the catalog is not deployed', () => {
     expect(body.gate.fixItHref).toContain('/admin/gates?gate=svc-iceberg-catalog');
     expect(upstream).toHaveLength(0);
   });
+
+  it('treats a 0.0.0.0 bind-address placeholder as not-configured (no unreachable fetch) — operator report 2026-08', async () => {
+    // Observed live on the Commercial console: LOOM_ICEBERG_CATALOG_URL was
+    // https://0.0.0.0:3000/api/catalog/iceberg (a dev bind address that also
+    // circularly points at Loom's own BFF). It must show the honest 503 gate,
+    // NOT "Iceberg REST Catalog unreachable at https://0.0.0.0…".
+    process.env.LOOM_ICEBERG_CATALOG_URL = 'https://0.0.0.0:3000/api/catalog/iceberg';
+    const { GET } = await import('../namespaces/route');
+    const res = await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.code).toBe('iceberg_catalog_not_configured');
+    expect(upstream).toHaveLength(0); // never attempted the fetch against the bind address
+  });
 });
 
 describe('Entra auth injection', () => {

@@ -35,7 +35,6 @@ import {
 } from './activity-catalog';
 import { branchesOf, totalInnerCount } from './drill-path';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
-import { isDangerousKey } from '@/lib/util/safe-keys';
 
 type FieldKind = 'text' | 'number' | 'bool' | 'select' | 'multiselect' | 'expr' | 'expr-multiline';
 
@@ -357,19 +356,29 @@ function getPath(obj: any, path: string): any {
   for (const t of tokenize(path)) { if (cur == null) return undefined; cur = cur[t as any]; }
   return cur;
 }
-function setPath(obj: any, path: string, value: any): any {
+/** Exported for `__tests__/activity-forms-set-path.test.ts` — the prototype-pollution guard needs a direct unit test. */
+export function setPath(obj: any, path: string, value: any): any {
   const toks = tokenize(path);
-  // Prototype-pollution guard (js/prototype-pollution-utility): this walks a
-  // dotted path and assigns into each segment, so a token of `__proto__` /
-  // `constructor` / `prototype` would write onto Object.prototype and affect
-  // every object in the page. Field paths are component-defined today, but a
-  // generic path-writer must not depend on every present and future caller
-  // passing a safe literal. Refuse the whole write rather than partially apply.
-  if (toks.some((t) => typeof t === 'string' && isDangerousKey(t))) return obj;
   const root = Array.isArray(obj) ? [...obj] : { ...(obj || {}) };
   let cur: any = root;
-  for (let i = 0; i < toks.length - 1; i++) {
+  for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
+    // Prototype-pollution guard (js/prototype-pollution-utility). This walks a
+    // dotted path and assigns into each segment, so a token of `__proto__` /
+    // `constructor` / `prototype` would write onto Object.prototype and affect
+    // every object in the page. Refuse the WHOLE write — a half-written activity
+    // is worse than a rejected one.
+    //
+    // WRITTEN AS LOCAL STRING LITERALS ON PURPOSE. #2773 expressed exactly this
+    // rule as `toks.some(isDangerousKey)` using the shared lib/util/safe-keys
+    // predicate; that shipped to main and CodeQL alert #374 stayed OPEN on the
+    // same head commit. The query's only deny-list barrier is
+    // `DenyListEqualityGuard` — an equality test whose operand is the literal
+    // string `__proto__` / `constructor` — so a predicate behind an import is
+    // invisible to it. `lib/components/pipeline/__tests__/activity-forms-set-path.test.ts`
+    // pins this local list against UNSAFE_OBJECT_KEYS so the copy cannot drift.
+    if (t === '__proto__' || t === 'constructor' || t === 'prototype') return obj;
+    if (i === toks.length - 1) { cur[t as any] = value; break; }
     const nextIsIndex = typeof toks[i + 1] === 'number';
     const existing = cur[t as any];
     cur[t as any] = nextIsIndex
@@ -377,7 +386,6 @@ function setPath(obj: any, path: string, value: any): any {
       : (existing && typeof existing === 'object' ? { ...existing } : {});
     cur = cur[t as any];
   }
-  cur[toks[toks.length - 1] as any] = value;
   return root;
 }
 

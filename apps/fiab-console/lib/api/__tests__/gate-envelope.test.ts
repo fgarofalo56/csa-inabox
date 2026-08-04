@@ -88,4 +88,49 @@ describe('backendGateResponse', () => {
     (gateStatus as any).mockReturnValue({ id: 'svc-aisearch', status: 'configured', missing: [] });
     expect(backendGateResponse('svc-aisearch')).toBeNull();
   });
+
+  /**
+   * #2624 — an id the registry does not know makes `gateStatus` return
+   * undefined. That is UNEVALUATED, not "configured". Before this fix the
+   * `if (status && …)` guard fell through to `return null`, so a mistyped or
+   * deleted gate id produced a `withBackendGate` wrapper that could not fire —
+   * a gate that reports itself as gating while gating nothing.
+   */
+  it('fails CLOSED for an id the registry does not know', async () => {
+    (getGate as any).mockReturnValue(undefined);
+    (gateStatus as any).mockReturnValue(undefined);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = backendGateResponse('svc-typo-not-a-gate');
+    expect(res, 'an unknown gate id must NOT be treated as configured').not.toBeNull();
+    expect(res!.status).toBe(503);
+    const body = await res!.json();
+    expect(body.gated).toBe(true);
+    expect(body.gate.id).toBe('svc-typo-not-a-gate');
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toMatch(/not in the registry/);
+    err.mockRestore();
+  });
+
+  it('sanitizes the unknown gate id before logging it', () => {
+    (gateStatus as any).mockReturnValue(undefined);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    backendGateResponse('bad\nid\rINJECTED');
+    expect(String(err.mock.calls[0][0])).not.toMatch(/[\n\r]/);
+    expect(String(err.mock.calls[0][0])).toMatch(/bad\?id\?\?INJECTED/);
+    err.mockRestore();
+  });
+
+  /**
+   * CONTROL — passes BEFORE and AFTER the fail-closed change. If the new branch
+   * were written too broadly (e.g. gating whenever `status` is falsy in a way
+   * that also catches a configured gate), this would go red.
+   */
+  it('CONTROL: a KNOWN configured gate still proceeds, and a known blocked gate still gates', async () => {
+    (gateStatus as any).mockReturnValue({ id: 'svc-adf', status: 'configured', missing: [] });
+    expect(backendGateResponse('svc-adf')).toBeNull();
+    (gateStatus as any).mockReturnValue({ id: 'svc-adf', status: 'blocked', missing: ['LOOM_ADF_FACTORY'] });
+    const res = backendGateResponse('svc-adf');
+    expect(res).not.toBeNull();
+    expect((await res!.json()).missing).toEqual(['LOOM_ADF_FACTORY']);
+  });
 });

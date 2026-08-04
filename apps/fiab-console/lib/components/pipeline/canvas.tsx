@@ -76,7 +76,20 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     flex: 1,
-    minHeight: '400px',
+    // `minHeight: 0`, NOT a px floor. A floor here is actively harmful: React
+    // Flow measures the shell to frame `fitView`, so a floor LARGER than the
+    // clip its parent gives it makes the graph frame around a viewport that is
+    // partly off-screen — nodes centre below the visible box and the panels
+    // (CanvasRightRail, MiniMap) anchor to a bottom edge nobody can see. That is
+    // exactly how the pipeline canvas went invisible rather than merely small:
+    // a 400px floor inside a ~96px `overflow: hidden` wrap.
+    //
+    // CONTRACT: every caller renders this inside a HEIGHT-BOUNDED flex column
+    // (pipeline-designer + data-pipeline-editor via a SplitPane pane inside a
+    // ResizableCanvasRegion; dataflow-diagram via its own bounded root), so
+    // `flex: 1` resolves to a real height. A new caller MUST bound it too — an
+    // unbounded parent now yields a zero-height canvas instead of a wrong one.
+    minHeight: 0,
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -824,10 +837,15 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             </Tooltip>
           </div>
         </Panel>
-        {/* Standardized zoom/fit/auto-layout rail (bottom-left, clear of the
-            bottom-right MiniMap) — the shared CanvasRightRail every Loom canvas
-            carries, replacing React Flow's default grey Controls. */}
-        <Panel position="bottom-left">
+        {/* Standardized zoom/fit/auto-layout rail. Fabric puts the canvas
+            navigation controls on the RIGHT ("The canvas includes navigation
+            controls on the right side… Search, Zoom in/out, Zoom to fit,
+            Auto-align" — learn.microsoft.com/fabric/data-factory/pipeline-canvas-experience),
+            and the rail is built for that side (it is literally CanvasRightRail;
+            its collapse chevrons point right). `center-right` clears both the
+            top-right power toolbar and the bottom-right MiniMap, so nothing
+            overlaps at any canvas height. */}
+        <Panel position="center-right">
           <CanvasRightRail
             zoom={zoom}
             minZoom={0.25}

@@ -34,7 +34,7 @@
  * (https://learn.microsoft.com/azure/foundry/openai/how-to/model-router).
  */
 
-import { bestModelsFor } from './model-availability-matrix';
+import { bestModelsFor, modelPreferenceChain, type AvailableDeployment } from './model-availability-matrix';
 import type { LoomCloud } from '../azure/cloud-endpoints';
 
 /** Cost/quality tier a turn is dispatched on. */
@@ -236,14 +236,95 @@ function envDeployment(name: string): string | undefined {
 }
 
 /**
+ * LAST-RESORT tier resolution context: the account's LIVE model deployments.
+ *
+ * WHY: when neither the tenant config nor the env wires `mini`/`strong`, the
+ * router used to collapse EVERY task class onto the single base deployment —
+ * silently. In the live console that meant 100% of Copilot traffic funnelling
+ * onto a 10K-TPM `gpt-4o-mini` while three 1000-capacity reasoning deployments
+ * sat idle on the same account, producing a chronic 429 storm.
+ *
+ * Rather than invent a deployment name (which would 404 — strictly worse than a
+ * 429), the router accepts the deployment list the runtime ALREADY caches for
+ * {@link applyAvailabilityFallback} and resolves the missing tier against it via
+ * the same Learn-grounded preference chain. Pure: this module still performs no
+ * I/O — the caller passes the (already-warmed, non-blocking) list in.
+ */
+export interface TierResolutionContext {
+  /** Live deployments on the AOAI/Foundry account (`{name, modelName}`). */
+  liveDeployments?: readonly AvailableDeployment[];
+  /** Cloud for the preference chain (Commercial / Gov …). */
+  cloud?: LoomCloud;
+  /** Account region for the region-override chain. */
+  region?: string;
+}
+
+/**
+ * Tokens that mark a CHEAPER/WEAKER variant of a base model. A deployment whose
+ * model is `<chainModel>-<one of these>` must NEVER satisfy that chain entry —
+ * otherwise the strong chain's `gpt-4.1` floor would happily bind the reasoning
+ * tier to a `gpt-4.1-mini`, and the chat chain's `gpt-4o` to a `gpt-4o-mini`.
+ */
+const WEAKER_VARIANT_RE = /^(?:mini|nano|small|lite|chat|instruct|embed|embedding)(?:$|[-_.])/i;
+
+/**
+ * Does a live deployment satisfy a preference-chain model?
+ *
+ * Exact match on either the deployment NAME or its underlying model name, PLUS
+ * a guarded variant match: real accounts routinely deploy capacity variants
+ * whose model name carries a suffix — the live estate reports
+ * `properties.model.name = "gpt-5.6-sol"` (three 1000-TPM sibling deployments),
+ * not the bare `gpt-5.6` the matrix chain is written in. An exact-only match
+ * therefore found NOTHING on the very account this fix exists to unblock.
+ *
+ * The suffix must not be a {@link WEAKER_VARIANT_RE} token, so widening the
+ * match can only ever select an equal-or-stronger model, never a cheaper one.
+ */
+function deploymentMatchesModel(d: AvailableDeployment, model: string): boolean {
+  const m = model.trim().toLowerCase();
+  if (!m) return false;
+  for (const candidate of [d.modelName, d.name]) {
+    const c = (candidate ?? '').trim().toLowerCase();
+    if (!c) continue;
+    if (c === m) return true;
+    if (c.startsWith(`${m}-`) && !WEAKER_VARIANT_RE.test(c.slice(m.length + 1))) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve a tier to a REAL deployed deployment name by walking that tier's
+ * Learn-grounded preference chain (best → floor) against the account's live
+ * deployments. Returns the deployment NAME (what the AOAI URL path needs).
+ *
+ * Returns undefined when nothing in the chain is deployed — it NEVER invents a
+ * name, because an undeployed model 404s, which is strictly worse than riding
+ * an over-subscribed base deployment.
+ */
+function discoverTierDeployment(
+  key: 'mini' | 'strong',
+  ctx: TierResolutionContext | undefined,
+): string | undefined {
+  const live = ctx?.liveDeployments;
+  if (!live || live.length === 0) return undefined;
+  for (const model of modelPreferenceChain(ctx?.cloud ?? 'Commercial', ctx?.region, key)) {
+    const hit = live.find((d) => d?.name && deploymentMatchesModel(d, model));
+    if (hit) return hit.name;
+  }
+  return undefined;
+}
+
+/**
  * Build a {@link TierPolicy} from the tenant Copilot config, merging admin
  * choices over the day-one env deployments and the defaults.
  *
  * Per-tier resolution precedence (first non-empty wins):
  *   • mini     : tenant cfg `modelTiers.mini`   → `LOOM_AOAI_MINI_DEPLOYMENT`
+ *                → a live-deployed model from the `mini` preference chain
  *   • standard : tenant cfg `modelTiers.standard` → tenant chat deployment
  *                → `LOOM_AOAI_DEPLOYMENT` → `LOOM_AOAI_CHAT_DEPLOYMENT`
  *   • strong   : tenant cfg `modelTiers.strong` → `LOOM_AOAI_STRONG_DEPLOYMENT`
+ *                → a live-deployed model from the `strong` preference chain
  *
  * The env fallbacks are the mini / strong deployments admin-plane bicep wires
  * from the Foundry account (model-strategy M2/M3), so best-per-task routing is
@@ -251,8 +332,17 @@ function envDeployment(name: string): string | undefined {
  * tiers in Admin → Copilot & Agents still overrides. A missing mini/strong tier
  * is safe: {@link selectTier} falls back desired → standard → base, so routing
  * degrades gracefully to the standard deployment rather than hard-failing.
+ *
+ * The FINAL fallback (`ctx.liveDeployments`) exists because "env unset" is not
+ * rare — a BYO-Foundry install, or any estate whose bicep has not re-applied
+ * since the tier vars were added, has both vars empty. Without it the router
+ * silently funnels every task class onto one deployment (the observed 429
+ * storm). With it, the tier binds to a model the account demonstrably HAS.
  */
-export function tierPolicyFromConfig(cfg: TierPolicyConfigShape | null | undefined): TierPolicy {
+export function tierPolicyFromConfig(
+  cfg: TierPolicyConfigShape | null | undefined,
+  ctx?: TierResolutionContext,
+): TierPolicy {
   // Default-ON / opt-out. Disabled ONLY when the tenant admin explicitly sets
   // modelTierRoutingEnabled:false (Admin → Copilot & Agents → Model tiers) OR
   // the deployment-wide env kill-switch LOOM_MODEL_TIER_ROUTING_ENABLED='false'
@@ -261,13 +351,19 @@ export function tierPolicyFromConfig(cfg: TierPolicyConfigShape | null | undefin
   const envOff = (process.env.LOOM_MODEL_TIER_ROUTING_ENABLED || '').trim().toLowerCase() === 'false';
   const enabled = cfg?.modelTierRoutingEnabled !== false && !envOff;
   const tiers: TierDeployments = {
-    mini: cfg?.modelTiers?.mini?.trim() || envDeployment('LOOM_AOAI_MINI_DEPLOYMENT'),
+    mini:
+      cfg?.modelTiers?.mini?.trim() ||
+      envDeployment('LOOM_AOAI_MINI_DEPLOYMENT') ||
+      discoverTierDeployment('mini', ctx),
     standard:
       cfg?.modelTiers?.standard?.trim() ||
       cfg?.copilotChatDeployment?.trim() ||
       envDeployment('LOOM_AOAI_DEPLOYMENT') ||
       envDeployment('LOOM_AOAI_CHAT_DEPLOYMENT'),
-    strong: cfg?.modelTiers?.strong?.trim() || envDeployment('LOOM_AOAI_STRONG_DEPLOYMENT'),
+    strong:
+      cfg?.modelTiers?.strong?.trim() ||
+      envDeployment('LOOM_AOAI_STRONG_DEPLOYMENT') ||
+      discoverTierDeployment('strong', ctx),
   };
   const taskMap: Record<TaskClass, ModelTier> = { ...DEFAULT_TASK_TIER_MAP };
   for (const tc of TASK_CLASSES) {
@@ -281,8 +377,9 @@ export function tierPolicyFromConfig(cfg: TierPolicyConfigShape | null | undefin
 export function resolveTierForTurn(
   cfg: TierPolicyConfigShape | null | undefined,
   input: TierSelectInput,
+  ctx?: TierResolutionContext,
 ): TierSelection {
-  return selectTier(tierPolicyFromConfig(cfg), input);
+  return selectTier(tierPolicyFromConfig(cfg, ctx), input);
 }
 
 // ── WS-1.1: shared call-path wiring (messages classifier + escalate-only auto) ─
@@ -350,6 +447,13 @@ export interface TurnRouteInput {
    * Set false to allow auto mini-downshift (an explicit opt-in by the caller).
    */
   escalateOnly?: boolean;
+  /**
+   * LAST-RESORT tier resolution against the account's live deployments, for
+   * when neither the tenant config nor the env wires mini/strong. Supplied by
+   * the unified `aoai-chat-client` from the already-cached, non-blocking
+   * deployment list (see {@link TierResolutionContext}).
+   */
+  resolution?: TierResolutionContext;
 }
 
 /**
@@ -367,14 +471,18 @@ export interface TurnRouteInput {
 export function routeTurnTier(input: TurnRouteInput): TierSelection {
   const explicit = input.tier != null || input.taskClass != null;
   const prompt = input.prompt ?? promptFromMessages(input.messages);
-  const sel = resolveTierForTurn(input.cfg ?? null, {
-    overrideTier: input.tier,
-    taskClass: input.taskClass,
-    prompt,
-    hasTools: input.hasTools,
-    baseDeployment: input.baseDeployment,
-    latencyBurn: input.latencyBurn,
-  });
+  const sel = resolveTierForTurn(
+    input.cfg ?? null,
+    {
+      overrideTier: input.tier,
+      taskClass: input.taskClass,
+      prompt,
+      hasTools: input.hasTools,
+      baseDeployment: input.baseDeployment,
+      latencyBurn: input.latencyBurn,
+    },
+    input.resolution,
+  );
   // Auto path + escalate-only: suppress a non-strong deployment swap (i.e. a
   // lightweight→mini downshift) so a hint-less caller only ever escalates.
   const escalateOnly = input.escalateOnly !== false;
@@ -390,8 +498,11 @@ export function routeTurnTier(input: TurnRouteInput): TierSelection {
  * env). When false the router silently rides the standard deployment for hard
  * turns and the `svc-model-reasoning-tier` gate surfaces the honest Fix-it.
  */
-export function reasoningTierConfigured(cfg?: TierPolicyConfigShape | null): boolean {
-  return !!tierPolicyFromConfig(cfg).tiers.strong;
+export function reasoningTierConfigured(
+  cfg?: TierPolicyConfigShape | null,
+  ctx?: TierResolutionContext,
+): boolean {
+  return !!tierPolicyFromConfig(cfg, ctx).tiers.strong;
 }
 
 /**

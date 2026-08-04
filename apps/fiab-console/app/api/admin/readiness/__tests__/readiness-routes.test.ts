@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { invalidateModel } from '@/lib/azure/query-result-cache';
 
 vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => ({
@@ -40,7 +41,16 @@ vi.mock('@/lib/admin/self-audit', () => ({
 }));
 
 describe('GET /api/admin/readiness', () => {
-  beforeEach(() => { enforceCapability.mockClear(); runSelfAudit.mockClear(); });
+  beforeEach(() => {
+    enforceCapability.mockClear();
+    runSelfAudit.mockClear();
+    // The route serves probes through a 30s module-level cache
+    // (getOrComputeCached, model 'readiness-v1'). Without dropping it between
+    // cases, a prior test's cached SUCCESS shadows the next test's mocked
+    // rejection — collectProbesUncached never runs, so probeError is undefined
+    // and the honest-degrade assertion fails. Cold-start each case.
+    invalidateModel('readiness-v1');
+  });
 
   it('is capability-gated (403 propagates)', async () => {
     const { NextResponse } = await import('next/server');
@@ -79,7 +89,16 @@ describe('GET /api/admin/readiness', () => {
 });
 
 describe('GET /api/admin/readiness/export', () => {
-  beforeEach(() => { enforceCapability.mockClear(); runSelfAudit.mockClear(); });
+  beforeEach(() => {
+    enforceCapability.mockClear();
+    runSelfAudit.mockClear();
+    // The route serves probes through a 30s module-level cache
+    // (getOrComputeCached, model 'readiness-v1'). Without dropping it between
+    // cases, a prior test's cached SUCCESS shadows the next test's mocked
+    // rejection — collectProbesUncached never runs, so probeError is undefined
+    // and the honest-degrade assertion fails. Cold-start each case.
+    invalidateModel('readiness-v1');
+  });
 
   const req = (qs = '') => new NextRequest(`http://localhost/api/admin/readiness/export${qs}`);
 

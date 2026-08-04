@@ -49,10 +49,38 @@
 # EXIT: 1 if and only if sign-in is demonstrably broken (invalid_client hits in
 #       the window, or an already-expired credential). 0 otherwise, including
 #       every "could not determine" path.
+#
+# RECORDED VERDICT (refs #2871)
+# ----------------------------
+# The exit status above is unchanged and remains the contract. In ADDITION this
+# script now emits an EXPLICIT three-state token — `ok` / `unknown` / `broken` —
+# on stdout and, when running under Actions, as `verdict=` in $GITHUB_OUTPUT.
+#
+# Why an explicit flag and not an inferred one: the caller needs to tell "the
+# checks ran and found nothing" from "the checks could not run", and the only
+# other way to recover that from here is to grep this script's own stdout for
+# `::warning::` — which would also match the benign "expires in 12d" runway
+# warning and mislabel a healthy estate as indeterminate. An inferred predicate
+# over log text is how a gate ends up classifying the wrong population; the
+# state is known precisely at the point each branch is taken, so it is recorded
+# there instead.
+#
+# The token exists so the loom-ui-verify job can RUN THE BROWSER SUITE ANYWAY
+# and still fail the run: a failing preflight used to be an early hard step, so
+# it aborted the job and no browser E2E receipt could be obtained for main at
+# all while the estate had a live AADSTS7000215 signal. Enforcement is deferred
+# to scripts/ci/ui-verify-gate-verdict.sh at the END of that job — deferred,
+# never dropped. This is exactly the second remedy check-annotation-teeth.mjs
+# names ("record the verdict (GITHUB_OUTPUT) and have a LATER step enforce it").
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
 RC=0
+# Number of sub-checks that could NOT be evaluated. Distinct from RC: this is
+# "no evidence either way", which must never become a failure (that tolerance is
+# the original, legitimate reason the step carried continue-on-error) but must
+# equally never be reported as health (#2837).
+UNKNOWN=0
 
 APP_ID="${LH_APP_ID:-<msal-app-id>}"
 RG="${LH_CONSOLE_RG:-<console-rg>}"
@@ -66,12 +94,14 @@ ROTATE_CMD="az containerapp secret set -n loom-console -g ${RG} --secrets \"loom
 echo "== (a) recent auth/callback invalid_client in the console logs =="
 if [ -z "${LH_LAW:-}" ]; then
   echo "::warning::could not resolve the console Log Analytics workspace in ${RG} — the callback-error check did NOT run (this is 'unknown', not 'healthy')."
+  UNKNOWN=$((UNKNOWN + 1))
 else
   HITS_RAW="${LH_HITS_RAW:-}"
   # Keep only a leading integer; anything else is not a count we can trust.
   HITS="$(printf '%s' "$HITS_RAW" | tr -d '\r' | grep -oE '[0-9]+' | head -1 || true)"
   if [ -z "$HITS" ]; then
     echo "::warning::resolved the workspace but could NOT read the invalid_client count (query error / no Log Analytics Reader on it) — the callback-error check did NOT run. Not treated as zero."
+    UNKNOWN=$((UNKNOWN + 1))
   elif [ "$HITS" -gt 0 ]; then
     echo "::error::LOGIN BROKEN — ${HITS} auth/callback invalid_client errors in the last 7d (AADSTS7000215). The MSAL secret has drifted/expired. Rotate: ${ROTATE_CMD}."
     RC=1
@@ -85,6 +115,7 @@ echo "== (b) MSAL app credential expiry =="
 MINEND="${LH_MIN_END:-}"
 if [ -z "$MINEND" ] || [ "$MINEND" = "None" ]; then
   echo "::warning::could not read MSAL app ${APP_ID} credentials (the verify SP likely lacks Application.Read.All / owner) — grant it to enable the expiry check. The expiry check did NOT run."
+  UNKNOWN=$((UNKNOWN + 1))
 else
   NOWSEC="${LH_NOW_EPOCH:-$(date -u +%s)}"
   # An unparseable timestamp is 'unknown', NOT 'expires today'. The previous
@@ -102,12 +133,37 @@ else
     fi
   else
     echo "::warning::could not parse the MSAL credential expiry '${MINEND}' — the expiry check did NOT run."
+    UNKNOWN=$((UNKNOWN + 1))
   fi
 fi
 
+# --- the explicit, recorded verdict ------------------------------------------
+# Order matters: evidence of breakage outranks an unevaluated sibling check. A
+# run that proved sign-in is down is BROKEN even if the other half was
+# unreadable.
 if [ "$RC" -ne 0 ]; then
+  VERDICT=broken
+elif [ "$UNKNOWN" -ne 0 ]; then
+  VERDICT=unknown
+else
+  VERDICT=ok
+fi
+
+if [ "$VERDICT" = broken ]; then
   echo "login-health verdict: BROKEN (see the ::error:: annotations above)."
+elif [ "$VERDICT" = unknown ]; then
+  echo "login-health verdict: INDETERMINATE — ${UNKNOWN} check(s) could not run. This is not evidence of health."
 else
   echo "login-health verdict: no evidence of a broken sign-in path."
 fi
+
+# Machine-readable, on stdout for humans/logs and in $GITHUB_OUTPUT for the
+# enforcing step. Appending to $GITHUB_OUTPUT must never change the exit status
+# of this script, so its own failure is tolerated explicitly.
+echo "login-health-verdict=${VERDICT}"
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  echo "verdict=${VERDICT}" >> "$GITHUB_OUTPUT" || \
+    echo "::warning::could not append the verdict to \$GITHUB_OUTPUT; the enforcing step fails closed on a missing verdict."
+fi
+
 exit "$RC"

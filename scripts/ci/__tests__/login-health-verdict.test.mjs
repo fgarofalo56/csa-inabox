@@ -23,8 +23,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, '..', 'login-health-verdict.sh');
@@ -146,5 +148,89 @@ test('an unparseable expiry is unknown, not "0 days of runway"', () => {
   const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '0', LH_MIN_END: 'not-a-date' });
   assert.equal(r.code, 0);
   assert.match(r.out, /::warning::could not parse the MSAL credential expiry/);
+  assert.doesNotMatch(r.out, /::error::/);
+});
+
+// ---------------------------------------------------------------------------
+// THE RECORDED VERDICT (refs #2871). The exit status alone cannot tell the
+// enforcing step apart "checked, healthy" from "could not check" — both are 0,
+// deliberately. loom-ui-verify now runs the browser suite even when the
+// preflight is broken and enforces the verdict at the END of the job, so that
+// distinction has to survive as DATA, not just as log prose.
+//
+// Recorded as an EXPLICIT token at the point each branch is taken, never
+// inferred later from the presence of a ::warning:: — that would also match the
+// benign "expires in 12d" runway warning and mislabel a healthy estate as
+// indeterminate. Classifying the wrong population is how a gate quietly stops
+// measuring what it claims to.
+// ---------------------------------------------------------------------------
+
+/** The machine-readable token, or null when the script emitted none. */
+const token = (out) => out.match(/^login-health-verdict=(\S+)$/m)?.[1] ?? null;
+
+test('verdict token: healthy estate records "ok"', () => {
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '0', LH_MIN_END: daysOut(400) });
+  assert.equal(token(r.out), 'ok');
+  assert.equal(r.code, 0);
+});
+
+test('verdict token: invalid_client hits record "broken"', () => {
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '41', LH_MIN_END: daysOut(400) });
+  assert.equal(token(r.out), 'broken');
+  assert.equal(r.code, 1, 'the exit contract is unchanged by the recording');
+});
+
+test('verdict token: an expired credential records "broken"', () => {
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '0', LH_MIN_END: daysOut(-5) });
+  assert.equal(token(r.out), 'broken');
+});
+
+test('verdict token: nothing checkable records "unknown", NOT "ok"', () => {
+  // The whole point. An unreadable estate must not be recorded as health.
+  const r = run({ LH_LAW: '', LH_HITS_RAW: '', LH_MIN_END: '' });
+  assert.equal(token(r.out), 'unknown');
+  assert.equal(r.code, 0, 'unknown still must not fail');
+});
+
+test('verdict token: a half-readable estate records "unknown"', () => {
+  // Workspace resolved, count unreadable, expiry fine. One check ran, one did
+  // not — that is not a clean bill of health.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '', LH_MIN_END: daysOut(400) });
+  assert.equal(token(r.out), 'unknown');
+});
+
+test('verdict token: BROKEN outranks an unevaluated sibling check', () => {
+  // Evidence of breakage beats "the other half was unreadable". Recording this
+  // as unknown would let the enforcing step pass a live outage.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '3', LH_MIN_END: '' });
+  assert.equal(token(r.out), 'broken');
+  assert.equal(r.code, 1);
+});
+
+test('verdict token: a near-expiry WARNING is still "ok", not "unknown"', () => {
+  // The inferred-from-::warning:: implementation would get exactly this wrong:
+  // the estate was fully checked and is healthy, it just needs a rotation soon.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '0', LH_MIN_END: daysOut(10) });
+  assert.match(r.out, /::warning::MSAL secret expires in 10d/);
+  assert.equal(token(r.out), 'ok');
+});
+
+test('verdict token: written to $GITHUB_OUTPUT as `verdict=` when running under Actions', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'lh-out-')), 'out.txt');
+  writeFileSync(file, '');
+  const r = run({
+    LH_LAW: 'ws-guid',
+    LH_HITS_RAW: '2',
+    LH_MIN_END: daysOut(400),
+    GITHUB_OUTPUT: file,
+  });
+  assert.equal(r.code, 1);
+  assert.equal(readFileSync(file, 'utf8').trim(), 'verdict=broken');
+});
+
+test('CONTROL: with no $GITHUB_OUTPUT set the script still works and exits normally', () => {
+  // It runs outside Actions in these very tests; the recording must be additive.
+  const r = run({ LH_LAW: 'ws-guid', LH_HITS_RAW: '0', LH_MIN_END: daysOut(400) });
+  assert.equal(r.code, 0);
   assert.doesNotMatch(r.out, /::error::/);
 });

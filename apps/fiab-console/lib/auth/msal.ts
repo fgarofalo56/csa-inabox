@@ -24,6 +24,7 @@ import {
   type TokenCacheContext,
 } from '@azure/msal-node';
 import { getPbiScope } from '@/lib/azure/cloud-endpoints';
+import { safeRecord } from '@/lib/security/safe-object';
 
 function authorityHost(): string {
   const cloud = (process.env.AZURE_CLOUD || 'AzureCloud').toLowerCase();
@@ -211,7 +212,14 @@ function mergeCacheBlobs(stored: string, current: string): string {
  * and stay in each replica's memory.
  */
 function splitCacheByOid(serialized: string): Record<string, string> {
-  const buckets: Record<string, Record<string, Record<string, unknown>>> = {};
+  // Null-prototype: `oid` is `home_account_id.split('.')[0]`, i.e. a dotted-path
+  // token used as an object key. On a literal, `ensure('constructor')` would see
+  // the INHERITED `Object.prototype.constructor` as an existing bucket and hand
+  // back `Object` to write sections into (a TypeError, so a 500 on the token
+  // path), and `buckets[oid]` in afterCacheAccess would be truthy for an account
+  // that does not exist. Entra issues home_account_id today, so this is a shape
+  // fix, not a live bug — but it is the same shape as lib/security/safe-object.
+  const buckets = safeRecord<Record<string, Record<string, unknown>>>();
   const ensure = (oid: string) => {
     if (!buckets[oid]) {
       buckets[oid] = {};
@@ -234,9 +242,9 @@ function splitCacheByOid(serialized: string): Record<string, string> {
       buckets[oid].AppMetadata = { ...appMetadata };
     }
   } catch {
-    return {};
+    return safeRecord<string>();
   }
-  const result: Record<string, string> = {};
+  const result = safeRecord<string>();
   for (const oid of Object.keys(buckets)) result[oid] = JSON.stringify(buckets[oid]);
   return result;
 }

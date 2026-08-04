@@ -22,6 +22,15 @@ const SEEN = new Set<string>();
 const MAX_AUTO_REPORTS_PER_SESSION = 5;
 let reportCount = 0;
 
+// Known-benign browser noise — NOT actionable errors. The ResizeObserver "loop"
+// notifications fire when a resize callback schedules another layout in the same
+// frame; the browser just defers the extra notifications and nothing breaks.
+// Chrome/Firefox emit them routinely (e.g. Fluent's virtualized grids on the
+// eventstream canvas — #2908). Auto-filing them as issues is pure noise and burns
+// the per-session report budget, so drop them before they reach /api/feedback.
+const BENIGN_ERROR_RE =
+  /ResizeObserver loop (?:completed with undelivered notifications|limit exceeded)/i;
+
 function fingerprintOf(name: string, message: string, route: string): string {
   return `${name}::${message.slice(0, 80)}::${route}`;
 }
@@ -35,6 +44,9 @@ export async function autoReport(err: Error | { name?: string; message?: string;
   });
   const name = err.name || 'Error';
   const message = err.message || '(no message)';
+  // Drop known-benign browser noise before it consumes the per-session budget,
+  // pollutes the SEEN dedupe set, or files a bogus auto-error issue (#2908).
+  if (BENIGN_ERROR_RE.test(message)) return;
   const fp = fingerprintOf(name, message, env.url ?? '');
   if (SEEN.has(fp)) return;
   SEEN.add(fp);

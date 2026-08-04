@@ -105,7 +105,7 @@ describe('preflight gates', () => {
     expect(pre.missingImages?.[0].status).toBe(404);
   });
 
-  it('treats a network error on the manifest HEAD as missing (status 0)', async () => {
+  it('classifies a network error on the manifest HEAD as UNVERIFIABLE, not missing (status 0)', async () => {
     const pre = await preflight(baseDeps({
       headImage: async () => { throw new Error('ENOTFOUND'); },
     }));
@@ -113,6 +113,36 @@ describe('preflight gates', () => {
     if (pre.ok) throw new Error('expected gate');
     expect(pre.reason).toBe('images-not-published');
     expect(pre.missingImages?.length).toBe(LOOM_APPS.length);
+    // A network error means "could not verify", not "not published" — the message
+    // must NOT tell the operator to rebuild. Every probe is flagged unverifiable.
+    expect(pre.missingImages?.every((p) => p.unverifiable)).toBe(true);
+    expect(pre.message).toMatch(/could not verify/i);
+    expect(pre.message).not.toMatch(/not published/i);
+  });
+
+  it('classifies a 401 (private-registry auth failure) as UNVERIFIABLE, not missing — Gov ACR #2905', async () => {
+    // The Gov ACR returned 401 for every ref; that must never read as "missing"
+    // (→ "build the images"), it means the probe could not authenticate to look.
+    const pre = await preflight(baseDeps({
+      headImage: async () => 401,
+    }));
+    expect(pre.ok).toBe(false);
+    if (pre.ok) throw new Error('expected gate');
+    expect(pre.reason).toBe('images-not-published');
+    expect(pre.missingImages?.every((p) => p.unverifiable && p.status === 401)).toBe(true);
+    expect(pre.message).toMatch(/AcrPull|could not verify|auth/i);
+    expect(pre.message).not.toMatch(/not published/i);
+  });
+
+  it('still reports a genuine 404 as not-published (build the images)', async () => {
+    const pre = await preflight(baseDeps({
+      headImage: async (ref) => (ref.includes('loom-console') ? 404 : 200),
+    }));
+    expect(pre.ok).toBe(false);
+    if (pre.ok) throw new Error('expected gate');
+    expect(pre.reason).toBe('images-not-published');
+    expect(pre.missingImages?.[0].unverifiable).toBe(false);
+    expect(pre.message).toMatch(/not published/i);
   });
 
   it('green-lights with a full per-app plan when everything checks out', async () => {

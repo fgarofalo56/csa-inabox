@@ -80,7 +80,13 @@ const ADF_FACTORY_REGIONS = [
 ];
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
+  // `flex: '1 0 auto'` (G3): the editor column FILLS the chrome's mainPanel
+  // (display:flex/column, overflow:auto) instead of collapsing to content
+  // height, so the resizable canvas region inside it has real viewport space to
+  // grow into and tracks a window resize. `flex-shrink: 0` keeps it from being
+  // squeezed below its content when the pipeline is taller than the panel — the
+  // panel scrolls instead.
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%', flex: '1 0 auto' },
   gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
   // Un-caged starter-graph region: full width (mirrors the bound-state canvas),
   // so the installed-app graph is readable instead of squeezed into the 720px
@@ -210,6 +216,10 @@ export function PipelineEditorCore({
   const [origSpec, setOrigSpec] = useState<string>('');
   const [runs, setRuns] = useState<PipelineRunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // #2895 — the item is bound but the factory/workspace has no pipeline by that
+  // name yet. Distinct from `error`: it is an expected, recoverable state that
+  // gets a guided warning + Fix-it, NOT a red backend-failure bar.
+  const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'graph' | 'parameters' | 'variables' | 'settings' | 'json' | 'runs'>('graph');
   const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
@@ -403,18 +413,28 @@ export function PipelineEditorCore({
   // Spec + runs (only meaningful once bound; routes 412 otherwise)
   // ------------------------------------------------------------------
   const loadPipeline = useCallback(async () => {
-    setError(null);
+    setError(null); setMissing(false);
     try {
       const res = await fetch(apiBase);
       const { ok, data, error: e } = await safePipelineJson(res);
       if (!ok || !data) {
         if (data?.code === 'unbound') return; // gate handles it
+        // #2895 — bound, but nothing by that name in the factory/workspace yet.
+        // Open an EMPTY spec so the designer mounts its guided empty state and
+        // the canvas is authorable; the guided bar below explains the one action
+        // that fixes it (Save creates the pipeline) plus Rebind. This is NOT an
+        // error path — a genuine failure still falls through to setError.
+        if (data?.code === 'pipeline-missing') {
+          const blank = JSON.stringify({ name: data?.pipelineName || bound || '', properties: { activities: [] } }, null, 2);
+          setMissing(true); setSpec(blank); setOrigSpec(blank);
+          return;
+        }
         setError(e || 'get failed'); return;
       }
       const txt = JSON.stringify(data.pipeline, null, 2);
       setSpec(txt); setOrigSpec(txt);
     } catch (e: any) { setError(e?.message || String(e)); }
-  }, [apiBase]);
+  }, [apiBase, bound]);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -1118,6 +1138,31 @@ export function PipelineEditorCore({
                 <Button size="small" appearance="subtle" icon={<Link20Regular />} onClick={() => { setBound(null); loadBinding(); }}>Rebind</Button>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => { loadPipeline(); loadRuns(); }} style={{ marginLeft: 'auto' }}>Refresh</Button>
               </div>
+              {/* #2895 — bound but not yet present in the backend. An expected
+                  state, so it is a guided WARNING with an inline Fix-it (G2),
+                  never a red bar carrying a stringified response body. The
+                  canvas below still renders and is authorable. */}
+              {missing && (
+                <MessageBar intent="warning" layout="multiline" data-testid="pipeline-missing-gate">
+                  <MessageBarBody>
+                    <MessageBarTitle>Nothing published under this name yet</MessageBarTitle>
+                    This item is bound to a pipeline named <strong>{bound}</strong>, but the{' '}
+                    {config.containerLabel} doesn&apos;t have one by that name yet — it was never
+                    published, or it was deleted. Build the pipeline on the canvas below and{' '}
+                    <strong>Save</strong> to create it, or rebind this item to a different pipeline.
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
+                      <Button size="small" appearance="primary" icon={<Link20Regular />}
+                        onClick={() => { setMissing(false); setBound(null); loadBinding(); }}>
+                        Rebind or create
+                      </Button>
+                      <Button size="small" appearance="secondary" icon={<ArrowSync20Regular />}
+                        onClick={() => loadPipeline()}>
+                        Retry
+                      </Button>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               {error && (<BackendStateBar error={error} title="Pipeline API" />)}
               {validation && (
                 <MessageBar intent={validation.ok ? 'success' : 'error'}><MessageBarBody>{validation.message}</MessageBarBody></MessageBar>
@@ -1155,6 +1200,10 @@ export function PipelineEditorCore({
                   }}
                   // "Ask Copilot" focuses the docked Pipeline Copilot composer.
                   onAskCopilot={() => { try { window.dispatchEvent(new CustomEvent('loom:pipeline-ask-copilot')); } catch { /* noop */ } }}
+                  // Fabric parity: with nothing selected the bottom dock shows
+                  // pipeline-level settings, and its buttons jump to the real
+                  // pipeline-configurations panes in THIS tab row.
+                  onOpenPipelineTab={(t) => setTab(t)}
                 />
               )}
               {tab === 'parameters' && (

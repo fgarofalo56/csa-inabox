@@ -25,6 +25,52 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.13](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.12...csa-inabox-v0.82.13) (2026-08-04)
+
+
+### Bug Fixes
+
+* **iceberg:** a 0.0.0.0 bind-address catalog URL now shows the honest gate, not "unreachable" ([#2904](https://github.com/fgarofalo56/csa-inabox/issues/2904)) ([b408d79](https://github.com/fgarofalo56/csa-inabox/commit/b408d79e53ac81b9403d094e7586928c66a5efc8))
+* **readiness:** serve-stale cache the self-audit — page was an 8s spinner ([#2896](https://github.com/fgarofalo56/csa-inabox/issues/2896)) ([#2903](https://github.com/fgarofalo56/csa-inabox/issues/2903)) ([37c0713](https://github.com/fgarofalo56/csa-inabox/commit/37c071376e8ae5a60780b254f84a5bcefce6c0cb))
+* **updates:** Gov updater — recognize .azurecr.us AND stop reporting 401 as "missing" (closes both halves of [#2905](https://github.com/fgarofalo56/csa-inabox/issues/2905)) ([#2906](https://github.com/fgarofalo56/csa-inabox/issues/2906)) ([c6b187b](https://github.com/fgarofalo56/csa-inabox/commit/c6b187b6bed9f90d7a4dfc4c1871bf47a591e99a))
+
+## [0.82.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.11...csa-inabox-v0.82.12) (2026-08-03)
+
+
+### Bug Fixes
+
+* **readiness:** the inspector clipped its right side and DuckLake's 448-char path overflowed ([#2902](https://github.com/fgarofalo56/csa-inabox/issues/2902)) ([544f0b3](https://github.com/fgarofalo56/csa-inabox/commit/544f0b304daf47c1084add1a7c4ae49c697459a6)), closes [#2896](https://github.com/fgarofalo56/csa-inabox/issues/2896)
+
+
+### Documentation
+
+* **prp:** CSA Loom developer toolkit — Skills, MCP servers, agents, CLI/SDK ([#2898](https://github.com/fgarofalo56/csa-inabox/issues/2898)) ([a989057](https://github.com/fgarofalo56/csa-inabox/commit/a989057758dda3c7292d4e71195a67ea59761dee))
+* **prp:** CSA Loom VS Code extension — parity spec vs the Fabric extension family ([#2899](https://github.com/fgarofalo56/csa-inabox/issues/2899)) ([99fcf97](https://github.com/fgarofalo56/csa-inabox/commit/99fcf97f3e11b580462ce5ab2252ad4f9a8d8176)), closes [#59](https://github.com/fgarofalo56/csa-inabox/issues/59)
+
+## [0.82.11](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.10...csa-inabox-v0.82.11) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ci:** npm CVE-floor guard was satisfiable by a shell string; earn its claim ([#2887](https://github.com/fgarofalo56/csa-inabox/issues/2887)) ([06f3b93](https://github.com/fgarofalo56/csa-inabox/commit/06f3b9331440991b54034dad1b02898dd67e2fae))
+* **ci:** stop discarding the browser E2E verdict in loom-ui-verify (refs [#2875](https://github.com/fgarofalo56/csa-inabox/issues/2875)) ([#2888](https://github.com/fgarofalo56/csa-inabox/issues/2888)) ([2045417](https://github.com/fgarofalo56/csa-inabox/commit/20454177d7c2f8db043a41b5328495a5daae3fc8))
+* **deploy:** the nightly reconcile would have deleted the estate on its first success (refs [#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775)) ([#2897](https://github.com/fgarofalo56/csa-inabox/issues/2897)) ([144184a](https://github.com/fgarofalo56/csa-inabox/commit/144184a111aa449fc892c10ccaf2610d40d6ca91))
+* **security:** the containment guard missed two more shapes, and a layer that tests nothing satisfied it (refs [#2869](https://github.com/fgarofalo56/csa-inabox/issues/2869)) ([#2891](https://github.com/fgarofalo56/csa-inabox/issues/2891)) ([0be2600](https://github.com/fgarofalo56/csa-inabox/commit/0be26002429e9ffbb8c94b923a38c646b3d41f70))
+* **ui:** the Learn drawer opened itself over the canvas, and a NotFound rendered as a raw ARM body (refs [#2893](https://github.com/fgarofalo56/csa-inabox/issues/2893) refs [#2895](https://github.com/fgarofalo56/csa-inabox/issues/2895)) ([#2900](https://github.com/fgarofalo56/csa-inabox/issues/2900)) ([c17e857](https://github.com/fgarofalo56/csa-inabox/commit/c17e85725b022cdd59f864eb383c296e02204690))
+
+## [0.82.10](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.9...csa-inabox-v0.82.10) (2026-08-03)
+
+
+### Bug Fixes
+
+* **ci:** a failing login-health preflight masked the entire browser E2E suite (refs [#2871](https://github.com/fgarofalo56/csa-inabox/issues/2871)) ([#2875](https://github.com/fgarofalo56/csa-inabox/issues/2875)) ([22a438a](https://github.com/fgarofalo56/csa-inabox/commit/22a438a7d78ffaa15117fccbdf139ad62314ddb9))
+* **ci:** the JS/TS CodeQL scan has analyzed nothing since 01:12Z (refs [#2850](https://github.com/fgarofalo56/csa-inabox/issues/2850)) ([#2876](https://github.com/fgarofalo56/csa-inabox/issues/2876)) ([8c964b0](https://github.com/fgarofalo56/csa-inabox/commit/8c964b085d92e763ef61b277cb79b50dec628df6))
+* **deploy:** lineage-extractor image cannot build — no lockfile for its npm ci (refs [#2816](https://github.com/fgarofalo56/csa-inabox/issues/2816)) ([#2882](https://github.com/fgarofalo56/csa-inabox/issues/2882)) ([1dbce18](https://github.com/fgarofalo56/csa-inabox/commit/1dbce185f8e029928966030e318b4007be5bffe0))
+* **report-editor:** stop minting a Power BI embed token for a `loom:` id (refs [#2830](https://github.com/fgarofalo56/csa-inabox/issues/2830)) ([#2878](https://github.com/fgarofalo56/csa-inabox/issues/2878)) ([369a32e](https://github.com/fgarofalo56/csa-inabox/commit/369a32e192aa75ca943a7269ee777cdd7c8d5be6))
+* **security:** close the property-injection class — and the reason 3 of its 4 alerts could never close ([#2848](https://github.com/fgarofalo56/csa-inabox/issues/2848)) ([df16840](https://github.com/fgarofalo56/csa-inabox/commit/df168404422bea2d1048697e06bc13954b189393))
+* **security:** floor 5 portal/react-webapp advisories (npm, not pnpm) + guard them ([#2877](https://github.com/fgarofalo56/csa-inabox/issues/2877)) ([d6b1c42](https://github.com/fgarofalo56/csa-inabox/commit/d6b1c4287307bcea3cc10e8b635d46a121ab608f)), closes [#2729](https://github.com/fgarofalo56/csa-inabox/issues/2729)
+* **security:** the path-containment guard was syntax-dependent, and a comment could satisfy it (refs [#2869](https://github.com/fgarofalo56/csa-inabox/issues/2869)) ([#2872](https://github.com/fgarofalo56/csa-inabox/issues/2872)) ([255d030](https://github.com/fgarofalo56/csa-inabox/commit/255d030ce8478572300ae0e5b500648caff7c8a2))
+
 ## [0.82.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.8...csa-inabox-v0.82.9) (2026-08-03)
 
 
