@@ -123,6 +123,9 @@ export const WATCHED = [
       'scripts/csa-loom/enable-unity-catalog.sh',
       'scripts/csa-loom/ensure-ai-private-endpoints.sh',
       'scripts/csa-loom/ensure-search-index.sh',
+      // #2929 — the bootstrap refreshes the `loom-docs` Copilot index through
+      // this shared driver, so a change to it changes what the bootstrap does.
+      'scripts/ci/reindex-loom-docs.sh',
       'scripts/csa-loom/ensure-vpn-dns-resolver.sh',
       'scripts/csa-loom/fix-synapse-spark-storage-access.sh',
       'scripts/csa-loom/grant-console-rbac.sh',
