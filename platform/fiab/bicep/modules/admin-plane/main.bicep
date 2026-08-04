@@ -5391,6 +5391,10 @@ module airflow 'airflow.bicep' = if (airflowHostActive) {
     caeId: containerPlatformModule.outputs.caeId
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
+    // Estate ACR the deploy workflow mirrors apache/airflow into (az acr import);
+    // the host pulls <acr>/apache/airflow:<tag> via the Console UAMI — NO public
+    // registry egress on this (Commercial default-ON) shipped lane. Issue #2682.
+    acrLoginServer: registry.outputs.acrLoginServer
     adminPassword: airflowAdminPassword
     webserverSecretKey: airflowWebserverSecretKey
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
