@@ -10,26 +10,39 @@ Microsoft Fabric / Power BI dependency (`.claude/rules/no-fabric-dependency.md`)
 
 This is **packaging, not a fork**. The image starts `FROM
 unitycatalog/unitycatalog:v0.5.0` (the official published server image) and
-overlays one thin entrypoint that renders config from environment variables, plus
-the Postgres JDBC driver and a small Entra authentication plugin (LU-1).
+overlays one thin entrypoint that renders config from environment variables, the
+Postgres JDBC driver and a small Entra authentication plugin (LU-1), and — since
+the #1603 fix — the upstream **v0.5.1 `unitycatalog-server`** artifact from Maven
+Central (see below). Every overlay consumes an upstream-released binary verbatim.
 
-> **Image pin (re-verified 2026-07-28).** Upstream released **v0.5.1** on GitHub
-> (2026-07-18) but **has not published a v0.5.1 container image** — Docker Hub
-> returns `404 tag 'v0.5.1' not found`, and the newest released tag there is
-> still `v0.5.0`. The pin therefore stays at v0.5.0. Move as soon as the image
-> appears: 0.5.1 fixes permission **GET** routes returning HTTP 500 when
-> server-side authorization is enabled, which is precisely the LU-2 posture.
+> **Base pin v0.5.0 + v0.5.1 server overlay (2026-08-04).** Upstream released
+> **v0.5.1** on 2026-07-18 but **has not published a v0.5.1 container image** —
+> Docker Hub returns `404 tag 'v0.5.1' not found`, and v0.5.0 is still the newest
+> published tag. v0.5.1 fixes permission **GET** routes returning HTTP 500 when
+> server-side authorization is enabled (upstream
+> [#1603](https://github.com/unitycatalog/unitycatalog/issues/1603)) — precisely
+> the LU-2 posture. Rather than wait for the image, the Dockerfile OVERLAYS the
+> v0.5.1 **server module**, which *is* published on Maven Central
+> (`io.unitycatalog:unitycatalog-server:0.5.1`, checksum-pinned). The thin jar
+> (only `io.unitycatalog.*` classes + the jCasbin auth-model resource; it bundles
+> the server + control models) is **prepended** to the server classpath so its
+> fixed `PermissionService` / `UnityAccessDecorator` shadow the v0.5.0 base copies
+> as a self-consistent set, while every third-party dependency stays as the base
+> ships it (the v0.5.0 and v0.5.1 server POMs are byte-identical except their own
+> version strings — zero third-party dependency changes). This is packaging, not a
+> fork or a from-source build.
 >
-> **That bug is not latent — enabling authorization is what triggers it.**
-> Measured on this image (`apps/loom-unity/tests/authz/authz-e2e.sh`, transcript
-> in `docs/fiab/security/loom-unity-authz-proof.md`):
-> `GET /api/2.1/unity-catalog/permissions/{securable}/{name}` returns **500**
+> **The bug is not latent — enabling authorization is what triggers it.**
+> Measured on the BARE v0.5.0 image (`apps/loom-unity/tests/authz/authz-e2e.sh`,
+> transcript in `docs/fiab/security/loom-unity-authz-proof.md`):
+> `GET /api/2.1/unity-catalog/permissions/{securable}/{name}` returned **500**
 > `"No authorization expression found."` while `server.authorization=enable`, and
-> **200** while it is disabled. `PATCH` on the same path returns 200 in both
-> states — so on an authorization-enabled v0.5.0 catalog you can grant and revoke
-> privileges but **cannot read them**. That takes out the Console's Grants pane
-> and the LU-4 effective-permissions resolver (which reads that route for the
-> target and every ancestor in the containment chain) on the OSS backend.
+> **200** while disabled (`PATCH` 200 in both) — so grant/revoke worked but reads
+> did not, taking out the Console's Grants pane and the LU-4 effective-permissions
+> resolver. **With the v0.5.1 overlay that GET returns 200 with authorization
+> enabled** — `authz-e2e.sh` case 9 now asserts 200. Confirm live with an image
+> rebuild + the harness run; a catalog on an image built before the overlay still
+> 500s until redeployed.
 
 ## What it exposes
 
@@ -279,6 +292,7 @@ bash apps/loom-unity/tests/authz/authz-e2e.sh
 12 assertions against the real image, in Docker, with a throwaway OIDC issuer and
 no Azure dependency: the fail-closed boot, anonymous/malformed/wrong-issuer
 rejection, the token exchange, an **authenticated 200 with real catalog JSON**,
-the sealed posture, and the v0.5.0 permission-GET-500 regression with its
-authorization-disabled control. Receipt:
+the sealed posture, and the permission-GET route returning **200 with
+authorization enabled** (the #1603 fix from the v0.5.1 server overlay, with its
+authorization-disabled control). Receipt:
 `docs/fiab/security/loom-unity-authz-proof.md`.

@@ -18,9 +18,15 @@
 #   6  authenticated read      internal token           -> 200 with real JSON
 #   7  service token           etc/conf/token.txt       -> 200
 #   8  SEALED audience         sentinel .invalid aud    -> exchange 401, read 401
-#   9  permissions GET         authz ENABLED            -> 500 (upstream #1603)
-#  10  permissions GET         authz DISABLED           -> 200 (so 9 is caused
-#                                                         by enabling authz)
+#   9  permissions GET         authz ENABLED            -> 200 (upstream #1603,
+#                                                         fixed by the v0.5.1
+#                                                         unitycatalog-server
+#                                                         overlay in the Dockerfile)
+#  10  permissions GET         authz DISABLED           -> 200 (the control: this
+#                                                         route always answered 200
+#                                                         with authz off; case 9
+#                                                         proves the overlay closed
+#                                                         the authz-ENABLED 500)
 #
 # Case 4 is the important one: it is exactly what lib/azure/uc-backend.ts
 # ossUcAuthHeader() sends. Upstream AuthDecorator — identical in v0.5.0 and
@@ -151,8 +157,13 @@ SEALED_XCH="$(curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
   --data-urlencode "subject_token=$TOK")"
 check "8b exchange of a real-audience token" "401" "$SEALED_XCH"
 
-echo "== upstream #1603 — permission GET routes vs server.authorization =="
-check "9  GET /permissions with authz ENABLED"  "500" \
+echo "== upstream #1603 — permission GET routes vs server.authorization (v0.5.1 overlay) =="
+# BEFORE the overlay this GET returned 500 "No authorization expression found."
+# with authz enabled (upstream #1603). The Dockerfile now prepends the upstream
+# v0.5.1 unitycatalog-server artifact from Maven Central, whose fixed
+# PermissionService + UnityAccessDecorator make this route return 200. Case 10 is
+# the control (authz disabled always returned 200).
+check "9  GET /permissions with authz ENABLED"  "200" \
   "$(status 18080 /api/2.1/unity-catalog/permissions/catalog/unity "Bearer $UCT")"
 check "10 GET /permissions with authz DISABLED" "200" \
   "$(status 18081 /api/2.1/unity-catalog/permissions/catalog/unity)"
