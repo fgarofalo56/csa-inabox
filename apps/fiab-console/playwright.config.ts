@@ -266,5 +266,22 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // #2622 — Unity Catalog audited-exit receipt. Drives the catalog
+      // federation read (which reaches Unity Catalog through the audited
+      // ucFetch/acctFetch exits closed by c2fafe84) and asserts a loom-unity
+      // audit row lands in the tenant-admin-gated /api/admin/audit-logs trail —
+      // the browser half the CI guard (which only proves the recorder is called
+      // from a finally) cannot give. Honest gate = pass. NOT a required check:
+      // it is the G1 receipt for the LU-3 exit audit.
+      name: 'unity-audit-exit',
+      testDir: './e2e',
+      testMatch: /unity-audit-exit-receipt\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
