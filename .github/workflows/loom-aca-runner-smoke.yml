@@ -4,13 +4,70 @@ name: loom-aca runner smoke test
 # registers + runs a job + reaches Azure as the console UAMI. Manual trigger only
 # (workflow_dispatch) so it never runs on normal pushes. See
 # docs/fiab/github-actions-runner.md.
+#
+# ── ACR DATA-PLANE PROBE / IMAGE PREFLIGHT (refs #2958) ─────────────────────
+# Every Loom ACR rests at publicNetworkAccess=Disabled + defaultAction=Deny with
+# the admin user off, so `az acr repository …` (a DATA-plane call) is impossible
+# from a workstation or a hosted runner without opening the firewall under a
+# lease. This runner is INSIDE the hub VNet and reaches the registry over its
+# private endpoint + the privatelink.azurecr zone — so it can enumerate tags with
+# **no firewall change at all**, which is both safer and faster than a lease.
+#
+# That makes this workflow the natural home for the ad-hoc image preflight: the
+# answer to "would a redeploy create Container Apps pointing at tags that do not
+# exist?" is exactly one in-VNet data-plane read away, and there was previously
+# no way to ask it. `image_refs` defaults to empty, in which case the refs are
+# DERIVED (scripts/ci/resolve-image-preflight-refs.mjs) from the same two files
+# the deploy uses — reconcile-policy.mjs's APP_IMAGE_TAGS and the paramfile's
+# readEnvironmentVariable defaults — so the probe cannot drift from the deploy.
+#
+# Read-only throughout: `az acr repository show` / `az acr repository list` only.
+# Nothing is built, pushed, deleted, or deployed.
 on:
   workflow_dispatch:
+    inputs:
+      acr:
+        description: 'ACR name. Empty = discover the acrloom* registry in the admin RG.'
+        type: string
+        required: false
+        default: ''
+      region:
+        description: 'Region whose admin RG holds the registry (rg-csa-loom-admin-<region>).'
+        type: string
+        required: false
+        default: centralus
+      param_file:
+        description: 'Paramfile whose appImageTags defaults the preflight resolves.'
+        type: string
+        required: false
+        default: platform/fiab/bicep/params/commercial.bicepparam
+      boundary:
+        description: 'Boundary the refs are resolved for (decides gov-only images like the maps tile server).'
+        type: choice
+        required: false
+        default: commercial
+        options: [commercial, gcc, gcc-high, il5]
+      image_refs:
+        description: 'Space-separated <repo>:<tag> overrides. Empty = derive from the paramfile.'
+        type: string
+        required: false
+        default: ''
+      use_lease:
+        description: 'Take the ACR firewall lease instead of relying on the in-VNet private endpoint. Only if the PE path fails.'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   smoke:
     runs-on: [self-hosted, loom-aca]
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Runner identity + toolchain
         run: |
           echo "Running on self-hosted runner: $(hostname)"
@@ -24,3 +81,92 @@ jobs:
         run: |
           az login --identity --output none && echo "az login --identity OK (console UAMI)"
           az account show --query "{sub:name, user:user.name}" -o json || true
+
+      # The deploy SP, not the console UAMI, for the data-plane probe: it is the
+      # identity the deploy lanes themselves use, so "can it read these tags"
+      # answers the question that actually matters. It is also a CLIENT-SECRET
+      # login rather than OIDC, which keeps this workflow dispatchable from a
+      # BRANCH — the OIDC federated credential is pinned to refs/heads/main and
+      # a branch dispatch dies at AADSTS700213.
+      - name: Azure login (deploy SP — for the ACR data-plane probe)
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: ACR data-plane probe + image preflight (read-only)
+        env:
+          IN_ACR: ${{ inputs.acr }}
+          REGION: ${{ inputs.region || 'centralus' }}
+          PARAM_FILE: ${{ inputs.param_file || 'platform/fiab/bicep/params/commercial.bicepparam' }}
+          BOUNDARY: ${{ inputs.boundary || 'commercial' }}
+          IN_REFS: ${{ inputs.image_refs }}
+          USE_LEASE: ${{ inputs.use_lease }}
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${REGION}"
+          ACR="${IN_ACR}"
+          if [ -z "$ACR" ]; then
+            ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r')
+          fi
+          if [ -z "$ACR" ]; then
+            echo "::error::No acrloom* registry found in $RG — nothing to probe."
+            exit 1
+          fi
+          echo "registry: $ACR   (rg: $RG)"
+
+          # Reachability is reported SEPARATELY from tag existence. A failure
+          # here means the private endpoint / privatelink.azurecr DNS is broken —
+          # a different defect from "the tag is missing". Conflating the two is
+          # how an UNPROVABLE result gets read as a negative, which is the exact
+          # class csa_loom_unknown_as_negative_class records.
+          echo "== ACR data-plane reachability from in-VNet =="
+          if az acr repository list --name "$ACR" -o tsv 2>/tmp/acrls.err | sort > /tmp/acr-repos.txt; then
+            echo "  reachable — $(wc -l < /tmp/acr-repos.txt) repositories"
+            sed 's/^/    /' /tmp/acr-repos.txt
+          else
+            echo "::warning::ACR data plane NOT readable from the in-VNet runner:"
+            sed 's/^/    /' /tmp/acrls.err || true
+            echo "  (re-dispatch with use_lease=true to probe through the firewall lease instead)"
+          fi
+
+          REFS="${IN_REFS}"
+          if [ -z "$REFS" ]; then
+            REFS=$(node scripts/ci/resolve-image-preflight-refs.mjs \
+                     --param-file "$PARAM_FILE" --boundary "$BOUNDARY" | tr '\n' ' ')
+          fi
+          echo "== image preflight =="
+          echo "  refs: $REFS"
+
+          # Tag inventory BEFORE the assertion, because "missing" alone does not
+          # tell an operator what to do. Three outcomes are actionable and
+          # different: the repo does not exist (nothing has EVER built it — the
+          # producer has to run), the repo exists but not at this tag (a real
+          # built tag can be pinned via LOOM_<APP>_TAG instead), or the tag is
+          # there. Printing this unconditionally means the failure message below
+          # always ships with the evidence needed to resolve it.
+          #
+          # Tail-capped: loom-console alone carries thousands of SHA tags and an
+          # uncapped dump made a 176 KB log where the answer was unreadable.
+          echo "== tag inventory for the referenced repositories (last 12 tags each) =="
+          for REF in $REFS; do
+            REPO="${REF%%:*}"
+            if ! grep -qx "$REPO" /tmp/acr-repos.txt 2>/dev/null; then
+              echo "    $REPO — REPOSITORY ABSENT (never built into this registry)"
+              continue
+            fi
+            ALL=$(az acr repository show-tags --name "$ACR" --repository "$REPO" -o tsv 2>/dev/null | tr -d '\r')
+            N=$(printf '%s\n' "$ALL" | grep -c . || true)
+            TAIL=$(printf '%s\n' "$ALL" | tail -12 | tr '\n' ' ')
+            echo "    $REPO — ${N} tag(s); latest 12: ${TAIL:-<none>}"
+          done
+
+          LEASE_ARG=""
+          [ "$USE_LEASE" = "true" ] && LEASE_ARG="--lease"
+          # shellcheck disable=SC2086
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" $LEASE_ARG $REFS

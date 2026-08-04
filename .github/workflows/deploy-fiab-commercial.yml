@@ -377,6 +377,66 @@ jobs:
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"} \
             ${HUB_PARAMS:+--parameters $HUB_PARAMS}
 
+      # ── IMAGE PREFLIGHT (refs #2958) ──────────────────────────────────────
+      # THE FOOTGUN THIS CLOSES. This deploy is subscription-scoped and ADOPTS
+      # every app already running in the live estate. The reconcile step above
+      # pins LOOM_<APP>_TAG for each app it found RUNNING, but an app that does
+      # NOT exist yet gets no pin and falls back to the paramfile default
+      # ('v0.1'; 'v1' for mapsTiles). On the live Commercial estate 2026-08-04
+      # that is FIVE of seventeen — loom-orchestrator, loom-copilot-maf,
+      # loom-maps-tileserver, loom-duckdb, loom-risingwave — none of which has
+      # ever been proven to exist in the registry. Deploying anyway creates five
+      # Container Apps that can never pull, fails the nested deployment, and
+      # takes the surrounding (live-estate-adopting) deployment down with it.
+      #
+      # deploy-fiab-gcch.yml and deploy-fiab-il5.yml have preflighted since
+      # #2640 — but only `loom-duckdb`, one hard-coded ref that structurally
+      # cannot notice the other four. This lane preflighted NOTHING. The ref set
+      # is now DERIVED from reconcile-policy.mjs's APP_IMAGE_TAGS plus the
+      # paramfile's readEnvironmentVariable defaults, so adding an app or moving
+      # a default carries the guard with it.
+      #
+      # Every ref is checked, pinned ones included: a pinned tag is running, so
+      # it should be present, and one extra read per app is cheap insurance
+      # against a registry purge or an untagged manifest.
+      #
+      # --lease: tag enumeration is an ACR DATA-plane call and this is a hosted
+      # runner, so the registry (publicNetworkAccess=Disabled) is unreachable
+      # without the shared firewall lease (#2603) that the build lanes use. The
+      # script releases it on exit. For an ad-hoc probe with no firewall change
+      # at all, dispatch loom-aca-runner-smoke.yml — it runs in-VNet.
+      #
+      # --skip-if-registry-absent keeps the genuine FROM-SCRATCH path working:
+      # no ACR yet means nothing live to adopt, and the two-phase image path
+      # (no-vaporware.md) builds the registry contents in the next phase. A
+      # registry that EXISTS but cannot be read still fails — "I could not prove
+      # it" is not a pass.
+      - name: Image preflight — ACR must already hold every referenced tag
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -uo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          ACR=$(az acr list -g "$RG" ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
+                  --query "[?starts_with(name,'acrloom')]|[0].name" -o tsv 2>/dev/null | tr -d '\r')
+          if [ -z "$ACR" ]; then
+            echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
+            exit 0
+          fi
+          # reconcile-resolve.mjs exported the running pins into $GITHUB_ENV, so
+          # they are in this step's environment and the resolver sees them.
+          # --boundary commercial drops the two refs this template provably does
+          # NOT pull here (the dead `orchestrator` key and the Gov-only maps tile
+          # server); both are printed as NOT ASSERTED rather than dropped
+          # silently. Asserting them would be a false failure, and a guard that
+          # cries wolf is a guard that gets switched off.
+          REFS=$(node scripts/ci/resolve-image-preflight-refs.mjs \
+                   --param-file platform/fiab/bicep/params/commercial.bicepparam \
+                   --boundary commercial | tr '\n' ' ')
+          # shellcheck disable=SC2086
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
+            --skip-if-registry-absent $REFS
+
       - name: Provision (idempotent)
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'

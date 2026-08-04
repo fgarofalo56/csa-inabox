@@ -276,6 +276,14 @@ export const WATCHED = [
       'platform/fiab/bicep/main.bicep',
       'platform/fiab/bicep/modules/admin-plane/**',
       'platform/fiab/bicep/params/commercial.bicepparam',
+      // refs #2958 — the image preflight this lane now runs before applying.
+      // Both are genuine deploy sources: assert-acr-image-tags.sh decides
+      // whether the apply proceeds at all, and resolve-image-preflight-refs.mjs
+      // decides WHICH tags it proves. A change to either can flip this lane from
+      // applying to refusing (or, worse, from refusing to applying), so a commit
+      // that touches them without a subsequent successful run IS drift.
+      'scripts/ci/assert-acr-image-tags.sh',
+      'scripts/ci/resolve-image-preflight-refs.mjs',
     ],
     maxDays: 7,
   },
