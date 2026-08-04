@@ -25,6 +25,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.13](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.12...csa-inabox-v0.82.13) (2026-08-04)
+
+
+### Bug Fixes
+
+* **iceberg:** a 0.0.0.0 bind-address catalog URL now shows the honest gate, not "unreachable" ([#2904](https://github.com/fgarofalo56/csa-inabox/issues/2904)) ([b408d79](https://github.com/fgarofalo56/csa-inabox/commit/b408d79e53ac81b9403d094e7586928c66a5efc8))
+* **readiness:** serve-stale cache the self-audit — page was an 8s spinner ([#2896](https://github.com/fgarofalo56/csa-inabox/issues/2896)) ([#2903](https://github.com/fgarofalo56/csa-inabox/issues/2903)) ([37c0713](https://github.com/fgarofalo56/csa-inabox/commit/37c071376e8ae5a60780b254f84a5bcefce6c0cb))
+* **updates:** Gov updater — recognize .azurecr.us AND stop reporting 401 as "missing" (closes both halves of [#2905](https://github.com/fgarofalo56/csa-inabox/issues/2905)) ([#2906](https://github.com/fgarofalo56/csa-inabox/issues/2906)) ([c6b187b](https://github.com/fgarofalo56/csa-inabox/commit/c6b187b6bed9f90d7a4dfc4c1871bf47a591e99a))
+
 ## [0.82.12](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.11...csa-inabox-v0.82.12) (2026-08-03)
 
 
