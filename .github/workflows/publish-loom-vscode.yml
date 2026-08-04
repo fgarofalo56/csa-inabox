@@ -1,0 +1,82 @@
+name: publish-loom-vscode
+
+# Builds, type-checks, tests and PACKAGES the CSA Loom VS Code extension
+# (csa-loom.loom-vscode) on every PR that touches it — the package step is the
+# real gate that proves `contributes` is valid and the bundle builds, exactly
+# the lesson baked into publish-loom-cli.yml (a test/gate that only runs on a
+# release tag is a gate nobody runs).
+#
+# Cut a release by pushing a tag:  git tag loom-vscode-v0.1.0 && git push --tags
+# Publish steps are gated on that tag AND on the marketplace secrets being set;
+# without them the job is build + typecheck + test + package only.
+#
+# Secrets (optional; publish is skipped without them):
+#   VSCE_PAT  — Azure DevOps PAT with Marketplace publish rights (vsce)
+#   OVSX_PAT  — Open VSX token (ovsx) for the sovereign/air-gapped mirror
+
+on:
+  push:
+    tags:
+      - 'loom-vscode-v*'
+  pull_request:
+    paths:
+      - 'apps/loom-vscode/**'
+      - 'apps/loom-sdk/**'
+      - '.github/workflows/publish-loom-vscode.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build + test + package only; do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/loom-vscode
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '20'
+
+      - name: Install (dev-only; the extension bundles the SDK from source)
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build bundle (esbuild → dist/extension.js)
+        run: npm run build
+
+      - name: Package (vsce → .vsix — validates contributes)
+        run: npm run package
+
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: loom-vscode-vsix
+          path: apps/loom-vscode/*.vsix
+          if-no-files-found: error
+
+      - name: Publish to VS Marketplace
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loom-vscode-v') && env.VSCE_PAT != '' }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --no-dependencies -p "$VSCE_PAT"
+
+      - name: Publish to Open VSX (sovereign / air-gapped mirror)
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loom-vscode-v') && env.OVSX_PAT != '' }}
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish loom-vscode.vsix -p "$OVSX_PAT"

@@ -1,0 +1,292 @@
+{
+  "name": "loom-vscode",
+  "displayName": "CSA Loom",
+  "description": "One extension, one sign-in, one tree — browse, create, rename, delete and open CSA Loom workspaces and items from VS Code. Azure-native; no Microsoft Fabric tenant required. Commercial and Government from a single install.",
+  "version": "0.1.0",
+  "publisher": "csa-loom",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Azure",
+    "Data Science",
+    "Other"
+  ],
+  "keywords": [
+    "csa-loom",
+    "loom",
+    "fabric",
+    "azure",
+    "government",
+    "data-platform"
+  ],
+  "icon": "media/loom.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Limitless-Data-LLC/csa-inabox.git",
+    "directory": "apps/loom-vscode"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "authentication": [
+      {
+        "id": "loom",
+        "label": "CSA Loom"
+      }
+    ],
+    "configuration": {
+      "title": "CSA Loom",
+      "properties": {
+        "loom.deployments": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "CSA Loom deployments to show in the Explorer. Each entry points at one Loom Console BFF (`apiUrl`). A Commercial and a Government deployment can be listed side by side — the same extension talks to both because token acquisition happens server-side (only `apiUrl` differs).",
+          "scope": "application",
+          "items": {
+            "type": "object",
+            "required": [
+              "apiUrl"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable id for the deployment (defaults to the apiUrl host). Secrets are keyed by this id."
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name shown as the tree root (defaults to the apiUrl host)."
+              },
+              "apiUrl": {
+                "type": "string",
+                "description": "Base URL of the Loom Console, e.g. https://csa-loom.limitlessdata.ai — the ONLY per-cloud difference."
+              },
+              "cloud": {
+                "type": "string",
+                "enum": [
+                  "commercial",
+                  "gov",
+                  "gcc",
+                  "gcc-high",
+                  "il5"
+                ],
+                "default": "commercial",
+                "description": "Cloud the deployment lives in. Informational — affects labels only; auth is resolved server-side."
+              }
+            }
+          }
+        },
+        "loom.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Off by default. When on AND VS Code telemetry is on, command names + durations (never file contents, query text, item names or identity) go to the operator's own Loom Application Insights via the BFF. No independent endpoint."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "loom",
+          "title": "CSA Loom",
+          "icon": "media/loom.svg"
+        }
+      ]
+    },
+    "views": {
+      "loom": [
+        {
+          "id": "loom.explorer",
+          "name": "Explorer",
+          "icon": "media/loom.svg",
+          "contextualTitle": "CSA Loom"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "loom.explorer",
+        "contents": "No CSA Loom deployments are configured yet.\n[Add deployment](command:loom.addDeployment)\nA deployment points at one Loom Console (Commercial or Government). You can add several and browse them side by side.\n[Learn more](https://learn.microsoft.com/fabric/data-engineering/set-up-fabric-vs-code-extension)",
+        "when": "!loom.hasDeployments"
+      },
+      {
+        "view": "loom.explorer",
+        "contents": "Sign in to start browsing your workspaces and items.\n[Sign in](command:loom.signIn)",
+        "when": "loom.hasDeployments && !loom.hasSession"
+      }
+    ],
+    "commands": [
+      {
+        "command": "loom.signIn",
+        "title": "Sign in",
+        "category": "CSA Loom",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "loom.signOut",
+        "title": "Sign out",
+        "category": "CSA Loom",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "loom.addDeployment",
+        "title": "Add deployment…",
+        "category": "CSA Loom",
+        "icon": "$(add)"
+      },
+      {
+        "command": "loom.refresh",
+        "title": "Refresh",
+        "category": "CSA Loom",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "loom.toggleGroupBy",
+        "title": "Toggle: group items by type",
+        "category": "CSA Loom",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "loom.createItem",
+        "title": "Create item…",
+        "category": "CSA Loom",
+        "icon": "$(add)"
+      },
+      {
+        "command": "loom.renameItem",
+        "title": "Rename…",
+        "category": "CSA Loom",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "loom.deleteItem",
+        "title": "Delete…",
+        "category": "CSA Loom",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "loom.openInConsole",
+        "title": "Open in Console",
+        "category": "CSA Loom",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "loom.removeWorkspace",
+        "title": "Remove workspace from Explorer",
+        "category": "CSA Loom",
+        "icon": "$(eye-closed)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "loom.createItem",
+          "when": "false"
+        },
+        {
+          "command": "loom.renameItem",
+          "when": "false"
+        },
+        {
+          "command": "loom.deleteItem",
+          "when": "false"
+        },
+        {
+          "command": "loom.openInConsole",
+          "when": "false"
+        },
+        {
+          "command": "loom.removeWorkspace",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "loom.toggleGroupBy",
+          "when": "view == loom.explorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "loom.addDeployment",
+          "when": "view == loom.explorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "loom.refresh",
+          "when": "view == loom.explorer",
+          "group": "navigation@3"
+        },
+        {
+          "command": "loom.signIn",
+          "when": "view == loom.explorer",
+          "group": "1_loom@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "loom.signIn",
+          "when": "view == loom.explorer && viewItem =~ /^deployment-signedout/",
+          "group": "inline@1"
+        },
+        {
+          "command": "loom.signOut",
+          "when": "view == loom.explorer && viewItem =~ /^deployment-signedin/",
+          "group": "1_auth@1"
+        },
+        {
+          "command": "loom.createItem",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "inline@1"
+        },
+        {
+          "command": "loom.createItem",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "1_item@1"
+        },
+        {
+          "command": "loom.removeWorkspace",
+          "when": "view == loom.explorer && viewItem =~ /^workspace/",
+          "group": "9_workspace@1"
+        },
+        {
+          "command": "loom.openInConsole",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "inline@1"
+        },
+        {
+          "command": "loom.openInConsole",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "1_item@1"
+        },
+        {
+          "command": "loom.renameItem",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "1_item@2"
+        },
+        {
+          "command": "loom.deleteItem",
+          "when": "view == loom.explorer && viewItem =~ /^item/",
+          "group": "9_item@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "package": "vsce package --no-dependencies -o loom-vscode.vsix",
+    "vscode:prepublish": "node build.mjs --production"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.7"
+  }
+}
