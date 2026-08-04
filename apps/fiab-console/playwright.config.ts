@@ -308,5 +308,60 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // G1 receipt for the Delta Sharing protocol + control plane (#2619).
+      // Creates real Cosmos share/recipient records → retry for the sweep.
+      name: 'delta-sharing',
+      testDir: './e2e',
+      testMatch: /delta-sharing-protocol\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // G1 receipt for the OpenLineage emitters (#2626). Read-only discovery of
+      // pipeline/Spark runs + their lineage receipts — no workspace creation.
+      name: 'openlineage-emitters',
+      testDir: './e2e',
+      testMatch: /openlineage-emitters\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // G1 receipt for the audited Unity Catalog exits (#2622). Drives a UC
+      // operation + polls the audit trail; retry for the shared-console sweep.
+      name: 'unity-audit-exit',
+      testDir: './e2e',
+      testMatch: /unity-audit-exit-receipt\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // G1 receipt for the AOAI target-resolution path (#2583 / #2557 / #2568).
+      // Drives copilot status + orchestrate; retry for the shared-console sweep.
+      name: 'aoai-target-resolution',
+      testDir: './e2e',
+      testMatch: /aoai-target-resolution\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
