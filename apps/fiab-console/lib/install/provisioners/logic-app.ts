@@ -70,6 +70,12 @@ export interface LogicAppArmConfig {
   resourceGroup: string;
   /** Azure region for the workflow resource, e.g. 'usgovvirginia'. */
   location: string;
+  /**
+   * A DIFFERENT, known-good resource group to retry against when the primary
+   * one does not exist. Empty when there is no distinct alternative.
+   * See `logicFallbackResourceGroup` for why this is not optional polish.
+   */
+  fallbackResourceGroup: string;
 }
 
 /**
@@ -79,24 +85,81 @@ export interface LogicAppArmConfig {
  * fields where Logic-Apps-specific overrides exist.
  */
 export function readLogicAppArmConfig(): LogicAppArmConfig {
-  const missing: string[] = [];
-  const subscriptionId =
-    process.env.LOOM_LOGIC_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
-  const resourceGroup =
-    process.env.LOOM_LOGIC_RG || process.env.LOOM_DLZ_RG || '';
-  const location =
-    process.env.LOOM_LOGIC_LOCATION || process.env.LOOM_AZURE_LOCATION || '';
-  if (!subscriptionId) missing.push('LOOM_LOGIC_SUB (or LOOM_SUBSCRIPTION_ID)');
-  if (!resourceGroup) missing.push('LOOM_LOGIC_RG (or LOOM_DLZ_RG)');
-  if (!location) missing.push('LOOM_LOGIC_LOCATION (or LOOM_AZURE_LOCATION)');
-  return { subscriptionId, resourceGroup, location } as LogicAppArmConfig & { _missing?: string[] };
+  return {
+    subscriptionId: logicSubscriptionId(),
+    resourceGroup: logicResourceGroup(),
+    location: logicLocation(),
+    fallbackResourceGroup: logicFallbackResourceGroup(),
+  };
+}
+
+// ── Coordinate resolution ────────────────────────────────────────────────
+//
+// #2954 — THE DEAD GATE. This provisioner used to resolve its region from
+// `LOOM_LOGIC_LOCATION || LOOM_AZURE_LOCATION`. NEITHER variable is set by any
+// bicep module in the repo — the canonical region the admin-plane stamps on the
+// Console container app is **LOOM_LOCATION**
+// (platform/fiab/bicep/modules/admin-plane/main.bicep: `{ name: 'LOOM_LOCATION',
+// value: location }`), which is what every other region-reading client uses
+// (aas-client, eventgrid-client, eventstream-standup, …).
+//
+// The consequence was total: `logicAppArmMissing()` ALWAYS returned a non-empty
+// array in every real deployment, so `logicAppProvisioner` returned
+// `status:'remediation'` before issuing a single ARM call and the run route
+// always answered its 409 "not backed by a live Azure Logic App" gate. No Logic
+// App workflow was ever created by Loom, anywhere — the feature read as
+// "configure me" forever, and the remediation text named variables that nothing
+// in the platform ever sets, so following it exactly still failed.
+//
+// LOOM_LOCATION is appended to each chain (the explicit LOOM_LOGIC_* overrides
+// still win, so an operator who split Logic Apps into another sub/RG/region
+// keeps that behaviour).
+
+function logicSubscriptionId(): string {
+  return process.env.LOOM_LOGIC_SUB || process.env.LOOM_SUBSCRIPTION_ID || '';
+}
+
+function logicResourceGroup(): string {
+  return process.env.LOOM_LOGIC_RG || process.env.LOOM_DLZ_RG || process.env.LOOM_ADMIN_RG || '';
+}
+
+/**
+ * The SECOND live blocker, found against the running commercial estate while
+ * validating the fix above.
+ *
+ * `LOOM_DLZ_RG` on the deployed Console reads `rg-csa-loom-dlz-default-centralus`
+ * — a resource group that DOES NOT EXIST in that subscription (the estate runs
+ * single-RG out of `LOOM_ADMIN_RG`). So even with the region resolved, the very
+ * first `PUT Microsoft.Logic/workflows` would come back `ResourceGroupNotFound`
+ * and the user would hit a dead end on create.
+ *
+ * `auto-bind-by-default.md` is explicit that this is OURS to fix, not the user's:
+ * "If there's some binding or mapping or mounting that needs to take place …
+ * you figure it out, you fix it, you make it work." So auto-bind retries once
+ * against the admin RG — a resource group the deploy always creates and where
+ * the platform already runs its own Consumption workflow (the report-subscription
+ * delivery Logic App). The `LOOM_<x>_RG || LOOM_ADMIN_RG` shape is the same
+ * fallback every other ARM client here uses (health-probes, env-apply, AAS).
+ */
+export function logicFallbackResourceGroup(): string {
+  const admin = process.env.LOOM_ADMIN_RG || '';
+  return admin && admin !== logicResourceGroup() ? admin : '';
+}
+
+function logicLocation(): string {
+  return (
+    process.env.LOOM_LOGIC_LOCATION ||
+    process.env.LOOM_AZURE_LOCATION ||
+    process.env.LOOM_LOCATION ||
+    ''
+  );
 }
 
 export function logicAppArmMissing(): string[] {
   const missing: string[] = [];
-  if (!(process.env.LOOM_LOGIC_SUB || process.env.LOOM_SUBSCRIPTION_ID)) missing.push('LOOM_LOGIC_SUB (or LOOM_SUBSCRIPTION_ID)');
-  if (!(process.env.LOOM_LOGIC_RG || process.env.LOOM_DLZ_RG)) missing.push('LOOM_LOGIC_RG (or LOOM_DLZ_RG)');
-  if (!(process.env.LOOM_LOGIC_LOCATION || process.env.LOOM_AZURE_LOCATION)) missing.push('LOOM_LOGIC_LOCATION (or LOOM_AZURE_LOCATION)');
+  if (!logicSubscriptionId()) missing.push('LOOM_LOGIC_SUB (or LOOM_SUBSCRIPTION_ID)');
+  if (!logicResourceGroup()) missing.push('LOOM_LOGIC_RG (or LOOM_DLZ_RG / LOOM_ADMIN_RG)');
+  if (!logicLocation()) missing.push('LOOM_LOGIC_LOCATION (or LOOM_LOCATION)');
   return missing;
 }
 

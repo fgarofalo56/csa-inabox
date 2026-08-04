@@ -289,7 +289,15 @@ describe('admin/env-config registry', () => {
     // credential, and /api/delta-sharing/* fails closed (503) until one is set.
     // They belong on /admin/env-config precisely because an operator has to see
     // and set them (round 2 shipped LOOM_SHARING_SCOPE nowhere an operator looks).
-    expect(EDITABLE_ENV.length).toBe(192);
+    // Bumped to 195 by #2954 (workflow builder on real Logic Apps): the new
+    // svc-logic-apps spec registers the Logic Apps auto-bind gate that had no
+    // entry at all, adding the three OVERRIDE keys LOOM_LOGIC_SUB /
+    // LOOM_LOGIC_RG / LOOM_LOGIC_LOCATION, +3: 192 -> 195. Their day-one
+    // fallbacks (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_LOCATION) were
+    // already in the catalog, so a push-button deploy still needs ZERO of these
+    // set — they exist so an operator can point workflows at a different
+    // subscription, resource group, or region.
+    expect(EDITABLE_ENV.length).toBe(195);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

@@ -466,8 +466,9 @@ const bundle: AppBundle = {
     '`definition` (triggers + actions + parameters + outputs). The ' +
     'logicAppProvisioner deploys it via `PUT Microsoft.Logic/workflows`, then ' +
     'proves it is live by firing the manual trigger and polling the run ' +
-    'history — or surfaces a precise remediation MessageBar naming ' +
-    '`LOOM_LOGIC_SUB` / `LOOM_LOGIC_RG` / `LOOM_LOGIC_LOCATION` and the ' +
+    'history — or surfaces a precise remediation MessageBar naming the ' +
+    'deployment coordinates it needs (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / ' +
+    'LOOM_LOCATION, overridable with the LOOM_LOGIC_* variants) and the ' +
     '"Logic App Contributor" role to grant (per no-vaporware.md).',
   sourceDocs: [
     'https://learn.microsoft.com/azure/logic-apps/workflow-definition-language-schema',
