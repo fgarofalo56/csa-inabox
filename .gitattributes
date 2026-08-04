@@ -50,3 +50,19 @@ scripts/ci/login-health-verdict.sh text eol=lf
 # checkout can never manufacture a 60k-line "diff" — and so the comparator never
 # needs an EOL normalization loose enough to hide a real content change.
 apps/fiab-console/deploy-templates/main.json text eol=lf
+
+# #2945 (found by the guard's FIRST real CI run) — bicep embeds the LINE ENDINGS
+# OF ITS OWN SOURCE into emitted string values. A `'''...'''` multi-line literal
+# in a .bicep file, and every file pulled in by `loadTextContent()`, are copied
+# byte-for-byte into main.json. So a CRLF checkout produced an ARM template
+# whose deploymentScript scriptContent was CRLF bash — the same
+# "command not found" failure on a stray carriage return that this file already
+# pins .sh files against — while a Linux build of the SAME commit produced LF.
+# The artifact committed before the gate had in fact been generated on Windows
+# and shipped 1195 escaped CRLFs inside its embedded bash, PowerShell, Python
+# and KQL.
+#
+# Pinning the whole bicep tree to LF makes `az bicep build` byte-identical on
+# every platform, which is what lets scripts/ci/check-deploy-template-sync.mjs
+# compare bytes with no normalization at all.
+platform/fiab/bicep/** text eol=lf

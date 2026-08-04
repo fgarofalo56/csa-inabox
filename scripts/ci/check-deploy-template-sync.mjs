@@ -284,6 +284,35 @@ function trunc(s) {
 }
 
 /**
+ * Count JSON-escaped CRLF sequences (the four characters `\` `r` `\` `n`) inside
+ * the template's string VALUES.
+ *
+ * FOUND BY THIS GUARD'S FIRST REAL CI RUN, 2026-08-04. bicep embeds the line
+ * endings of its own source into emitted strings: a `'''…'''` multi-line literal
+ * in a .bicep file, and every file pulled in by `loadTextContent()`, are copied
+ * byte-for-byte. So the artifact committed on main — generated on a Windows
+ * checkout — carried 1195 escaped CRLFs inside its embedded bash, PowerShell,
+ * Python and KQL, including
+ *
+ *     "scriptContent": "set -euo pipefail\r\nGRAPH_RA='…"
+ *
+ * i.e. a CRLF bash script handed to an ARM deploymentScript, which is the exact
+ * `$'\r': command not found` failure `.gitattributes` already pins .sh files
+ * against. A Linux build of the same commit emitted LF. That is not cosmetic and
+ * it is not a checkout artifact of the JSON file itself (which is LF on both).
+ *
+ * `platform/fiab/bicep/** text eol=lf` now makes the compile platform-independent.
+ * This check exists so that if the pin is ever lost, or a new embedded source
+ * lands outside it, the failure NAMES the cause instead of printing an opaque
+ * 51-line diff.
+ *
+ * @param {Buffer} buf @returns {number}
+ */
+export function countEscapedCrlf(buf) {
+  return buf.length ? buf.toString('binary').split('\\r\\n').length - 1 : 0;
+}
+
+/**
  * Refuse to compare against something that is not a compiled ARM template.
  *
  * `az bicep build` exiting 0 while producing nothing usable is a real, observed
@@ -487,6 +516,33 @@ function main(root = process.cwd()) {
     }
 
     const cmp = compareArtifacts(committed, fresh);
+
+    // Name the CRLF-embedded-source cause before reporting an opaque byte diff.
+    // Order matters: if the FRESH build has them, the compiling checkout's bicep
+    // sources are CRLF (the developer's environment); if only the COMMITTED copy
+    // has them, the artifact was generated from such a checkout and shipped.
+    const freshCrlf = countEscapedCrlf(fresh);
+    const committedCrlf = countEscapedCrlf(committed);
+    if (freshCrlf > 0) {
+      fail.push(
+        `A fresh build of ${entry.source} embeds ${freshCrlf} CRLF sequence(s) inside its string values.\n` +
+          '  bicep copies the line endings of its own source into emitted strings, so your bicep\n' +
+          '  checkout is CRLF. `.gitattributes` pins `platform/fiab/bicep/** text eol=lf`; refresh it:\n' +
+          '    git ls-files platform/fiab/bicep | xargs rm -f && git checkout -- platform/fiab/bicep\n' +
+          '  Shipping this would hand ARM deploymentScripts CRLF bash ("$\'\\r\': command not found").',
+      );
+      continue;
+    }
+    if (committedCrlf > 0) {
+      fail.push(
+        `${entry.artifact} embeds ${committedCrlf} CRLF sequence(s) inside its string values — it was\n` +
+          '  generated from a CRLF bicep checkout. Regenerate it from an LF checkout (see the command\n' +
+          `  below); a fresh build of the same source here embeds none.\n` +
+          `    az bicep build -f ${entry.source} --outfile ${entry.artifact}`,
+      );
+      continue;
+    }
+
     if (cmp.equal) {
       log(`OK — ${entry.artifact} is byte-identical to a fresh build (${committed.length} bytes, bicep ${pinned.stamped}).`);
       continue;

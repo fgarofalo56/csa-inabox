@@ -52,6 +52,17 @@ Two details worth knowing before you "fix" a failure:
   *eol* difference, your checkout predates that pin — run
   `git add --renormalize apps/fiab-console/deploy-templates/main.json`. Do not
   "fix" it by rewriting the file.
+- **Regenerate from an LF bicep checkout.** bicep embeds the line endings of its
+  own source into emitted string values — a `'''…'''` multi-line literal in a
+  `.bicep` file, and every file pulled in by `loadTextContent()`, are copied
+  byte-for-byte. The artifact committed before this gate had been generated on
+  Windows and carried **1195** escaped CRLFs inside its embedded bash,
+  PowerShell, Python and KQL, including
+  `"scriptContent": "set -euo pipefail\r\n…"` — CRLF bash handed to an ARM
+  deploymentScript, i.e. `$'\r': command not found`. `.gitattributes` now pins
+  `platform/fiab/bicep/** text eol=lf`, which makes the compile byte-identical
+  on Windows and Linux; the guard also fails with a named message if escaped
+  CRLFs ever reappear, rather than printing an opaque diff.
 - **The bicep CLI version is pinned by the file itself.** `az bicep build`
   output varies across CLI versions in `metadata._generator.version` *and*
   `templateHash` (measured 2026-08-04: 0.45.15 vs 0.46.1 differ in 840 lines,

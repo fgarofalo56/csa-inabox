@@ -44,6 +44,7 @@ import {
   ARTIFACTS,
   assertLooksLikeArmTemplate,
   compareArtifacts,
+  countEscapedCrlf,
   discoverDeployTemplates,
   parseBicepCliVersion,
   parseGeneratorVersion,
@@ -197,6 +198,51 @@ test('a CRLF copy that ALSO has a content change is classified as content, not e
   const cmp = compareArtifacts(both, REAL);
   assert.equal(cmp.equal, false);
   assert.equal(cmp.reason, 'content');
+});
+
+// ── embedded CRLF (the defect this guard found on its first real CI run) ─────
+
+/**
+ * A VERBATIM 180-byte slice of the artifact that was committed on main before
+ * this PR — cut out of the real file, not written by hand. It is the shape the
+ * guard caught: bicep copied a CRLF .bicep source's line endings straight into a
+ * deploymentScript's bash. base64 so the bytes cannot be rewritten by a checkout.
+ */
+const REAL_DEFECTIVE_SLICE_B64 = [
+  'InNjcmlwdENvbnRlbnQiOiAic2V0IC1ldW8gcGlwZWZhaWxcclxuR1JBUEhfUkE9J1t7XCJyZXNvdXJjZUFwcElkXCI6XCIw',
+  'MDAwMDAwMy0wMDAwLTAwMDAtYzAwMC0wMDAwMDAwMDAwMDBcIixcInJlc291cmNlQWNjZXNzXCI6W3tcImlkXCI6XCJlMWZl',
+  'NmRkOC1iYTMxLTRkNjEtODllNy04ODYzOWRhNDY4M2RcIixc',
+].join('');
+const REAL_DEFECTIVE = Buffer.from(REAL_DEFECTIVE_SLICE_B64, 'base64');
+
+test('the defective slice really is the shipped shape: CRLF bash in a deploymentScript', () => {
+  const s = REAL_DEFECTIVE.toString('utf8');
+  assert.match(s, /"scriptContent": "set -euo pipefail/);
+  // The four characters backslash-r-backslash-n, INSIDE a JSON string value.
+  assert.ok(s.includes(String.raw`\r\n`));
+  // …and the file itself has no real CRLF — this is not a line-ending problem
+  // with the JSON, it is CRLF *content* embedded in a value.
+  assert.equal(REAL_DEFECTIVE.includes(Buffer.from('\r\n')), false);
+});
+
+test('countEscapedCrlf finds the embedded CRLF in the real defective bytes', () => {
+  assert.equal(countEscapedCrlf(REAL_DEFECTIVE), 1);
+});
+
+test('countEscapedCrlf is ZERO on real LF bicep output', () => {
+  assert.equal(countEscapedCrlf(REAL), 0);
+});
+
+test('countEscapedCrlf does not count a real CRLF, only the escaped form', () => {
+  // A file whose own line endings are CRLF is the `eol` case, handled by
+  // compareArtifacts. Conflating the two would send the developer to the wrong fix.
+  const crlfFile = Buffer.from(REAL.toString('utf8').replace(/\n/g, '\r\n'), 'utf8');
+  assert.equal(countEscapedCrlf(crlfFile), 0);
+  assert.equal(compareArtifacts(crlfFile, REAL).reason, 'eol');
+});
+
+test('countEscapedCrlf handles empty input without throwing', () => {
+  assert.equal(countEscapedCrlf(Buffer.alloc(0)), 0);
 });
 
 // ── refuse-to-pass-vacuously ─────────────────────────────────────────────────
