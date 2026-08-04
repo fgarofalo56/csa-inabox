@@ -68,34 +68,16 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 /**
- * The `autoBind` block the bind GET now returns (`lib/azure/auto-bind →
- * autoBindWireStatus`). Declared structurally rather than imported because
- * `auto-bind.ts` is a SERVER module (it reaches Azure control planes) and this
- * is a client component.
+ * The auto-bind surfaces (progress / retry / rebind / gate / fallback) live in
+ * their own module — see its header for why each exists and which is allowed to
+ * be a form. `AutoBindWire` is the shape the bind GET's `autoBind` block carries.
  */
-interface AutoBindWire {
-  status: 'bound' | 'retry' | 'unavailable' | 'unsupported';
-  via?: 'created' | 'attached' | 'existing' | 'recreated';
-  backingName?: string;
-  sourceName?: string;
-  sanitized?: boolean;
-  nameDrift?: boolean;
-  reason?: string;
-  missing?: string;
-  retryable?: boolean;
-}
-
-// Common Azure regions for the "Create new factory" location picker (Commercial
-// + US Government). The default is the chosen resource group's location.
-const ADF_FACTORY_REGIONS = [
-  'eastus', 'eastus2', 'centralus', 'southcentralus', 'westus', 'westus2', 'westus3',
-  'northcentralus', 'westcentralus', 'canadacentral', 'northeurope', 'westeurope',
-  'uksouth', 'francecentral', 'germanywestcentral', 'switzerlandnorth',
-  'norwayeast', 'swedencentral', 'eastasia', 'southeastasia', 'japaneast',
-  'australiaeast', 'centralindia', 'koreacentral', 'brazilsouth', 'uaenorth',
-  // US Government
-  'usgovvirginia', 'usgovarizona', 'usgovtexas',
-];
+import {
+  AutoBindProgress, AutoBindRetry, AutoBindRebindNotice, AutoBindUnavailable,
+  AutoBindFallbackGate, type AutoBindWire,
+} from './pipeline-autobind-surfaces';
+/** The create-new-factory branch of the factory picker — its own module. */
+import { CreateFactoryForm } from './pipeline-create-factory-form';
 
 const useStyles = makeStyles({
   // `flex: '1 0 auto'` (G3): the editor column FILLS the chrome's mainPanel
@@ -840,27 +822,13 @@ export function PipelineEditorCore({
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
-  // The LAST-RESORT surface, not the default one. Auto-bind (the GET's
-  // `autoBind` block) now establishes the binding before this component
-  // renders, so the only way here is a console that predates auto-bind (an
-  // older image whose bind GET returns no `autoBind` field) — a genuine
-  // 'unavailable' gate and a transient 'retry' each have their own surface
-  // above, and an explicit Rebind has its own too. It therefore leads with the
-  // Retry that re-runs auto-bind, and only then offers the manual picker below.
+  // The LAST-RESORT surface, not the default one — see AutoBindFallbackGate.
   const bindGate = (
-    <MessageBar intent="warning" layout="multiline">
-      <MessageBarBody>
-        <MessageBarTitle>Still connecting this pipeline to Azure</MessageBarTitle>
-        Loom binds this item to its {config.containerLabel} pipeline automatically — creating it if it
-        doesn’t exist yet. If that hasn’t completed, retry; you can also pick an existing pipeline below.
-        {listError && (<><br /><strong>Listing pipelines failed:</strong> {listError}</>)}
-        <div style={{ marginTop: tokens.spacingVerticalS }}>
-          <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={() => void loadBinding()}>
-            Retry
-          </Button>
-        </div>
-      </MessageBarBody>
-    </MessageBar>
+    <AutoBindFallbackGate
+      containerLabel={config.containerLabel}
+      listError={listError}
+      onRetry={() => void loadBinding()}
+    />
   );
 
   // ------------------------------------------------------------------
@@ -988,44 +956,19 @@ export function PipelineEditorCore({
       main={
         <div className={s.pad}>
           {bindingLoading ? (
-            // PROVISIONING, on the real surface. Auto-bind creates-or-attaches
-            // the backing pipeline during this fetch, so this is progress —
-            // not a gate, and never a configuration form standing in for the
-            // canvas the user asked for.
+            // PROVISIONING, on the real surface — never a configuration form
+            // standing in for the canvas the user asked for.
             <div className={s.provisioning} data-testid="pipeline-autobind-progress">
-              <MessageBar intent="info" layout="multiline">
-                <MessageBarBody>
-                  <MessageBarTitle>
-                    {rebinding ? 'Loading pipelines in this ' + config.containerLabel + '…' : 'Preparing your pipeline…'}
-                  </MessageBarTitle>
-                  {rebinding
-                    ? `Listing the pipelines available to re-map this item to.`
-                    : `Loom is connecting this item to its Azure ${config.containerLabel} pipeline — creating it if it doesn’t exist yet. This happens automatically; there is nothing to configure.`}
-                </MessageBarBody>
-              </MessageBar>
-              <Spinner label={rebinding ? 'Listing pipelines…' : 'Provisioning and binding…'} />
+              <AutoBindProgress containerLabel={config.containerLabel} rebinding={rebinding} />
             </div>
           ) : !bound && !rebinding && autoBind?.status === 'retry' ? (
-            // TRANSIENT failure. A retryable PROGRESS state with a real Retry —
-            // deliberately not a dead end and not a red error banner.
             <div className={s.provisioning} data-testid="pipeline-autobind-retry">
-              <MessageBar intent="warning" layout="multiline">
-                <MessageBarBody>
-                  <MessageBarTitle>Still connecting this pipeline to Azure</MessageBarTitle>
-                  Loom is setting up the {config.containerLabel} pipeline for this item and hit a
-                  temporary problem. Nothing is lost — retry, or leave this open and it will
-                  settle on the next load.
-                  {autoBind.reason && (<><br /><Caption1>{autoBind.reason}</Caption1></>)}
-                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
-                    <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={() => void loadBinding()}>
-                      Retry
-                    </Button>
-                    <Button size="small" appearance="secondary" icon={<Link20Regular />} onClick={startRebind}>
-                      Choose a pipeline manually
-                    </Button>
-                  </div>
-                </MessageBarBody>
-              </MessageBar>
+              <AutoBindRetry
+                containerLabel={config.containerLabel}
+                reason={autoBind.reason}
+                onRetry={() => void loadBinding()}
+                onRebind={startRebind}
+              />
             </div>
           ) : !bound || rebinding ? (
             <>
@@ -1034,35 +977,9 @@ export function PipelineEditorCore({
                   when auto-bind reported a genuine estate gate it cannot
                   self-serve. It is no longer the state the editor opens in. */}
               {rebinding ? (
-                <MessageBar intent="info" layout="multiline">
-                  <MessageBarBody>
-                    <MessageBarTitle>Re-map this item to a different pipeline</MessageBarTitle>
-                    Loom already binds this item automatically. Use this only to point it at a
-                    specific {config.containerLabel} or an existing pipeline you authored elsewhere.
-                    <div style={{ marginTop: tokens.spacingVerticalS }}>
-                      <Button size="small" appearance="secondary" onClick={cancelRebind}>
-                        Cancel and use the automatic binding
-                      </Button>
-                    </div>
-                  </MessageBarBody>
-                </MessageBar>
+                <AutoBindRebindNotice containerLabel={config.containerLabel} onCancel={cancelRebind} />
               ) : autoBind?.status === 'unavailable' ? (
-                // HONEST GATE (ux-baseline G2): the platform genuinely cannot
-                // perform this itself — no factory exists anywhere the identity
-                // can read, or it is denied. The reason text already names the
-                // real remediation, and the picker below is the in-product
-                // Fix-it: point the item at a factory the user CAN reach.
-                <MessageBar intent="warning" layout="multiline" data-testid="pipeline-autobind-gate">
-                  <MessageBarBody>
-                    <MessageBarTitle>Loom couldn’t create this pipeline for you</MessageBarTitle>
-                    {autoBind.reason}
-                    <div style={{ marginTop: tokens.spacingVerticalS }}>
-                      <Button size="small" appearance="primary" icon={<ArrowSync20Regular />} onClick={() => void loadBinding()}>
-                        Try again
-                      </Button>
-                    </div>
-                  </MessageBarBody>
-                </MessageBar>
+                <AutoBindUnavailable reason={autoBind.reason} onRetry={() => void loadBinding()} />
               ) : bindGate}
               {isAdf && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
@@ -1104,59 +1021,24 @@ export function PipelineEditorCore({
                       )}
                     </>
                   ) : (
-                    // Create-new factory wizard — name + target resource group
-                    // (carries the subscription) + location. Real ARM PUT via
-                    // /api/adf/factories/create (Contract E#1). No JSON textarea.
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '560px' }}>
-                      <Field label="New factory name" required hint="Globally unique within Azure; 3-63 chars, letters/digits/hyphens.">
-                        <Input
-                          value={newFactoryName}
-                          onChange={(_, d) => { setNewFactoryName(d.value); setFactoryCreateError(null); }}
-                          placeholder="adf-loom-myteam"
-                        />
-                      </Field>
-                      <AzureResourcePicker
-                        type="Microsoft.Resources/subscriptions/resourceGroups"
-                        label="Target resource group"
-                        placeholder="Select a resource group (across all subscriptions)"
-                        value={newFactoryRg?.id}
-                        onChange={(r) => {
-                          setNewFactoryRg(r);
-                          // Default the factory's region to the resource group's
-                          // location; the operator can override below.
-                          if (r?.location && !newFactoryLocation) setNewFactoryLocation(r.location);
-                          setFactoryCreateError(null);
-                        }}
-                      />
-                      <Field label="Location" required hint="Azure region for the new Data Factory.">
-                        <Dropdown
-                          placeholder="Select a region"
-                          value={newFactoryLocation}
-                          selectedOptions={newFactoryLocation ? [newFactoryLocation] : []}
-                          onOptionSelect={(_, d) => setNewFactoryLocation(d.optionValue || '')}
-                        >
-                          {ADF_FACTORY_REGIONS.map((r) => (<Option key={r} value={r} text={r}>{r}</Option>))}
-                        </Dropdown>
-                      </Field>
-                      <div className={s.row}>
-                        <Button
-                          appearance="primary"
-                          icon={<Add20Regular />}
-                          disabled={factoryCreateBusy || !newFactoryName.trim() || !newFactoryRg || !(newFactoryLocation || newFactoryRg?.location)}
-                          onClick={createFactory}
-                        >
-                          {factoryCreateBusy ? 'Creating…' : 'Create factory'}
-                        </Button>
-                      </div>
-                      {factoryCreateError && (
-                        <MessageBar intent="error">
-                          <MessageBarBody>
-                            <MessageBarTitle>Could not create the factory</MessageBarTitle>
-                            {factoryCreateError}
-                          </MessageBarBody>
-                        </MessageBar>
-                      )}
-                    </div>
+                    <CreateFactoryForm
+                      name={newFactoryName}
+                      onNameChange={(v) => { setNewFactoryName(v); setFactoryCreateError(null); }}
+                      rg={newFactoryRg}
+                      onRgChange={(r) => {
+                        setNewFactoryRg(r);
+                        // Default the factory's region to the resource group's
+                        // location; the operator can override below.
+                        if (r?.location && !newFactoryLocation) setNewFactoryLocation(r.location);
+                        setFactoryCreateError(null);
+                      }}
+                      location={newFactoryLocation}
+                      onLocationChange={setNewFactoryLocation}
+                      busy={factoryCreateBusy}
+                      error={factoryCreateError}
+                      onCreate={createFactory}
+                      rowClassName={s.row}
+                    />
                   )}
                 </div>
               )}
