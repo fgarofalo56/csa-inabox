@@ -945,4 +945,98 @@ test.describe.serial('semantic-model tab click-walk (#2648 / #2649)', () => {
         `(Loom workspace ${target.workspaceId}):\n${bind.join('\n')}`,
     ).toEqual([]);
   });
+
+  // --------------------------------------------------------------------------
+  // #2912 — the Azure-native tabs MUST mount with Power BI OFF.
+  //
+  // Aggregations / Incremental refresh / Direct Lake have Azure-native backends
+  // (XMLA `alternateOf` / AAS refresh-policy / ADLS Delta shim) but used to be
+  // reachable ONLY through the Power BI opt-in (`datasetId` binds only via a
+  // bound Power BI workspace), so on the default estate a user lost all three
+  // and `LoomNativeModelView` had no equivalent — a no-fabric-dependency.md
+  // violation.
+  //
+  // WHY THIS IS A SEPARATE, STRICTER TEST. The #2648 walk above reaches the full
+  // strip through the guided "Build model" launcher — a Power BI-free way IN, but
+  // one that side-steps the three tabs' OWN entry points. Treating "the strip is
+  // walkable via Build" as sufficient launders the violation into a green check.
+  // Here each tab is reached through its OWN ribbon entry with Power BI OFF and
+  // its BODY must mount. A non-mount — `LoomNativeModelView` or a "Power BI
+  // opt-in off" gate rendering instead — is a FAILURE. The body's honest
+  // AAS/XMLA/Event-Grid infra-gate renders INSIDE the mounted body, so the marker
+  // (the body's own header) is present WITH or WITHOUT the gate; only a genuine
+  // non-mount leaves it absent.
+  // --------------------------------------------------------------------------
+  test('#2912 the Azure-native tabs mount with Power BI OFF (Aggregations / Incremental refresh / Direct Lake)', async ({ page, context }, testInfo) => {
+    test.setTimeout(240_000);
+    await signIn(context).catch(() => { /* storageState already set */ });
+    test.skip(
+      powerBiEnabled,
+      'the runtime Power BI opt-in is ON for this estate — #2912 is about the Power BI-OFF default path',
+    );
+    test.skip(
+      semanticBackend === 'analysis-services',
+      'LOOM_SEMANTIC_BACKEND=analysis-services renders the AAS panel, not the ribbon + item strip under test',
+    );
+    const target = await ensureScratch(page);
+
+    const cap = attachCapture(page);
+    await openEditor(page, target.id);
+
+    // The ribbon body (where these entries live) is hidden when collapsed — a
+    // per-user localStorage choice that could ride in on the storage state.
+    const expandBtn = page.getByRole('button', { name: /^Expand ribbon$/i });
+    if ((await expandBtn.count()) > 0) await expandBtn.first().click().catch(() => { /* verified below */ });
+
+    // Each Azure-native tab: its ribbon entry + the body header that only its
+    // MOUNTED body renders (present with or without an honest Azure gate).
+    const AZURE_NATIVE_TABS: Array<{ ribbon: RegExp; body: RegExp; name: string }> = [
+      { ribbon: /^Manage aggregations$/i, body: /Automatic aggregations/i, name: 'Aggregations' },
+      { ribbon: /^Incremental refresh$/i, body: /Incremental refresh \+ hybrid table/i, name: 'Incremental refresh' },
+      { ribbon: /^Direct Lake$/i, body: /AAS incremental-refresh shim, not a Fabric F-SKU/i, name: 'Direct Lake' },
+    ];
+
+    const problems: string[] = [];
+    for (const t of AZURE_NATIVE_TABS) {
+      const entry = page.getByRole('button', { name: t.ribbon }).first();
+      if ((await entry.count()) === 0) {
+        problems.push(`#2912 ${t.name}: NO ribbon entry "${t.ribbon}" — the Azure-native tab is unreachable with Power BI OFF`);
+        continue;
+      }
+      if (!(await entry.isEnabled().catch(() => false))) {
+        problems.push(`#2912 ${t.name}: the ribbon entry is DISABLED with Power BI OFF — it must fall back to the item id`);
+        continue;
+      }
+      await entry.click({ timeout: 10_000 }).catch((e: unknown) => {
+        problems.push(`#2912 ${t.name}: ribbon entry click failed — ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+      });
+      // The tab BODY must mount. Only a NON-mount (the old LoomNativeModelView /
+      // a "Power BI opt-in off" gate) leaves this header absent.
+      const mounted = await page
+        .getByText(t.body)
+        .first()
+        .waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!mounted) {
+        problems.push(
+          `#2912 ${t.name}: the tab BODY did not mount with Power BI OFF (expected ${t.body}). ` +
+            'LoomNativeModelView or a Power BI gate rendered instead — the exact no-fabric-dependency.md violation.',
+        );
+      }
+      await page.screenshot({ path: testInfo.outputPath(`sm-native-${t.name.replace(/\s+/g, '-').toLowerCase()}.png`) }).catch(() => {});
+    }
+
+    testInfo.annotations.push({
+      type: 'native-tabs',
+      description: `Power BI OFF — Azure-native tab mounts: ${AZURE_NATIVE_TABS.length - problems.length}/${AZURE_NATIVE_TABS.length} clean`,
+    });
+
+    // #2649 also holds over this walk: no call may carry a Power BI groupId, and
+    // every /api/items/semantic-model/<id>/… call must address the opened item.
+    const bind = bindingProblems(cap.requests, cap.notFound, cap.pbiWorkspaceIds, target);
+
+    expect(problems, `#2912 Azure-native tab mount problems with Power BI OFF:\n${problems.join('\n')}`).toEqual([]);
+    expect(bind, `#2649 binding problems during the #2912 walk:\n${bind.join('\n')}`).toEqual([]);
+  });
 });

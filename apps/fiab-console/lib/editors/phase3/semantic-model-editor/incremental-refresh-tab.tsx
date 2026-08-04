@@ -144,7 +144,25 @@ export function useSemanticModelIncrementalRefreshState(): IncrementalRefreshSta
 
 /** What the callback half needs from the parent scope. */
 export interface IncrementalRefreshDeps {
+  /**
+   * The workspace that ENABLES the incremental-refresh POLICY actions
+   * (loadIrPolicy / saveIrPolicy). Their route (`/refresh-policy`) is AAS/XMLA
+   * and resolves its server from env — it never reads a workspace on the wire
+   * (see the route header) — so on the DEFAULT estate this is the item's own
+   * Loom workspace and the policy surface works with NO Power BI bound
+   * (no-fabric-dependency.md). #2912.
+   */
   workspaceId: string;
+  /**
+   * The Power BI groupId for the ENHANCED (async) refresh action only, which
+   * genuinely POSTs to the Power BI `/refreshes` REST endpoint
+   * (`enhancedRefreshDataset` — the route requires it and calls Power BI). It is
+   * empty on the default estate, so enhanced refresh stays honestly Power-BI-
+   * gated while the AAS-native policy apply above remains the default-estate
+   * path. Kept separate from `workspaceId` so re-pointing the policy actions to
+   * the Loom workspace does NOT change the Power-BI-ON enhanced-refresh call.
+   */
+  pbiWorkspaceId: string;
   datasetId: string;
   loadRefreshes: (wsId: string, dsId: string) => Promise<void> | void;
 }
@@ -156,7 +174,7 @@ export interface IncrementalRefreshDeps {
  * over. Dependency arrays are byte-identical to the pre-refactor originals.
  */
 export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefreshState, deps: IncrementalRefreshDeps): IncrementalRefreshActions {
-  const { workspaceId, datasetId, loadRefreshes } = deps;
+  const { workspaceId, pbiWorkspaceId, datasetId, loadRefreshes } = deps;
   const {
     irTableName, irRollingWindowPeriods, irRollingWindowGranularity,
     irIncrementalPeriods, irIncrementalGranularity, irEnableHybrid,
@@ -227,11 +245,18 @@ export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefresh
   // Enhanced (async) refresh — POST /refreshes with commitMode + applyRefreshPolicy
   // + effectiveDate. Refreshes the rolling Import partitions per the policy while
   // leaving historical + DQ partitions intact.
+  //
+  // #2912: this is the one IR action that is GENUINELY Power BI — the
+  // `/refreshes` POST requires a workspaceId and calls Power BI's
+  // `enhancedRefreshDataset` (see the route). So it keys off `pbiWorkspaceId`,
+  // NOT the Loom workspace: on the default estate `pbiWorkspaceId` is empty and
+  // this action stays honestly gated, while the AAS-native `saveIrPolicy` above
+  // (which APPLIES the policy via a TMSL Refresh) is the default-estate path.
   const triggerEnhancedRefresh = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
+    if (!pbiWorkspaceId || !datasetId) return;
     setEnhBusy(true); setEnhMsg(null);
     try {
-      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           type: 'full',
@@ -243,15 +268,13 @@ export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefresh
       const j = await r.json();
       if (!j.ok) { setEnhMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
       setEnhMsg({ ok: true, text: `Enhanced refresh queued (requestId: ${String(j.requestId || '').slice(0, 8)}…).` });
-      setTimeout(() => loadRefreshes(workspaceId, datasetId), 2000);
+      setTimeout(() => loadRefreshes(pbiWorkspaceId, datasetId), 2000);
     } catch (e: any) { setEnhMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setEnhBusy(false); }
     // The `set*` functions come from `useState` (stable for the component's
     // lifetime) but reach this hook through `st`, so the rule can't prove it.
-    // The array below is byte-identical to the pre-decomposition original;
-    // adding the setters would change it and break the structural guarantee.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, datasetId, enhCommitMode, enhApplyPolicy, enhEffectiveDate, loadRefreshes]);
+  }, [pbiWorkspaceId, datasetId, enhCommitMode, enhApplyPolicy, enhEffectiveDate, loadRefreshes]);
 
   return {
     loadIrPolicy, saveIrPolicy, triggerEnhancedRefresh,
@@ -259,12 +282,15 @@ export function useSemanticModelIncrementalRefreshActions(st: IncrementalRefresh
 }
 
 export function SemanticModelIncrementalRefreshTab({
-  s, ir, tables, workspaceId, datasetId,
+  s, ir, tables, workspaceId, pbiWorkspaceId, datasetId,
 }: {
   s: Phase3Styles;
   ir: IncrementalRefreshApi;
   tables: TableLite[] | undefined;
+  /** Enables the AAS-native POLICY actions (route ignores it on the wire). */
   workspaceId: string;
+  /** Power BI groupId — gates the genuinely-Power-BI enhanced-refresh action. */
+  pbiWorkspaceId: string;
   datasetId: string;
 }) {
   const {
@@ -393,7 +419,15 @@ export function SemanticModelIncrementalRefreshTab({
         <Field label="Effective date override (ISO, optional)">
           <Input value={enhEffectiveDate} onChange={(_, d) => setEnhEffectiveDate(d.value)} placeholder="2025-06-08" />
         </Field>
-        <Button appearance="primary" icon={<Play20Regular />} disabled={enhBusy || !workspaceId || !datasetId} onClick={triggerEnhancedRefresh}>
+        <Button
+          appearance="primary"
+          icon={<Play20Regular />}
+          disabled={enhBusy || !pbiWorkspaceId || !datasetId}
+          onClick={triggerEnhancedRefresh}
+          title={!pbiWorkspaceId
+            ? 'Enhanced asynchronous refresh runs through the Power BI /refreshes REST API — enable the Power BI opt-in and bind a workspace. The incremental-refresh policy above applies via the Azure Analysis Services XMLA endpoint with no Power BI required.'
+            : undefined}
+        >
           {enhBusy ? 'Queuing…' : 'Run enhanced refresh'}
         </Button>
         {enhMsg && <MessageBar intent={enhMsg.ok ? 'success' : 'error'}><MessageBarBody>{enhMsg.text}</MessageBarBody></MessageBar>}
