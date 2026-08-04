@@ -49,6 +49,33 @@ import {
  * reading as though it could. Using the guard's own reader means every attack
  * below is mutated against the same bytes CI sees, and the pass assertion is
  * the real one.
+ *
+ * ## The budget this file has to respect (#2944)
+ *
+ * Every attack below runs `analyzeUnityChokepoint` over ~5,345 real files, and
+ * it does so as STRAIGHT-LINE SYNCHRONOUS CPU. That is the one shape vitest
+ * cannot survive in quantity: a worker reports results with a birpc call whose
+ * reply arrives as an IPC message, readable only when the event loop reaches its
+ * poll phase — and a promise-chained run of synchronous tests never gets there.
+ * Past 60 s of CUMULATIVE synchronous CPU in one file, birpc's hardcoded
+ * deadline rejects and the WHOLE RUN fails with
+ * `[vitest-worker]: Timeout calling "onTaskUpdate"` while all 45 tests PASS.
+ *
+ * Measured, single worker, idle main thread: 50 s of sync CPU is clean, 100 s
+ * fails; 100 s of ASYNC waiting is clean. So the budget is this file's own
+ * synchronous CPU, and neither sharding nor the fork cap can buy any of it back.
+ *
+ * That is not hypothetical here — this file WAS the whole problem: 31 whole-tree
+ * scans, 108,699 ms on CI, the only file over 60 s out of 1,354 and 4.6x the next
+ * slowest, which is what turned `loom-roll-and-validate` red at 537e1411 (#2949).
+ * #2944 fixed it in the GUARD, by short-circuiting its two whole-tree loops
+ * before they mask, so a scan is ~0.25 s instead of ~3 s and this file is ~12 s.
+ *
+ * IF YOU ADD AN ATTACK HERE, add it to an EXISTING whole-tree scan wherever the
+ * payloads are independent (planted files always are — `analyzeUnityChokepoint`
+ * accumulates into one array with no early return and no cap, so N rogue files
+ * in one scan report exactly as N scans of one rogue file would). Adding scans
+ * is what put this file over the cliff twice already.
  */
 let CACHED: Map<string, string> | null = null;
 function realSources(): Map<string, string> {
@@ -438,12 +465,13 @@ describe('TRANSPORT VOCABULARY — one definition, two consumers', () => {
     //   round 2  analyzeUnityChokepoint()   -> re-SCANNED it per transport
     // Round 1 was hoisted and round 2 was not, so this still did 9 full scans
     // of ~4,000 files. That made this ~17s and the FILE ~63s, which mattered
-    // for a reason no one would guess from reading it: vitest's worker RPC has
-    // a 60s deadline hardcoded in its bundled birpc, and a file that runs past
-    // it fails the whole run with `Timeout calling "onTaskUpdate"` while every
-    // test still passes. Measured across three CI runs, "one file >= 60000ms"
-    // predicted the red/green outcome exactly (74.4s RED, 59.9s GREEN, 62.9s
-    // RED) — see PR #2785. This file was the only such file in 1302.
+    // for a reason no one would guess from reading it: a spec file that spends
+    // more than 60s of CUMULATIVE SYNCHRONOUS CPU fails the whole run with
+    // `Timeout calling "onTaskUpdate"` while every test still passes — vitest's
+    // bundled birpc rejects a reply the blocked worker never got to read. See
+    // the note on realSources() above for the measured mechanism (#2944), and
+    // PR #2785 for the CI runs where "one file >= 60000ms" predicted the
+    // red/green outcome exactly (74.4s RED, 59.9s GREEN, 62.9s RED).
     //
     // The transports are INDEPENDENT rogue files, so N scans of one rogue file
     // and one scan of N rogue files assert the same thing. analyzeUnityChokepoint

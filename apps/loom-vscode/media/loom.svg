@@ -1,19 +1,33 @@
 <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-  <!-- CSA Loom mark: a woven lattice (warp + weft threads). Monochrome so the
-       VS Code activity bar can recolor it for active/inactive states. -->
-  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-    <!-- warp (vertical) -->
-    <path d="M6 3.5 V20.5" />
-    <path d="M12 3.5 V20.5" />
-    <path d="M18 3.5 V20.5" />
-    <!-- weft (horizontal) -->
-    <path d="M3.5 7 H20.5" />
-    <path d="M3.5 12 H20.5" />
-    <path d="M3.5 17 H20.5" />
-  </g>
-  <g fill="currentColor">
-    <circle cx="6" cy="7" r="1.15" />
-    <circle cx="12" cy="12" r="1.15" />
-    <circle cx="18" cy="17" r="1.15" />
+  <!-- CSA Loom mark: the two interlocking woven loops of the brand logo
+       (apps/fiab-console/public/brand/loom-logo.png), reduced to monochrome
+       line art for the VS Code activity bar.
+
+       currentColor is required here - VS Code recolors activity-bar icons for
+       active/inactive/hover and for light vs dark themes, so the full-colour
+       gradient mark cannot be used at this size. media/loom.png carries the
+       real gradient artwork for the marketplace gallery.
+
+       The weave is a true over-under: each loop is drawn through a mask that
+       punches out the one crossing where the other loop passes in front. The
+       mask centres below are the NUMERICALLY SOLVED intersections of the two
+       rotated ellipses (rx=6.94 ry=5.77 rotate(-28) centres 7.1 apart), so
+       changing any ellipse parameter invalidates them - regenerate rather
+       than nudging by eye. -->
+  <defs>
+    <mask id="loomUnderTop">
+      <rect width="24" height="24" fill="white" />
+      <circle cx="12.86" cy="6.90" r="1.72" fill="black" />
+    </mask>
+    <mask id="loomUnderBottom">
+      <rect width="24" height="24" fill="white" />
+      <circle cx="11.14" cy="17.10" r="1.72" fill="black" />
+    </mask>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.5">
+    <!-- left loop - passes UNDER at the upper crossing -->
+    <ellipse cx="8.45" cy="12.00" rx="6.94" ry="5.77" transform="rotate(-28 8.45 12.00)" mask="url(#loomUnderTop)" />
+    <!-- right loop - passes UNDER at the lower crossing -->
+    <ellipse cx="15.55" cy="12.00" rx="6.94" ry="5.77" transform="rotate(-28 15.55 12.00)" mask="url(#loomUnderBottom)" />
   </g>
 </svg>
