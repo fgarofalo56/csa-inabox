@@ -1,0 +1,19 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <!-- CSA Loom mark: a woven lattice (warp + weft threads). Monochrome so the
+       VS Code activity bar can recolor it for active/inactive states. -->
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <!-- warp (vertical) -->
+    <path d="M6 3.5 V20.5" />
+    <path d="M12 3.5 V20.5" />
+    <path d="M18 3.5 V20.5" />
+    <!-- weft (horizontal) -->
+    <path d="M3.5 7 H20.5" />
+    <path d="M3.5 12 H20.5" />
+    <path d="M3.5 17 H20.5" />
+  </g>
+  <g fill="currentColor">
+    <circle cx="6" cy="7" r="1.15" />
+    <circle cx="12" cy="12" r="1.15" />
+    <circle cx="18" cy="17" r="1.15" />
+  </g>
+</svg>
