@@ -256,6 +256,26 @@ export default defineConfig({
       },
     },
     {
+      // LU-9 (#2619) — Delta Sharing G1 receipt. Live HTTP against the recipient
+      // PROTOCOL route (anonymous fail-closed in the {errorCode,message} wire
+      // shape — not the Loom envelope) + a real browser walk of Marketplace →
+      // Data shares (create share, add ADLS Delta table, register recipient,
+      // grant, render manifest, suspend via the Access toggle). Honest-gate +
+      // tenant-admin tolerant. Creates real Cosmos share/recipient records, so
+      // retries:2 (same reasoning as publish-version) and an afterAll cleanup.
+      // Deliberately NOT a required check — it is the G1 receipt for #2619.
+      name: 'delta-sharing',
+      testDir: './e2e',
+      testMatch: /delta-sharing-protocol\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
       // L5 — column fan-out canvas + impact analysis receipts.
       name: 'lineage-columns',
       testDir: './e2e',
