@@ -22,9 +22,10 @@
  * /api/cosmos-items). Pipeline operations stay in adf-client / synapse-dev-client.
  */
 
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { resolveWorkspaceAccessByOid, ambientAccessOptsFor } from '@/lib/auth/workspace-access';
 import { resolveFactoryOverride, type FactoryOverride } from '@/lib/azure/adf-factory-context';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export interface PipelineBinding {
   /** The real Azure pipeline name to use for every REST call. */
@@ -76,8 +77,9 @@ export class ItemNotFoundError extends Error {
 }
 
 /**
- * Load a Loom item by (id, itemType) scoped to the caller's tenant. Mirrors
- * the loadItem() in /api/cosmos-items so RBAC stays consistent.
+ * Load a Loom item by (id, itemType) and authorize the caller against the
+ * workspace that owns it. Mirrors the access model of /api/cosmos-items so RBAC
+ * stays consistent.
  *
  * `itemType` accepts a single type OR a list of acceptable types. This matters
  * because the pipeline family aliases at creation time: an interactively-created
@@ -87,11 +89,42 @@ export class ItemNotFoundError extends Error {
  * The ADF/Synapse route handlers therefore pass BOTH their own type and
  * `'data-pipeline'` so either persisted form resolves. The list is matched via a
  * parameterized `IN (...)` — no string concatenation of values.
+ *
+ * #2942 — THE AUTHORIZATION STEP USED TO BE AN OWNER-ONLY POINT READ:
+ *
+ *     const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
+ *     if (!resource || resource.tenantId !== tenantId) return null;
+ *
+ * i.e. `assertOwner` inlined byte-for-byte. The `workspaces` container is
+ * partitioned by `/tenantId` and `Workspace.tenantId` stores the workspace
+ * CREATOR's Entra oid, so that point read can only ever find a workspace the
+ * CALLER created. It answers "did this caller create the workspace", not "may
+ * this caller access it". A tenant admin who did not personally create the
+ * workspace therefore got `null` → `ItemNotFoundError` → the data-pipeline
+ * editor showed "Item <id> (adf-pipeline) not found in this tenant" and never
+ * rendered its canvas — while `GET /api/cosmos-items/data-pipeline/<id>`
+ * returned 200 for the SAME caller, because that route resolves through
+ * `resolveItemAccessByOid` → `resolveWorkspaceAccessByOid` (owner → ACL → tid
+ * boundary → admin-open). Same root cause as #2941's `assertOwner` on the
+ * semantic-model model route.
+ *
+ * It now uses that canonical ladder. `tenantId` here is the caller's Entra oid
+ * (legacy naming, matching the ~30 call sites that pass `session.claims.oid`);
+ * the tid boundary and the tenant-admin bypass come from the AMBIENT request
+ * session for that same principal via `ambientAccessOptsFor`, so no call site
+ * had to change.
+ *
+ * WRITE-SCOPED BY DEFAULT, exactly like `loadOwnedItem`: this helper backs both
+ * reads AND `persistBinding` (a Cosmos mutation) plus the run/debug/validate/
+ * trigger actions, so a shared read-only Viewer must not pass it. That is also
+ * strictly NOT weaker than the previous owner-only behavior. A genuinely
+ * read-only caller opts in with `{ allowReadRoles: true }`.
  */
 export async function loadPipelineItem(
   itemId: string,
   itemType: string | string[],
   tenantId: string,
+  opts: { allowReadRoles?: boolean } = {},
 ): Promise<WorkspaceItem | null> {
   const types = (Array.isArray(itemType) ? itemType : [itemType]).filter(Boolean);
   const items = await itemsContainer();
@@ -107,14 +140,13 @@ export async function loadPipelineItem(
     .fetchAll();
   const item = resources[0];
   if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
+  const access = await resolveWorkspaceAccessByOid(
+    tenantId,
+    item.workspaceId,
+    await ambientAccessOptsFor(tenantId),
+  );
+  if (!access) return null;
+  if (!opts.allowReadRoles && !access.canWrite) return null;
   return item;
 }
 
@@ -139,13 +171,18 @@ function readBindingFromState(item: WorkspaceItem): {
  *   - UnboundPipelineError   when the item exists but has no state.pipelineName
  *
  * Callers map those to 404 / 412 respectively.
+ *
+ * `opts.allowReadRoles` is for a STRICTLY read-only caller (e.g. rendering the
+ * editor's bind picker). It is deliberately NOT the default: `resolveBinding`
+ * also backs run / debug / validate / trigger, which execute or mutate.
  */
 export async function resolveBinding(
   itemId: string,
   itemType: string | string[],
   tenantId: string,
+  opts: { allowReadRoles?: boolean } = {},
 ): Promise<PipelineBinding> {
-  const item = await loadPipelineItem(itemId, itemType, tenantId);
+  const item = await loadPipelineItem(itemId, itemType, tenantId, opts);
   // For not-found messages use the caller's primary (first) requested type —
   // e.g. 'adf-pipeline' — since the item genuinely doesn't exist. When the item
   // IS found, prefer its ACTUAL persisted itemType (often 'data-pipeline').
@@ -159,6 +196,10 @@ export async function resolveBinding(
 /**
  * Persist a binding onto the Loom item's `state`. Used by the editor's
  * "bind to existing" / "create new + bind" actions. Returns the updated item.
+ *
+ * WRITE — intentionally uses `loadPipelineItem`'s write-scoped default (no
+ * `allowReadRoles`): a shared read-only Viewer must never be able to re-bind an
+ * item, even though #2942 loosened the READ path for admins/members.
  */
 export async function persistBinding(
   itemId: string,

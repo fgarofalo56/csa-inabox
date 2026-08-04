@@ -183,6 +183,39 @@ async function effectiveCallerTid(oid: string, opts: WorkspaceAccessOpts): Promi
 }
 
 /**
+ * Build the FULL access options — `callerTid` + `groups` + the tenant-admin
+ * bypass — from the AMBIENT request session, for a helper that was handed only
+ * an `oid` (#2941 / #2942).
+ *
+ * WHY THIS EXISTS. `ambientCallerTid` already recovers the tid for the ~263
+ * oid-only call sites, but `tenantAdmin` had no equivalent — so any helper that
+ * takes an oid instead of a session silently ran WITHOUT the admin-open bypass
+ * (step 6). That is what broke the pipeline binder for a tenant admin
+ * (`loadPipelineItem`, ~30 oid-only call sites): the admin resolved to no
+ * access and the item read "not found in this tenant" even though the very same
+ * item opened fine through `/api/cosmos-items`, which DOES pass a session.
+ *
+ * SAFETY: identical rule to {@link ambientCallerTid} — the ambient session is
+ * used ONLY when its `oid` equals the `oid` whose access is being resolved, so
+ * a helper resolving access on behalf of a different principal can never borrow
+ * this request's admin status. Off-request (jobs, scripts, tests) `getSession()`
+ * throws and we degrade to `{ callerTid: undefined }`, i.e. exactly the previous
+ * behavior. Imports are dynamic so this module keeps its static dependency
+ * graph (no session / feature-gate edge).
+ */
+export async function ambientAccessOptsFor(oid: string): Promise<WorkspaceAccessOpts> {
+  try {
+    const { getSession } = await import('@/lib/auth/session');
+    const s = getSession();
+    if (!s || s.claims.oid !== oid) return { callerTid: undefined };
+    const { isTenantAdmin } = await import('@/lib/auth/feature-gate');
+    return { callerTid: s.claims.tid, groups: s.claims.groups, tenantAdmin: isTenantAdmin(s) };
+  } catch {
+    return { callerTid: undefined };
+  }
+}
+
+/**
  * Resolve the caller's access to a workspace from their Entra `oid` (the value
  * legacy code calls `tenantId`). Returns null when the caller neither owns the
  * workspace nor holds any ACL role on it (or the tid boundary rejects it).

@@ -19,9 +19,10 @@
 import { NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import { loadWorkspaceAdmin } from '@/lib/clients/workspaces-client';
+import { cosmosIdFromLoomId } from '@/app/api/items/_lib/loom-content-id';
 import type { Workspace } from '@/lib/types/workspace';
 
 /** Point-read the workspace on (id, ownerOid); true when the caller owns it. */
@@ -34,6 +35,104 @@ export async function assertOwner(workspaceId: string, tenantId: string): Promis
     if (e?.code === 404) return false;
     throw e;
   }
+}
+
+/**
+ * Resolve the OWNING WORKSPACE of an item by (id, itemType) — no authorization,
+ * this only answers "which workspace does this item live in".
+ *
+ * Deliberately implemented here rather than reusing `_lib/item-crud.loadItemRaw`:
+ * `item-crud` imports {@link authorizeWorkspace} from THIS module, so importing
+ * it back would be a cycle. `cosmosIdFromLoomId` is a zero-dependency string
+ * function (see `_lib/loom-content-id`), so applying it costs nothing and lets a
+ * synthetic `loom:<cosmosItemId>` route id resolve like every other Cosmos
+ * chokepoint (#2830).
+ */
+async function workspaceIdOfItem(itemId: string, itemType: string): Promise<string | null> {
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<{ workspaceId?: string }>({
+      query: 'SELECT c.workspaceId FROM c WHERE c.id = @id AND c.itemType = @t',
+      parameters: [
+        { name: '@id', value: cosmosIdFromLoomId(itemId) },
+        { name: '@t', value: itemType },
+      ],
+    })
+    .fetchAll();
+  return resources[0]?.workspaceId || null;
+}
+
+/**
+ * Authorize an ITEM-scoped BFF route whose workspace arrives as an OPTIONAL
+ * query/body param. Returns the route's own 404 response when denied, else null.
+ *
+ * THE TWO DEFECTS THIS CLOSES (#2941). Several per-item sub-routes shipped the
+ * shape
+ *
+ *     if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid)))
+ *       return NextResponse.json({ ok:false, error:'<x> not found' }, { status:404 });
+ *
+ * which is wrong twice over:
+ *
+ *  1. WRONG GUARD — it breaks the feature. {@link assertOwner} is a partition
+ *     point-read on the CALLER's own partition (the `workspaces` container is
+ *     partitioned by `/tenantId`, and `Workspace.tenantId` stores the CREATOR's
+ *     oid). It therefore answers "did this caller CREATE this workspace", not
+ *     "may this caller ACCESS it". A tenant admin — or an ACL-shared member —
+ *     who did not personally create the workspace is refused on a READ, so the
+ *     semantic-model editor showed "Column metadata load failed — semantic model
+ *     not found" for every model while `/api/cosmos-items/...` (which uses the
+ *     ACL-aware resolver) returned 200 for the same caller.
+ *     {@link authorizeWorkspace} is the canonical ladder: owner → tenant admin →
+ *     shared-ACL member.
+ *
+ *  2. SKIPPABLE AUTHORIZATION — the `workspaceId &&` prefix made the check
+ *     optional AT THE CALLER'S DISCRETION: drop the query param and no
+ *     authorization ran at all. Same class as the #2723 broken-access-control
+ *     fix. Here the workspace is instead resolved FROM THE ITEM when the param
+ *     is absent, so authorization cannot be skipped by omitting a parameter.
+ *
+ * READ vs WRITE. Pass `{ allowReadRoles: true }` from a strictly read-only GET
+ * so any workspace role admits the caller. Mutating handlers must NOT pass it —
+ * they stay write-scoped (Owner/Admin/Member) so a read-only Viewer can never
+ * mutate through a route that only "made the read work".
+ *
+ * 404-NOT-403 is preserved, using the ROUTE's own `notFound` wording, so this
+ * neither leaks the existence of resources the caller can't see nor changes the
+ * error string the editor already handles.
+ *
+ * The one path that proceeds unauthorized is `id` naming NO item of that type
+ * anywhere in the estate: there is then no other tenant's resource to authorize,
+ * and every remaining read/write in those handlers is partition-scoped to the
+ * caller's own oid. That case is unreachable for any id that names a real item —
+ * the lookup is a cross-partition query, not an owner-scoped one, so an item
+ * belonging to a DIFFERENT tenant is still found and still refused.
+ */
+export async function authorizeItemWorkspace(
+  session: SessionPayload,
+  opts: {
+    /** The caller-supplied workspace id (query param / body field), if any. */
+    workspaceId?: string | null;
+    /** Route `[id]` — used to resolve the workspace when the param is absent. */
+    itemId: string;
+    /** Cosmos `itemType` of the route's item family. */
+    itemType: string;
+    /** Read-only GET surfaces opt in; mutating handlers must not. */
+    allowReadRoles?: boolean;
+    /** The route's existing not-found wording (e.g. 'semantic model not found'). */
+    notFound: string;
+  },
+): Promise<NextResponse | null> {
+  let workspaceId = (opts.workspaceId || '').trim();
+  if (!workspaceId) {
+    workspaceId = (await workspaceIdOfItem(opts.itemId, opts.itemType)) || '';
+    if (!workspaceId) return null; // no such item — nothing of another tenant's to gate
+  }
+  const denied = await authorizeWorkspace(session, workspaceId, {
+    allowReadRoles: opts.allowReadRoles,
+  });
+  if (!denied) return null;
+  return NextResponse.json({ ok: false, error: opts.notFound }, { status: 404 });
 }
 
 /**

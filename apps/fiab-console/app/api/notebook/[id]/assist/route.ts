@@ -27,8 +27,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
@@ -40,6 +39,7 @@ import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { buildAssistMessages, type InCellMode } from '@/lib/copilot/notebook-tools';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getLastLivyError } from '@/lib/azure/synapse-livy-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 type AssistMode = InCellMode; // 'generate' | 'explain' | 'fix' | 'comments' | 'optimize'
 const ASSIST_MODES: AssistMode[] = ['generate', 'explain', 'fix', 'comments', 'optimize'];
@@ -97,11 +97,7 @@ async function liveLivyErrorText(notebookId: string, workspaceId: string): Promi
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
 
   const body = await req.json().catch(() => ({}));
   const mode = body?.mode as AssistMode | undefined;
@@ -116,8 +112,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const prompt = String(body?.prompt || '');
   let errorText = String(body?.errorText || '');
   const workspaceId = String(body?.workspaceId || '');
-  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) {
-    return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+  // #2941 — was `workspaceId && assertOwner(...)`: owner-only (404'd a tenant
+  // admin / shared member) AND skippable by omitting the body field. Now the
+  // canonical ladder, with the workspace resolved from the notebook item when
+  // the field is absent. Write-scoped: this assist can read the live Livy
+  // session's last error for the notebook, so it is not a public read surface.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: params.id, itemType: 'notebook',
+      notFound: 'notebook not found',
+    });
+    if (denied) return denied;
   }
   const runtime = String(body?.runtime || '');
 
@@ -138,7 +143,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // The client passes the cell's cached error when present; when it's empty
     // (cold-loaded notebook), pull the REAL last error from the live Livy
     // session for this notebook (Azure-native Synapse Spark, no Fabric needed).
-    const notebookId = (await ctx.params).id;
+    const notebookId = params.id;
     errorText = await liveLivyErrorText(notebookId, workspaceId);
     if (!errorText.trim()) {
       return NextResponse.json(
@@ -207,4 +212,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

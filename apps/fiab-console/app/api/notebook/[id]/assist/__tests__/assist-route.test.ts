@@ -13,6 +13,19 @@ import { NextRequest } from 'next/server';
 const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 }) as any);
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
+// #2941 — the route's workspace guard is now UNSKIPPABLE: with no `workspaceId`
+// in the body it resolves the notebook's workspace from Cosmos, so it can no
+// longer be a no-op just because the test body omits the field. These are AOAI
+// assist-logic tests, not authorization tests (and they mock no Cosmos), so the
+// guard is armed to AUTHORIZE. It is deliberately NOT stubbed out of existence:
+// `invokes the workspace guard` below asserts the route still calls it, so
+// dropping the adoption fails here too. The guard's own behaviour is covered in
+// lib/auth/__tests__/authorize-item-workspace.test.ts.
+const authorizeItemWorkspaceMock = vi.fn(async () => null);
+vi.mock('@/lib/auth/workspace-guard', () => ({
+  authorizeItemWorkspace: (...a: any[]) => authorizeItemWorkspaceMock(...(a as [])),
+}));
+
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
@@ -51,6 +64,8 @@ beforeEach(() => {
   delete process.env.LOOM_SYNAPSE_WORKSPACE;
   delete process.env.LOOM_BRONZE_URL;
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
+  authorizeItemWorkspaceMock.mockClear();
+  authorizeItemWorkspaceMock.mockResolvedValue(null);
   resolveAoaiTargetMock.mockResolvedValue({ endpoint: 'https://aoai.example.com', deployment: 'chat', apiVersion: '2024-10-21' });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.resetModules(); });
@@ -75,6 +90,32 @@ describe('POST /api/notebook/[id]/assist', () => {
     const { POST } = await import('@/app/api/notebook/[id]/assist/route');
     const r = await POST(postReq({ mode: 'wat' }), ctx);
     expect(r.status).toBe(400);
+  });
+
+  // #2941 — the route MUST authorize the caller against the notebook's
+  // workspace, and must do so even when the body carries no `workspaceId`
+  // (the old `workspaceId && assertOwner(...)` shape skipped it entirely).
+  it('invokes the workspace guard with the notebook identity even with no workspaceId in the body', async () => {
+    stubAoai('spark.range(1).count()');
+    const { POST } = await import('@/app/api/notebook/[id]/assist/route');
+    await POST(postReq({ mode: 'generate', lang: 'pyspark', prompt: 'count' }), ctx);
+    expect(authorizeItemWorkspaceMock).toHaveBeenCalledTimes(1);
+    const opts = (authorizeItemWorkspaceMock.mock.calls[0] as any[])[1];
+    expect(opts.itemId).toBe('nb-1');
+    expect(opts.itemType).toBe('notebook');
+    expect(opts.notFound).toBe('notebook not found');
+    // WRITE-scoped: this assist reads the notebook's live Livy session state.
+    expect(opts.allowReadRoles).toBeFalsy();
+  });
+
+  it('404s (not 200) when the guard denies', async () => {
+    authorizeItemWorkspaceMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: 'notebook not found' }), { status: 404 }) as any,
+    );
+    stubAoai('spark.range(1).count()');
+    const { POST } = await import('@/app/api/notebook/[id]/assist/route');
+    const r = await POST(postReq({ mode: 'generate', lang: 'pyspark', prompt: 'count' }), ctx);
+    expect(r.status).toBe(404);
   });
 
   it('400 when generate is missing a prompt', async () => {

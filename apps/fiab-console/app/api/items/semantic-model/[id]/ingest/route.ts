@@ -41,7 +41,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import {
   adfConfigGate,
   upsertLinkedService as adfUpsertLinkedService,
@@ -298,7 +298,17 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
 
     // ----- Best-effort: persist run state to the Cosmos item -----
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-    if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+    // #2941 — was `workspaceId && assertOwner(...)`: owner-only (404'd a tenant
+    // admin / shared member) AND skippable by dropping the param. Now the
+    // canonical ladder, write-scoped (this guards a Cosmos state WRITE), with
+    // the workspace resolved from the item when the param is absent.
+    {
+      const denied = await authorizeItemWorkspace(session, {
+        workspaceId, itemId: id, itemType: 'semantic-model',
+        notFound: 'semantic model not found',
+      });
+      if (denied) return denied;
+    }
     if (workspaceId) {
       try {
         const items = await itemsContainer();
