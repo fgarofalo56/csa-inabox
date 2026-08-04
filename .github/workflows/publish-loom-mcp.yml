@@ -1,0 +1,82 @@
+name: publish-loom-mcp
+
+# Publishes the @csa-loom/mcp npm package (the Loom MCP servers; M1 loom-catalog
+# ships the `loom-catalog-mcp` bin).
+#
+# Mirrors publish-loom-cli.yml: tag-triggered so cutting an MCP release never
+# touches the shared release-please machinery. Also runs on PRs that touch the
+# package, as a build + typecheck + test gate — a test nobody runs is the same
+# defect class as a gate that measures nothing.
+#
+# Cut a release by pushing a tag:   git tag loom-mcp-v0.1.0 && git push --tags
+# Or run manually (workflow_dispatch) for a dry-run.
+#
+# PUBLISH CAVEAT: @csa-loom/mcp depends on @csa-loom/sdk via `file:../loom-sdk`.
+# npm refuses to publish a package with a file: dependency, so the publish step
+# is BLOCKED until @csa-loom/sdk is published (PRP D0) and this package's
+# dependency is switched to a semver range. Until then the tag path is a no-op
+# and only the CI gate (build + typecheck + test) runs — which is the valuable
+# part today. Requires repo/org secret NPM_TOKEN for the eventual publish.
+
+on:
+  push:
+    tags:
+      - 'loom-mcp-v*'
+  pull_request:
+    paths:
+      - 'apps/loom-mcp/**'
+      - 'apps/loom-sdk/**'
+      - '.github/workflows/publish-loom-mcp.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build + test only; do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # The MCP package's file: dependency resolves to the SDK's built dist/,
+      # so build the SDK first.
+      - name: Build @csa-loom/sdk (file: dependency)
+        working-directory: apps/loom-sdk
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Install (materialize the file: SDK dep as real files)
+        working-directory: apps/loom-mcp
+        run: npm install --no-audit --no-fund --install-links
+
+      - name: Typecheck
+        working-directory: apps/loom-mcp
+        run: npm run typecheck
+
+      - name: Test (unit + stdio smoke test)
+        working-directory: apps/loom-mcp
+        run: npm test
+
+      - name: Build
+        working-directory: apps/loom-mcp
+        run: npm run build
+
+      - name: Publish to npm
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/loom-mcp-v') }}
+        working-directory: apps/loom-mcp
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

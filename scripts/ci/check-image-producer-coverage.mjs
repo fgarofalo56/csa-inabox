@@ -80,6 +80,7 @@ const KNOWN_UNBUILT = new Map([
   ['loom-capacity-broker', 'compute/loom-capacity-broker-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep. Needs a producer before it is wired.'],
   ['loom-directlake', 'compute/loom-directlake-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep. Needs a producer before it is wired.'],
   ['loom-onelake', 'compute/loom-onelake-app.bicep is a standalone entrypoint not invoked by admin-plane/main.bicep — its own header still carries the "TODO wire into main.bicep" block. Needs a producer before it is wired.'],
+  ['loom-mcp', 'Dev-tool stdio MCP server (loom-devtools). Distributed via npm + the loom-skills marketplace and run locally / self-hosted (`claude mcp add` or the optional Dockerfile). By design it is NOT a platform-deployed Container App — no bicep references its image, so there is no admin-plane deploy to hit MANIFEST_UNKNOWN. The Dockerfile is a self-host convenience, not an estate image; this entry is permanent, not a pending-wiring gap.'],
 ]);
 
 /** Does `line` reference `context` in a position that can reach a build? */
