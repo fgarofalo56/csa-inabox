@@ -13,11 +13,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { resolveWorkspaceAccessByOid, ambientAccessOptsFor } from '@/lib/auth/workspace-access';
+import { withSession } from '@/lib/api/route-toolkit';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import { autoBindOnCreate } from '@/lib/azure/auto-bind';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -27,10 +28,8 @@ function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
 }
 
-export async function POST(req: NextRequest, props: { params: Promise<{ type: string }> }) {
-  const { type } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+export const POST = withSession<{ type: string }>(async (req: NextRequest, { session, params }) => {
+  const { type } = params;
 
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
@@ -41,18 +40,30 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!displayName) return err('displayName is required', 400, 'missing_displayName');
 
   try {
-    // Verify the caller's tenant owns the target workspace.
-    const ws = await workspacesContainer();
-    let workspace: Workspace | undefined;
-    try {
-      const { resource } = await ws.item(workspaceId, session.claims.oid).read<Workspace>();
-      workspace = resource;
-    } catch (e: any) {
-      if (e?.code !== 404) throw e;
-    }
-    if (!workspace || workspace.tenantId !== session.claims.oid) {
-      return err('Workspace not found', 404, 'not_found');
-    }
+    // Authorize the caller against the target workspace.
+    //
+    // This USED to be the owner-only point read `ws.item(workspaceId,
+    // session.claims.oid).read()` plus `workspace.tenantId !== oid` — the same
+    // inlined `assertOwner` that #2946 removed from `pipeline-binding.ts` and
+    // the semantic-model route (#2941, #2942). `workspaces` is partitioned by
+    // `/tenantId` and `Workspace.tenantId` holds the workspace CREATOR's oid, so
+    // it answered "did this caller create the workspace", not "may this caller
+    // write to it": a tenant admin or an ACL Member got "Workspace not found"
+    // and could not create an item at all — which also meant auto-bind never
+    // ran for them. It now uses the canonical ladder (owner → tenant admin →
+    // shared ACL), the same one `/api/workspaces/[id]/items` POST already used
+    // for the identical operation.
+    //
+    // WRITE-SCOPED: `canWrite` is required, so a shared read-only Viewer still
+    // cannot create items — strictly not weaker than the owner-only behaviour.
+    const access = await resolveWorkspaceAccessByOid(
+      session.claims.oid,
+      workspaceId,
+      await ambientAccessOptsFor(session.claims.oid),
+    );
+    // 404 rather than 403, so an id cannot be probed for existence across
+    // tenants — the same behaviour the previous owner-only read had.
+    if (!access || !access.canWrite) return err('Workspace not found', 404, 'not_found');
 
     const now = new Date().toISOString();
     const item: WorkspaceItem = {
@@ -80,4 +91,4 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   } catch (e: any) {
     return err(e?.message || 'Failed to create item', 500, 'cosmos_error');
   }
-}
+});
