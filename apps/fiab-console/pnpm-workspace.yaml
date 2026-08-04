@@ -36,7 +36,21 @@ overrides:
   protobufjs: '>=8.6.0'
   # <8.5.10 and <=8.5.11 advisories in this lockfile; portal/react-webapp has a
   # separate <=8.5.17 advisory handled in its own manifest.
-  postcss: '>=8.5.12'
+  #
+  # RAISED 8.5.12 -> 8.5.23 for GHSA-fxqj-rqcc-2cmp / CVE-2026-69153 (published
+  # 2026-08-03), which is the INCOMPLETE-FIX follow-up to GHSA-6g55-p6wh-862q:
+  # the earlier patch nested its traversal/absolute-path rejection inside
+  # `if (cssFile)`, so `postcss([]).process(css)` with `from` unset skipped it
+  # and an attacker `sourceMappingURL` could still read an arbitrary `.map`.
+  # Range is `<= 8.5.22` — i.e. EVERY release up to and including the one this
+  # lockfile resolved — and first_patched_version is 8.5.23.
+  #
+  # This is RUNTIME scope here, not build-time: `next` is a production
+  # dependency and declares `postcss: 8.4.31` as a direct dependency of its
+  # own, so postcss is in the production resolution graph. (A pnpm override
+  # REPLACES the parent's range outright rather than intersecting with it,
+  # which is why an exact `8.4.31` pin upstream still resolves to our floor.)
+  postcss: '>=8.5.23'
   uuid: '>=11.1.1'
   '@opentelemetry/core': '>=2.8.0'
   '@opentelemetry/propagator-jaeger': '>=2.9.0'

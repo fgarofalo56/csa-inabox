@@ -15,13 +15,17 @@
 //      selectable via `redisBackend`:
 //        'managed' (DEFAULT) — Azure Managed Redis (Microsoft.Cache/
 //          redisEnterprise) via modules/shared/managed-redis.bicep. Azure
-//          Cache for Redis is retiring: Public-cloud creation is blocked for
-//          existing customers on 2026-10-01 and all caches are turned off on
-//          2028-10-01.
+//          Cache for Redis is retiring; per the JULY 2026 revision (Learn,
+//          cache-whats-new, re-verified 2026-08-04) the only operative dates
+//          are 2026-04-01 (new customers, PUBLIC CLOUD ONLY) and 2028-10-01
+//          (all remaining caches turned off). The old 2026-10-01 / 2027-04-01
+//          creation blocks were WITHDRAWN.
 //        'classic' — the legacy Microsoft.Cache/redis Premium cache. This is
 //          the ONLY option in Azure Government: Azure Managed Redis is Azure
-//          Public cloud only (Learn, AMR planning FAQ). Sovereign callers MUST
-//          pass redisBackend='classic'.
+//          Public cloud only (Learn, AMR planning FAQ), with no announced Gov
+//          ETA. Sovereign callers MUST pass redisBackend='classic' — and that
+//          still CREATES fine today; the binding date for them is the
+//          2028-10-01 turn-off.
 //      The four consumers:
 //        - Loom Direct Lake segment-residency index
 //          (key {tableId, deltaVersion, columnId, rowGroupId} -> Arrow IPC bytes)
@@ -79,11 +83,14 @@ param location string
 
 // ── Shared Redis (zone-redundant) ──
 
-// #2642 — Azure Cache for Redis is retiring (Public cloud: creation blocked for
-// existing customers 2026-10-01; every cache off 2028-10-01). 'managed' is the
-// forward path. It is NOT available in Azure Government — AMR is Azure Public
-// cloud only (Learn, "Azure Managed Redis planning FAQs"), so a sovereign
-// caller MUST pass 'classic'. See modules/shared/managed-redis.bicep.
+// #2642 — Azure Cache for Redis is retiring. Per the JULY 2026 revision (Learn,
+// cache-whats-new, re-verified 2026-08-04) the creation blocks were removed for
+// ALL clouds except the 2026-04-01 new-customer block in the PUBLIC cloud; the
+// remaining hard date is the 2028-10-01 turn-off. 'managed' is the forward
+// path. It is NOT available in Azure Government — AMR is Azure Public cloud
+// only (Learn, "Azure Managed Redis planning FAQs"), with no announced Gov ETA
+// — so a sovereign caller MUST pass 'classic', which still creates fine today.
+// See modules/shared/managed-redis.bicep.
 @description('Which Redis provider backs the shared cache. "managed" = Azure Managed Redis (Microsoft.Cache/redisEnterprise) — the forward path, AZURE PUBLIC CLOUD ONLY. "classic" = the legacy Microsoft.Cache/redis Premium cache — required in Azure Government (GCC/GCC-High/IL5), where Azure Managed Redis does not exist, and the value to pass when redeploying against an EXISTING classic cache you do not want to migrate yet.')
 @allowed(['managed', 'classic'])
 param redisBackend string = 'managed'

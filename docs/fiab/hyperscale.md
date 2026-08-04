@@ -110,17 +110,27 @@ global Azure cloud"*; the [Azure Cache for Redis planning FAQ][acr-faq] says the
 same from the other side: *"The Azure Redis Enterprise and Enterprise Flash
 tiers are available only in the Public cloud"* — and AMR **is** that
 `redisEnterprise` provider). Pointing Gov at the managed backend would replace a
-service that stops accepting new caches in 2026 with one that has never existed
-in that cloud.
+service that still creates successfully there today with one that has never
+existed in that cloud.
 
 ### Redis backend (#2642)
 
-Azure Cache for Redis is retiring. Per Microsoft Learn:
+Azure Cache for Redis is retiring. **Microsoft revised the timeline in July 2026**,
+*removing the creation-block dates for all clouds* except the public-cloud
+new-customer block. Re-verified against Learn on 2026-08-04
+([What's New in Azure Cache for Redis](https://learn.microsoft.com/azure/azure-cache-for-redis/cache-whats-new),
+section "July 2026"):
 
-| Cloud | New caches blocked (new customers) | New caches blocked (existing customers) | All caches off |
-|---|---|---|---|
-| Azure Public | 2026-04-01 | **2026-10-01** | 2028-10-01 |
-| Azure Government | **2026-10-01** | 2027-04-01 | 2028-10-01 |
+| Cloud | New caches blocked | All caches off |
+|---|---|---|
+| Azure Public | 2026-04-01 (new customers only) | 2028-10-01 |
+| Azure Government | *(no creation block — withdrawn)* | 2028-10-01 |
+
+> The earlier table published here — Public `2026-10-01` for existing customers,
+> Government `2026-10-01` / `2027-04-01` — was **withdrawn by that update** and is
+> no longer operative. Several secondary sources still print it (the AVM
+> `avm/res/cache/redis` README, some Azure Advisor recommendation strings), so
+> do not "restore" it from those.
 
 What this means for the H-band substrate:
 
@@ -130,10 +140,20 @@ What this means for the H-band substrate:
   sub-resource `redisEnterprise`, DNS zone `privatelink.redis.azure.net`.
 - **Government** — `redisBackend=classic`. Endpoint stays
   `<name>.redis.cache.<sovereign-suffix>:**6380**`, sub-resource `redisCache`,
-  DNS zone `privatelink.redis.cache.<sovereign-suffix>`. After 2027-04-01 a Gov
-  estate can no longer create a cache of either flavour; the Redis tier is
-  optional everywhere in Loom (the in-memory per-replica tier is the honest
-  default), so this degrades cross-replica sharing rather than function.
+  DNS zone `privatelink.redis.cache.<sovereign-suffix>`. A Gov estate **can
+  still create** a classic cache today — the 2026/2027 blocks are gone — so a
+  from-scratch sovereign deploy is not broken. The binding date is the
+  **2028-10-01 turn-off**, and Azure Managed Redis has no announced Azure
+  Government availability
+  ([Microsoft Q&A](https://learn.microsoft.com/answers/a/12551338)), so the Gov
+  forward path is an open architecture decision (AMR-when-available, or an
+  OSS-Redis/Valkey-on-ACA backend). The Redis tier is optional everywhere in
+  Loom (the in-memory per-replica tier is the honest default), so even at
+  turn-off this degrades cross-replica sharing rather than function.
+- **The classic path says so out loud.** `deploy-planner/redis.bicep` emits a
+  `redisRetirementNotice` output naming the 2028-10-01 turn-off whenever it
+  creates the classic resource, so a deploy receipt cannot silently hand back a
+  retiring cache.
 - **Never compose the port by hand.** The module publishes a `redisEndpoint`
   output that is already `<host>:<port>` for whichever backend was deployed;
   set `LOOM_BROKER_REDIS` / `LOOM_SPARK_POOL_REDIS` / `LOOM_RESULT_CACHE_REDIS`

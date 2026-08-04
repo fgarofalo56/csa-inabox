@@ -6,7 +6,7 @@ settings:
 
 overrides:
   protobufjs: '>=8.6.0'
-  postcss: '>=8.5.12'
+  postcss: '>=8.5.23'
   uuid: '>=11.1.1'
   '@opentelemetry/core': '>=2.8.0'
   '@opentelemetry/propagator-jaeger': '>=2.9.0'
@@ -3754,8 +3754,8 @@ packages:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
     engines: {node: '>= 0.4'}
 
-  postcss@8.5.22:
-    resolution: {integrity: sha512-KBDEIpLrvpv16pp3K0Fw+UCoZfopFjjgeB+0tA/aaThfEE74kKDLrgg603YvOWJyg3+WYtyq3xYsQWsIyZlPqQ==}
+  postcss@8.5.25:
+    resolution: {integrity: sha512-DTPx3RWSSnWyzLxQnlH0rJP+EW5ekl16ZU4/psbIhA0e53kJfdgaN5vKM+xP7yJtXVu+nfdVFmlgFDEKAe4Pyw==}
     engines: {node: ^10 || ^12 || >=14}
 
   postgres-array@2.0.0:
@@ -8975,7 +8975,7 @@ snapshots:
       '@next/env': 15.5.21
       '@swc/helpers': 0.5.15
       caniuse-lite: 1.0.30001806
-      postcss: 8.5.22
+      postcss: 8.5.25
       react: 19.2.6
       react-dom: 19.2.6(react@19.2.6)
       styled-jsx: 5.1.6(@babel/core@7.29.7)(react@19.2.6)
@@ -9157,7 +9157,7 @@ snapshots:
 
   possible-typed-array-names@1.1.0: {}
 
-  postcss@8.5.22:
+  postcss@8.5.25:
     dependencies:
       nanoid: 3.3.16
       picocolors: 1.1.1
@@ -9836,7 +9836,7 @@ snapshots:
       esbuild: 0.25.12
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
-      postcss: 8.5.22
+      postcss: 8.5.25
       rollup: 4.60.4
       tinyglobby: 0.2.16
     optionalDependencies:
