@@ -5,11 +5,23 @@
 // Entra authentication so the Loom Console UAMI connects token-only.
 //
 // ── #2642: WHICH PROVIDER ──────────────────────────────────────────────────
-// Azure Cache for Redis (`Microsoft.Cache/redis`) is retiring. Per Microsoft
-// Learn, in the Azure PUBLIC cloud new-cache creation is blocked for existing
-// customers on 2026-10-01 and every remaining cache is turned off on
-// 2028-10-01; in Azure Government creation is blocked for NEW customers on
-// 2026-10-01 and for existing customers on 2027-04-01.
+// Azure Cache for Redis (`Microsoft.Cache/redis`) is retiring.
+//
+// TIMELINE — REVISED BY MICROSOFT IN JULY 2026. Re-verified 2026-08-04 against
+// Learn "What's New in Azure Cache for Redis", section "July 2026": *"Microsoft
+// is removing creation block timeline for Basic, Standard, and Premium tiers
+// for ALL CLOUDS."* The operative dates are now only:
+//   2026-04-01  creation blocked for NEW customers — IN THE PUBLIC CLOUD ONLY
+//   2028-10-01  all remaining Basic/Standard/Premium caches turned off
+// The previously-announced public/existing 2026-10-01 block, and the Azure
+// Government pair 2026-10-01 (new) / 2027-04-01 (existing), were WITHDRAWN by
+// that update. This module used to state them as fact; they are corrected here
+// rather than deleted so the next reader knows the old table is retracted and
+// does not "restore" it from the AVM redis README or an Advisor string, both of
+// which still print it.
+//
+// NET EFFECT ON A SOVEREIGN FROM-SCRATCH DEPLOY: the classic path is NOT
+// creation-blocked in 2026. 2028-10-01 is a migrate-before deadline.
 //
 // So this module picks a backend:
 //   redisBackend='managed' (DEFAULT) — Azure Managed Redis
@@ -21,16 +33,19 @@
 // Redis is only available in the global Azure cloud"*; and the Azure Cache for
 // Redis planning FAQ: *"The Azure Redis Enterprise and Enterprise Flash tiers
 // are available only in the Public cloud"* — AMR is that `redisEnterprise`
-// provider). main.bicep therefore derives the backend from `boundary` and pins
-// GCC / GCC-High / IL5 to 'classic'. Do NOT flip a sovereign deployment to
-// 'managed': it would swap a service that stops taking new caches in 2026 for
+// provider). Microsoft Q&A confirms there is still **no announced ETA** for AMR
+// in Azure Government (re-verified 2026-08-04). main.bicep therefore derives the
+// backend from `boundary` and pins GCC / GCC-High / IL5 to 'classic'. Do NOT
+// flip a sovereign deployment to 'managed': it would swap a working service for
 // one that has never existed in that cloud.
 //
 // Grounded in Microsoft Learn:
 //   Microsoft.Cache/redis            https://learn.microsoft.com/azure/templates/microsoft.cache/redis
 //   Microsoft.Cache/redisEnterprise  https://learn.microsoft.com/azure/templates/microsoft.cache/redisenterprise
+//   REVISED retirement timeline      https://learn.microsoft.com/azure/azure-cache-for-redis/cache-whats-new
 //   Retirement + migration           https://learn.microsoft.com/azure/redis/migrate/migrate-basic-standard-premium-overview
 //   AMR is Public-cloud only         https://learn.microsoft.com/azure/redis/planning-faq
+//   No AMR-in-Gov ETA                https://learn.microsoft.com/answers/a/12551338
 
 targetScope = 'resourceGroup'
 
@@ -155,3 +170,15 @@ output endpoint string = useManagedRedis
 
 @description('Which Redis provider was actually deployed ("managed" = redisEnterprise, "classic" = redis).')
 output redisBackendDeployed string = redisBackend
+
+// An HONEST, DATED notice rather than a silent break (#2642). The classic
+// provider still creates successfully in Azure Government today — the 2026
+// creation blocks were withdrawn in July 2026 — but it IS on a retirement path
+// with a hard turn-off, and a deploy that quietly hands back a retiring
+// resource is exactly the silent break this output exists to prevent. Surfaced
+// as an output so it lands in `az deployment sub show --query properties.outputs`
+// and in the deploy-planner receipt, where a human actually reads it.
+@description('Retirement posture of the Redis backend that was deployed. Empty-ish ("none") on the managed backend; on classic it names the hard turn-off date so the deploy receipt cannot omit it.')
+output redisRetirementNotice string = useManagedRedis
+  ? 'none — Azure Managed Redis (Microsoft.Cache/redisEnterprise) is the forward path and is not retiring.'
+  : 'ACTION REQUIRED BEFORE 2028-10-01 — this deployment created a RETIRING Azure Cache for Redis (Microsoft.Cache/redis). Microsoft turns off all remaining Basic/Standard/Premium caches on 2028-10-01. The 2026-10-01 / 2027-04-01 creation blocks were WITHDRAWN in July 2026 (https://learn.microsoft.com/azure/azure-cache-for-redis/cache-whats-new), so creation still works — but migration is still required. Azure Managed Redis is Azure Public cloud only and has no announced Azure Government date, so a sovereign estate must plan either an AMR-in-Gov arrival or a non-Redis / OSS-Redis result-cache backend. Migration guide: https://learn.microsoft.com/azure/redis/migrate/migrate-basic-standard-premium-overview'

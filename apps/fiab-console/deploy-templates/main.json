@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "2436046988143969150"
+      "templateHash": "1668618694091549883"
     }
   },
   "definitions": {
@@ -2574,7 +2574,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6069735895687210242"
+              "templateHash": "4247823161061767053"
             }
           },
           "definitions": {
@@ -6232,7 +6232,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "1873325673927894549"
+                      "templateHash": "2881113548566291117"
                     }
                   },
                   "parameters": {
@@ -6815,8 +6815,7 @@
                       "properties": {
                         "ipConfigurations": [
                           {
-                            "privateIpAllocationMethod": "Static",
-                            "privateIpAddress": "[format('{0}.9.4', variables('prefix'))]",
+                            "privateIpAllocationMethod": "Dynamic",
                             "subnet": {
                               "id": "[format('{0}/subnets/snet-dns-inbound', resourceId('Microsoft.Network/virtualNetworks', format('vnet-csa-loom-hub-{0}', parameters('location'))))]"
                             }
@@ -6832,7 +6831,7 @@
                   "outputs": {
                     "dnsResolverInboundIp": {
                       "type": "string",
-                      "value": "[format('{0}.9.4', variables('prefix'))]"
+                      "value": "[reference(resourceId('Microsoft.Network/dnsResolvers/inboundEndpoints', format('dnspr-loom-{0}', parameters('location')), 'inbound'), '2022-07-01').ipConfigurations[0].privateIpAddress]"
                     },
                     "hubVnetId": {
                       "type": "string",
@@ -15418,7 +15417,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "2899045092665584055"
+                      "templateHash": "16029290191515264391"
                     }
                   },
                   "parameters": {
@@ -15450,7 +15449,7 @@
                     }
                   },
                   "variables": {
-                    "websiteContributorRoleId": "de139f84-1756-47ae-9be6-808fbbe706ee",
+                    "websiteContributorRoleId": "de139f84-1756-47ae-9be6-808fbbe84772",
                     "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c",
                     "effectiveSwaRoleId": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), variables('contributorRoleId'), variables('websiteContributorRoleId'))]",
                     "sovereignRedundant": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]"
@@ -17268,7 +17267,7 @@
                     "value": "[reference('registry').outputs.acrLoginServer.value]"
                   },
                   "imageTag": {
-                    "value": "[parameters('appImageTags').console]"
+                    "value": "[coalesce(tryGet(parameters('appImageTags'), 'dbtRunner'), 'v0.1')]"
                   },
                   "uamiId": {
                     "value": "[reference('identity').outputs.uamiConsoleId.value]"
@@ -17974,6 +17973,9 @@
                   "uamiClientId": {
                     "value": "[reference('identity').outputs.uamiConsoleClientId.value]"
                   },
+                  "acrLoginServer": {
+                    "value": "[reference('registry').outputs.acrLoginServer.value]"
+                  },
                   "adminPassword": {
                     "value": "[variables('airflowAdminPassword')]"
                   },
@@ -17997,7 +17999,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "17004316930672592148"
+                      "templateHash": "13958776645966802577"
                     }
                   },
                   "parameters": {
@@ -18026,11 +18028,17 @@
                         "description": "Console UAMI client ID — injected as AZURE_CLIENT_ID for managed-identity auth from DAGs."
                       }
                     },
+                    "acrLoginServer": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Estate ACR login server (e.g. <name>.azurecr.io) the Airflow image is pulled from. The deploy workflow (full-app-deploy-commercial.yml / gov-provision-dataplane-images.yml) mirrors the upstream image into THIS registry with `az acr import`, and the host pulls the mirrored copy via the Console UAMI — NO public-registry egress on any shipped lane. REQUIRED: the admin-plane call site always supplies registry.outputs.acrLoginServer, so the effective image is always <acrLoginServer>/<airflowImage>."
+                      }
+                    },
                     "airflowImage": {
                       "type": "string",
                       "defaultValue": "apache/airflow:2.10.5-python3.12",
                       "metadata": {
-                        "description": "Apache Airflow container image. Defaults to the upstream OSS image on Docker Hub; override with an ACR-mirrored tag (e.g. <acr>.azurecr.io/apache/airflow:2.10.5) in locked-egress / sovereign estates."
+                        "description": "Apache Airflow container image REPOSITORY:TAG (no registry host), mirrored UNCHANGED into the estate ACR. The upstream Docker Hub coordinate is recorded here as the mirror source-of-truth AND the LIC0 licence record (github.com/apache/airflow = Apache-2.0); the EFFECTIVE pull is always <acrLoginServer>/<this> — never docker.io. Bump this to re-point the mirror; the workflow imports exactly this ref."
                       }
                     },
                     "adminUsername": {
@@ -18108,6 +18116,7 @@
                     }
                   },
                   "variables": {
+                    "airflowImageRef": "[format('{0}/{1}', parameters('acrLoginServer'), parameters('airflowImage'))]",
                     "pgAdminLogin": "loomairflow",
                     "pgServerName": "[take(format('psql-loom-airflow-{0}', uniqueString(resourceGroup().id)), 63)]",
                     "pgDatabaseName": "airflow",
@@ -18356,13 +18365,19 @@
                               "name": "webserver-secret-key",
                               "value": "[parameters('webserverSecretKey')]"
                             }
+                          ],
+                          "registries": [
+                            {
+                              "server": "[parameters('acrLoginServer')]",
+                              "identity": "[parameters('uamiId')]"
+                            }
                           ]
                         },
                         "template": {
                           "containers": [
                             {
                               "name": "webserver",
-                              "image": "[parameters('airflowImage')]",
+                              "image": "[variables('airflowImageRef')]",
                               "args": [
                                 "webserver"
                               ],
@@ -18407,7 +18422,7 @@
                             },
                             {
                               "name": "scheduler",
-                              "image": "[parameters('airflowImage')]",
+                              "image": "[variables('airflowImageRef')]",
                               "args": [
                                 "scheduler"
                               ],
@@ -18466,7 +18481,8 @@
               "dependsOn": [
                 "containerPlatformModule",
                 "identity",
-                "monitoring"
+                "monitoring",
+                "registry"
               ]
             },
             "ducklakeCatalog": {
@@ -54328,7 +54344,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "12879347030013500197"
+              "templateHash": "1725311055214562487"
             }
           },
           "parameters": {
@@ -54856,6 +54872,13 @@
                 "description": "Which Redis provider was actually deployed (\"managed\" = redisEnterprise, \"classic\" = redis)."
               },
               "value": "[parameters('redisBackend')]"
+            },
+            "redisRetirementNotice": {
+              "type": "string",
+              "metadata": {
+                "description": "Retirement posture of the Redis backend that was deployed. Empty-ish (\"none\") on the managed backend; on classic it names the hard turn-off date so the deploy receipt cannot omit it."
+              },
+              "value": "[if(variables('useManagedRedis'), 'none — Azure Managed Redis (Microsoft.Cache/redisEnterprise) is the forward path and is not retiring.', 'ACTION REQUIRED BEFORE 2028-10-01 — this deployment created a RETIRING Azure Cache for Redis (Microsoft.Cache/redis). Microsoft turns off all remaining Basic/Standard/Premium caches on 2028-10-01. The 2026-10-01 / 2027-04-01 creation blocks were WITHDRAWN in July 2026 (https://learn.microsoft.com/azure/azure-cache-for-redis/cache-whats-new), so creation still works — but migration is still required. Azure Managed Redis is Azure Public cloud only and has no announced Azure Government date, so a sovereign estate must plan either an AMR-in-Gov arrival or a non-Redis / OSS-Redis result-cache backend. Migration guide: https://learn.microsoft.com/azure/redis/migrate/migrate-basic-standard-premium-overview')]"
             }
           }
         }

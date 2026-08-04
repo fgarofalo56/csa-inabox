@@ -801,16 +801,37 @@ var redisIsPremium = redisSkuName == 'Premium'
 var redisSkuFamily = redisIsPremium ? 'P' : 'C'
 var redisSkuCapacity = redisIsPremium ? 1 : 0
 
-// #2642 — Azure Cache for Redis is retiring. Azure PUBLIC cloud: new-cache
-// creation blocked for existing customers 2026-10-01, all caches off
-// 2028-10-01. Azure Government: blocked for NEW customers 2026-10-01, existing
-// 2027-04-01. Azure Managed Redis (Microsoft.Cache/redisEnterprise) is the
-// successor — but it is AZURE PUBLIC CLOUD ONLY:
+// #2642 — Azure Cache for Redis is retiring. Azure Managed Redis
+// (Microsoft.Cache/redisEnterprise) is the successor.
+//
+// TIMELINE — REVISED BY MICROSOFT IN JULY 2026. Re-verified 2026-08-04 against
+// https://learn.microsoft.com/azure/azure-cache-for-redis/cache-whats-new
+// ("July 2026"): *"Microsoft is removing creation block timeline for Basic,
+// Standard, and Premium tiers for ALL CLOUDS."* What survives is only:
+//   2026-04-01  creation blocked for NEW customers — IN THE PUBLIC CLOUD ONLY
+//   2028-10-01  all remaining Basic/Standard/Premium caches turned off
+// The dates this comment used to carry — public/existing 2026-10-01, and the
+// Azure Government pair 2026-10-01 (new) / 2027-04-01 (existing) — were
+// WITHDRAWN by that update and are no longer operative. Do not reinstate them
+// from a stale secondary source: the AVM `avm/res/cache/redis` README and
+// several Advisor recommendation strings still print the old table.
+//
+// CONSEQUENCE FOR THIS DERIVATION: a from-scratch SOVEREIGN deploy on the
+// classic provider is NOT blocked in 2026. The only hard date left for Gov is
+// the 2028-10-01 turn-off, which is a migrate-before deadline, not a
+// create-blocked-now one.
+//
+// AMR remains AZURE PUBLIC CLOUD ONLY (re-verified 2026-08-04):
 //   "Azure Managed Redis is only available in the global Azure cloud"
 //   https://learn.microsoft.com/azure/redis/planning-faq
 //   "The Azure Redis Enterprise and Enterprise Flash tiers are available only
 //    in the Public cloud"  (AMR *is* that redisEnterprise provider)
 //   https://learn.microsoft.com/azure/azure-cache-for-redis/cache-planning-faq
+// Microsoft Q&A, on Gov specifically: *"Azure Managed Redis is not available
+// at this time, and there is no publicly announced ETA for when support will
+// be introduced in Azure Government or other sovereign clouds."*
+//   https://learn.microsoft.com/answers/a/12551338
+//
 // So the backend is DERIVED from the boundary rather than exposed as a new
 // param (main.bicep is at the ARM 256-param ceiling): Commercial gets the
 // forward path, every other boundary stays on the classic provider because the

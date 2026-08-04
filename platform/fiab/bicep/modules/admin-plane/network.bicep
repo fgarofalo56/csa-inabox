@@ -580,8 +580,9 @@ var dnsZones = [
   // #2642 (2026-08) — Azure MANAGED Redis (Microsoft.Cache/redisEnterprise).
   // A DIFFERENT private-link sub-resource ('redisEnterprise', not 'redisCache')
   // on a DIFFERENT zone, so the classic zone above cannot serve it. Azure Cache
-  // for Redis is retiring (Public cloud: no new caches for existing customers
-  // after 2026-10-01; all caches off 2028-10-01), so hband-shared.bicep now
+  // for Redis is retiring (per the July 2026 Learn revision the creation blocks
+  // were withdrawn for all clouds bar the 2026-04-01 public-cloud new-customer
+  // block; all caches off 2028-10-01), so hband-shared.bicep now
   // defaults to the managed provider in Commercial and needs this zone for its
   // PE DNS group. Index 25.
   // NO SOVEREIGN VARIANT: Learn's private-endpoint-dns Government table does

@@ -3,9 +3,15 @@
 // WHY THIS MODULE EXISTS
 // ---------------------------------------------------------------------------
 // Azure Cache for Redis (`Microsoft.Cache/redis`, Basic/Standard/Premium) is
-// retiring. Per Microsoft Learn, in the Azure PUBLIC cloud new-cache creation
-// is blocked for EXISTING customers on 2026-10-01, and every remaining cache is
-// turned off on 2028-10-01. Azure Managed Redis (AMR) is the successor and is
+// retiring. TIMELINE REVISED BY MICROSOFT IN JULY 2026 — re-verified 2026-08-04
+// against Learn "What's New in Azure Cache for Redis": *"Microsoft is removing
+// creation block timeline for Basic, Standard, and Premium tiers for ALL
+// CLOUDS."* Operative dates are now only 2026-04-01 (creation blocked for NEW
+// customers, PUBLIC CLOUD ONLY) and 2028-10-01 (all remaining caches turned
+// off). The public/existing 2026-10-01 block and the Azure Government
+// 2026-10-01 / 2027-04-01 pair were WITHDRAWN.
+//   https://learn.microsoft.com/azure/azure-cache-for-redis/cache-whats-new
+// Azure Managed Redis (AMR) is the successor and is
 // deployed through a DIFFERENT resource provider shape:
 //   Microsoft.Cache/redisEnterprise                        (the cluster)
 //   Microsoft.Cache/redisEnterprise/databases              (child, name 'default')
@@ -31,8 +37,12 @@
 // opposite ("Managed Redis is listed as a mainstream service in Azure
 // Government"); that conflates Azure *Cache* for Redis (which IS a Gov
 // service) with Azure *Managed* Redis (which is not). Do not "fix" Gov by
-// pointing it here — it would replace a service that stops taking NEW caches
-// in Oct 2026 with one that has never existed in that cloud at all.
+// pointing it here: it would replace a service that still creates successfully
+// there today with one that has never existed in that cloud at all. Microsoft
+// Q&A, re-verified 2026-08-04: *"Azure Managed Redis is not available at this
+// time, and there is no publicly announced ETA for when support will be
+// introduced in Azure Government or other sovereign clouds."*
+//   https://learn.microsoft.com/answers/a/12551338
 //
 // ── NOT A 1:1 PORT OF THE CLASSIC SHAPE ────────────────────────────────────
 // Four things genuinely differ and are easy to get wrong by find-and-replace:
