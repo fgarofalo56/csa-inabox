@@ -42,3 +42,11 @@ scripts/ci/test-assert-acr-image-tags.sh text eol=lf
 # #2837 — the login-health verdict is executed by `bash` in loom-ui-verify.yml
 # (in-VNet Linux runner) and by the node:test self-test. Same CRLF hazard.
 scripts/ci/login-health-verdict.sh text eol=lf
+
+# #2945 — deploy-templates/main.json is the COMPILED ARM template that is COPY'd
+# into the console image and submitted INLINE to ARM. It is byte-compared against
+# a fresh `az bicep build` by scripts/ci/check-deploy-template-sync.mjs, and
+# `az bicep build` always writes LF. Pin the committed copy to LF so a CRLF
+# checkout can never manufacture a 60k-line "diff" — and so the comparator never
+# needs an EOL normalization loose enough to hide a real content change.
+apps/fiab-console/deploy-templates/main.json text eol=lf

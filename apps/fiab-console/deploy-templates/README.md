@@ -30,3 +30,33 @@ az bicep build -f platform/fiab/bicep/main.bicep \
 
 Commit the regenerated `main.json`. The CI template-publish step already
 recompiles from the same source, so the bundled copy must be kept in sync.
+
+## CI enforces this (#2945)
+
+`scripts/ci/check-deploy-template-sync.mjs` runs in the merge-blocking
+`guardrails` job (`.github/workflows/loom-guardrails.yml`, **no path filter** —
+it runs on every PR). It recompiles `main.bicep` and requires the committed
+`main.json` to be **byte-identical**; any difference fails the job and prints
+the regenerate command above.
+
+It was needed because this file had already drifted, silently, and the drift
+shipped: four merged fixes were **inert** in the deploying artifact, including
+#2682's ACR-mirroring supply-chain fix (airflow was still pulled straight from
+Docker Hub) and a role assignment against a Website Contributor GUID that does
+not exist.
+
+Two details worth knowing before you "fix" a failure:
+
+- **Line endings are not content.** `az bicep build` always writes LF and
+  `.gitattributes` pins this file to `text eol=lf`. If the guard reports an
+  *eol* difference, your checkout predates that pin — run
+  `git add --renormalize apps/fiab-console/deploy-templates/main.json`. Do not
+  "fix" it by rewriting the file.
+- **The bicep CLI version is pinned by the file itself.** `az bicep build`
+  output varies across CLI versions in `metadata._generator.version` *and*
+  `templateHash` (measured 2026-08-04: 0.45.15 vs 0.46.1 differ in 840 lines,
+  every one of them a `_generator` line). Rather than mask those fields, the
+  guard reads `metadata._generator.version` out of the committed artifact and
+  installs exactly that bicep before compiling — so nothing is normalized away
+  and a new bicep release cannot cause a false failure. Regenerating with a
+  newer bicep is fine: the stamp moves and the guard follows it.
