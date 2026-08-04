@@ -49,6 +49,8 @@ import { cogScope, getOpenAiSuffix } from '@/lib/azure/cloud-endpoints';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
 import { iterateAoaiDeltas } from '@/lib/api/aoai-sse';
 import { randomId } from '@/lib/util/random-id';
+import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { resolveOwnedSqlTarget } from '@/app/api/items/azure-sql-database/_bound-connection';
 
 // ---------- Command allowlist ----------
 const COMMANDS = ['fix', 'explain', 'nl2sql'] as const;
@@ -179,7 +181,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
-  await params; // id is part of the route contract; state comes from the body
+  const { id } = await params; // #2723 — the id now conveys authority (owner-scoped load below)
 
   let body: CopilotBody = {};
   try {
@@ -195,8 +197,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       { status: 400 },
     );
   }
-  const server = String(body.server || '').trim();
-  const database = String(body.database || '').trim();
   const selection = String(body.selection || '').trim();
   const sql = String(body.sql || '').trim();
   // The working snippet: explicit selection wins, else the full editor buffer
@@ -214,6 +214,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const sessionId =
     body.sessionId || randomId('sqlcopilot', 6);
+
+  // Authority (#2723): the caller must OWN the [id] item, and the schema this
+  // Copilot reads over the live TDS path is bound to THAT item's connection —
+  // never a body-chosen server/database. Owner-scoped load → 404 otherwise.
+  const item = await loadOwnedItem(id, 'azure-sql-database', session.claims.oid, { session });
+  if (!item) {
+    return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+  }
+  // Derive the schema-read target from the owned item's bound connection. A body
+  // that names a DIFFERENT server/database is rejected outright; an item with no
+  // bound connection still runs the Copilot, just without live schema grounding
+  // (loadSchemaCatalog soft-fails on empty coordinates — no body-chosen DB read).
+  const bound = resolveOwnedSqlTarget(item, { server: body.server, database: body.database });
+  if (!bound.ok && bound.code !== 'no_bound_connection') {
+    return NextResponse.json({ ok: false, error: bound.error, code: bound.code }, { status: bound.status });
+  }
+  const server = bound.ok ? bound.server : '';
+  const database = bound.ok ? bound.database : '';
 
   // Resolve AOAI — honest gate when nothing is wired.
   let target: ResolvedTarget;
