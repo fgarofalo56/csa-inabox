@@ -701,11 +701,44 @@ export function isClientComponent(src) {
   return /^(['"])use client\1\s*;?/.test(src.slice(firstCode));
 }
 
-/** True when the file names the catalog in a way that could address a request. */
+/**
+ * True when the file names the catalog in a way that could address a request.
+ *
+ * ## Why the client-component test comes LAST
+ *
+ * The three conditions are ordered by COST, not by narrative. `isClientComponent`
+ * masks the whole file — `maskSource` does `src.split('')`, so it allocates one
+ * single-character string per byte — purely to read the first non-whitespace
+ * token. Check 4 calls this for EVERY file in the tree, and only 69 of ~5,345
+ * reference the catalog at all, so asking the expensive question first meant
+ * masking ~55 MB of source to answer a question about 69 files.
+ *
+ * The two orders are equivalent, exhaustively:
+ *
+ *   ADDRESS  PATH  client │ before  after
+ *   ─────────────────────────────────────
+ *      T      -      -    │  true    true    (first arm, unchanged)
+ *      F      T      T    │  false   false   (client exemption still applies)
+ *      F      T      F    │  true    true
+ *      F      F      T    │  false   false
+ *      F      F      F    │  false   false
+ *
+ * That is not merely asserted-about: the guard's own spec keeps `#4 — fails on a
+ * .tsx SERVER component` (the F/T/F row) and `#4 — but does NOT fire on a real
+ * 'use client' component` (the F/T/T row), which are the only two rows the
+ * reorder could possibly have changed. Both still pass.
+ *
+ * Measured effect on ONE whole-tree scan: check 4 went ~1.5 s -> ~0.16 s. That
+ * matters beyond tidiness — see the note on the guard's spec: the spec runs 31
+ * whole-tree scans and vitest's bundled birpc fails the WHOLE RUN if a worker
+ * blocks its own event loop past the 60 s `onTaskUpdate` reply deadline (#2944).
+ */
 export function referencesCatalogAddress(rel, src) {
   if (UNITY_ADDRESS_RE.test(src)) return true;
-  if (isClientComponent(src)) return false;
-  return UNITY_REST_PATH_RE.test(src);
+  // Cheap raw-source regex first: no match here means no path arm can fire, so
+  // the client-component exemption cannot change the answer.
+  if (!UNITY_REST_PATH_RE.test(src)) return false;
+  return !isClientComponent(src);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -737,8 +770,19 @@ export function referencesCatalogAddress(rel, src) {
  */
 export const SECURABLE_RAW_PUBLIC = new Set(['getKeyVaultSecret', 'keyVaultConfigGate']);
 
+/**
+ * The module BASENAME every specifier that resolves to {@link SECURABLE_RAW}
+ * must contain. DERIVED from {@link SECURABLE_RAW} rather than re-typed, so the
+ * specifier pattern below and the cheap pre-filter in
+ * {@link securableRawImports} have ONE definition and cannot drift apart — the
+ * same rule this file applies to {@link TRANSPORTS}. Renaming the raw module
+ * therefore moves both at once.
+ */
+const SECURABLE_RAW_BASENAME = path.basename(SECURABLE_RAW, '.ts');
+
 /** Module specifiers that resolve to {@link SECURABLE_RAW}. */
-const SECURABLE_RAW_SPECIFIER = "(?:@/lib/azure/shortcut-credentials|(?:\\.{1,2}/)+shortcut-credentials)";
+const SECURABLE_RAW_SPECIFIER =
+  `(?:@/lib/azure/${SECURABLE_RAW_BASENAME}|(?:\\.{1,2}/)+${SECURABLE_RAW_BASENAME})`;
 
 /**
  * Every binding a file imports from {@link SECURABLE_RAW}.
@@ -750,8 +794,26 @@ const SECURABLE_RAW_SPECIFIER = "(?:@/lib/azure/shortcut-credentials|(?:\\.{1,2}
  * Read against comments-masked source with STRING BODIES INTACT (the specifier
  * only exists inside a string), so a doc comment naming the module is not an
  * import. Exported for the guard's own spec.
+ *
+ * ## Why the pre-filter is safe (#2944)
+ *
+ * Check 8 runs this over EVERY file in the tree, and 14 of ~5,345 import from
+ * that module — so ~5,331 files were paying a full {@link maskComments} pass
+ * (one single-character string allocated per source byte) to be told `[]`.
+ *
+ * Skipping the mask when the RAW source does not contain the basename cannot
+ * change any answer, because {@link maskSource} only ever REPLACES characters
+ * with spaces; it never inserts one. So a substring absent from `src` is absent
+ * from `maskComments(src)` too, and every pattern below embeds
+ * {@link SECURABLE_RAW_SPECIFIER}, which embeds the basename — no match was
+ * reachable. Proven empirically as well: identical output on all 5,345 real
+ * files plus 21 synthetic payloads (renamed / namespace / dynamic / require /
+ * type-only / in-comment / look-alike-module / empty).
+ *
+ * Measured: check 8 over one whole-tree scan, ~1.8 s -> ~0.03 s.
  */
 export function securableRawImports(src) {
+  if (!src.includes(SECURABLE_RAW_BASENAME)) return [];
   const masked = maskComments(src);
   const names = [];
 
