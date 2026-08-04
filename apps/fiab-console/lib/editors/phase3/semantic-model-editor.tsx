@@ -69,7 +69,6 @@ import { MetricViewBuilder } from '../components/metric-view-builder';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
-import { getItem } from '@/lib/api/workspaces';
 import { useBiBackend, useSemanticBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
 import { AskAffordance } from '@/lib/components/ask/AskAffordance';
@@ -92,6 +91,7 @@ import { SemanticModelSecurityTab } from './semantic-model-editor/security-tab';
 import { SemanticModelCopilotPane } from './semantic-model-editor/copilot-pane';
 import { SemanticModelPrepForAiPane } from './semantic-model-editor/prep-for-ai-pane';
 import { LoomNativeModelView } from './semantic-model-editor/loom-native-model-view';
+import { usePbiWorkspaceBinding } from './semantic-model-editor/pbi-workspace-binding';
 // N9 — Verified Semantic Contract + VQR authoring tab (governed metric registry
 // + approved question→query pairs; the data agent retrieves verified queries
 // first and refuses out-of-contract questions).
@@ -135,55 +135,14 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // editor keeps its Loom-native surface.
   const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces(pbiOptIn);
-  // ── TWO workspace namespaces, never interchangeable (#2649) ────────────────
-  // `pbiWorkspaceId` — a POWER BI groupId (usePowerBiWorkspaces →
-  //   /api/powerbi/workspaces). Only Power BI-backed calls may receive it:
-  //   list / detail / refresh / refresh-schedule / take-over / measures / build /
-  //   direct-lake / app.powerbi.com deep links + the PBI governance panels.
-  // `loomWorkspaceId` — THIS item's own Loom workspace GUID (its Cosmos
-  //   partition key). The assertOwner-guarded Loom item routes (`[id]/model`,
-  //   `[id]/datasource`) accept nothing else and answer 404 "semantic model not
-  //   found" for a Power BI groupId — which is what 404'd them on EVERY open.
-  //   Resolved from the item record exactly as the sibling Power BI-family
-  //   editor in this folder already does (paginated-report-editor.tsx).
-  const [pbiWorkspaceId, setPbiWorkspaceId] = useState('');
-  const [loomWorkspaceId, setLoomWorkspaceId] = useState('');
-  // The Power BI workspace this item's Loom workspace is MAPPED to
-  // (`pbiWorkspaceMapping.pbiWorkspaceId`, set in Workspace settings). `''`
-  // once resolution finishes with no mapping; `null` while still resolving so
-  // the auto-pick below can WAIT rather than race ahead to an arbitrary group.
-  const [mappedPbiWorkspaceId, setMappedPbiWorkspaceId] = useState<string | null>(null);
-  useEffect(() => {
-    if (!id || id === 'new') return;
-    let cancelled = false;
-    // Best-effort: the Loom routes treat an ABSENT workspaceId as "no owner
-    // check", so degrading to '' still works — unlike sending a foreign id.
-    getItem(item.slug, id)
-      .then((it) => { if (!cancelled && it?.workspaceId) setLoomWorkspaceId(it.workspaceId); })
-      .catch(() => { /* leave loomWorkspaceId unresolved */ });
-    return () => { cancelled = true; };
-  }, [item.slug, id]);
-  // Resolve the workspace→Power BI mapping so the auto-pick below binds the
-  // MAPPED group instead of an arbitrary one (see the auto-pick comment).
-  //
-  // NO-FABRIC-DEPENDENCY: gated on `pbiOptIn` exactly like `usePowerBiWorkspaces`
-  // above, so the DEFAULT (Loom-native) render still makes ZERO extra requests
-  // for a Power BI concern. When Power BI is off, `ws.workspaces` is empty and
-  // the binding resolver returns undefined regardless, so leaving this state at
-  // `null` blocks nothing.
-  useEffect(() => {
-    if (!pbiOptIn) return;
-    if (!loomWorkspaceId) return;
-    let cancelled = false;
-    clientFetch(`/api/workspaces/${encodeURIComponent(loomWorkspaceId)}/powerbi-mapping`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        setMappedPbiWorkspaceId(j?.ok ? (j.mapping?.pbiWorkspaceId || '') : '');
-      })
-      .catch(() => { if (!cancelled) setMappedPbiWorkspaceId(''); });
-    return () => { cancelled = true; };
-  }, [pbiOptIn, loomWorkspaceId]);
+  // Workspace identity cluster (3 states + 2 effects) — extracted to
+  // ./semantic-model-editor/pbi-workspace-binding. Called HERE, at the exact
+  // position the inline `pbiWorkspaceId` state occupied, so the expanded hook
+  // order is unchanged. The auto-pick effect that consumes this stays below at
+  // its original position (moving it would reorder effect execution).
+  const {
+    pbiWorkspaceId, setPbiWorkspaceId, loomWorkspaceId, mappedPbiWorkspaceId,
+  } = usePbiWorkspaceBinding({ itemSlug: item.slug, id, pbiOptIn });
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
@@ -766,24 +725,12 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // route — `loomWorkspaceId` (resolved from the item record above) is the only
   // value those accept, and the auto-picked groupId 404'd all of them.
   //
-  // BINDING PRECEDENCE (auto-bind-by-default.md — the platform owns the
-  // binding, and it must be the RIGHT one). Previously this unconditionally
-  // took `ws.workspaces[0].id` — the first group the tenant listing happened to
-  // return. That is an ARBITRARY third workspace: not the item's workspace and
-  // not the one an operator mapped in Workspace settings. Every
-  // /api/powerbi/{datasets,reports,dashboards,dataflows} call then addressed a
-  // group the signed-in user may have no role on, which Power BI answers 401
-  // (learn.microsoft.com/power-bi/developer/embedded/troubleshoot-rest-api
-  // #troubleshoot-401-errors-in-power-bi-rest-api-calls). Now we follow the
-  // documented precedence in lib/azure/powerbi-workspace-mapping.ts:
-  //   1. the workspace→Power BI MAPPING (pbiWorkspaceMapping.pbiWorkspaceId)
-  //   2. only if unmapped, the first listed group (previous behavior)
-  // and we WAIT for mapping resolution (`null`) so the arbitrary fallback can
-  // never win a race against the mapped value.
-  //
-  // The rule itself lives in lib/azure/powerbi-editor-binding.ts as a PURE
-  // function so its unit test executes the real thing instead of a copy (a test
-  // that re-implements its subject cannot fail).
+  // The precedence rule (mapped group over the arbitrary first-listed one, and
+  // WAITING while the mapping resolves so the fallback cannot win the race) is
+  // a PURE function in lib/azure/powerbi-editor-binding.ts — see that module for
+  // the full rationale and the 401 it removes. It lives there so its unit test
+  // executes the real thing instead of a copy (a test that re-implements its
+  // subject cannot fail).
   useEffect(() => {
     if (pbiWorkspaceId) return;
     const next = resolveEditorPbiBinding({

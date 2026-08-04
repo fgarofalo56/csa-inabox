@@ -60,6 +60,7 @@ describe('R10 decomposition — SemanticModelEditorInner hook order', () => {
       read(path.join(EDITORS, 'phase3', 'semantic-model-editor.tsx')),
       'SemanticModelEditorInner',
       {
+        usePbiWorkspaceBinding: read(path.join(DIR, 'pbi-workspace-binding.ts')),
         useSemanticModelAggregations: read(path.join(DIR, 'aggregations-tab.tsx')),
         useSemanticModelDirectLake: read(path.join(DIR, 'direct-lake-tab.tsx')),
         useSemanticModelIncrementalRefreshState: read(path.join(DIR, 'incremental-refresh-tab.tsx')),

@@ -41,62 +41,31 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  ClientSecretCredential,
-  type TokenCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
-import { powerPlatformEndpoints } from '@/lib/azure/cloud-endpoints';
+import {
+  powerPlatformFetch, bapBase, bapScope, type PpCallIdentity,
+} from '@/lib/azure/power-platform-auth';
 
-// CLOUD-AWARE BAP ENDPOINT (shared with powerplatform-client).
+// CLOUD-AWARE BAP ENDPOINT + DUAL-IDENTITY AUTH — both now come from the single
+// shared chokepoint `power-platform-auth.ts`.
 //
-// THIS LINE WAS THE BUG. It read `LOOM_POWER_PLATFORM_BAP_BASE`, which NOTHING
-// in the repo sets: bicep wires `LOOM_BAP_BASE` (admin-plane/main.bicep), while
-// scripts/ci/check-env-sync.mjs exempts the name below as "derived from cloud
-// endpoints" and seven parity docs tell operators it is how the Copilot Studio
-// family reaches a sovereign cloud. The result: an operator could configure the
-// platform exactly as documented and STILL have every Copilot Studio call pinned
-// to the Commercial host, with no gate naming the cause. Both clients now
-// resolve through `powerPlatformEndpoints()` (which honors BOTH var names), so
-// the exemption is finally true and the two clients can no longer diverge.
-function bapBase(): string { return powerPlatformEndpoints().bapBase; }
-function bapScope(): string { return powerPlatformEndpoints().bapScope; }
+// THE BUG THAT MOTIVATED THE SHARING. This client used to read
+// `LOOM_POWER_PLATFORM_BAP_BASE`, which NOTHING in the repo sets: bicep wires
+// `LOOM_BAP_BASE` (admin-plane/main.bicep), while scripts/ci/check-env-sync.mjs
+// exempted the phantom name as "derived from cloud endpoints" and seven parity
+// docs told operators it is how the Copilot Studio family reaches a sovereign
+// cloud. An operator could configure the platform exactly as documented and
+// STILL have every Copilot Studio call pinned to the Commercial host, with no
+// gate naming the cause. Two hand-maintained copies of one policy is how that
+// happened, so there is now exactly one copy.
+//
+// The Dataverse credential resolution is shared for the same reason: this client
+// used to read ONLY LOOM_DATAVERSE_CLIENT_ID, so an estate that set just the
+// MSAL vars (which the day-one bootstrap registers as the Dataverse Application
+// User) left it with NO Dataverse credential at all.
+
+/** BAP admin control-plane api-version (host comes from `bapBase()`). */
 const BAP_API_VERSION = '2020-10-01';
-
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const uamiCredential: TokenCredential = uamiClientId
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
-
-// Dataverse credential — Copilot Studio agents/knowledge live in Dataverse.
-// UAMIs can't be Dataverse Application Users, so route those scopes through
-// the MSAL Web App SP when configured. See powerplatform-client.ts.
-//
-// AUTO-BIND: fall back to the MSAL Web App SP exactly as the sibling
-// powerplatform-client does. The day-one bootstrap registers THAT app as the
-// Dataverse Application User (scripts/csa-loom/dataverse-add-appuser.sh), so
-// reading only LOOM_DATAVERSE_CLIENT_ID left this client with NO Dataverse
-// credential on any estate that didn't separately set the dedicated var —
-// every Copilot Studio call then fell through to the UAMI, which Dataverse
-// rejects. Sharing the sibling's resolution order makes it work day-one with
-// no operator step (auto-bind-by-default.md §5).
-const dataverseClientId =
-  process.env.LOOM_DATAVERSE_CLIENT_ID || process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const dataverseClientSecret =
-  process.env.LOOM_DATAVERSE_CLIENT_SECRET || process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
-const dataverseTenantId = process.env.LOOM_DATAVERSE_TENANT_ID || process.env.AZURE_TENANT_ID;
-const dataverseCredential: TokenCredential | null =
-  (dataverseClientId && dataverseClientSecret && dataverseTenantId)
-    ? new ClientSecretCredential(dataverseTenantId, dataverseClientId, dataverseClientSecret)
-    : null;
-
-const isDataverseScope = (scope: string) => /\.crm[0-9]*\.dynamics\.com\/\.default$/.test(scope);
-
-const credential = uamiCredential;
 
 export class CopilotStudioError extends Error {
   status: number;
@@ -128,44 +97,23 @@ export class CopilotStudioError extends Error {
  *
  * Kill switch: LOOM_POWERPLATFORM_USER_PASSTHROUGH=false → pure SP behavior.
  */
-async function getSpToken(scope: string): Promise<string> {
-  const cred = (isDataverseScope(scope) && dataverseCredential) ? dataverseCredential : uamiCredential;
-  const t = await cred.getToken(scope);
-  if (!t?.token) throw new CopilotStudioError(`Failed to acquire AAD token for ${scope}`, 401);
-  return t.token;
-}
+/** Bind the shared dual-identity transport to this client's error type. */
+const CS_AUTH = { tokenError: (m: string) => new CopilotStudioError(m, 401) };
 
 /** Which identity produced the token an outbound call actually used. */
-export type CopilotStudioCallIdentity = 'user' | 'sp';
+export type CopilotStudioCallIdentity = PpCallIdentity;
 
 /**
- * Issue a Copilot Studio (Dataverse / BAP) call under DUAL IDENTITY — mirrors
- * `ppFetch` in powerplatform-client.ts; see the long rationale there.
- *
- * Short version: neither identity alone can serve this client. Every Copilot
- * Studio agent / topic / action / knowledge source is a DATAVERSE row, and a
- * UAMI token is never a valid Dataverse Application User — while the BAP *admin*
- * scope is management-application-only, so an ordinary signed-in user 403s
- * there. Trying the user and RETRYING as the service principal on 401/403 means
- * each surface is served by whichever principal actually holds the right, and no
- * call that works today can regress (both legs already existed).
+ * Issue a Copilot Studio (Dataverse / BAP) call under DUAL IDENTITY — the
+ * shared policy in power-platform-auth.ts. Copilot Studio agents, topics,
+ * actions and knowledge sources are all Dataverse rows (a UAMI token is never a
+ * valid Dataverse Application User), while the BAP admin scope is
+ * management-application-only, so each surface is served by whichever principal
+ * actually holds the right.
  */
 async function csFetch(url: string, scope: string, init: RequestInit): Promise<Response> {
-  const { tryUserTokenForPowerPlatform } = await import('@/lib/auth/obo');
-  const withBearer = (token: string): RequestInit => ({
-    ...init,
-    headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${token}` },
-  });
-  const userToken = await tryUserTokenForPowerPlatform(scope);
-  if (userToken) {
-    const res = await fetchWithTimeout(url, withBearer(userToken));
-    if (res.status !== 401 && res.status !== 403) return res;
-    let spToken: string | null = null;
-    try { spToken = await getSpToken(scope); } catch { spToken = null; }
-    if (!spToken) return res;
-    return fetchWithTimeout(url, withBearer(spToken));
-  }
-  return fetchWithTimeout(url, withBearer(await getSpToken(scope)));
+  const { res } = await powerPlatformFetch(url, scope, init, CS_AUTH);
+  return res;
 }
 
 interface CallOpts {

@@ -23,67 +23,14 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+// DUAL-IDENTITY AUTH + TRANSPORT — extracted to a single shared chokepoint so
+// this client and copilot-studio-client cannot drift again (they already had:
+// each read a different, only-half-wired env var for the BAP host). See the
+// long rationale in power-platform-auth.ts.
 import {
-  ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential,
-  ClientSecretCredential, type TokenCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { powerPlatformEndpoints, assertPowerPlatformAvailable } from '@/lib/azure/cloud-endpoints';
-
-// CLOUD-AWARE ENDPOINTS (single source of truth). These were module-level
-// `process.env` reads that ONLY understood the Commercial hosts unless an
-// operator set every var by hand; the sibling copilot-studio-client read a
-// DIFFERENT (unwired) var for the same host. Both clients now resolve through
-// `powerPlatformEndpoints()` so a sovereign boundary routes correctly, an
-// operator override applies to BOTH clients, and an unknown sovereign host
-// raises a named remediation instead of silently calling a Commercial host.
-// Lazily evaluated (functions, not consts) so a runtime env change and unit
-// tests both take effect.
-function bapBase(): string { return powerPlatformEndpoints().bapBase; }
-function bapScope(): string { return powerPlatformEndpoints().bapScope; }
-function powerAppsScope(): string { return powerPlatformEndpoints().powerAppsScope; }
-function flowScope(): string { return powerPlatformEndpoints().flowScope; }
-/** Throws an honest, named remediation when this cloud has no known host. */
-function powerAppsBase(): string {
-  assertPowerPlatformAvailable('powerapps');
-  return powerPlatformEndpoints().powerAppsBase as string;
-}
-function flowBase(): string {
-  assertPowerPlatformAvailable('flow');
-  return powerPlatformEndpoints().flowBase as string;
-}
-
-// UAMI credential — used for BAP / PowerApps / Flow control-plane calls.
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const uamiCredential: TokenCredential = uamiClientId
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
-
-// Dataverse credential — UAMIs aren't valid Dataverse Application Users
-// (Microsoft platform restriction), so we use a confidential SP for any
-// `<org>.crm.dynamics.com/.default` scope. The SP must be registered as a
-// Dataverse Application User (System Administrator) on every env Loom reads —
-// which the day-one bootstrap does for the MSAL Web App SP
-// (scripts/csa-loom/dataverse-add-appuser.sh, run from the post-deploy
-// workflow). So by DEFAULT we reuse that SAME MSAL app + secret here (no
-// gate, works day-one): LOOM_DATAVERSE_CLIENT_ID/_SECRET are honored when set
-// (a dedicated Dataverse app), otherwise we fall back to LOOM_MSAL_CLIENT_ID /
-// LOOM_MSAL_CLIENT_SECRET (the registered app-user). See docs/fiab/dataverse-app-user.md.
-const dataverseClientId =
-  process.env.LOOM_DATAVERSE_CLIENT_ID || process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const dataverseClientSecret =
-  process.env.LOOM_DATAVERSE_CLIENT_SECRET || process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
-const dataverseTenantId = process.env.LOOM_DATAVERSE_TENANT_ID || process.env.AZURE_TENANT_ID;
-const dataverseCredential: TokenCredential | null =
-  (dataverseClientId && dataverseClientSecret && dataverseTenantId)
-    ? new ClientSecretCredential(dataverseTenantId, dataverseClientId, dataverseClientSecret)
-    : null;
-
-const isDataverseScope = (scope: string) => /\.crm[0-9]*\.dynamics\.com\/\.default$/.test(scope);
-
-/** Legacy alias — most call sites still reference `credential`. */
-const credential = uamiCredential;
-
+  powerPlatformFetch, ppAuthHint,
+  bapBase, bapScope, powerAppsBase, powerAppsScope, flowBase, flowScope,
+} from '@/lib/azure/power-platform-auth';
 /**
  * Honest config gate for the Power Platform navigator routes.
  *
@@ -161,87 +108,10 @@ export class PowerPlatformError extends Error {
   }
 }
 
-/** Which identity produced the token an outbound call actually used. */
-export type PpCallIdentity = 'user' | 'sp';
-
-/**
- * Acquire the SERVICE-PRINCIPAL bearer token for a Power Platform REST call.
- *
- * Route Dataverse-scope tokens through the MSAL Web App SP when configured
- * (Dataverse refuses UAMI-issued tokens — the SP must be registered as an
- * Application User on the env). Falls back to the UAMI credential if the
- * dedicated Dataverse SP isn't configured, which then surfaces a 403 with
- * "user is not a member of the organization" — actionable.
- */
-async function getSpToken(scope: string): Promise<string> {
-  const cred = (isDataverseScope(scope) && dataverseCredential) ? dataverseCredential : uamiCredential;
-  const t = await cred.getToken(scope);
-  if (!t?.token) throw new PowerPlatformError(`Failed to acquire AAD token for ${scope}`, 401);
-  return t.token;
-}
-
-function withBearer(init: RequestInit, token: string): RequestInit {
-  return {
-    ...init,
-    headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${token}` },
-  };
-}
-
-/**
- * Issue a Power Platform REST call under DUAL IDENTITY.
- *
- * WHY BOTH IDENTITIES ARE REQUIRED — neither one alone can serve this client:
- *
- *   - Only a LICENSED USER can author Power Automate flows. "APIs related to
- *     Flow are supported for service principal authentication in situations
- *     where a license isn't required, as it isn't possible to assign licenses
- *     to service principal identities in Microsoft Entra ID."
- *     (learn.microsoft.com/power-platform/admin/powerplatform-api-create-service-principal
- *      #limitations-of-service-principals). And a UAMI-issued token is never a
- *     valid Dataverse Application User.
- *   - Only the registered MANAGEMENT APPLICATION can use the BAP *admin* scope
- *     (`/scopes/admin/...`). An ordinary signed-in user is not a Power Platform
- *     administrator, so a user token 403s there — while the SP succeeds.
- *
- * A "user token first, SP only if no user token could be MINTED" design (the
- * shape this file briefly carried) therefore REGRESSES the admin control plane:
- * once a user token mints successfully, every admin listing 403s and the SP is
- * never tried. That is the difference between "Power Platform works" and "the
- * environment list is empty", which is exactly the reported symptom.
- *
- * So: try the user, and on a 401/403 RETRY the same request as the service
- * principal. Both legs are pre-existing behaviors, so this can only ever turn a
- * failure into a success:
- *   - no signed-in user / kill switch / mint failure → SP only (today's path);
- *   - user allowed                                   → user (correct licensing + RBAC);
- *   - user denied, SP allowed                        → SP (today's path).
- *
- * The bodies we send are always JSON strings, so re-issuing the request is safe.
- * Kill switch: LOOM_POWERPLATFORM_USER_PASSTHROUGH=false → pure SP behavior.
- */
-async function ppFetch(
-  url: string,
-  scope: string,
-  init: RequestInit,
-): Promise<{ res: Response; identity: PpCallIdentity; triedUser: boolean }> {
-  const { tryUserTokenForPowerPlatform } = await import('@/lib/auth/obo');
-  const userToken = await tryUserTokenForPowerPlatform(scope);
-  if (userToken) {
-    const res = await fetchWithTimeout(url, withBearer(init, userToken));
-    if (res.status !== 401 && res.status !== 403) return { res, identity: 'user', triedUser: true };
-    // The delegated identity is not authorized for this surface — retry as the
-    // service principal before surfacing the denial.
-    let spToken: string | null = null;
-    try { spToken = await getSpToken(scope); } catch { spToken = null; }
-    if (!spToken) return { res, identity: 'user', triedUser: true };
-    return { res: await fetchWithTimeout(url, withBearer(init, spToken)), identity: 'sp', triedUser: true };
-  }
-  return {
-    res: await fetchWithTimeout(url, withBearer(init, await getSpToken(scope))),
-    identity: 'sp',
-    triedUser: false,
-  };
-}
+/** Bind the shared dual-identity transport to this client's error type. */
+const PP_AUTH = { tokenError: (m: string) => new PowerPlatformError(m, 401) };
+const ppFetch = (url: string, scope: string, init: RequestInit) =>
+  powerPlatformFetch(url, scope, init, PP_AUTH);
 
 interface CallOpts {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -278,14 +148,12 @@ async function call<T = any>(url: string, scope: string, opts: CallOpts = {}): P
     const msg = (json?.error?.message || json?.message || text || `${method} ${url} failed`).toString();
     let hint: string | undefined;
     if (res.status === 401 || res.status === 403) {
-      // Name the principal(s) actually refused. `triedUser` — NOT `identity` —
-      // is the right discriminator: after a retry `identity` is 'sp', so keying
-      // off it would report an SP-only denial even though the signed-in user was
-      // refused first, and send the operator to fix the wrong grant.
+      // Name the principal(s) actually refused. The copy lives ONCE, in
+      // power-platform-auth.ppAuthHint — an inline duplicate here was dead-coding
+      // the shared helper, which a mutation test caught (inverting the helper's
+      // discriminator stayed green because nothing called it).
       void identity;
-      hint = triedUser
-        ? 'Both identities were refused: your signed-in account, then the Console service principal. Confirm your account has a Power Platform licence and a role on this environment, AND that the Console SP is registered as a Power Platform management application (New-PowerAppManagementApp) and — for Dataverse — added as an Application User with the System Administrator role.'
-        : 'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow group in Power Platform admin centre, and (for Dataverse) added as an Application User in the target environment with the System Administrator role.';
+      hint = ppAuthHint(triedUser);
     }
     throw new PowerPlatformError(msg, res.status, json || text, full, hint);
   }
