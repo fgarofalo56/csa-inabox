@@ -323,3 +323,99 @@ describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
     expect(dl.every((c) => c.url.includes(encodeURIComponent(`loom:${ITEM_ID}`)))).toBe(true);
   });
 });
+
+// ── #2912 — the Azure-native tabs must be reachable with Power BI OFF ─────────
+// no-fabric-dependency.md violation: Aggregations / Incremental refresh / Direct
+// Lake have Azure-native backends (XMLA alternateOf / AAS refresh-policy / ADLS
+// Delta shim) but their UI only mounted through the Power BI opt-in (`datasetId`
+// binds ONLY via a bound Power BI workspace). On the DEFAULT estate a user lost
+// all three, and `LoomNativeModelView` has no equivalent.
+//
+// These cases mount the editor with Power BI OFF (biBackend absent) on a
+// PERSISTED item, reach each tab through its ribbon entry, and assert the tab
+// BODY mounts — with ZERO Power BI calls. Each goes RED on the pre-fix tree:
+// the ribbon entries are absent / disabled (`disabled:!datasetId`) and the tabs
+// are not in the keep-mounted allowlist, so `LoomNativeModelView` renders
+// instead of the tab body.
+describe('SemanticModelEditor — Azure-native tabs reachable with Power BI OFF (#2912)', () => {
+  const ITEM_ID = 'c1a2b3c4-0000-4000-8000-00000000abcd';
+  const LOOM_WS = 'd5e6f700-0000-4000-8000-000000000042';
+
+  function installDefaultEstateMocks() {
+    return installFetchMock({
+      // biBackend absent = the Azure-native default; Power BI stays opt-in OFF.
+      '/api/config/ui': () => ({}),
+      // The item record — the only source of the opened item's Loom workspace.
+      '/api/cosmos-items/semantic-model/': () => ({
+        id: ITEM_ID, workspaceId: LOOM_WS, itemType: 'semantic-model',
+        displayName: 'Sales Semantic Model', createdBy: '', createdAt: '', updatedAt: '', state: {},
+      }),
+      // Loom-native model definition (LoomNativeModelView + Azure-native tabs).
+      '/model': () => ({
+        ok: true, modelName: 'Sales', tables: [{ name: 'FactSales', columns: [{ name: 'Amount', type: 'double' }] }],
+        measures: [], relationships: [],
+      }),
+      // Incremental-refresh policy route: honest AAS infra-gate (default backend
+      // is loom-native, so the route reports the exact env var to set).
+      '/refresh-policy': () => ({ ok: false, error: 'Incremental refresh policy requires LOOM_SEMANTIC_BACKEND=analysis-services' }),
+      // Direct Lake shim: honest "not enabled" Azure infra-gate (no Power BI).
+      '/direct-lake': () => ({ ok: true, shimEnabled: false, hint: 'Set LOOM_DIRECT_LAKE_SHIM_ENABLED=true', runs: [], config: null }),
+    });
+  }
+
+  async function mountDefaultEstate() {
+    render(<SemanticModelEditor item={makeItem('semantic-model', 'Semantic model')} id={ITEM_ID} />);
+    await waitFor(() => expect(screen.getByTestId('ribbon')).toBeInTheDocument(), { timeout: 5000 });
+  }
+
+  /** Find an ENABLED ribbon button by its visible label. */
+  function ribbonButton(label: RegExp): HTMLButtonElement | undefined {
+    const ribbon = screen.getByTestId('ribbon');
+    return Array.from(ribbon.querySelectorAll('button')).find((b) => label.test(b.textContent || '')) as HTMLButtonElement | undefined;
+  }
+
+  beforeEach(() => { invalidatePlatformConfig(); installFetchMock({}); });
+  afterEach(() => { vi.restoreAllMocks(); invalidatePlatformConfig(); });
+
+  it('reaches the Aggregations tab body from the ribbon with Power BI OFF', async () => {
+    const { calls } = installDefaultEstateMocks();
+    await mountDefaultEstate();
+    const btn = ribbonButton(/manage aggregations/i);
+    expect(btn, 'the "Manage aggregations" ribbon entry must exist').toBeDefined();
+    expect(btn!.disabled, 'it must be enabled on the default estate (fell back to the item id)').toBe(false);
+    await userEvent.click(btn!);
+    // The tab BODY mounts — not LoomNativeModelView.
+    expect(await screen.findByText(/Automatic aggregations/i)).toBeInTheDocument();
+    // no-fabric-dependency.md: reaching the tab made ZERO Power BI calls.
+    expect(calls.filter((c) => c.url.includes('/api/powerbi/'))).toEqual([]);
+  });
+
+  it('reaches the Incremental refresh tab body from the ribbon with Power BI OFF', async () => {
+    const { calls } = installDefaultEstateMocks();
+    await mountDefaultEstate();
+    const btn = ribbonButton(/incremental refresh/i);
+    expect(btn, 'the "Incremental refresh" ribbon entry must exist').toBeDefined();
+    expect(btn!.disabled).toBe(false);
+    await userEvent.click(btn!);
+    expect(await screen.findByText(/Incremental refresh \+ hybrid table/i)).toBeInTheDocument();
+    // The AAS-native policy action is reachable (button present, not a Power BI gate).
+    expect(screen.getByRole('button', { name: /Load partitions/i })).toBeInTheDocument();
+    expect(calls.filter((c) => c.url.includes('/api/powerbi/'))).toEqual([]);
+  });
+
+  it('reaches the Direct Lake (shim) tab body from the ribbon with Power BI OFF', async () => {
+    const { calls } = installDefaultEstateMocks();
+    await mountDefaultEstate();
+    const btn = ribbonButton(/^direct lake$/i);
+    expect(btn, 'the "Direct Lake" ribbon entry must exist').toBeDefined();
+    expect(btn!.disabled).toBe(false);
+    await userEvent.click(btn!);
+    // The tab BODY mounts with its honest, cloud-invariant disclosure.
+    expect(await screen.findByText(/AAS incremental-refresh shim, not a Fabric F-SKU/i)).toBeInTheDocument();
+    // …and it addressed the OPENED item's own model route (no Power BI groupId).
+    const dl = calls.filter((c) => c.url.includes('/direct-lake'));
+    expect(dl.length, 'the Direct Lake config route must have been queried').toBeGreaterThan(0);
+    expect(dl.every((c) => c.url.includes(ITEM_ID))).toBe(true);
+    expect(calls.filter((c) => c.url.includes('/api/powerbi/'))).toEqual([]);
+  });
+});

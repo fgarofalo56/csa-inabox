@@ -176,9 +176,14 @@ describe('R10 module — direct-lake-tab', () => {
 describe('R10 module — incremental-refresh-tab', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
-  function useIrApi(loadRefreshes = vi.fn()) {
+  function useIrApi(loadRefreshes = vi.fn(), opts?: { workspaceId?: string; pbiWorkspaceId?: string }) {
     const st = useSemanticModelIncrementalRefreshState();
-    const actions = useSemanticModelIncrementalRefreshActions(st, { workspaceId: 'ws-1', datasetId: 'ds-1', loadRefreshes });
+    const actions = useSemanticModelIncrementalRefreshActions(st, {
+      workspaceId: opts?.workspaceId ?? 'ws-1',
+      pbiWorkspaceId: opts?.pbiWorkspaceId ?? 'ws-1',
+      datasetId: 'ds-1',
+      loadRefreshes,
+    });
     return { ...st, ...actions } as IncrementalRefreshApi;
   }
 
@@ -271,12 +276,44 @@ describe('R10 module — incremental-refresh-tab', () => {
     }
   });
 
+  // #2912 — no-fabric-dependency.md. On the DEFAULT estate (no Power BI
+  // workspace) the AAS-native refresh POLICY must still apply, while the ENHANCED
+  // async refresh — which genuinely POSTs to the Power BI /refreshes REST API —
+  // stays honestly gated. Before the fix the single `workspaceId` fed BOTH, so a
+  // present Loom workspace also un-gated enhanced refresh, POSTing a Loom id to a
+  // Power BI route. This case goes RED on that tree (the POST fires).
+  it('applies the AAS refresh policy with NO Power BI workspace, but keeps enhanced refresh Power BI-gated (#2912)', async () => {
+    const loadRefreshes = vi.fn();
+    const { calls } = installFetchMock({
+      '/refresh-policy': () => ({ ok: true, partitions: [{ name: '2024', storageMode: 'Import' }] }),
+      '/refreshes': () => ({ ok: true, requestId: 'deadbeefdeadbeef' }),
+    });
+    // The item's own Loom workspace is present; there is NO Power BI workspace.
+    const { result } = renderHook(() => useIrApi(loadRefreshes, { workspaceId: 'loom-ws', pbiWorkspaceId: '' }));
+
+    act(() => { result.current.setIrTableName('FactSales'); });
+    await act(async () => { await result.current.saveIrPolicy(); });
+    const put = calls.find((c) => c.init?.method === 'PUT' && c.url.includes('/refresh-policy'));
+    expect(put, 'saveIrPolicy must apply the AAS policy on the default estate (no Power BI)').toBeDefined();
+    // The route is AAS/XMLA and resolves its server from env — no workspace on the wire.
+    expect(put!.url).toBe('/api/items/semantic-model/ds-1/refresh-policy');
+
+    // Enhanced (async) refresh is a Power BI REST call — with no Power BI
+    // workspace it must be a no-op, never a POST carrying a Loom id.
+    await act(async () => { await result.current.triggerEnhancedRefresh(); });
+    expect(
+      calls.filter((c) => c.init?.method === 'POST' && c.url.includes('/refreshes')),
+      'enhanced refresh must stay gated when no Power BI workspace is bound',
+    ).toHaveLength(0);
+    expect(result.current.enhMsg, 'no enhanced-refresh message on a no-op').toBeNull();
+  });
+
   it('the state hook keeps a draft alive while the tab BODY unmounts (the whole point of the split)', async () => {
     installFetchMock({});
     function Host({ show }: { show: boolean }) {
       const ir = useIrApi();
       return show
-        ? <SemanticModelIncrementalRefreshTab s={S} ir={ir} tables={TABLES} workspaceId="ws-1" datasetId="ds-1" />
+        ? <SemanticModelIncrementalRefreshTab s={S} ir={ir} tables={TABLES} workspaceId="ws-1" pbiWorkspaceId="ws-1" datasetId="ds-1" />
         : <div data-testid="other-tab" />;
     }
     const { rerender } = render(<Host show />);

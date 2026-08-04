@@ -197,6 +197,23 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // `/[id]/refreshes` on every open and stamped the groupId into a Loom item URL.
   const pbiDatasetId = livePbiDatasetId(datasets, datasetId);
 
+  // #2912 (no-fabric-dependency.md) — the identifier the Azure-native tabs
+  // (Aggregations / Incremental-refresh policy / Direct Lake) address. On the
+  // DEFAULT estate `datasetId` never binds (it only binds through the Power BI
+  // opt-in), so fall back to THIS item's own id — the model / refresh-policy /
+  // direct-lake routes resolve a raw or `loom:` id straight from Cosmos with no
+  // Power BI dataset. When Power BI is actually working (`powerBiConfigured`)
+  // the bound `datasetId` is used verbatim, so the Power-BI-ON path is
+  // unchanged; `new` items have no persisted model, so they stay unbound.
+  const effectiveDatasetId = datasetId || (!powerBiConfigured && id !== 'new' ? id : '');
+  // The workspace the Azure-native tab actions use as their enablement guard.
+  // The AAS refresh-policy route and the Direct-Lake config route resolve their
+  // backend from env / Cosmos and don't require a Power BI workspace, so on the
+  // default estate this is the item's own Loom workspace. On the Power-BI-ON
+  // path `pbiWorkspaceId` is bound first, so this stays byte-identical to the
+  // pre-#2912 wiring there.
+  const nativeWorkspaceId = pbiWorkspaceId || loomWorkspaceId;
+
   // --- Model builder (real Power BI push-dataset authoring) ---------------
   // Builds a NEW semantic model with tables/typed-columns/measures/relationships
   // via POST /api/items/semantic-model/build → Power BI Push Datasets REST.
@@ -535,7 +552,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
 
   // Automatic aggregations builder (XMLA TMSL alternateOf) — extracted to
   // ./semantic-model-editor/aggregations-tab (R10).
-  const agg = useSemanticModelAggregations({ workspaceId: loomWorkspaceId, datasetId, tables: detail?.tables });
+  const agg = useSemanticModelAggregations({ workspaceId: loomWorkspaceId, datasetId: effectiveDatasetId, tables: detail?.tables });
   // Direct Lake query with transparent Serverless fallback (direct-lake-query tab).
   // When the warm AAS cache (last model refresh) is within LOOM_DL_CACHE_TTL_SECONDS
   // the row is served from the Power BI in-memory VertiPaq cache; otherwise the
@@ -568,7 +585,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // Direct Lake (shim) — extracted to ./semantic-model-editor/direct-lake-tab
   // (R10). Called at the exact position the raw state block occupied so the
   // hook + effect order of this component is unchanged.
-  const dl = useSemanticModelDirectLake({ tab, datasetId, workspaceId: pbiWorkspaceId, tables: detail?.tables });
+  const dl = useSemanticModelDirectLake({ tab, datasetId: effectiveDatasetId, workspaceId: nativeWorkspaceId, tables: detail?.tables });
 
   // Composite + Dual per-table storage mode (Tables tab). Each table gets an
   // Import / DirectQuery / Dual picker so a single model can MIX modes; the
@@ -829,7 +846,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // declarations occupied, i.e. after `loadRefreshes` which the last of them
   // closes over. The state half was registered further up (see `irState`), so
   // the cluster's draft survives tab switches exactly as before.
-  const irActions = useSemanticModelIncrementalRefreshActions(irState, { workspaceId: pbiWorkspaceId, datasetId, loadRefreshes });
+  const irActions = useSemanticModelIncrementalRefreshActions(irState, { workspaceId: nativeWorkspaceId, pbiWorkspaceId, datasetId: effectiveDatasetId, loadRefreshes });
   const ir: IncrementalRefreshApi = { ...irState, ...irActions };
 
   // Apply the per-table storage modes: builds a composite model.bim TMSL with a
@@ -1051,7 +1068,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
         { label: saveBusy ? 'Saving…' : 'Save to model (XMLA)', onClick: datasetId ? () => { setTab('measures'); saveMeasure(); } : undefined, disabled: !datasetId || saveBusy, title: !datasetId ? 'select a dataset first' : 'Persist the measure (DAX + format string + display folder) via TMSL createOrReplace (requires LOOM_SEMANTIC_BACKEND=analysis-services + LOOM_AAS_SERVER)' },
       ]},
       { label: 'Aggregations', actions: [
-        { label: 'Manage aggregations', onClick: datasetId ? () => setTab('aggregations') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Define an automatic-aggregation table (alternateOf) so the engine routes matching queries to a small pre-aggregated cache' },
+        { label: 'Manage aggregations', onClick: effectiveDatasetId ? () => setTab('aggregations') : undefined, disabled: !effectiveDatasetId, title: !effectiveDatasetId ? 'save the model first' : 'Define an automatic-aggregation table (alternateOf) so the engine routes matching queries to a small pre-aggregated cache — Azure Analysis Services XMLA, no Power BI required' },
+      ]},
+      { label: 'Storage', actions: [
+        { label: 'Incremental refresh', onClick: effectiveDatasetId ? () => setTab('incremental') : undefined, disabled: !effectiveDatasetId, title: !effectiveDatasetId ? 'save the model first' : 'Set an incremental-refresh policy (archive window + incremental window + optional real-time DirectQuery partition) via the Azure Analysis Services XMLA endpoint — no Power BI workspace required' },
+        { label: 'Direct Lake', onClick: effectiveDatasetId ? () => setTab('direct-lake') : undefined, disabled: !effectiveDatasetId, title: !effectiveDatasetId ? 'save the model first' : 'Keep a warm cache fresh from an ADLS Gen2 Delta source (Azure-native Direct Lake shim) — no Fabric capacity required' },
       ]},
       { label: 'Advanced', actions: [
         { label: 'Calc groups', onClick: datasetId ? () => setTab('calcGroups') : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Author calculation groups (SELECTEDMEASURE patterns) — switch a visual’s aggregation via a slicer' },
@@ -1070,7 +1091,18 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, pbiDatasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, pbiWorkspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, effectiveDatasetId, pbiDatasetId, detail?.dataset?.isRefreshable, isDqMode, focusNewMeasure, openInPbi, pbiWorkspaceId, focusBuild, focusModel, saveBusy, saveMeasure, modelTables, selectedTableName]);
+
+  // Tabs whose bodies are Azure-native and mount WITHOUT a bound Power BI
+  // dataset. The first seven never needed one; #2912 adds the three the rule
+  // requires — Aggregations (XMLA `alternateOf`), Incremental refresh (AAS
+  // refresh-policy) and Direct Lake (ADLS Delta shim) — so on the default estate
+  // selecting one mounts the item-tab strip + its body instead of leaving
+  // `LoomNativeModelView` as the only reachable surface (no-fabric-dependency.md).
+  const datasetIndependentTab =
+    tab === 'build' || tab === 'copilot' || tab === 'prep-for-ai' ||
+    tab === 'daxquery' || tab === 'health' || tab === 'metrics' || tab === 'verified-queries' ||
+    tab === 'aggregations' || tab === 'incremental' || tab === 'direct-lake';
 
   return (
     <>
@@ -1294,7 +1326,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
               own tables / typed columns / relationships / DAX measures from the
               Azure-native model route so the editor is never an empty banner
               without a Fabric / Power BI workspace (no-fabric-dependency.md). */}
-          {!datasetId && tab !== 'build' && tab !== 'copilot' && tab !== 'prep-for-ai' && tab !== 'daxquery' && tab !== 'health' && tab !== 'metrics' && tab !== 'verified-queries' && (
+          {!datasetId && !datasetIndependentTab && (
             <LoomNativeModelView
               id={id}
               sub={nativeSub}
@@ -1303,7 +1335,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
               onBuild={focusBuild}
             />
           )}
-          {(datasetId || tab === 'build' || tab === 'copilot' || tab === 'prep-for-ai' || tab === 'daxquery' || tab === 'health' || tab === 'metrics' || tab === 'verified-queries') && (
+          {(datasetId || datasetIndependentTab) && (
             <>
               {/* ux-fabric-a W1 — tab-strip density: Fabric's item-tab strips are
                   compact (size=small) and scroll horizontally instead of wrapping
@@ -1920,7 +1952,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                 {tab === 'aggregations' && (
                   <SemanticModelAggregationsTab
                     s={s} agg={agg} tables={detail?.tables}
-                    targetStorageMode={detail?.dataset?.targetStorageMode} datasetId={datasetId}
+                    targetStorageMode={detail?.dataset?.targetStorageMode} datasetId={effectiveDatasetId}
                   />
                 )}
                 {tab === 'refresh' && (
@@ -1952,7 +1984,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                 )}
                 {tab === 'incremental' && (
                   <SemanticModelIncrementalRefreshTab
-                    s={s} ir={ir} tables={detail?.tables} workspaceId={pbiWorkspaceId} datasetId={datasetId}
+                    s={s} ir={ir} tables={detail?.tables} workspaceId={nativeWorkspaceId} pbiWorkspaceId={pbiWorkspaceId} datasetId={effectiveDatasetId}
                   />
                 )}
                 {tab === 'config' && (
@@ -2062,7 +2094,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   />
                 )}
                 {tab === 'direct-lake' && (
-                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={datasetId} />
+                  <SemanticModelDirectLakeTab s={s} dl={dl} datasetId={effectiveDatasetId} />
                 )}
                 {tab === 'datasource' && isDqMode && datasetId && (
                   <DqSourcePanel datasetId={datasetId} itemId={id} workspaceId={loomWorkspaceId} />
