@@ -272,16 +272,27 @@ jobs:
             bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # 2026-07-16: the console compile cgroup-OOMs on the default 8 GB ACR
-          # Tasks agent. A dedicated 16 GB S3 pool is the documented fix and is
-          # available in USGov Arizona/Texas/Virginia. Only the console needs it;
-          # loom-uat is a thin Playwright layer over the console context.
+          # Tasks agent (re-confirmed 2026-07-30, run 30564119314: "Next.js build
+          # worker exited with code: null and signal: SIGKILL" at ~7min). A
+          # dedicated 16 GB S3 pool is the documented fix and is available in
+          # USGov Arizona/Texas/Virginia. Only the console needs it; loom-uat is
+          # a thin Playwright layer over the console context.
+          #
+          # #2706 — the pool is `loombuild2`, NOT `loombuild`. This lane resolves
+          # the SAME Gov registry that gov-console-roll builds on, where the
+          # original `loombuild` pool's backing queue is stuck in "being deleted":
+          # builds submitted to it sit ~60min and `az acr build` exits 0 having
+          # pushed NOTHING. loombuild2 is proven on this registry by 8+
+          # consecutive green console rolls. Keep the two Gov lanes on the same
+          # pool name so this lane cannot silently inherit the wedged one.
+          POOL="loombuild2"
           POOL_ARGS=""
           if [ "$APP" = "loom-console" ]; then
-            az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
-              || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
-            CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
-            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
-            POOL_ARGS="--agent-pool loombuild"
+            az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
+              || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+            CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
+            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
+            POOL_ARGS="--agent-pool $POOL"
           fi
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # ── Tag set: EVERY tag a Gov template could pull for this app ───────
@@ -301,8 +312,13 @@ jobs:
           echo "::notice::$APP will be pushed as: $TAG_LIST"
           case "$APP" in
             loom-console)
+              # #2706 — logs STREAM for the console build (no `--no-logs`). This
+              # is the one build on this registry that goes through the S3 agent
+              # pool, and a pool-side stall is INDISTINGUISHABLE from a slow
+              # compile when the output is suppressed: that is precisely how a
+              # wedged queue burned 3.5-4.5h per run before anyone could see it.
               # shellcheck disable=SC2086
-              az acr build --registry "$ACR" --no-logs $POOL_ARGS $IMG_ARGS \
+              az acr build --registry "$ACR" $POOL_ARGS $IMG_ARGS \
                 --file apps/fiab-console/Dockerfile \
                 --build-arg "LOOM_BUILD_SHA=$SHA_TAG" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
                 apps/fiab-console
@@ -326,8 +342,8 @@ jobs:
               ;;
           esac
           if [ "$APP" = "loom-console" ]; then
-            q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
+            q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
           fi
           # The lease is released by the dedicated always() step below, AFTER
           # the supply-chain steps have pulled the image + pushed the signature.

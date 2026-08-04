@@ -30,15 +30,15 @@ on:
         type: boolean
         default: false
       bypass_agent_pool:
-        description: 'DIAGNOSTIC (#2706) — build on the DEFAULT hosted ACR agent instead of the loombuild S3 pool. Separates "the pool is broken" from "ACR is broken": two instrumented runs had az acr build exit 0 while pushing no tag. The default agent has less memory, so an OOM here is a MEANINGFUL result (it means the pool is genuinely required), while a successful build means the pool is at fault.'
+        description: 'DIAGNOSTIC (#2706) — build on the DEFAULT hosted ACR agent instead of the S3 pool. Separates "the pool is broken" from "ACR is broken". ANSWERED 2026-07-30 (run 30564119314): the default agent SIGKILLs the Next.js build worker at ~7min, so the pool is genuinely required — keep this false unless re-testing that.'
         type: boolean
         default: false
       agent_pool_name:
-        description: 'ACR agent pool to build on (#2706). Default loombuild. The original loombuild queue is stuck in "being deleted" (409), which is what made az acr build exit 0 while pushing nothing — a FRESH NAME sidesteps it without waiting on Azure. Precedent: loompool -> loompool2 in the 2026-07-14 Spark incident.'
+        description: 'ACR agent pool to build on (#2706). Default loombuild2 — the ORIGINAL `loombuild` pool on the Gov ACR has a backing queue stuck in "being deleted" (409); builds submitted to it sit ~60min and `az acr build` exits 0 having pushed NOTHING. loombuild2 is the fresh name that fixed it, proven by 8+ consecutive green rolls (17-23min each). If loombuild2 ever wedges the same way, pass a FRESH name (loombuild3) rather than retrying. Precedent: loompool -> loompool2, 2026-07-14 Spark incident.'
         type: string
-        default: 'loombuild'
+        default: 'loombuild2'
       recreate_agent_pool:
-        description: 'REMEDIATION (#2706) — delete + recreate the loombuild agent pool before building. The bypass diagnostic proved the pool is at fault: on it az acr build runs 60min, exits 0 and pushes nothing; off it the same commit fails in 7min with real logs. Safe: an agent pool is stateless build compute (no data, no config beyond itself) and the build step already recreates it when absent.'
+        description: 'REMEDIATION (#2706) — delete + recreate the agent pool named by agent_pool_name before building. NOTE: this did NOT work on the wedged `loombuild` pool (run 30565655935 got "The specified queue is being deleted", 409) — a fresh NAME is the reliable move. Safe: an agent pool is stateless build compute and the build step recreates it when absent.'
         type: boolean
         default: false
 
@@ -110,12 +110,14 @@ jobs:
           # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
           # the trusted-service bypass, so the ACR stays open through the build
           # (it already is for the tarball upload).
-          # #2706 — the pool NAME is an input. The original `loombuild` queue is
-          # stuck in "being deleted" (409), which is what made az acr build exit 0
-          # while pushing nothing; a FRESH NAME sidesteps it without waiting on
-          # Azure to unstick anything.
+          # #2706 — the pool NAME is an input. The original `loombuild` queue on
+          # this registry is stuck in "being deleted" (409), which is what made
+          # az acr build exit 0 while pushing nothing; `loombuild2` is the fresh
+          # name that fixed it and is now the DEFAULT (8+ consecutive green rolls,
+          # 17-23min each). Recreating the wedged pool did NOT work (run
+          # 30565655935) — a fresh NAME is the reliable move.
           POOL="${{ inputs.agent_pool_name }}"
-          POOL="${POOL:-loombuild}"
+          POOL="${POOL:-loombuild2}"
           echo "::notice::building on ACR agent pool: $POOL"
 
           # #2706 REMEDIATION — recreate the pool when asked. The bypass diagnostic
@@ -143,10 +145,55 @@ jobs:
           # agent is unhealthy or still scaling from 0 the run just queues rather
           # than failing, and `--no-logs` made a stall indistinguishable from a
           # slow build. Print what we are about to build on.
+          #
+          # provisioningState is NOT the tell — it read `Succeeded` on BOTH
+          # silent failures (runs 30552543683, 30558316496). Printed for
+          # forensics only; do not gate on it.
           echo "::notice::agent pool state before build:"
           az acr agentpool show -r "$ACR" -n "$POOL" \
             --query "{count:count,tier:tier,state:provisioningState}" -o tsv 2>&1 | sed 's/^/  pool: /' || true
-          az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>&1 | sed 's/^/  queued: /' || true
+
+          # #2706 — QUEUE DEPTH IS THE SIGNAL, and it used to be printed and
+          # DISCARDED. Measured, on this exact registry:
+          #
+          #   loombuild  (wedged queue)  queued=3 / queued=4  -> ~60min, exit 0, NO image
+          #   loombuild2 (healthy)       queued=0  x8 runs    -> 17-23min, image pushed
+          #
+          # This run already holds the ACR firewall lease — a real mutex (see
+          # scripts/csa-loom/acr-firewall-lease.sh), and every `az acr build`
+          # call site on this registry takes it. So no other legitimate build can
+          # be occupying the queue right now: a queue that will not drain is a
+          # STUCK queue, not contention. Wait briefly for a straggler, then FAIL
+          # FAST with the remediation instead of burning an hour discovering the
+          # same thing. An unreadable probe is reported as UNKNOWN, never as
+          # "clear" — a check that cannot distinguish those measures nothing.
+          read_queue() {
+            az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null \
+              | tr -d '\r' | grep -E '^[0-9]+$' | tail -1 || true
+          }
+          Q="$(read_queue)"
+          if [ -n "$Q" ] && [ "$Q" != "0" ]; then
+            echo "::warning::#2706 — $POOL reports $Q queued item(s) before this build; waiting up to 5min for it to drain."
+            for i in $(seq 1 20); do
+              sleep 15
+              N="$(read_queue)"
+              if [ -z "$N" ]; then
+                echo "  queued: UNKNOWN (read failed) — NOT treating that as drained ($i/20)"
+                continue
+              fi
+              Q="$N"
+              echo "  queued: $Q ($i/20)"
+              if [ "$Q" = "0" ]; then break; fi
+            done
+          fi
+          if [ -z "$Q" ]; then
+            echo "::warning::#2706 — could not read the queue depth for $POOL. This is UNKNOWN, not zero; proceeding, but if this build runs long and pushes nothing, the wedged-queue failure mode is the first thing to check."
+          elif [ "$Q" != "0" ]; then
+            echo "::error::#2706 — the '$POOL' queue on $ACR still holds $Q item(s) after 5 minutes, and this run holds the ACR firewall lease so nothing legitimate is building. That is the signature of the queue stuck in 'being deleted' that made az acr build exit 0 after ~60min having pushed NO image. Do NOT retry on this pool and do NOT bother recreating it (that returned 409 in run 30565655935) — re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3. Precedent: loombuild -> loombuild2 here, loompool -> loompool2 in the 2026-07-14 Spark incident."
+            exit 1
+          else
+            echo "::notice::  queued: 0 — the $POOL queue is clear"
+          fi
 
           # Logs STREAM now (the `--no-logs` opt-out is gone). A silent build is
           # exactly the shape this repo keeps getting burned by: it looks
@@ -159,7 +206,7 @@ jobs:
           # is genuinely required); a successful build indicts the pool.
           POOL_ARGS=(--agent-pool "$POOL")
           if [ "${{ inputs.bypass_agent_pool }}" = "true" ]; then
-            echo "::warning::#2706 DIAGNOSTIC — building on the DEFAULT hosted agent, NOT loombuild."
+            echo "::warning::#2706 DIAGNOSTIC — building on the DEFAULT hosted agent, NOT the $POOL S3 pool. This is EXPECTED to fail: run 30564119314 proved the default 8 GB agent SIGKILLs the Next.js build worker at ~7min."
             POOL_ARGS=()
           fi
 
