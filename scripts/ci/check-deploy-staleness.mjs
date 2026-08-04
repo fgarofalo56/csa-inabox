@@ -26,8 +26,20 @@
  *
  * Usage:  GITHUB_TOKEN=… node scripts/ci/check-deploy-staleness.mjs [--json]
  * Env:    GITHUB_REPOSITORY (owner/repo) — defaults to the CSA Loom repo.
+ *
+ * TESTABILITY. The drift comparison is the whole point of this control, so it
+ * lives in PURE functions ({@link pickLastRealSuccess}, {@link classifyDrift},
+ * {@link decide}) that the self-test drives with fixtures — no gh, no git, no
+ * network. The IO (gh run-history, git log) and the reporting stay in main(),
+ * which runs only on direct invocation. A guard that has never been SHOWN to
+ * fail on real drift is itself the "gate that measures nothing" defect this file
+ * exists to catch, so scripts/ci/__tests__/deploy-staleness.test.mjs proves the
+ * teeth: run<code ⇒ STALE, run>code ⇒ ok, never-run ⇒ STALE, gh-query-failed ⇒
+ * UNKNOWN (never a false green), and the maxDays boundary in both directions.
  */
 import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
 
@@ -36,7 +48,7 @@ const REPO = process.env.GITHUB_REPOSITORY || 'fgarofalo56/csa-inabox';
  * redeploy — the workflow itself PLUS whatever it applies. `maxDays` is how much
  * drift is tolerable before this fails.
  */
-const WATCHED = [
+export const WATCHED = [
   {
     workflow: 'gov-uc-purview-wire.yml',
     why: 'Deploys loom-unity + Purview wiring into Gov. Carried the #2643 authorization fix undeployed for 15 days.',
@@ -205,10 +217,29 @@ const WATCHED = [
  */
 const DRY_RUN_MARKER = 'DRY RUN';
 
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
 
 function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/**
+ * Pick the newest run that actually DEPLOYED from `gh run list` JSON rows
+ * (already filtered to `--status success`, newest first). PURE — no IO — so the
+ * self-test can prove the dry-run filter without shelling gh.
+ *
+ * Runs whose display title carries the DRY_RUN_MARKER are SKIPPED. Those runs
+ * succeed having deployed NOTHING; treating one as a deploy would let a dry run
+ * clear the drift it did not fix — the exact "green on nothing" shape this file
+ * exists to catch. A history of ONLY dry runs therefore returns { at: null }
+ * (never ran for real), NOT the dry run's timestamp.
+ *
+ * @param {{createdAt?:string, displayTitle?:string}[]} rows
+ * @returns {{at:string|null, dryRunsSkipped:number}}
+ */
+export function pickLastRealSuccess(rows) {
+  const real = rows.filter((r) => !String(r.displayTitle || '').includes(DRY_RUN_MARKER));
+  return { at: real[0]?.createdAt || null, dryRunsSkipped: rows.length - real.length };
 }
 
 /**
@@ -234,9 +265,7 @@ function lastSuccessfulRun(workflow) {
       'run', 'list', '--workflow', workflow, '--status', 'success',
       '--limit', '20', '--json', 'createdAt,displayTitle', '--repo', REPO,
     ]);
-    const rows = JSON.parse(out || '[]');
-    const real = rows.filter((r) => !String(r.displayTitle || '').includes(DRY_RUN_MARKER));
-    return { at: real[0]?.createdAt || null, dryRunsSkipped: rows.length - real.length };
+    return pickLastRealSuccess(JSON.parse(out || '[]'));
   } catch (e) {
     return { queryFailed: true, error: String(e?.stderr || e?.message || e).slice(0, 160) };
   }
@@ -252,12 +281,24 @@ function lastCodeChange(paths) {
   }
 }
 
-const rows = [];
-for (const entry of WATCHED) {
-  const run = lastSuccessfulRun(entry.workflow);
-  const codeAt = lastCodeChange(entry.paths);
-  if (!codeAt) continue; // path removed from the tree — nothing to compare.
-
+/**
+ * Classify one watched entry. PURE — the entire drift decision lives here so the
+ * self-test drives every branch with fixtures. `run` is the shape
+ * {@link lastSuccessfulRun} returns.
+ *
+ *   queryFailed  — gh/auth/network broke: we do NOT know → ALWAYS stale, never a
+ *                  false green (the 2026-08-02 "UNKNOWN reported as fresh" trap).
+ *   neverRan     — the workflow has genuinely never run for real → ALWAYS stale.
+ *   otherwise    — stale iff code is newer than the last real run AND the drift
+ *                  exceeds this entry's maxDays tolerance (ordinary lag is ok).
+ *
+ * `maxDays` is BOTH the fail threshold and the acknowledgment mechanism: raising
+ * it for an entry (with a reason, in the WATCHED table) is how a known-pending
+ * deploy is signed off — a deployment review, not a silent allowlist.
+ *
+ * @param {{codeAt:string, run:{at?:string|null, queryFailed?:boolean, error?:string, dryRunsSkipped?:number}, maxDays:number}} args
+ */
+export function classifyDrift({ codeAt, run, maxDays }) {
   const queryFailed = run.queryFailed === true;
   const runAt = run.at || null;
   const neverRan = !queryFailed && !runAt;
@@ -265,41 +306,72 @@ for (const entry of WATCHED) {
     ? Infinity
     : Math.max(0, Math.round((Date.parse(codeAt) - Date.parse(runAt)) / DAY_MS));
   const stale = queryFailed || neverRan
-    || (Date.parse(codeAt) > Date.parse(runAt) && driftDays > entry.maxDays);
-
-  rows.push({ ...entry, runAt, codeAt, driftDays, neverRan, queryFailed, queryError: run.error, dryRunsSkipped: run.dryRunsSkipped || 0, stale });
+    || (Date.parse(codeAt) > Date.parse(runAt) && driftDays > maxDays);
+  return { runAt, driftDays, neverRan, queryFailed, queryError: run.error, dryRunsSkipped: run.dryRunsSkipped || 0, stale };
 }
 
-if (process.argv.includes('--json')) {
-  console.log(JSON.stringify(rows, null, 2));
+/**
+ * The exit decision over classified rows. PURE. Any stale row ⇒ exit 1.
+ * @param {{stale:boolean}[]} rows
+ * @returns {{stale:object[], code:number}}
+ */
+export function decide(rows) {
+  const stale = rows.filter((r) => r.stale);
+  return { stale, code: stale.length ? 1 : 0 };
 }
 
-console.log('[deploy-staleness] watched deploy paths:');
-for (const r of rows) {
-  const when = r.queryFailed ? 'UNKNOWN (run-history query failed)'
-    : r.neverRan ? 'NEVER RUN'
-      : `last success ${r.runAt.slice(0, 10)}`;
-  const drift = (r.queryFailed || r.neverRan) ? '' : `, code ${r.codeAt.slice(0, 10)} (+${r.driftDays}d)`;
-  // Named, not silent: a dry run that was skipped is the difference between
-  // "nobody dispatched this" and "somebody dispatched it and it deployed
-  // nothing", and those need different responses.
-  const dry = r.dryRunsSkipped ? `  [${r.dryRunsSkipped} dry run(s) ignored]` : '';
-  console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${when}${drift}${dry}`);
+/** Build the classified rows from the live IO (gh run-history + git log). */
+function buildRows() {
+  const rows = [];
+  for (const entry of WATCHED) {
+    const run = lastSuccessfulRun(entry.workflow);
+    const codeAt = lastCodeChange(entry.paths);
+    if (!codeAt) continue; // path removed from the tree — nothing to compare.
+    rows.push({ ...entry, codeAt, ...classifyDrift({ codeAt, run, maxDays: entry.maxDays }) });
+  }
+  return rows;
 }
 
-const stale = rows.filter((r) => r.stale);
-if (stale.length === 0) {
-  console.log('[deploy-staleness] OK — every watched deploy path has run since its code last changed.');
-  process.exit(0);
+function main() {
+  const rows = buildRows();
+
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify(rows, null, 2));
+  }
+
+  console.log('[deploy-staleness] watched deploy paths:');
+  for (const r of rows) {
+    const when = r.queryFailed ? 'UNKNOWN (run-history query failed)'
+      : r.neverRan ? 'NEVER RUN'
+        : `last success ${r.runAt.slice(0, 10)}`;
+    const drift = (r.queryFailed || r.neverRan) ? '' : `, code ${r.codeAt.slice(0, 10)} (+${r.driftDays}d)`;
+    // Named, not silent: a dry run that was skipped is the difference between
+    // "nobody dispatched this" and "somebody dispatched it and it deployed
+    // nothing", and those need different responses.
+    const dry = r.dryRunsSkipped ? `  [${r.dryRunsSkipped} dry run(s) ignored]` : '';
+    console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${when}${drift}${dry}`);
+  }
+
+  const { stale, code } = decide(rows);
+  if (stale.length === 0) {
+    console.log('[deploy-staleness] OK — every watched deploy path has run since its code last changed.');
+    return code;
+  }
+
+  console.error(`\n[deploy-staleness] FAIL — ${stale.length} deploy path(s) carry code that was never applied.\n`);
+  for (const r of stale) {
+    console.error(`  ${r.workflow}`);
+    console.error(`    ${r.queryFailed ? `run history UNKNOWN — the gh query failed: ${r.queryError}` : r.neverRan ? `has NEVER run${r.dryRunsSkipped ? ` for real (${r.dryRunsSkipped} dry run(s) ignored — a dry run deploys nothing)` : ''}` : `${r.driftDays} days of undeployed code (limit ${r.maxDays})`}`);
+    console.error(`    why it matters: ${r.why}`);
+    console.error(`    dispatch: gh workflow run ${r.workflow} --ref main\n`);
+  }
+  console.error('  A merged fix is not a deployed fix. If the drift is intentional, raise maxDays');
+  console.error('  for that entry WITH a reason — that is a deployment review, not a config tweak.\n');
+  return code;
 }
 
-console.error(`\n[deploy-staleness] FAIL — ${stale.length} deploy path(s) carry code that was never applied.\n`);
-for (const r of stale) {
-  console.error(`  ${r.workflow}`);
-  console.error(`    ${r.queryFailed ? `run history UNKNOWN — the gh query failed: ${r.queryError}` : r.neverRan ? `has NEVER run${r.dryRunsSkipped ? ` for real (${r.dryRunsSkipped} dry run(s) ignored — a dry run deploys nothing)` : ''}` : `${r.driftDays} days of undeployed code (limit ${r.maxDays})`}`);
-  console.error(`    why it matters: ${r.why}`);
-  console.error(`    dispatch: gh workflow run ${r.workflow} --ref main\n`);
+const invokedDirectly = process.argv[1]
+  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  process.exit(main());
 }
-console.error('  A merged fix is not a deployed fix. If the drift is intentional, raise maxDays');
-console.error('  for that entry WITH a reason — that is a deployment review, not a config tweak.\n');
-process.exit(1);
