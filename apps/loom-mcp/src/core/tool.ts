@@ -8,7 +8,7 @@
  * audit (§5.7) fires on both the allow and deny paths; errors are normalized to
  * a `{ok:false,…}` envelope (§5.2) with no stack traces.
  */
-import { authorize } from './authz.js';
+import { authorize, type AuthzPolicy } from './authz.js';
 import { scrub } from './scrub.js';
 import { toErrorResult, errorResult } from './errors.js';
 import { emitAudit, hashArgs, stderrAuditSink } from './audit.js';
@@ -21,6 +21,12 @@ export interface ToolHandlerOptions {
   auth: AuthContext | null;
   /** Audit sink (defaults to the stderr JSON sink). */
   audit?: AuditSink;
+  /**
+   * Per-server authorization policy (M3 `allowMutations`, M5 admin floors,
+   * default-OFF). Omitted ⇒ the M1 read-only default (see {@link AuthzPolicy}).
+   * The gate reads `server` from here too, so pass it through for the message.
+   */
+  authz?: AuthzPolicy;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -28,13 +34,14 @@ export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>
 /** Build the MCP handler for one tool. */
 export function buildToolHandler(spec: ToolSpec, opts: ToolHandlerOptions): ToolHandler {
   const sink = opts.audit ?? stderrAuditSink;
+  const policy: AuthzPolicy = { server: opts.server, ...opts.authz };
 
   return async (args: Record<string, unknown>): Promise<ToolResult> => {
     const started = Date.now();
     const argsHash = hashArgs(args);
     const principal = opts.auth?.principal ?? 'anonymous';
 
-    const decision = authorize(spec, opts.auth);
+    const decision = authorize(spec, opts.auth, policy);
     if (!decision.ok) {
       emitAudit(sink, {
         ts: new Date().toISOString(),
@@ -53,7 +60,7 @@ export function buildToolHandler(spec: ToolSpec, opts: ToolHandlerOptions): Tool
     // Non-null once authorized (the gate rejects a null auth above).
     const auth = opts.auth as AuthContext;
     try {
-      const { data, count } = await spec.run({ auth, args });
+      const { data, count, audit } = await spec.run({ auth, args });
       const safe = scrub(data);
       emitAudit(sink, {
         ts: new Date().toISOString(),
@@ -64,11 +71,14 @@ export function buildToolHandler(spec: ToolSpec, opts: ToolHandlerOptions): Tool
         decision: 'allow',
         outcome: 'ok',
         count,
+        // Plan-vs-apply + affected principal for mutating tools (§5.4/§5.7).
+        mutation: audit?.mutation,
+        target: audit?.target,
         duration_ms: Date.now() - started,
       });
       return {
         content: [{ type: 'text', text: JSON.stringify(safe, null, 2) }],
-        structuredContent: { ok: true, count, data: safe },
+        structuredContent: { ok: true, count, mutation: audit?.mutation, data: safe },
       };
     } catch (e) {
       emitAudit(sink, {
