@@ -266,5 +266,28 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // #2557/#2568/#2583 — the G1 browser receipt for the AOAI target-resolution
+      // path. Exercises resolveAoaiTarget through GET /api/copilot/status, the
+      // real POST /api/copilot/orchestrate SSE turn, and the /copilot UI (Launch
+      // → Ask anything → Send), holding the resolution error wording to the #2568
+      // rule (a paging timeout must surface AS a timeout, never as "deploy a
+      // model"). Mirrors sm-tab-clickwalk: minted-session auth, wide viewport.
+      // NOT a required check — it is the G1 receipt for those issues.
+      name: 'aoai-target-resolution',
+      testDir: './e2e',
+      testMatch: /aoai-target-resolution\.spec\.ts/,
+      dependencies: ['mint'],
+      // A real AOAI turn behind Front Door on a shared console is variable
+      // (fail-then-pass), the exact case Playwright's retry model handles; the
+      // read-only status/stability tests are deterministic. Same reasoning as
+      // route-smoke / publish-version above.
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
