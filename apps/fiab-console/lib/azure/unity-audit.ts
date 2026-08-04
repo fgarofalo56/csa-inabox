@@ -22,15 +22,18 @@
  *
  * ### What this trail does NOT cover (read this before trusting it)
  *
- * `lib/azure/shortcut-credentials.ts` keeps its OWN private `ucFetch` and issues
- * storage-credential + external-location CREATE/DELETE with no row here. That
- * file sits under a repo-level credential-path write deny, so the recorder has
- * to be added by someone with write access to it; it is declared in the guard's
- * `KNOWN_UNAUDITED` map and printed on every passing run (issue #2622, gap 1).
- *
  * `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` namespace/table CREATE +
  * DROP are audited, but into a DIFFERENT trail (`logIcebergAccess` →
  * `_auditLog itemType:'iceberg-catalog'`).
+ *
+ * `lib/azure/shortcut-credentials.ts` still holds its OWN private transport, and
+ * the recorder could not be added INSIDE it (repo-level credential-path write
+ * deny). Its storage-credential + external-location exits are nonetheless
+ * audited as of #2622 gap 1 — see § 3d: `lib/azure/uc-securable.ts` wraps every
+ * one of them, and the guard's import check makes that facade the ONLY module
+ * permitted to consume them, so no un-audited call path to those securables
+ * remains. The file stays declared in the guard's `KNOWN_UNAUDITED` because the
+ * transport itself is still un-instrumented.
  *
  * ### What it DOES cover beyond UC REST (2026-08-02, issue #2622)
  *
@@ -1013,6 +1016,115 @@ export function recordUnityAccountAccess(opts: {
       durationMs: opts.durationMs ?? 0,
       outcome: failed ? unityOutcomeForError(opts.error, status) : 'success',
       detail: opts.error ? String((opts.error as Error)?.message || opts.error).slice(0, 400) : undefined,
+    });
+  } catch {
+    /* audit is never allowed to break a catalog call */
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3d) Storage credentials + external locations (issue #2622, gap 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ## Why the upstream error message never reaches the row
+ *
+ * Same rule as § 3b, for a sharper reason. The functions this recorder covers
+ * POST a **credential body** to Unity Catalog:
+ *
+ *   - `ensureUcGcpStorageCredential` sends the GCP service-account JSON, which
+ *     contains `private_key`;
+ *   - `ensureUcAwsStorageCredential` sends the IAM role ARN.
+ *
+ * `shortcut-credentials.ts` throws `\`<fn> failed <status>: <response body>\``,
+ * and a Unity Catalog 400 routinely ECHOES the offending request body. A
+ * storage-credential CREATE is a mutation, and {@link recordUnityAccess} fans
+ * mutations out to tenant-registered OUTBOUND WEBHOOKS (third-party URLs), so
+ * copying that message onto the row could put a live private key outside the
+ * Loom boundary where it cannot be recalled.
+ *
+ * So `detail` here is stamped from the extracted STATUS CODE only — a bounded
+ * integer, never a substring of the error. The securable on the row comes from
+ * the CALLER's structured name, not from parsing the message.
+ */
+
+/**
+ * HTTP status off a `shortcut-credentials.ts` failure.
+ *
+ * Those helpers throw `new Error(\`<fn> failed <status>: <body>\`)` rather than
+ * an error object carrying `.status`, so the status has to be recovered from the
+ * message to classify a 401/403 as {@link UnityAuditOutcome} `denied` — the
+ * highest-value row in the trail. Both shapes are accepted (`.status` first),
+ * and an unrecognised error yields `0`, which classifies as `failure`: a row is
+ * still written, so the fallback can never DROP an audit record.
+ *
+ * ONLY the matched 3-digit code is returned — no substring of the message ever
+ * escapes this function. PURE — unit-tested.
+ */
+export function unitySecurableErrorStatus(err: unknown): number {
+  const e = err as { status?: unknown; message?: unknown } | null;
+  const direct = Number(e?.status);
+  if (Number.isInteger(direct) && direct >= 100 && direct <= 599) return direct;
+  const message = typeof e?.message === 'string' ? e.message : '';
+  const m = /\bfailed\s+([1-5]\d\d)\b/.exec(message);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * The storage-credential / external-location half of the choke point, called
+ * from the `finally` of `ucSecurable` (lib/azure/uc-securable.ts).
+ *
+ * WHY THIS EXISTS: `lib/azure/shortcut-credentials.ts` keeps its OWN private
+ * transport and issues `POST`/`DELETE` on
+ * `/api/2.1/unity-catalog/storage-credentials` and `/external-locations` — the
+ * securables that hand a workload access to a storage account, and the
+ * highest-value pair in the whole surface after a grant. Neither `ucFetch` nor
+ * `dbxFetch` can see them, and that file sits under a repo-level credential-path
+ * write deny so the recorder cannot be added inside it (issue #2622, gap 1).
+ *
+ * The fix is therefore an audited FACADE: `lib/azure/uc-securable.ts` wraps each
+ * un-audited export, and the guard's import check makes that facade the only
+ * module allowed to consume them, so the un-audited functions are unreachable
+ * from the rest of the app.
+ *
+ * Never throws — same fire-and-forget contract as {@link recordUnityAccess}.
+ */
+export function recordUnitySecurableAccess(opts: {
+  /** REST path as issued — the collection for a CREATE, `/{name}` for a DELETE. */
+  path: string;
+  method?: string;
+  /** Securable name from the CALLER's structured params, never parsed from an error. */
+  target?: string;
+  durationMs?: number;
+  error?: unknown;
+  workspaceHost?: string;
+}): void {
+  try {
+    const method = (opts.method || 'GET').toUpperCase();
+    const failed = opts.error != null;
+    const status = failed ? unitySecurableErrorStatus(opts.error) : 200;
+    const shape = classifyUnityCall(method, opts.path);
+    const target = boundSecurable(opts.target);
+    void recordUnityAccess({
+      ...shape,
+      // A CREATE POSTs to the COLLECTION, so the path carries no name — take it
+      // from the caller's structured params (same pattern as the SQL half).
+      securableFqn: target || shape.securableFqn,
+      backend: 'databricks',
+      method,
+      path: (opts.path || '').split('?')[0],
+      workspaceHost: opts.workspaceHost || process.env.LOOM_DATABRICKS_HOSTNAME || '',
+      status,
+      durationMs: opts.durationMs ?? 0,
+      outcome: failed ? unityOutcomeForError(opts.error, status) : 'success',
+      // NOT the error message — it echoes a request body that may carry a GCP
+      // service-account private key, and a mutation row egresses to third-party
+      // webhooks. See the section header.
+      detail: failed
+        ? (status
+          ? `http_status=${status}`
+          : 'Unity Catalog securable call failed (error text withheld — it echoes the credential body)')
+        : undefined,
     });
   } catch {
     /* audit is never allowed to break a catalog call */

@@ -335,12 +335,12 @@ fails the build when:
    undici `request`, node `https.request` and `axios.post` each walked past it with
    zero failures. Both consumers now derive from one exported list, and the spec
    asserts per entry that both see it, so they cannot diverge again;
-3. a recorder call leaves the `finally` of **any** of the four audited
-   transports (`ucFetch`, `dbxFetch`, `ucSql`, `acctFetch`) — the check
-   brace-matches the real function body and the real `finally` block, with
+3. a recorder call leaves the `finally` of **any** of the five audited
+   transports (`ucFetch`, `dbxFetch`, `ucSql`, `acctFetch`, `ucSecurable`) — the
+   check brace-matches the real function body and the real `finally` block, with
    comments and string literals masked, so a decoy call elsewhere in the file
-   does not satisfy it. All four are driven off one `AUDITED_TRANSPORTS` table,
-   so a fifth cannot be added with a weaker assertion than its siblings;
+   does not satisfy it. All five are driven off one `AUDITED_TRANSPORTS` table,
+   so a sixth cannot be added with a weaker assertion than its siblings;
 4. `unity-audit.ts` stops writing either sink or stops classifying denials;
 5. any file pinned in `SQL_EXIT_BASELINES` grows a new `executeStatement(` exit,
    or a pinned file disappears. The pin is per FILE because a *refactor* can
@@ -352,6 +352,13 @@ fails the build when:
    `uc-system-tables.ts` and `app/api/items/[type]/[id]/security/route.ts` — and
    the only permitted raw exit in the repo is `ucSql`'s own. A vanished pin
    fails.
+6. any module other than `lib/azure/uc-securable.ts` imports a **UC-mutating**
+   symbol from `lib/azure/shortcut-credentials.ts` (check 8). That module holds
+   an un-audited transport that cannot be instrumented in place, so the facade is
+   the audited door to it and this check is what obliges callers through it. The
+   rule is an **allowlist** of the two non-catalog exports, so a new un-audited
+   export added to that (unreadable) file is denied by default; namespace and
+   dynamic imports count as `*` and are never allowlistable.
 
 The guard's own bypasses are covered by negative tests in
 `apps/fiab-console/lib/azure/__tests__/unity-audit-guard.test.ts`, which replay
@@ -365,7 +372,7 @@ indirection it does not name (a hand-rolled `net.Socket` speaking HTTP; a helper
 in a third module that itself carries no catalog address); and it proves the
 recorder is *called*, never that the row is correct or that it reached Cosmos. The
 `## LIMITS` block at the top of the guard is the normative statement. Do not cite
-the guard as proof that the Databricks path is fully covered — cite the four
+the guard as proof that the Databricks path is fully covered — cite the five
 transports plus the gap list below.
 
 ### Audit (LU-3) — known gaps
@@ -384,17 +391,40 @@ a trail with an undisclosed hole is worse than having none.
   **inside** the `finally`, not that the call is **unconditional** —
   `finally { if (ok) record(…) }` still passes it. That property is held by
   `lib/azure/__tests__/unity-audit-sql.test.ts`, not by the guard.
-- **`lib/azure/shortcut-credentials.ts` is un-audited — the ONE gap still open.**
-  Its own private `ucFetch` issues storage-credential and external-location
-  CREATE/DELETE. A storage credential is a live cloud identity, which makes this
-  the single most privilege-relevant un-audited surface in the list. It is
-  unchanged by #2622 because the file is covered by a **repo-level
-  credential-path read/write deny**, so the recorder has to be added by someone
-  with write access to it. It is listed in the guard's
-  `KNOWN_UNAUDITED` map, which prints the gap on every passing run, fails the
-  build if any *other* file joins it, **and** — since round 3 — pins the file's
-  outbound-call count so the un-audited surface cannot GROW while it waits
-  (issue #2622).
+- ~~**`lib/azure/shortcut-credentials.ts` is un-audited.**~~ **CLOSED (#2622,
+  2026-08-04) — with a residual worth reading.** Its own private `ucFetch` issues
+  storage-credential and external-location CREATE/DELETE; a storage credential is
+  a live cloud identity, which made this the most privilege-relevant un-audited
+  surface in the list. Rounds 2–5 left it open twice for the same reason: the file
+  is covered by a **repo-level credential-path read/write deny**, so the
+  `try/finally` every other transport received could not be added inside it.
+  That reasoning assumed the only place to audit a call is at its transport. It is
+  not. Those five exports had exactly **one** production consumer
+  (`lib/azure/shortcut-engines.ts`), so an audited **facade** —
+  `lib/azure/uc-securable.ts` — now wraps every one of them and records via
+  `recordUnitySecurableAccess` from a `finally`. It is the guard's **fifth**
+  `AUDITED_TRANSPORTS` entry, so its `finally` is brace-matched exactly like
+  `ucFetch`'s.
+  A facade nobody is obliged to use would be a comment, so the load-bearing half
+  is the guard's new **check 8**: only `uc-securable.ts` may import a UC-mutating
+  symbol from `shortcut-credentials.ts`. It is stated as an **allowlist** of the
+  two non-catalog exports (`getKeyVaultSecret`, `keyVaultConfigGate`) rather than
+  a denylist of today's five — this is the one file in the tree the guard's author
+  cannot **read**, so a new un-audited export added to it must be denied by
+  *default* rather than by having been anticipated. Namespace and dynamic imports
+  count as `*` and can never be allowlisted.
+  *Residual, stated plainly:* no un-audited **call path** to those securables
+  remains, but the **transport itself** is still un-instrumented, so the file
+  stays in `KNOWN_UNAUDITED` and the guard still prints it on every passing run.
+  What is genuinely left of gap 1 is moving the `try/finally` inside the file,
+  which needs write access to a credential-path-denied path. The outbound-call
+  ratchet (pinned at 2) still stops the un-audited surface GROWING meanwhile.
+  Emission is proved — not merely declared — by
+  `lib/azure/__tests__/unity-audit-securable.test.ts`, which stubs only the raw
+  transport and the two sinks and asserts on the bytes that reached Cosmos and
+  `LoomAudit_CL`, including the **denied** row on a 403 and the fact that the
+  upstream error message (which can echo a GCP service-account `private_key`)
+  never lands on a row.
 - **Iceberg REST catalog writes land in a DIFFERENT trail.**
   `lib/azure/iceberg-catalog-client.ts`'s `ircFetch` issues namespace CREATE
   (`POST /v1/namespaces`), table register (`POST`) and table-registration DROP

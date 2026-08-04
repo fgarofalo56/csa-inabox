@@ -30,12 +30,19 @@ import {
 import {
   getKeyVaultSecret,
   keyVaultConfigGate,
+} from './shortcut-credentials';
+// The UC storage-credential + external-location calls come from the AUDITED
+// facade, NOT from shortcut-credentials directly: that module's private
+// transport writes no Loom audit row, and creating a storage credential is the
+// closest thing in Unity Catalog to minting storage access (issue #2622, gap 1).
+// `scripts/ci/check-unity-audit-chokepoint.mjs` check 8 enforces this import.
+import {
   ensureUcAwsStorageCredential,
   ensureUcGcpStorageCredential,
   ensureUcExternalLocation,
   deleteUcExternalLocation,
   deleteUcStorageCredential,
-} from './shortcut-credentials';
+} from './uc-securable';
 import { graphDriveConfigGate, headDriveItem, parseSharepointUri } from './graph-drive-client';
 import type {
   ShortcutTargetType,

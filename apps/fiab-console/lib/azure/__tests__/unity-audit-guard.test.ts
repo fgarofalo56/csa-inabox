@@ -30,6 +30,10 @@ import {
   SQL_EXIT_BASELINES,
   SQL_CHOKEPOINT,
   ACCOUNT_CHOKEPOINT,
+  SECURABLE_CHOKEPOINT,
+  SECURABLE_RAW,
+  SECURABLE_RAW_PUBLIC,
+  securableRawImports,
   AUDITED_TRANSPORTS,
   OUTBOUND_BASELINE,
   CHOKEPOINT_FILES,
@@ -532,16 +536,16 @@ describe('ROUND 5 — every audited transport must record from its finally', () 
     return `${neutered}\nfunction __decoy_${symbol}() { void ${symbol}({} as never); }\n`;
   }
 
-  it('covers all four transports from ONE table', () => {
+  it('covers all five transports from ONE table', () => {
     expect(AUDITED_TRANSPORTS.map((t: { fn: string }) => t.fn).sort())
-      .toEqual(['acctFetch', 'dbxFetch', 'ucFetch', 'ucSql']);
+      .toEqual(['acctFetch', 'dbxFetch', 'ucFetch', 'ucSecurable', 'ucSql']);
     for (const t of AUDITED_TRANSPORTS as Array<{ file: string; fn: string; recorder: string; why: string }>) {
       expect(typeof t.why, `${t.fn} has no explanation`).toBe('string');
       expect(t.why.length).toBeGreaterThan(40);
     }
   });
 
-  it('fails for EVERY transport whose finally stops recording (one scan, four attacks)', () => {
+  it('fails for EVERY transport whose finally stops recording (one scan, five attacks)', () => {
     const s = realSources();
     for (const t of AUDITED_TRANSPORTS as Array<{ file: string; recorder: string }>) {
       const src = s.get(t.file);
@@ -628,5 +632,158 @@ export async function rogueAssign(host: string, token: string, ws: string, ms: s
 `);
     expect(analyzeUnityChokepoint(s).join('\n'))
       .toMatch(/unity-catalog-account-client\.ts: \d+ outbound calls \(ratchet: 1\)/);
+  });
+});
+
+/**
+ * ROUND 6 (issue #2622, gap 1 — the LAST declared gap).
+ *
+ * `shortcut-credentials.ts` mints storage credentials and external locations
+ * from its own private transport and cannot be instrumented in place (repo-level
+ * credential-path read/write deny). Rounds 2–5 stopped there, twice. The fix is
+ * an audited FACADE plus an IMPORT choke point — and the import choke point is
+ * the half that matters, because a facade nobody is obliged to use is a comment.
+ *
+ * Every attack below is one whole-tree scan for the block (see the note on the
+ * TRANSPORTS test: a spec file past 60s fails the run on vitest's birpc
+ * deadline while every test still passes).
+ */
+describe('ROUND 6 — the securable IMPORT choke point (check 8)', () => {
+  it('is wired: the facade is an audited transport and the raw module stays declared', () => {
+    expect(AUDITED_TRANSPORTS.some((t: { file: string }) => t.file === SECURABLE_CHOKEPOINT)).toBe(true);
+    // The entry is deliberately KEPT: no un-audited call PATH remains, but the
+    // transport itself is still un-instrumented, and the honest statement of
+    // that is the entry, not its removal.
+    expect(KNOWN_UNAUDITED.has(SECURABLE_RAW)).toBe(true);
+    // The allowlist is the two NON-catalog exports — stated in the affirmative,
+    // so anything new in that unreadable file is denied by default.
+    expect([...SECURABLE_RAW_PUBLIC].sort()).toEqual(['getKeyVaultSecret', 'keyVaultConfigGate']);
+  });
+
+  it('fails on the pre-#2622 import AND on every evasion a name scan invites', () => {
+    // ## Why this scans a SYNTHETIC map and not the real tree
+    //
+    // Every other attack in this file mutates the whole tree, and each of those
+    // passes costs ~1.5-2.5s. This file already sits at the vitest birpc
+    // `onTaskUpdate` cliff — measured at 81s on the round-6 author's machine
+    // BEFORE this block existed, and at 59.9s GREEN / 62.9s RED on CI in PR
+    // #2785 — so a spec that runs past 60s fails the whole RUN while every test
+    // still passes. Adding scans to this file is therefore not free, and check 8
+    // does not need them: it is a PER-FILE import scan whose behaviour does not
+    // depend on how many other files are present.
+    //
+    // What the real tree WOULD add — proof that check 8 does not false-positive
+    // across the shipped sources — is already asserted by 'passes on the shipped
+    // sources' at the top of this file, which now runs check 8 too. So the real
+    // bytes of `shortcut-engines.ts` are used for the REGRESSION case (the exact
+    // import this PR replaced), and everything else is planted alongside it.
+    const real = realSources();
+    const engines = 'lib/azure/shortcut-engines.ts';
+    expect(real.has(engines)).toBe(true);
+
+    const s = new Map<string, string>([
+      // (0) THE REGRESSION — the EXACT import this PR replaced, prepended to the
+      //     REAL file. If check 8 could not fail on this, the facade would be
+      //     decorative: it would exist, and nothing would oblige anyone to route
+      //     through it.
+      [engines, [
+        'import {',
+        '  getKeyVaultSecret,',
+        '  keyVaultConfigGate,',
+        '  ensureUcAwsStorageCredential,',
+        '  ensureUcGcpStorageCredential,',
+        '  ensureUcExternalLocation,',
+        '  deleteUcExternalLocation,',
+        '  deleteUcStorageCredential,',
+        "} from './shortcut-credentials';",
+        real.get(engines)!,
+      ].join('\n')],
+      // (a) a RENAMED named import — the EXPORTED name is what is matched.
+      ['lib/azure/rogue-sec-a.ts',
+        "import { ensureUcExternalLocation as mk } from './shortcut-credentials';\nexport const go = mk;\n"],
+      // (b) a NAMESPACE import — hands over EVERY export at once, so it can
+      //     never be allowlisted by name.
+      ['lib/azure/rogue-sec-b.ts',
+        "import * as creds from './shortcut-credentials';\nexport const go = creds;\n"],
+      // (c) a DYNAMIC import — same, deferred.
+      ['lib/azure/rogue-sec-c.ts',
+        "export async function go() { const m = await import('./shortcut-credentials'); return m; }\n"],
+      // (d) a BRAND-NEW un-audited export added to the unreadable file and
+      //     consumed elsewhere. A denylist of today's five would say NOTHING
+      //     about this; the allowlist denies it by default. This is the whole
+      //     reason check 8 is stated in the affirmative.
+      ['app/api/rogue-sec/route.ts',
+        "import { rotateUcStorageCredential } from '@/lib/azure/shortcut-credentials';\n"
+        + 'export async function POST() { await rotateUcStorageCredential(); return new Response(); }\n'],
+    ]);
+
+    const found = analyzeUnityChokepoint(s).join('\n');
+    for (const sym of [
+      'ensureUcAwsStorageCredential',
+      'ensureUcGcpStorageCredential',
+      'ensureUcExternalLocation',
+      'deleteUcExternalLocation',
+      'deleteUcStorageCredential',
+    ]) {
+      expect(found, `${sym} walked past the import choke point`)
+        .toMatch(new RegExp(`shortcut-engines\\.ts: imports \`${sym}\` from `));
+    }
+    // …and the two non-catalog exports in the SAME statement are NOT flagged.
+    expect(found).not.toMatch(/imports `getKeyVaultSecret`/);
+    expect(found).not.toMatch(/imports `keyVaultConfigGate`/);
+    expect(found, 'a renamed import walked past').toMatch(/rogue-sec-a\.ts: imports `ensureUcExternalLocation`/);
+    expect(found, 'a namespace import walked past').toMatch(/rogue-sec-b\.ts: imports `\*`/);
+    expect(found, 'a dynamic import walked past').toMatch(/rogue-sec-c\.ts: imports `\*`/);
+    expect(found, 'a NEW un-audited export walked past')
+      .toMatch(/rogue-sec\/route\.ts: imports `rotateUcStorageCredential`/);
+  });
+
+  it('does NOT fire on the legitimate importers that ship today', () => {
+    // No whole-tree scan: `securableRawImports` is pure, and the tree-wide PASS
+    // (which now includes check 8) is asserted once at the top of this file.
+    //
+    // The routes really do import getKeyVaultSecret from that module and the
+    // facade really does import all five. If either tripped, check 8 would be
+    // unusable and would get disabled rather than fixed.
+    const s = realSources();
+    expect(securableRawImports(s.get(SECURABLE_CHOKEPOINT)!).sort()).toEqual([
+      'deleteUcExternalLocation',
+      'deleteUcStorageCredential',
+      'ensureUcAwsStorageCredential',
+      'ensureUcExternalLocation',
+      'ensureUcGcpStorageCredential',
+    ]);
+    expect(securableRawImports(s.get('lib/azure/shortcut-engines.ts')!).sort())
+      .toEqual(['getKeyVaultSecret', 'keyVaultConfigGate']);
+    for (const route of ['app/api/lakehouse/shortcuts/route.ts', 'app/api/lakehouse/shortcuts/test/route.ts']) {
+      for (const name of securableRawImports(s.get(route)!)) {
+        expect(SECURABLE_RAW_PUBLIC.has(name), `${route} imports non-public ${name}`).toBe(true);
+      }
+    }
+  });
+
+  it('reads an import, not a mention of one in a comment', () => {
+    expect(securableRawImports("// import { deleteUcStorageCredential } from './shortcut-credentials';")).toEqual([]);
+    expect(securableRawImports("/** see './shortcut-credentials' */\nexport const a = 1;")).toEqual([]);
+    // …but the real thing, whose specifier only exists inside a string, counts.
+    expect(securableRawImports("import { deleteUcStorageCredential } from './shortcut-credentials';"))
+      .toEqual(['deleteUcStorageCredential']);
+    expect(securableRawImports("import { getKeyVaultSecret } from '@/lib/azure/shortcut-credentials';"))
+      .toEqual(['getKeyVaultSecret']);
+    expect(securableRawImports("import { getKeyVaultSecret } from '../shortcut-credentials';"))
+      .toEqual(['getKeyVaultSecret']);
+    // A different module named similarly must not be swept in.
+    expect(securableRawImports("import { x } from './shortcut-engines';")).toEqual([]);
+  });
+
+  it('fails when the facade disappears while the raw module remains', () => {
+    // Deleting the facade must not silently hand shortcut-engines back its
+    // un-audited imports. Cheap: a 3-file synthetic tree, not the real one —
+    // check 8 and the AUDITED_TRANSPORTS presence check are both pure over the
+    // source map, so a whole-tree scan would prove nothing extra here.
+    const failures = analyzeUnityChokepoint(new Map([
+      [SECURABLE_RAW, 'export async function deleteUcStorageCredential() {}\n'],
+    ])).join('\n');
+    expect(failures).toMatch(/MISSING CHOKE POINT: lib\/azure\/uc-securable\.ts does not exist/);
   });
 });
