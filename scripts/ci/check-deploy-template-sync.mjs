@@ -374,15 +374,18 @@ export function discoverDeployTemplates(root) {
  */
 function runAz(args) {
   const opts = { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 };
-  // On Windows `az` is a .cmd, which Node refuses to spawn without a shell; pass
-  // ONE pre-quoted command string rather than an args array so this does not trip
-  // DEP0190 (args + shell:true are concatenated unescaped).
+  // NO SHELL, and NO hand-rolled quoting. On Linux (where CI runs) `az` is a
+  // plain executable and the args array is passed through verbatim. On Windows
+  // `az` is a .cmd, which Node refuses to spawn directly — so go through
+  // cmd.exe with the args STILL as an array, letting Node do the argv quoting.
+  //
+  // The first version of this escaped `"` by hand for a `shell: true` command
+  // string; CodeQL called it js/incomplete-sanitization and was right — that
+  // form escapes quotes but not the backslashes before them, and cmd.exe quoting
+  // is not backslash-based anyway. Passing an array removes the question.
   const res =
     process.platform === 'win32'
-      ? spawnSync(['az', ...args].map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' '), {
-          ...opts,
-          shell: true,
-        })
+      ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'az', ...args], opts)
       : spawnSync('az', args, opts);
   return {
     status: res.status,
