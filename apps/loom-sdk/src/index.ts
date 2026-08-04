@@ -26,6 +26,16 @@ export type {
   CreateTokenInput,
   CreateTokenResult,
   SessionResult,
+  QueryResult,
+  SqlQueryOptions,
+  KqlQueryOptions,
+  RunSummary,
+  RunDetail,
+  RunList,
+  RunLogSlice,
+  RunStartResult,
+  RunListOptions,
+  RunLogOptions,
 } from './types.js';
 
 // Resource classes (exported for advanced typing / DI).
@@ -34,3 +44,5 @@ export { ItemsResource } from './resources/items.js';
 export { CatalogResource } from './resources/catalog.js';
 export { ThreadResource } from './resources/thread.js';
 export { TokensResource } from './resources/tokens.js';
+export { QueryResource } from './resources/query.js';
+export { RunsResource } from './resources/runs.js';

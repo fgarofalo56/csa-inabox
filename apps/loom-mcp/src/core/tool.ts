@@ -21,6 +21,12 @@ export interface ToolHandlerOptions {
   auth: AuthContext | null;
   /** Audit sink (defaults to the stderr JSON sink). */
   audit?: AuditSink;
+  /**
+   * Whether this server permits non-`readOnly` tools. Default `false` (a
+   * read-only server: M1 `loom-catalog`, M2 `loom-query`). A write server
+   * (M4 `loom-ops`) sets `true`; the scope floor still applies.
+   */
+  allowMutations?: boolean;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<ToolResult>;
@@ -34,7 +40,7 @@ export function buildToolHandler(spec: ToolSpec, opts: ToolHandlerOptions): Tool
     const argsHash = hashArgs(args);
     const principal = opts.auth?.principal ?? 'anonymous';
 
-    const decision = authorize(spec, opts.auth);
+    const decision = authorize(spec, opts.auth, { allowMutations: opts.allowMutations });
     if (!decision.ok) {
       emitAudit(sink, {
         ts: new Date().toISOString(),

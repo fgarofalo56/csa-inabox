@@ -24,6 +24,13 @@ export interface CreateServerOptions {
   auth: AuthContext | null;
   /** Audit sink override (defaults to the stderr JSON sink). */
   audit?: AuditSink;
+  /**
+   * Whether this server permits non-`readOnly` tools. Default `false` — a
+   * read-only server (M1 `loom-catalog`, M2 `loom-query`) whose gate refuses
+   * every mutating tool. A write server (M4 `loom-ops`, M3, M5) sets `true`;
+   * mutating tools then still have to clear the per-tool `minScope` floor.
+   */
+  allowMutations?: boolean;
 }
 
 /** Build a fully-wired MCP server (not yet connected to a transport). */
@@ -31,7 +38,12 @@ export function createLoomMcpServer(opts: CreateServerOptions): McpServer {
   const server = new McpServer({ name: opts.name, version: opts.version });
 
   for (const spec of opts.tools) {
-    const handler = buildToolHandler(spec, { server: opts.name, auth: opts.auth, audit: opts.audit });
+    const handler = buildToolHandler(spec, {
+      server: opts.name,
+      auth: opts.auth,
+      audit: opts.audit,
+      allowMutations: opts.allowMutations,
+    });
     server.registerTool(
       spec.name,
       {

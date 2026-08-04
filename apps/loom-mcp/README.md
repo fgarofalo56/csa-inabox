@@ -11,14 +11,15 @@ Azure-native — **no Microsoft Fabric tenant required** (`.claude/rules/no-fabr
 
 Loom's MCP surface is split into five servers by **blast radius** (PRP
 `loom-devtools` §4.2) so a single leaked token never grants everything. This
-package ships **M1** today; M2–M5 reuse the same shared core (`src/core/`).
+package ships **M1**, **M2**, and **M4** today; M3/M5 reuse the same shared core
+(`src/core/`).
 
 | # | Server | Blast radius | Status |
 |---|--------|--------------|--------|
-| **M1** | `loom-catalog` | Read metadata (this package) | **shipped** |
-| M2 | `loom-query` | Read data rows | deferred |
+| **M1** | `loom-catalog` | Read metadata | **shipped** |
+| **M2** | `loom-query` | Read data rows (bounded, capped) | **shipped** |
 | M3 | `loom-author` | Create/modify items | deferred |
-| M4 | `loom-ops` | Read runs/logs, trigger reruns | deferred |
+| **M4** | `loom-ops` | Read runs/logs, start/cancel runs | **shipped** |
 | M5 | `loom-admin` | Provision infra, grant access | deferred |
 
 ### M1 · `loom-catalog` (read-only)
@@ -36,6 +37,48 @@ client (never raw REST), metadata only:
 
 No tool mutates, and none returns data rows, secrets, connection strings, or ARM
 ids (see Security).
+
+### M2 · `loom-query` (read-only data, bounded)
+
+The **data-exfiltration surface** — so it is the most locked-down server. Three
+tools read *bounded* result sets from a Loom item's data plane, every one
+`readOnly` with a `read-only` scope floor:
+
+| Tool | SDK call | Loom endpoint | Auth floor |
+|------|----------|---------------|-----------|
+| `loom.query.sql` | `query.sql(id, sql, opts)` | `POST /api/items/{type}/{id}/query` (T-SQL) | PAT `read-only` |
+| `loom.query.kql` | `query.kql(id, kql, opts)` | `POST /api/items/{type}/{id}/query` (KQL/ADX) | PAT `read-only` |
+| `loom.query.preview` | `query.preview(id, opts)` | `GET /api/items/{type}/{id}/preview` | PAT `read-only` |
+
+PRP §5.3 exfiltration controls, enforced in the tool:
+
+- **Read-only by construction.** DDL/DML (SQL) and control commands (KQL, leading
+  `.`) are rejected *at parse*, naming the statement class — they never reach the
+  engine.
+- **Hard caps, server-side.** Rows default to 500, hard max 5000; a serialized
+  result is capped at 512 KB. A caller may *lower* a limit; it cannot raise it.
+- **Every cell scrubbed.** The result rows pass through the core secret-scrub
+  (§5.2) — a secret in a data cell is redacted before it leaves the process.
+- **Audited.** The query text is recorded only as the core `args_hash`; the row
+  count is on the audit event.
+
+### M4 · `loom-ops` (runs/logs — read + write)
+
+MIXED blast radius: three read tools and two **write** tools. The write tools set
+`readOnly:false` + `minScope:'read-write'`, so a `read-only` token is refused by
+the core scope gate — this is the shared core's write path.
+
+| Tool | SDK call | Loom endpoint | Auth floor |
+|------|----------|---------------|-----------|
+| `loom.run.list` | `runs.list(id, opts)` | `GET /api/items/{type}/{id}/runs` | PAT `read-only` |
+| `loom.run.get` | `runs.get(id, runId, opts)` | `GET /api/items/{type}/{id}/runs?runId=` | PAT `read-only` |
+| `loom.run.logs` | `runs.logs(id, runId, opts)` | `GET /api/items/{type}/{id}/runs/{runId}/log` | PAT `read-only` |
+| `loom.run.start` | `runs.start(id, opts)` | `POST /api/items/{type}/{id}/run` | PAT **`read-write`** |
+| `loom.run.cancel` | `runs.cancel(id, runId, opts)` | `POST /api/items/{type}/{id}/runs/{runId}/cancel` | PAT **`read-write`** |
+
+Per-item authorization is the BFF's job (the tool calls the same route the
+browser does — it does not reimplement the ACL). Run input/output receipts are
+scrubbed by the core before they leave the process.
 
 ## Authentication
 
@@ -115,8 +158,14 @@ Rigorous per the PRP §5 controls:
 
 - **Token required (no anonymous).** Every tool call goes through the
   authorization gate; a null credential is denied.
-- **Read-only by construction.** M1 only registers `readOnly` tools and the gate
-  refuses to dispatch anything else — no mutating endpoint is reachable.
+- **Mutation floor per server.** A read-only server (`loom-catalog`,
+  `loom-query`) only registers `readOnly` tools and the gate refuses to dispatch
+  anything else. A write server (`loom-ops`) opts in (`allowMutations`), and its
+  write tools additionally require a `read-write` scope — a `read-only` token is
+  refused (`loom.run.start` / `loom.run.cancel`).
+- **Query caps (§5.3).** `loom-query` rejects DDL/DML/control statements at parse
+  and caps rows (default 500, max 5000) + bytes (512 KB) server-side — a caller
+  can only lower a limit.
 - **Secret-scrub (§5.2).** Every tool result passes through a fail-closed scrub
   (`src/core/scrub.ts`) that strips PATs, `loom_session` cookies, bearer headers,
   storage/SQL connection strings, SAS signatures, full ARM resource ids,
@@ -151,7 +200,8 @@ source and the stdio smoke test against the compiled binary.
 `src/core/` is the seam M2–M5 reuse unchanged:
 
 - `auth.ts` / `credential-store.ts` — resolve a credential into an `AuthContext`.
-- `authz.ts` — the per-tool gate (no-anonymous, read-only, scope floor).
+- `authz.ts` — the per-tool gate (no-anonymous, per-server mutation floor via
+  `allowMutations`, scope floor).
 - `scrub.ts` — the secret-scrub (§5.2).
 - `errors.ts` — `{ok:false,…}` normalization.
 - `audit.ts` — the audit hook (§5.7).
@@ -164,7 +214,7 @@ resolver; it inherits the scrub, audit, gate, and error handling for free.
 
 ## Deferred (not in this package)
 
-- M2 `loom-query`, M3 `loom-author`, M4 `loom-ops`, M5 `loom-admin`.
+- M3 `loom-author`, M5 `loom-admin`.
 - The four purpose-built agents (`loom-item-builder`, `loom-triage`,
   `loom-rule-auditor`, `loom-parity-analyst`), PRP §4.3.
 - npm publish: blocked until `@csa-loom/sdk` is published (PRP D0) and this

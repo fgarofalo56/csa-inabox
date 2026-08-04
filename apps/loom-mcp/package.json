@@ -1,7 +1,7 @@
 {
   "name": "@csa-loom/mcp",
   "version": "0.1.0",
-  "description": "CSA Loom MCP servers — deployable Model Context Protocol servers over the Loom SDK. M1 `loom-catalog` is the read-only foundation (catalog/search/get-item/list-workspaces). Azure-native; no Microsoft Fabric tenant required.",
+  "description": "CSA Loom MCP servers — deployable Model Context Protocol servers over the Loom SDK. M1 `loom-catalog` (read metadata), M2 `loom-query` (bounded, capped, read-only data reads), and M4 `loom-ops` (read runs/logs + start/cancel runs) reuse one shared core (auth, authz, scrub, audit). Azure-native; no Microsoft Fabric tenant required.",
   "keywords": [
     "csa-loom",
     "loom",
@@ -14,7 +14,9 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "loom-catalog-mcp": "dist/servers/loom-catalog/bin.js"
+    "loom-catalog-mcp": "dist/servers/loom-catalog/bin.js",
+    "loom-query-mcp": "dist/servers/loom-query/bin.js",
+    "loom-ops-mcp": "dist/servers/loom-ops/bin.js"
   },
   "files": [
     "dist",
@@ -32,7 +34,9 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "prepublishOnly": "npm run build",
     "test": "npm run build && node --import tsx --test test/*.test.ts",
-    "start:catalog": "node dist/servers/loom-catalog/bin.js"
+    "start:catalog": "node dist/servers/loom-catalog/bin.js",
+    "start:query": "node dist/servers/loom-query/bin.js",
+    "start:ops": "node dist/servers/loom-ops/bin.js"
   },
   "dependencies": {
     "@csa-loom/sdk": "file:../loom-sdk",
