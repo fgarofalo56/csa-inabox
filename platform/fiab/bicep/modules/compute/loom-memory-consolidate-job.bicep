@@ -27,6 +27,7 @@
 //         consoleUamiId: identity.outputs.consoleUamiId
 //         consoleInternalUrl: 'https://loom-console.internal.${env}'    // in-VNet FQDN
 //         internalTokenKeyVaultSecretUri: '${kv.outputs.uri}secrets/loom-internal-token'
+//         acrLoginServer: registry.outputs.acrLoginServer    // pull curl from the estate ACR (#2682)
 //         complianceTags: complianceTags
 //       }
 //     }
@@ -53,8 +54,16 @@ param internalTokenKeyVaultSecretUri string
 @description('Cron schedule (UTC). Default 07:17 nightly — off-peak, matching the GitHub workflow.')
 param cronExpression string = '17 7 * * *'
 
-@description('Small utility image with curl (busybox/curl). Default a public curl image.')
+@description('Small utility image with curl. REPOSITORY:TAG only (no registry host). Recorded here as the mirror source-of-truth AND the LIC0 licence record (curl.se = curl licence, MIT/X derivative); the EFFECTIVE pull is <acrLoginServer>/<this> whenever acrLoginServer is supplied — never docker.io on a deploy path (issue #2682).')
 param jobImage string = 'curlimages/curl:8.10.1'
+
+@description('Estate ACR login server (e.g. <name>.azurecr.io). The deploy workflow mirrors curlimages/curl into this registry (az acr import) and the job pulls the mirrored copy via consoleUamiId. When the wiring call site supplies it (see the TODO above), the effective image is <acrLoginServer>/<jobImage> and no public-registry egress occurs; empty (standalone/BYO-egress only) leaves the bare upstream ref.')
+param acrLoginServer string = ''
+
+// EFFECTIVE image ref: the estate-ACR mirror when the login server is known
+// (every wired lane), else the bare upstream ref for a BYO-egress standalone
+// use. Never a public-registry pull on a shipped lane.
+var jobImageRef = empty(acrLoginServer) ? jobImage : '${acrLoginServer}/${jobImage}'
 
 @description('Max seconds one run may execute before termination.')
 param replicaTimeout int = 600
@@ -98,12 +107,20 @@ resource consolidateJob 'Microsoft.App/jobs@2025-02-02-preview' = {
           identity: consoleUamiId
         }
       ]
+      // Pull the mirrored curl image from the estate ACR with the console UAMI
+      // when the login server is supplied — no public-registry egress (#2682).
+      registries: empty(acrLoginServer) ? [] : [
+        {
+          server: acrLoginServer
+          identity: consoleUamiId
+        }
+      ]
     }
     template: {
       containers: [
         {
           name: 'consolidate'
-          image: jobImage
+          image: jobImageRef
           resources: {
             cpu: json(cpu)
             memory: memory

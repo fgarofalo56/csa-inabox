@@ -174,6 +174,45 @@ jobs:
           # 90s for Azure RBAC propagation across all assignments
           sleep 90
 
+      # ── Mirror third-party upstream images into the estate ACR (#2682) ───────
+      # NO Loom deploy path may pull a third-party container image from a public
+      # registry. `az acr import` is a server-side registry-to-registry copy, so
+      # the ONLY egress to Docker Hub is here (a one-time build-lane import into
+      # the ACR the firewall lease has open), NOT from the Container Apps at
+      # runtime. The bicep then pulls <acr>/<repo>:<tag> via the app UAMIs:
+      #   • admin-plane/airflow.bicep        -> <acr>/apache/airflow:<tag>  (live)
+      #   • compute/loom-memory-consolidate-job.bicep -> <acr>/curlimages/curl:<tag>
+      #   • s3proxy is PRE-STAGED for the svc-s3-gateway re-add (#2682 follow-on,
+      #     data-plane/s3-gateway-aca.bicep -> <acr>/s3proxy:3.3.0); harmless to
+      #     hold in ACR until that module returns.
+      # Each repo:tag is reviewed in LIC0 (check-license-inventory.mjs) with a
+      # THIRD_PARTY_LICENSES.md NOTICE row. Keep the --image target byte-identical
+      # to the bicep ref so the mirror and the template stay in lockstep.
+      - name: Mirror third-party images into ACR (#2682)
+        run: |
+          set +e
+          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
+          # source (Docker Hub) -> ACR repo:tag (must match the bicep ref exactly).
+          MIRRORS=(
+            "docker.io/apache/airflow:2.10.5-python3.12|apache/airflow:2.10.5-python3.12"
+            "docker.io/andrewgaul/s3proxy:3.3.0|s3proxy:3.3.0"
+            "docker.io/curlimages/curl:8.10.1|curlimages/curl:8.10.1"
+          )
+          rc=0
+          for M in "${MIRRORS[@]}"; do
+            SRC="${M%%|*}"; DST="${M##*|}"
+            echo "Mirroring $SRC -> $ACR_NAME/$DST"
+            # Primary: Docker Hub. Fallback: the MCR Docker Hub mirror (reachable
+            # in every cloud) in case the estate ACR cannot reach docker.io.
+            if ! az acr import -n "$ACR_NAME" --source "$SRC" --image "$DST" --force -o none; then
+              MCR_SRC="mcr.microsoft.com/mirror/docker/${SRC#docker.io/}"
+              echo "::warning::docker.io import failed for $DST; trying $MCR_SRC"
+              az acr import -n "$ACR_NAME" --source "$MCR_SRC" --image "$DST" --force -o none || { echo "::error::could not mirror $DST into $ACR_NAME"; rc=1; }
+            fi
+          done
+          [ "$rc" -eq 0 ] && echo "::notice::third-party images mirrored into $ACR_NAME." || echo "::error::one or more third-party image mirrors FAILED — the deploy will honest-gate on the affected service."
+          exit $rc
+
   build:
     name: Build ${{ matrix.app }} via Docker push
     needs: [resolve, open-acr]
