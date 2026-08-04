@@ -25,6 +25,29 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.82.14](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.13...csa-inabox-v0.82.14) (2026-08-04)
+
+
+### Bug Fixes
+
+* **feedback:** stop auto-filing benign ResizeObserver loop notifications ([#2908](https://github.com/fgarofalo56/csa-inabox/issues/2908)) ([#2909](https://github.com/fgarofalo56/csa-inabox/issues/2909)) ([0811601](https://github.com/fgarofalo56/csa-inabox/commit/08116019f15079899cafb44be3d4f596a92b16d5))
+* **loom-unity:** classpath-prepend the upstream v0.5.1 server jar to fix the authz permission-GET 500 ([#2680](https://github.com/fgarofalo56/csa-inabox/issues/2680)/[#2643](https://github.com/fgarofalo56/csa-inabox/issues/2643)) ([#2918](https://github.com/fgarofalo56/csa-inabox/issues/2918)) ([b4dcf1e](https://github.com/fgarofalo56/csa-inabox/commit/b4dcf1e4b1b2c45e663c88d6c8aea04dc47372fc))
+* **semantic-model:** Aggregations / Incremental-refresh / Direct-Lake reachable on the Azure-native path (closes [#2912](https://github.com/fgarofalo56/csa-inabox/issues/2912)) ([#2914](https://github.com/fgarofalo56/csa-inabox/issues/2914)) ([0e53d6d](https://github.com/fgarofalo56/csa-inabox/commit/0e53d6de9d26822bde0e315f71e9f225edade0f6))
+* **supply-chain:** airflow pulls from ACR not docker.io + mirror third-party images on both clouds ([#2682](https://github.com/fgarofalo56/csa-inabox/issues/2682)) ([#2921](https://github.com/fgarofalo56/csa-inabox/issues/2921)) ([2723a2f](https://github.com/fgarofalo56/csa-inabox/commit/2723a2f2339a27f91967171a3957ccbdfba11690))
+
+
+### Tests
+
+* **ci:** give the deploy-staleness drift guard teeth — pure-fn refactor + 15 mutation-proved tests ([#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775)) ([#2919](https://github.com/fgarofalo56/csa-inabox/issues/2919)) ([cbc41f8](https://github.com/fgarofalo56/csa-inabox/commit/cbc41f841a7cf7c6f20cb5fd87db1592fef3c64c))
+* **e2e:** G1 click-walk receipt specs for Help Center guides, UC system-tables, UC effective-permissions ([#2913](https://github.com/fgarofalo56/csa-inabox/issues/2913)) ([c31226e](https://github.com/fgarofalo56/csa-inabox/commit/c31226eeb7ec62d4ea52461983dc06915f9fb407))
+* **e2e:** G1 receipt specs — Delta Sharing, OpenLineage, UC-audit-exit, AOAI target-resolution ([#2915](https://github.com/fgarofalo56/csa-inabox/issues/2915)) ([864c15f](https://github.com/fgarofalo56/csa-inabox/commit/864c15fc9f82c8b3c541c691fd87aa10b0cc89b4))
+* **e2e:** raise the AOAI copilot G1 landing timeout for a cold Front Door replica ([#2583](https://github.com/fgarofalo56/csa-inabox/issues/2583)) ([#2916](https://github.com/fgarofalo56/csa-inabox/issues/2916)) ([e2d5505](https://github.com/fgarofalo56/csa-inabox/commit/e2d5505e8a02b33184aa755a5ac048331248985e))
+
+
+### Performance Improvements
+
+* **copilot:** code-split the console out of the /copilot landing chunk ([#2583](https://github.com/fgarofalo56/csa-inabox/issues/2583)) ([#2917](https://github.com/fgarofalo56/csa-inabox/issues/2917)) ([e8c8bae](https://github.com/fgarofalo56/csa-inabox/commit/e8c8baea67ee484d0c7f898e13025eec2a39748b))
+
 ## [0.82.13](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.82.12...csa-inabox-v0.82.13) (2026-08-04)
 
 
