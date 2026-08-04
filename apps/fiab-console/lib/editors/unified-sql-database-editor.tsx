@@ -55,7 +55,6 @@ import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible
 import { ResultsPanel } from './components/results-panel';
 import { EditorResultsSplit } from './components/editor-results-split';
 import type { BatchQueryResponse } from './components/results-panel';
-import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { registerInlineCompletion } from '@/lib/components/editor/inline-completion';
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
@@ -70,6 +69,8 @@ import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
+import { bindItemConnection } from './sql-bind-connection';
+import { ConnectionStringsCard } from './components/connection-strings-card';
 
 // ── Real Azure database option sets (parity with the portal create blades) ──
 const AZURE_REGIONS = [
@@ -780,22 +781,6 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     return inv.mi.instances.find((x) => x.name === server)?.fqdn || '';
   }, [inv, family, server]);
 
-  // ---- connection strings (Connect tab card) ----
-  type ConnDriverKey = 'adonet' | 'jdbc' | 'odbc' | 'php' | 'go';
-  const [connDriver, setConnDriver] = useState<ConnDriverKey>('adonet');
-  const [connCopied, setConnCopied] = useState<ConnDriverKey | null>(null);
-  const connStrings = useMemo(
-    () => ((family === 'azure-sql' && serverFqdn && database)
-      ? buildConnectionStrings({ fqdn: serverFqdn, database })
-      : null),
-    [family, serverFqdn, database],
-  );
-  const copyConnStr = useCallback(async (key: ConnDriverKey, value: string) => {
-    await navigator.clipboard?.writeText(value);
-    setConnCopied(key);
-    setTimeout(() => setConnCopied(null), 2000);
-  }, []);
-
   const loadDatabases = useCallback(async (fam: Family, srv: string) => {
     setDatabases([]); setDatabasesFull([]); setDbError(null);
     if (!srv || fam === 'managed-instance') return;
@@ -879,19 +864,12 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     if (family !== 'postgres' && !database) { setQResult({ ok: false, error: 'select a database first' }); return; }
     // #2723 — the azure-sql /query route DERIVES its target from THIS item's
     // bound connection (authority comes from the item id, not the request body),
-    // so persist the current selection before running. A freshly-picked
-    // server/database thus becomes the item's bound authority. Bound once per
-    // selection (boundKeyRef); PostgreSQL uses its own route/binding.
+    // so persist the current selection before running. PostgreSQL has its own
+    // route/binding. Bound at most once per selection (boundKeyRef).
     if (family !== 'postgres' && id !== 'new') {
-      const key = `${family}|${server}|${database}`;
-      if (boundKeyRef.current !== key) {
-        const jb = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/connect`, {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ family, server, database }),
-        }).catch(() => ({ ok: false as const }));
-        if (jb?.ok) boundKeyRef.current = key;
-        else { setQResult({ ok: false, error: (jb as { error?: string })?.error || 'could not bind the connection to this item' }); return; }
-      }
+      const b = await bindItemConnection({ id, family, server, database, cachedKey: boundKeyRef.current, postJson: fetchJson });
+      if (!b.ok) { setQResult({ ok: false, error: b.error }); return; }
+      boundKeyRef.current = b.key;
     }
     const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -1156,15 +1134,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     let res: Response;
     try {
       // #2723 — keep the Copilot's schema-read target bound to this item (parity
-      // with run()): persist the current selection first, so the route's
-      // derive-from-item schema grounding matches the editor's selection and
-      // never 403s on a stale binding. copilotEligible ⇒ family === 'azure-sql'.
-      if (id !== 'new' && boundKeyRef.current !== `azure-sql|${server}|${database}`) {
-        const jb = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/connect`, {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ family: 'azure-sql', server, database }),
-        }).catch(() => ({ ok: false as const }));
-        if (jb?.ok) boundKeyRef.current = `azure-sql|${server}|${database}`;
+      // with run()), so the route's derive-from-item grounding matches the
+      // editor's selection. copilotEligible ⇒ family === 'azure-sql'.
+      if (id !== 'new') {
+        const b = await bindItemConnection({ id, family: 'azure-sql', server, database, cachedKey: boundKeyRef.current, postJson: fetchJson });
+        if (b.ok) boundKeyRef.current = b.key;
       }
       res = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/copilot`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1642,52 +1616,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
 
               {/* ---- Connection strings (ADO.NET / JDBC / ODBC / PHP / Go) ---- */}
               {family === 'azure-sql' && serverFqdn && (
-                <div className={s.connCard}>
-                  <Subtitle2><PlugConnected20Regular style={{ verticalAlign: 'middle' }} /> Connection strings</Subtitle2>
-                  {!database ? (
-                    <Caption1>Select a database (left pane or a <strong>Connect</strong> button above) to generate driver-ready strings.</Caption1>
-                  ) : (
-                    <>
-                      <Caption1>
-                        FQDN: <code>{serverFqdn}</code> · DB: <code>{database}</code> · Auth: Microsoft Entra Managed Identity (password-free)
-                      </Caption1>
-                      <TabList
-                        size="small"
-                        selectedValue={connDriver}
-                        onTabSelect={(_, d) => setConnDriver(d.value as ConnDriverKey)}
-                      >
-                        <Tab value="adonet">ADO.NET</Tab>
-                        <Tab value="jdbc">JDBC</Tab>
-                        <Tab value="odbc">ODBC</Tab>
-                        <Tab value="php">PHP</Tab>
-                        <Tab value="go">Go</Tab>
-                      </TabList>
-                      {connStrings && (
-                        <div className={s.connCodeWrap}>
-                          <pre className={s.connCode}>{connStrings[connDriver]}</pre>
-                          <Tooltip content={connCopied === connDriver ? 'Copied!' : 'Copy to clipboard'} relationship="label">
-                            <Button
-                              size="small"
-                              appearance="subtle"
-                              icon={<Copy20Regular />}
-                              aria-label={`Copy ${connDriver} connection string`}
-                              className={s.connCopyBtn}
-                              onClick={() => copyConnStr(connDriver, connStrings[connDriver])}
-                            />
-                          </Tooltip>
-                        </div>
-                      )}
-                      <Caption1>
-                        All strings use password-free Microsoft Entra authentication (Managed Identity / Default).
-                        Grant the connecting identity <code>db_datareader</code> / <code>db_datawriter</code> in the database via{' '}
-                        <code>CREATE USER [&lt;entra-principal&gt;] FROM EXTERNAL PROVIDER;</code>.
-                        {getSqlHostSuffix(serverFqdn).includes('usgovcloudapi') && (
-                          <> Gov cloud detected — endpoint suffix is <code>{getSqlHostSuffix(serverFqdn)}</code> (GCC-High / IL5 / DoD).</>
-                        )}
-                      </Caption1>
-                    </>
-                  )}
-                </div>
+                <ConnectionStringsCard fqdn={serverFqdn} database={database} s={s} />
               )}
             </>
           )}
