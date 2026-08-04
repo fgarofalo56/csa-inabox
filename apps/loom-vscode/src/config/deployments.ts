@@ -45,7 +45,9 @@ export function normalizeUrl(url: string): string {
 export function deploymentIdFromUrl(apiUrl: string): string {
   try {
     const u = new URL(apiUrl);
-    const seg = u.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || '';
+    // First non-empty path segment. Split + filter (no run-trim regex) so there
+    // is no quadratic backtracking on a pathological path (ReDoS-safe).
+    const seg = u.pathname.split('/').find(Boolean) || '';
     const base = seg ? `${u.host}-${seg}` : u.host;
     return base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
   } catch {
