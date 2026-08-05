@@ -23,7 +23,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { workspacesContainer, workspaceGitContainer } from '@/lib/azure/cosmos-client';
+import { workspaceGitContainer } from '@/lib/azure/cosmos-client';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import {
   putKeyVaultSecret,
   deleteKeyVaultSecret,
@@ -38,24 +39,18 @@ export const dynamic = 'force-dynamic';
 const PROVIDERS = ['github', 'ado'] as const;
 type Provider = (typeof PROVIDERS)[number];
 
-async function assertOwner(workspaceId: string, tenantId: string) {
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwner(params.id, s.claims.oid)))
-    return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  // #2947 — was a local owner-only `assertOwner` ("did you CREATE this
+  // workspace"), which 404'd a tenant admin / shared member. Canonical ladder,
+  // read-scoped: reading the binding returns the KV secret NAME, never the PAT.
+  {
+    const denied = await authorizeWorkspace(s, params.id, { allowReadRoles: true });
+    if (denied) return denied;
+  }
   const c = await workspaceGitContainer();
   try {
     const { resource } = await c.item(params.id, params.id).read<any>();
@@ -70,8 +65,13 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwner(params.id, s.claims.oid)))
-    return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  // #2947 — was a local owner-only `assertOwner`. Canonical ladder, WRITE-scoped
+  // (this mutates the binding and the Key Vault PAT secret), so a read-only
+  // Viewer that may GET the binding can never connect/disconnect Git.
+  {
+    const denied = await authorizeWorkspace(s, params.id);
+    if (denied) return denied;
+  }
   const body = await req.json().catch(() => ({}));
   const provider = (body?.provider || '').toString() as Provider;
   // The client sends repoHost + repoPath rather than a single repoUrl so the
@@ -149,8 +149,13 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwner(params.id, s.claims.oid)))
-    return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  // #2947 — was a local owner-only `assertOwner`. Canonical ladder, WRITE-scoped
+  // (this mutates the binding and the Key Vault PAT secret), so a read-only
+  // Viewer that may GET the binding can never connect/disconnect Git.
+  {
+    const denied = await authorizeWorkspace(s, params.id);
+    if (denied) return denied;
+  }
   const c = await workspaceGitContainer();
   try {
     const { resource } = await c.item(params.id, params.id).read<any>();
