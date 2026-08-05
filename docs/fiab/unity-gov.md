@@ -646,9 +646,40 @@ schema yourself).
 
 ## Deploy
 
-`admin-plane/main.bicep` is at the ARM 256-parameter ceiling, so both Loom Unity
-modules are **standalone out-of-band entrypoints** (orphan-allowlisted in
-`scripts/ci/check-bicep-sync.mjs`), the same pattern the Hyperscale-band apps use.
+**Since #2681 you do not deploy Loom Unity — the platform does.**
+`admin-plane/main.bicep` invokes both modules DEFAULT-ON on every boundary:
+
+| what | how |
+|---|---|
+| toggle | `loomBackends.unity` (unset ⇒ `enabled`). Opt out with `observabilityConfig.backendOverrides = { unity: 'disabled' }`. No new top-level param — the ARM 256-parameter ceiling is untouched. |
+| identity | a dedicated `uami-loom-unity-<region>` holding AcrPull on the admin ACR and Entra administrator on its own Postgres. |
+| metastore | `data-plane/loom-unity-postgres.bicep`, consuming the `privatelink.postgres.*` zone the DuckLake store created on the hub VNet. Skipped where `postgresQuotaAvailable=false` (the gcc-high / il5 default) — the catalog then runs the EmptyDir H2 store (`dbEphemeral`), functional but not durable. |
+| authorization | `authMode: 'entra'` as a LITERAL at the module call, `consolePrincipalId` for the #2974 SCIM auto-bind, `consoleAllowedCidrs` pinned to the Container Apps infrastructure subnet read from `network.outputs.containerPlatformSubnetPrefix`. |
+| image | `appImageTags.unity` (`LOOM_UNITY_TAG`, default `v0.1`). It is now a HARD prerequisite of the apps phase and is asserted by the image preflight in all three deploy lanes. |
+| console wiring | `LOOM_UNITY_URL` / `_CLIENT_ID` / `_AUDIENCE` / `_AUTH_MODE` emitted by the same template; `LOOM_UC_BACKEND=oss` pinned on GCC-High / IL5. |
+
+**First deploy caveat.** The Entra app registration the catalog pins as its
+audience is a Microsoft Graph object ARM cannot create. On a genuinely fresh
+estate `entraClientId` is therefore empty at ARM time and the module deploys
+**SEALED** — up, `minReplicas 0`, an unroutable `api://loom-unity-sealed-*.invalid`
+audience, every caller refused. That is deliberate (the alternative, and the
+actual #2643 finding, was an anonymous catalog anything on the VNet could
+mutate). `csa-loom-post-deploy-bootstrap.yml` unseals it in the step *"Unseal
+Loom Unity + wire the Console (LU / #2681)"* once `bootstrap-msal-app-reg.sh`
+has created the registration — by updating three env vars and the replica floor,
+never by re-running the module (a partial-param redeploy would silently migrate
+the catalog off Postgres onto an Azure Files H2 store, which does not start on
+Gov).
+
+Steady state is protected by the deploy lanes resolving the estate's existing
+registration into `LOOM_MSAL_CLIENT_ID` before applying
+(`scripts/csa-loom/resolve-msal-client-id.sh`) — without that, every reconcile
+would blank sign-in and re-seal a working catalog.
+
+### Manual / out-of-band deploy (still supported)
+
+Both modules remain directly invocable — useful for a targeted change, and the
+path `.github/workflows/gov-uc-purview-wire.yml` still uses:
 
 1. **Provision the catalog store** — Entra-only, private-endpoint-only Postgres:
 

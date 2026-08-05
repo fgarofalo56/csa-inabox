@@ -24,6 +24,9 @@
  * Plus: the live probe must stay wired into GATE_PROBE_MAP, because env presence
  * alone can never prove a deployed catalog rejects anonymous callers.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ENV_CHECKS, evalEnv, type EnvSpec } from '../env-checks';
@@ -141,5 +144,96 @@ describe('svc-loom-unity-authz — scoped to estates that actually deploy Loom U
 describe('svc-loom-unity-authz — the live probe is the sharp verdict', () => {
   it('is wired into GATE_PROBE_MAP so a deployed catalog is judged on measured evidence', () => {
     expect(GATE_PROBE_MAP['svc-loom-unity-authz']).toBe('probe-loom-unity-authz');
+  });
+});
+
+/**
+ * #2681 — the DEPLOY half. The two tests above pin how the gate BEHAVES; these
+ * pin that the platform actually stands the catalog up, authorized, with no
+ * operator step.
+ *
+ * Why this lives in a test rather than only in review: the reason
+ * `appliesWhenPresent` could not be trusted was that NO bicep emitted
+ * `LOOM_UNITY_URL`, so "not deployed ⇒ pass" applied on every estate. That is
+ * only safe while the orchestrator really does deploy the catalog. Reverting the
+ * module call, or softening `authMode` back to a caller-supplied value, would
+ * restore #2643 with the gate still green — so the orchestrator wiring is
+ * asserted here directly, against the bicep source.
+ */
+describe('#2681 — admin-plane/main.bicep deploys Loom Unity, authorized, by default', () => {
+  const adminPlane = () =>
+    readFileSync(
+      resolve(__dirname, '../../../../../platform/fiab/bicep/modules/admin-plane/main.bicep'),
+      'utf8',
+    );
+
+  /**
+   * The `module loomUnity … { … }` call ONLY.
+   *
+   * Scoped on purpose, and the scoping is load-bearing: the first draft of these
+   * tests asserted `consolePrincipalId: identity.outputs.uamiConsolePrincipalId`
+   * against the whole file, which passed happily after that line was deleted
+   * from the Loom Unity call — the same expression appears 35 other times in
+   * this template (every azure-connections / RBAC module takes it). A whole-file
+   * `toContain` on a common expression is a test that cannot fail. Caught by
+   * mutation-proof, fixed here.
+   */
+  const unityCall = () => {
+    const src = adminPlane();
+    const start = src.indexOf("module loomUnity '../compute/loom-unity-app.bicep'");
+    expect(start).toBeGreaterThan(-1);
+    const rest = src.slice(start);
+    const end = rest.indexOf('\n}\n');
+    expect(end).toBeGreaterThan(-1);
+    return rest.slice(0, end + 3);
+  };
+
+  it('invokes compute/loom-unity-app.bicep (it is no longer an out-of-band entrypoint)', () => {
+    expect(adminPlane()).toMatch(/module\s+loomUnity\s+'\.\.\/compute\/loom-unity-app\.bicep'/);
+  });
+
+  it('deploys the metastore too, so the catalog is not a scratch database', () => {
+    expect(adminPlane()).toMatch(
+      /module\s+loomUnityPostgres\s+'\.\.\/data-plane\/loom-unity-postgres\.bicep'/,
+    );
+  });
+
+  it('pins authMode to the LITERAL entra — never a caller-supplied or disabled value', () => {
+    const call = unityCall();
+    expect(call).toMatch(/^\s*authMode:\s*'entra'$/m);
+    // #2643 was `authMode=disabled` supplied by the ONE caller. No spelling of
+    // the off-switch may reach this module from the orchestrator.
+    expect(call).not.toMatch(/authMode:\s*'(disabled|anonymous|none|off)'/);
+  });
+
+  it('passes the Console principal so an ENFORCING catalog is also a USABLE one (#2974)', () => {
+    // Without this the SCIM auto-bind never runs, upstream AuthService resolves
+    // the app-only caller as an unknown `sub`, and every Console call 401s —
+    // "authenticated and unusable", which is the failure #2681 was blocked on.
+    expect(unityCall()).toMatch(
+      /^\s*consolePrincipalId:\s*identity\.outputs\.uamiConsolePrincipalId$/m,
+    );
+  });
+
+  it('IP-pins ingress to the Container Apps subnet read from the network module', () => {
+    // A literal CIDR here would drift from the real subnet layout silently.
+    expect(unityCall()).toMatch(/network\.outputs\.containerPlatformSubnetPrefix/);
+  });
+
+  it('emits the four Console-side vars, and never an off-switch value for the posture', () => {
+    const src = adminPlane();
+    for (const v of [
+      'LOOM_UNITY_URL',
+      'LOOM_UNITY_CLIENT_ID',
+      'LOOM_UNITY_AUDIENCE',
+      'LOOM_UNITY_AUTH_MODE',
+    ]) {
+      expect(src).toContain(`name: '${v}'`);
+    }
+    // rejectValues exists because #2643's gate was satisfied BY the anonymous
+    // posture. No template may emit one of those values for this var.
+    expect(src).not.toMatch(
+      /name:\s*'LOOM_UNITY_AUTH_MODE',\s*value:[^\n]*'(anonymous|disabled|none|off)'/,
+    );
   });
 });

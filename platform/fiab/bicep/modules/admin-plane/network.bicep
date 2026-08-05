@@ -784,6 +784,18 @@ output hubVnetName string = hubVnet.name
 output firewallPrivateIp string = firewallEnabled ? firewall!.properties.ipConfigurations[0].properties.privateIPAddress : ''
 output bastionId string = bastion.id
 output containerPlatformSubnetId string = '${hubVnet.id}/subnets/snet-container-platform'
+// The CIDR of the Container Apps infrastructure subnet — the source range every
+// in-environment pod (the Console included) draws its IP from. Internal-ingress
+// apps that additionally IP-pin their ingress (compute/loom-unity-app.bicep's
+// `consoleAllowedCidrs`) need this LITERAL, not the subnet resource id, because
+// an ACA `ipSecurityRestrictions` rule takes a CIDR.
+//
+// READ FROM `subnets`, NOT RE-DERIVED. An earlier revision recomputed
+// '${prefix}.2.0/24' at the output; that is a second source of truth for the
+// same value, and the day the layout above moves the CAE subnet the IP pin
+// would silently allow the WRONG range (or nothing, which locks the Console out
+// of its own catalog). Reading the array entry makes the two impossible to drift.
+output containerPlatformSubnetPrefix string = filter(subnets, s => s.name == 'snet-container-platform')[0].addressPrefix
 output functionsSubnetId string = '${hubVnet.id}/subnets/snet-functions'
 output apimSubnetId string = '${hubVnet.id}/subnets/snet-apim'
 output privateEndpointsSubnetId string = '${hubVnet.id}/subnets/snet-private-endpoints'

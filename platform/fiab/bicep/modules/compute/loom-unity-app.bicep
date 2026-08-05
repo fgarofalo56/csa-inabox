@@ -24,11 +24,27 @@
 // single-writer it pins the app to exactly ONE replica. With Postgres the app
 // scales past one replica (maxReplicas below).
 //
-// STANDALONE ENTRYPOINT: admin-plane/main.bicep is at the ARM 256-parameter
-// ceiling, so this deploys out-of-band (like the Hyperscale-band modules), then
-// LOOM_UNITY_URL + LOOM_UC_BACKEND=oss are set on the Console app. Until wired,
-// the UC client honest-gates (OssUcNotConfiguredError) and Commercial keeps
-// using Databricks UC. Orphan-allowlisted in scripts/ci/check-bicep-sync.mjs.
+// DEPLOYED BY THE ORCHESTRATOR (#2681). admin-plane/main.bicep invokes this
+// module DEFAULT-ON on every boundary (`loomUnityActive`), passes authMode
+// 'entra' as a literal, binds the Console principal for the SCIM auto-bind, IP-
+// pins ingress to the Container Apps infrastructure subnet, and emits
+// LOOM_UNITY_URL / _CLIENT_ID / _AUDIENCE / _AUTH_MODE onto the Console app.
+// No new top-level param was needed — the toggle rides the existing
+// `loomBackends` bag (`unity`) and the image tag the existing `appImageTags`
+// bag, so the 256-parameter ceiling is untouched.
+//
+// It was previously a STANDALONE out-of-band entrypoint that only a manual
+// `gov-uc-purview-wire.yml` dispatch ever invoked. That is why LOOM_UNITY_URL
+// was emitted by no bicep anywhere, why a from-scratch Commercial estate had no
+// catalog at all, and why `svc-loom-unity-authz` — scoped
+// `appliesWhenPresent(LOOM_UNITY_URL)` — reported PASS on every such estate for
+// a component that did not exist.
+//
+// FIRST-DEPLOY NOTE: the Entra app registration this module pins as its audience
+// is a Microsoft Graph object ARM cannot create, so on a genuinely fresh estate
+// `entraClientId` arrives empty and the module deploys SEALED (see authSealed
+// below) rather than anonymous. csa-loom-post-deploy-bootstrap.yml unseals it
+// once the registration exists.
 //
 // svc-loom-unity-authz FIXED HERE: every caller omitted entraClientId, and this
 // module then SILENTLY rendered `server.authorization=disable` — so the module

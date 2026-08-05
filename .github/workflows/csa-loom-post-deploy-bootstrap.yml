@@ -350,6 +350,121 @@ jobs:
             echo "LOOM_MSAL_CLIENT_ID=$APP_ID" >> "$GITHUB_ENV"
           fi
 
+      - name: Unseal Loom Unity + wire the Console (LU / #2681)
+        # THE FIRST-DEPLOY HALF of #2681. admin-plane/main.bicep now deploys
+        # loom-unity DEFAULT-ON with authMode=entra, and passes the Console's MSAL
+        # app registration as the catalog's entraClientId. On a genuinely fresh
+        # estate that registration does not exist yet at ARM time (it is a
+        # Microsoft Graph object; the step above creates it), so the module has no
+        # audience to pin and deploys SEALED BY DESIGN — minReplicas 0, an
+        # unroutable `api://loom-unity-sealed-*.invalid` audience, every caller
+        # refused. That is the correct fail-closed posture (#2643 was the
+        # alternative: an anonymous catalog anything on the CAE VNet could mutate)
+        # but it is not a working catalog, and leaving it there would be exactly
+        # the "value the deploy could have set" that auto-bind-by-default forbids.
+        #
+        # This step closes the loop the moment the registration exists.
+        #
+        # ENV UPDATE, NOT A MODULE REDEPLOY — deliberately. Re-running
+        # compute/loom-unity-app.bicep out-of-band with a partial param set would
+        # take unityPostgresFqdn='' + dbEphemeral=false, i.e. useAzureFiles=true,
+        # and SILENTLY MIGRATE the catalog off its Postgres metastore onto an
+        # Azure Files H2 file DB — which on Azure Government blocks container
+        # start outright (CIFS mount, CrashLoopBackOff). Setting the three auth
+        # values and the replica floor touches persistence not at all.
+        #
+        # LOOM_UNITY_CONSOLE_PRINCIPAL_ID is already on the app (the orchestrator
+        # passes consolePrincipalId unconditionally), so the #2974 SCIM auto-bind
+        # runs on the revision this step creates and the enforcing catalog is also
+        # a usable one.
+        #
+        # Best-effort like every bootstrap step: a miss leaves the catalog SEALED
+        # (safe) and the svc-loom-unity-authz gate honest, and never fails the
+        # deploy.
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          CID="${LOOM_MSAL_CLIENT_ID:-}"
+          # Belt and braces: the step above writes the freshly-created app id to
+          # $GITHUB_ENV, but LOOM_MSAL_CLIENT_ID is ALSO a workflow-level `env:`
+          # and the precedence between the two is not worth betting a federal
+          # catalog on. Fall back to the estate's own record (Key Vault → live
+          # Console app), which is the authority either way.
+          if [ -z "$CID" ]; then
+            # resolve-msal-client-id.sh logs to stderr and prints ONLY the id on
+            # stdout, so its diagnostics stay visible in the job log — no 2>/dev/null.
+            CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "$ADMIN_RG" || true)"
+            CID="$(printf '%s' "$CID" | tr -d '\r')"
+          fi
+          # NO `2>/dev/null` ON ANY QUERY BELOW, deliberately. The dominant defect
+          # class in this repo's automation is UNKNOWN reported as a NEGATIVE: an
+          # `az ... 2>/dev/null` that fails on rights or a bad subscription
+          # returns an empty string, and the script then reports "not deployed —
+          # nothing to do" for a catalog that is deployed and sealed. Each read
+          # below captures its exit status separately so a FAILED query is a
+          # warning, never a silent pass.
+          UNITY=""
+          if UNITY_RAW=$(az containerapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+                --query "[?name=='loom-unity'].name | [0]" -o tsv); then
+            UNITY=$(printf '%s' "$UNITY_RAW" | tr -d '\r')
+          else
+            echo "::warning::Could not enumerate Container Apps in $ADMIN_RG — cannot tell whether loom-unity is deployed. NOT treating that as absent. Check the deploy identity's rights on $ADMIN_RG and re-run."
+            exit 0
+          fi
+          if [ -z "$UNITY" ]; then
+            echo "::notice::loom-unity is not deployed in $ADMIN_RG (loomBackends.unity='disabled', or deployAppsEnabled=false) — nothing to unseal."
+            exit 0
+          fi
+          if [ -z "$CID" ]; then
+            echo "::warning::loom-unity is deployed but no MSAL client id resolved, so the catalog stays SEALED (up, refusing every caller). Re-run this workflow once bootstrap-msal-app-reg.sh has created the registration."
+            exit 0
+          fi
+          CURRENT=$(az containerapp show -n loom-unity -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "properties.template.containers[0].env[?name=='LOOM_UNITY_ENTRA_CLIENT_ID'].value | [0]" -o tsv \
+            | tr -d '\r') || CURRENT="__query_failed__"
+          if [ "$CURRENT" = "$CID" ]; then
+            echo "  loom-unity already pins this audience — no change."
+          else
+            echo "Unsealing loom-unity onto audience api://$CID …"
+            az containerapp update -n loom-unity -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+              --min-replicas 1 \
+              --set-env-vars \
+                "LOOM_UNITY_AUTH=enable" \
+                "LOOM_UNITY_ENTRA_CLIENT_ID=$CID" \
+                "LOOM_UNITY_AUDIENCES=api://$CID,$CID" \
+              -o none \
+              && echo "  loom-unity unsealed (authorization ENFORCED against the Console registration)." \
+              || echo "::warning::Could not update loom-unity — the catalog stays SEALED. Check the deploy identity's rights on $ADMIN_RG."
+            for i in $(seq 1 20); do
+              REV=$(az containerapp show -n loom-unity -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query properties.latestRevisionName -o tsv | tr -d '\r') || REV=""
+              [ -n "$REV" ] || { echo "  (could not read the latest revision name — retrying)"; sleep 15; continue; }
+              H=$(az containerapp revision show -n loom-unity -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --revision "$REV" --query properties.healthState -o tsv | tr -d '\r') || H="?"
+              echo "  loom-unity health=$H"
+              [ "$H" = "Healthy" ] && break
+              sleep 15
+            done
+          fi
+          # CONSOLE HALF. The orchestrator emits LOOM_UNITY_URL unconditionally but
+          # emits the client id / audience only when it had one at ARM time, so on
+          # a first deploy those two are empty strings on the Console. Fill them —
+          # `has()` in the env-checks treats an empty value as absent, so until
+          # this runs the svc-loom-unity-authz gate correctly reports the estate as
+          # unconfigured rather than pretending otherwise.
+          CAE_DOMAIN=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].properties.defaultDomain" -o tsv | tr -d '\r') || CAE_DOMAIN=""
+          if [ -n "$CAE_DOMAIN" ]; then
+            az containerapp update -g "$ADMIN_RG" -n loom-console --subscription "$ADMIN_SUB" \
+              --set-env-vars \
+                "LOOM_UNITY_URL=https://loom-unity.internal.$CAE_DOMAIN" \
+                "LOOM_UNITY_CLIENT_ID=$CID" \
+                "LOOM_UNITY_AUDIENCE=api://$CID/.default" \
+                "LOOM_UNITY_AUTH_MODE=entra" \
+              -o none \
+              && echo "  Wired LOOM_UNITY_* on loom-console (entra)." \
+              || echo "::warning::Could not set the LOOM_UNITY_* vars on loom-console — set them manually."
+          else
+            echo "::warning::Could not resolve the Container Apps environment default domain — LOOM_UNITY_URL not wired."
+          fi
+
       - name: Reindex loom-docs on the freshly-rolled console (Copilot index freshness — #2929)
         # A fresh deploy rolls a NEW console image whose baked docs corpus the
         # Help Copilot's AI Search index must reflect — otherwise /copilot answers

@@ -105,6 +105,14 @@ export const APP_IMAGE_TAGS = Object.freeze([
   { key: 'duckdb', repo: 'loom-duckdb', envVar: 'LOOM_DUCKDB_TAG' },
   { key: 'loomMigrate', repo: 'loom-migrate', envVar: 'LOOM_MIGRATE_TAG' },
   { key: 'risingwave', repo: 'loom-risingwave', envVar: 'LOOM_RISINGWAVE_TAG' },
+  // loom-unity (#2681). admin-plane/main.bicep now deploys the Unity-Catalog-
+  // compatible OSS metastore DEFAULT-ON on every boundary and binds
+  // LOOM_UNITY_URL, so its image became a hard prerequisite of the apps phase in
+  // the same change. Before that it was produced only by gov-build-images.yml
+  // and consumed only by a manual gov-uc-purview-wire.yml dispatch, so no
+  // preflight covered it; now the Commercial lane's resolver picks it up
+  // automatically from this table.
+  { key: 'unity', repo: 'loom-unity', envVar: 'LOOM_UNITY_TAG' },
 ]);
 
 /** key -> entry, for callers that have a key in hand. */
