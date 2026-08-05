@@ -154,6 +154,27 @@ jobs:
             --image "loom-duckdb:$TAG" --image "loom-duckdb:$SHA_TAG" --image "loom-duckdb:latest" \
             apps/loom-duckdb
 
+      # N7e — the DEFAULT-ON Federated SQL engine. admin-plane/main.bicep now
+      # deploys data-plane/loom-trino-aca.bicep on the Gov boundaries too
+      # (params pin containerPlatform='containerApps'), pulling
+      # <acr>/loom-trino:<appImageTags.trino, default v0.1>. Without this build
+      # the Gov Container App has no image to resolve and LOOM_TRINO_URL would
+      # point at an endpoint that never serves.
+      #
+      # Reuses the firewall lease the loom-duckdb step above acquired — DO NOT
+      # acquire a second one; the release step at the end of the job covers both.
+      #
+      # The N1 Iceberg REST Catalog deployed alongside it runs the loom-unity
+      # image, which this lane deliberately does NOT build: gov-uc-purview-wire.yml
+      # owns that image (it builds loom-unity:v0.1 on the Gov ACR and asserts the
+      # digest resolves). Duplicating it here would race that workflow's push.
+      - name: Build loom-trino on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::notice::TEMPLATE PULLS  $ACR_LOGIN/loom-trino:$TAG"
+          az acr build --registry "$ACR" --no-logs             --image "loom-trino:$TAG" --image "loom-trino:$SHA_TAG" --image "loom-trino:latest"             apps/loom-trino
+
       # ── Mirror third-party upstream images into the Gov ACR (#2682) ──────────
       # No sovereign Container App may pull a third-party image from a public
       # registry. `az acr import` is a server-side copy under the SAME firewall

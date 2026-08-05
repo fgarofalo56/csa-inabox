@@ -57,6 +57,7 @@ import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { recordDatabricksUnityAccess } from '@/lib/azure/unity-audit';
+import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
 
 /** Registry gate id — mirrors the ENV_CHECKS spec in env-checks/data-plane.ts. */
 export const ICEBERG_CATALOG_GATE_ID = 'svc-iceberg-catalog';
@@ -124,17 +125,14 @@ export function icebergCatalogBase(): string {
  * A stale/placeholder value must degrade to the same honest state as unset.
  */
 export function isUnreachableCatalogUrl(raw: string): boolean {
-  let host = '';
-  try {
-    host = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  } catch {
-    return true; // unparseable → cannot be reached
-  }
-  // Bind-all / unspecified addresses — valid to LISTEN on, never to connect to.
-  if (host === '0.0.0.0' || host === '::' || host === '0:0:0:0:0:0:0:0') return true;
-  // A value pointing back at this app's own BFF proxy is circular, not a catalog.
-  if (/\/api\/catalog\/iceberg(\/|$)/.test(raw)) return true;
-  return false;
+  // ONE implementation, shared with lib/admin/env-checks (which cannot import
+  // this server-only module). The health gate used to disagree with the runtime
+  // about this exact value and reported the estate green while every request
+  // 503'd — see lib/azure/unreachable-url.ts for the full account.
+  //
+  // The second argument is the iceberg-specific circular case: a value pointing
+  // back at this app's OWN BFF proxy is not a catalog.
+  return isUnreachableServiceUrl(raw, /\/api\/catalog\/iceberg(\/|$)/);
 }
 
 /** IRC path prefix on the catalog server (env-overridable, normalized). */

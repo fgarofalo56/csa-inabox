@@ -1,8 +1,9 @@
 /**
- * N7e — registry wiring + the opt-in posture that backs the SQL Lab engine
+ * N7e — registry wiring + the DEFAULT-ON posture that backs the SQL Lab engine
  * picker. (The full editor render harness is known-broken repo-wide, so the
- * "Trino option shows + DuckDB is the default" contract is proven here through
- * the registries the picker reads: the FLAG0 default-OFF flag and the G2 gate.)
+ * "Trino option shows + DuckDB is the engine the picker starts on" contract is
+ * proven here through the registries the picker reads: the FLAG0 flag and the
+ * G2 gate.)
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { RUNTIME_FLAGS } from '@/lib/admin/runtime-flags';
@@ -17,33 +18,33 @@ const TRINO_FLAG_ID = 'n7e-trino-federation';
 beforeEach(() => { delete process.env.LOOM_TRINO_URL; });
 afterEach(() => { delete process.env.LOOM_TRINO_URL; });
 
-describe('N7e FLAG0 — the additive opt-in engine choice (default OFF)', () => {
+describe('N7e FLAG0 — the additive engine choice (DEFAULT-ON, opt-out)', () => {
   it('registers n7e-trino-federation with the N7e owner item', () => {
     const flag = RUNTIME_FLAGS.find((f) => f.id === TRINO_FLAG_ID);
     expect(flag).toBeTruthy();
     expect(flag?.ownerItem).toBe('N7e');
-    // The description documents the sole loom_default_on_opt_out carve-out.
-    expect(flag?.description).toMatch(/opt-in|default:false|DEFAULT OFF/i);
+    // loom_default_on_opt_out: the engine ships enabled and the flag is a kill
+    // switch, so the description must read as opt-OUT, never opt-in.
+    expect(flag?.description).toMatch(/DEFAULT-ON|opt-out/i);
+    expect(flag?.description).not.toMatch(/DEFAULTS OFF/i);
   });
 });
 
-describe('N7e G2 gate — svc-loom-trino (opt-in; gates no feature)', () => {
+describe('N7e G2 gate — svc-loom-trino (default-ON; gates no feature)', () => {
   it('is registered on the SQL Lab engine picker + the federated route', () => {
     const gate = getGate('svc-loom-trino');
     expect(gate).toBeTruthy();
     const paths = gate!.surfaces.map((s) => s.path);
     expect(paths).toContain('/items/sql-lab');
     expect(paths).toContain('/api/sql/trino');
-    // Opt-in heavy infra → NOT auto-resolved, but has an inline Fix-it (env-picker).
+    // Wired by the deploy, with an inline Fix-it (env-picker) for the cases
+    // where it is not (explicit opt-out / non-Container-Apps boundary).
     expect(gate!.fixit.kind).toBe('env-picker');
     expect(gate!.requiredSettings.map((r) => r.envVar)).toContain('LOOM_TRINO_URL');
   });
 
-  it('is OPT-IN when unset and CONFIGURED once wired — DuckDB stays the default engine either way', () => {
-    // #2753: svc-loom-trino carries spec.optIn — an opt-in-by-design carve-out
-    // (private AKS cluster, real cost) whose absence removes no capability. Unset
-    // it reads the neutral 'opt-in' state, NOT a red 'blocked' misconfiguration.
-    expect(gateStatus('svc-loom-trino')?.status).toBe('opt-in');
+  it('is BLOCKED when unset (opted out / image missing) and CONFIGURED once the deploy wires it — DuckDB stays the engine the picker starts on either way', () => {
+    expect(gateStatus('svc-loom-trino')?.status).toBe('blocked');
     process.env.LOOM_TRINO_URL = 'https://trino.internal';
     expect(gateStatus('svc-loom-trino')?.status).toBe('configured');
   });

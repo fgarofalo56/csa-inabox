@@ -305,7 +305,17 @@ describe('admin/env-config registry', () => {
     // operator input — bicep emits 'aas' (or '') and never 'powerbi'. It belongs
     // on /admin/env-config because that page already hosts the runtime toggle
     // (PowerBiBackendCard); the runtime setting still takes precedence over env.
-    expect(EDITABLE_ENV.length).toBe(196);
+    // Bumped to 197 by the federated-lake work (#2678 / #2757): the new
+    // svc-loom-trino-authz spec registers LOOM_TRINO_AUTH_MODE, the var that
+    // reports the DEPLOYED authorization posture of the Federated SQL engine
+    // ('entra' | 'sealed' | 'disabled'), +1: 196 -> 197. It is its OWN spec
+    // rather than a second required var on svc-loom-trino because /api/sql/trino
+    // hard-gates on that spec, so putting it there would 503 the engine on any
+    // estate that has not redeployed yet. LOOM_ICEBERG_CATALOG_URL was already
+    // in the catalog (N1) and stays at one entry - what changed there is that it
+    // is no longer optionalDefault, which moves it OUT of the set pinned below
+    // but does not change this total.
+    expect(EDITABLE_ENV.length).toBe(197);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -424,11 +434,15 @@ describe('admin/env-config registry', () => {
       // (GraphRAG grounding still runs, just at the default hop budget).
       'LOOM_GRAPHRAG_MAX_HOPS',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
-      // N1 svc-iceberg-catalog — unset is fully functional: the lakehouse Interop
-      // tab still emits real Delta↔Iceberg dual metadata into the customer's own
-      // lake and any engine can be pointed at that metadata folder. Deploying the
-      // catalog adds discovery + credential vending, never the data path.
-      'LOOM_ICEBERG_CATALOG_URL',
+      // N1 svc-iceberg-catalog is DELIBERATELY ABSENT from this set now.
+      // LOOM_ICEBERG_CATALOG_URL used to be optionalDefault on the argument that
+      // the lakehouse Interop tab still emits Delta↔Iceberg dual metadata when it
+      // is unset. True, and not the point: optionalDefault forces `pass`
+      // unconditionally, so the gate could not report anything but Ready — and
+      // the live Commercial estate scored it Ready while carrying the placeholder
+      // https://0.0.0.0:3000/api/catalog/iceberg and 503-ing every federation
+      // request. The catalog is now deployed by admin-plane/main.bicep, so unset
+      // means the deploy did not happen, which readiness must be able to say.
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE',
       // N12 — bounded NL2SQL repair attempts; unset = code default 2 (the
       // self-healing loop still repairs, just within the default budget).

@@ -124,7 +124,12 @@ const ALLOWLIST = new Set([
   'LOOM_ADT_ENDPOINT',
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)
   'LOOM_SPARK_POOL_REAP_GRACE',      // opt-in tune: grace seconds before an untracked Livy session is reaped (default 600)              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
-  'LOOM_ICEBERG_CATALOG_URL',        // N1 opt-in Iceberg REST Catalog service URL (internal-ingress Unity Catalog OSS container). Deployed out-of-band via data-plane/iceberg-catalog-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the lakehouse Interop tab still writes real Delta<->Iceberg dual metadata into the customer's own ADLS Gen2 and every surface renders with an honest Fix-it gate; only catalog DISCOVERY is absent. (LOOM_ICEBERG_CATALOG_TOKEN auto-allowed by /_TOKEN$/.)
+  // LOOM_ICEBERG_CATALOG_URL is NO LONGER allowlisted: the N1 Iceberg REST
+  // Catalog is DEFAULT-ON. admin-plane/main.bicep deploys
+  // data-plane/iceberg-catalog-aca.bicep and emits the var, so this guard now
+  // ENFORCES that wiring instead of excusing its absence — which is exactly how
+  // the live estate ended up carrying a hand-set 0.0.0.0 placeholder.
+  // (LOOM_ICEBERG_CATALOG_TOKEN auto-allowed by /_TOKEN$/.)
   // LOOM_RISINGWAVE_URL and LOOM_DUCKDB_URL were allowlisted here as "opt-in …
   // deployed out-of-band via data-plane/*.bicep (admin-plane/main.bicep at the
   // 256-param ceiling), then set on the console app". BOTH reasons are stale —
@@ -168,8 +173,16 @@ const ALLOWLIST = new Set([
   'LOOM_ICEBERG_CATALOG_PREFIX',     // N1 opt-in IRC path prefix override (code default /api/2.1/unity-catalog/iceberg) — runtime-only knob, never a deploy dependency
   'LOOM_ICEBERG_CATALOG_WAREHOUSE',  // N1 opt-in IRC warehouse override (code default 'loom') — runtime-only knob, never a deploy dependency
   'LOOM_ICEBERG_CATALOG_AUDIENCE',   // N1 opt-in Entra audience for the upstream catalog hop (defaults to api://<LOOM_MSAL_CLIENT_ID>) — runtime-only knob
-  'LOOM_TRINO_URL',                  // N7e THE single opt-in carve-out: internal-ingress Trino/Starburst Federated-SQL coordinator on a PRIVATE AKS cluster (Apache-2.0), registered against the N1 Iceberg REST Catalog + external connectors. Deployed out-of-band via data-plane/loom-trino-aks.bicep (admin-plane/main.bicep at the 256-param ceiling) + a separate Helm-install phase, then set on the console app. Unset (the DEFAULT) => the "Federated SQL (Trino)" engine option honest-gates with a Fix-it that discloses the AKS cost and SQL Lab keeps working on the DEFAULT DuckDB tier — gates NO feature (loom_default_on_opt_out carve-out). (LOOM_TRINO_TOKEN auto-allowed by /_TOKEN$/.)
-  'LOOM_TRINO_AUDIENCE',             // N7e opt-in Entra audience for the Trino coordinator hop (defaults to api://<LOOM_MSAL_CLIENT_ID>); unset => the BFF reaches the internal-ingress cluster on in-VNet trust — runtime-only knob
+  // LOOM_TRINO_URL is NO LONGER allowlisted: N7e is DEFAULT-ON. The push-button
+  // deploy stands up the scale-to-zero single-node Trino Container App
+  // (data-plane/loom-trino-aca.bicep) and admin-plane/main.bicep emits the var,
+  // so this guard now enforces that wiring instead of excusing its absence.
+  // (LOOM_TRINO_TOKEN auto-allowed by /_TOKEN$/; LOOM_TRINO_FETCH_TIMEOUT_MS by /_MS$/.)
+  // LOOM_TRINO_AUDIENCE is NO LONGER allowlisted either. Its old note said
+  // "unset => the BFF reaches the internal-ingress cluster on in-VNet trust",
+  // which stopped being true the moment the engine started ENFORCING Entra bearer
+  // authorization (#2678 §3) — in-VNet trust is precisely the posture that was
+  // removed. admin-plane/main.bicep emits it alongside LOOM_TRINO_AUTH_MODE.
   'LOOM_TRINO_ICEBERG_CATALOG',      // N7e opt-in Trino catalog name that fronts the Loom Iceberg REST Catalog (code default 'iceberg') — runtime-only knob, never a deploy dependency
   'LOOM_SHARING_AUDIENCE',          // LU-9 the Entra AUDIENCE an external Delta Sharing RECIPIENT's token must carry: a DEDICATED app registration (App ID URI) for the sharing API. When set it REPLACES the fallback (api://<LOOM_MSAL_CLIENT_ID>) rather than adding to it, so the Console's own API stops being a data-export credential. One of this or LOOM_SHARING_SCOPE is REQUIRED once LOOM_SHARING_URL is set (env-check svc-loom-sharing anyOf) — /api/delta-sharing/* fails CLOSED with 503 otherwise. Runtime-only (an Entra app registration, not an ARM resource), never a deploy dependency.
   'LOOM_SHARING_SCOPE',             // LU-9 the alternative half of the same pin: a scope or app role (comma/space separated) that a recipient token must carry in scp/roles. Lets an estate keep the Console's own registration as the audience while still separating recipient tokens from ordinary Console API tokens — expose the scope on the Console app registration and consent it ONLY to recipient apps. Runtime-only. See lib/sharing/store.sharingAudiencePinned + docs/fiab/delta-sharing-gov.md.

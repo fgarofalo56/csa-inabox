@@ -100,10 +100,10 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'Unset → Delta↔Iceberg dual metadata still writes real Iceberg V2 metadata into your own ADLS Gen2 (the Interop tab keeps working and hands you the metadata path). The catalog adds discovery + credential vending on top; it is never on the data path.',
+      'DEFAULT-ON: admin-plane/main.bicep deploys data-plane/iceberg-catalog-aca.bicep (internal-ingress Unity Catalog OSS serving the standard Apache Iceberg REST Catalog surface, minReplicas 0 so idle cost is nothing) and emits LOOM_ICEBERG_CATALOG_URL on the Console, in Commercial and in Gov. Unset or holding an unreachable placeholder therefore means the admin-plane deployment has not been re-run since this shipped, the loom-unity image is not in this ACR, or an operator set loomBackends.icebergCatalog=\'disabled\'. THIS GATE NOW GOES RED FOR THAT: it used to be optionalDefault + presence-only, so the live Commercial estate scored Ready while carrying the placeholder https://0.0.0.0:3000/api/catalog/iceberg and 503-ing every federation request. Until it is wired, Delta↔Iceberg dual metadata still writes real Iceberg V2 metadata into your own ADLS Gen2 (the Interop tab keeps working and hands you the metadata path) — but catalog DISCOVERY and credential vending, i.e. the surface external engines actually browse, are absent, and the Trino engine sees no lake catalog at all.',
     legacyCodes: ['iceberg_catalog_not_configured'],
   },
-  // ── N7e — Trino Federated SQL (the ONE opt-in carve-out; gates NO feature) ──
+  // ── N7e — Trino Federated SQL. DEFAULT-ON since the engine moved off AKS ──
   'svc-loom-trino': {
     surfaces: [
       { path: '/items/sql-lab', label: 'SQL Lab → engine picker: "Federated SQL (Trino)"' },
@@ -111,8 +111,21 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'OPT-IN by design — this is the single non-default engine in the program. Unset → SQL Lab runs on the DEFAULT DuckDB tier (svc-loom-duckdb) with the identical result surface; only the additive "Federated SQL (Trino)" choice is gated. Deploying loom-trino-aks.bicep stands up a private AKS cluster (real, disclosed cost) that can join a Loom Iceberg table with an external Postgres table in one statement. Its absence removes no capability, so it never breaches loom_default_on_opt_out.',
+      'DEFAULT-ON since the engine moved off AKS: every push-button deploy stands up a single-node Trino OSS Container App with INTERNAL ingress and minReplicas 0 (data-plane/loom-trino-aca.bicep) and wires LOOM_TRINO_URL, in Commercial and in Gov. Idle cost is nothing — a replica only exists while a query is running. Empty means an explicit opt-out (loomBackends.trino=\'disabled\'), a non-Container-Apps boundary, or the loom-trino image not yet in this ACR; SQL Lab then keeps executing on the DEFAULT DuckDB tier (svc-loom-duckdb) with the identical result surface. LAKE FEDERATION: the same deploy stands up the N1 Iceberg REST Catalog (svc-iceberg-catalog) and hands the engine its URL, so SHOW CATALOGS includes the Loom lake on a first install — it no longer returns jmx + memory only. Add external sources declaratively with loomBackends.trinoCatalogs / trinoCatalogSecrets (rendered as LOOM_TRINO_CATALOG_<NAME>). Runtime kill switch without a redeploy: the n7e-trino-federation flag. Heavy federated joins can be moved to the opt-in multi-node AKS cluster (data-plane/loom-trino-aks.bicep) by repointing the same var. SECURITY POSTURE — default-ON here means default-SAFE, not merely running: the engine enforces Entra bearer authorization (Trino JWT authenticator against the active cloud\'s Entra JWKS, audience pinned), because internal ingress alone would leave it queryable by anything on the VNet with an arbitrary X-Trino-User. On a from-scratch install there is no app registration to pin yet (ARM cannot create a Graph object), so it deploys SEALED — authorization enforced against a sentinel audience nothing can mint, minReplicas 0 so it bills nothing, serving NOBODY, and LOOM_TRINO_AUTH_MODE reports "sealed" so /items/sql-lab shows this note instead of firing a query that would 401. Run .github/workflows/csa-loom-post-deploy-bootstrap.yml (the sign-in bootstrap every estate needs anyway) and redeploy with LOOM_MSAL_CLIENT_ID set — or pin a dedicated app with loomBackends.trinoAudienceClientId — to un-seal it. loomBackends.trinoAuthMode=\'disabled\' restores the anonymous posture as an explicit, logged opt-out, and the svc-loom-trino env-check now reports THAT as a defect instead of green.',
     legacyCodes: ['trino_not_configured'],
+  },
+  // The engine's AUTHORIZATION posture, tracked separately from its reachability
+  // so an honest health finding can never 503 a working estate (/api/sql/trino
+  // hard-gates on svc-loom-trino, not on this id).
+  'svc-loom-trino-authz': {
+    surfaces: [
+      { path: '/items/sql-lab', label: 'SQL Lab -> engine picker: "Federated SQL (Trino)"' },
+      { path: '/api/sql/trino', label: 'Federated SQL execution edge (audited)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'DEFAULT-SAFE: data-plane/loom-trino-aca.bicep turns on the Trino JWT authenticator (Entra JWKS for the active cloud, audience pinned) and admin-plane/main.bicep reports the resulting posture here. "entra" = enforced and a token can be minted. "sealed" = enforced against a sentinel audience nothing can mint, which is the CORRECT from-scratch state (ARM cannot create the Entra app registration) and is treated as configured, not as a defect - run csa-loom-post-deploy-bootstrap.yml and redeploy to un-seal it. "disabled" is an explicit, audited opt-out that puts the engine back to queryable-by-anything-on-the-VNet with an arbitrary X-Trino-User, bypassing the BFF session check AND the audit row; this gate now REJECTS that value instead of counting it as present. When LOOM_TRINO_URL is unset the engine is not deployed here at all, so the check reports not-applicable rather than a false red.',
+    legacyCodes: [],
   },
   'svc-cosmos-control': {
     surfaces: [
