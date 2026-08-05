@@ -15,10 +15,19 @@
  * azure-functions/copilot-evaluator/src/evaluator-core.ts::RunTotals):
  *   retrievalHitRate  0..1  deterministic, always present
  *   groundingAvg      1..5  judged questions only; null = judge 'deferred'
- *                            (E2 daily cap / no judge deployment). Per the E2
- *                            cap contract the gate treats null as NO-CHANGE —
- *                            never a regression, never a fabricated pass.
- *   passRate          0..1  deterministic verdict (+ grounding>=4 when judged)
+ *                            (E2 daily cap / no judge deployment). The GROUNDING
+ *                            FLOOR is treated as NO-CHANGE when null (the E2 cap
+ *                            contract — never a fabricated grounding regression).
+ *                            That tolerance is scoped to the grounding metric
+ *                            ALONE: a null grounding also means the pass
+ *                            predicate lost a conjunct, which is a hard failure
+ *                            (see passPredicateOf / issue #2992).
+ *   passRate          0..1  deterministic verdict (+ grounding>=4 when judged,
+ *                            + productFidelity>=4 when the judge returned it).
+ *                            NOT a single quantity: WHICH conjuncts were applied
+ *                            varies run to run, so every comparison of this
+ *                            metric must first agree the two sides were produced
+ *                            under the same predicate (#2992).
  *   questions         int   rows that produced a score. ZERO means the surface
  *                            was NOT MEASURED (every eval-probe call failed) —
  *                            the evaluator rolls an empty result set up as a
@@ -78,9 +87,16 @@ export function normalizeRuns(json) {
     // measured NOTHING that run. It is reported, never inferred from a healthy
     // groundingAvg.
     judged: numOrNull(d.totals?.judged ?? d.judged),
+    autoFailed: numOrNull(d.totals?.autoFailed ?? d.autoFailed),
     productFidelityAvg: numOrNull(d.totals?.productFidelityAvg ?? d.productFidelityAvg),
     productFidelityJudged: numOrNull(d.totals?.productFidelityJudged ?? d.productFidelityJudged),
     parityInversions: numOrNull(d.totals?.parityInversions ?? d.parityInversions),
+    // #2992 — the pass predicate's own provenance. DECLARED by evaluators new
+    // enough to emit it; INFERRED from the observable judge fields otherwise
+    // (see passPredicateOf). `deterministicPassRate` is the degraded-mode
+    // metric under its own name — deliberately NOT `passRate`.
+    passPredicate: d.totals?.passPredicate ?? d.passPredicate ?? null,
+    deterministicPassRate: numOrNull(d.totals?.deterministicPassRate ?? d.deterministicPassRate),
   });
   if (Array.isArray(json)) {
     for (const d of json) put(fromDoc(d));
@@ -97,6 +113,172 @@ function numOrNull(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+
+// ── Pass-predicate provenance (#2992) ────────────────────────────────────────
+//
+// `passRate` is NOT one quantity. It is "the fraction of questions satisfying
+// the conjunct set that this run was able to apply", and that set VARIES:
+//
+//   deterministic      retrievalHit && mentionPass && !forbiddenHit
+//                      && !parityInversionHit          — always applied
+//   grounding          judge.grounding >= 4            — only on JUDGED rows
+//   productFidelity    judge.productFidelity >= 4      — only when the judge
+//                                                        deployment returns the
+//                                                        rubric field (#2979)
+//
+// (evaluator-core.ts::computePass — a deferred/errored judge keeps the
+// deterministic verdict, so a dropped conjunct can only move `passRate` UP.)
+//
+// That asymmetry is what made this dangerous enough to file: a TOTAL judge
+// failure drops the grounding conjunct on every row and therefore renders as a
+// large IMPROVEMENT. The worse the degradation, the better the number looks.
+// An eval run did exactly this — `groundingAvg: null` on every surface, the
+// deterministic-only rate compared against a judged baseline, and the
+// difference reported as `data-agent +20` / `report +20`.
+//
+// So: every run carries the predicate that produced its rate, and two rates are
+// only ever subtracted after their predicates are agreed to match.
+
+/** Conjuncts the pass predicate may carry, with the rubric each comes from. */
+export const PASS_CONJUNCTS = /** @type {const} */ ([
+  { key: 'deterministic', label: 'retrievalHit && mentionPass && !forbiddenHit && !parityInversionHit' },
+  { key: 'grounding', label: 'judge.grounding >= 4' },
+  { key: 'productFidelity', label: 'judge.productFidelity >= 4' },
+]);
+
+/**
+ * The predicate that produced a run's pass rate.
+ *
+ * DECLARED when the evaluator emitted `passPredicate` (a run receipt from an
+ * evaluator built after #2992). INFERRED otherwise, from fields every receipt
+ * has carried since the evaluator's first commit — the inference is exact, not
+ * a heuristic:
+ *
+ *   groundingAvg === null  ⟺  rollupRun found ZERO judged results
+ *                             (evaluator-core.ts: `judgedResults.length
+ *                             ? avg(...) : null`)  ⟺  the grounding conjunct
+ *                             was applied to no row at all.
+ *   productFidelityJudged  is the count of judged rows that RETURNED the
+ *                          dimension (#2979); 0/absent ⟺ the conjunct was
+ *                          applied to no row.
+ *
+ * Inference matters because the deployed evaluator image is stale (#2991) — a
+ * fix that only read a DECLARED field would be inert until that image ships.
+ *
+ * @param {object|null} run  a normalized run (normalizeRuns)
+ * @returns {{id: string, conjuncts: string[], degraded: boolean,
+ *            judgeCoverage: number|null, source: 'declared'|'inferred',
+ *            metricName: 'passRate'|'deterministicPassRate', measured: boolean}}
+ */
+export function passPredicateOf(run) {
+  const notMeasured = {
+    id: 'not-measured',
+    conjuncts: [],
+    degraded: false,
+    judgeCoverage: null,
+    source: 'inferred',
+    metricName: 'passRate',
+    measured: false,
+  };
+  if (!run) return notMeasured;
+  // Zero scored questions = nothing was evaluated under ANY predicate (#2798).
+  if (run.questions === 0) return notMeasured;
+
+  const declared = run.passPredicate;
+  if (declared && Array.isArray(declared.conjuncts)) {
+    const conjuncts = declared.conjuncts.filter((c) => PASS_CONJUNCTS.some((x) => x.key === c));
+    return {
+      id: conjuncts.join('+') || 'none',
+      conjuncts,
+      degraded: !conjuncts.includes('grounding'),
+      judgeCoverage: numOrNull(declared.judgeCoverage),
+      source: 'declared',
+      metricName: conjuncts.includes('grounding') ? 'passRate' : 'deterministicPassRate',
+      measured: true,
+    };
+  }
+
+  const conjuncts = ['deterministic'];
+  if (run.groundingAvg !== null && run.groundingAvg !== undefined) conjuncts.push('grounding');
+  if (Number.isFinite(run.productFidelityJudged) && run.productFidelityJudged > 0) {
+    conjuncts.push('productFidelity');
+  }
+  // Coverage refines a MATCHING predicate: how much of the judgeable set the
+  // judge actually reached. `judged`/`autoFailed` ride the Cosmos `totals`; the
+  // console-log receipt does not carry them, hence null-tolerant.
+  let judgeCoverage = null;
+  if (Number.isFinite(run.judged) && Number.isFinite(run.questions)) {
+    // auto-failed rows never spend a judge call by design and fail the
+    // deterministic conjunct anyway — they are not "missing" judge coverage.
+    const judgeable = run.questions - (Number.isFinite(run.autoFailed) ? run.autoFailed : 0);
+    judgeCoverage = judgeable > 0 ? Math.min(1, run.judged / judgeable) : 1;
+  }
+  const degraded = !conjuncts.includes('grounding');
+  return {
+    id: conjuncts.join('+'),
+    conjuncts,
+    degraded,
+    judgeCoverage,
+    source: 'inferred',
+    metricName: degraded ? 'deterministicPassRate' : 'passRate',
+    measured: true,
+  };
+}
+
+/**
+ * May these two pass rates be subtracted?
+ *
+ * The refusal is the point. Emitting no delta is strictly better than emitting
+ * one computed across different predicates, because the second is indexed under
+ * a column header ("Pass-rate Δ") that asserts it means something it does not.
+ *
+ * @returns {{ok: boolean, reason: string|null, detail: string|null}}
+ */
+export function predicatesComparable(cur, prev, opts = {}) {
+  const deltaPoints = Number.isFinite(opts.deltaPoints) ? opts.deltaPoints : 5;
+  if (!cur?.measured || !prev?.measured) {
+    return { ok: false, reason: 'not-measured', detail: 'one side scored zero questions — nothing to compare' };
+  }
+  if (cur.id !== prev.id) {
+    const gained = cur.conjuncts.filter((c) => !prev.conjuncts.includes(c));
+    const lost = prev.conjuncts.filter((c) => !cur.conjuncts.includes(c));
+    const bits = [];
+    if (lost.length) bits.push(`this run DROPPED [${lost.join(', ')}]`);
+    if (gained.length) bits.push(`this run ADDED [${gained.join(', ')}]`);
+    return {
+      ok: false,
+      reason: 'predicate-mismatch',
+      detail:
+        `baseline predicate \`${prev.id}\` vs this run's \`${cur.id}\` — ${bits.join('; ')}. ` +
+        'Dropping a conjunct can only raise the rate, so the difference would read as an improvement ' +
+        'regardless of quality.',
+    };
+  }
+  // Same conjunct set, different judge REACH: the coverage gap alone bounds how
+  // much of any apparent movement is predicate drift rather than quality. If
+  // that bound exceeds the threshold the check is testing against, the check
+  // cannot distinguish the two — so it must not claim to.
+  if (cur.judgeCoverage !== null && prev.judgeCoverage !== null) {
+    const gapPoints = Math.abs(cur.judgeCoverage - prev.judgeCoverage) * 100;
+    if (gapPoints > deltaPoints + EPS) {
+      return {
+        ok: false,
+        reason: 'coverage-gap',
+        detail:
+          `same conjuncts (\`${cur.id}\`) but the judge reached ${(prev.judgeCoverage * 100).toFixed(0)}% of ` +
+          `judgeable rows in the baseline vs ${(cur.judgeCoverage * 100).toFixed(0)}% here — a gap of ` +
+          `${gapPoints.toFixed(1)} points, larger than the ${deltaPoints}-point threshold this check applies.`,
+      };
+    }
+  }
+  return { ok: true, reason: null, detail: null };
+}
+
+/** The exact remediation for a run whose judge never scored a row. */
+const JUDGE_REMEDIATION =
+  'Resolve a judge deployment (LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT → LOOM_AOAI_STRONG_DEPLOYMENT → ' +
+  'LOOM_AOAI_MINI_DEPLOYMENT → LOOM_AOAI_DEPLOYMENT) and confirm the daily cap ' +
+  '(LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 500 judged Q/day) is not already spent for this UTC day.';
 
 /**
  * Split Cosmos `eval-run` docs into {latest, previous} normalized maps —
@@ -196,19 +378,52 @@ export function evaluateGate(current, floorsDoc, opts = {}) {
       notes.push(`${surface}: no floor yet — add one via the ratchet once runs accumulate`);
     }
 
+    // #2992 — establish, BEFORE any metric is read, which conjuncts produced
+    // this run's pass rate and which produced the baseline's.
+    const predicate = passPredicateOf(cur);
+    const prevPredicate = prev ? passPredicateOf(prev) : null;
+    row.passPredicate = predicate;
+    row.prevPassPredicate = prevPredicate;
+
     for (const m of METRICS) {
       const value = cur[m.key] ?? null;
       const floorVal = floor && Number.isFinite(floor[m.key]) ? floor[m.key] : null;
       const prevVal = prev ? prev[m.key] ?? null : null;
       const metric = { value, floor: floorVal, prev: prevVal, deltaPoints: null, verdict: 'ok' };
 
-      // groundingAvg null = judge deferred → NO-CHANGE per the E2 cap contract:
-      // skip both the floor check and the delta check for this metric.
+      // groundingAvg null = judge deferred → the GROUNDING FLOOR is no-change
+      // per the E2 cap contract: skip both the floor check and the delta check
+      // for this metric. (Scoped to grounding only — the same null makes the
+      // pass predicate degraded, which the passRate branch below hard-fails.)
       if (m.key === 'groundingAvg' && value === null) {
         metric.verdict = 'deferred';
         if (floorVal !== null) {
           notes.push(`${surface}: grounding judge deferred (E2 daily cap / no judge deployment) — floor ${floorVal} not evaluated, treated as no-change`);
         }
+        row.metrics[m.key] = metric;
+        continue;
+      }
+
+      // #2992 — the judge scored NO row, so `passRate` here is a
+      // deterministic-only rate wearing the judged metric's name. There is no
+      // pass rate for this surface this run; there is an error. Do NOT check it
+      // against a floor ratcheted from judged runs, do NOT subtract it from a
+      // judged baseline, and do NOT print it under the pass-rate header.
+      if (m.key === 'passRate' && predicate.degraded) {
+        metric.verdict = 'degraded-predicate';
+        metric.metricName = predicate.metricName;
+        // The value still exists — it is simply a DIFFERENT metric. Carry it
+        // under its own name so the receipt loses no information.
+        metric.degradedValue = cur.deterministicPassRate ?? value;
+        metric.value = null;
+        row.status = 'fail';
+        failures.push(
+          `${surface}: the grounding judge scored ZERO of ${cur.questions} question(s), so this run has NO pass-rate — ` +
+          `its ${m.display(metric.degradedValue)} is a \`deterministicPassRate\` (predicate \`${predicate.id}\`, ` +
+          `missing the \`grounding >= 4\` conjunct), NOT the \`passRate\` its floor and baseline are expressed in. ` +
+          `Dropping that conjunct can only raise the number, so this degradation would otherwise report as an ` +
+          `improvement. ${JUDGE_REMEDIATION}`,
+        );
         row.metrics[m.key] = metric;
         continue;
       }
@@ -222,6 +437,23 @@ export function evaluateGate(current, floorsDoc, opts = {}) {
       }
 
       if (prevVal !== null && value !== null && !(m.key === 'groundingAvg' && prevVal === null)) {
+        // #2992 — a pass-rate delta is only meaningful when both sides were
+        // produced under the same conjunct set. Refuse rather than subtract.
+        if (m.key === 'passRate' && prevPredicate) {
+          const cmp = predicatesComparable(predicate, prevPredicate, { deltaPoints });
+          if (!cmp.ok) {
+            metric.verdict = 'delta-refused';
+            metric.deltaRefused = { reason: cmp.reason, detail: cmp.detail, prev: prevPredicate.id, current: predicate.id };
+            metric.deltaPoints = null;
+            if (row.status === 'ok' || row.status === 'no-floor') row.status = 'warn';
+            warnings.push(
+              `${surface}: pass-rate delta REFUSED (${cmp.reason}) — ${cmp.detail} ` +
+              `No delta is reported for this surface; the two rates are not the same quantity.`,
+            );
+            row.metrics[m.key] = metric;
+            continue;
+          }
+        }
         const dropPoints = (prevVal - value) * m.pointsPerUnit;
         metric.deltaPoints = Math.round(-dropPoints * 10) / 10; // signed: negative = drop
         if (dropPoints > deltaPoints + EPS && metric.verdict !== 'below-floor') {
@@ -255,16 +487,25 @@ export function renderMarkdown(report, meta = {}) {
   lines.push('');
   lines.push(bits.join(' · '));
   lines.push('');
-  lines.push('| Surface | Q | Hit-rate (Δpts) | Grounding (Δpts) | Pass-rate (Δpts) | Floor check |');
-  lines.push('|---|---:|---|---|---|---|');
+  lines.push('| Surface | Q | Hit-rate (Δpts) | Grounding (Δpts) | Pass-rate (Δpts) | Pass predicate | Floor check |');
+  lines.push('|---|---:|---|---|---|---|---|');
   for (const row of report.rows) {
     const cur = row.metrics;
     const cell = (key) => {
       const m = cur[key];
       if (!m) return '—';
       const metricDef = METRICS.find((x) => x.key === key);
+      // #2992 — a degraded predicate produced a DIFFERENT metric. Never print
+      // its value under the `Pass-rate` header: a number under a header that
+      // does not describe it is the whole defect (same lesson as #2798's
+      // never-measured 0.00). The value is reported below, under its own name.
+      if (m.verdict === 'degraded-predicate') {
+        return `**not computed** — no judged rows`;
+      }
       let s = metricDef.display(m.value);
-      if (m.deltaPoints !== null && m.deltaPoints !== undefined) {
+      if (m.verdict === 'delta-refused') {
+        s += ' (Δ **refused**)';
+      } else if (m.deltaPoints !== null && m.deltaPoints !== undefined) {
         s += ` (${m.deltaPoints > 0 ? '+' : ''}${m.deltaPoints})`;
       }
       if (m.verdict === 'below-floor') s += ` **< floor ${metricDef.display(m.floor)}**`;
@@ -281,8 +522,31 @@ export function renderMarkdown(report, meta = {}) {
     lines.push(
       `| ${row.surface} | ${q} | ${unscored ? label : cell('retrievalHitRate')} | ` +
       `${unscored ? '—' : cell('groundingAvg')} | ${unscored ? '—' : cell('passRate')} | ` +
-      `${icon[row.status] ?? row.status} ${row.status} |`,
+      `${unscored ? '—' : predicateCell(row)} | ${icon[row.status] ?? row.status} ${row.status} |`,
     );
+  }
+  // #2992 — the predicate ledger. A silently-absent delta is a smaller version
+  // of the same defect, so every refusal is stated with both sides named.
+  const degraded = report.rows.filter((r) => r.metrics?.passRate?.verdict === 'degraded-predicate');
+  const refused = report.rows.filter((r) => r.metrics?.passRate?.verdict === 'delta-refused');
+  if (degraded.length || refused.length) {
+    lines.push('', '### Pass-predicate provenance (#2992)', '');
+    for (const r of degraded) {
+      const m = r.metrics.passRate;
+      lines.push(
+        `- ❌ \`${r.surface}\` — the judge scored **no rows**, so there is no \`passRate\` for this run. ` +
+        `Its deterministic-only rate is **\`deterministicPassRate\` = ${m.degradedValue ?? '—'}** ` +
+        `(predicate \`${r.passPredicate?.id}\`). The \`grounding >= 4\` conjunct was applied to zero questions; ` +
+        'dropping it can only raise the rate, so this is reported as a FAILURE rather than an improvement.',
+      );
+    }
+    for (const r of refused) {
+      const d = r.metrics.passRate.deltaRefused ?? {};
+      lines.push(
+        `- ⚠️ \`${r.surface}\` — pass-rate Δ **refused** (\`${d.reason}\`): ${d.detail} ` +
+        `The two rates are not the same quantity, so no delta is shown.`,
+      );
+    }
   }
   if (report.failures.length) {
     lines.push('', '### Below-floor failures', '');
@@ -324,6 +588,15 @@ export function renderMarkdown(report, meta = {}) {
 function cellQuestions(row) {
   // questions ride on the row only via the current map — the CLI attaches it
   return Number.isFinite(row.questions) ? row.questions : null;
+}
+
+/** #2992 — the conjunct set that produced this row's rate, stated per row. */
+function predicateCell(row) {
+  const p = row.passPredicate;
+  if (!p || !p.measured) return '—';
+  const cov = p.judgeCoverage === null ? '' : ` · judge ${(p.judgeCoverage * 100).toFixed(0)}%`;
+  const mark = p.source === 'declared' ? '' : ' *(inferred)*';
+  return `\`${p.id}\`${cov}${mark}`;
 }
 
 /** Attach `questions` onto gate rows from the normalized current map (display only). */
@@ -393,6 +666,26 @@ export function ratchetFloors(floorsDoc, observations, opts = {}) {
       // incomplete — leave that floor untouched (conservative, per the E2 cap
       // contract).
       if (metric === 'groundingAvg' && values.length < runs.length) continue;
+      // #2992 — passRate ratchets ONLY from a window whose runs all applied the
+      // SAME conjunct set. Otherwise a run that lost the `grounding >= 4`
+      // conjunct (its rate can only be HIGHER for it) would raise the floor on
+      // evidence the judge never produced, permanently pinning a `passRate`
+      // floor above what a healthy judged run can clear — the same
+      // cross-predicate arithmetic the delta comparator refuses, but baked in
+      // rather than merely reported.
+      if (metric === 'passRate') {
+        const predicates = runs.map((r) => passPredicateOf(r));
+        const degradedRuns = predicates.filter((p) => p.degraded).length;
+        const ids = new Set(predicates.map((p) => p.id));
+        if (degradedRuns > 0 || ids.size > 1) {
+          skipped.push(
+            `${surface}: passRate floor NOT ratcheted — the ${runs.length}-run window mixes pass predicates ` +
+            `(${[...ids].map((i) => `\`${i}\``).join(', ')}${degradedRuns ? `; ${degradedRuns} run(s) had NO judged rows` : ''}). ` +
+            'A floor may only be raised from rates produced under one predicate.',
+          );
+          continue;
+        }
+      }
       if (values.length === 0) continue;
       const observedMin = Math.min(...values);
       const factor = 10 ** rule.decimals;

@@ -11,9 +11,16 @@
  *                                           → ::warning annotation, exit 0
  *     (flaky-judge tolerance)
  *   - groundingAvg null (judge 'deferred' — E2 daily cap / no judge deployment)
- *                                           → NO-CHANGE: neither floor nor delta
- *     is evaluated for grounding (the E2 cap contract; deterministic retrieval
- *     scoring remains authoritative)
+ *                                           → the GROUNDING FLOOR is no-change
+ *     (neither floor nor delta evaluated for grounding — the E2 cap contract;
+ *     deterministic retrieval scoring remains authoritative) AND the surface's
+ *     pass rate is a `deterministicPassRate`, not a `passRate`: it is neither
+ *     floor-checked nor compared, and the run FAILS (#2992). A judge that
+ *     scored nothing means there is no pass rate — there is an error.
+ *   - a pass-rate whose predicate differs from the baseline's
+ *                                           → the delta is REFUSED, loudly, and
+ *     no number is emitted (#2992: dropping a conjunct can only raise the rate,
+ *     so subtracting across predicates renders degradation as improvement).
  *
  * Usage (artifact mode — the E4 workflow path; dependency-free):
  *   node scripts/csa-loom/check-eval-regression.mjs \
@@ -220,9 +227,17 @@ if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_S
 console.log(`check-eval-regression: source = ${source}`);
 for (const row of report.rows) {
   const m = row.metrics;
-  const fmt = (k) => (m[k] ? (m[k].value === null ? 'deferred' : m[k].value) : '—');
+  const fmt = (k) => {
+    if (!m[k]) return '—';
+    // #2992 — never print a degraded rate under the pass-rate label.
+    if (m[k].verdict === 'degraded-predicate') {
+      return `NOT COMPUTED (deterministicPassRate ${m[k].degradedValue ?? '—'})`;
+    }
+    return m[k].value === null ? 'deferred' : m[k].value;
+  };
+  const pred = row.passPredicate?.measured ? ` [predicate ${row.passPredicate.id}]` : '';
   console.log(
-    `  ${row.status.padEnd(8)} ${row.surface}: hit-rate ${fmt('retrievalHitRate')}, grounding ${fmt('groundingAvg')}, pass-rate ${fmt('passRate')}`,
+    `  ${row.status.padEnd(8)} ${row.surface}: hit-rate ${fmt('retrievalHitRate')}, grounding ${fmt('groundingAvg')}, pass-rate ${fmt('passRate')}${pred}`,
   );
 }
 for (const n of report.notes) console.log(`  note: ${n}`);
@@ -237,8 +252,19 @@ for (const f of report.failures) {
 
 const totalFailures = report.failures.length + searchGate.failures.length;
 if (totalFailures > 0) {
+  // #2992 — a degraded-predicate failure is NOT a quality regression and must
+  // not be triaged as one: the run measured less, it did not score worse.
+  const degraded = report.rows.filter((r) => r.metrics?.passRate?.verdict === 'degraded-predicate');
+  if (degraded.length > 0) {
+    console.error(
+      `check-eval-regression: ${degraded.length} surface(s) produced NO pass-rate — the grounding judge scored zero ` +
+      `rows (${degraded.map((r) => r.surface).join(', ')}). This is a JUDGE failure, not a quality regression: ` +
+      'their deterministic-only rates are reported as `deterministicPassRate` and were neither floor-checked nor ' +
+      'compared against the judged baseline.',
+    );
+  }
   console.error(
-    `check-eval-regression: ${totalFailures} below-floor failure(s) ` +
+    `check-eval-regression: ${totalFailures} failure(s) ` +
     `(${report.failures.length} copilot, ${searchGate.failures.length} search). ` +
     'Fix the corpus/prompt/index regression, or (explicit override only) edit content/evals/eval-floors.json with a justification.',
   );

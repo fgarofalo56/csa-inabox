@@ -664,13 +664,74 @@ export function computePass(r: {
   return true; // deferred / error: deterministic-only verdict (judge no-change)
 }
 
+/**
+ * #2992 — the provenance of a run's pass rate: WHICH conjuncts `computePass`
+ * was actually able to apply, and over how much of the judgeable set.
+ *
+ * Recorded rather than assumed because the set genuinely varies run to run —
+ * `grounding` only on judged rows, `productFidelity` only when the judge
+ * deployment returns the rubric field (#2979/#2984) — and because the conjuncts
+ * are one-directional: every one that drops out can only RAISE the rate. A
+ * consumer that subtracts two rates without first agreeing their predicates
+ * match will read a total judge failure as a large improvement, which is
+ * exactly what happened.
+ */
+export interface PassPredicate {
+  /** Stable id, e.g. 'deterministic+grounding+productFidelity'. */
+  id: string;
+  conjuncts: ('deterministic' | 'grounding' | 'productFidelity')[];
+  /** Fraction of judgeable rows (questions − autoFailed) the judge scored. */
+  judgeCoverage: number;
+  /** True when `grounding >= 4` was applied to NO row — there is no pass rate. */
+  degraded: boolean;
+}
+
+/** Derive the declared pass predicate from one surface's scored results. */
+export function passPredicateFor(results: EvalResult[]): PassPredicate {
+  const judged = results.filter((r) => r.judgeStatus === 'scored' && r.judge);
+  const autoFailed = results.filter((r) => r.judgeStatus === 'auto-fail').length;
+  // auto-fails never spend a judge call by design and fail deterministically
+  // anyway, so they are not missing coverage.
+  const judgeable = results.length - autoFailed;
+  const conjuncts: PassPredicate['conjuncts'] = ['deterministic'];
+  if (judged.length > 0) conjuncts.push('grounding');
+  if (judged.some((r) => r.judge!.productFidelity !== undefined)) conjuncts.push('productFidelity');
+  return {
+    id: conjuncts.join('+'),
+    conjuncts,
+    judgeCoverage: judgeable > 0 ? Math.round(Math.min(1, judged.length / judgeable) * 1000) / 1000 : 1,
+    degraded: !conjuncts.includes('grounding'),
+  };
+}
+
 export interface RunTotals {
   questions: number;
   retrievalHitRate: number;
   mrrAvg: number;
   groundingAvg: number | null;
   answerAvg: number | null;
-  passRate: number;
+  /**
+   * 0..1 — the JUDGED pass rate. `null` when the judge scored no row, because
+   * then this run did not produce that quantity at all (issue #2992).
+   *
+   * `passRate` is not one number: `computePass` applies a conjunct set that
+   * VARIES with what the judge returned, and a dropped conjunct can only move
+   * the rate UP. Emitting a deterministic-only rate under this name is what let
+   * a total judge failure be compared against a judged baseline and reported as
+   * `data-agent +20` / `report +20` — a degradation rendered as progress. The
+   * degraded value is still emitted, under `deterministicPassRate`.
+   */
+  passRate: number | null;
+  /**
+   * 0..1 — the rate under the deterministic conjuncts ALONE, present only when
+   * the grounding conjunct could not be applied (#2992). Deliberately a
+   * different NAME, because it is a different quantity: it is not comparable to
+   * `passRate`, and `content/evals/eval-floors.json` floors are not expressed
+   * in it.
+   */
+  deterministicPassRate?: number;
+  /** #2992 — which conjuncts actually produced the rate above. */
+  passPredicate?: PassPredicate;
   judged: number;
   deferred: number;
   autoFailed: number;
@@ -749,7 +810,8 @@ export function rollupRun(
   if (n === 0) {
     return {
       questions: 0, retrievalHitRate: 0, mrrAvg: 0, groundingAvg: null,
-      answerAvg: null, passRate: 0, judged: 0, deferred: 0, autoFailed: 0,
+      answerAvg: null, passRate: null, judged: 0, deferred: 0, autoFailed: 0,
+      passPredicate: { id: 'deterministic', conjuncts: ['deterministic'], judgeCoverage: 1, degraded: true },
       productFidelityAvg: null, productFidelityJudged: 0, parityInversions: 0,
       backends: {},
       ...probeInfo,
@@ -771,13 +833,22 @@ export function rollupRun(
   const fidelityScores = judgedResults
     .map((r) => r.judge!.productFidelity)
     .filter((v): v is number => v !== undefined);
+  // #2992 — the rate, and the predicate that produced it, are emitted together.
+  // When the judge scored nothing the `grounding >= 4` conjunct was applied to
+  // no row, so the value below is NOT a `passRate`: it goes out under
+  // `deterministicPassRate` and `passRate` is null. Consumers therefore cannot
+  // accidentally compare it to a judged baseline — the name itself refuses.
+  const predicate = passPredicateFor(results);
+  const rate = round3(results.filter((r) => r.pass).length / n);
   return {
     questions: n,
     retrievalHitRate: round3(results.filter((r) => r.retrievalHit).length / n),
     mrrAvg: round3(avg(results.map((r) => r.mrr))),
     groundingAvg,
     answerAvg,
-    passRate: round3(results.filter((r) => r.pass).length / n),
+    passRate: predicate.degraded ? null : rate,
+    ...(predicate.degraded ? { deterministicPassRate: rate } : {}),
+    passPredicate: predicate,
     judged: judgedResults.length,
     deferred: results.filter((r) => r.judgeStatus === 'deferred').length,
     autoFailed: results.filter((r) => r.judgeStatus === 'auto-fail').length,
