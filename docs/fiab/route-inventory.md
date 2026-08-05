@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1668 |
+| Total routes | 1669 |
 | Public (no session) | 100 |
 | Session-only | 562 |
 | Owner-scoped | 715 |
-| Admin | 291 |
+| Admin | 292 |
 | Gated (backend config) | 530 |
 | Areas | 120 |
 
@@ -2089,6 +2089,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `setup/deploy-status/route.ts` | GET | session-only |  | — |
 | `setup/deploy/route.ts` | POST | admin |  | — |
 | `setup/discover-services/route.ts` | GET | admin | ● | — |
+| `setup/estate-scan/route.ts` | POST | admin |  | — |
 | `setup/existing-aoai/route.ts` | GET | session-only |  | — |
 | `setup/existing-dlzs/route.ts` | GET | owner-scoped |  | — |
 | `setup/existing-storage/route.ts` | GET | session-only |  | — |

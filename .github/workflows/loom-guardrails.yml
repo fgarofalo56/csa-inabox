@@ -88,6 +88,16 @@ jobs:
         run: node scripts/ci/check-bicep-sync.mjs
       - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
         run: node scripts/ci/check-deploy-script-reachability.mjs
+      # The deployment planner is the ONLY surface with multi-subscription
+      # discovery, per-service adopt-or-deploy-new, and a reviewable plan. It
+      # used to redirect away the moment a hub existed — i.e. it was unreachable
+      # on exactly the estate brownfield planning applies to, so brownfield was
+      # in effect not shipped (deploy-integrity.md R4/R5). The second-hub
+      # invariant is enforced in POST /api/setup/deploy, not by a redirect.
+      - name: setup-entrypoints (the deployment planner stays reachable — deploy-integrity R4/R5)
+        run: |
+          node scripts/ci/check-setup-entrypoints.mjs --self-test
+          node scripts/ci/check-setup-entrypoints.mjs
       # Reachability says the deploy script RUNS. This says the staleness
       # watchdog can SEE it: every source a watched workflow executes or applies
       # must be in that entry's `paths`, or a commit touching it can never
