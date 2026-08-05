@@ -5,6 +5,7 @@
 // ../semantic-model-editor.tsx.
 
 import { useCallback, useEffect, useState } from 'react';
+import { clientFetch } from '@/lib/client-fetch';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Field,
   Card, Divider, Textarea,
@@ -32,7 +33,7 @@ export function SemanticModelCopilotPane({ id }: { id: string }) {
   const loadCheckpoints = useCallback(async () => {
     setCpErr(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure?action=checkpoints`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure?action=checkpoints`);
       const j = await r.json();
       if (!j.ok) { setCpErr(j.error || `HTTP ${r.status}`); setCheckpoints([]); return; }
       setCheckpoints(Array.isArray(j.checkpoints) ? j.checkpoints : []);
@@ -46,7 +47,7 @@ export function SemanticModelCopilotPane({ id }: { id: string }) {
     if (!q) return;
     setProposing(true); setPlan(null); setProposeErr(null); setApplyResult(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'propose', prompt: q }),
       });
@@ -61,7 +62,7 @@ export function SemanticModelCopilotPane({ id }: { id: string }) {
     if (!plan || plan.ops.length === 0) return;
     setApplying(true); setApplyResult(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'apply', plan }),
       });
@@ -77,7 +78,7 @@ export function SemanticModelCopilotPane({ id }: { id: string }) {
   const restore = useCallback(async (checkpointId: string) => {
     setRestoringId(checkpointId); setRestoreMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'restore', checkpointId }),
       });
@@ -92,7 +93,7 @@ export function SemanticModelCopilotPane({ id }: { id: string }) {
   const checkpointNow = useCallback(async () => {
     setRestoreMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/copilot-structure`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'checkpoint', label: 'Manual checkpoint' }),
       });

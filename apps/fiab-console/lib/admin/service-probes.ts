@@ -472,6 +472,173 @@ const reportRenderProbe: ServiceProbe = {
 };
 
 /** The registry — one probe per backend data path. */
+// ── Power Platform / Power BI / Copilot Studio family ────────────────────────
+//
+// WHY these exist. Before this wave the ENTIRE Power BI / Power Platform /
+// Dataverse / Copilot Studio family had ZERO live probes, so `/admin/readiness`
+// reported them Ready purely because an env var was present:
+// `svc-powerplatform` asserted only `required: ['LOOM_UAMI_CLIENT_ID']`, which a
+// deployed Container App ALWAYS sets. It therefore measured "is the console
+// deployed", not "can we reach Power Platform" — a green light that could not
+// go red (the repo's "gates that measure nothing" class). These three probes
+// make the family's readiness reflect a real round-trip.
+//
+// Each is a READ-ONLY list call — no environment/app/agent is created — so the
+// exercise is safe to run against a production tenant.
+
+/**
+ * powerplatform — list environments via the BAP admin control plane.
+ *
+ * A 401/403 here is the single most common real failure for this family and it
+ * has a precise, documented cause: the calling service principal has not been
+ * registered as a Power Platform MANAGEMENT APPLICATION. That registration
+ * cannot be self-served — "A service principal can't register itself. By
+ * design, an administrator using username and password context must register
+ * the application."
+ * (learn.microsoft.com/power-platform/admin/powerplatform-api-create-service-principal)
+ * So we classify it as a `gate` with the exact remediation rather than a `fail`.
+ */
+const powerPlatformProbe: ServiceProbe = {
+  service: 'powerplatform',
+  title: 'Power Platform — list environments (BAP admin control plane)',
+  timeoutMs: 30_000,
+  async run() {
+    const pp = await import('@/lib/azure/powerplatform-client');
+    const g = pp.powerPlatformConfigGate();
+    if (g) {
+      return gate(`Power Platform not configured — set ${g.missing} so the Console can mint a BAP token.`);
+    }
+    try {
+      const envs = await pp.listEnvironments();
+      if (envs.length === 0) {
+        return gate(
+          'BAP answered but returned ZERO environments. The identity is authenticated yet sees no environment — '
+          + 'register the Console principal as a Power Platform management app (New-PowerAppManagementApp -ApplicationId <clientId>, '
+          + 'or PUT https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/adminApplications/{clientId}?api-version=2020-10-01 '
+          + 'with a tenant-admin USER token), or sign in as a user with Environment Admin.',
+        );
+      }
+      return {
+        status: 'pass',
+        detail: `BAP admin control plane answered — ${envs.length} environment(s) listed.`,
+        evidence: evidenceSlice(envs.slice(0, 10).map((e) => e.displayName || e.name).join(', ')),
+      };
+    } catch (e) {
+      const msg = errMsg(e);
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        return gate(
+          `BAP rejected the call (HTTP ${status}): ${msg}. The Console principal is not a registered Power Platform `
+          + 'management application. A tenant admin must run New-PowerAppManagementApp -ApplicationId <clientId> '
+          + '(a service principal cannot register itself — Microsoft requires an admin USER context).',
+        );
+      }
+      throw e;
+    }
+  },
+};
+
+/**
+ * powerbi — list workspaces (groups) over the real Power BI REST.
+ *
+ * 401/403 is classified as a `gate`: Learn documents that a service-principal
+ * 401 on the user APIs means the "Service principals can call Fabric public
+ * APIs" (formerly "Allow service principals to use Power BI APIs") tenant
+ * setting is off, or the principal is outside the scoped security group.
+ * (learn.microsoft.com/power-bi/developer/embedded/troubleshoot-rest-api)
+ */
+const powerBiProbe: ServiceProbe = {
+  service: 'powerbi',
+  title: 'Power BI — list workspaces (REST /groups)',
+  timeoutMs: 30_000,
+  async run() {
+    const pbi = await import('@/lib/azure/powerbi-client');
+    const g = pbi.powerbiConfigGate();
+    if (g) return gate(`Power BI not configured — ${g.detail}`);
+    try {
+      const groups = await pbi.listWorkspaces();
+      if (groups.length === 0) {
+        return gate(
+          'Power BI REST answered but the identity can see ZERO workspaces, so every workspace-scoped call '
+          + '(datasets / reports / dashboards / dataflows) will 401. Add the calling identity to at least one '
+          + 'workspace as Member or Admin.',
+        );
+      }
+      return {
+        status: 'pass',
+        detail: `Power BI REST answered — ${groups.length} workspace(s) visible.`,
+        evidence: evidenceSlice(groups.slice(0, 10).map((w) => w.name).join(', ')),
+      };
+    } catch (e) {
+      const msg = errMsg(e);
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || status === 403) return gate(`Power BI rejected the call (HTTP ${status}): ${msg}. ${pbi.POWERBI_SP_HINT}`);
+      throw e;
+    }
+  },
+};
+
+/**
+ * dataverse — list tables in the first reachable environment.
+ *
+ * This is the probe that actually exercises the Copilot Studio family's
+ * backing store: agents / topics / actions / knowledge are all Dataverse rows
+ * (msdyn_copilots, msdyn_botcomponents, msdyn_pluginactions,
+ * msdyn_knowledgesources). If Dataverse is unreachable, every Copilot Studio
+ * editor is dead — which is exactly the symptom this probe now catches.
+ */
+const dataverseProbe: ServiceProbe = {
+  service: 'dataverse',
+  title: 'Dataverse — list tables in the first reachable environment',
+  timeoutMs: 45_000,
+  async run() {
+    const pp = await import('@/lib/azure/powerplatform-client');
+    const cg = pp.powerPlatformConfigGate();
+    if (cg) return gate(`Power Platform not configured — set ${cg.missing}.`);
+    const dg = pp.dataverseConfigGate();
+    if (dg) {
+      return gate(
+        `Dataverse has no usable credential — set ${dg.missing}. A user-assigned managed identity cannot be a `
+        + 'Dataverse Application User, so this path needs the MSAL Web App SP (registered as an application user '
+        + 'by the post-deploy bootstrap) or a signed-in user via passthrough.',
+      );
+    }
+    let envs: Awaited<ReturnType<typeof pp.listEnvironments>>;
+    try {
+      envs = await pp.listEnvironments();
+    } catch (e) {
+      return gate(`Cannot enumerate environments to locate a Dataverse org: ${errMsg(e)}`);
+    }
+    const withOrg = envs.find((e) => e.instanceUrl);
+    if (!withOrg) {
+      return gate(
+        `No environment with a Dataverse instance was found (${envs.length} environment(s) listed). `
+        + 'Create a Dataverse database on a Power Platform environment — Copilot Studio agents, topics, '
+        + 'actions and knowledge sources are all stored as Dataverse rows.',
+      );
+    }
+    try {
+      const tables = await pp.listTables(withOrg.name);
+      return {
+        status: 'pass',
+        detail: `Dataverse Web API answered on "${withOrg.displayName || withOrg.name}" — ${tables.length} table(s) listed.`,
+        evidence: evidenceSlice(tables.slice(0, 10).map((t) => t.LogicalName || t.SchemaName).join(', ')),
+      };
+    } catch (e) {
+      const msg = errMsg(e);
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || status === 403) {
+        return gate(
+          `Dataverse rejected the call on "${withOrg.displayName || withOrg.name}" (HTTP ${status}): ${msg}. `
+          + 'Register the Console MSAL app as an Application User with a security role on that environment '
+          + '(scripts/csa-loom/dataverse-add-appuser.sh), or sign in as a licensed user.',
+        );
+      }
+      throw e;
+    }
+  },
+};
+
 export const SERVICE_PROBES: ServiceProbe[] = [
   sparkProbe,
   warehouseSqlProbe,
@@ -486,6 +653,10 @@ export const SERVICE_PROBES: ServiceProbe[] = [
   purviewScanProbe,
   databricksSqlProbe,
   reportRenderProbe,
+  // Power Platform / Power BI / Copilot Studio family — previously UNPROBED.
+  powerPlatformProbe,
+  powerBiProbe,
+  dataverseProbe,
 ];
 
 export function isKnownService(service: string): boolean {

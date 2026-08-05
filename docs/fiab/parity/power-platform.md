@@ -5,7 +5,7 @@
 > maker authoring (canvas / flow / table) was routed out to the real product
 > instead of built in Loom (audit-T28). **PR #1086** ("Power Platform maker
 > authoring in-Loom (canvas/flow/table)") cures the worst of it with in-Loom
-> authoring surfaces over Dataverse / BAP (routed by `LOOM_POWER_PLATFORM_BAP_BASE`,
+> authoring surfaces over Dataverse / BAP (routed by `cloud-endpoints.powerPlatformEndpoints()`,
 > Azure-native default — no Fabric/Power-BI tenant required). **PR #907** added
 > custom attributes / attribute groups admin. **Grade C → B−.** Remaining honest
 > gaps: Managed Environments + groups, the remaining admin-center areas, Power

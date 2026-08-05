@@ -186,6 +186,9 @@ const ALLOWLIST = new Set([
   'LOOM_SHARING_URL',
   'LOOM_UNITY_AUTH_MODE',           // LU-2 explicit Loom Unity auth posture ('entra' | 'token' | 'anonymous'); unset => inferred from LOOM_UNITY_TOKEN / LOOM_UNITY_CLIENT_ID. Runtime-only declaration, never a deploy dependency — the server half lives on the loom-unity app (loom-unity-app.bicep authMode).
   'LOOM_POWERBI_USER_PASSTHROUGH',  // opt-out kill switch for Power BI user-passthrough (OBO) auth (#1800 PBI slice; default ON in code — all Power BI tie-ins authenticate as the signed-in user, Synapse-style); set 'false' to revert every Power BI call to the console service principal
+  'LOOM_POWERPLATFORM_USER_PASSTHROUGH', // opt-out kill switch for the SAME passthrough on the Power Platform / Copilot Studio clients (default ON in code). Those clients now try the signed-in user FIRST and RETRY as the service principal on 401/403 (lib/azure/powerplatform-client.ts ppFetch), because only a licensed USER can author Power Automate flows / act as a Dataverse application user, while only the registered management app can use the BAP admin scope. Set 'false' to revert both clients to the pure service-principal path.
+  'LOOM_POWERAPPS_SCOPE',           // opt-in override for the Power Apps AAD audience (default https://service.powerapps.com/.default). Sovereign boundaries can use a different audience than the Commercial one, and it is NOT derivable from the REST host — runtime-only knob, resolved in lib/azure/cloud-endpoints.powerPlatformEndpoints().
+  'LOOM_FLOW_SCOPE',                // opt-in override for the Power Automate (Flow) AAD audience (default https://service.flow.microsoft.com/.default) — same rationale as LOOM_POWERAPPS_SCOPE.
   'LOOM_RESULT_CACHE_REDIS_BREAKER_THRESHOLD', // opt-in tune: consecutive Redis-tier failures before the cache circuit breaker opens (default 3 in redis-cache-client.ts)
   'LOOM_SETUP_DISCOVERY_CACHE_DISABLED', // opt-out kill switch for the in-process cross-sub discovery SWR cache (Setup / Add-landing-zone wizards); default on in code (lib/azure/cross-sub-cache.ts) — a latency-only memo, no infra
   'LOOM_BATCH_SUB',                 // opt-in subscription override for the Azure Batch account (SVC-5); default = LOOM_SUBSCRIPTION_ID
@@ -294,7 +297,17 @@ const ALLOWLIST = new Set([
   'LOOM_DLP_GRAPH_BASE',            // derived from cloud endpoints (Graph)
   'LOOM_DEVOPS_BASE',               // derived from cloud endpoints (Azure DevOps)
   'LOOM_DOCS_BASE_URL',             // derived from public docs site
-  'LOOM_POWER_PLATFORM_BAP_BASE',   // derived from cloud endpoints (BAP)
+  // LEGACY ALIAS, and the comment on this line used to be a LIE that hid a real bug.
+  // It read "derived from cloud endpoints (BAP)" — but no code derived anything:
+  // copilot-studio-client read THIS var directly while bicep emitted the DIFFERENT
+  // var LOOM_BAP_BASE, so the entire Copilot Studio family was pinned to the
+  // Commercial host in every sovereign boundary. Seven parity docs told operators
+  // to set this name; this exemption is why nobody noticed nothing consumed it.
+  // The claim is now TRUE: lib/azure/cloud-endpoints.powerPlatformEndpoints()
+  // derives the BAP host from the detected cloud and accepts this name only as a
+  // back-compat alias for LOOM_BAP_BASE, so an estate that set it is not regressed.
+  // Keep the entry (nothing emits the alias); do NOT restore the old wording.
+  'LOOM_POWER_PLATFORM_BAP_BASE',
   'LOOM_POWERBI_EMBED_HOST',        // derived from cloud endpoints (Power BI)
   'LOOM_AZURE_MAPS_SEARCH_HOST',    // derived from cloud endpoints (Azure Maps)
   'LOOM_AML_DATAPLANE_HOST',        // derived from AML workspace region
