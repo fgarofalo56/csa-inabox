@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1668 |
 | Public (no session) | 100 |
-| Session-only | 576 |
-| Owner-scoped | 701 |
+| Session-only | 575 |
+| Owner-scoped | 702 |
 | Admin | 291 |
 | Gated (backend config) | 530 |
 | Areas | 120 |
@@ -1134,7 +1134,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/azure-sql-database/[id]/principal-search/route.ts` | GET | session-only |  | — |
 | `items/azure-sql-database/[id]/queries/route.ts` | GET POST DELETE | owner-scoped |  | Cosmos |
 | `items/azure-sql-database/[id]/query/cancel/route.ts` | POST | session-only |  | — |
-| `items/azure-sql-database/[id]/query/route.ts` | POST | session-only |  | — |
+| `items/azure-sql-database/[id]/query/route.ts` | POST | owner-scoped |  | — |
 | `items/azure-sql-database/[id]/replication/route.ts` | POST | session-only |  | — |
 | `items/azure-sql-database/[id]/restore/route.ts` | GET POST | session-only |  | — |
 | `items/azure-sql-database/[id]/scale/route.ts` | POST | session-only |  | — |

@@ -43,9 +43,14 @@ vi.mock('@/lib/azure/postgres-flex-client', async () => {
   };
 });
 
+// `loadOwnedItem` is what `withWorkspaceOwner` (route-toolkit) runs to enforce
+// owner/workspace access on the `[id]` routes — #2723 moved /connect and /query
+// onto that wrapper, so it must be mocked here too or the wrapper throws (500)
+// / short-circuits 404 before the handler body ever runs.
 vi.mock('../_lib/item-crud', () => ({
   jerr: (error: string, status = 500) => ({ status, json: async () => ({ ok: false, error }) }),
   updateOwnedItem: vi.fn(),
+  loadOwnedItem: vi.fn(),
 }));
 
 import { GET as inventoryGET } from '../sql-databases/route';
@@ -64,7 +69,7 @@ import {
   listDatabases as listPgDatabases, listFirewallRules as listPgFw,
   upsertFirewallRule as upsertPgFw, deleteFirewallRule as deletePgFw,
 } from '@/lib/azure/postgres-flex-client';
-import { updateOwnedItem } from '../_lib/item-crud';
+import { updateOwnedItem, loadOwnedItem } from '../_lib/item-crud';
 
 function bodyReq(url: string, body: any) {
   return { url, nextUrl: new URL(url), json: async () => body } as any;
@@ -178,33 +183,56 @@ describe('POST /azure-sql-database/[id]/create-db', () => {
 });
 
 // ---------------------------------------------------------------
+// #2723 — /connect is now wrapped in `withWorkspaceOwner`, so every case below
+// first passes the owner check (`loadOwnedItem`) before the handler body runs.
 describe('POST /azure-sql-database/[id]/connect', () => {
+  /** The owner-scoped item `withWorkspaceOwner` resolves for id=i1. */
+  const ownedItem = { id: 'i1', itemType: 'azure-sql-database', state: { mirror: 'kept' } } as any;
+
   it('401 without session', async () => {
     (getSession as any).mockReturnValue(null);
     const res = await connectPOST(bodyReq('http://x/', { family: 'azure-sql', server: 's' }), ctx('i1'));
     expect(res.status).toBe(401);
   });
 
-  it('400 for id=new (must save item first)', async () => {
+  it('404 for id=new — the owner guard rejects before the handler (must save item first)', async () => {
     (getSession as any).mockReturnValue(session);
+    // There is no item 'new' to own, so loadOwnedItem finds nothing.
+    (loadOwnedItem as any).mockResolvedValue(null);
     const res = await connectPOST(bodyReq('http://x/', { family: 'azure-sql', server: 's' }), ctx('new'));
-    expect(res.status).toBe(400);
+    // 404-not-400: withWorkspaceOwner uses the same 404-not-403 shape everywhere
+    // so an id can't be probed for existence. Still a hard denial — the handler
+    // body (and updateOwnedItem) never runs.
+    expect(res.status).toBe(404);
+    expect(updateOwnedItem).not.toHaveBeenCalled();
   });
 
   it('400 for an unknown family', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
     const res = await connectPOST(bodyReq('http://x/', { family: 'oracle', server: 's' }), ctx('i1'));
     expect(res.status).toBe(400);
   });
 
   it('binds the connection to item state on the happy path', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
     (updateOwnedItem as any).mockResolvedValue({ id: 'i1', state: { connection: {} } });
     const res = await connectPOST(bodyReq('http://x/', { family: 'postgres', server: 'pg', database: 'app' }), ctx('i1'));
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(updateOwnedItem).toHaveBeenCalledWith('i1', 'azure-sql-database', 't1', expect.objectContaining({
       state: expect.objectContaining({ connection: expect.objectContaining({ family: 'postgres', server: 'pg', database: 'app' }) }),
+    }));
+  });
+
+  it('MERGES the connection into existing state — binding never wipes sibling state', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(ownedItem);
+    (updateOwnedItem as any).mockResolvedValue({ id: 'i1', state: { connection: {} } });
+    await connectPOST(bodyReq('http://x/', { family: 'azure-sql', server: 'srv', database: 'db' }), ctx('i1'));
+    expect(updateOwnedItem).toHaveBeenCalledWith('i1', 'azure-sql-database', 't1', expect.objectContaining({
+      state: expect.objectContaining({ mirror: 'kept' }),
     }));
   });
 });
@@ -301,21 +329,40 @@ describe('PostgreSQL flexible server routes', () => {
 });
 
 // ---------------------------------------------------------------
+// #2723 — /query is wrapped in `withWorkspaceOwner` and derives its server +
+// database from the OWNED item's bound connection. The body can no longer pick
+// the target, so every case here resolves an owned, bound item first.
 describe('POST /azure-sql-database/[id]/query (multi-result-set shape)', () => {
+  /** Owned item bound (by POST /connect) to server 's' / database 'd'. */
+  const boundItem = {
+    id: 'i1', itemType: 'azure-sql-database',
+    state: { connection: { family: 'azure-sql', server: 's', database: 'd' } },
+  } as any;
+
   it('401 without session', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: 'SELECT 1' }));
+    const res = await sqlQueryPOST(bodyReq('http://x/', { sql: 'SELECT 1' }), ctx('i1'));
     expect(res.status).toBe(401);
+  });
+
+  it('404 when the caller does not own the item — the guard runs before any SQL', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await sqlQueryPOST(bodyReq('http://x/', { sql: 'SELECT 1' }), ctx('i1'));
+    expect(res.status).toBe(404);
+    expect(executeQueryBatch).not.toHaveBeenCalled();
   });
 
   it('400 when sql is missing', async () => {
     (getSession as any).mockReturnValue(session);
-    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd' }));
+    (loadOwnedItem as any).mockResolvedValue(boundItem);
+    const res = await sqlQueryPOST(bodyReq('http://x/', {}), ctx('i1'));
     expect(res.status).toBe(400);
   });
 
   it('returns recordsets[] + messages[] + backward-compat fields on the happy path', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(boundItem);
     (executeQueryBatch as any).mockResolvedValue({
       recordsets: [
         { columns: ['a'], rows: [[1]], rowCount: 1, truncated: false },
@@ -325,7 +372,9 @@ describe('POST /azure-sql-database/[id]/query (multi-result-set shape)', () => {
       rowsAffected: [0, 1, 1],
       executionMs: 42,
     });
-    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;" }));
+    // NOTE: the body carries NO server/database — the target is DERIVED from the
+    // owned item's bound connection (#2723).
+    const res = await sqlQueryPOST(bodyReq('http://x/', { sql: "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;" }), ctx('i1'));
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
@@ -338,16 +387,33 @@ describe('POST /azure-sql-database/[id]/query (multi-result-set shape)', () => {
     expect(j.columns).toEqual(['a']);
     expect(j.rows).toEqual([[1]]);
     expect(j.rowCount).toBe(1);
-    // The route forwards an optional 4th cancel-token options arg (undefined
-    // when the body carries no requestId).
+    // 's' / 'd' came from item.state.connection, NOT the body. The route forwards
+    // an optional 4th cancel-token options arg (undefined with no requestId).
     expect(executeQueryBatch).toHaveBeenCalledWith('s', 'd', "PRINT 'x'; SELECT 1 AS a; SELECT 2 AS b, 3 AS c;", undefined);
+  });
+
+  it('403s a body that names a DIFFERENT server — the body can only trigger a rejection', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(boundItem);
+    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 'attacker', database: 'd', sql: 'SELECT 1' }), ctx('i1'));
+    expect(res.status).toBe(403);
+    expect(executeQueryBatch).not.toHaveBeenCalled();
+  });
+
+  it('409s when the item has no bound connection — no implicit target', async () => {
+    (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue({ id: 'i1', itemType: 'azure-sql-database', state: {} });
+    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: 'SELECT 1' }), ctx('i1'));
+    expect(res.status).toBe(409);
+    expect(executeQueryBatch).not.toHaveBeenCalled();
   });
 
   it('propagates an AzureSqlError status (e.g. 401 token failure)', async () => {
     (getSession as any).mockReturnValue(session);
+    (loadOwnedItem as any).mockResolvedValue(boundItem);
     const { AzureSqlError } = await vi.importActual<any>('@/lib/azure/azure-sql-client');
     (executeQueryBatch as any).mockRejectedValue(new AzureSqlError('Failed to acquire AAD token for Azure SQL', 401));
-    const res = await sqlQueryPOST(bodyReq('http://x/', { server: 's', database: 'd', sql: 'SELECT 1' }));
+    const res = await sqlQueryPOST(bodyReq('http://x/', { sql: 'SELECT 1' }), ctx('i1'));
     expect(res.status).toBe(401);
     const j = await res.json();
     expect(j.ok).toBe(false);
