@@ -1,108 +1,314 @@
-# Discovery and adoption — the service reference
+# Multi-subscription discovery — what Loom finds, and what it will not claim
 
-This page is the reference behind the [brownfield walkthrough](brownfield.md):
-what Loom can discover, what it uses each service for, what it **changes** about
-a service you let it adopt, and how to supply values by hand when discovery
-cannot see something.
+**Audience:** whoever runs the deployment.
+**Applies to:** brownfield *and* greenfield. Greenfield is simply the case where
+discovery finds nothing to adopt — and that is a conclusion the scan is careful
+to earn rather than assume.
+
+Related: [Bring your own services](../bring-your-own-services.md)
+
+> The end-to-end greenfield and brownfield walkthroughs
+> (`greenfield.md` / `brownfield.md`) are being written in a separate change and
+> are **not** in the docs tree yet. This page is deliberately self-contained
+> until they land, and does not link to them.
 
 ---
 
-## How discovery works
+## 1. What the scan does
 
-Loom queries **Azure Resource Graph** — a tenant-wide, read-only index of ARM
-resources. One query, one `type in~ (...)` filter built from the service
-catalogue, projecting name, resource group, subscription, location and kind.
+Before a deployment plan exists, CSA Loom offers to look across the
+subscriptions you allow it to read and report **what already exists that Loom
+could use instead of deploying new**. It is read-only: it runs Azure Resource
+Graph queries and writes nothing.
 
-```kql
-Resources
-| where type in~ ('microsoft.purview/accounts', 'microsoft.search/searchservices', ...)
-| project name, resourceGroup, subscriptionId, location, kind, sku
-| order by name asc
+```
+POST /api/deploy/discovery
+{
+  "subscriptions": ["<guid>", "<guid>"],   // omit to scan every subscription you can see
+  "hubRegion": "centralus"                  // optional; sharpens the recommendations
+}
 ```
 
-**It writes nothing.** Resource Graph has no write surface.
+Requires the `admin.deploy-dlz` capability at Admin — the same gate as the
+deploy itself, because the output drives a subscription-scoped plan.
 
-### Which identity does the reading
+### What it reads
 
-| Path | Identity |
-|---|---|
-| `scripts/csa-loom/discover-services.sh`, `byo-wizard.sh`, `scan-and-deploy.sh` | the signed-in `az` principal (you) |
-| Console `/setup` → Scan & choose | the **Console managed identity**, with no fallback to your token |
-| Console `/admin/landing-zones` → Attach existing service | your delegated token first, Console managed identity second |
+Per resource: name, resource group, subscription id and display name, region,
+SKU name and tier, `publicNetworkAccess`, the network-ACL default action, the
+count of private-endpoint connections, ADLS hierarchical-namespace state, and
+tags. Nothing else, and nothing is written.
 
-> **The wizard's day-0 scan runs as the Console managed identity.** At first-run
-> you are typically Owner across the estate and that identity may hold Reader on
-> almost nothing — so the wizard can report far less than you can see. The CLI
-> paths run as you and are the more complete view. Making the day-0 scan
-> user-delegated-first is in flight.
+### What it scans for
 
-### Coverage limits you should know
+The ARM type list is **generated** from the adoption catalog
+(`apps/fiab-console/lib/deploy/adoption-catalog.ts`), so a service cannot be in
+the catalog without the scanner looking for it. `scripts/ci/check-adoption-catalog-sync.mjs`
+fails the build if any code hard-codes a second list.
 
-| Limit | Effect | Mitigation |
-|---|---|---|
-| Resource Graph trims by RBAC and returns **no error** for subscriptions you cannot read | An invisible subscription is indistinguishable from an empty one | Confirm your subscription list with `az account list -o table` and compare |
-| The default page size is **1000** rows; `$skipToken` is the only truncation signal | On a very large tenant the wizard's scan can be cut off. Results are ordered by name, so an alphabetical cut can zero out whole services | Use the CLI inventory, which pages, or scope the scan per subscription |
-| `allowPartialScopes` is not set | A tenant-scope query above Azure's subscription limit errors rather than returning partial results | Scope to specific subscriptions |
+| Family | Services scanned |
+| --- | --- |
+| Governance | Purview |
+| Analytics | Synapse, Azure Data Explorer, Databricks, Azure ML |
+| Storage | Storage / ADLS Gen2 |
+| Database | Cosmos DB, PostgreSQL Flexible Server, Azure SQL |
+| AI | AI Foundry / Azure OpenAI, AI Search |
+| Streaming | Event Hubs, Stream Analytics |
+| Integration | Data Factory, API Management, Azure Maps |
+| Platform | Log Analytics, Container Registry, Key Vault* |
+| Networking | Virtual Network, Private DNS zone, Firewall policy, Azure Firewall* |
 
-### Run the inventory yourself
+\* Key Vault and the Azure Firewall *instance* are discovered for reporting but
+are never offered for adoption — see [§5](#5-what-loom-will-never-adopt-and-why).
+
+---
+
+## 2. The part that matters most: coverage
+
+**A scan that could not read a subscription must never look like a scan that
+read it and found nothing.** Those two states lead to opposite operator
+actions, and Azure makes it easy to confuse them.
+
+Measured against the live Resource Graph REST API (`api-version=2022-10-01`) on
+2026-08-05:
+
+> Pass Resource Graph a `subscriptions` array containing one subscription you
+> can read and one you cannot, and it returns **HTTP 200 with rows for the
+> readable one and no indication whatsoever that the other was skipped**.
+> `allowPartialScopes: true` does not change this. Only when *every* requested
+> scope is ineligible does it fail, with
+> `BadRequest / NoValidSubscriptionsInQueryRequest`.
+
+So a coverage report derived from the query's own results is untrue by
+construction. Ask for 12 subscriptions, be unable to read 3, and those 3 look
+exactly like "scanned, nothing found".
+
+Loom therefore establishes coverage independently, in three steps:
+
+1. **`GET /subscriptions`** — what this identity can see at all. A requested
+   subscription absent from that list is `no-access`.
+2. **A Resource Graph coverage probe** over `ResourceContainers` — which of
+   those Resource Graph will *actually* read. It returns a row per readable
+   subscription **including subscriptions that contain zero resources**, which
+   is what lets a genuinely empty greenfield subscription be distinguished from
+   an unreadable one. A requested, ARM-visible subscription missing here is
+   `no-access`.
+3. **The inventory query**, scoped to exactly the subscriptions step 2 proved
+   readable — so nothing can be dropped silently.
+
+### The ledger
+
+The response carries one entry per **requested** subscription:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `scanned` · `no-access` · `truncated` · `not-requested` |
+| `matchedResources` | how many adoption candidates were found there |
+| `credentialTier` | `user` (your delegated token) or `uami` (the Console identity) |
+| `established` | **what the code actually observed to produce that status** |
+
+`status: 'scanned'` with `matchedResources: 0` is a real and *different* answer
+from `status: 'no-access'`. The summary line never merges them:
+
+```
+Requested 5 subscriptions. Read 4 of them, 4 containing something Loom could
+adopt. 1 could NOT be read — those are unknown, not empty. Anything you own
+there will not appear below.
+```
+
+Every `no-access` entry says how it was established, for example:
+
+```
+ARM GET /subscriptions did not return this subscription for the signed-in operator
+```
+```
+ARM lists this subscription, but Azure Resource Graph did not return its
+container row when explicitly scoped to it — Resource Graph cannot read it
+with this identity
+```
+
+### When nothing at all could be read
+
+The scan returns `ok: false` with `code: 'no_access'` (or `'arg_error'`) and a
+message that says **the scan could not look** — never that your estate is
+empty — plus an `established` field naming the failure per credential tier.
+
+---
+
+## 3. Which identity does the looking
+
+| Tier | Credential | Used when |
+| --- | --- | --- |
+| 1 | the signed-in operator's delegated ARM token | always tried first |
+| 2 | the Console user-assigned managed identity | tier 1 unavailable or saw nothing |
+
+Tier 1 first is deliberate. At first run you are typically Owner across the
+estate while the Console managed identity may not exist yet, let alone hold
+Reader anywhere. The tier that answered is reported **per subscription**, so a
+narrow result can be explained rather than mistaken for a bare estate: a
+subscription answered on tier 2 is showing you what *Loom* can see, which may be
+less than what you can see.
+
+### Permissions you need
+
+| Need | Scope | Who | If absent |
+| --- | --- | --- | --- |
+| `Microsoft.Resources/subscriptions/read` | tenant | you | the subscription is not offered as a scan target |
+| `Reader` | each scanned subscription | you (tier 1) | that subscription reports `no-access` **by name** |
+| `Reader` | each scanned subscription | Console UAMI (tier 2) | tier 2 sees less; reported per subscription |
+
+No tenant-root or management-group Reader grant is required, and Loom does not
+ask for one.
+
+---
+
+## 4. What comes back per service
+
+For every catalog service — including ones with no candidates, so greenfield
+renders the same shape:
+
+| Field | Meaning |
+| --- | --- |
+| `candidates[]` | what was found: name, RG, subscription, region, SKU, network posture, private-endpoint count, HNS (storage), tags |
+| `recommendation` | `adopt` · `create` · `adopt-required` |
+| `recommendationReason` | a sentence, always present |
+| `usedFor` | what Loom uses this service for |
+| `mutations[]` | **what Loom would CHANGE about an adopted instance** |
+| `noCandidateOutcome` | `none-exist` · `could-not-look` · `not-adoptable` |
+| `uncertain` | true when "nothing found" is not a conclusion |
+
+### `mutations` — read this before you adopt
+
+Adoption is not passive. Each service declares what Loom does to it, and the
+review step renders it verbatim. For example, adopting a Databricks workspace:
+
+- assigns the workspace to a Unity Catalog metastore
+- creates a SCIM service principal for Loom
+- creates a SQL warehouse
+- creates Loom catalogs / schemas in Unity Catalog
+
+If that is not acceptable for a given production workspace, choose *create*.
+
+### How the recommendation is decided
+
+Deliberately decisive rather than heuristic:
+
+- **`adopt-required`** — the service is a tenant singleton and one exists.
+  Purview is the case: Azure permits one Enterprise Purview account per tenant
+  and deploying a second fails at ARM with `EnterpriseTenantAlreadyExists`. So
+  "create new" is not offered and then failed twenty minutes into a deploy — it
+  is disabled with the reason.
+- **`adopt`** — exactly one candidate, in the hub region.
+- **`create`** — everything else. One candidate in the *wrong* region says so
+  and names both regions. Several candidates says so and does not guess: picking
+  among ambiguous instances in someone else's production estate is worse than
+  deploying a clean one.
+
+### Network posture
+
+Derived from what the resource actually reports, using the same rules as the
+day-2 attach preflight:
+
+| Posture | Derived from |
+| --- | --- |
+| `private-endpoint` | `publicNetworkAccess: Disabled`, or private-endpoint connections present with no other signal |
+| `service-endpoint` | `networkAcls.defaultAction: Deny` |
+| `public` | `publicNetworkAccess: Enabled` |
+| `unknown` | the resource platform reports neither |
+
+`unknown` is a real answer and is never rendered as `public`. Guessing "public"
+would let an unreachable resource be recommended and then fail at the first
+data-plane call instead of at planning time.
+
+Likewise storage: an *absent* `isHnsEnabled` is reported as unknown, not
+`false`. Hierarchical namespace can only be set at account creation, so a wrong
+`false` would reject an account that may in fact be usable.
+
+---
+
+## 5. What Loom will never adopt, and why
+
+These are decisions, not gaps. Each is rendered to you with its reason.
+
+| Not adoptable | Why |
+| --- | --- |
+| **Key Vault** (as the platform vault) | Loom's vault is the trust root for the MSAL secret, data-plane credentials and cosign material. `enableSoftDelete` / `enablePurgeProtection` are one-way and cannot be turned on retroactively in a way Loom can guarantee, and adoption would mean Loom writing platform secrets into a vault whose access policies and network ACLs a third party mutates. |
+| **Azure Firewall instance** | Rule-collection-group priority bands collide destructively with no safe merge — Loom cannot know which of your collections it may renumber. Loom adopts the firewall **policy** by resource id instead, adding its own uniquely-named rule-collection group in a reserved priority band, and deploys its own firewall instance. |
+
+Resources of these types are still *discovered* — you can see them — but they
+are never offered as a choice, because offering a choice that does not exist is
+worse than explaining why.
+
+---
+
+## 6. Limitations, stated
+
+- **Management-group scoping is not implemented.** Resource Graph accepts a
+  `managementGroups` scope, but the coverage ledger is subscription-keyed and
+  expanding a group to its subscriptions is a separate path. The route
+  **rejects** a management-group scope explicitly rather than silently scanning
+  something else.
+- **Networking candidates are reported as a flat list.** A VNet, DNS zone or
+  firewall policy is adopted per instance and per zone name, not one-of-N, so
+  the recommendation for those rows is coarse; the per-zone decision belongs to
+  the deployment plan, not to discovery.
+- **Truncation is estate-wide, not per subscription.** If the scan hits its
+  paging budget, Resource Graph gives no way to attribute the shortfall to a
+  particular subscription — so **every** scanned subscription is reported
+  `truncated` rather than one of them being silently credited with a complete
+  read. Every service with no candidate then reports `could-not-look`, not
+  `none-exist`.
+- **Fitness is not evaluated here.** Discovery answers *does it exist*. Whether
+  an existing resource is *usable* — SKU, region, reachability from the Console
+  subnet, and the RBAC the deploy identity holds or can grant — is the
+  validation step of the plan, not of the scan.
+
+---
+
+## 7. Verifying the scan yourself
+
+A live receipt harness runs the shipped scanner against a real tenant. CI never
+runs it, and it fails rather than skips without a token, so a green run always
+means Azure answered:
 
 ```bash
-az login
-bash scripts/csa-loom/discover-services.sh
+cd apps/fiab-console
+export LOOM_LIVE_ARM_TOKEN="$(az account get-access-token \
+    --resource https://management.azure.com --query accessToken -o tsv)"
+node_modules/.bin/vitest run --config vitest.live.config.ts
 ```
 
-Or directly, for one service type:
+It prints the coverage ledger and the per-service candidate counts, and asserts
+that a subscription it cannot read is reported `no-access` rather than
+scanned-with-zero.
 
-```bash
-az graph query -q "Resources | where type =~ 'microsoft.purview/accounts' \
-  | project name, resourceGroup, subscriptionId, location" -o table
-```
+Azure Government is never scanned from a workstation. Gov verification runs
+through GitHub Actions.
 
 ---
 
-## What is scanned
+## 8. Where the code lives
 
-Sixteen service types. For each: the ARM type queried, the environment variables
-the tooling emits, the enable flag, and what Loom uses it for.
-
-| Service (key) | ARM type | Adopt via | Enable flag | Loom uses it for |
-|---|---|---|---|---|
-| `aisearch` | `Microsoft.Search/searchServices` | `EXISTING_AI_SEARCH_SERVICE` +`_RG` +`_SUB` | `aiSearchEnabled` (default **true**) | The AI Search / vector navigators; the Copilot retrieval corpus |
-| `apim` | `Microsoft.ApiManagement/service` | `EXISTING_APIM` +`_RG` +`_SUB` | `apimEnabled` (**true**) | The API Marketplace — publish, Try, curl |
-| `adx` | `Microsoft.Kusto/clusters` | `EXISTING_KUSTO_CLUSTER` +`_RG` +`_SUB` | `adxEnabled` (**true**) | Real-Time Intelligence: Eventhouse, KQL database / queryset / dashboard |
-| `foundry` | `Microsoft.CognitiveServices/accounts` (kind `AIServices`) | `EXISTING_AOAI` +`_RG` +`_SUB` +`_CHAT_DEPLOYMENT` +`_EMBED_DEPLOYMENT` | `aiFoundryEnabled` (**true**) — and `agentFoundryEnabled` (**true**) for the project | Copilot and the AI Foundry agent / orchestration surfaces |
-| `purview` | `Microsoft.Purview/accounts` | `EXISTING_PURVIEW` +`_RG` +`_SUB` | `purviewEnabled` | Governance and the data map. **Tenant singleton** |
-| `maps` | `Microsoft.Maps/accounts` | `loomAzureMapsAccount` (name only) | `azureMapsEnabled` / `loomMapsEnabled` (**true**, Commercial + GCC only) | The Geo / map editors |
-| `synapse` | `Microsoft.Synapse/workspaces` | `EXISTING_SYNAPSE` +`_RG` +`_SUB` | `loomSynapseEnabled` (**true**) | Per-DLZ Synapse — Serverless SQL, dedicated pools, Spark |
-| `cosmos` | `Microsoft.DocumentDB/databaseAccounts` | `EXISTING_COSMOS_ACCOUNT` +`_RG` +`_SUB` | `loomConsoleCosmosEnabled` (**true**) | Console metadata plus the graph / vector store |
-| `adf` | `Microsoft.DataFactory/factories` | `EXISTING_ADF` +`_RG` +`_SUB` | `loomDataFactoryEnabled` (**true**) | Per-DLZ Data Factory — pipelines, dataflows |
-| `eventhubs` | `Microsoft.EventHub/namespaces` | `EXISTING_EVENTHUB_NAMESPACE` +`_RG` +`_SUB` | `loomEventHubEnabled` (**true**) | Eventstream sources, Data Explorer ingest, mirroring CDC transport |
-| `streamanalytics` | `Microsoft.StreamAnalytics/streamingjobs` | `EXISTING_ASA_JOB` +`_RG` +`_SUB` | `loomStreamAnalyticsEnabled` (**true**) | The stream-analytics-job editor and the Eventstream transform node |
-| `databricks` | `Microsoft.Databricks/workspaces` | `EXISTING_DATABRICKS` +`_RG` +`_SUB` +`_HOSTNAME` | `loomDatabricksEnabled` (**true**) | Per-DLZ Databricks and Unity Catalog |
-| `storage` | `Microsoft.Storage/storageAccounts` | *(no consumer — see below)* | — | The medallion lakehouse and org visuals |
-| `postgres` | `Microsoft.DBforPostgreSQL/flexibleServers` | *(no consumer)* | `postgresEnabled` (default **false**) | The Postgres-flavoured stores — Loom Unity catalog, DuckLake catalog, Weave |
-| `keyvault` | `Microsoft.KeyVault/vaults` | *(reported only — adoption deliberately not offered)* | — | MSAL secret, session secret, the Maps key, the Connections credential store |
-| `firewall` | *(no ARM query — flag only)* | *(no adoption)* | `loomFirewallEnabled` (**true**) | Hub egress filtering |
-
-> **Reported but not consumable.** `EXISTING_STORAGE`, `EXISTING_POSTGRES`,
-> `EXISTING_KEYVAULT`, `EXISTING_FIREWALL` and `EXISTING_MAPS` are emitted by
-> the discovery tooling but **no `.bicepparam` reads them**. Setting them has no
-> effect. Maps has an alternate, working input (`loomAzureMapsAccount`); the
-> others have none.
-
-### Not scanned at all
-
-Networking (VNets, subnets, Private DNS zones, firewall policies), Log
-Analytics, and Azure Container Registry. There is no discovery and no parameter
-for any of them, so **bring-your-own networking is not supported today**. This
-is the single largest brownfield gap; closing it is in flight.
+| Path | Role |
+| --- | --- |
+| `apps/fiab-console/lib/deploy/adoption-catalog.ts` | the one catalog: ARM types, classes, roles, `usedFor`, `mutations` |
+| `apps/fiab-console/lib/deploy/discovery-model.ts` | pure: query generation, row mapping, recommendations, the coverage summary |
+| `apps/fiab-console/lib/deploy/discovery-scanner.ts` | the three-step scan and the credential ladder |
+| `apps/fiab-console/app/api/deploy/discovery/route.ts` | the BFF route |
+| `scripts/ci/check-adoption-catalog-sync.mjs` | pins catalog names to `main.bicep` |
+| `apps/fiab-console/scripts/live/discovery.live.ts` | the live-Azure receipt |
+| `apps/fiab-console/lib/deploy/plan-model.ts` | the adopt-or-create plan type + validation |
+| `apps/fiab-console/lib/deploy/plan-to-arm.ts` | the ONE serializer that turns a plan into the `adopt` ARM parameter |
+| `apps/fiab-console/lib/deploy/fitness.ts` | the family fitness checks a candidate must pass |
+| `scripts/ci/check-fitness-messages.mjs` | pins every fitness message to something observed |
 
 ---
 
-## What Loom changes about an adopted resource
+## 9. What Loom changes about an adopted resource
 
 Adoption is not read-only. Before you adopt a production resource, know what
-Loom will do to it.
+Loom will do to it. Every row below is the `mutations` field of
+`adoption-catalog.ts` — the same strings the review step renders verbatim.
 
 | Service | What Loom changes | Role it needs |
 |---|---|---|
@@ -140,38 +346,59 @@ Two things to know:
 
 ---
 
-## Supplying values by hand
+## 10. Supplying values by hand
 
-Discovery is a convenience, not a requirement. Every adoption input is an
-environment variable or a parameter you can set directly — you never need the
-scan to have found something in order to adopt it.
+Discovery is a convenience, not a requirement. You never need the scan to have
+found something in order to adopt it — but note that **`main.bicep` no longer
+declares 36 `existing*` scalar parameters.** It declares ONE `adopt` object
+keyed by the service key, because ARM caps a template at 256 parameters and
+`main.bicep` was at 251/256; a name/resource-group/subscription triple could not
+be added for even one more service.
+
+There are two supported ways in, and they compose:
+
+**1. The `EXISTING_*` environment variables** (unchanged, and still the simplest).
+The boundary `.bicepparam` files read them and fold them into the plan:
 
 ```bash
-# You know the resource exists; discovery could not see it (no Reader, another
-# tenant boundary, a subscription you excluded). Name it directly.
 export EXISTING_AI_SEARCH_SERVICE=corp-search
 export EXISTING_AI_SEARCH_RG=rg-shared-ai
 export EXISTING_AI_SEARCH_SUB=<sub-id>
+az deployment sub create -f platform/fiab/bicep/main.bicep \
+  -p platform/fiab/bicep/params/commercial-full.bicepparam
 ```
 
-The values go through the identical code path as a discovered candidate — there
-is no separate "manual" mode and no undocumented override. The full name-to-
-parameter mapping:
+**2. `LOOM_ADOPT_JSON`, or a generated `.bicepparam`** — the whole plan as one
+document, produced by `planToArmParameters()` in `lib/deploy/plan-to-arm.ts`.
+Every deploy tier uses that one serializer, so the wizard, the copy-paste `az`
+command, `byo-wizard.sh` and `scan-and-deploy.sh` all emit the identical shape:
 
-| Environment variable | Bicep parameter | Suppresses creation? |
+```bicep
+param adopt = {
+  purview: { mode: 'adopt', target: { name: 'corp-purview', rg: 'rg-gov', sub: '<sub-id>' } }
+  aisearch: { mode: 'create' }
+}
+```
+
+An explicit plan wins over the legacy environment reads, and an **absent key
+means create-new** — so a pure-greenfield deploy emits no `adopt` assignment at
+all and `adoptMode()` defaults every service to `create`.
+
+| Environment variable | Plan key / `extra` field | Suppresses creation? |
 |---|---|---|
-| `EXISTING_AI_SEARCH_SERVICE` / `_RG` / `_SUB` | `existingAiSearchService` / `Rg` / `Sub` | yes |
-| `EXISTING_APIM` / `_RG` / `_SUB` | `existingApimName` / `Rg` / `Sub` | yes |
-| `EXISTING_KUSTO_CLUSTER` / `_RG` / `_SUB` | `existingAdxClusterName` / `Rg` / `Sub` | yes |
-| `EXISTING_AOAI` / `_RG` / `_SUB` / `_CHAT_DEPLOYMENT` / `_EMBED_DEPLOYMENT` | `existingFoundryAccountName` / `Rg` / `Sub` / `existingFoundryChatDeployment` / `EmbedDeployment` | hub account yes; **agent project no** |
-| `EXISTING_EVENTHUB_NAMESPACE` / `_RG` / `_SUB` | `existingEventHubNamespace` / `Rg` / `Sub` | yes — **`single-sub` topology only** |
-| `EXISTING_ASA_JOB` / `_RG` / `_SUB` | `existingAsaJob` / `Rg` / `Sub` | yes — **`single-sub` topology only** |
-| `EXISTING_COSMOS_ACCOUNT` / `_RG` / `_SUB` | `existingCosmosAccount` / `Rg` / `Sub` | yes — **`tenant` / `dlz-attach` only** |
-| `EXISTING_PURVIEW` / `_RG` / `_SUB` | `existingPurviewAccount` / `Rg` / `Sub` | **no** — also set `purviewEnabled=false` |
-| `EXISTING_SYNAPSE` / `_RG` / `_SUB` | `existingSynapseWorkspace` / `Rg` / `Sub` | **no** — also set `loomSynapseEnabled=false` |
-| `EXISTING_DATABRICKS` / `_RG` / `_SUB` / `_HOSTNAME` | `existingDatabricksWorkspace` / `Rg` / `Sub` / `Hostname` | **no** — also set `loomDatabricksEnabled=false` |
-| `EXISTING_ADF` / `_RG` / `_SUB` | `existingAdfFactory` / `Rg` / `Sub` | **no** — also set `loomDataFactoryEnabled=false` |
-| *(none)* | `loomAzureMapsAccount` | **no** — also set `azureMapsEnabled=false` |
+| `EXISTING_AI_SEARCH_SERVICE` / `_RG` / `_SUB` | `aisearch` | yes |
+| `EXISTING_APIM` / `_RG` / `_SUB` | `apim` | yes |
+| `EXISTING_KUSTO_CLUSTER` / `_RG` / `_SUB` | `adx` | yes |
+| `EXISTING_AOAI` / `_RG` / `_SUB` / `_CHAT_DEPLOYMENT` / `_EMBED_DEPLOYMENT` | `foundry` (+ `extra.chatDeployment` / `extra.embedDeployment`) | hub account yes; **agent project no** |
+| `EXISTING_EVENTHUB_NAMESPACE` / `_RG` / `_SUB` | `eventhubs` | yes |
+| `EXISTING_ASA_JOB` / `_RG` / `_SUB` | `streamanalytics` | yes |
+| `EXISTING_COSMOS_ACCOUNT` / `_RG` / `_SUB` | `cosmos` | yes |
+| `EXISTING_PURVIEW` / `_RG` / `_SUB` | `purview` | yes — `provisionPurview` now gates creation |
+| `EXISTING_SYNAPSE` / `_RG` / `_SUB` | `synapse` | yes — `provisionSynapse` |
+| `EXISTING_DATABRICKS` / `_RG` / `_SUB` / `_HOSTNAME` | `databricks` (+ `extra.hostname`) | yes — `provisionDatabricks` |
+| `EXISTING_ADF` / `_RG` / `_SUB` | `adf` | yes — `provisionAdf` |
+| `EXISTING_AZURE_MAPS_ACCOUNT` / `_RG` / `_SUB` | `maps` | yes — `provisionMaps` |
+| `EXISTING_AML_WORKSPACE` / `_RG` / `_SUB` | `aml` | yes — `provisionAml` |
 | *(none)* | `loomPlanBackingSqlServer` / `loomSqlServerRg` | adopt-only by design |
 
 The `_SUB` value also flows into a `LOOM_<SVC>_SUB` Console environment variable
@@ -180,67 +407,33 @@ that the matching client reads at runtime, falling back to
 reached by account host name and a portal-granted role, so it is
 subscription-agnostic and has no `LOOM_PURVIEW_SUB` wire.
 
----
-
-## Recommendations Loom makes
-
-Discovery attaches a recommendation to each service. The rules:
-
-| Recommendation | When |
-|---|---|
-| **Adopt (required)** | The service is a tenant singleton and one exists. **Purview** is the only one today — a second account fails `EnterpriseTenantAlreadyExists` |
-| **Adopt** | Exactly one candidate, in the hub's region |
-| **Create** | Everything else — including "three candidates found, none obviously right" |
-
-A recommendation is never applied silently. You confirm every service.
+> **This closes the old class A / class B split.** Previously, naming an
+> existing Purview/Synapse/Databricks/ADF/Maps did **not** suppress creation —
+> you had to *also* set `purviewEnabled=false` and remember which flag went with
+> which service, or Loom deployed a second one alongside yours. Every adoptable
+> service now has a `provision<Service>` variable that is `false` whenever the
+> plan says `adopt`.
 
 ---
 
-## Where the estate view lives
+## 11. Where the estate view lives
 
-There is **no Console surface today that renders "here is your estate, here is
-what Loom could adopt."** Discovery output is consumed transiently inside a
-wizard step and is not persisted. The `/admin/*` surfaces show Loom's *own*
-resources (`/admin/capacity`, `/admin/network`, `/admin/domains`) and its
-configuration readiness (`/admin/readiness`, `/admin/gates`) — not the wider
-estate.
+Discovery output is consumed inside the setup wizard and, once you confirm a
+plan, **persisted** — `lib/deploy/plan-store.ts` writes it so every deploy
+transport carries the same plan rather than only the copy-paste `az` fallback.
 
-A persisted deployment plan plus an `/admin/deployment` estate view — showing
-the applied plan, its diff against live, and each deploy path's last successful
-run — is in flight. Until it lands, the CLI inventory is the estate view.
-
----
-
-## Design in flight — the `adopt` plan
-
-This section describes work **not on `main` as of 2026-08-05**. It is recorded
-here so the shape is known, not as instructions you can follow.
-
-`main.bicep` is at **251 of the ARM cap of 256 parameters**, and 36 of those are
-the `existing*` scalars. Adding a name/resource-group/subscription triple for
-even one more service breaks the build. The consolidation replaces all 36 with a
-single object-typed parameter:
-
-```bicep
-@description('Operator adoption plan, keyed by service key.')
-param adopt object = {}
-// { purview: { mode: 'adopt', target: { name: '...', rg: '...', sub: '...' } }, ... }
-```
-
-with one derived `provisionX` variable per service gating every creation site,
-so `mode: 'adopt'` **always** suppresses creation — collapsing the class A / class
-B distinction in the [brownfield table](brownfield.md#step-2-choose-adopt-or-create-per-service)
-and freeing roughly 40 parameters of headroom for networking, storage, Postgres,
-Log Analytics and ACR adoption.
-
-The plan is persisted so that all four deploy transports carry it (today only
-the copy-paste `az` fallback does), and a blocking fitness suite runs before any
-resource is created.
+The `/admin/*` surfaces still show Loom's *own* resources
+(`/admin/capacity`, `/admin/network`, `/admin/domains`) and its configuration
+readiness (`/admin/readiness`, `/admin/gates`) — **not** the wider estate. A
+dedicated `/admin/deployment` estate view showing the applied plan, its diff
+against live, and each deploy path's last successful run is **not on this
+branch**; the CLI inventory in §7 is the estate view until it lands.
 
 ---
 
 ## Next
 
 - [**Brownfield deployment**](brownfield.md) — the walkthrough this reference supports
+- [**Greenfield deployment**](greenfield.md)
 - [**Failure recovery**](failure-recovery.md) — what to do when an adoption fails
 - [**Bring-your-own services**](../bring-your-own-services.md) — the original reuse reference
