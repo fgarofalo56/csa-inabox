@@ -1019,6 +1019,13 @@ param appImageTags object = {
   // them the same way as every other app image.
   loomMigrate: 'v0.1'
   risingwave: 'v0.1'
+  // loom-unity (#2681) — the Unity-Catalog-compatible OSS metastore. Now a
+  // DEFAULT-ON data-plane Container App deployed by admin-plane/main.bicep on
+  // every boundary (it was an out-of-band standalone entrypoint before), so its
+  // image is a hard prerequisite of the apps phase exactly like loomMigrate /
+  // risingwave. Read there with `?? 'v0.1'`, so an operator bag omitting this
+  // key still deploys.
+  unity: 'v0.1'
 }
 
 @description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov.')
@@ -1446,6 +1453,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       dataflow: 'adf'
       dataproducts: ''
       orgVisuals: loomOrgVisualsEnabled ? 'enabled' : 'disabled'
+      // LU (#2681) — Loom Unity, the sovereign OSS metastore. DEFAULT-ON; set
+      // observabilityConfig.backendOverrides = { unity: 'disabled' } to opt out.
+      unity: 'enabled'
     }, observabilityConfig.?backendOverrides ?? {})
   }
 }

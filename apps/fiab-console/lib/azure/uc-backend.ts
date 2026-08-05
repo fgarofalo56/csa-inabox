@@ -56,10 +56,12 @@ function hasDatabricksWorkspace(): boolean {
 /**
  * Resolve the active Unity Catalog backend. Explicit `LOOM_UC_BACKEND` always
  * wins (admin-plane/main.bicep pins `oss` on GCC-High / IL5, where Databricks
- * Unity Catalog has no endpoint at all); otherwise auto-select Loom Unity
- * whenever there is NO Databricks workspace bound and a `loom-unity` URL is
- * configured. Defaults to Databricks, so any estate with a bound workspace is
- * byte-identical to before.
+ * Unity Catalog has no endpoint at all — that pin was claimed here from LU-2 but
+ * only became TRUE in #2681, which is also when the orchestrator started
+ * deploying the catalog at all); otherwise auto-select Loom Unity whenever there
+ * is NO Databricks workspace bound and a `loom-unity` URL is configured.
+ * Defaults to Databricks, so any estate with a bound workspace is byte-identical
+ * to before.
  *
  * The auto-select used to additionally require `isGovCloud()`. That made the
  * catalog unreachable on every Commercial estate — including estates with no

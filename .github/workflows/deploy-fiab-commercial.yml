@@ -411,6 +411,35 @@ jobs:
       # (no-vaporware.md) builds the registry contents in the next phase. A
       # registry that EXISTS but cannot be read still fails — "I could not prove
       # it" is not a pass.
+      # SIGN-IN + CATALOG-AUTHORIZATION DURABILITY (#2681). Same defect the
+      # GCC-High and IL5 lanes already fixed, still open here: an Entra app
+      # registration is a Microsoft Graph object ARM cannot create, so
+      # commercial.bicepparam reads it from LOOM_MSAL_CLIENT_ID — and this lane
+      # passed NOTHING. An ACA template rewrite drops every env var it does not
+      # declare, so each re-run re-rendered an EMPTY client id and took sign-in
+      # dark, undoing what the post-deploy bootstrap had wired.
+      #
+      # It now costs more than sign-in. admin-plane/main.bicep deploys `loom-unity`
+      # DEFAULT-ON and passes this id as the catalog's `entraClientId`; with no
+      # pinnable audience the module deploys SEALED (minReplicas 0, unroutable
+      # audience) by design — fail-closed rather than the anonymous catalog of
+      # #2643. So an unresolved client id here does not merely blank sign-in, it
+      # RE-SEALS a working catalog on every reconcile. Resolve the estate's
+      # existing registration first: Key Vault record, then the live Console app.
+      # Empty is the correct answer on a genuinely fresh subscription — the
+      # catalog comes up sealed and csa-loom-post-deploy-bootstrap unseals it.
+      - name: Resolve the existing MSAL client id (sign-in + Loom Unity audience durability)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -euo pipefail
+          CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "rg-csa-loom-admin-${AZURE_LOCATION}" || true)"
+          echo "LOOM_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
+          if [ -n "${CID:-}" ]; then
+            echo "::notice::MSAL client id resolved for this estate — sign-in and the Loom Unity audience stay wired across this deploy."
+          else
+            echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured and loom-unity deploys SEALED until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
+          fi
+
       - name: Image preflight — ACR must already hold every referenced tag
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |

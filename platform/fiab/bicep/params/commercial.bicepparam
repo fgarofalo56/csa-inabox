@@ -252,4 +252,23 @@ param appImageTags = {
   duckdb: readEnvironmentVariable('LOOM_DUCKDB_TAG', 'v0.1')
   loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
   risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
+  // loom-unity (#2681) — the Unity-Catalog-compatible OSS metastore.
+  // admin-plane/main.bicep now deploys it DEFAULT-ON on every boundary (it was
+  // an out-of-band standalone entrypoint before), so this image is a hard
+  // prerequisite of the apps phase — and declaring it HERE is what puts it in
+  // the Commercial lane resolve-image-preflight-refs.mjs assertion set.
+  unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
 }
+
+// SIGN-IN + LOOM-UNITY-AUDIENCE DURABILITY (#2681). An Entra app registration is
+// a Microsoft Graph object ARM cannot create, so this reads the estate's existing
+// one out of the environment; deploy-fiab-commercial.yml resolves it (Key Vault
+// record → live Console app) into LOOM_MSAL_CLIENT_ID immediately before the
+// deploy. Without this line that export is INERT — the param falls back to
+// main.bicep's `''` default — and each reconcile both blanks sign-in and
+// RE-SEALS the Loom Unity catalog, because admin-plane/main.bicep passes this
+// value as the catalog's entraClientId and the module deploys SEALED rather than
+// anonymous when no audience can be pinned. Empty is the correct answer on a
+// genuinely fresh subscription; csa-loom-post-deploy-bootstrap.yml creates the
+// registration and unseals the catalog. Mirrors gcc-high/il5.bicepparam.
+param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')

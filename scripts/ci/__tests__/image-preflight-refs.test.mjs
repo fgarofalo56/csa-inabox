@@ -219,19 +219,28 @@ test('commercial.bicepparam + the live running set => exactly the five unpinned 
   const r = resolveRefs({ paramSrc, env, boundary: 'commercial' });
 
   // orchestrator + mapsTiles are excluded on Commercial (dead key / gov-only),
-  // so what the Commercial deploy would actually pull unproven is these three —
+  // so what the Commercial deploy would actually pull unproven is these four —
   // and the in-VNet probe (run 30955093956) found loom-duckdb:v0.1 MISSING.
+  //
+  // loom-unity joined this set in #2681, and that is the POINT of the change:
+  // admin-plane/main.bicep now deploys the catalog DEFAULT-ON, so the Commercial
+  // deploy really does pull `loom-unity:v0.1`. Before #2681 it was invisible
+  // here — the module was an out-of-band entrypoint and the key was absent from
+  // both APP_IMAGE_TAGS and commercial.bicepparam, so a deploy that could not
+  // pull the image would have failed the Container App PUT with no preflight
+  // warning at all. This row growing is the guard extending to cover it.
   assert.deepEqual(r.unpinned, [
     'loom-copilot-maf:v0.1',
     'loom-duckdb:v0.1',
     'loom-risingwave:v0.1',
+    'loom-unity:v0.1',
   ]);
   assert.deepEqual(
     r.skipped.map((s) => s.ref),
     ['loom-orchestrator:v0.1', 'loom-maps-tileserver:v1'],
   );
   assert.equal(r.pinned.length, 12);
-  assert.equal(r.refs.length, 15);
+  assert.equal(r.refs.length, 16);
 });
 
 test('on GCC-High the SAME inputs additionally assert the maps tile server', () => {

@@ -150,6 +150,12 @@ param appImageTags = {
   // build-fiab-images-acr-tasks.yml (boundary matches the estate's cloud).
   loomMigrate: readEnvironmentVariable('LOOM_MIGRATE_TAG', 'v0.1')
   risingwave: readEnvironmentVariable('LOOM_RISINGWAVE_TAG', 'v0.1')
+  // loom-unity (#2681) — the Unity-Catalog-compatible OSS metastore.
+  // admin-plane/main.bicep now deploys it DEFAULT-ON on every boundary (it was
+  // an out-of-band standalone entrypoint before), so this image is a hard
+  // prerequisite of the apps phase — a missing manifest fails the Container App
+  // PUT with MANIFEST_UNKNOWN, not just the feature.
+  unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
 }
 
 // MSAL — passed from env (don't commit secrets to disk)

@@ -866,6 +866,40 @@ var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 // default-ON is ~$0 at idle (see the block there).
 var duckdbTierEnabled = true
 var duckdbTierActive = duckdbTierEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── LU (#2681) — Loom Unity, the Unity-Catalog-compatible OSS metastore ───────
+// DEFAULT-ON in EVERY boundary. Previously `compute/loom-unity-app.bicep` was a
+// standalone out-of-band entrypoint invoked ONLY by `gov-uc-purview-wire.yml`,
+// so a from-scratch deploy stood up NO catalog on Commercial at all and, on Gov,
+// the catalog existed only because a human had dispatched that workflow once.
+// `LOOM_UNITY_URL` was therefore emitted by NO bicep — which is precisely the
+// shape `.claude/rules/auto-bind-by-default.md` §5 forbids ("the value must be
+// produced by the deploy"), and it is what let the `svc-loom-unity-authz` gate
+// read PASS forever: `appliesWhenPresent` scopes that check to estates where
+// LOOM_UNITY_URL is set, so an ABSENT catalog reported ready. Deploying it here
+// is what makes that gate MEAN something.
+//
+// AUTHORIZATION IS NOT OPTIONAL ON THIS PATH. The module's own default is
+// `authMode: 'entra'`, and when no audience can be pinned it deploys SEALED
+// (minReplicas 0, an unroutable audience) rather than silently downgrading to an
+// anonymous catalog — that downgrade WAS #2643. #2974 then closed the other half
+// (the Console principal is auto-bound as an ENABLED Unity user over SCIM at
+// container boot, because an Entra app-only token carries no `email` claim and
+// upstream `AuthService` resolves the caller as `sub` = the object id). Both
+// halves are wired below; neither is skippable from here.
+var loomUnityEnabled = (loomBackends.?unity ?? 'enabled') != 'disabled'
+var loomUnityActive = loomUnityEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+// PERSISTENCE. The durable store is an Entra-only, private-endpoint-only
+// Postgres Flexible Server (data-plane/loom-unity-postgres.bicep). Where the
+// sovereign Postgres quota gate trips (gcc-high/il5 .bicepparam default
+// `postgresQuotaAvailable=false`) we deploy the catalog ANYWAY on an EmptyDir H2
+// store — `dbEphemeral: true`, byte-identical to what gov-uc-purview-wire.yml
+// has been deploying on Gov since 2026-07-15. That is a FUNCTIONAL catalog whose
+// metadata does not survive a restart; it is NOT the H2-on-Azure-Files variant,
+// which CrashLoopBackOffs on Gov because the CIFS mount blocks container start.
+// Skipping the catalog entirely on the one cloud that has no Databricks Unity
+// Catalog endpoint would have been the worse trade.
+var loomUnityPostgresActive = loomUnityActive && postgresQuotaAvailable
 // loom-risingwave Postgres-wire root password. Same construction and the same
 // reasoning as airflowAdminPassword above: UNPREDICTABLE, derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
@@ -1693,6 +1727,15 @@ param loomBackends object = {
   domains: 'cosmos'
   dataproducts: ''
   orgVisuals: 'enabled'
+  // LU (#2681) — Loom Unity, the Unity-Catalog-compatible OSS metastore. Rides
+  // this bag rather than a new top-level param for the same 256-param-ceiling
+  // reason as `loomMigrate` / `risingwave`, and is an opt-OUT per
+  // loom_default_on_opt_out.md: unset ⇒ enabled. Set 'disabled' ONLY when the
+  // estate deliberately runs no sovereign catalog (Commercial estates with a
+  // bound Databricks workspace still auto-select Databricks UC at runtime —
+  // resolveUcBackend() only picks 'oss' when NO workspace is bound — so leaving
+  // this on costs a scale-capable ACA app, not a behaviour change).
+  unity: 'enabled'
   // Folded out of standalone params (data-eng deploy-readiness sweep) to stay
   // under the ARM 256-parameter ceiling; consumed via same-named vars above so
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
@@ -3863,6 +3906,47 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // `*.<env-id>` record in the CAE private DNS zone resolves the
             // `.internal.` form to the same environment IP.
             { name: 'LOOM_RISINGWAVE_URL', value: risingwaveActive ? 'loom-risingwave.internal.${containerPlatformModule.outputs.caeDefaultDomain}:4566' : '' }
+            // ── LU (#2681) — Loom Unity, the Unity-Catalog-compatible OSS metastore ──
+            // Deployed DEFAULT-ON by this template (compute/loom-unity-app.bicep +
+            // its Entra-only Postgres store). Before this change LOOM_UNITY_URL was
+            // emitted by NO bicep at all: the module was an out-of-band entrypoint
+            // that only a manual gov-uc-purview-wire.yml dispatch ever invoked, so
+            // a from-scratch estate had no catalog AND `svc-loom-unity-authz` —
+            // scoped `appliesWhenPresent(LOOM_UNITY_URL)` — reported PASS for the
+            // catalog that was not there.
+            //
+            // CONSTRUCTED, not read from `loomUnity!.outputs.fqdn`, for the same
+            // blast-radius reason as LOOM_MIGRATE_URL / LOOM_RISINGWAVE_URL above:
+            // reading the output makes ARM emit `appDeployments dependsOn
+            // [... loom-unity ...]`, so a loom-unity image missing from a
+            // boundary's ACR would stop loom-console from deploying at all —
+            // turning a degraded catalog into a Console outage. ACA's documented
+            // internal-ingress FQDN is `<app>.internal.<env-default-domain>`.
+            { name: 'LOOM_UNITY_URL', value: loomUnityActive ? 'https://loom-unity.internal.${containerPlatformModule.outputs.caeDefaultDomain}' : '' }
+            // The Entra app registration the Console mints its bearer against —
+            // the SAME confidential client as sign-in, so there is no second app
+            // to register. Empty until an app registration exists (day-one
+            // bicep-only deploy): the catalog then deploys SEALED rather than
+            // anonymous, and csa-loom-post-deploy-bootstrap.yml re-runs this
+            // module with the resolved id + wires these three vars.
+            { name: 'LOOM_UNITY_CLIENT_ID', value: loomUnityActive ? effectiveMsalClientId : '' }
+            { name: 'LOOM_UNITY_AUDIENCE', value: loomUnityActive && !empty(effectiveMsalClientId) ? 'api://${effectiveMsalClientId}/.default' : '' }
+            // The posture DECLARATION the Console acts on. 'entra' matches the
+            // server half pinned at the module call. It is a hard literal — the
+            // values `anonymous` / `disabled` / `none` / `off` are in the
+            // svc-loom-unity-authz `rejectValues` set precisely because #2643 was
+            // an anonymous catalog whose gate was satisfied BY being anonymous,
+            // so no code path here may emit one.
+            { name: 'LOOM_UNITY_AUTH_MODE', value: loomUnityActive ? 'entra' : '' }
+            // Backend selector. resolveUcBackend() auto-selects 'oss' whenever no
+            // Databricks workspace is bound and LOOM_UNITY_URL is set, so
+            // Commercial estates with Databricks keep using Databricks UC with no
+            // pin at all. GCC-High / IL5 are pinned EXPLICITLY: Azure Databricks
+            // exists on those boundaries but Unity Catalog does not, so a bound
+            // workspace there would auto-select a backend with no endpoint. The
+            // uc-backend.ts header has claimed this pin since LU-2; until now no
+            // bicep actually emitted it.
+            { name: 'LOOM_UC_BACKEND', value: loomUnityActive && (boundary == 'GCC-High' || boundary == 'IL5') ? 'oss' : '' }
             // ── Hyperscale band (HYP-16 cross-cutting platform) ──
             // The three H-band substrate services (Loom OneLake / Loom Direct Lake
             // / Loom Capacity Broker) are STANDALONE ACA apps deployed out-of-band
@@ -5805,6 +5889,125 @@ module loomMigrate '../data-plane/loom-migrate-aca.bicep' = if (loomMigrateActiv
   // when skipRoleGrants is set.)
   dependsOn: [
     loomMigrateAcrPull
+  ]
+}
+
+// =====================================================================
+// LU (#2681) — Loom Unity: the Unity-Catalog-compatible OSS metastore.
+// Backs LOOM_UNITY_URL for lib/azure/uc-backend.ts when the OSS backend is
+// selected — which is ALWAYS the case in Azure Government, where Databricks
+// Unity Catalog has no endpoint at all.
+//
+// WHY THIS BLOCK EXISTS. `compute/loom-unity-app.bicep` shipped as a standalone
+// out-of-band entrypoint, invoked by exactly one thing: a manual dispatch of
+// `.github/workflows/gov-uc-purview-wire.yml`. So a from-scratch deploy produced
+// NO catalog on any boundary, and the live Gov catalog existed only because a
+// human ran that workflow once, on 2026-07-15. `.claude/rules/auto-bind-by-default.md`
+// §5 is explicit that a prerequisite the platform can deploy must be DEPLOYED,
+// not requested — and the second-order damage was worse than the missing
+// feature: `svc-loom-unity-authz` is scoped `appliesWhenPresent(LOOM_UNITY_URL)`,
+// so on every estate where no bicep set that var the authorization gate reported
+// PASS for a catalog that did not exist, and `/admin/readiness` scored it ready.
+//
+// LEAST-PRIVILEGE IDENTITY. A dedicated `uami-loom-unity-<region>` holding
+// AcrPull on the admin-plane ACR and Entra administrator on its OWN Postgres
+// server — never the Console UAMI, which holds lake and control-plane rights the
+// catalog process has no business inheriting.
+// =====================================================================
+resource loomUnityUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (loomUnityActive) {
+  name: 'uami-loom-unity-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) — the identity's only
+// admin-plane role. Same existing-ref convention as scriptRunnerAcrPull /
+// loomMigrateAcrPull (the registry name must be calculable at deployment START,
+// so it is recomputed rather than read from a module output → BCP120).
+resource loomUnityAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (loomUnityActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, loomUnityUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: loomUnityUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+// LU-1 — durable metastore. Entra-ONLY (there is no database credential to
+// rotate or leak), publicNetworkAccess Disabled, reachable only over an in-module
+// private endpoint. Skipped where the sovereign Postgres quota gate trips; the
+// app then runs the EmptyDir H2 store (see loomUnityPostgresActive above).
+module loomUnityPostgres '../data-plane/loom-unity-postgres.bicep' = if (loomUnityPostgresActive) {
+  name: 'loom-unity-postgres'
+  params: {
+    location: location
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    // ZONE-COLLISION CONTRACT (see ducklakeCatalog above). Azure rejects a second
+    // virtualNetworkLink to a DIFFERENT privatelink.postgres.<suffix> zone on the
+    // same VNet, and the DuckLake store already created + linked one on the hub.
+    // CONSUME it. `loomUnityPostgresActive` is a strict subset of
+    // `ducklakeCatalogActive` (both require containerApps + deployAppsEnabled +
+    // postgresQuotaAvailable, and ducklakeCatalogEnabled is an unconditional
+    // true), so whenever this module deploys, that output exists.
+    privateDnsZoneId: ducklakeCatalogActive ? ducklakeCatalog!.outputs.privateDnsZoneId : ''
+    unityPrincipalId: loomUnityUami!.properties.principalId
+    unityPrincipalName: loomUnityUami!.name
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+module loomUnity '../compute/loom-unity-app.bicep' = if (loomUnityActive) {
+  name: 'loom-unity'
+  params: {
+    name: 'loom-unity'
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    unityUamiId: loomUnityUami!.id
+    unityUamiClientId: loomUnityUami!.properties.clientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
+    // Postgres when the quota gate allows it; otherwise an EmptyDir H2 store.
+    // dbEphemeral is what keeps Gov BOOTABLE — the alternative fallback
+    // (H2 on an Azure Files SMB mount) blocks container start on that boundary.
+    unityPostgresFqdn: loomUnityPostgresActive ? loomUnityPostgres!.outputs.fqdn : ''
+    unityDbAadUser: loomUnityPostgresActive ? loomUnityPostgres!.outputs.aadUser : ''
+    dbEphemeral: !loomUnityPostgresActive
+    // AUTHORIZATION. `entra` is the module default and is NOT overridable from
+    // here on purpose: #2643 was an anonymous catalog that anything on the CAE
+    // VNet could read AND mutate, and the way it survived review was a caller
+    // passing authMode=disabled. There is no such parameter on this path.
+    // With no pinnable audience the module deploys SEALED (minReplicas 0,
+    // unroutable audience) rather than open — fail-closed, by construction.
+    authMode: 'entra'
+    entraClientId: effectiveMsalClientId
+    // #2974 — the Console principal's OBJECT ID. An Entra app-only token carries
+    // no `email` claim, and upstream AuthService resolves the caller as
+    // claims.getOrDefault(EMAIL, claim(SUBJECT)), i.e. the object id. The
+    // entrypoint registers exactly this id as an ENABLED Unity user over SCIM at
+    // boot, so an ENFORCING catalog is also a USABLE one. Without it the catalog
+    // comes up authenticated-and-refusing-everyone.
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Pin ingress to the Container Apps infrastructure subnet — the only source
+    // range an in-environment caller (the Console) can present. Read from the
+    // network module so it cannot drift from the actual subnet layout.
+    consoleAllowedCidrs: [
+      network.outputs.containerPlatformSubnetPrefix
+    ]
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+  // The app pulls from ACR as loomUnityUami, so the AcrPull grant must land
+  // before the first revision is created, otherwise a from-scratch deploy races
+  // role propagation and the revision fails its image pull. (A dependsOn on a
+  // false-condition resource is a no-op in ARM, so this is safe under
+  // skipRoleGrants.)
+  dependsOn: [
+    loomUnityAcrPull
   ]
 }
 

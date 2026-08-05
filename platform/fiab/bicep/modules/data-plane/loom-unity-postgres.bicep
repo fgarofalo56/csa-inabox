@@ -27,11 +27,25 @@
 //     App resolves the server name to a private address.
 //   * Diagnostics to the Loom Log Analytics workspace.
 //
-// STANDALONE ENTRYPOINT: admin-plane/main.bicep is at the ARM 256-parameter
-// ceiling, so this deploys out-of-band (like every other data-plane band
-// module) and its outputs are passed to compute/loom-unity-app.bicep.
-// Orphan-allowlisted in scripts/ci/check-bicep-sync.mjs.
+// DEPLOYED BY THE ORCHESTRATOR (#2681). admin-plane/main.bicep invokes this
+// module whenever Loom Unity is active AND the sovereign Postgres quota gate
+// allows it (`loomUnityPostgresActive`), and passes its fqdn / aadUser outputs
+// straight to compute/loom-unity-app.bicep. No new top-level param was needed —
+// the Loom Unity toggle rides the existing `loomBackends` bag — so the ARM
+// 256-parameter ceiling is untouched.
 //
+// ZONE-COLLISION CONTRACT: the orchestrator passes the privatelink.postgres.*
+// zone that ducklake-catalog-postgres.bicep created on the hub VNet as this
+// module's `privateDnsZoneId`. Azure rejects a second virtualNetworkLink to a
+// DIFFERENT zone of the same name on the same VNet, so this module must never
+// create its own when that one exists.
+//
+// Where the quota gate trips (gcc-high / il5 default postgresQuotaAvailable=
+// false) the orchestrator SKIPS this module and runs the catalog on an EmptyDir
+// H2 store instead (`dbEphemeral: true`) — a functional but non-durable
+// metastore, which is what the Gov estate has been running since 2026-07-15.
+// The direct invocation below still works for an out-of-band deploy:
+
 //   az deployment group create -g <admin-rg> \
 //     -f platform/fiab/bicep/modules/data-plane/loom-unity-postgres.bicep \
 //     -p location=<region> \

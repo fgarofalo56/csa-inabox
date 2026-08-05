@@ -141,7 +141,8 @@ if [[ "$SKIP_TEARDOWN" == "true" ]]; then
   echo -e "${BLUE}[2/4] Image preflight (adoption path)${NC}"
   bash "${SCRIPT_DIR}/preflight-image-tags.sh" \
     --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
-    --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" || {
+    --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" \
+    --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}" || {
       echo -e "${RED}Image preflight FAILED — refusing to repoint a live Container App at a tag that is not in the registry. Run .github/workflows/gov-build-images.yml first.${NC}"
       exit 1
     }
