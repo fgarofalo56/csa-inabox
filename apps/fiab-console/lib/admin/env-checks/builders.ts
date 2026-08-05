@@ -79,6 +79,29 @@ export const BUILDERS_ENV_CHECKS: EnvSpec[] = [
     role: 'Airflow API access (Console UAMI / basic auth via Key Vault)',
   },
   {
+    id: 'svc-logic-apps', category: 'builders', title: 'Workflows — Azure Logic Apps (Consumption) target', severity: 'recommended',
+    // AUTO-BIND (.claude/rules/auto-bind-by-default.md): creating a `logic-app`
+    // item PROVISIONS + BINDS a real Microsoft.Logic/workflows resource named
+    // after the item. That needs three ARM coordinates, ALL of which the
+    // admin-plane already stamps on the Console container app — hence `derived`.
+    //
+    // #2954: this gate was previously invisible (no spec at all) AND unsatisfiable
+    // (the provisioner read LOOM_LOGIC_LOCATION || LOOM_AZURE_LOCATION, neither of
+    // which ANY bicep module sets). Registering it here means /admin/gates and
+    // Copilot can both see + resolve it, and the alias groups below name the
+    // variables the platform genuinely emits.
+    anyOf: [
+      ['LOOM_LOGIC_SUB', 'LOOM_SUBSCRIPTION_ID'],
+      ['LOOM_LOGIC_RG', 'LOOM_DLZ_RG', 'LOOM_ADMIN_RG'],
+      ['LOOM_LOGIC_LOCATION', 'LOOM_LOCATION'],
+    ],
+    warnOnMiss: true, derived: true,
+    remediation: 'Workflow (logic-app) items auto-provision a real Azure Logic Apps Consumption workflow named after the item. A push-button deploy wires all three coordinates automatically (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_LOCATION); set the LOOM_LOGIC_* overrides only to target a different subscription, resource group, or region. If the configured resource group does not exist, auto-bind retries once against LOOM_ADMIN_RG rather than dead-ending. The Console UAMI also needs "Logic App Contributor" at RESOURCE-GROUP scope on whichever group it lands in — deploy-planner/logic-app.bicep grants exactly that on the DLZ RG (logicAppsEnabled, default on).',
+    provisionedBy: 'modules/admin-plane/main.bicep apps[] env (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_LOCATION) + modules/deploy-planner/logic-app.bicep (logicAppsEnabled, default on → the RG-scoped Logic App Contributor grant)',
+    role: 'Logic App Contributor (Console UAMI) at RESOURCE-GROUP scope on LOOM_DLZ_RG — a workflow-scoped grant 403s every new-workflow PUT',
+    docs: 'https://learn.microsoft.com/rest/api/logic/workflows/create-or-update',
+  },
+  {
     id: 'svc-copyjob-control', category: 'builders', title: 'Copy job — watermark control store (Azure SQL)', severity: 'optional',
     required: ['LOOM_COPYJOB_CONTROL_SQL_SERVER'], warnOnMiss: true,
     remediation: 'Set LOOM_COPYJOB_CONTROL_SQL_SERVER (the Azure SQL logical server) so incremental copy jobs persist watermarks (copyjob_control_not_configured). Full-load copy jobs work without it.',

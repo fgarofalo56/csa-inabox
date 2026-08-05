@@ -57,6 +57,16 @@ export const BUILDERS_GATE_META: Record<string, GateMeta> = {
     surfaces: [{ path: '/items/airflow-job', label: 'Airflow job editor' }],
     fixit: { kind: 'env-picker' },
   },
+  'svc-logic-apps': {
+    surfaces: [
+      { path: '/items/logic-app', label: 'Workflow designer — save / run / run history' },
+      { path: '/api/items/logic-app/*', label: 'Workflow BFF (auto-bind, PUT definition, trigger run, runs)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Auto-wired on a push-button deploy: admin-plane stamps LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_LOCATION and deploy-planner/logic-app.bicep (logicAppsEnabled, default on) grants the Console UAMI Logic App Contributor at RG scope.',
+    legacyCodes: ['logic_app_not_configured', 'logic_app_not_bound'],
+  },
   'svc-copyjob-control': {
     surfaces: [{ path: '/items/copy-job', label: 'Copy job watermarks' }],
     fixit: { kind: 'resource-picker' },
