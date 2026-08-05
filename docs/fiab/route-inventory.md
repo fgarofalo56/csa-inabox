@@ -2095,6 +2095,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `setup/deploy-status/route.ts` | GET | session-only |  | — |
 | `setup/deploy/route.ts` | POST | admin |  | — |
 | `setup/discover-services/route.ts` | GET | admin | ● | — |
+| `setup/estate-scan/route.ts` | POST | admin |  | — |
 | `setup/existing-aoai/route.ts` | GET | session-only |  | — |
 | `setup/existing-dlzs/route.ts` | GET | owner-scoped |  | — |
 | `setup/existing-storage/route.ts` | GET | session-only |  | — |
