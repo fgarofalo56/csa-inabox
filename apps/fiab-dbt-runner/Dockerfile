@@ -14,8 +14,29 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-security.txt ./
+COPY scripts ./scripts
+
+# Two passes on purpose. requirements.txt is the resolvable pin set;
+# requirements-security.txt then OVERRIDES transitive pins that would otherwise
+# ship a CRITICAL CVE (today: deepdiff 7.0.1 / CVE-2025-58367, held back by
+# dbt-common 1.27.1, which is itself held by dbt-core's protobuf<6 fence). See
+# that file for the full justification and the removal plan. This is the same
+# shape apps/loom-transform-runner already uses for the identical finding —
+# that sibling adopted the fix, this app did not, and the SC1 Trivy gate has
+# failed `Build loom-dbt-runner` on every full-app-deploy-commercial run since.
+#
+# The override deliberately conflicts with a declared range, so pip emits a
+# "dependency conflicts" advisory and still exits 0 — which means a typo would
+# fail SILENTLY. scripts/assert_security_pins.py turns that back into a build
+# failure.
+#
+# That assertion lives in a FILE, not an inline heredoc: ACR Tasks' classic
+# builder does not support Dockerfile heredocs (they require BuildKit). Keep
+# this Dockerfile BuildKit-feature-free.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r requirements-security.txt \
+    && python scripts/assert_security_pins.py
 COPY app ./app
 
 EXPOSE 8080

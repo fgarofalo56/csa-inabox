@@ -254,6 +254,16 @@ jobs:
         run: node scripts/ci/check-license-inventory.mjs
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         run: bash scripts/ci/test-assert-acr-image-tags.sh
+      # assert-acr-image-tags.sh proves a tag EXISTS. This proves the workflow
+      # that is supposed to CREATE it actually builds it: the Commercial image
+      # producer's build matrix, its cosign APPS=() list, and the deploy
+      # contract derived from params/commercial.bicepparam were three
+      # hand-maintained lists with a "keep in sync" comment and no control.
+      # They had drifted three separate ways at once (refs #2958) — including
+      # loom-script-runner, an image the paramfile pulls that NO workflow in
+      # the repo built.
+      - name: full-app-deploy image contract (matrix == cosign list == deploy contract — refs #2958)
+        run: node scripts/ci/check-full-app-deploy-contract.mjs
       # The roll's digest resolution used to be `az … 2>/dev/null || echo ""`
       # and called an empty result "the tag does not exist" — a false statement
       # printed about images that were in the registry (#2980/#2982). Its
