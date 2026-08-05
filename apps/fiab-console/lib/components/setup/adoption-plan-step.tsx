@@ -278,7 +278,7 @@ export function AdoptionPlanStep(props: AdoptionPlanStepProps) {
             const key = row.service.key;
             const decision = plan.services[key];
             const rec = recommendFor(row, hubRegion);
-            const modes = allowedModes(row, !!row.service.class && row.service.class !== 'create-only');
+            const modes = allowedModes(row, !!row.service.cls && row.service.cls !== 'create-only');
             const mode: ServiceMode = decision?.mode ?? 'create';
             const badge = recBadge(rec.recommendation);
             const noCand = noCandidateSentence(row, decision ?? { mode: 'create', source: 'default', decidedBy: '', decidedAt: '' }, ledger);
@@ -295,7 +295,7 @@ export function AdoptionPlanStep(props: AdoptionPlanStepProps) {
                         <Badge appearance="tint" color={badge.color} size="small">
                           {badge.text}
                         </Badge>
-                        {row.service.class === 'create-only' && (
+                        {row.service.cls === 'create-only' && (
                           <Badge appearance="outline" size="small" icon={<LockClosed16Regular />}>
                             Loom deploys its own
                           </Badge>
@@ -404,7 +404,7 @@ export function AdoptionPlanStep(props: AdoptionPlanStepProps) {
 
                 {/* R5.5 — supplying values is a first-class input path, offered on
                     EVERY row in EVERY outcome, not an undocumented env override. */}
-                {row.service.class !== 'create-only' && (
+                {row.service.cls !== 'create-only' && (
                   <div>
                     {!manualOpen[key] ? (
                       <Button

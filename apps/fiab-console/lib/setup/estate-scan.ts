@@ -48,7 +48,8 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getUserArmToken } from '@/lib/azure/user-token-store';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { PagingBudget, PAGE_DEADLINE, type PageDeadline } from '@/lib/azure/paging-budget';
-import { adoptionArmTypes, armRowToServiceKey, getServiceDef } from '@/lib/deploy/adoption-catalog';
+import { adoptionArmTypes, armTypeToServiceKey, getServiceDef } from '@/lib/deploy/adoption-catalog';
+import { COVERAGE_QUERY } from '@/lib/deploy/discovery-model';
 import type { AdoptionCandidate } from '@/lib/deploy/plan-builder';
 import type { SubscriptionScanResult } from '@/lib/deploy/plan-model';
 
@@ -165,6 +166,77 @@ async function tokenFor(tier: 1 | 2, operatorOid?: string): Promise<string | nul
   } catch {
     return null;
   }
+}
+
+/**
+ * The Resource Graph coverage probe.
+ *
+ * WHY IT EXISTS - measured against live Commercial ARG (api-version 2022-10-01)
+ * on 2026-08-05: a request naming 5 subscription scopes where one is not
+ * readable returns HTTP 200, rows for the other 4, `facets: []`, and NO field
+ * anywhere identifying the scope that was dropped. `allowPartialScopes: true`
+ * does not change that, and `count` reflects only what came back. So the ONLY
+ * way to tell "Resource Graph read this subscription and it is empty" apart from
+ * "Resource Graph silently ignored this subscription" is to ask Resource Graph
+ * which containers it can see, scoped to exactly the same list.
+ *
+ * A subscription ARM says you can read is NOT necessarily one ARG will read.
+ *
+ * Returns the set it PROBED and the set it found READABLE. A subscription absent
+ * from `probed` means the probe itself did not complete - that is UNKNOWN, and
+ * the caller must not collapse it into either answer.
+ *
+ * Same query and semantics as `lib/deploy/discovery-scanner.probeCoverage`,
+ * sharing `COVERAGE_QUERY`, so the two scanners cannot drift on this.
+ */
+export async function probeArgCoverage(
+  userToken: string | null,
+  uamiToken: string | null,
+  ledger: SubscriptionScanResult[],
+): Promise<{ probed: Set<string>; readable: Set<string>; error: string | null }> {
+  const probed = new Set<string>();
+  const readable = new Set<string>();
+  let error: string | null = null;
+
+  const groups: { token: string; ids: string[] }[] = [];
+  const tier1 = ledger.filter((e) => e.status === 'scanned' && e.credentialTier === 1).map((e) => e.subscriptionId);
+  const tier2 = ledger.filter((e) => e.status === 'scanned' && e.credentialTier === 2).map((e) => e.subscriptionId);
+  if (userToken && tier1.length) groups.push({ token: userToken, ids: tier1 });
+  if (uamiToken && tier2.length) groups.push({ token: uamiToken, ids: tier2 });
+
+  for (const group of groups) {
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${ARG_API_VERSION}`,
+        {
+          method: 'POST',
+          headers: { authorization: `Bearer ${group.token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            subscriptions: group.ids,
+            query: COVERAGE_QUERY,
+            options: { resultFormat: 'objectArray', $top: 1000, allowPartialScopes: true },
+          }),
+          cache: 'no-store',
+        },
+        15_000,
+      );
+    } catch (e: any) {
+      error = `Resource Graph coverage probe could not be reached: ${safe(e?.message ?? e, 160)}`;
+      continue;
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      error = `Resource Graph coverage probe answered HTTP ${res.status}: ${safe(body, 160)}`;
+      continue;
+    }
+    const j: any = await res.json().catch(() => ({}));
+    for (const id of group.ids) probed.add(id);
+    for (const row of (j?.data ?? []) as { subscriptionId?: unknown }[]) {
+      if (typeof row?.subscriptionId === 'string' && row.subscriptionId) readable.add(row.subscriptionId);
+    }
+  }
+  return { probed, readable, error };
 }
 
 /**
@@ -297,6 +369,46 @@ export async function scanEstate(req: EstateScanRequest): Promise<EstateScanResu
     return { ledger, candidates: [], queryTier: userToken ? 1 : 2 };
   }
 
+  // ── 1b. Which of those will RESOURCE GRAPH actually read? ───────────────
+  //
+  // ARM readability is NOT Resource Graph readability. Measured against live
+  // Commercial ARG (2022-10-01): a request naming 5 scopes where 1 is not
+  // readable returns HTTP 200 with rows from the other 4, `facets: []`, and NO
+  // field anywhere naming the one that was dropped — even with
+  // `allowPartialScopes: true`. Without this probe such a subscription is
+  // recorded `scanned` with `matchedResources: 0`, which asserts "I read it and
+  // there is nothing there" about a scope that was never read. That is how a
+  // multi-subscription scan can under-report and still look complete.
+  //
+  // Same probe as lib/deploy/discovery-scanner.probeCoverage, and the same
+  // shared COVERAGE_QUERY, so the two scanners cannot drift on this.
+  const argReadable = await probeArgCoverage(userToken, uamiToken, ledger);
+  for (const e of ledger) {
+    if (e.status !== 'scanned') continue;
+    if (argReadable.probed.has(e.subscriptionId) && !argReadable.readable.has(e.subscriptionId)) {
+      e.status = 'no-access';
+      e.detail =
+        'ARM lists this subscription, but Azure Resource Graph did not return its container row ' +
+        'when explicitly scoped to it — Resource Graph cannot read it with this identity, so ' +
+        'nothing here was scanned. "Not found" below does not cover this subscription.';
+    } else if (!argReadable.probed.has(e.subscriptionId)) {
+      // The probe itself failed. UNKNOWN is not "no access" and is not "read".
+      e.status = 'partial';
+      e.detail =
+        (e.detail ? `${e.detail} ` : '') +
+        'The Resource Graph coverage probe could not be completed for this subscription, so ' +
+        `whether it was actually read is UNPROVEN${argReadable.error ? `: ${argReadable.error}` : ''}.`;
+    }
+  }
+
+  // Recompute the readable set from the CORRECTED ledger — querying a scope ARG
+  // will drop is what produced the silent under-report in the first place.
+  readable.length = 0;
+  for (const e of ledger) if (e.status === 'scanned') readable.push(e.subscriptionId);
+  if (readable.length === 0) {
+    return { ledger, candidates: [], queryTier: userToken ? 1 : 2 };
+  }
+
   // ── 2. One paged ARG query over the readable subscriptions ──────────────
   // Group by the tier that could read them so each query runs under a token
   // that is actually entitled to every scope in it.
@@ -382,12 +494,12 @@ export async function scanEstate(req: EstateScanRequest): Promise<EstateScanResu
   const tierOf = new Map(ledger.map((e) => [e.subscriptionId, e.credentialTier]));
 
   for (const r of rows) {
-    const key = armRowToServiceKey(String(r.type ?? ''), r.kind);
+    const key = armTypeToServiceKey(String(r.type ?? ''), r.kind);
     if (!key) continue;
     const def = getServiceDef(key);
     // A create-only service is scanned so the UI can SAY one exists and explain
     // why Loom still deploys its own — but it is never offered as a candidate.
-    if (!def || def.class === 'create-only') continue;
+    if (!def || def.cls === 'create-only') continue;
     const sub = String(r.subscriptionId ?? '');
     matched.set(sub, (matched.get(sub) ?? 0) + 1);
     candidates.push({

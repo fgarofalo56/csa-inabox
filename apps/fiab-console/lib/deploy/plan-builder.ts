@@ -28,7 +28,7 @@
  *                     offers manual coordinates. This is R7 expressed in data:
  *                     the plan physically cannot claim absence it did not
  *                     establish.
- *     not adoptable   `class:'create-only'` → create, LOCKED, with the reason.
+ *     not adoptable   `cls:'create-only'` → create, LOCKED, with the reason.
  */
 
 import {
@@ -43,8 +43,24 @@ import {
   type SubscriptionScanResult,
   coverageSummary,
   defaultNetworkDecision,
-  withPlanHash,
 } from './plan-model';
+
+/**
+ * Stamp the UNVERIFIED hash slot.
+ *
+ * The planner runs inside the wizard, i.e. in the browser, so it cannot compute
+ * the authoritative hash — `lib/deploy/plan-hash.ts` imports `node:crypto` and is
+ * server-only by design (a hash computed in the browser proves nothing about the
+ * plan the deploy received). The plan therefore leaves the planner with an EMPTY
+ * `planHash`, and `savePlan()` stamps the real sha256 on the way into Cosmos.
+ * `verifyPlanHash()` reports an unstamped plan as NOT verified rather than as
+ * trivially verified.
+ */
+function unstamped<T extends Omit<DeploymentPlan, 'planHash'> & { planHash?: string }>(
+  plan: T,
+): T & { planHash: string } {
+  return { ...plan, planHash: '' };
+}
 
 /**
  * One discovered candidate, as the wizard receives it from the scan.
@@ -76,7 +92,7 @@ export interface AdoptionCandidate {
 export interface AdoptableServiceView {
   key: string;
   label: string;
-  class: ServiceClass;
+  cls: ServiceClass;
   /** Mandatory when class === 'create-only'; rendered verbatim in the UI. */
   createOnlyReason?: string;
   singleton?: 'tenant' | 'region';
@@ -118,7 +134,7 @@ export interface RecommendationResult {
 export function recommendFor(row: ServiceScanRow, hubRegion: string): RecommendationResult {
   const { service, candidates } = row;
 
-  if (service.class === 'create-only') {
+  if (service.cls === 'create-only') {
     return {
       recommendation: 'create',
       reason: service.createOnlyReason ?? `Loom always deploys its own ${service.label}.`,
@@ -194,6 +210,9 @@ export interface BuildPlanArgs {
   boundary: PlanBoundary;
   topology: PlanTopology;
   installSubscriptionId: string;
+  /** The tenant the plan belongs to. Carried on the plan so `plan-store` can
+   *  partition by it and a plan can never be read across a tenant boundary. */
+  tenantId: string;
   region: string;
   scanScope: { subscriptions: string[]; managementGroups: string[] };
   ledger: SubscriptionScanResult[];
@@ -228,14 +247,14 @@ export function buildPlanFromDiscovery(args: BuildPlanArgs): DeploymentPlan {
       // Only a CREATE reached without seeing everything is uncertain. An adopt
       // decision names a resource we actually saw, so it asserts nothing about
       // what we could not read.
-      ...(mode === 'create' && incomplete && row.service.class !== 'create-only' ? { uncertain: true as const } : {}),
+      ...(mode === 'create' && incomplete && row.service.cls !== 'create-only' ? { uncertain: true as const } : {}),
       ...(cand ? { target: candidateToTarget(cand) } : {}),
       decidedBy: args.createdBy,
       decidedAt: at,
     };
   }
 
-  return withPlanHash({
+  return unstamped({
     planId: args.planId,
     schemaVersion: 1 as const,
     createdAt: at,
@@ -244,6 +263,7 @@ export function buildPlanFromDiscovery(args: BuildPlanArgs): DeploymentPlan {
     boundary: args.boundary,
     topology: args.topology,
     installSubscriptionId: args.installSubscriptionId,
+    tenantId: args.tenantId,
     region: args.region,
     scanScope: args.scanScope,
     scanResults: args.ledger,
@@ -282,7 +302,7 @@ export interface AllowedModes {
 
 export function allowedModes(row: ServiceScanRow, canSkip: boolean): AllowedModes {
   const { service, candidates } = row;
-  if (service.class === 'create-only') {
+  if (service.cls === 'create-only') {
     return {
       adopt: false,
       create: true,
@@ -290,7 +310,7 @@ export function allowedModes(row: ServiceScanRow, canSkip: boolean): AllowedMode
       adoptDisabledReason: service.createOnlyReason ?? `Loom always deploys its own ${service.label}.`,
     };
   }
-  if (service.class === 'adopt-required' || (service.singleton && candidates.length >= 1)) {
+  if (service.cls === 'adopt-required' || (service.singleton && candidates.length >= 1)) {
     return {
       adopt: true,
       create: false,
@@ -335,7 +355,7 @@ export function applyDecision(
     decidedBy: by,
     decidedAt: now(),
   };
-  return withPlanHash({
+  return unstamped({
     ...plan,
     services: { ...plan.services, [serviceKey]: decision },
   });
@@ -355,7 +375,7 @@ export function applyFitness(
 ): DeploymentPlan {
   const prev = plan.services[serviceKey];
   if (!prev || prev.mode !== 'adopt') return plan;
-  return withPlanHash({
+  return unstamped({
     ...plan,
     services: { ...plan.services, [serviceKey]: { ...prev, fitness } },
   });
@@ -363,7 +383,7 @@ export function applyFitness(
 
 /** Produce the successor of an edited plan (invariant 4: plans are immutable). */
 export function supersede(plan: DeploymentPlan, newPlanId: string, by: string, now: () => string = () => new Date().toISOString()): DeploymentPlan {
-  return withPlanHash({
+  return unstamped({
     ...plan,
     planId: newPlanId,
     supersedes: plan.planId,
@@ -379,7 +399,7 @@ export function supersede(plan: DeploymentPlan, newPlanId: string, by: string, n
  * MUST NOT say "no X exists" for the uncertain case.
  */
 export function noCandidateSentence(row: ServiceScanRow, decision: ServiceDecision, ledger: SubscriptionScanResult[]): string {
-  if (row.service.class === 'create-only') {
+  if (row.service.cls === 'create-only') {
     return row.service.createOnlyReason ?? `Loom always deploys its own ${row.service.label}.`;
   }
   if (row.candidates.length > 0) return '';

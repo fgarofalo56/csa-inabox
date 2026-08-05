@@ -123,31 +123,41 @@ discover() {
 
 # ---------------------------------------------------------------------------
 # Service table. Columns (|-separated):
-#   key | label | arm-type | graph-filter | name-param | rg-param | sub-param
+#   key | label | arm-type | graph-filter | (unused) | (unused) | (unused)
 #       | env-name | env-rg | env-sub | enabled-flag
+# The three (unused) columns held the main.bicep `existing<Svc>{Name,Rg,Sub}`
+# param names. main.bicep no longer declares them — it declares ONE `adopt`
+# object bag keyed by the `key` column (ARM's 256-parameter cap), so the emitter
+# builds an adopt entry from `key` instead. The columns are kept EMPTY rather
+# than removed because this table is parsed positionally.
 # The env-name/env-rg/env-sub are the CANONICAL EXISTING_* vars — they match the
 # bicepparam readEnvironmentVariable() names AND discover-services.sh /
 # patch-navigator-env.sh, so all consumers agree (fixes the §1.4 var-name drift).
 # enabled-flag is '' for DLZ-provisioned services (no provisioning toggle).
 # ---------------------------------------------------------------------------
 SERVICES=(
-  "aisearch|AI Search|Microsoft.Search/searchServices||existingAiSearchService|existingAiSearchRg|existingAiSearchSub|EXISTING_AI_SEARCH_SERVICE|EXISTING_AI_SEARCH_RG|EXISTING_AI_SEARCH_SUB|aiSearchEnabled"
-  "apim|API Management|Microsoft.ApiManagement/service||existingApimName|existingApimRg|existingApimSub|EXISTING_APIM|EXISTING_APIM_RG|EXISTING_APIM_SUB|apimEnabled"
-  "maps|Azure Maps|Microsoft.Maps/accounts||loomAzureMapsAccount|||EXISTING_AZURE_MAPS_ACCOUNT|EXISTING_AZURE_MAPS_RG|EXISTING_AZURE_MAPS_SUB|loomMapsEnabled"
-  "adx|ADX / Kusto|Microsoft.Kusto/clusters||existingAdxClusterName|existingAdxClusterRg|existingAdxClusterSub|EXISTING_KUSTO_CLUSTER|EXISTING_KUSTO_RG|EXISTING_KUSTO_SUB|adxEnabled"
-  "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'|existingFoundryAccountName|existingFoundryRg|existingFoundrySub|EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|agentFoundryEnabled"
-  "purview|Microsoft Purview|Microsoft.Purview/accounts||existingPurviewAccount|existingPurviewRg|existingPurviewSub|EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled"
-  "synapse|Synapse|Microsoft.Synapse/workspaces||existingSynapseWorkspace|existingSynapseRg|existingSynapseSub|EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB|"
-  "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts||existingCosmosAccount|existingCosmosRg|existingCosmosSub|EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB|"
-  "adf|Data Factory|Microsoft.DataFactory/factories||existingAdfFactory|existingAdfRg|existingAdfSub|EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB|"
-  "eventhubs|Event Hubs|Microsoft.EventHub/namespaces||existingEventHubNamespace|existingEventHubRg|existingEventHubSub|EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB|loomEventHubEnabled"
-  "streamanalytics|Stream Analytics|Microsoft.StreamAnalytics/streamingjobs||existingAsaJob|existingAsaRg|existingAsaSub|EXISTING_ASA_JOB|EXISTING_ASA_RG|EXISTING_ASA_SUB|loomStreamAnalyticsEnabled"
-  "databricks|Databricks|Microsoft.Databricks/workspaces||existingDatabricksWorkspace|existingDatabricksRg|existingDatabricksSub|EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB|"
+  "aisearch|AI Search|Microsoft.Search/searchServices|||||EXISTING_AI_SEARCH_SERVICE|EXISTING_AI_SEARCH_RG|EXISTING_AI_SEARCH_SUB|aiSearchEnabled"
+  "apim|API Management|Microsoft.ApiManagement/service|||||EXISTING_APIM|EXISTING_APIM_RG|EXISTING_APIM_SUB|apimEnabled"
+  "maps|Azure Maps|Microsoft.Maps/accounts|||||EXISTING_AZURE_MAPS_ACCOUNT|EXISTING_AZURE_MAPS_RG|EXISTING_AZURE_MAPS_SUB|loomMapsEnabled"
+  "adx|ADX / Kusto|Microsoft.Kusto/clusters|||||EXISTING_KUSTO_CLUSTER|EXISTING_KUSTO_RG|EXISTING_KUSTO_SUB|adxEnabled"
+  "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'||||EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|agentFoundryEnabled"
+  "purview|Microsoft Purview|Microsoft.Purview/accounts|||||EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled"
+  "synapse|Synapse|Microsoft.Synapse/workspaces|||||EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB|"
+  "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts|||||EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB|"
+  "adf|Data Factory|Microsoft.DataFactory/factories|||||EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB|"
+  "eventhubs|Event Hubs|Microsoft.EventHub/namespaces|||||EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB|loomEventHubEnabled"
+  "streamanalytics|Stream Analytics|Microsoft.StreamAnalytics/streamingjobs|||||EXISTING_ASA_JOB|EXISTING_ASA_RG|EXISTING_ASA_SUB|loomStreamAnalyticsEnabled"
+  "databricks|Databricks|Microsoft.Databricks/workspaces|||||EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB|"
 )
 
 # Accumulators
 declare -A NAME RG SUB HOST
 declare -a BLOCK_LINES ENV_LINES SUMMARY
+# `set -u` + `${#arr[@]}` on a DECLARED-BUT-EMPTY array is fatal in bash, which
+# is how the first cut of this emitted a params file with no `param adopt` line
+# at all. Initialise to a real empty array and count separately.
+declare -a ADOPT_ENTRIES=()
+ADOPT_COUNT=0
 # AOAI/Foundry reused-account deployment names (resolved in the loop below).
 FOUNDRY_CHAT=""; FOUNDRY_EMBED=""; FOUNDRY_CHOICE="new"
 
@@ -247,12 +257,33 @@ for row in "${SERVICES[@]}"; do
   # true; gate → false so a fresh deploy honestly skips AOAI).
   [[ "$key" == "foundry" ]] && FOUNDRY_CHOICE="$choice"
 
-  # Build the literal bicepparam lines for this service. Some services bind only
-  # a NAME param (e.g. Azure Maps → loomAzureMapsAccount; no rg/sub param exists
-  # in main.bicep) — skip empty param names so we never emit an undeclared param.
-  [[ -n "$nameP" ]] && BLOCK_LINES+=("param $nameP = '${n}'")
-  [[ -n "$rgP"   ]] && BLOCK_LINES+=("param $rgP = '${r}'")
-  [[ -n "$subP"  ]] && BLOCK_LINES+=("param $subP = '${s}'")
+  # Build the literal bicepparam lines for this service.
+  #
+  # main.bicep NO LONGER DECLARES the 36 `existing*` scalars — it declares ONE
+  # `adopt` object bag (ARM caps a template at 256 params and main.bicep was at
+  # 251/256, so a name/rg/sub triple could not be added for even one more
+  # service). Emitting `param existingPurviewAccount = '…'` against the current
+  # template is a hard BCP259: "assigned in the params file without being
+  # declared in the Bicep file" — it does not deploy, it does not compile.
+  #
+  # So an ADOPT decision contributes one entry to the adopt bag, keyed by the
+  # SAME service key as apps/fiab-console/lib/deploy/adoption-catalog.ts. A
+  # `new` or `gate` choice contributes NOTHING: `adoptMode()` defaults an absent
+  # key to 'create', so a pure-greenfield run must not emit an empty entry — an
+  # empty `param adopt = {}` is harmless but an empty per-service scalar was the
+  # thing that broke greenfield.
+  if [[ -n "$n" ]]; then
+    entry="  ${key}: { mode: 'adopt', target: { name: '${n}', rg: '${r}', sub: '${s}' }"
+    if [[ "$key" == "databricks" && -n "${HOST[$key]:-}" ]]; then
+      entry+=", extra: { hostname: '${HOST[$key]}' }"
+    fi
+    if [[ "$key" == "foundry" ]]; then
+      entry+=", extra: { chatDeployment: '${FOUNDRY_CHAT}', embedDeployment: '${FOUNDRY_EMBED}' }"
+    fi
+    entry+=" }"
+    ADOPT_ENTRIES+=("$entry")
+    ADOPT_COUNT=$((ADOPT_COUNT + 1))
+  fi
 
   # Build the env-file lines (canonical EXISTING_* triples — names match the
   # bicepparam readEnvironmentVariable + the post-deploy scripts).
@@ -270,15 +301,16 @@ for row in "${SERVICES[@]}"; do
   echo
 done
 
-# Databricks hostname (separate param + env, resolved above).
+# Databricks hostname (resolved above) travels inside the adopt bag's `extra`,
+# not as its own param — `existingDatabricksHostname` no longer exists in
+# main.bicep. The env line stays: the boundary bicepparams still fold
+# EXISTING_DATABRICKS_HOSTNAME into the plan for an env-file-only workflow.
 DBX_HOST="${HOST[databricks]:-}"
-BLOCK_LINES+=("param existingDatabricksHostname = '${DBX_HOST}'")
 ENV_LINES+=("export EXISTING_DATABRICKS_HOSTNAME='${DBX_HOST}'")
 
 # AOAI/Foundry reused-account deployment names (empty when provisioning new —
 # the dedicated agentFoundry account then deploys gpt-4o + embeddings itself).
-BLOCK_LINES+=("param existingFoundryChatDeployment = '${FOUNDRY_CHAT}'")
-BLOCK_LINES+=("param existingFoundryEmbedDeployment = '${FOUNDRY_EMBED}'")
+# Same story: they ride in the adopt bag's `extra`, not as standalone params.
 ENV_LINES+=("export EXISTING_AOAI_CHAT_DEPLOYMENT='${FOUNDRY_CHAT}'")
 ENV_LINES+=("export EXISTING_AOAI_EMBED_DEPLOYMENT='${FOUNDRY_EMBED}'")
 # AOAI/Foundry is ON BY DEFAULT (agentFoundryEnabled defaults true in main.bicep
@@ -303,8 +335,38 @@ ENV_LINES+=("export FABRIC_ENABLED='${FABRIC_VAL}'")
 # Emit the generated bicepparam: copy the template, replacing the marked block.
 # ---------------------------------------------------------------------------
 BLOCK_FILE="$(mktemp)"
+# The template's own adopt block (the `var legacyAdoptFromEnv = union(...)`
+# declaration through the line BEFORE `param adopt =`) is carried through
+# VERBATIM: the wizard must not drop the EXISTING_* env fallback just because it
+# is regenerating the marked region. Only the final `param adopt =` assignment
+# is rewritten, so the operator's literal picks compose OVER the env reads.
+ADOPT_VAR_BLOCK="$(awk '/^var legacyAdoptFromEnv = union\(/{p=1} p{print} /^\)$/{if(p) exit}' "$TEMPLATE")"
 {
   echo "// >>> BYO-WIZARD START (generated by scripts/csa-loom/byo-wizard.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+  if [[ -n "$ADOPT_VAR_BLOCK" ]]; then
+    echo "$ADOPT_VAR_BLOCK"
+  else
+    echo "var legacyAdoptFromEnv = {}"
+  fi
+  # The adopt bag. `main.bicep` no longer declares the 36 `existing*` scalars —
+  # it declares ONE `adopt` object (ARM caps a template at 256 params and
+  # main.bicep was at 251/256). Emitting `param existingPurviewAccount = '…'`
+  # against the current template is a hard BCP259 ("assigned in the params file
+  # without being declared in the Bicep file"): it does not compile, so it does
+  # not deploy.
+  #
+  # A pure-greenfield run (every answer 'new' or 'gate') contributes NO entries
+  # and this collapses to exactly the template's own default — `adoptMode()`
+  # resolves every absent key to 'create'. That is deliberate: the previous
+  # generator appended `param existingDatabricksHostname = ''` unconditionally,
+  # which broke a greenfield deploy that had adopted nothing at all.
+  if [[ "$ADOPT_COUNT" -gt 0 ]]; then
+    echo "param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')), {"
+    for e in ${ADOPT_ENTRIES[@]+"${ADOPT_ENTRIES[@]}"}; do echo "$e"; done
+    echo "})"
+  else
+    echo "param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')))"
+  fi
   for l in "${BLOCK_LINES[@]}"; do echo "$l"; done
   echo "// <<< BYO-WIZARD END"
 } > "$BLOCK_FILE"

@@ -47,6 +47,7 @@ export const PATHS = {
   adminPlane: 'platform/fiab/bicep/modules/admin-plane/main.bicep',
   attachKinds: 'apps/fiab-console/lib/azure/attached-service-kinds.ts',
   commercialParams: 'platform/fiab/bicep/params/commercial-full.bicepparam',
+  discoveryModel: 'apps/fiab-console/lib/deploy/discovery-model.ts',
 };
 
 /**
@@ -98,6 +99,13 @@ export function parseCatalog(source) {
       provisionVar: str('provisionVar'),
       provisionSink: str('provisionSink'),
       createOnlyReason: /^ {4}createOnlyReason:/m.test(chunk),
+      // The reason TEXT, for the substance check. It is usually a wrapped
+      // multi-line string literal, so read to the closing quote, not to EOL.
+      // Both quote styles: a reason containing an apostrophe is written "…".
+      createOnlyReasonText: (() => {
+        const r = /^ {4}createOnlyReason:\s*(['"])((?:(?!\1)[^\\]|\\.)*)\1/m.exec(chunk);
+        return r ? r[2] : '';
+      })(),
       attachKind: roleFromSpread ? roleFromSpread[1] : undefined,
       roleGuidLiteral: roleGuidLiteral ? roleGuidLiteral[1] : undefined,
       consoleEnv: strList('consoleEnv'),
@@ -141,7 +149,62 @@ export function runChecks(files) {
     );
   }
 
+  // C2 — uniqueness. A duplicated key silently shadows an entry in BY_KEY; a
+  // duplicated provisionVar means two services share one suppression gate, so
+  // adopting one would suppress the other.
+  for (const [label, values] of [
+    ['service key', catalog.map((d) => d.key)],
+    ['provisionVar', catalog.map((d) => d.provisionVar).filter(Boolean)],
+  ]) {
+    const seen = new Set();
+    for (const v of values) {
+      if (seen.has(v)) problems.push(`duplicate ${label}: '${v}'`);
+      seen.add(v);
+    }
+  }
+
+  // C3 — ARM types are lower-case. They are emitted into the ARG
+  // `type in~ (...)` literal verbatim, and a mixed-case entry silently matches
+  // nothing rather than erroring.
+  for (const d of catalog) {
+    if (d.armType && d.armType !== d.armType.toLowerCase()) {
+      problems.push(
+        `${d.key}: armType '${d.armType}' must be lower-case (it is emitted into the ARG literal verbatim).`,
+      );
+    }
+  }
+
+  // C5 — the scanner query is GENERATED from this catalog, not a second
+  // hand-kept list. A hand-maintained second list is how 'maps', 'postgres' and
+  // 'storage' ended up offered by the wizard and absent from the deploy.
+  if (!/const types = adoptionArmTypes\(\)/.test(files.discoveryModel)) {
+    problems.push(
+      `${PATHS.discoveryModel}: buildInventoryQuery no longer builds its type literal from ` +
+        `adoptionArmTypes(). A second hand-kept type list is how the wizard and the deploy drifted apart.`,
+    );
+  }
+  for (const d of catalog) {
+    if (d.armType && files.discoveryModel.includes(`'${d.armType}'`)) {
+      problems.push(
+        `${PATHS.discoveryModel} hard-codes the ARM type '${d.armType}' — it must come from the catalog.`,
+      );
+    }
+  }
+
   for (const def of catalog) {
+    // C4 — a locked row's reason must be SUBSTANTIVE. "you can't" with no
+    // "because" is indistinguishable from "we didn't build it".
+    if (
+      ['create-only', 'attach-in-place', 'reference-only'].includes(def.cls) &&
+      def.createOnlyReason &&
+      def.createOnlyReasonText.length < 80
+    ) {
+      problems.push(
+        `${def.key}: createOnlyReason is ${def.createOnlyReasonText.length} chars — a locked row needs a ` +
+          `substantive reason, not a label. The operator is being told they may not do something.`,
+      );
+    }
+
     // A8 — a locked row must always carry its reason.
     if (['create-only', 'attach-in-place', 'reference-only'].includes(def.cls) && !def.createOnlyReason) {
       problems.push(
@@ -281,6 +344,7 @@ export function loadFiles() {
     adminPlane: read(PATHS.adminPlane),
     attachKinds: read(PATHS.attachKinds),
     commercialParams: read(PATHS.commercialParams),
+    discoveryModel: read(PATHS.discoveryModel),
   };
 }
 

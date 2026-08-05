@@ -190,6 +190,12 @@ function role(kind: AttachedServiceKind): { roleGuid: string; roleName: string; 
 }
 
 const LOG_ANALYTICS_CONTRIBUTOR = '92aaf0da-9dab-42b6-94a3-d43ce8d16293';
+// Network roles. These four services are attach-in-place / create-only, so they
+// are never granted through the day-2 attach catalog (which has no network
+// kinds) — the GUIDs are literal and match scripts/csa-loom/grant-navigator-rbac.sh.
+const CONTRIBUTOR = 'b24988ac-6180-42a0-ab88-20f7382dd24c';
+const NETWORK_CONTRIBUTOR = '4d97b98b-1d4f-4787-a291-c67834d212e7';
+const PRIVATE_DNS_ZONE_CONTRIBUTOR = 'b12aa53e-6015-4669-85d0-8515ebb3ae7f';
 
 export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
   {
@@ -640,6 +646,78 @@ export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
     mutations: [],
     fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
   },
+  // ---- network -------------------------------------------------------------
+  // Carried over from the wizard planner catalog (#3009). These four are NOT
+  // adoptable through the `adopt` bag today — the hub network is attached by the
+  // landing-zone path, not suppressed by a provision var — but they MUST stay in
+  // the catalog: `adoptionArmTypes()` generates the Resource Graph query from it,
+  // so dropping them makes the scan blind to the customer's existing hub and the
+  // wizard silently reports a clean greenfield estate over a populated one.
+  {
+    key: 'vnet',
+    label: 'Virtual Network',
+    armType: 'microsoft.network/virtualnetworks',
+    tileSlug: 'network',
+    family: 'network',
+    cls: 'attach-in-place',
+    createOnlyReason:
+      'The hub VNet is attached in place by the landing-zone path rather than suppressed by an adopt decision: Loom carves its subnets out of free address space in a VNet you already own and never renumbers an existing subnet. Choosing "adopt" here would imply a suppression that does not exist, so the row is locked and the VNet is supplied through the landing-zone parameters instead.',
+    roleGuid: NETWORK_CONTRIBUTOR,
+    roleName: 'Network Contributor',
+    consoleEnv: ['LOOM_HUB_VNET_NAME'],
+    usedFor: 'The hub VNet that hosts the Container Apps subnet, private endpoints and the firewall.',
+    mutations: [
+      'creates the subnets Loom needs from free address space (it never renumbers an existing subnet)',
+      'delegates the Container Apps subnet to Microsoft.App/environments',
+    ],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
+  },
+  {
+    key: 'privatednszone',
+    label: 'Private DNS zone',
+    armType: 'microsoft.network/privatednszones',
+    tileSlug: 'network',
+    family: 'network',
+    cls: 'attach-in-place',
+    createOnlyReason:
+      'A privatelink zone is attached in place, not adopted-or-created: Loom adds its own A records and links the zone to the hub VNet. There is no provision var to suppress, and an EMPTY privatelink zone that already exists shadows public resolution for that namespace — so the zone must be linked rather than duplicated. It is supplied through the landing-zone parameters.',
+    roleGuid: PRIVATE_DNS_ZONE_CONTRIBUTOR,
+    roleName: 'Private DNS Zone Contributor',
+    consoleEnv: [],
+    usedFor: 'Name resolution for every privatelink.* endpoint Loom creates.',
+    mutations: ['adds A records for Loom’s private endpoints', 'links the zone to the hub VNet'],
+    fitness: { regionPolicy: 'any', familyChecks: [] },
+  },
+  {
+    key: 'azurefirewall',
+    label: 'Azure Firewall (instance)',
+    armType: 'microsoft.network/azurefirewalls',
+    tileSlug: 'network',
+    family: 'network',
+    cls: 'create-only',
+    createOnlyReason:
+      'Rule-collection-group priority bands collide destructively and there is no safe merge — Loom cannot know which of your existing collections it may renumber, and renumbering a production egress firewall is not a recoverable mistake. Loom adopts the firewall POLICY by id and deploys its own firewall instance against it.',
+    consoleEnv: [],
+    usedFor: 'Egress hardening for the admin plane.',
+    mutations: [],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
+  },
+  {
+    key: 'firewallpolicy',
+    label: 'Azure Firewall policy',
+    armType: 'microsoft.network/firewallpolicies',
+    tileSlug: 'network',
+    family: 'network',
+    cls: 'attach-in-place',
+    createOnlyReason:
+      'The firewall policy is attached in place: Loom adds one uniquely-named rule-collection group in a reserved priority band to a policy you already own, rather than creating a second policy that would then have to be swapped in. There is no provision var to suppress — the policy id is supplied through the landing-zone parameters.',
+    roleGuid: CONTRIBUTOR,
+    roleName: 'Contributor',
+    consoleEnv: [],
+    usedFor: 'Egress rules for the admin plane.',
+    mutations: ['adds one uniquely-named rule-collection group in a reserved priority band'],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
+  },
 ];
 
 const BY_KEY = new Map(ADOPTION_CATALOG.map((d) => [d.key, d]));
@@ -652,6 +730,22 @@ export function getServiceDef(key: string): AdoptableServiceDef | undefined {
 /** Every key in the catalog, in catalog order. */
 export function allServiceKeys(): string[] {
   return ADOPTION_CATALOG.map((d) => d.key);
+}
+
+/** The display label for a key, falling back to the raw key for an unknown one. */
+export function serviceLabel(key: string): string {
+  return BY_KEY.get(key)?.label ?? key;
+}
+
+/**
+ * The services the wizard offers a DECISION for. Wider than `adoptableServices()`
+ * on purpose: `create-only` and `attach-in-place` rows render LOCKED with their
+ * `createOnlyReason` rather than being hidden, because an operator who owns an
+ * ACR needs to be told Loom will not adopt it — silence reads as an oversight.
+ * `reference-only` is excluded: there is no decision to make when Loom only reads.
+ */
+export function decidableServices(): AdoptableServiceDef[] {
+  return ADOPTION_CATALOG.filter((d) => d.cls !== 'reference-only');
 }
 
 /** The services whose adopt/create decision the bicep `adopt` bag actually honours. */

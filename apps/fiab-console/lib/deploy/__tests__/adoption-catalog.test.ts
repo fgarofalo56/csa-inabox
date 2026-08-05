@@ -14,7 +14,7 @@ import path from 'node:path';
 import {
   ADOPTION_CATALOG,
   adoptionArmTypes,
-  armRowToServiceKey,
+  armTypeToServiceKey,
   adoptableServices,
   getServiceDef,
   serviceLabel,
@@ -103,23 +103,23 @@ describe('adoption-catalog', () => {
     expect([...types].sort()).toEqual(types);
   });
 
-  describe('armRowToServiceKey — kind disambiguation', () => {
+  describe('armTypeToServiceKey — kind disambiguation', () => {
     it('maps an AIServices Cognitive account to foundry', () => {
-      expect(armRowToServiceKey('microsoft.cognitiveservices/accounts', 'AIServices')).toBe('foundry');
+      expect(armTypeToServiceKey('microsoft.cognitiveservices/accounts', 'AIServices')).toBe('foundry');
     });
 
     it('does NOT mis-file a Speech account as foundry', () => {
       // Same ARM type, different kind. The old code paths that filtered in
       // memory on a regex over the whole row would have claimed this one.
-      expect(armRowToServiceKey('microsoft.cognitiveservices/accounts', 'SpeechServices')).toBeNull();
+      expect(armTypeToServiceKey('microsoft.cognitiveservices/accounts', 'SpeechServices')).toBeNull();
     });
 
     it('is case-insensitive on the ARM type', () => {
-      expect(armRowToServiceKey('Microsoft.Purview/Accounts')).toBe('purview');
+      expect(armTypeToServiceKey('Microsoft.Purview/Accounts')).toBe('purview');
     });
 
     it('returns null for an ARM type the catalog does not cover', () => {
-      expect(armRowToServiceKey('microsoft.web/sites')).toBeNull();
+      expect(armTypeToServiceKey('microsoft.web/sites')).toBeNull();
     });
   });
 

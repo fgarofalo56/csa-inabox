@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { buildEstateQuery, derivePosture } from '@/lib/setup/estate-scan';
-import { adoptionArmTypes, armRowToServiceKey, ADOPTION_CATALOG } from '@/lib/deploy/adoption-catalog';
+import { adoptionArmTypes, armTypeToServiceKey, ADOPTION_CATALOG } from '@/lib/deploy/adoption-catalog';
 
 describe('buildEstateQuery', () => {
   const q = buildEstateQuery();
@@ -57,13 +57,13 @@ describe('derivePosture', () => {
 
 describe('adoption catalog', () => {
   it('splits Cognitive Services accounts by ARM kind so Maps is never filed as Foundry', () => {
-    expect(armRowToServiceKey('microsoft.cognitiveservices/accounts', 'AIServices')).toBe('foundry');
-    expect(armRowToServiceKey('microsoft.cognitiveservices/accounts', 'SpeechServices')).toBeNull();
-    expect(armRowToServiceKey('microsoft.maps/accounts')).toBe('maps');
+    expect(armTypeToServiceKey('microsoft.cognitiveservices/accounts', 'AIServices')).toBe('foundry');
+    expect(armTypeToServiceKey('microsoft.cognitiveservices/accounts', 'SpeechServices')).toBeNull();
+    expect(armTypeToServiceKey('microsoft.maps/accounts')).toBe('maps');
   });
 
   it('returns null for a type Loom does not adopt', () => {
-    expect(armRowToServiceKey('microsoft.compute/virtualmachines')).toBeNull();
+    expect(armTypeToServiceKey('microsoft.compute/virtualmachines')).toBeNull();
   });
 
   it('requires a reason on every create-only entry — the UI renders it verbatim', () => {

@@ -135,6 +135,10 @@ export function useAdoptionPlanner(): AdoptionPlanner {
           return;
         }
 
+        // The tenant id is the SERVER's answer (from the session), never a
+        // client-side guess. An absent one is carried through as empty and
+        // `plan-store` refuses the plan rather than partitioning it wrongly.
+        const tenantId: string = typeof j.tenantId === 'string' ? j.tenantId : '';
         const nextLedger: SubscriptionScanResult[] = j.ledger ?? [];
         const nextRows: ServiceScanRow[] = j.rows ?? [];
         setLedger(nextLedger);
@@ -146,6 +150,7 @@ export function useAdoptionPlanner(): AdoptionPlanner {
             boundary: args.boundary,
             topology: args.topology,
             installSubscriptionId: args.installSubscriptionId,
+            tenantId,
             region: args.region,
             scanScope: { subscriptions: scope, managementGroups: [] },
             ledger: nextLedger,

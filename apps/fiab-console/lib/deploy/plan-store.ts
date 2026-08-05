@@ -19,10 +19,10 @@ import {
 import type { SessionPayload } from '@/lib/auth/session';
 import { tenantScopeId } from '@/lib/auth/session';
 import {
-  computePlanHash,
   validatePlan,
   type DeploymentPlan,
 } from './plan-model';
+import { computePlanHash, withPlanHash } from './plan-hash';
 
 /** The stored document: the plan plus the tenant partition and a status. */
 export interface StoredDeploymentPlan extends DeploymentPlan {
@@ -73,8 +73,13 @@ export async function writePlanIfAbsent(
   plan: DeploymentPlan,
   status: StoredDeploymentPlan['status'] = 'draft',
 ): Promise<StoredDeploymentPlan> {
-  assertPlanHashIntact(plan);
-  const issues = validatePlan(plan);
+  // A plan authored in the wizard arrives UNSTAMPED (`planHash: ''`) because the
+  // planner runs in the browser and cannot compute the authoritative hash. This
+  // is where it is stamped. A plan that DOES carry a hash has crossed a trust
+  // boundary claiming integrity, and that claim is checked rather than trusted.
+  const stamped = plan.planHash ? plan : withPlanHash(plan);
+  assertPlanHashIntact(stamped);
+  const issues = validatePlan(stamped);
   if (issues.length > 0) {
     throw new PlanIntegrityError(
       'The deployment plan is not internally consistent and was not stored.',
@@ -88,8 +93,8 @@ export async function writePlanIfAbsent(
   if (existing) return existing;
 
   const doc: StoredDeploymentPlan = {
-    ...plan,
-    id: plan.planId,
+    ...stamped,
+    id: stamped.planId,
     tenantId,
     status,
   };

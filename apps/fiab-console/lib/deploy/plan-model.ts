@@ -22,7 +22,6 @@
  * estate is SUPPOSED to be, and drift is the diff against it.
  */
 
-import { createHash } from 'node:crypto';
 
 import { canAdopt, canCreate, getServiceDef } from './adoption-catalog';
 import type { FitnessResult } from './fitness';
@@ -52,6 +51,13 @@ export interface SubscriptionScanResult {
   matchedResources: number;
   /** A $skipToken remained when the paging budget expired. */
   truncated: boolean;
+  /**
+   * Present when the status is no-access / timed-out / partial — WHAT actually
+   * happened, in the words of the thing that failed. Without it the ledger can
+   * only say "could not read", which is the state that let a silently-dropped
+   * scope look like an empty one.
+   */
+  detail?: string;
 }
 
 /** The role the deploy will create for the Console identity on an adopted resource. */
@@ -77,6 +83,8 @@ export interface ServiceDecision {
     name: string;
     rg: string;
     sub: string;
+    /** Full ARM id when known. NEVER rendered in full in UI or logs. */
+    id?: string;
     location?: string;
     sku?: string;
   };
@@ -162,21 +170,6 @@ export function canonicalize(value: unknown): unknown {
     return out;
   }
   return value;
-}
-
-/**
- * sha256 over the canonicalised plan with `planHash` removed.
- *
- * SERVER-SIDE. This module imports node:crypto at the top level, so the wizard
- * must not import it into a client bundle — it hashes and validates through a
- * BFF route. That is deliberate: the hash is the integrity boundary for a plan
- * that crosses from the browser into a deployment, and a hash computed in the
- * browser would prove nothing about the plan the deploy received.
- */
-export function computePlanHash(plan: Omit<DeploymentPlan, 'planHash'> & { planHash?: string }): string {
-  const { planHash: _ignored, ...rest } = plan as DeploymentPlan;
-  const json = JSON.stringify(canonicalize(rest));
-  return createHash('sha256').update(json, 'utf8').digest('hex');
 }
 
 export interface PlanValidationIssue {
@@ -286,68 +279,190 @@ export function isPlanSubmittable(plan: DeploymentPlan): boolean {
   return validatePlan(plan).length === 0;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Wizard-facing aliases and types (reconciled from the planner branch)
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Produce the next immutable revision of a plan. The caller supplies the changed
- * fields; the result carries a fresh id, a fresh hash and a `supersedes` link.
+ * Canonical names. The two adopt-or-create branches named the same three unions
+ * differently — `ServiceMode`/`AdoptionMode`, `PlanBoundary`/`DeploymentBoundary`,
+ * `PlanTopology`/`DeploymentTopology`. The `Deployment*` / `AdoptionMode` set is
+ * canonical because `AdoptionMode` is the same literal union the bicep `adopt`
+ * bag consumes from `adoption-catalog.ts`; these three are declared aliases so
+ * one name change cannot make the two halves disagree again.
  */
-export function supersede(
-  prev: DeploymentPlan,
-  changes: Partial<Omit<DeploymentPlan, 'planId' | 'planHash' | 'supersedes' | 'schemaVersion'>>,
-  planId: string,
-  createdBy: string,
-  now: string,
-): DeploymentPlan {
-  const next: Omit<DeploymentPlan, 'planHash'> = {
-    ...prev,
-    ...changes,
-    planId,
-    schemaVersion: 1,
-    supersedes: prev.planId,
-    createdBy,
-    createdAt: now,
-  };
-  return { ...next, planHash: computePlanHash(next) };
+export type ServiceMode = AdoptionMode;
+export type PlanBoundary = DeploymentBoundary;
+export type PlanTopology = DeploymentTopology;
+
+/** Where a decision came from. Rendered on the review step so nothing is silent. */
+export type DecisionSource = ServiceDecision['source'];
+
+/** Re-exported so the wizard does not import the catalog for one union. */
+export type { AdoptionClass as ServiceClass } from './adoption-catalog';
+
+/** Why a subscription's scan ended the way it did. */
+export type ScanStatus = SubscriptionScanResult['status'];
+
+/** Coordinates of an existing resource, discovered or typed by the operator. */
+export type ServiceTarget = NonNullable<ServiceDecision['target']>;
+
+/** Hub subnet roles Loom needs when it adopts a customer VNet. */
+export type HubSubnetRole =
+  | 'container-apps'
+  | 'private-endpoints'
+  | 'firewall'
+  | 'bastion'
+  | 'gateway';
+
+/** A fresh, all-create network decision — the greenfield shape. Alias of `emptyNetworkDecision`. */
+export function defaultNetworkDecision(): NetworkDecision {
+  return emptyNetworkDecision();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure derivations — isomorphic, safe in a client bundle
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * TRUE when nothing in this plan adopts an existing resource.
+ *
+ * Derived, never stored. Note `skip` does NOT make a plan non-greenfield:
+ * choosing not to deploy Azure Maps into an empty subscription is still a
+ * greenfield install.
+ */
+export function isGreenfieldPlan(plan: Pick<DeploymentPlan, 'services' | 'network'>): boolean {
+  for (const d of Object.values(plan.services)) {
+    if (d.mode === 'adopt') return false;
+  }
+  const n = plan.network;
+  if (n.hub.mode === 'adopt') return false;
+  if (n.privateDns.mode !== 'create') return false;
+  if (n.firewall.mode === 'adopt-policy') return false;
+  if (n.logAnalytics.mode === 'adopt') return false;
+  for (const s of Object.values(n.spokes)) if (s.mode === 'adopt') return false;
+  return true;
+}
+
+/** Human label for the path this plan represents. */
+export function planPathLabel(
+  plan: Pick<DeploymentPlan, 'services' | 'network'>,
+): 'greenfield' | 'brownfield' {
+  return isGreenfieldPlan(plan) ? 'greenfield' : 'brownfield';
+}
+
+export interface CoverageSummary {
+  requested: number;
+  scanned: number;
+  noAccess: number;
+  partial: number;
+  timedOut: number;
+  truncated: number;
+  /**
+   * true when ANY subscription was not fully read — every "none found" in this
+   * plan must then be qualified rather than asserted.
+   */
+  incomplete: boolean;
 }
 
 /**
- * A greenfield plan: every catalog service set to `create`, no scan hits.
+ * Coverage, counted from the ledger (i.e. from what was REQUESTED).
  *
- * Greenfield is the DEGENERATE CASE of brownfield, not a separate code path.
- * There is one deploy pipeline; greenfield is the plan where every adoptable
- * entry is 'create'. Two pipelines is how the estate ended up with a
- * brownfield-only failure (`allow_existing_hub`) that greenfield CI never saw.
+ * A caller must never compute coverage by counting distinct subscriptions in a
+ * result set — that is the `subsSeen.size` bug this function replaces, which
+ * told an operator with 12 subscriptions and hits in 2 that "2 were scanned".
  */
-export function greenfieldPlan(opts: {
-  planId: string;
-  createdBy: string;
-  now: string;
-  boundary: DeploymentBoundary;
-  topology: DeploymentTopology;
-  installSubscriptionId: string;
-  region: string;
-  tenantId: string;
-  scanScope?: { subscriptions: string[]; managementGroups: string[] };
-  scanResults?: SubscriptionScanResult[];
-  featureFlags?: Record<string, boolean>;
-}): DeploymentPlan {
-  const services: Record<string, ServiceDecision> = {};
-  const base: Omit<DeploymentPlan, 'planHash'> = {
-    planId: opts.planId,
-    schemaVersion: 1,
-    createdAt: opts.now,
-    createdBy: opts.createdBy,
-    boundary: opts.boundary,
-    topology: opts.topology,
-    installSubscriptionId: opts.installSubscriptionId,
-    region: opts.region,
-    tenantId: opts.tenantId,
-    scanScope: opts.scanScope ?? { subscriptions: [], managementGroups: [] },
-    scanResults: opts.scanResults ?? [],
-    // An ABSENT key means 'create' in bicep's adoptMode(), so a greenfield plan
-    // is genuinely empty rather than carrying 20 redundant 'create' rows.
-    services,
-    network: emptyNetworkDecision(),
-    featureFlags: opts.featureFlags ?? {},
+export function coverageSummary(ledger: SubscriptionScanResult[]): CoverageSummary {
+  const s: CoverageSummary = {
+    requested: ledger.length,
+    scanned: 0,
+    noAccess: 0,
+    partial: 0,
+    timedOut: 0,
+    truncated: 0,
+    incomplete: false,
   };
-  return { ...base, planHash: computePlanHash(base) };
+  for (const r of ledger) {
+    if (r.status === 'scanned') s.scanned++;
+    else if (r.status === 'no-access') s.noAccess++;
+    else if (r.status === 'partial') s.partial++;
+    else if (r.status === 'timed-out') s.timedOut++;
+    if (r.truncated) s.truncated++;
+  }
+  s.incomplete = s.noAccess > 0 || s.partial > 0 || s.timedOut > 0 || s.truncated > 0;
+  return s;
+}
+
+/**
+ * The sentence the UI renders about coverage. Generated from the ledger — never
+ * a hard-coded count, and it NEVER says "scanned N" when N was the number of
+ * subscriptions that happened to contain a match.
+ */
+export function coverageSentence(ledger: SubscriptionScanResult[]): string {
+  const c = coverageSummary(ledger);
+  if (c.requested === 0) return 'No subscriptions were selected for the scan.';
+  const parts: string[] = [
+    `Read ${c.scanned} of ${c.requested} subscription${c.requested === 1 ? '' : 's'}`,
+  ];
+  if (c.noAccess) parts.push(`${c.noAccess} could not be read`);
+  if (c.partial) parts.push(`${c.partial} returned partial results`);
+  if (c.timedOut) parts.push(`${c.timedOut} timed out`);
+  if (c.truncated) parts.push(`${c.truncated} were truncated before the last page`);
+  const head = parts.join(', ') + '.';
+  return c.incomplete
+    ? `${head} Anything reported as "not found" is therefore "not found in what I could read".`
+    : head;
+}
+
+export interface PlanCounts {
+  adopt: number;
+  create: number;
+  skip: number;
+  uncertain: number;
+  /** decisions blocked by a red fitness verdict — the plan cannot be executed. */
+  unusable: number;
+}
+
+export function planCounts(services: Record<string, ServiceDecision>): PlanCounts {
+  const c: PlanCounts = { adopt: 0, create: 0, skip: 0, uncertain: 0, unusable: 0 };
+  for (const d of Object.values(services)) {
+    if (d.mode === 'adopt') c.adopt++;
+    else if (d.mode === 'create') c.create++;
+    else c.skip++;
+    if (d.uncertain) c.uncertain++;
+    if (d.mode === 'adopt' && (d.fitness?.verdict === 'unusable' || d.fitness?.verdict === 'unknown')) {
+      c.unusable++;
+    }
+  }
+  return c;
+}
+
+/**
+ * Whether the plan may be executed.
+ *
+ * BLOCKING: fitness is not advisory. A red or UNKNOWN fitness on an `adopt`
+ * decision blocks — `unknown` blocks precisely because "I could not verify this"
+ * is not "this is fine".
+ */
+export function planBlockers(plan: Pick<DeploymentPlan, 'services'>): string[] {
+  const out: string[] = [];
+  for (const [key, d] of Object.entries(plan.services)) {
+    if (d.mode !== 'adopt') continue;
+    if (!d.target?.name) {
+      out.push(`${key}: set to adopt but no resource was chosen.`);
+      continue;
+    }
+    if (!d.fitness) {
+      out.push(`${key}: adoption has not been validated yet — run the validation step.`);
+      continue;
+    }
+    if (d.fitness.verdict === 'unusable') {
+      const failed = d.fitness.checks.find((c) => c.verdict === 'fail');
+      out.push(`${key}: ${failed?.what ?? 'the chosen resource is not usable'}`);
+    } else if (d.fitness.verdict === 'unknown') {
+      const unk = d.fitness.checks.find((c) => c.verdict === 'unknown');
+      out.push(`${key}: could not verify — ${unk?.what ?? 'validation was inconclusive'}`);
+    }
+  }
+  return out;
 }

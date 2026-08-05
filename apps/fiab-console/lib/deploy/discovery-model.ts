@@ -53,7 +53,7 @@
 import {
   ADOPTION_CATALOG,
   adoptionArmTypes,
-  armRowToServiceKey,
+  armTypeToServiceKey,
   getServiceDef,
   type AdoptableServiceDef,
 } from './adoption-catalog';
@@ -327,7 +327,7 @@ export function rowToCandidate(
   credentialTier: CredentialTier,
   discoveredAt: string,
 ): AdoptionCandidate | null {
-  const serviceKey = armRowToServiceKey(String(row.type ?? ''), row.kind);
+  const serviceKey = armTypeToServiceKey(String(row.type ?? ''), row.kind);
   if (!serviceKey) return null;
   const tags = normaliseTags(row.tags);
   // Derived from the catalog rather than a literal: a second hard-coded ARM

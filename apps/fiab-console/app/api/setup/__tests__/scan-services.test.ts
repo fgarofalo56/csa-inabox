@@ -74,24 +74,41 @@ describe('canDisable', () => {
 });
 
 describe('serviceChoicesToParams', () => {
-  it('use-existing sets existing* params + EXISTING_* env + flag=false', () => {
+  it('use-existing sets the adopt bag + EXISTING_* env, and keeps the flag TRUE', () => {
     const out = serviceChoicesToParams({
       aisearch: { mode: 'use-existing', name: 'srch', rg: 'rg-a', sub: OTHER_SUB },
     });
-    expect(out.bicepParams.existingAiSearchService).toBe('srch');
-    expect(out.bicepParams.existingAiSearchRg).toBe('rg-a');
-    expect(out.bicepParams.existingAiSearchSub).toBe(OTHER_SUB);
-    expect(out.bicepParams.aiSearchEnabled).toBe(false);
+    expect(out.adopt.aisearch).toEqual({
+      mode: 'adopt',
+      target: { name: 'srch', rg: 'rg-a', sub: OTHER_SUB },
+    });
+    // main.bicep no longer declares existing* scalars — emitting one is BCP259.
+    expect(Object.keys(out.bicepParams).filter((k) => k.startsWith('existing'))).toHaveLength(0);
+    // The flag stays TRUE: `provisionAiSearch = aiSearchEnabled && adoptMode==create`
+    // already suppresses creation, and the flag also mirrors the Console binding.
+    expect(out.bicepParams.aiSearchEnabled).toBe(true);
     expect(out.existingEnv.EXISTING_AI_SEARCH_SERVICE).toBe('srch');
     expect(out.existingEnv.EXISTING_AI_SEARCH_RG).toBe('rg-a');
     expect(out.existingEnv.EXISTING_AI_SEARCH_SUB).toBe(OTHER_SUB);
   });
 
-  it('new sets the enable flag true and no existing* params', () => {
+  it('new sets the enable flag true and contributes NOTHING to the adopt bag', () => {
     const out = serviceChoicesToParams({ apim: { mode: 'new' } });
     expect(out.bicepParams.apimEnabled).toBe(true);
-    expect(out.bicepParams.existingApimName).toBeUndefined();
+    expect(out.adopt.apim).toBeUndefined();
+    expect(Object.keys(out.adopt)).toHaveLength(0);
     expect(Object.keys(out.existingEnv)).toHaveLength(0);
+  });
+
+  it('an all-new (greenfield) choice set emits an EMPTY adopt bag', () => {
+    const out = serviceChoicesToParams({
+      apim: { mode: 'new' },
+      aisearch: { mode: 'new' },
+      purview: { mode: 'new' },
+      databricks: { mode: 'new' },
+    });
+    expect(Object.keys(out.adopt)).toHaveLength(0);
+    expect(Object.keys(out.bicepParams).filter((k) => k.startsWith('existing'))).toHaveLength(0);
   });
 
   it('disable sets the enable flag false', () => {
@@ -99,22 +116,28 @@ describe('serviceChoicesToParams', () => {
     expect(out.bicepParams.purviewEnabled).toBe(false);
   });
 
-  it('a DLZ service (no flag) reuse sets existing* + env but no flag', () => {
+  it('a DLZ service (no flag) reuse sets the adopt bag + env but no flag', () => {
     const out = serviceChoicesToParams({
       synapse: { mode: 'use-existing', name: 'syn', rg: 'rg-s', sub: DEPLOY_SUB },
     });
-    expect(out.bicepParams.existingSynapseWorkspace).toBe('syn');
+    expect(out.adopt.synapse).toEqual({
+      mode: 'adopt',
+      target: { name: 'syn', rg: 'rg-s', sub: DEPLOY_SUB },
+    });
     expect(out.bicepParams.synapseEnabled).toBeUndefined();
     expect(out.existingEnv.EXISTING_SYNAPSE).toBe('syn');
   });
 
-  it('Maps reuse sets only the EXISTING_* env (no existing* bicep param) + flag false', () => {
+  it('Maps reuse goes through the SAME adopt bag as every other service', () => {
     const out = serviceChoicesToParams({
       maps: { mode: 'use-existing', name: 'maps1', rg: 'rg-m', sub: DEPLOY_SUB },
     });
     expect(out.existingEnv.EXISTING_AZURE_MAPS).toBe('maps1');
-    expect(out.bicepParams.azureMapsEnabled).toBe(false);
-    // Maps has no existing* bicep params declared — must NOT emit one.
+    expect(out.adopt.maps).toEqual({
+      mode: 'adopt',
+      target: { name: 'maps1', rg: 'rg-m', sub: DEPLOY_SUB },
+    });
+    expect(out.bicepParams.azureMapsEnabled).toBe(true);
     expect(Object.keys(out.bicepParams).filter((k) => k.startsWith('existing'))).toHaveLength(0);
   });
 

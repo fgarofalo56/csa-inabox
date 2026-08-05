@@ -31,8 +31,9 @@
  * resource exactly) but are never logged, and the UI renders name / resource
  * group / subscription display name instead.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
+import { tenantScopeId } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { scanEstate, MAX_SCAN_SUBSCRIPTIONS } from '@/lib/setup/estate-scan';
 import { decidableServices } from '@/lib/deploy/adoption-catalog';
@@ -46,7 +47,7 @@ function toView(d: ReturnType<typeof decidableServices>[number]): AdoptableServi
   return {
     key: d.key,
     label: d.label,
-    class: d.class,
+    cls: d.cls,
     ...(d.createOnlyReason ? { createOnlyReason: d.createOnlyReason } : {}),
     ...(d.singleton ? { singleton: d.singleton } : {}),
     usedFor: d.usedFor,
@@ -55,12 +56,10 @@ function toView(d: ReturnType<typeof decidableServices>[number]): AdoptableServi
   };
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withSession(async (req, { session }) => {
   // Same gate as POST /api/setup/deploy — this builds a subscription-scoped
-  // deployment plan, so it is an admin-tier action.
+  // deployment plan, so it is an admin-tier action. `withSession` has already
+  // returned 401 for an absent session, so this is purely the capability check.
   const gate = await enforceCapability(session, 'admin.deploy-dlz', 'Admin');
   if (gate) return gate;
 
@@ -118,9 +117,13 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
+    // The tenant comes from the SERVER session, never from the client. The plan
+    // carries it so `plan-store` can partition by it; a browser-supplied tenant
+    // id would be a cross-tenant read waiting to happen.
+    tenantId: tenantScopeId(session),
     ledger: result.ledger,
     queryTier: result.queryTier,
     rows: Array.from(byKey.values()),
     ...(result.fatal ? { fatal: result.fatal } : {}),
   });
-}
+});

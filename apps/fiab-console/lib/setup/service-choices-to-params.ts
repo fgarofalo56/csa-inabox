@@ -2,10 +2,13 @@
  * Translate the Setup Wizard's per-service scan-and-choose picks into the two
  * deploy-time artifacts the rest of the pipeline consumes:
  *
- *   1. `bicepParams` — `loom<Svc>Enabled` flags + `existing<Svc>*` reuse params,
- *      forwarded as `-p key=value` overrides on `az deployment sub create`
- *      (orchestrator body / GitHub dispatch / copy-paste command). These map
- *      1:1 onto params declared in platform/fiab/bicep/main.bicep.
+ *   1. `bicepParams` — `loom<Svc>Enabled` flags, forwarded as `-p key=value`
+ *      overrides on `az deployment sub create` (orchestrator body / GitHub
+ *      dispatch / copy-paste command). These map 1:1 onto params declared in
+ *      platform/fiab/bicep/main.bicep.
+ *   1b. `adopt` — the ONE object param that carries every reuse decision. It
+ *      replaced 36 `existing<Svc>*` scalars (ARM's 256-param cap); assigning
+ *      one of those names now fails the build with BCP259.
  *   2. `existingEnv` — the canonical EXISTING_* triples for every use-existing
  *      pick, consumed post-deploy by scripts/csa-loom/{grant-navigator-rbac,
  *      patch-navigator-env}.sh to grant RBAC + patch the Console env on the
@@ -37,6 +40,19 @@ export interface ServiceChoiceParams {
   bicepParams: Record<string, string | boolean>;
   /** Canonical EXISTING_* env triples for post-deploy wiring. */
   existingEnv: Record<string, string>;
+  /**
+   * The `adopt` bag main.bicep reads, keyed by the adoption-catalog service key.
+   *
+   * `main.bicep` NO LONGER DECLARES the 36 `existing<Svc>{Name,Rg,Sub}` scalars —
+   * it declares ONE `adopt` object, because ARM caps a template at 256 parameters
+   * and main.bicep was at 251/256. Emitting `-p existingPurviewAccount=…` against
+   * the current template is a hard BCP259 and the deploy does not start.
+   *
+   * An ABSENT key means create-new (`adoptMode()` defaults to 'create'), so a
+   * pure-greenfield set of choices leaves this EMPTY and no `-p adopt=` override
+   * is emitted at all.
+   */
+  adopt: Record<string, { mode: 'adopt'; target: { name: string; rg: string; sub: string } }>;
 }
 
 /**
@@ -60,19 +76,23 @@ export function translateChoice(
       const rg = (choice.rg || '').trim();
       const sub = (choice.sub || '').trim();
       if (!name) return; // nothing chosen — treat as no-op (the UI prevents this)
-      if (def.existingNameParam) out.bicepParams[def.existingNameParam] = name;
-      if (def.existingRgParam) out.bicepParams[def.existingRgParam] = rg;
-      if (def.existingSubParam) out.bicepParams[def.existingSubParam] = sub;
+      out.adopt[def.key] = { mode: 'adopt', target: { name, rg, sub } };
       out.existingEnv[def.envName] = name;
       out.existingEnv[def.envRg] = rg;
       out.existingEnv[def.envSub] = sub;
-      // Reuse an existing instance → do NOT also provision a new one.
-      if (def.enabledFlag) out.bicepParams[def.enabledFlag] = false;
+      // The enable flag stays TRUE on a reuse pick. Under the adopt-or-create
+      // model `provision<Svc> = <enableFlag> && adoptMode(adopt,key)=='create'`,
+      // so the adopt decision ALONE suppresses the new resource. Setting the
+      // flag false as well would additionally blank the Console's binding env
+      // (several flags are env MIRRORS, e.g. `deSynapse: loomSynapseEnabled`) —
+      // i.e. the operator would adopt their Synapse and then find the editor
+      // honest-gated because Loom had un-wired itself.
+      if (def.enabledFlag) out.bicepParams[def.enabledFlag] = true;
       break;
     }
     case 'new': {
       if (def.enabledFlag) out.bicepParams[def.enabledFlag] = true;
-      // Leave existing* blank (the boundary defaults '' already).
+      // Contribute NOTHING to the adopt bag — an absent key is 'create'.
       break;
     }
     case 'disable': {
@@ -88,7 +108,7 @@ export function translateChoice(
  * (forward-compatible with new services the UI might send).
  */
 export function serviceChoicesToParams(choices: ServiceChoices | undefined): ServiceChoiceParams {
-  const out: ServiceChoiceParams = { bicepParams: {}, existingEnv: {} };
+  const out: ServiceChoiceParams = { bicepParams: {}, existingEnv: {}, adopt: {} };
   if (!choices) return out;
   for (const [key, choice] of Object.entries(choices)) {
     const def = SETUP_SCAN_SERVICE_BY_KEY[key];
