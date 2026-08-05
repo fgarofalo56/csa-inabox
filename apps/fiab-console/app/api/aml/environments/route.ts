@@ -28,7 +28,7 @@
 import { NextResponse } from 'next/server';
 import { withSession } from '@/lib/api/route-toolkit';
 import { apiHonestGateError } from '@/lib/api/gate-envelope';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -101,8 +101,14 @@ export const PATCH = withSession(async (req, { session }) => {
   if (!notebookId || !workspaceId) {
     return NextResponse.json({ ok: false, error: 'notebookId + workspaceId required' }, { status: 400 });
   }
-  if (!(await assertOwner(workspaceId, session.claims.oid))) {
-    return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: notebookId, itemType: 'notebook',
+      notFound: 'notebook not found',
+    });
+    if (denied) return denied;
   }
   try {
     const nb = await loadNotebook(notebookId, workspaceId);

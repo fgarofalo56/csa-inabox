@@ -14,8 +14,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer, workspacePermissionsContainer } from '@/lib/azure/cosmos-client';
+import { workspacePermissionsContainer } from '@/lib/azure/cosmos-client';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,24 +23,20 @@ export const dynamic = 'force-dynamic';
 const ROLES = ['admin', 'contributor', 'viewer'] as const;
 type Role = (typeof ROLES)[number];
 
-async function assertOwner(workspaceId: string, tenantId: string) {
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const ws = await assertOwner(params.id, s.claims.oid);
-  if (!ws) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  // #2947 — was a local owner-only `assertOwner` point-read ("did you CREATE
+  // this workspace"), so a tenant admin could not see or manage membership on a
+  // workspace they did not personally create. `resolveAdminWorkspace` is the
+  // canonical owner-first / tenant-admin-fallback resolver AND returns the doc
+  // this handler needs (createdBy / createdAt for the implicit-owner row).
+  //
+  // DELIBERATELY NOT `authorizeWorkspace`: granting/removing workspace membership
+  // is a privilege-management surface, so shared-ACL members (even Admin-role
+  // ones from the separate `workspace-roles` ACL) must NOT be admitted here —
+  // only the owner or a tenant admin. This widens the guard exactly one rung.
+  const { ws, resp } = await resolveAdminWorkspace(params.id);
+  if (resp) return resp;
   const c = await workspacePermissionsContainer();
   const { resources } = await c.items
     .query({
@@ -66,10 +62,18 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
 
 export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const ws = await assertOwner(params.id, s.claims.oid);
-  if (!ws) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  // #2947 — was a local owner-only `assertOwner` point-read ("did you CREATE
+  // this workspace"), so a tenant admin could not see or manage membership on a
+  // workspace they did not personally create. `resolveAdminWorkspace` is the
+  // canonical owner-first / tenant-admin-fallback resolver AND returns the doc
+  // this handler needs (createdBy / createdAt for the implicit-owner row).
+  //
+  // DELIBERATELY NOT `authorizeWorkspace`: granting/removing workspace membership
+  // is a privilege-management surface, so shared-ACL members (even Admin-role
+  // ones from the separate `workspace-roles` ACL) must NOT be admitted here —
+  // only the owner or a tenant admin. This widens the guard exactly one rung.
+  const { session: s, ws, resp } = await resolveAdminWorkspace(params.id);
+  if (resp) return resp;
   const body = await req.json().catch(() => ({}));
   const upn = (body?.upn || '').toString().trim().toLowerCase();
   const role = (body?.role || '').toString() as Role;
@@ -94,10 +98,18 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
 export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const ws = await assertOwner(params.id, s.claims.oid);
-  if (!ws) return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+  // #2947 — was a local owner-only `assertOwner` point-read ("did you CREATE
+  // this workspace"), so a tenant admin could not see or manage membership on a
+  // workspace they did not personally create. `resolveAdminWorkspace` is the
+  // canonical owner-first / tenant-admin-fallback resolver AND returns the doc
+  // this handler needs (createdBy / createdAt for the implicit-owner row).
+  //
+  // DELIBERATELY NOT `authorizeWorkspace`: granting/removing workspace membership
+  // is a privilege-management surface, so shared-ACL members (even Admin-role
+  // ones from the separate `workspace-roles` ACL) must NOT be admitted here —
+  // only the owner or a tenant admin. This widens the guard exactly one rung.
+  const { ws, resp } = await resolveAdminWorkspace(params.id);
+  if (resp) return resp;
   const upn = new URL(req.url).searchParams.get('upn')?.toLowerCase();
   if (!upn) return NextResponse.json({ ok: false, error: 'upn required' }, { status: 400 });
   if (upn === (ws.createdBy || '').toLowerCase()) {

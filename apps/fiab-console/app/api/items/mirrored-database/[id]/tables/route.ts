@@ -17,7 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { listTablesWithAuth } from '@/lib/azure/sql-objects-client';
@@ -61,7 +61,16 @@ async function resolveSqlAuth(tenantId: string, connectionId?: string): Promise<
 export const GET = withSession<{ id: string }>(async (req: NextRequest, { session: s, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('mirrored database not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: params.id, itemType: 'mirrored-database',
+      allowReadRoles: true,
+      notFound: 'mirrored database not found',
+    });
+    if (denied) return denied;
+  }
 
   try {
     const items = await itemsContainer();

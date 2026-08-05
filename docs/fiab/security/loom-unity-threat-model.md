@@ -71,16 +71,24 @@ Measured against the pinned image, both directions, transcript in
   internal token; `AuthService.verifyPrincipal` also requires the subject to be an
   enabled Unity Catalog user.
 
-`uc-backend.ts` `ossUcAuthHeader()` sends the Entra token directly, so **the
-Console cannot authenticate to an authorization-enabled catalog today**. Turning
-`authMode=entra` on for the live Gov estate would therefore not secure it — it
-would convert "anonymous but working" into "authenticated and unusable" on a
-federal deployment. Consequences recorded honestly rather than papered over:
+`uc-backend.ts` `ossUcAuthHeader()` **now performs that exchange** (#2679,
+`lib/azure/uc-token-exchange.ts`), and the `verifyPrincipal` half is closed too:
+since #2643 the entrypoint AUTO-BINDS the Console principal's object id as an
+ENABLED Unity Catalog user at boot, using the admin token the server mints for
+itself (`consolePrincipalId` on `loom-unity-app.bicep`,
+`.claude/rules/auto-bind-by-default.md` §5). Both blockers that made
+`authMode=entra` mean "authenticated and unusable" on a federal deployment are
+therefore gone, and `gov-uc-purview-wire.yml` no longer hard-codes the
+`disabled` opt-out — `entra` is its default and it now REFUSES to deploy when it
+cannot resolve the audience or the Console principal. What is not yet available
+is live evidence: the workflow has not been re-run, so the disposition below
+stays OPEN until it has. Consequences recorded honestly rather than papered over:
 
 | # | State | Disposition |
 |---|---|---|
 | F-11 | `unityAuthorizationPosture()` reported the `entra` mode as `hardened: true`. It is not — the credential it describes is rejected. | Fixed: reported as **not hardened**, with the remediation naming `LOOM_UNITY_TOKEN` and the exchange endpoint. |
-| F-12 | The live Gov catalog answers unauthenticated reads. | **OPEN**, and now DECLARED rather than inferred: `gov-uc-purview-wire.yml` deploys the audited `authMode=disabled` opt-out (SECURITY WARNING on every boot), pins ACA ingress to the CAE infrastructure subnet so the exposure narrows from "the Gov VNet" to that subnet, and its probe reports the finding as open. Closing it requires the token-exchange client. |
+| F-12 | The live Gov catalog answers unauthenticated reads. | **OPEN in the estate, CLOSED in the tree.** The July-15 deployment is still live and still anonymous — its image's entrypoint defaults `LOOM_UNITY_AUTH` to `disable` and the ARM template carries no auth env at all (measured via `gov-verify-facts`, run 30972823887). What changed with #2643 is that re-running `gov-uc-purview-wire.yml` now CLOSES it instead of reproducing it: before that fix the workflow hard-coded `UNITY_AUTH_MODE=disabled`, so the redeploy the issue prescribed as the remediation would have redeployed the finding. Closing it in the estate requires that dispatch. |
+| F-14 | The Console itself defaulted to `anonymous` when nothing was declared, so a deployment that forgot one variable talked to its catalog with no credential — and an un-credentialed call only *succeeds* against an open catalog. | Fixed (#2643): `resolveUnityAuthMode()` defaults to `entra`; `anonymous` must be DECLARED. An estate that cannot mint a credential now FAILS CLOSED in `ossUcAuthHeader()` rather than retrying bare. |
 | F-13 | On v0.5.0, `GET /permissions/{securable}/{name}` returns **500** whenever `server.authorization=enable` (200 when disabled; `PATCH` unaffected) — upstream #1603, fixed in a v0.5.1 image Docker Hub has not published. | **OPEN** and disclosed: enabling authorization on this pinned image breaks grants **reads** — the Grants pane and the LU-4 effective-permissions resolver. The capability matrix records `grants` as `partial` on the OSS backend for this reason. |
 
 ## 2. Surface inventory (post-LU-2)

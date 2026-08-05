@@ -25,6 +25,42 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.86.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.0...csa-inabox-v0.86.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **copilot:** chunk the RAG corpus on line boundaries with a title breadcrumb (refs [#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929)) ([#2969](https://github.com/fgarofalo56/csa-inabox/issues/2969)) ([7869d43](https://github.com/fgarofalo56/csa-inabox/commit/7869d43441548499572e4915a141a59e801fd1e4))
+
+## [0.86.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.85.0...csa-inabox-v0.86.0) (2026-08-05)
+
+
+### Features
+
+* **auto-bind:** provision + bind an item's Azure backing object by default (refs [#2942](https://github.com/fgarofalo56/csa-inabox/issues/2942)) ([#2955](https://github.com/fgarofalo56/csa-inabox/issues/2955)) ([57c01e9](https://github.com/fgarofalo56/csa-inabox/commit/57c01e95b9e73dc5ebb8cd3481a82fd972c89035))
+* **devtools:** loom-vscode icon derived from the CSA Loom brand mark ([#2950](https://github.com/fgarofalo56/csa-inabox/issues/2950)) ([85cc7c7](https://github.com/fgarofalo56/csa-inabox/commit/85cc7c7a666352478d11844a53b5470677bd977b))
+* **workflows:** real Logic Apps workflow builder — visual designer, auto-bind, run history (closes [#2954](https://github.com/fgarofalo56/csa-inabox/issues/2954)) ([#2956](https://github.com/fgarofalo56/csa-inabox/issues/2956)) ([977e229](https://github.com/fgarofalo56/csa-inabox/commit/977e229083449e53224361e93aa13f2ce984e65f))
+
+
+### Bug Fixes
+
+* **ci:** cut unity-audit guard spec 108.7s -&gt; ~13s, clearing vitest's 60s birpc deadline (fixes [#2944](https://github.com/fgarofalo56/csa-inabox/issues/2944), refs [#2949](https://github.com/fgarofalo56/csa-inabox/issues/2949)) ([#2959](https://github.com/fgarofalo56/csa-inabox/issues/2959)) ([c228efe](https://github.com/fgarofalo56/csa-inabox/commit/c228efe88f91ed5659ab550ab29c62e64b117b80))
+* **ci:** gate the compiled ARM template that ships — byte-compare vs a fresh bicep build ([#2945](https://github.com/fgarofalo56/csa-inabox/issues/2945)) ([#2960](https://github.com/fgarofalo56/csa-inabox/issues/2960)) ([7950a4e](https://github.com/fgarofalo56/csa-inabox/commit/7950a4ee25bc60f42eca73049f23cd4e5c13321d))
+* **ci:** make a roll state which SHA it deployed, and refuse an unbuilt image ([#2967](https://github.com/fgarofalo56/csa-inabox/issues/2967)) ([23a08ad](https://github.com/fgarofalo56/csa-inabox/commit/23a08ad4a194c6502771f69d26b46d51a6456665)), closes [#2963](https://github.com/fgarofalo56/csa-inabox/issues/2963) [#2775](https://github.com/fgarofalo56/csa-inabox/issues/2775)
+* **copilot:** async+pollable loom-docs reindex, and actually ship the corpus (refs [#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929)) ([#2953](https://github.com/fgarofalo56/csa-inabox/issues/2953)) ([862c45e](https://github.com/fgarofalo56/csa-inabox/commit/862c45e90fb9447f6b326e95a8245c42c41212e6))
+* **copilot:** the freshness manifest could never be written on AI Search (closes [#2964](https://github.com/fgarofalo56/csa-inabox/issues/2964)) ([#2965](https://github.com/fgarofalo56/csa-inabox/issues/2965)) ([30af2ce](https://github.com/fgarofalo56/csa-inabox/commit/30af2cee8ea32248df25823de88603499a588c5e))
+* **deploy:** clear the two admin-plane redeploy prerequisites — MCP file private endpoint + a real image preflight (refs [#2958](https://github.com/fgarofalo56/csa-inabox/issues/2958)) ([#2961](https://github.com/fgarofalo56/csa-inabox/issues/2961)) ([75e7bf4](https://github.com/fgarofalo56/csa-inabox/commit/75e7bf48b6e48e5f25b1d91a33a0b889870d646f))
+* **power-platform,powerbi,copilot-studio:** make the Power family actually reach its backends (refs [#77](https://github.com/fgarofalo56/csa-inabox/issues/77)) ([#2957](https://github.com/fgarofalo56/csa-inabox/issues/2957)) ([8935fa4](https://github.com/fgarofalo56/csa-inabox/commit/8935fa43b16a90b71c26059d9acc8324aba655e0))
+* **readiness:** the AML probe used an api-version ARM does not publish, and two gates were satisfied by their own failure mode (refs [#2643](https://github.com/fgarofalo56/csa-inabox/issues/2643), [#2945](https://github.com/fgarofalo56/csa-inabox/issues/2945)) ([#2952](https://github.com/fgarofalo56/csa-inabox/issues/2952)) ([99f7ca2](https://github.com/fgarofalo56/csa-inabox/commit/99f7ca2071b202cf792c35534f5480105a5f5186))
+* **security:** audit the remaining Unity Catalog shortcut-credential exit (refs [#2622](https://github.com/fgarofalo56/csa-inabox/issues/2622)) ([#2943](https://github.com/fgarofalo56/csa-inabox/issues/2943)) ([537e141](https://github.com/fgarofalo56/csa-inabox/commit/537e1411d356d9f5a0602ecb96a091b380e25ad7))
+* **security:** bind azure-sql-database query+copilot to the owned item ([#2723](https://github.com/fgarofalo56/csa-inabox/issues/2723) broken-access-control) ([#2920](https://github.com/fgarofalo56/csa-inabox/issues/2920)) ([0e71377](https://github.com/fgarofalo56/csa-inabox/commit/0e7137790ce360c481dbcb33e39f89d744325f5b))
+* **security:** semantic-model model route — adopt authorizeWorkspace + make the workspace guard unskippable ([#2941](https://github.com/fgarofalo56/csa-inabox/issues/2941)) ([#2946](https://github.com/fgarofalo56/csa-inabox/issues/2946)) ([898b6da](https://github.com/fgarofalo56/csa-inabox/commit/898b6daa607c4cf6f0c67639ab9c4c2058cd5213))
+
+
+### Documentation
+
+* **rules:** AUTO-BIND BY DEFAULT — no user-performed plumbing ([#2951](https://github.com/fgarofalo56/csa-inabox/issues/2951)) ([3348a04](https://github.com/fgarofalo56/csa-inabox/commit/3348a04ba7020e9ef872d06f2da9a9e20b3fbe5b))
+
 ## [0.85.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.84.0...csa-inabox-v0.85.0) (2026-08-04)
 
 

@@ -294,6 +294,122 @@ EOF
   fi
 }
 
+# ---------------------------------------------------------------------------
+# AUTO-BIND — register the Console principal as an ENABLED Unity Catalog user.
+#
+# WHY THIS EXISTS. Turning `server.authorization=enable` on is only half of a
+# working catalog. Upstream `AuthService.verifyPrincipal` (v0.5.0 and v0.5.1,
+# read at the tag) resolves the caller from the subject token as:
+#
+#     subject = claims.getOrDefault(EMAIL, claim(SUBJECT)).asString()
+#     if (subject.equals("admin")) -> allow
+#     if (user != null && user.getState() == ENABLED) -> allow
+#     throw OAuthInvalidRequestException("User not allowed: " + subject)
+#
+# An Entra **app-only** (client-credentials) token — which is what the Console's
+# managed identity mints — carries NO `email` claim, so the subject falls back to
+# `sub`, i.e. the service principal's object id. Unless a UC user exists with
+# that object id as its email AND is ENABLED, the token exchange at
+# /api/1.0/unity-control/auth/tokens answers 401 and the Console cannot talk to
+# its own catalog. That is precisely why gov-uc-purview-wire.yml kept deploying
+# the audited `authMode=disabled` opt-out: flipping authorization on without this
+# step converts "anonymous but working" into "authenticated and unusable".
+#
+# Per .claude/rules/auto-bind-by-default.md §5 the PLATFORM performs that
+# binding — it is not an operator instruction. The server mints its own admin
+# token into etc/conf/token.txt at boot, so the container has, locally and
+# without any external credential, exactly the authority needed to register the
+# principal. This runs in the background against 127.0.0.1 after the JVM is up.
+#
+# Failure here is LOUD but never fatal: the catalog stays sealed-but-correct
+# (every caller refused) rather than being taken down, and probe-loom-unity-authz
+# reports the posture from the outside either way.
+# ---------------------------------------------------------------------------
+# Decide — WITHOUT side effects — what the auto-bind step will do. Factored out
+# so the dry-run renders the same decision the real boot takes: a bind that is
+# only exercised on a live container is a bind nobody notices has stopped
+# happening. Echoes one of:
+#   authorization-disabled   nothing to bind — every caller is already allowed
+#   not-configured           no principal id was passed (catalog enforces, but
+#                            only `admin` / pre-registered users can call it)
+#   invalid-principal-id     a value was passed that is not an Entra object id
+#   bind:<object-id>         will register that principal as an enabled UC user
+console_bind_plan() {
+  if [ "${LOOM_UNITY_AUTH:-enable}" != "enable" ]; then
+    echo "authorization-disabled"
+  elif [ -z "${LOOM_UNITY_CONSOLE_PRINCIPAL_ID:-}" ]; then
+    echo "not-configured"
+  elif printf '%s' "${LOOM_UNITY_CONSOLE_PRINCIPAL_ID}" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
+    echo "bind:${LOOM_UNITY_CONSOLE_PRINCIPAL_ID}"
+  else
+    echo "invalid-principal-id"
+  fi
+}
+
+# Say — on stderr, on EVERY boot including the dry run — what the auto-bind
+# decision was. Separate from console_bind_plan (which stays side-effect free so
+# it can be asserted on) and from bind_console_principal (which only runs on the
+# happy path). The two non-binding states are the ones worth narrating: both
+# leave a catalog that enforces authorization but cannot serve its own Console,
+# and neither should be discoverable only by reading a container log after
+# something breaks.
+announce_bind_plan() {
+  case "$1" in
+    invalid-principal-id)
+      echo "[loom-unity] WARNING: LOOM_UNITY_CONSOLE_PRINCIPAL_ID is not an Entra object id (GUID) — refusing to register it as a Unity Catalog user. Pass the Console managed identity's principalId (the 'sub' claim of the token it mints), not its client id or resource id." >&2
+      ;;
+    not-configured)
+      echo "[loom-unity] NOTICE: authorization is ENFORCED but no LOOM_UNITY_CONSOLE_PRINCIPAL_ID was passed, so no Console principal is auto-registered. Only 'admin' and pre-registered Unity Catalog users can call this catalog. Pass consolePrincipalId on loom-unity-app.bicep." >&2
+      ;;
+  esac
+}
+
+bind_console_principal() {  bind_principal="$1"
+  bind_base="http://127.0.0.1:${LOOM_UNITY_PORT:-8080}"
+  bind_token=""
+  bind_try=0
+
+  # The admin token does not exist until the server writes it, and the SCIM route
+  # does not answer until the JVM is listening. One loop covers both, so this
+  # cannot race a slow boot.
+  while [ "${bind_try}" -lt 90 ]; do
+    if [ -s "${CONF_DIR}/token.txt" ]; then
+      bind_token="$(tr -d ' \011\015\012' < "${CONF_DIR}/token.txt")"
+      if [ -n "${bind_token}" ] && curl -sS -o /dev/null -m 5 \
+          -H "Authorization: Bearer ${bind_token}" \
+          "${bind_base}/api/1.0/unity-control/scim2/Users"; then
+        break
+      fi
+    fi
+    bind_try=$((bind_try + 1))
+    sleep 2
+  done
+
+  if [ -z "${bind_token}" ]; then
+    echo "[loom-unity] AUTO-BIND FAILED: the server never wrote ${CONF_DIR}/token.txt, so the Console principal could not be registered as a Unity Catalog user. Authorization stays ENFORCED, so the catalog is refusing every caller (including the Console) rather than serving anonymous ones. See docs/fiab/security/loom-unity-threat-model.md." >&2
+    return 0
+  fi
+
+  bind_status="$(curl -sS -o /dev/null -w '%{http_code}' -m 15 -X POST \
+    "${bind_base}/api/1.0/unity-control/scim2/Users" \
+    -H "Authorization: Bearer ${bind_token}" \
+    -H 'Content-Type: application/scim+json' \
+    -d "{\"schemas\":[\"urn:ietf:params:scim:schemas:core:2.0:User\"],\"userName\":\"${bind_principal}\",\"displayName\":\"CSA Loom Console\",\"emails\":[{\"value\":\"${bind_principal}\",\"primary\":true}],\"active\":true}")"
+
+  case "${bind_status}" in
+    20*)
+      echo "[loom-unity] auto-bind: registered the Console principal ${bind_principal} as an ENABLED Unity Catalog user (HTTP ${bind_status}) — the Entra token exchange can now mint an internal token for it."
+      ;;
+    409)
+      echo "[loom-unity] auto-bind: the Console principal ${bind_principal} is already a Unity Catalog user (HTTP 409) — nothing to do."
+      ;;
+    *)
+      echo "[loom-unity] AUTO-BIND FAILED: registering the Console principal ${bind_principal} as a Unity Catalog user returned HTTP ${bind_status}. Authorization stays ENFORCED — the catalog refuses every caller rather than falling back to anonymous. The Console will report this through probe-loom-unity-authz. See docs/fiab/security/loom-unity-threat-model.md." >&2
+      ;;
+  esac
+  return 0
+}
+
 seed_db_if_empty() {
   # Fresh Azure Files share → seed the schema from the image so the server has a
   # valid DB to open. Only for the H2 default (Postgres owns its own schema).
@@ -320,6 +436,9 @@ if [ "${LOOM_UNITY_DRYRUN:-}" = "1" ]; then
   render_hibernate
   echo "=== server.properties ==="
   render_server
+  echo "=== auto-bind ==="
+  echo "console-principal-bind=$(console_bind_plan)"
+  announce_bind_plan "$(console_bind_plan)"
   exit 0
 fi
 
@@ -337,5 +456,22 @@ seed_db_if_empty
 write_config
 
 cd "${UC_HOME}"
+
+# AUTO-BIND (see bind_console_principal / console_bind_plan above). Only
+# meaningful when authorization is actually enforced — with `disable` every
+# caller is already allowed and there is no principal to register.
+#
+# The id is interpolated into a JSON body, so its shape is VALIDATED first (in
+# console_bind_plan): an Entra object id is a GUID, and refusing anything else
+# keeps a malformed or hostile value from breaking out of the JSON string. A bad
+# value is a configuration error worth naming, not something to paper over.
+BIND_PLAN="$(console_bind_plan)"
+announce_bind_plan "${BIND_PLAN}"
+case "${BIND_PLAN}" in
+  bind:*)
+    bind_console_principal "${BIND_PLAN#bind:}" &
+    ;;
+esac
+
 echo "[loom-unity] starting OSS Unity Catalog server on :${LOOM_UNITY_PORT:-8080}"
 exec ./bin/start-uc-server

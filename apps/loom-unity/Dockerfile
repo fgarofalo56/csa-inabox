@@ -155,7 +155,15 @@ USER root
 # rebuild. Upgrading the whole package set rather than just openssl is
 # deliberate and prophylactic — this is a security-critical service and the next
 # base-tag lag should not re-block the gate.
+#
+# `curl` is added in the same layer because the entrypoint's AUTO-BIND step
+# (bind_console_principal — registers the Console principal as an ENABLED Unity
+# Catalog user so authorization can be enforced without bricking the catalog)
+# talks to 127.0.0.1 over HTTP. It is not assumed to be present in the upstream
+# base: an auto-bind that silently no-ops because a tool is missing would leave
+# the catalog refusing its own Console with no obvious cause.
 RUN apk upgrade --no-cache \
+    && apk add --no-cache curl \
     && apk info -v libcrypto3 libssl3 | sort -u
 
 # Preserve the image's seeded catalog DB so a fresh Azure Files mount (which

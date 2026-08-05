@@ -14,7 +14,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError, apiError } from '@/lib/api/respond';
@@ -32,7 +32,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('airflow job not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'airflow-job',
+      allowReadRoles: true,
+      notFound: 'airflow job not found',
+    });
+    if (denied) return denied;
+  }
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
@@ -94,7 +103,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('airflow job not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'airflow-job',
+      notFound: 'airflow job not found',
+    });
+    if (denied) return denied;
+  }
   const body = await req.json().catch(() => ({} as any));
   const dagId = String(body?.dagId || '').trim();
   if (!dagId) return err('dagId required', 400);

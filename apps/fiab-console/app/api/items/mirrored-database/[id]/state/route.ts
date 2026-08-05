@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { runMirrorSnapshot, type MirrorSource, type MirrorTableSpec, type MirrorTableResult } from '@/lib/azure/mirror-engine';
@@ -39,7 +39,15 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
 export const POST = withSession(async (req, { session: s, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('mirrored database not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: params.id, itemType: 'mirrored-database',
+      notFound: 'mirrored database not found',
+    });
+    if (denied) return denied;
+  }
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   if (action !== 'start' && action !== 'stop') return apiError("action must be 'start' or 'stop'", 400);

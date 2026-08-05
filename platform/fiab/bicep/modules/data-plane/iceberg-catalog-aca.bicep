@@ -88,6 +88,14 @@ Optional keys:
                          SAME one the Console signs in with (LOOM_MSAL_CLIENT_ID).
                          Audiences derive as api://<clientId>,<clientId>.
   entraAudiences         Explicit comma-separated audience override.
+  consolePrincipalId     AUTO-BIND: the Entra OBJECT ID (principalId) of the Console
+                         managed identity — the `sub` claim of the app-only token it
+                         mints. The entrypoint registers it as an ENABLED Unity Catalog
+                         user at boot, because upstream AuthService.verifyPrincipal
+                         resolves the caller from `email` else `sub` and refuses any
+                         principal that is not `admin` or an enabled user. Without it an
+                         authorization-enabled catalog is correct-but-unusable: the
+                         Console token exchange answers 401. Pass principalId, NOT clientId.
   authorityHost          Entra authority host override; empty => derived per cloud
                          from environment().authentication.loginEndpoint.''')
 param catalogConfig object
@@ -138,6 +146,13 @@ var authAudiencePinned = !empty(entraClientId) || !empty(entraAudiences)
 var authSealed = authEnabled && !authAudiencePinned
 var sealedAudience = 'api://loom-iceberg-sealed-${uniqueString(resourceGroup().id, name)}.invalid'
 var effectiveAudiences = !empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : '')
+// AUTO-BIND (#2643, .claude/rules/auto-bind-by-default.md §5). Same image, same
+// upstream requirement as compute/loom-unity-app.bicep: AuthService.verifyPrincipal
+// resolves the caller from `email` else `sub`, and an Entra app-only token has no
+// `email`, so the Console principal's OBJECT ID must exist as an ENABLED Unity
+// Catalog user or an authorization-enabled catalog refuses the Console itself.
+// The entrypoint registers it at boot; this just carries the id through.
+var consolePrincipalId = string(catalogConfig.?consolePrincipalId ?? '')
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
@@ -185,6 +200,9 @@ var envVars = concat(
   ] : [
     { name: 'LOOM_UNITY_AUTH', value: 'disable' }
   ],
+  (authEnabled && !empty(consolePrincipalId)) ? [
+    { name: 'LOOM_UNITY_CONSOLE_PRINCIPAL_ID', value: consolePrincipalId }
+  ] : [],
   empty(catalogDbUrl) ? [
     // No Postgres wired: the container uses its LOCAL metadata store. Catalog
     // metadata is then NOT durable across restarts — honestly surfaced as the

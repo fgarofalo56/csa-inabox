@@ -12,9 +12,15 @@
  * itself while both disagree with production.
  *
  * Still ported here (unavoidably — they remain module-private):
- *   loom-docs-index.ts  walkMarkdown / chunkMarkdown (MAX_CHUNK 1500)
+ *   loom-docs-index.ts  walkMarkdown
  *                       + the searchDocs over-fetch → diversify → slice order
  *   evaluator-core.ts   chunkPath / scoreRetrieval  -> docHit() (doc-level)
+ *
+ * NOT ported any more (#2929): `chunkMarkdown` / MAX_CHUNK. Those used to be a
+ * hand-maintained copy, which is the "fixture that models the code" failure —
+ * the harness agrees with its own copy while both drift from production. They
+ * now come from the REAL `lib/azure/docs-chunker.ts`, the same module
+ * `loom-docs-index.ts` imports.
  *
  * Usage (from the repo root):
  *   node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs
@@ -41,6 +47,13 @@ const {
   DEFAULT_SOURCE_WEIGHTS, corpusSourceClass,
 } = ranker;
 
+// The REAL chunker — the same module loom-docs-index.ts imports, so the
+// corpus this harness scores is chunked exactly as the shipped one is.
+const chunker = await import(
+  pathToFileURL(path.join(REPO, 'apps', 'fiab-console', 'lib', 'azure', 'docs-chunker.ts')).href
+);
+const { chunkMarkdown, MAX_CHUNK } = chunker;
+
 const argv = process.argv.slice(2);
 const flag = (name, dflt) => {
   const i = argv.indexOf(name);
@@ -62,8 +75,6 @@ const sourceWeights = SW
   })()
   : DEFAULT_SOURCE_WEIGHTS;
 
-/** loom-docs-index.ts MAX_CHUNK. */
-const MAX_CHUNK = 1500;
 /** loom-docs-index.ts RETRIEVAL_OVERFETCH — candidates pulled before diversifying. */
 const OVERFETCH = 4;
 
@@ -81,32 +92,6 @@ function walkMarkdown(dir) {
       const full = path.join(cur, e.name);
       if (e.isDirectory()) stack.push(full);
       else if (e.name.endsWith('.md')) out.push(full);
-    }
-  }
-  return out;
-}
-
-// ── port: loom-docs-index.chunkMarkdown ──────────────────────────────────────
-function chunkMarkdown(text) {
-  const lines = text.split(/\r?\n/);
-  const blocks = [];
-  let curHeading;
-  let buf = [];
-  const flush = () => {
-    const content = buf.join('\n').trim();
-    if (content.length > 0) blocks.push({ heading: curHeading, content });
-    buf = [];
-  };
-  for (const line of lines) {
-    const m = line.match(/^(#{1,3})\s+(.*)$/);
-    if (m) { flush(); curHeading = m[2].trim(); } else buf.push(line);
-  }
-  flush();
-  const out = [];
-  for (const b of blocks) {
-    if (b.content.length <= MAX_CHUNK) { out.push(b); continue; }
-    for (let i = 0; i < b.content.length; i += MAX_CHUNK) {
-      out.push({ heading: b.heading, content: b.content.slice(i, i + MAX_CHUNK) });
     }
   }
   return out;

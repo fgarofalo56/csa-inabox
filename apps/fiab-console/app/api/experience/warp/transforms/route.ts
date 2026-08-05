@@ -27,7 +27,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -190,14 +190,14 @@ export async function POST(req: NextRequest) {
   if (!displayName) return err('displayName is required', 400, 'missing_displayName');
   if (!workspaceId) return err('workspaceId is required', 400, 'missing_workspaceId');
   if (!graph || !Array.isArray(graph.nodes)) return err('graph is required', 400, 'missing_graph');
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return err('Workspace not found', 404, 'not_found');
+  // #2947 — this route ran the owner-only check TWICE (`assertOwner` here and
+  // the point-read below), so "did you CREATE this workspace" 404'd a tenant
+  // admin / shared member on save. One canonical ladder, write-scoped: this
+  // POST upserts the transform item. The route's own `err()` shape (with its
+  // `not_found` code) is preserved.
+  if (await authorizeWorkspace(session, workspaceId)) return err('Workspace not found', 404, 'not_found');
 
   try {
-    // Authorize: the workspace must belong to the caller's tenant.
-    const wsc = await workspacesContainer();
-    const { resource: ws } = await wsc.item(workspaceId, session.claims.oid).read<Workspace>().catch(() => ({ resource: null as any }));
-    if (!ws || ws.tenantId !== session.claims.oid) return err('Workspace not found', 404, 'not_found');
-
     const items = await itemsContainer();
     const now = new Date().toISOString();
     const existingId = (body?.id || '').toString().trim();
