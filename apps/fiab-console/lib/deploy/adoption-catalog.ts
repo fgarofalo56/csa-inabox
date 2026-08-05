@@ -170,6 +170,13 @@ export interface AdoptableServiceDef {
    * An empty array means Loom only reads the resource.
    */
   mutations: string[];
+  /**
+   * Set ONLY when Loom genuinely reads an adopted instance and changes nothing
+   * about it, which is the sole legitimate reason for an empty `mutations`.
+   * Requiring the claim to be made explicitly is what stops "we forgot to write
+   * the mutations down" from looking identical to "there are none".
+   */
+  readOnlyAdoption?: true;
   fitness: FitnessSpec;
 }
 
@@ -268,6 +275,7 @@ export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
     consoleEnv: ['LOOM_AOAI_ENDPOINT', 'LOOM_AOAI_DEPLOYMENT', 'LOOM_AOAI_EMBED_DEPLOYMENT'],
     legacyEnv: { name: 'EXISTING_AOAI', rg: 'EXISTING_AOAI_RG', sub: 'EXISTING_AOAI_SUB' },
     usedFor: 'Copilot, the data agents, AI functions and every embedding path',
+    readOnlyAdoption: true,
     mutations: [],
     fitness: {
       regionPolicy: 'prefer-hub',
@@ -499,6 +507,7 @@ export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
     consoleEnv: ['LOOM_AZURE_MAPS_ACCOUNT', 'LOOM_MAPS_BACKEND'],
     legacyEnv: { name: 'EXISTING_AZURE_MAPS_ACCOUNT', rg: 'EXISTING_AZURE_MAPS_RG', sub: 'EXISTING_AZURE_MAPS_SUB' },
     usedFor: 'the geo editors, map tiles and geocoding',
+    readOnlyAdoption: true,
     mutations: [],
     fitness: {
       forbiddenSkus: [{

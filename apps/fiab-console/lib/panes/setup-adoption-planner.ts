@@ -30,6 +30,7 @@ import {
   buildPlanFromDiscovery,
   type ServiceScanRow,
 } from '@/lib/deploy/plan-builder';
+import { randomSuffix } from '@/lib/util/random-id';
 import {
   type DeploymentPlan,
   type PlanBoundary,
@@ -53,17 +54,18 @@ export interface AdoptionPlannerArgs {
 }
 
 /**
- * A ULID-ish, monotonic-enough plan id. `crypto.randomUUID` is available in
- * every browser Loom supports and in Node 19+; the timestamp prefix keeps plan
- * ids sortable in the Cosmos container without a second index.
+ * A ULID-ish, monotonic-enough plan id. The timestamp prefix keeps plan ids
+ * sortable in the Cosmos container without a second index.
+ *
+ * The random half comes from `lib/util/random-id`, which is crypto-backed and
+ * REFUSES to fall back to `Math.random()`. The first cut of this had a
+ * `: Math.random().toString(36)` fallback arm — a plan id is the key a deploy is
+ * addressed by, and a predictable one is not a cosmetic problem. Refusing to
+ * mint an id is the correct behaviour when no CSPRNG is available.
  */
 export function newPlanId(now: () => number = Date.now): string {
   const ts = now().toString(36).padStart(9, '0');
-  const rand =
-    typeof globalThis.crypto?.randomUUID === 'function'
-      ? globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
-      : Math.random().toString(36).slice(2, 14);
-  return `plan_${ts}_${rand}`;
+  return `plan_${ts}_${randomSuffix(12)}`;
 }
 
 export interface AdoptionPlannerState {

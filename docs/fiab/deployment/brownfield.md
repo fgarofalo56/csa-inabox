@@ -75,10 +75,10 @@ bash scripts/csa-loom/byo-wizard.sh --boundary commercial-full
 `byo-wizard.sh` writes `platform/fiab/bicep/params/<name>.generated.bicepparam`
 and `temp/<name>.byo-exports.sh`.
 
-> **Read [`byo-wizard.sh` caveat](#the-byo-wizard-does-not-emit-the-disable-flag)
-> before you use it.** On an *adopt* pick it emits the `EXISTING_*` value but
-> **not** the matching `*Enabled=false` flag, so for the bind-only services in
-> the table below it produces a duplicate rather than an adoption.
+> On an *adopt* pick it writes ONE entry into the `adopt` object bag —
+> see [what the BYO wizard emits](#what-the-byo-wizard-emits-and-what-it-no-longer-emits).
+> It no longer emits per-service `existing*` params: `main.bicep` stopped
+> declaring them, and assigning one is a compile-time `BCP259`.
 
 ### What it scans
 
@@ -109,45 +109,48 @@ environment variables it emits and what Loom uses each service for, is in
 
 ## Step 2 — choose adopt or create, per service
 
-This is the table that matters. **Adoption behaves in three different ways
-depending on the service**, and the difference decides whether you get an
-adoption or a duplicate.
+This is the table that matters: it says, per service, what "adopt" actually
+does to the deploy.
 
-### Class A — adopting suppresses creation (safe)
+### Adopting suppresses creation — for every adoptable service
 
-Set the `EXISTING_*` value and the provisioning module is skipped. Nothing else
-is required.
+Set the `EXISTING_*` values (or hand the wizard a `reuse:` pick, or post a plan)
+and the provisioning module is skipped. **Nothing else is required.**
 
-| Service | Adopt via | Notes |
-|---|---|---|
-| AI Search | `EXISTING_AI_SEARCH_SERVICE` (+ `_RG`, `_SUB`) | Gated `if (aiSearchEnabled && empty(existingAiSearchService))` |
-| API Management | `EXISTING_APIM` (+ `_RG`, `_SUB`) | Adopting skips a ~30-minute Premium provision |
-| ADX / Kusto | `EXISTING_KUSTO_CLUSTER` (+ `_RG`, `_SUB`) | **See the ADX grant caveat below** |
-| AI Foundry / AOAI **hub account** | `EXISTING_AOAI` (+ `_RG`, `_SUB`, `_CHAT_DEPLOYMENT`, `_EMBED_DEPLOYMENT`) | Suppresses the `aiFoundry` module. **Does not suppress the Foundry *project*** — see class B |
-| Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+ `_RG`, `_SUB`) | **`single-sub` topology only** |
-| Stream Analytics | `EXISTING_ASA_JOB` (+ `_RG`, `_SUB`) | **`single-sub` topology only** |
-| Cosmos (Console metadata) | `EXISTING_COSMOS_ACCOUNT` (+ `_RG`, `_SUB`) | **`tenant` / `dlz-attach` topologies only.** In `single-sub` the DLZ Cosmos account is created unconditionally |
-| Azure SQL (plan backing) | `loomPlanBackingSqlServer` (+ `loomSqlServerRg`) | Adopt-only by design — Loom never creates this server, it only reads |
+`main.bicep` derives one gate per service:
 
-### Class B — adopting binds the Console but does **not** suppress creation
+```bicep
+var provisionPurview = purviewEnabled && adoptMode(adopt, 'purview') == 'create'
+```
 
-For these, setting `EXISTING_*` alone points the Console at your resource **and
-still deploys a new one alongside it**. You must also set the enable flag to
-`false`.
+so a decision of `adopt` suppresses the new resource on its own. The enable flag
+stays TRUE — it is also the Console's binding mirror, and turning it off would
+adopt your resource and then un-wire Loom from it.
 
-| Service | Adopt via | You **must also** pass | If you forget |
+| Service | Adopt via | Suppression gate | Notes |
 |---|---|---|---|
-| Purview | `EXISTING_PURVIEW` (+ `_RG`, `_SUB`) | `-p purviewEnabled=false` | The deploy attempts a second account and fails `EnterpriseTenantAlreadyExists` — only one Enterprise Purview is allowed per tenant |
-| Azure Maps | `loomAzureMapsAccount=<name>` | `-p azureMapsEnabled=false` | A second Maps account is created and the Console binds to **the new one**, silently ignoring yours |
-| AI Foundry **agent project** | (bound via `EXISTING_AOAI*`) | `-p agentFoundryEnabled=false` | The `agentFoundry` project is created and the Console env **prefers it** over your adopted account |
-| Synapse | `EXISTING_SYNAPSE` (+ `_RG`, `_SUB`) | `-p loomSynapseEnabled=false` | A per-DLZ Synapse workspace is created alongside yours |
-| Databricks | `EXISTING_DATABRICKS` (+ `_RG`, `_SUB`, `_HOSTNAME`) | `-p loomDatabricksEnabled=false` | A per-DLZ Premium workspace is created alongside yours |
-| Data Factory | `EXISTING_ADF` (+ `_RG`, `_SUB`) | `-p loomDataFactoryEnabled=false` | A per-DLZ factory is created alongside yours |
+| AI Search | `EXISTING_AI_SEARCH_SERVICE` (+ `_RG`, `_SUB`) | `provisionAiSearch` | |
+| API Management | `EXISTING_APIM` (+ `_RG`, `_SUB`) | `provisionApim` | Adopting skips a ~30-minute Premium provision |
+| ADX / Kusto | `EXISTING_KUSTO_CLUSTER` (+ `_RG`, `_SUB`) | `provisionAdx` | **See the ADX grant caveat below** |
+| AI Foundry / AOAI | `EXISTING_AOAI` (+ `_RG`, `_SUB`, `_CHAT_DEPLOYMENT`, `_EMBED_DEPLOYMENT`) | `provisionFoundry`, `provisionAgentFoundry` | ONE decision now gates both the hub account and the agent project |
+| Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+ `_RG`, `_SUB`) | `provisionEventHubs` | |
+| Stream Analytics | `EXISTING_ASA_JOB` (+ `_RG`, `_SUB`) | `provisionStreamAnalytics` | |
+| Cosmos (Console metadata) | `EXISTING_COSMOS_ACCOUNT` (+ `_RG`, `_SUB`) | `provisionConsoleCosmos` | |
+| Purview | `EXISTING_PURVIEW` (+ `_RG`, `_SUB`) | `provisionPurview` | Tenant singleton — the wizard DISABLES "create new" when one exists rather than offering it and failing `EnterpriseTenantAlreadyExists` |
+| Azure Maps | `EXISTING_AZURE_MAPS_ACCOUNT` (+ `_RG`, `_SUB`) | `provisionMaps` | |
+| Synapse | `EXISTING_SYNAPSE` (+ `_RG`, `_SUB`) | `provisionSynapse` | |
+| Databricks | `EXISTING_DATABRICKS` (+ `_RG`, `_SUB`, `_HOSTNAME`) | `provisionDatabricks` | |
+| Data Factory | `EXISTING_ADF` (+ `_RG`, `_SUB`) | `provisionAdf` | |
+| Azure ML | `EXISTING_AML_WORKSPACE` (+ `_RG`, `_SUB`) | `provisionAml` | |
+| Azure SQL (plan backing) | `loomPlanBackingSqlServer` (+ `loomSqlServerRg`) | *(reference-only)* | Adopt-only by design — Loom never creates this server, it only reads |
 
-> This asymmetry is a known defect, not a design. Collapsing all adoption onto a
-> single `provisionX` gate so `EXISTING_*` always suppresses creation is in
-> flight; see [Status](#status-what-the-wizard-does-and-does-not-implement).
-> Until it lands, **the enable flag is not optional for class B**.
+> **This replaced a class A / class B split.** Six services used to bind the
+> Console WITHOUT suppressing creation, so an operator who named their Purview
+> and forgot `-p purviewEnabled=false` got a second account and a hard
+> `EnterpriseTenantAlreadyExists`. `scripts/ci/check-adoption-catalog-sync.mjs`
+> byte-compares each `provision<Svc>` line against `main.bicep` and asserts the
+> var actually reaches the module parameter that creates the resource, so the
+> asymmetry cannot come back unnoticed.
 
 ### Class C — no adoption path exists today
 
@@ -211,7 +214,6 @@ az deployment sub create \
   --parameters platform/fiab/bicep/params/commercial-full.bicepparam \
   --parameters adminEntraGroupId="$GROUP_ID" \
   --parameters deployAppsEnabled=false \
-  --parameters purviewEnabled=false          # REQUIRED — Purview is class B
 ```
 
 `EXISTING_*` coverage per parameter file:
@@ -255,14 +257,36 @@ BYO_NONINTERACTIVE=1 \
 
 Each `BYO_<KEY>` is `reuse:<name>[:<rg>[:<sub>]]` | `new` | `gate`.
 
-#### The BYO wizard does not emit the disable flag
+#### What the BYO wizard emits (and what it no longer emits)
 
-On a `reuse` pick `byo-wizard.sh` writes `param existingPurviewAccount = '<name>'`
-but **not** `param purviewEnabled = false`. For every class B service you must
-add the flag yourself on the command line (as in 3a) or edit the generated file.
-For Purview specifically, omitting it produces a hard ARM failure
-(`EnterpriseTenantAlreadyExists`) on exactly the scenario the wizard exists to
-serve.
+On a `reuse` pick `byo-wizard.sh` writes ONE entry into the `adopt` object:
+
+```bicep
+param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')), {
+  purview: { mode: 'adopt', target: { name: 'my-tenant-purview', rg: 'rg-shared-governance', sub: '<sub-id>' } }
+})
+```
+
+It does **not** write `param existingPurviewAccount = '<name>'`. `main.bicep`
+stopped declaring those 36 scalars — ARM caps a template at 256 parameters and
+`main.bicep` sat at 251/256, so no further service could be made adoptable at
+all. Assigning one of the old names now fails to compile with
+
+```
+Error BCP259: The parameter "existingPurviewAccount" is assigned in the params
+file without being declared in the Bicep file.
+```
+
+**You no longer add the disable flag yourself.** That was the class A / class B
+split, and it is gone: `main.bicep` derives
+`provisionPurview = purviewEnabled && adoptMode(adopt, 'purview') == 'create'`,
+so an `adopt` decision suppresses the new resource on its own while the enable
+flag stays true (the flag is also the Console's binding mirror — turning it off
+would adopt your Purview and then un-wire Loom from it). Omitting a flag can no
+longer produce `EnterpriseTenantAlreadyExists`.
+
+A pure-greenfield run emits **no** adopt entries; every absent key resolves to
+`create`.
 
 ### 3c. Live re-binding, without redeploying
 
@@ -338,7 +362,7 @@ brownfield-specific codes, and what each actually means:
 
 | ARM code | Class | What it means | What to do |
 |---|---|---|---|
-| `EnterpriseTenantAlreadyExists` | config | A Purview account already exists in this tenant | Adopt it: `EXISTING_PURVIEW=<name>` **+ `purviewEnabled=false`** |
+| `EnterpriseTenantAlreadyExists` | config | A Purview account already exists in this tenant | Adopt it: `EXISTING_PURVIEW=<name>` (+ `_RG`, `_SUB`). No enable-flag override is needed — `provisionPurview` is already false for an `adopt` decision |
 | `PrivateDnsZoneAlreadyExists` | config | The `privatelink.*` zone already exists — usually a re-deploy after a partial failure | Delete the conflicting zone, or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter** — an earlier version of the runbook said there was; it does not exist |
 | `VnetAddressRangeInUse` | config | The hub CIDR (or the hardcoded `10.100.0.0/16` spoke CIDR) collides | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not currently settable — see class C |
 | `StorageAccountAlreadyTaken` | config | Global name collision | Change the deployment name prefix |
@@ -370,10 +394,15 @@ az deployment sub create -l eastus2 \
   -p platform/fiab/bicep/params/commercial-full.bicepparam \
   -p adminEntraGroupId="$GROUP_ID" \
   -p deployAppsEnabled=false \
-  -p purviewEnabled=false \
   -p azureMapsEnabled=false \
   -p loomFirewallEnabled=false
 ```
+
+> Note there is **no `-p purviewEnabled=false`**. `EXISTING_PURVIEW` is folded
+> into the `adopt` bag by the boundary bicepparam, and `provisionPurview` is
+> already false because the decision is `adopt`. `azureMapsEnabled=false` and
+> `loomFirewallEnabled=false` are still here because those are *skip* decisions
+> — "deploy nothing and bind nothing" — which is a different answer from *adopt*.
 
 Then the phase-2 and phase-3 steps are identical to
 [greenfield](greenfield.md#phase-2-build-the-images-and-bring-the-apps-up-1525-min),
@@ -439,7 +468,7 @@ These are decisions with specific technical reasons, not gaps.
 
 ## Azure Government brownfield
 
-The decision model, the `EXISTING_*` mechanism and the class A/B/C table are
+The decision model, the `EXISTING_*` mechanism and the adoption table are
 identical — `gcc.bicepparam`, `gcc-high.bicepparam` and `il5.bicepparam` all
 read the `EXISTING_*` variables. Two Gov-specific differences:
 

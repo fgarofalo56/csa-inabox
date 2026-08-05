@@ -37,7 +37,7 @@ Common failure modes:
 | `Forbidden` on Key Vault Premium HSM | permission | Lacks `Microsoft.KeyVault/managedHsms/write` | Request elevated role |
 | `VnetAddressRangeInUse` | config | CIDR conflict | Pick a different CIDR; update `hubVnetCidr`. The DLZ spoke CIDR (`10.100.0.0/16`) is not settable from the root template today |
 | `PrivateDnsZoneAlreadyExists` | config | Re-deploy after a previous failure | `az network private-dns zone delete` the conflicts, or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter** — an earlier version of this table said there was; it has never existed in `main.bicep` |
-| `EnterpriseTenantAlreadyExists` | config | A Purview account already exists in the tenant — only one is allowed | Adopt it: `EXISTING_PURVIEW=<name>` **and** `purviewEnabled=false`. See [Brownfield](../deployment/brownfield.md) |
+| `EnterpriseTenantAlreadyExists` | config | A Purview account already exists in the tenant — only one is allowed | Adopt it: `EXISTING_PURVIEW=<name>` (+ `_RG`, `_SUB`). No enable-flag override is needed — `provisionPurview` is already false for an `adopt` decision. See [Brownfield](../deployment/brownfield.md) |
 | `ManagedIdentityRoleAssignmentDelay` / `PrincipalNotFound` | eventual-consistency | RBAC replication lag | Wait 5 min; re-run |
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | config | Phase 1 ran with `deployAppsEnabled=true` against an **empty** ACR | Re-run phase 1 with `false`, then the image phase. See [Greenfield](../deployment/greenfield.md) |
 | `ResourceGroupNotFound` early in `full-app-deploy-commercial` | config | The workflow's `region` input does not match the estate's region | Pass `-f region=<your-region>` |

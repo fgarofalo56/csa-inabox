@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1669 |
+| Total routes | 1670 |
 | Public (no session) | 100 |
 | Session-only | 562 |
 | Owner-scoped | 715 |
-| Admin | 292 |
+| Admin | 293 |
 | Gated (backend config) | 530 |
 | Areas | 121 |
 

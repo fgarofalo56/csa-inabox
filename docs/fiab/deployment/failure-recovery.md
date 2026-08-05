@@ -157,7 +157,7 @@ This is the **brownfield class**. Most of these mean *something already exists*
 
 | Code | Meaning | Fix |
 |---|---|---|
-| `EnterpriseTenantAlreadyExists` | A Purview account already exists in this tenant. Only one is allowed | Adopt it: `EXISTING_PURVIEW=<name>` **and** `-p purviewEnabled=false`. See [Brownfield class B](brownfield.md#class-b--adopting-binds-the-console-but-does-not-suppress-creation) |
+| `EnterpriseTenantAlreadyExists` | A Purview account already exists in this tenant. Only one is allowed | Adopt it: `EXISTING_PURVIEW=<name>` (+ `_RG`, `_SUB`). No enable-flag override is needed — `provisionPurview` is already false for an `adopt` decision. See [Brownfield](brownfield.md#step-2--choose-adopt-or-create-per-service) |
 | `PrivateDnsZoneAlreadyExists` | The `privatelink.*` zone exists — almost always a re-deploy after a partial failure | Delete the conflicting zone (`az network private-dns zone delete -n <zone> -g <rg>`) or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter.** An earlier version of this runbook claimed one; it has never existed |
 | `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c--no-adoption-path-exists-today) |
 | `StorageAccountAlreadyTaken` | Storage account names are globally unique | Change the deployment name prefix |

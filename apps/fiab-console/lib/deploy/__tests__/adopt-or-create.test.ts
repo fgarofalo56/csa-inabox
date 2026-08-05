@@ -9,14 +9,16 @@ import {
   getServiceDef,
 } from '../adoption-catalog';
 import {
-  computePlanHash,
-  greenfieldPlan,
-  supersede,
   validatePlan,
   emptyNetworkDecision,
   type DeploymentPlan,
   type ServiceDecision,
 } from '../plan-model';
+import {
+  computePlanHash,
+  greenfieldPlan,
+  supersede,
+} from '../plan-hash';
 import {
   planToAdoptBag,
   planToAdoptJson,

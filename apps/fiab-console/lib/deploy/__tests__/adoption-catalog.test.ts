@@ -43,14 +43,17 @@ describe('adoption-catalog', () => {
 
   it('every enableFlag is a parameter main.bicep actually declares', () => {
     const params = declaredBicepParams();
+    // `enableFlag` is OPTIONAL in the canonical shape (`string | undefined`),
+    // not `string | null`: an absent flag means the service has no provisioning
+    // toggle. Only a DECLARED flag has to exist in main.bicep.
     const missing = ADOPTION_CATALOG.filter(
-      (d) => d.enableFlag !== null && !params.has(d.enableFlag),
+      (d) => !!d.enableFlag && !params.has(d.enableFlag),
     ).map((d) => `${d.key} → ${d.enableFlag}`);
     expect(missing).toEqual([]);
   });
 
   it('asserts a non-trivial number of flags (the guard cannot pass vacuously)', () => {
-    const flagged = ADOPTION_CATALOG.filter((d) => d.enableFlag !== null);
+    const flagged = ADOPTION_CATALOG.filter((d) => !!d.enableFlag);
     expect(flagged.length).toBeGreaterThanOrEqual(10);
   });
 
@@ -59,9 +62,13 @@ describe('adoption-catalog', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('provisionVar names are unique (the adopt bag keys off them)', () => {
-    const vars = ADOPTION_CATALOG.map((d) => d.provisionVar);
+  it('provisionVar names are unique (two services must never share one gate)', () => {
+    // Only DECLARED provision vars — a create-only / attach-in-place row has
+    // none, and counting several `undefined`s as duplicates is a false alarm.
+    const vars = ADOPTION_CATALOG.map((d) => d.provisionVar).filter(Boolean);
     expect(new Set(vars).size).toBe(vars.length);
+    // The check must not be able to pass vacuously.
+    expect(vars.length).toBeGreaterThanOrEqual(13);
   });
 
   it('every armType is lower-case (the ARG `type in~` literal is built verbatim)', () => {
@@ -79,9 +86,19 @@ describe('adoption-catalog', () => {
 
   it('every adoptable service declares what Loom would CHANGE about it', () => {
     for (const d of ADOPTION_CATALOG.filter((x) => x.cls === 'adoptable' || x.cls === 'adopt-required')) {
+      if (d.readOnlyAdoption) {
+        // The ONE legitimate empty case, and it has to be claimed explicitly so
+        // "we forgot to write them down" cannot masquerade as "there are none".
+        expect(d.mutations, `${d.key} claims read-only adoption but lists mutations`).toEqual([]);
+        continue;
+      }
       expect(d.mutations.length, `${d.key} declares no mutations`).toBeGreaterThan(0);
       for (const m of d.mutations) expect(m.trim().length).toBeGreaterThan(10);
     }
+    // The loop must not be able to pass vacuously.
+    const adoptables = ADOPTION_CATALOG.filter((x) => x.cls === 'adoptable' || x.cls === 'adopt-required');
+    expect(adoptables.length).toBeGreaterThanOrEqual(13);
+    expect(adoptables.filter((d) => !d.readOnlyAdoption).length).toBeGreaterThanOrEqual(10);
   });
 
   it('a create-only service is excluded from adoptableServices()', () => {

@@ -41,10 +41,12 @@ The default is **per boundary**, not global: `true` in
 `il5.bicepparam` (Atlas on AKS instead). Decide:
 
 - [ ] Greenfield tenant → leave `true` (or flip it on for GCC-High)
-- [ ] Existing Purview → **adopt it**: set `EXISTING_PURVIEW` (+ `_RG`, `_SUB`)
-      **and** `purviewEnabled=false`. Only one Enterprise Purview is allowed per
-      tenant; setting `EXISTING_PURVIEW` alone does **not** suppress creation and
-      the deploy fails `EnterpriseTenantAlreadyExists`. See
+- [ ] Existing Purview → **adopt it**: set `EXISTING_PURVIEW` (+ `_RG`, `_SUB`).
+      That is the whole step — `provisionPurview` is derived as
+      `purviewEnabled && adoptMode(adopt,'purview') == 'create'`, so an adopt
+      decision suppresses creation on its own and no enable-flag override is
+      needed. (It used to: `EXISTING_PURVIEW` alone bound the Console and still
+      deployed a second account, failing `EnterpriseTenantAlreadyExists`.) See
       [Brownfield deployment](../deployment/brownfield.md)
 - [ ] Region has no Purview (e.g. `centralus`) → `purviewEnabled=false`; the
       Loom catalog falls back to its Azure-native backend

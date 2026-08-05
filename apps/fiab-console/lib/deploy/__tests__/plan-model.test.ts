@@ -14,19 +14,21 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  canonicalPlanJson,
-  computePlanHash,
   coverageSentence,
   coverageSummary,
   isGreenfieldPlan,
   planBlockers,
   planCounts,
-  verifyPlanHash,
-  withPlanHash,
   type DeploymentPlan,
   type ServiceDecision,
   type SubscriptionScanResult,
 } from '@/lib/deploy/plan-model';
+import {
+  canonicalPlanJson,
+  computePlanHash,
+  verifyPlanHash,
+  withPlanHash,
+} from '@/lib/deploy/plan-hash';
 import {
   allowedModes,
   applyDecision,
@@ -151,7 +153,7 @@ describe('recommendFor', () => {
   });
 
   it('marks a tenant singleton adopt-required rather than offering a create that would fail', () => {
-    const purview = svc({ key: 'purview', label: 'Microsoft Purview', class: 'adopt-required', singleton: 'tenant' });
+    const purview = svc({ key: 'purview', label: 'Microsoft Purview', cls: 'adopt-required', singleton: 'tenant' });
     const r = recommendFor({ service: purview, candidates: [cand({ serviceKey: 'purview', name: 'pv' })] }, 'eastus2');
     expect(r.recommendation).toBe('adopt-required');
 
@@ -161,7 +163,7 @@ describe('recommendFor', () => {
   });
 
   it('renders a create-only service locked, with its reason', () => {
-    const kv = svc({ key: 'keyvault', label: 'Key Vault', class: 'create-only', createOnlyReason: 'trust root', mutations: [] });
+    const kv = svc({ key: 'keyvault', label: 'Key Vault', cls: 'create-only', createOnlyReason: 'trust root', mutations: [] });
     const r = recommendFor({ service: kv, candidates: [] }, 'eastus2');
     expect(r.recommendation).toBe('create');
     expect(r.reason).toBe('trust root');
@@ -272,13 +274,26 @@ describe('applyDecision / immutability / hash', () => {
       services: Object.fromEntries(Object.entries(base.services).reverse()),
     };
     expect(computePlanHash(reordered)).toBe(computePlanHash(base));
-    expect(verifyPlanHash(base)).toBe(true);
+    expect(verifyPlanHash(withPlanHash(base))).toBe(true);
+  });
+
+  it('the PLANNER leaves the plan unstamped — the hash is stamped server-side', () => {
+    // plan-builder runs in the browser (setup-wizard is a 'use client' tree) and
+    // cannot compute the authoritative sha256: lib/deploy/plan-hash.ts imports
+    // node:crypto and is server-only by design. A hash computed in the browser
+    // would prove nothing about the plan the deploy received.
+    expect(base.planHash).toBe('');
+    // And an UNSTAMPED plan is reported NOT verified, never verified-trivially.
+    expect(verifyPlanHash(base)).toBe(false);
   });
 
   it('changes the hash when a decision changes', () => {
     const next = applyDecision(base, 'aisearch', { mode: 'skip' }, 'tester', NOW);
-    expect(next.planHash).not.toBe(base.planHash);
-    expect(verifyPlanHash(next)).toBe(true);
+    // Stamp both sides the way writePlanIfAbsent() does on the server.
+    const a = withPlanHash(base);
+    const b = withPlanHash(next);
+    expect(b.planHash).not.toBe(a.planHash);
+    expect(verifyPlanHash(b)).toBe(true);
   });
 
   it('excludes the hash field from its own input', () => {

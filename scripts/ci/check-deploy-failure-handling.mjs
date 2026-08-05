@@ -51,13 +51,43 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const WF_DIR = path.join(REPO_ROOT, '.github', 'workflows');
 
-/** Workflows in scope: anything that deploys, builds an image, or rolls one. */
+/**
+ * Workflows in scope.
+ *
+ * NAME-BASED SCOPING WAS THE HOLE. The first cut of this guard scoped on the
+ * FILENAME — `/(^|[-_])(deploy|build|roll|rollback)/i` — which matched 27 of
+ * 114 workflows and excluded 39 that mutate Azure, 13 of them `gov-provision-*`.
+ * Measured: `gov-provision-aisearch.yml` runs `az deployment group create` and
+ * `gov-provision-maps.yml` runs `az acr build`, and neither was ever looked at.
+ * That is the same class as the `getSession(`-literal guard that made four
+ * exploitable routes invisible: a control whose reach is decided by a name is
+ * defeated by a rename, and lands exactly where the guard is the only control.
+ *
+ * Scope is therefore decided by WHAT THE WORKFLOW DOES. A workflow is in scope
+ * when any of its `run:` blocks issues an Azure-mutating command. The name
+ * pattern is kept as an OR arm so the deploy/build/roll workflows stay in scope
+ * even if a future refactor moves their `az` calls into a script.
+ */
 export const IN_SCOPE = /(^|[-_])(deploy|build|roll|rollback)/i;
+
+/**
+ * An Azure command that CHANGES something (or builds an image that will be
+ * deployed). Read-only verbs — `show`, `list`, `query` — are deliberately absent:
+ * this guard is about deploy-path failure handling, not about every `az` call.
+ */
+export const AZ_MUTATING =
+  /\baz\s+(?:deployment\s+\w+\s+(?:create|validate|what-if)|acr\s+build|containerapp\s+(?:create|update|revision\s+\w+)|group\s+create|provider\s+register|role\s+assignment\s+create|webapp\s+(?:create|deployment)|functionapp\s+(?:create|deployment)|storage\s+account\s+create|keyvault\s+(?:create|set)|monitor\s+\w+\s+create)\b/;
+
+export function isInScope(file, source) {
+  if (IN_SCOPE.test(file)) return true;
+  return runBlocks(source).some((b) => b.body.some((l) => !isComment(l.text) && AZ_MUTATING.test(l.text)));
+}
 
 export function inScopeWorkflows(dir = WF_DIR) {
   return fs
     .readdirSync(dir)
-    .filter((f) => f.endsWith('.yml') && IN_SCOPE.test(f))
+    .filter((f) => f.endsWith('.yml'))
+    .filter((f) => isInScope(f, fs.readFileSync(path.join(dir, f), 'utf8')))
     .sort();
 }
 

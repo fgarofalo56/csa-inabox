@@ -35,7 +35,11 @@ import { classify, TAXONOMY } from '../deploy-classify.mjs';
 
 const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs');
 
-function tmpdir() {
+// NOTE: deliberately NOT named `tmpdir` — a local helper with that name shadows
+// `os.tmpdir` to every reader AND to scripts/ci/check-temp-artifact-safety.mjs,
+// which then flags `path.join(scratchDir(), '<const>')` as a shared-temp-root write.
+// It is a fresh mkdtemp directory; the name now says so.
+function scratchDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'loom-retry-test-'));
 }
 
@@ -76,7 +80,7 @@ const MYSTERY = 'ERROR: (SomeCodeNobodyHasEverSeen) the widget frobnicator decli
 // ── THE MUTATION PROOF: the retry must be able to fail ───────────────────────
 
 test('MUTATION PROOF — a permanently-failing TRANSIENT dependency goes RED after the budget', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   fs.writeFileSync(counter, '');
   const artifact = path.join(dir, 'deploy-failure.json');
@@ -106,7 +110,7 @@ test('MUTATION PROOF — a permanently-failing TRANSIENT dependency goes RED aft
 });
 
 test('MUTATION PROOF — the wall-clock budget also fails closed', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   fs.writeFileSync(counter, '');
 
@@ -125,7 +129,7 @@ test('MUTATION PROOF — the wall-clock budget also fails closed', () => {
 // ── THE HAPPY PATH COSTS NOTHING ─────────────────────────────────────────────
 
 test('happy path — one invocation, zero sleeps, exit 0, no artifact written', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   const artifact = path.join(dir, 'deploy-failure.json');
   fs.writeFileSync(counter, '');
@@ -144,7 +148,7 @@ test('happy path — one invocation, zero sleeps, exit 0, no artifact written', 
 });
 
 test('a transient failure that clears is retried and then succeeds', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   fs.writeFileSync(counter, '');
 
@@ -161,7 +165,7 @@ test('a transient failure that clears is retried and then succeeds', () => {
 // ── QUOTA IS NEVER RETRIED, AND THE MESSAGE SAYS "QUOTA" ─────────────────────
 
 test('MUTATION PROOF — a quota denial is attempted ONCE and the message names quota', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   const artifact = path.join(dir, 'deploy-failure.json');
   fs.writeFileSync(counter, '');
@@ -184,7 +188,7 @@ test('MUTATION PROOF — a quota denial is attempted ONCE and the message names 
 });
 
 test('MUTATION PROOF — an UNCLASSIFIABLE failure is attempted once and asserts no cause', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   fs.writeFileSync(counter, '');
 
@@ -200,7 +204,7 @@ test('MUTATION PROOF — an UNCLASSIFIABLE failure is attempted once and asserts
 });
 
 test('the FULL stderr is echoed on final failure — never truncated, never swallowed', () => {
-  const dir = tmpdir();
+  const dir = scratchDir();
   const counter = path.join(dir, 'n');
   fs.writeFileSync(counter, '');
   const noisy = `${QUOTA}line-A-marker\nline-B-marker\n`;
@@ -213,7 +217,7 @@ test('the FULL stderr is echoed on final failure — never truncated, never swal
 
 test('a missing binary is a failure, not a silent success', () => {
   const r = runRetry(['--class-allow', 'transient', '--backoff', '0'], [
-    path.join(tmpdir(), 'definitely-not-a-real-binary'),
+    path.join(scratchDir(), 'definitely-not-a-real-binary'),
   ]);
   assert.notEqual(r.status, 0);
 });
