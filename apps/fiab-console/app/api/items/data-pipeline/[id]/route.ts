@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getPipeline, upsertPipeline, deletePipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
 import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
@@ -25,7 +25,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('pipeline not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'data-pipeline',
+      allowReadRoles: true,
+      notFound: 'pipeline not found',
+    });
+    if (denied) return denied;
+  }
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
@@ -66,7 +75,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('pipeline not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'data-pipeline',
+      notFound: 'pipeline not found',
+    });
+    if (denied) return denied;
+  }
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
@@ -112,7 +129,15 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('pipeline not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'data-pipeline',
+      notFound: 'pipeline not found',
+    });
+    if (denied) return denied;
+  }
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();

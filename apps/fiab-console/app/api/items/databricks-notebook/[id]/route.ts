@@ -17,7 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import {
   getNotebook,
   importNotebook,
@@ -41,8 +41,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!path) {
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
     if (!workspaceId) return NextResponse.json({ ok: false, error: 'path or workspaceId is required' }, { status: 400 });
-    if (!(await assertOwner(workspaceId, session.claims.oid))) {
-      return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+    // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+    // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+    {
+      const denied = await authorizeItemWorkspace(session, {
+        workspaceId, itemId: (await ctx.params).id, itemType: 'databricks-notebook',
+        allowReadRoles: true,
+        notFound: 'notebook not found',
+      });
+      if (denied) return denied;
     }
     try {
       const items = await itemsContainer();

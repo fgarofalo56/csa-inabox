@@ -21,7 +21,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getServiceClientFor } from '@/lib/azure/adls-client';
 import {
@@ -113,7 +113,12 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({} as any));
   const workspaceId = String(body?.workspaceId || '').trim();
   if (!workspaceId) return err('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeWorkspace(s, workspaceId);
+    if (denied) return denied;
+  }
 
   // Honest gate 1 — ADLS sample account. No silent fallback to LOOM_ADLS_ACCOUNT:
   // seeding writes real bytes, so the operator must opt the account in explicitly.

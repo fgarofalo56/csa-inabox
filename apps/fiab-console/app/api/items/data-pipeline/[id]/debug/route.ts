@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { withSession } from '@/lib/api/route-toolkit';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { debugPipeline } from '@/lib/azure/adf-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -24,7 +24,15 @@ export const POST = withSession<{ id: string }>(async (req: NextRequest, { sessi
   const { id } = params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return apiError('pipeline not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: params.id, itemType: 'data-pipeline',
+      notFound: 'pipeline not found',
+    });
+    if (denied) return denied;
+  }
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
