@@ -297,7 +297,15 @@ describe('admin/env-config registry', () => {
     // already in the catalog, so a push-button deploy still needs ZERO of these
     // set — they exist so an operator can point workflows at a different
     // subscription, resource group, or region.
-    expect(EDITABLE_ENV.length).toBe(195);
+    // Bumped to 196 by #2968 (Power BI is Fabric-family and must be opt-in): the
+    // new bi-powerbi-backend spec registers LOOM_BI_BACKEND, the selector that
+    // had no gate entry at all even though it decides whether the console talks
+    // to Power BI, +1: 195 -> 196. It is `optIn: true`, so an unset value reads
+    // as the neutral opt-in state and a push-button deploy still needs ZERO
+    // operator input — bicep emits 'aas' (or '') and never 'powerbi'. It belongs
+    // on /admin/env-config because that page already hosts the runtime toggle
+    // (PowerBiBackendCard); the runtime setting still takes precedence over env.
+    expect(EDITABLE_ENV.length).toBe(196);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

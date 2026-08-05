@@ -27,19 +27,28 @@ import { clientFetch } from '@/lib/client-fetch';
  * the whole tree shows one honest infra-gate MessageBar. When Power BI returns
  * 401/403 (SP not authorized in the tenant / not a workspace member) the exact
  * remediation hint is surfaced verbatim.
+ *
+ * NO-FABRIC-DEPENDENCY (#2968). Power BI is Fabric-family, so this navigator is
+ * reachable ONLY behind the explicit runtime opt-in. `enabled` is REQUIRED —
+ * not defaulted — so every present and future host has to state where its
+ * opt-in comes from; the previous arrangement relied on hosts passing
+ * `workspaceId=''`, an invariant a caller could (and did) break silently. With
+ * `enabled={false}` this component issues ZERO `/api/powerbi/*` requests and
+ * renders the guided opt-in card below (ux-baseline.md G2: an inline Fix it
+ * that goes to the real toggle, not a bare remediation banner).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tree, TreeItem, TreeItemLayout,
   Button, Input, Field, Caption1, Badge, Spinner,
-  Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
+  Tooltip, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync16Regular, ArrowSync20Regular, Delete16Regular,
   Table20Regular, DocumentText20Regular, Board20Regular, Flow20Regular,
-  Open16Regular, Search20Regular, Warning20Regular,
+  Open16Regular, Search20Regular, Warning20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -68,6 +77,12 @@ interface DashboardRow { id: string; displayName: string; webUrl?: string }
 interface DataflowRow { objectId: string; name: string; description?: string; configuredBy?: string }
 
 export interface PowerBiTreeProps {
+  /**
+   * The Power BI **opt-in** (`useBiBackend().powerBiEnabled`). REQUIRED — with
+   * `false` the navigator makes ZERO Power BI requests and renders the guided
+   * opt-in card instead (no-fabric-dependency.md / #2968).
+   */
+  enabled: boolean;
   /** The Power BI workspace (groupId) to navigate. Empty = "pick a workspace" prompt. */
   workspaceId: string;
   /** Currently selected semantic model (highlighted). */
@@ -85,6 +100,7 @@ export interface PowerBiTreeProps {
 }
 
 export function PowerBiTree({
+  enabled,
   workspaceId,
   selectedDatasetId = null,
   onOpenDataset,
@@ -114,13 +130,14 @@ export function PowerBiTree({
   const [pipelines, setPipelines] = useState<PipelineRow[] | null>(null);
   const [pipelinesErr, setPipelinesErr] = useState<string | null>(null);
   const loadPipelines = useCallback(async () => {
+    if (!enabled) return; // Power BI opt-in off → never call Power BI (#2968).
     if (pipelines !== null) return; // load once
     try {
       const j = await clientFetch('/api/powerbi/pipelines').then(readJson);
       if (j.ok) { setPipelines(j.pipelines || []); setPipelinesErr(null); }
       else { setPipelines([]); setPipelinesErr(j.error || j.hint || 'could not load pipelines'); }
     } catch (e: any) { setPipelines([]); setPipelinesErr(e?.message || String(e)); }
-  }, [pipelines]);
+  }, [enabled, pipelines]);
   const deployStage = useCallback(async (pipelineId: string, sourceStageOrder: number, label: string) => {
     setBusy(true); setActionMsg(null);
     try {
@@ -142,7 +159,9 @@ export function PowerBiTree({
   }
 
   const loadAll = useCallback(async () => {
-    if (!workspaceId) {
+    // #2968 — the Power BI opt-in is checked HERE, at the point of call, so no
+    // host can reintroduce the fan-out by passing a workspaceId it inferred.
+    if (!enabled || !workspaceId) {
       setDatasets([]); setReports([]); setDashboards([]); setDataflows([]);
       return;
     }
@@ -169,7 +188,7 @@ export function PowerBiTree({
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [enabled, workspaceId]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -251,6 +270,40 @@ export function PowerBiTree({
       </span>
     </TreeItemLayout>
   );
+
+  // --- Power BI opt-in (no-fabric-dependency.md / G2) ----------------------
+  // Power BI is Fabric-family, so it is OFF by default and the host surface is
+  // fully functional without it (Azure-native semantic layer / Loom-native
+  // renderer). Nothing is broken here — this is a discoverable OPT-IN, so it
+  // gets a guided card with an inline Fix it that opens the real toggle
+  // (/admin/env-config → "Power BI backend"), never a red remediation banner.
+  // Registered as gate `bi-powerbi-backend` so Copilot and /admin/gates can
+  // find and resolve it.
+  if (!enabled) {
+    return (
+      <div className={s.root}>
+        <div className={s.header}><span className={s.title}>Workspace content</span></div>
+        <MessageBar intent="info" layout="multiline">
+          <MessageBarBody>
+            <MessageBarTitle>Power BI browsing is opt-in</MessageBarTitle>
+            This editor runs on the Azure-native semantic layer, so nothing here needs
+            Power BI. Turn the Power BI backend on to also browse the mapped workspace&apos;s
+            semantic models, reports, dashboards and dataflows.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button
+              size="small"
+              appearance="primary"
+              icon={<Settings20Regular />}
+              onClick={() => { try { window.location.assign('/admin/env-config#power-bi-backend'); } catch { /* navigation blocked */ } }}
+            >
+              Fix it — enable Power BI backend
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+      </div>
+    );
+  }
 
   // --- config gate (whole tree) -------------------------------------------
   if (gate) {

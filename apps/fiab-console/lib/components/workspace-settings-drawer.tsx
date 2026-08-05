@@ -44,6 +44,7 @@ import { SparkComputePane } from '@/lib/panes/spark-compute';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
+import { useBiBackend } from '@/lib/components/platform-config';
 import { WorkspaceImageEditor } from '@/lib/components/workspace-image-editor';
 import { WorkspacePortabilitySection } from '@/lib/components/workspace-portability';
 
@@ -272,6 +273,12 @@ interface PbiMappingDoc { pbiWorkspaceId: string; pbiWorkspaceName?: string; map
 
 function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
   const styles = useStyles();
+  // #2968 — `pbiConfigured` only says "the Console has a credential that COULD
+  // reach Power BI"; it is NOT the Power BI opt-in. Listing groups on that alone
+  // put a Fabric-family call on the DEFAULT path (no-fabric-dependency.md).
+  // The mapping itself stays editable without the opt-in — it is a Loom Cosmos
+  // record, not a Power BI call.
+  const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const [current, setCurrent] = useState<PbiMappingDoc | null | 'loading'>('loading');
   const [pbiConfigured, setPbiConfigured] = useState<boolean>(false);
   const [pbiId, setPbiId] = useState('');
@@ -292,7 +299,7 @@ function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
           setCurrent(d.mapping ?? null);
           setPbiConfigured(!!d.pbiConfigured);
           if (d.mapping) { setPbiId(d.mapping.pbiWorkspaceId || ''); setPbiName(d.mapping.pbiWorkspaceName || ''); }
-          if (d.pbiConfigured) {
+          if (d.pbiConfigured && pbiOptIn) {
             clientFetch('/api/powerbi/workspaces')
               .then((r) => r.json())
               .then((w: any) => {
@@ -310,7 +317,7 @@ function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
         }
       })
       .catch((e) => { setCurrent(null); setError(String(e?.message || e)); });
-  }, [workspace.id]);
+  }, [workspace.id, pbiOptIn]);
 
   const save = async (clear = false) => {
     setSaving(true); setError(null); setSaved(false);
@@ -442,6 +449,7 @@ function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
             overflow: 'hidden',
           }}>
             <PowerBiTree
+              enabled={pbiOptIn}
               workspaceId={current.pbiWorkspaceId}
               onOpenReport={(r) => { if (r.webUrl) { try { window.open(r.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
               onOpenDashboard={(d) => { if (d.webUrl) { try { window.open(d.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
