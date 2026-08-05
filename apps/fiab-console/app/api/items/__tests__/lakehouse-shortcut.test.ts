@@ -9,7 +9,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
-vi.mock('@/lib/auth/workspace-guard', () => ({ assertOwner: vi.fn(async () => true) }));
+// #2947 — the route now runs the canonical ladder via authorizeItemWorkspace
+// (null = admitted); `assertOwner` no longer exists.
+vi.mock('@/lib/auth/workspace-guard', () => ({
+  authorizeItemWorkspace: vi.fn(async () => null),
+  // #2947 also replaced this route's private `loadWs(workspaceId, oid)` — an
+  // `assertOwner` inlined under another name — on the GET/POST handlers.
+  authorizeWorkspace: vi.fn(async () => null),
+}));
 
 const created: any[] = [];
 const store = new Map<string, any>();

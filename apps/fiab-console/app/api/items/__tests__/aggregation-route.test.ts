@@ -24,7 +24,6 @@ vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 // covered in lib/auth/__tests__/authorize-item-workspace.test.ts and its wiring
 // into this route in .../model/__tests__/model-route-guard.test.ts.
 vi.mock('@/lib/auth/workspace-guard', () => ({
-  assertOwner: vi.fn(async () => true),
   authorizeItemWorkspace: vi.fn(async () => null),
 }));
 vi.mock('@/lib/azure/powerbi-client', () => ({
@@ -46,7 +45,7 @@ vi.mock('@/lib/azure/aas-client', () => ({
 
 import { POST as modelPOST } from '../semantic-model/[id]/model/route';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner, authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { getDataset, executeDatasetQueries } from '@/lib/azure/powerbi-client';
 import { xmlaConfigGate, executeTmsl, executeAggTmsl } from '@/lib/azure/aas-client';
 
@@ -69,7 +68,6 @@ beforeEach(() => {
   vi.resetAllMocks();
   // resetAllMocks wipes the vi.fn impls (incl. the workspace guards), so re-arm
   // them to authorize — these are aggregation logic tests.
-  (assertOwner as any).mockResolvedValue(true);
   (authorizeItemWorkspace as any).mockResolvedValue(null);
   (xmlaConfigGate as any).mockReturnValue(null);
 });

@@ -14,7 +14,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
-vi.mock('@/lib/auth/workspace-guard', () => ({ assertOwner: vi.fn(async () => true) }));
+// #2947 — the route now runs the canonical ladder via authorizeItemWorkspace
+// (null = admitted); `assertOwner` no longer exists.
+vi.mock('@/lib/auth/workspace-guard', () => ({ authorizeItemWorkspace: vi.fn(async () => null) }));
 
 const replaceMock = vi.fn();
 const patchMock = vi.fn();
