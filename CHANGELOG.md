@@ -25,6 +25,16 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.86.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.1...csa-inabox-v0.86.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **copilot:** ground docs-RAG answers in what LOOM does, not what the parity doc's Fabric column does (refs [#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929)) ([#2978](https://github.com/fgarofalo56/csa-inabox/issues/2978)) ([678b53b](https://github.com/fgarofalo56/csa-inabox/commit/678b53bccccc4c23ae6afa7f851a22a6910d7bb0))
+* **loom-unity:** retry the apk index fetch so a dl-cdn blip cannot re-block a security deploy (refs [#2643](https://github.com/fgarofalo56/csa-inabox/issues/2643)) ([#2981](https://github.com/fgarofalo56/csa-inabox/issues/2981)) ([e69a776](https://github.com/fgarofalo56/csa-inabox/commit/e69a77637d08c2ff219b39659942dd11a80b52c3))
+* **security:** 87 assertOwner sites answered "did you CREATE this workspace" instead of "may you ACCESS it" ([#2947](https://github.com/fgarofalo56/csa-inabox/issues/2947)) ([#2973](https://github.com/fgarofalo56/csa-inabox/issues/2973)) ([2ccee96](https://github.com/fgarofalo56/csa-inabox/commit/2ccee9659e2864ef37048b45d55967afe3f73d39))
+* **security:** Loom Unity — authorization ON by default, and AUTO-BIND the Console principal so it is usable (refs [#2643](https://github.com/fgarofalo56/csa-inabox/issues/2643)) ([#2974](https://github.com/fgarofalo56/csa-inabox/issues/2974)) ([de3ad20](https://github.com/fgarofalo56/csa-inabox/commit/de3ad20f58458f172b92c10e98f980d1761fbc8d))
+
 ## [0.86.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.0...csa-inabox-v0.86.1) (2026-08-05)
 
 
