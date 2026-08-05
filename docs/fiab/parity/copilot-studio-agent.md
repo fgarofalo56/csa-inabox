@@ -47,7 +47,7 @@ Line token URL from env so the same code targets each cloud.
 
 | Concern | Commercial / GCC | GCC-High | IL5 / DoD |
 | --- | --- | --- | --- |
-| BAP base (`LOOM_POWER_PLATFORM_BAP_BASE`) | `api.bap.microsoft.com` (default) | `api.bap.microsoft.us` (set the env var) | Power Platform unavailable — honest ⚠️ gate |
+| BAP base (auto-derived; `LOOM_BAP_BASE` overrides) | `api.bap.microsoft.com` | `gov.api.bap.microsoft.us` (GCC) / `high.api.bap.microsoft.us` (GCC High) / `api.bap.appsplatform.us` (DoD) | Power Platform unavailable — honest ⚠️ gate |
 | BAP token scope (`BAP_SCOPE`) | `api.bap.microsoft.com/.default` | currently hardcoded to `.com`; GCC-High needs `api.bap.microsoft.us/.default` (known follow-up — surfaced as an honest gate if the token is rejected) | N/A |
 | Dataverse host | `*.crm.dynamics.com` / `*.crm9.dynamics.com` (GCC) | `*.crm.microsoftdynamics.us` | N/A |
 | Dataverse auth (client-secret SP) | `LOOM_DATAVERSE_CLIENT_ID` / `_SECRET` / `_TENANT_ID` (re-uses the MSAL SP) | same vars; US-cloud audience | N/A |

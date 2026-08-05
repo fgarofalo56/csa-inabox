@@ -582,11 +582,20 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     docs: 'https://learn.microsoft.com/azure/databricks/machine-learning/feature-store/',
   },
   {
+    // HONESTY NOTE (do not "simplify" this back to a bare required[]).
+    // `LOOM_UAMI_CLIENT_ID` is set on EVERY deployed Container App, so asserting
+    // it alone made this capability permanently green — it measured "is the
+    // console deployed", not "can we reach Power Platform". Reaching Power
+    // Platform additionally needs a tenant-admin action the platform cannot
+    // self-serve (see remediation), which no env var can express. The real
+    // signal is the live `powerplatform` probe in lib/admin/service-probes.ts
+    // (Exercise → Power Platform), which performs an actual BAP environment
+    // list and reports gate/fail with the exact remediation.
     id: 'svc-powerplatform', category: 'azure-services', title: 'Power Platform control plane (power-* items / Copilot Studio)', severity: 'optional',
     required: ['LOOM_UAMI_CLIENT_ID'], warnOnMiss: true,
-    remediation: 'The Power Platform BAP API authenticates as the Console UAMI (LOOM_UAMI_CLIENT_ID) — a Power Platform admin must also register it as a management app (New-PowerAppManagementApp; scripts/csa-loom/grant-powerplatform-sp.ps1). The live probe surfaces the known SP-not-allowed 403 with the exact one-time fix.',
-    provisionedBy: 'modules/admin-plane/main.bicep (uami-console → apps[] env) + operator-run PP management-app registration',
-    role: 'Power Platform management application (tenant admin registration) + Environment Admin where environments are managed',
+    remediation: 'Env presence alone does NOT mean Power Platform is reachable — run Exercise → "Power Platform — list environments" for the live verdict. The BAP API authenticates as the Console UAMI (LOOM_UAMI_CLIENT_ID), and a Power Platform admin must ALSO register it as a management app (New-PowerAppManagementApp -ApplicationId <clientId>) — Microsoft requires an admin USER context for that registration, so a service principal cannot self-register. Loom additionally runs Power Platform calls under the SIGNED-IN USER by default (LOOM_POWERPLATFORM_USER_PASSTHROUGH), which is required for Power Automate authoring because Flow APIs reject unlicensed service-principal identities.',
+    provisionedBy: 'modules/admin-plane/main.bicep (uami-console → apps[] env) + operator-run PP management-app registration; user-passthrough needs no provisioning',
+    role: 'Power Platform management application (tenant admin registration) + Environment Admin where environments are managed; OR a signed-in user with Power Platform licences (passthrough)',
   },
   {
     id: 'svc-servicebus', category: 'azure-services', title: 'Service Bus (queues / topics — business events)', severity: 'optional',

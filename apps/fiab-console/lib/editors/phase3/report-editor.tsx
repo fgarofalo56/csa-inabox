@@ -153,7 +153,7 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
     setRunning(true); setSteps([]); setNarrative(null); setPending(null);
     setAoaiGate(null); setTopError(null); setApplyMsg(null);
     try {
-      const res = await fetch('/api/items/report/copilot', {
+      const res = await clientFetch('/api/items/report/copilot', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ prompt: p, reportId }),
       });
@@ -369,7 +369,7 @@ function ReportLikeEditor({
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
     try {
-      const r = await fetch(`${listPath}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`${listPath}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setReports([]); setErr(j.error); return; }
       setReports(j.reports || []);
@@ -379,7 +379,7 @@ function ReportLikeEditor({
 
   const loadDetail = useCallback(async (wsId: string, rId: string) => {
     try {
-      const r = await fetch(`${detailPathBase}/${encodeURIComponent(rId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`${detailPathBase}/${encodeURIComponent(rId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (j.ok) setReport(j.report);
       else setErr(j.error);
