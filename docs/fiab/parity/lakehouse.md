@@ -93,3 +93,61 @@ Per-cloud honesty: the GET response returns the cloud boundary (commercial / gcc
 Bicep: `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` (optional warehouse pin, blank → first RUNNING warehouse) added to `platform/fiab/bicep/modules/admin-plane/main.bicep`. Liquid clustering reuses the already-deployed `LOOM_DATABRICKS_HOSTNAME` + Console UAMI Databricks workspace access.
 
 Grade: **A+ (liquid clustering hits a real Databricks DDL backend; the three Fabric-only accelerators are honest persisted-preference gates with precise warning MessageBars — never a fake Azure "enabled"; sparkConfig validation is unit-tested; bicep-synced).**
+
+## How it works — common questions
+
+The matrices above are the parity record. This section answers the questions
+people actually ask about a Loom lakehouse, each one self-contained so it can be
+read (and retrieved) on its own.
+
+### Using a lakehouse without a Fabric capacity
+
+You do not need one. A Loom lakehouse is backed by **ADLS Gen2 + Delta** — that
+is the default, not a fallback. The Files tree is the live ADLS Gen2 data-plane;
+the Tables tree is a real **`_delta_log`** scan of each container's `Tables/`
+directory; T-SQL runs through **Synapse Serverless**. Nothing on this path calls
+`api.fabric.microsoft.com`, `api.powerbi.com` or `onelake.dfs.fabric.microsoft.com`,
+and the editor is fully functional with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset
+(per `no-fabric-dependency.md`). A Fabric lakehouse backend exists only as an
+explicit opt-in via `LOOM_LAKEHOUSE_BACKEND=fabric`.
+
+### How lakehouse shortcuts work without Fabric OneLake
+
+Loom ships its own **Azure-native zero-copy shortcuts engine**
+(`lib/azure/shortcut-engines.ts`) — Fabric OneLake shortcuts are opt-in only and
+are never on the default path. A **Files** shortcut is a named read-in-place
+pointer, proven by a real listing: no bytes are copied. A **Tables** shortcut
+registers a real **zero-copy** external object on the default Azure-native
+engine — a Synapse Serverless `CREATE VIEW … OPENROWSET`, or a Databricks Unity
+Catalog external table over the `abfss://` / object-store location — so the
+lakehouse SQL analytics endpoint queries the source in place by the shortcut's
+three-part `engineObject` name (for example `loom_lakehouse.shortcuts.<name>`).
+Deleting a shortcut drops the view or external table and **never the source
+bytes**. Definitions live in the Cosmos `lakehouse-shortcuts` registry.
+
+### Which sources a lakehouse shortcut can point at
+
+The New shortcut wizard offers: another **internal Loom lakehouse**, **ADLS
+Gen2**, **Azure Blob Storage**, **Amazon S3**, **Google Cloud Storage (GCS)**,
+and **Dataverse** — each as either a **Files** or a **Tables** shortcut. S3 and
+GCS need a stored credential, which is an honest gate naming
+`LOOM_SHORTCUT_KEYVAULT`; the Tables kind additionally needs a query engine,
+naming `LOOM_SYNAPSE_WORKSPACE` **or** `LOOM_DATABRICKS_HOSTNAME`.
+
+### How the Share button grants access
+
+**Share** grants Microsoft Entra principals **Azure RBAC** at the storage
+**container** scope. The dialog POSTs to `/api/lakehouse/permissions`, which
+writes a real ARM `Microsoft.Authorization/roleAssignments` — the same backend
+the Permissions dialog uses — choosing between **Storage Blob Data Reader**,
+**Storage Blob Data Contributor** and **Storage Blob Data Owner**. There is no
+Fabric or Power BI workspace involved, and no separate sharing store: access is
+the storage account's own RBAC, so it is revocable and auditable in Azure.
+
+### How the default Spark pool is chosen
+
+In **Settings**, `defaultSparkPool` is an **enumerated Dropdown** bound to the
+real Synapse Spark pools returned by `/api/loom/compute-targets` — you pick from
+the pools that actually exist in the deployment rather than typing a name (per
+the no-freeform-config rule). When no Spark pool is deployed the Dropdown shows
+an honest empty state instead of an invented default.

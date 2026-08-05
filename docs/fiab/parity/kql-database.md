@@ -90,6 +90,47 @@ Azure-native default: every executable control uses the ADX cluster
 `api.fabric.microsoft.com`. The OneLake shortcut (10) and Excel/Power BI export
 (18) are the only Fabric-family rows and are strictly opt-in.
 
+## How it works — common questions
+
+The matrices above are the parity record. This section answers the questions
+people actually ask about a Loom KQL database, each one self-contained so it can
+be read (and retrieved) on its own.
+
+### What backs a KQL database — ADX, not a Fabric Eventhouse
+
+**Azure Data Explorer (ADX)** backs every Loom KQL database. You do **not** need
+a Microsoft Fabric **Eventhouse**, a Fabric capacity, or a Real-Time
+Intelligence workspace: the Fabric Eventhouse is the Fabric-family equivalent of
+this item and is strictly opt-in. The editor targets the cluster named by
+`LOOM_KUSTO_CLUSTER_URI` and is fully functional with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset (per `no-fabric-dependency.md`). Nothing
+on the default path calls `api.fabric.microsoft.com`.
+
+### Query endpoint vs management endpoint
+
+ADX exposes two REST endpoints and the editor picks between them for you, by the
+statement's **leading dot**:
+
+- a statement beginning with `.` is a **control (management) command** and is
+  sent to the **management endpoint** `/v1/rest/mgmt` via `executeMgmtCommand`
+  — for example `.show tables details`, `.create table`, `.alter table T policy
+  update`;
+- anything else is a **query** and is sent to the **query endpoint**
+  `/v1/rest/query` via `executeQuery`.
+
+Both go through the single route `POST /api/items/kql-database/[id]/query`,
+which does the dispatch — there is no endpoint selector to set, and no way to
+send a control command down the query endpoint by mistake.
+
+### Running a KQL query in the editor
+
+Type KQL into the Monaco editor and press **Shift+Enter** to run it (the ribbon
+Run command does the same thing). Results render in the `KustoResultsGrid` over
+the real rows returned by `/v1/rest/query`, with sort, per-column filter,
+in-grid search, column statistics and **CSV** export. Control commands typed
+with a leading `.` run the same way and return their result set into the same
+grid.
+
 ## Cloud boundary (Commercial / GCC / GCC-High / IL5)
 
 | Boundary | Coverage | Notes |

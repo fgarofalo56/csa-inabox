@@ -35,6 +35,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Container } from '@azure/cosmos';
 
 import { copilotSessionsContainer } from './cosmos-client';
+import { chunkMarkdown, MAX_CHUNK as CHUNKER_MAX_CHUNK } from './docs-chunker';
 import { recordRetrieval } from '@/lib/perf/retrieval-metrics';
 import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import {
@@ -776,41 +777,7 @@ function walkSource(dir: string): string[] {
   return out;
 }
 
-const MAX_CHUNK = 1500;
-
-function chunkMarkdown(text: string): Array<{ heading?: string; content: string }> {
-  // Split on H2 boundaries (and H1), keep heading as label.
-  const lines = text.split(/\r?\n/);
-  const blocks: Array<{ heading?: string; content: string }> = [];
-  let curHeading: string | undefined;
-  let buf: string[] = [];
-  const flush = () => {
-    const content = buf.join('\n').trim();
-    if (content.length > 0) blocks.push({ heading: curHeading, content });
-    buf = [];
-  };
-  for (const line of lines) {
-    const m = line.match(/^(#{1,3})\s+(.*)$/);
-    if (m) {
-      flush();
-      curHeading = m[2].trim();
-    } else {
-      buf.push(line);
-    }
-  }
-  flush();
-  // Further split any block bigger than MAX_CHUNK.
-  const out: Array<{ heading?: string; content: string }> = [];
-  for (const b of blocks) {
-    if (b.content.length <= MAX_CHUNK) { out.push(b); continue; }
-    let i = 0;
-    while (i < b.content.length) {
-      out.push({ heading: b.heading, content: b.content.slice(i, i + MAX_CHUNK) });
-      i += MAX_CHUNK;
-    }
-  }
-  return out;
-}
+const MAX_CHUNK = CHUNKER_MAX_CHUNK;
 
 function summarizeSource(filePath: string, text: string): string {
   // Grab the leading JSDoc / banner comment and exported names — keeps
