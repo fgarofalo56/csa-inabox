@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+/**
+ * GUARDRAIL: owner-only-workspace-guard  (merge-blocker, RATCHETING — #2947)
+ * ---------------------------------------------------------------------------
+ * RULE: a workspace authorization decision goes through the canonical ladder in
+ *   `lib/auth/workspace-guard.ts` (`authorizeWorkspace` / `authorizeItemWorkspace`
+ *   / `resolveAdminWorkspace`), NEVER an owner-only point read.
+ *
+ * THE DEFECT THIS RATCHETS. `workspacesContainer().item(<workspaceId>, <callerOid>)`
+ *   is a PARTITION point read. The `workspaces` container is partitioned on
+ *   `/tenantId` and `Workspace.tenantId` stores the workspace CREATOR's Entra oid
+ *   (`lib/auth/workspace-access.ts`), so a workspace document exists ONLY in its
+ *   creator's partition. That read can therefore only answer
+ *
+ *       "did this caller CREATE this workspace?"
+ *
+ *   and never "may this caller ACCESS it?". A tenant admin, a shared-ACL member,
+ *   or any non-creator is refused. Two live editors shipped broken on exactly
+ *   this (#2941 semantic-model — "Column metadata load failed"; #2942 pipeline
+ *   canvas), and #2947 migrated 87 call sites off the shared `assertOwner`
+ *   helper, which was then DELETED so tsc stops its return.
+ *
+ * WHY A RATCHET AND NOT A HARD ZERO. Deleting `assertOwner` does not stop the
+ *   next author RE-INLINING its four-line body under a new name — which is
+ *   precisely what five routes had already done before #2947
+ *   (admin/workspaces/{connections,spark/environment,spark/pools},
+ *   workspaces/{permissions,scm} each carried a private copy). This guard
+ *   detects the SHAPE, not the name. A residual population of the same shape
+ *   still exists on other route families (apps/, data-products/,
+ *   deployment-pipelines/, external-shares/, …) — those are real candidates for
+ *   the same bug but were deliberately OUT of #2947's scope, so they are
+ *   baselined here rather than silently ignored or noisily failed.
+ *
+ * DETECTION — a file scores one violation per line that BOTH
+ *   1. point-reads a container resolved from `workspacesContainer()` with a
+ *      caller-oid / tenantId partition key, AND
+ *   2. is in a file that also compares `.tenantId ===` / `.tenantId !==`
+ *      (the "and it's mine" half of the owner-only idiom),
+ *   plus one violation for any `assertOwner` identifier (the deleted helper).
+ *
+ * RATCHET SEMANTICS (shared mechanic — scripts/ci/_ratchet-count.mjs):
+ *   1. per-key rise → FAIL (a net-new owner-only guard).
+ *   2. touched-file (boy-scout) → a baselined file this PR MODIFIES must be
+ *      migrated to the canonical ladder while you're there. Escape hatch:
+ *      TOUCH_EXEMPT below, with a one-line reason.
+ *
+ * Baseline: scripts/ci/owner-only-workspace-guard-baseline.json (shrink-only;
+ * regen with --update-baseline and a one-line justification in the PR body).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runRatchet, gitTouchedFiles } from './_ratchet-count.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const APP_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
+const BASELINE_FILE = path.join(__dirname, 'owner-only-workspace-guard-baseline.json');
+
+/** The canonical guard module itself documents the deleted helper by name. */
+const SELF = 'apps/fiab-console/lib/auth/workspace-guard.ts';
+
+/**
+ * Touched-file escape hatch: repo-relative path → one-line reason a PR may
+ * modify a baselined file without migrating it. Keep SHORT.
+ */
+const TOUCH_EXEMPT = new Map([]);
+
+/** Owner-partition point read: `.item(<x>, <oid-ish>)` on a workspaces handle. */
+const POINT_READ_RE =
+  /\.item\(\s*[A-Za-z0-9_.[\]]+\s*,\s*(?:[A-Za-z0-9_]*\.)*(?:claims\.oid|oid|tenantId|ownerOid)\s*\)/;
+/** The "…and it's mine" comparison that makes the read an OWNERSHIP test. */
+const OWNER_CMP_RE = /\.tenantId\s*[!=]==/;
+/** The deleted helper, by name (identifier use, not prose). */
+const ASSERT_OWNER_RE = /(?:^|[^\w.])assertOwner\s*[(=:]/;
+
+function walk(dir, acc = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name === 'node_modules' || e.name === '.next' || e.name === '__tests__') continue;
+      walk(p, acc);
+    } else if (/\.tsx?$/.test(e.name)) {
+      acc.push(p);
+    }
+  }
+  return acc;
+}
+
+/** Drop comment lines so documentation of the deleted helper is not a hit. */
+const isComment = (l) => {
+  const t = l.trim();
+  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+};
+
+const current = {};
+for (const abs of [...walk(path.join(APP_ROOT, 'app')), ...walk(path.join(APP_ROOT, 'lib'))]) {
+  const rel = path.relative(REPO_ROOT, abs).replace(/\\/g, '/');
+  if (rel === SELF) continue;
+  const raw = fs.readFileSync(abs, 'utf8');
+  const lines = raw.split(/\r?\n/).filter((l) => !isComment(l));
+  const code = lines.join('\n');
+  const usesWorkspaces = /workspacesContainer\s*\(/.test(code);
+  const comparesOwner = OWNER_CMP_RE.test(code);
+  let n = 0;
+  for (const l of lines) {
+    if (usesWorkspaces && comparesOwner && POINT_READ_RE.test(l)) n++;
+    if (ASSERT_OWNER_RE.test(l)) n++;
+  }
+  if (n > 0) current[rel] = n;
+}
+
+process.exit(
+  runRatchet({
+    name: 'owner-only-workspace-guard',
+    baselineFile: BASELINE_FILE,
+    meta: {
+      owner: 'CSA Loom platform / security',
+      why:
+        'An owner-only workspace point read answers "did you CREATE this workspace", ' +
+        'not "may you ACCESS it" — it refuses tenant admins and shared-ACL members ' +
+        '(#2941/#2942/#2947). Use authorizeWorkspace / authorizeItemWorkspace / ' +
+        'resolveAdminWorkspace from lib/auth/workspace-guard.ts, read/write scoped.',
+      unblock:
+        'node scripts/ci/check-owner-only-workspace-guard.mjs --update-baseline ' +
+        '(run in the blocked PR with a one-line justification)',
+    },
+    current,
+    touched: {
+      files: gitTouchedFiles({ cwd: REPO_ROOT }),
+      exempt: TOUCH_EXEMPT,
+      message: () =>
+        'migrate this file to authorizeWorkspace / authorizeItemWorkspace / resolveAdminWorkspace ' +
+        '(read-only handlers pass { allowReadRoles: true }; mutating handlers MUST NOT)',
+    },
+  }),
+);

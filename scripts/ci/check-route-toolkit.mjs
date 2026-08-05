@@ -315,6 +315,68 @@ const TOUCH_EXEMPT = new Map([
   // session-OR-internal-token wrapper (the eval-probe route hand-rolls the same
   // check for the same reason).
   ['apps/fiab-console/app/api/help-copilot/reindex/route.ts', '#2929: dual session-OR-internal-token auth; withSession checks the session only and would drop the token path (needed for the CI reindex trigger)'],
+  // #2947 (the assertOwner sweep) touched these 44 routes to swap ONE line per
+  // handler: the owner-only `assertOwner(workspaceId, oid)` authorization check
+  // — which point-reads the CALLER's Cosmos partition and therefore answered
+  // "did you CREATE this workspace" instead of "may you ACCESS it", 404ing every
+  // tenant admin and shared-ACL member — for the canonical
+  // `authorizeItemWorkspace` / `authorizeWorkspace` ladder, read/write scoped.
+  //
+  // THE AUTH PROLOGUE withSession REPLACES IS UNTOUCHED: every one of these
+  // keeps its `const s = getSession(); if (!s) return apiError('unauthenticated',
+  // 401)`. THE CODEMOD DECLINES ALL 44 — running
+  //   node scripts/codemods/migrate-route-toolkit.mjs --file=<each>
+  // over the list reports "DRY-RUN: 0 handlers across 0 files" for every file,
+  // skipping each handler with "getSession() without the exact 401 guard" (they
+  // return the apiError helper, not the literal NextResponse.json shape the
+  // codemod matches). Hand-migrating 44 routes' handler signatures inside a
+  // security fix is unrelated churn with real 401-regression risk across the
+  // whole item-editor surface; the route-toolkit migration for this family is
+  // tracked separately.
+  ['apps/fiab-console/app/api/admin/workspaces/[id]/connections/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/admin/workspaces/[id]/spark/environment/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/admin/workspaces/[id]/spark/pools/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/experience/warp/transforms/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/activator/[id]/rules/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/activator/[id]/start/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/activator/[id]/stop/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/airflow-job/[id]/connection/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/airflow-job/[id]/dag-runs/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/airflow-job/[id]/dags/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/airflow-job/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/airflow-job/[id]/task-logs/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/approval-logicapp/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/evaluate/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/export/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/integration-runtimes/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/publish/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/triggers/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/[id]/validate/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/data-pipeline/practice-seed/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/databricks-notebook/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/dataflow/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/event-schema-set/[id]/check-compat/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/event-schema-set/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/event-schema-set/[id]/versions/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-database/[id]/monitor/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-database/[id]/open-mirror/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-database/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-database/[id]/sources/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-database/[id]/sql-endpoint/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-databricks/[id]/catalog/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-databricks/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mirrored-databricks/[id]/sql-endpoint/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mounted-adf/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/mounted-adf/[id]/run/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/notebook/[id]/execute-spark/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/notebook/[id]/jobs/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/notebook/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/notebook/[id]/run/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/notebook/[id]/runs/[runId]/log/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/notebook/[id]/runs/[runId]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/items/synapse-notebook/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  ['apps/fiab-console/app/api/workspaces/[id]/scm/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
