@@ -217,6 +217,13 @@ jobs:
         run: node scripts/ci/check-license-inventory.mjs
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         run: bash scripts/ci/test-assert-acr-image-tags.sh
+      # The roll's digest resolution used to be `az … 2>/dev/null || echo ""`
+      # and called an empty result "the tag does not exist" — a false statement
+      # printed about images that were in the registry (#2980/#2982). Its
+      # replacement retries, and a retry is precisely the thing that quietly
+      # becomes a gate that cannot fail, so it gets a mutation-proving self-test.
+      - name: acr-digest resolver self-test (fails closed — #2980)
+        run: bash scripts/ci/test-resolve-acr-digest.sh
       - name: route-inventory (route taxonomy drift gate — WS-D D3)
         run: node scripts/ci/generate-route-inventory.mjs --check
       - name: 'annotation-teeth (a step that prints ::error:: must be able to fail — #2837)'

@@ -391,10 +391,41 @@ jobs:
           TAG="${{ steps.vars.outputs.tag }}"
           echo "acr_opened=false" >> "$GITHUB_OUTPUT"
 
-          # Reach the ACR data plane; take the firewall lease if network-locked.
-          if ! az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then
-            PNA=$(az acr show -n "${{ env.ACR_NAME }}" --query publicNetworkAccess -o tsv | tr -d '\r')
-            echo "ACR data plane unreachable (publicNetworkAccess=$PNA) — acquiring the firewall lease for signature verification ..."
+          # ── Is the ACR data plane open to this runner? ASK THE CONTROL PLANE.
+          #
+          # #2980/#2982 — this used to ask `az acr login`, and that is the WRONG
+          # ORACLE. The step immediately before this one (the unskippable
+          # image-exists gate, #2967) takes the shared ACR firewall lease and
+          # RE-LOCKS the registry on exit — assert-acr-image-tags.sh carries
+          # `trap release_lease EXIT`, and its output is swallowed by
+          # `>/dev/null 2>&1`, so the re-lock is invisible in the log.
+          #
+          # ACR firewall changes take 30–90s to reach the DATA plane. So for the
+          # first few seconds after that re-lock, `az acr login` still SUCCEEDS
+          # against a stale-open data plane. This step therefore concluded
+          # "reachable — no lease needed", skipped the lease, and the digest read
+          # that followed was DENIED — and reported as "the tag does not exist",
+          # about images whose digest the PREVIOUS STEP had printed seconds
+          # earlier. An UNKNOWN rendered as a NEGATIVE (the #2819 class).
+          #
+          # Whether a roll hit it came down to how long the vitest gate in
+          # between happened to take. Gap between the image-exists gate and this
+          # one, 2026-08-05:
+          #     7869d434   2.8s -> FAILED        30af2cee    36.6s -> passed
+          #     e69a7763   7.6s -> FAILED        678b53bc   406s   -> passed
+          #     248dbc83   2.2s -> FAILED        e07eaca8   503s   -> passed
+          # Clean separation at the propagation window. The three that passed
+          # each logged "ACR data plane unreachable (publicNetworkAccess=
+          # Disabled)" — i.e. they got the RIGHT answer only because they asked
+          # late enough.
+          #
+          # The CONTROL plane has no such lag: the re-lock is a synchronous ARM
+          # write that completed inside the previous step. Ask it instead.
+          PNA=$(az acr show -n "${{ env.ACR_NAME }}" --query publicNetworkAccess -o tsv | tr -d '\r' || echo "")
+          DA=$(az acr show -n "${{ env.ACR_NAME }}" --query networkRuleSet.defaultAction -o tsv | tr -d '\r' || echo "")
+          echo "ACR firewall (control plane): publicNetworkAccess=${PNA:-<unreadable>}, defaultAction=${DA:-<unreadable>}"
+          if [[ "$PNA" != "Enabled" || "$DA" != "Allow" ]]; then
+            echo "ACR data plane is network-locked — acquiring the firewall lease for signature verification ..."
             # A short lease + short wait: this is a ~1 min data-plane read, and a
             # roll must not sit behind a 2-hour build lease. If a build holds the
             # registry we fall through to the same "cannot verify" warning below.
@@ -405,23 +436,46 @@ jobs:
               echo "::warning::Could not take the ACR firewall lease (another build/roll holds it) — CANNOT verify the image signature. SKIPPING the SC1 gate for this roll. Re-run once the holding run finishes."
               exit 0
             fi
-            REACHABLE=false
-            for i in $(seq 1 18); do
-              if az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then REACHABLE=true; echo "ACR reachable after $i attempt(s)."; break; fi
-              sleep 10
-            done
-            if [[ "$REACHABLE" != "true" ]]; then
-              # Unreachable ≠ unsigned. Same policy as a missing loom-uat job:
-              # loud warning, gate skipped — an infra hiccup must never
-              # permanently block an emergency roll.
-              echo "::warning::Could not reach the ACR data plane after ~3 min — CANNOT verify the image signature. SKIPPING the SC1 gate for this roll (the image may or may not be signed). Investigate the ACR network toggle (an Azure Policy may be reverting it)."
-              exit 0
-            fi
           fi
 
-          DIGEST=$(az acr repository show --name "${{ env.ACR_NAME }}" --image "${{ env.APP_NAME }}:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
-          if [[ -z "$DIGEST" ]]; then
-            echo "::error::Could not resolve a manifest digest for ${{ env.APP_NAME }}:$TAG in ${{ env.ACR_NAME }} — the tag does not exist. Nothing to roll; check the image_tag input."
+          # `az acr login` is still required — it mints the data-plane token
+          # cosign uses. It is just no longer trusted to answer "is the firewall
+          # open?". Poll it: right after an open, propagation is exactly the lag
+          # described above, in the other direction.
+          REACHABLE=false
+          for i in $(seq 1 18); do
+            if az acr login --name "${{ env.ACR_NAME }}" >/dev/null 2>&1; then REACHABLE=true; echo "ACR data plane reachable after $i attempt(s)."; break; fi
+            sleep 10
+          done
+          if [[ "$REACHABLE" != "true" ]]; then
+            # Unreachable ≠ unsigned. Same policy as a missing loom-uat job:
+            # loud warning, gate skipped — an infra hiccup must never
+            # permanently block an emergency roll.
+            echo "::warning::Could not reach the ACR data plane after ~3 min — CANNOT verify the image signature. SKIPPING the SC1 gate for this roll (the image may or may not be signed). Investigate the ACR network toggle (an Azure Policy may be reverting it)."
+            exit 0
+          fi
+
+          # ── Resolve the manifest digest. Bounded retry; FAILS CLOSED.
+          #
+          # Was: `az acr repository show … 2>/dev/null || echo ""`, then "empty
+          # means the tag does not exist". That discarded the registry's answer
+          # and asserted a fact it never established. scripts/ci/resolve-acr-digest.sh
+          # keeps the three states apart and is self-tested
+          # (scripts/ci/test-resolve-acr-digest.sh) including the mutation that
+          # matters: a registry that never returns a digest comes out RED.
+          #   exit 0 -> digest on stdout   exit 3 -> genuinely absent
+          #   exit 4 -> could not READ the registry within the budget
+          set +e
+          DIGEST=$(bash scripts/ci/resolve-acr-digest.sh \
+                     --acr "${{ env.ACR_NAME }}" --image "${{ env.APP_NAME }}:$TAG")
+          RESOLVE_RC=$?
+          set -e
+          if [[ $RESOLVE_RC -eq 3 ]]; then
+            echo "::error::REFUSING TO ROLL — ${{ env.APP_NAME }}:$TAG does not exist in ${{ env.ACR_NAME }}: the registry answered NOT FOUND on every attempt. Nothing to roll; check the image_tag input, or wait for build-fiab-images-acr-tasks to finish this SHA."
+            exit 1
+          fi
+          if [[ $RESOLVE_RC -ne 0 || -z "$DIGEST" ]]; then
+            echo "::error::REFUSING TO ROLL — could not READ ${{ env.ACR_NAME }} to resolve a manifest digest for ${{ env.APP_NAME }}:$TAG (see the resolver output above). This is NOT proof the tag is missing; the registry never answered. Rolling an image whose signature cannot be verified is worse than not rolling, so this gate fails closed. Most likely the ACR firewall is closed to this runner or a firewall change has not propagated."
             exit 1
           fi
           REF="${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}@$DIGEST"
