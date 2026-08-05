@@ -1,159 +1,197 @@
 /**
- * adoption-catalog — the ONE catalog of Azure services CSA Loom can adopt from
- * an existing (brownfield) estate, or deploy new (greenfield).
+ * adoption-catalog — the ONE catalog of every Azure backing service CSA Loom can
+ * adopt from an existing estate or deploy new.
  *
- * ## Why this file exists
+ * WHY THIS EXISTS
+ * ---------------
+ * Before this module the same question — "which services can Loom reuse, what is
+ * each one's ARM type, its bicep enable flag, its EXISTING_* env names, and the
+ * role the Console UAMI needs on it" — was answered by SIX divergent tables:
  *
- * Six divergent catalogs described "the services Loom can reuse", and they
- * disagreed on flag names, env names and even which service a key referred to:
+ *   lib/setup/scan-services.ts                      (12 services)
+ *   app/api/setup/discover-services/route.ts        (16, its own SERVICES array)
+ *   app/api/setup/deploy/route.ts SERVICE_PARAM_MAP (15)
+ *   lib/azure/attached-service-kinds.ts             (15 attach kinds — the best of them)
+ *   scripts/csa-loom/byo-wizard.sh                  (12)
+ *   scripts/csa-loom/scan-and-deploy.sh             (14)
  *
- *   - `lib/setup/scan-services.ts`                       (12 services)
- *   - `app/api/setup/discover-services/route.ts` SERVICES (16)
- *   - `app/api/setup/deploy/route.ts` SERVICE_PARAM_MAP   (15)
- *   - `lib/azure/attached-service-kinds.ts`               (15 — the best of them)
- *   - `scripts/csa-loom/byo-wizard.sh`                    (12)
- *   - `scripts/csa-loom/scan-and-deploy.sh`               (14)
+ * They disagreed, and the disagreements shipped. Measured on 2026-08-05:
+ *   - `maps`    — the CLI used loomMapsEnabled + EXISTING_AZURE_MAPS_ACCOUNT, the
+ *                 console used azureMapsEnabled + EXISTING_AZURE_MAPS. Only the
+ *                 first env name was read by any .bicepparam, so the console's
+ *                 BYO value was inert.
+ *   - `foundry` — the CLI disabled agentFoundryEnabled, the console disabled
+ *                 aiFoundryEnabled. main.bicep documents those as INDEPENDENT
+ *                 accounts, so the two surfaces suppressed different resources
+ *                 for the same "reuse my AOAI" answer.
+ *   - the vitest that claimed to pin them "in lockstep" asserted only
+ *     `expect(def.enabledFlag).toBeTruthy()` — it compared no name at all, which
+ *     is exactly why the drift was invisible.
  *
- * Machine-diffing them found real, shipped drift (`maps` carried
- * `loomMapsEnabled` in the CLI and `azureMapsEnabled` in TypeScript; `foundry`
- * carried `agentFoundryEnabled` vs `aiFoundryEnabled` — two DIFFERENT accounts).
- * The "no drift" test that was supposed to prevent exactly this asserted only
- * `expect(def.enabledFlag).toBeTruthy()` — it compared no names at all.
+ * This file is the single source of truth. `scripts/ci/check-adoption-catalog-sync.mjs`
+ * byte-compares every field below against `platform/fiab/bicep/main.bicep` and
+ * fails the build on any drift.
  *
- * This catalog is the replacement. `scripts/ci/check-adoption-catalog-sync.mjs`
- * byte-compares every `enableFlag` against the parameters `main.bicep` actually
- * declares, so an invented or renamed flag fails CI instead of shipping.
+ * RELATIONSHIP TO attached-service-kinds.ts
+ * -----------------------------------------
+ * That module stays: it is the day-2 *attach* vocabulary (register an existing
+ * resource into a landing zone after Loom is deployed). Its `roleGuid`/`roleName`
+ * values are re-exported here verbatim via `attachKind`, so day-0 adoption and
+ * day-2 attach grant the SAME role and can never diverge. The guard asserts it.
  *
- * ## Scope of THIS file
- *
- * Discovery + adoption metadata only:
- *   - what ARM type to scan for (the ARG `type in~` literal is GENERATED from
- *     this list — never hand-maintained, see `discovery-model.ts`),
- *   - whether the service can be adopted at all, and if not, WHY (§6 of the
- *     greenfield/brownfield design — `class:'create-only'` demands a reason),
- *   - what Loom uses it for and what Loom would CHANGE about an adopted
- *     instance (rendered verbatim on the review step — an operator adopting a
- *     production Databricks workspace must see "assigns it to a Unity Catalog
- *     metastore" BEFORE, not after),
- *   - the built-in role the Console UAMI needs on an adopted instance.
- *
- * The `adopt` bicep param bag, the `provisionVar` gating and the plan model are
- * downstream of this file and land separately; `provisionVar` records the name
- * those vars will carry so the two halves cannot drift apart silently.
- *
- * Role GUIDs and `tileSlug`s are carried over VERBATIM from
- * `lib/azure/attached-service-kinds.ts` (which this catalog supersedes) so the
- * day-0 adopt path and the day-2 attach path keep granting the same roles.
- *
- * No Fabric / Power BI entry exists here by construction — every backend is
- * Azure-native (`.claude/rules/no-fabric-dependency.md`). Fabric stays opt-in
- * behind `fabricEnabled` and is never scanned or recommended.
+ * Every backend here is Azure-native (no-fabric-dependency.md). Fabric / Power BI
+ * is deliberately absent: it is never scanned, never recommended, never adopted.
  */
 
-/** Coarse grouping used to organise the discovery result and the plan UI. */
-export type ServiceFamily =
-  | 'analytics'
-  | 'storage'
-  | 'governance'
-  | 'ai'
-  | 'streaming'
-  | 'database'
-  | 'integration'
-  | 'networking'
-  | 'platform';
+import {
+  ATTACHED_KIND_DEFS,
+  type AttachedServiceKind,
+} from '../azure/attached-service-kinds';
 
 /**
- * How this service may participate in a deployment plan.
+ * How the operator's decision for one service is honoured.
  *
- * - `adoptable`      — Loom can use an existing instance or deploy a new one.
- * - `adopt-required` — a TENANT SINGLETON: when one exists, "create new" is not
- *   merely discouraged, it FAILS at ARM (Purview: `EnterpriseTenantAlreadyExists`).
- *   The UI disables "new" with the explanation rather than offering it and then
- *   failing the deploy 20 minutes in.
- * - `reference-only` — Loom reads it but never provisions or mutates it.
- * - `create-only`    — Loom always deploys its own; adoption is not feasible.
- *   `createOnlyReason` is REQUIRED and is rendered to the operator, because
- *   "you can't" without "because" is indistinguishable from "we didn't build it".
+ * - `adopt`  — bind Loom to the named existing resource AND suppress the new one.
+ * - `create` — deploy a new one (the default for an absent decision).
+ * - `skip`   — deploy nothing and bind nothing; the dependent editors honest-gate.
  */
-export type AdoptionClass = 'adoptable' | 'adopt-required' | 'reference-only' | 'create-only';
+export type AdoptionMode = 'adopt' | 'create' | 'skip';
+
+/**
+ * What Loom is allowed to do with a service, decided by us and not by the
+ * operator. Rendered in the UI so a locked row always carries its reason.
+ *
+ * - `adoptable`      — offer adopt or create, freely.
+ * - `adopt-required` — a tenant/region singleton exists; "create new" is DISABLED
+ *                      with an explanation rather than offered and then failed.
+ *                      Purview: a second account fails EnterpriseTenantAlreadyExists.
+ * - `reference-only` — Loom only READS the resource; it never creates one and
+ *                      never mutates it (Azure SQL under plan-backing-sql.bicep).
+ * - `attach-in-place`— adopted through the landing-zone attach path, not by
+ *                      suppressing a Loom-created resource.
+ * - `create-only`    — Loom always deploys its own. REQUIRES `createOnlyReason`.
+ */
+export type AdoptionClass =
+  | 'adoptable'
+  | 'adopt-required'
+  | 'reference-only'
+  | 'attach-in-place'
+  | 'create-only';
+
+/** Drives which family-specific fitness checks run (see lib/deploy/fitness.ts). */
+export type ServiceFamily =
+  | 'governance'
+  | 'search'
+  | 'ai'
+  | 'analytics'
+  | 'lakehouse'
+  | 'streaming'
+  | 'integration'
+  | 'operational-db'
+  | 'storage'
+  | 'api'
+  | 'geo'
+  | 'observability'
+  | 'network'
+  | 'platform';
+
+/** How strict the hub-region match is for this service. */
+export type RegionPolicy =
+  /** Must sit in the hub region; anything else is unusable. */
+  | 'must-match-hub'
+  /** Cross-region works but costs latency/egress — warn, do not block. */
+  | 'prefer-hub'
+  /** The service is global or explicitly supports cross-region (Purview, Maps). */
+  | 'any';
+
+/** Declarative inputs to the fitness evaluator. Evaluated, never assumed. */
+export interface FitnessSpec {
+  /** SKU tier/name values Loom can work against (case-insensitive). Empty = any. */
+  allowedSkuTiers?: string[];
+  /** SKU tier/name values that are known-unusable, with the reason rendered. */
+  forbiddenSkus?: { match: string; why: string }[];
+  regionPolicy: RegionPolicy;
+  /**
+   * Family-specific check ids this service runs, resolved in fitness.ts. Each id
+   * maps to a check that states what it OBSERVED, never what it assumed.
+   */
+  familyChecks: string[];
+}
 
 export interface AdoptableServiceDef {
-  /** Stable key — the ONLY identifier used across discovery, plan and bicep. */
+  /** The ONLY identifier, everywhere: plan keys, bicep `adopt` keys, UI, docs. */
   key: string;
   label: string;
-  /** Lower-case ARM type for the generated ARG `type in~ (...)` literal. */
+  /** Lowercase ARM type for the Resource Graph `type in~ (...)` literal. */
   armType: string;
-  /**
-   * Case-insensitive discriminator on the ARM resource's `kind` field, for ARM
-   * types that host several distinct services. AOAI/Foundry is an
-   * `AIServices`-kind Cognitive Services account; a Speech or Vision account
-   * shares the ARM type and is NOT an adoption candidate for `foundry`.
-   */
+  /** Case-insensitive ARM `kind` discriminator (AOAI is an AIServices account). */
   armKindFilter?: string;
-  /** item-type-visual slug so rows reuse the existing icon registry. */
+  /** item-type-visual slug, so rows/tiles reuse the shipped icon registry. */
   tileSlug: string;
   family: ServiceFamily;
   cls: AdoptionClass;
-  /** REQUIRED when cls === 'create-only'. Rendered verbatim to the operator. */
+  /** MANDATORY when cls === 'create-only' | 'attach-in-place' | 'reference-only'. */
   createOnlyReason?: string;
-  /** `tenant` → only one may exist per tenant (Purview). */
+  /** A tenant- or region-scoped singleton, which forces `adopt-required`. */
   singleton?: 'tenant' | 'region';
+  /** The bicep param that enables provisioning at all (opt-out toggle). */
+  enableFlag?: string;
+  /** The bicep var that must gate creation. Required for adoptable classes. */
+  provisionVar?: string;
   /**
-   * The `main.bicep` boolean parameter that turns this service on, when one
-   * exists. `null` means the service is provisioned unconditionally today (it
-   * has no opt-out flag) — recorded honestly rather than inventing a name that
-   * `check-adoption-catalog-sync.mjs` would then fail on.
+   * The bicep MODULE PARAMETER that `provisionVar` must be passed to — i.e. the
+   * knob the resource-creating module actually reads. `'if'` means the module is
+   * gated by an inline `= if (... provisionVar ...)` condition instead.
+   *
+   * This is what makes the drift guard precise. Asserting merely that the raw
+   * enable flag is never passed anywhere is too broad: `deSynapse:
+   * loomSynapseEnabled` is an env-blanking MIRROR and
+   * `loomStreamAnalyticsEnabled: loomStreamAnalyticsEnabled` on
+   * asa-query-tester-rbac is an RBAC grant the Console still needs when the job
+   * is ADOPTED. Naming the exact sink catches a revert of the real gate and
+   * nothing else.
    */
-  enableFlag: string | null;
-  /**
-   * The bicep var that MUST gate creation once the `adopt` param bag lands:
-   * `var <provisionVar> = <enableFlag> && adoptMode(adopt, '<key>') == 'create'`.
-   * Declared here so the two halves are pinned to one name from the start.
-   */
-  provisionVar: string;
-  /** Built-in role definition GUID the Console UAMI needs on an adopted instance. */
-  roleGuid: string;
-  roleName: string;
-  /** `LOOM_*` Console env vars this service populates once bound. */
+  provisionSink?: string;
+  /** Built-in role the Console UAMI needs on an ADOPTED instance. */
+  roleGuid?: string;
+  roleName?: string;
+  /** The day-2 attach kind this maps to, so both paths grant the same role. */
+  attachKind?: AttachedServiceKind;
+  /** LOOM_* env vars in the admin-plane app env this service populates. */
   consoleEnv: string[];
+  /** Legacy per-service EXISTING_* env names still honoured by the bicepparams. */
+  legacyEnv?: { name: string; rg: string; sub: string };
   /** Shown in the UI: what Loom uses this service for. */
   usedFor: string;
   /**
-   * What Loom CHANGES about an adopted instance. Mandatory and non-empty for
-   * every adoptable service — the operator sees this before confirming, so
-   * adoption is never a silent mutation of production infrastructure.
-   * An empty array is only valid for `reference-only` / `create-only`.
+   * What Loom CHANGES about an adopted instance (deploy-integrity R5.2). Rendered
+   * VERBATIM on the review step. An operator adopting a production Databricks
+   * workspace must see "assigns it to a Unity Catalog metastore" BEFORE, not after.
+   * An empty array means Loom only reads the resource.
    */
   mutations: string[];
+  fitness: FitnessSpec;
 }
 
-// Built-in Azure role definition GUIDs — carried over verbatim from
-// lib/azure/attached-service-kinds.ts and scripts/csa-loom/grant-navigator-rbac.sh
-// so day-0 adopt and day-2 attach grant identically.
-const CONTRIBUTOR = 'b24988ac-6180-42a0-ab88-20f7382dd24c';
-const STORAGE_BLOB_DATA_CONTRIB = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
-const COSMOS_CONTRIB = '5bd9cd88-fe45-4216-938b-f97437e15450';
-const EH_DATA_OWNER = 'f526a384-b230-433a-b45c-95f59c4a2dec';
-const ADF_CONTRIB = '673868aa-7521-48a0-acc6-0f60742d39f5';
-const SEARCH_CONTRIB = '7ca78c08-252a-4471-8644-bb5ff32d4ba0';
-const COG_CONTRIB = '25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68';
-const APIM_CONTRIB = '312a565d-c81f-4fd8-895a-4e21e48d571c';
-const PURVIEW_DATA_SOURCE_ADMIN = '200bba9e-f0c8-430f-892b-6f0794863803';
-const LOG_ANALYTICS_CONTRIB = '92aaf0da-9dab-42b6-94a3-d43ce8d16293';
-const NETWORK_CONTRIB = '4d97b98b-1d4f-4787-a291-c67834d212e7';
-const PRIVATE_DNS_ZONE_CONTRIB = 'b12aa53e-6015-4669-85d0-8515ebb3ae7f';
-const ACR_PUSH = '8311e382-0749-4cb8-b61a-304f252e45ec';
-const READER = 'acdd72a7-3385-48ef-bd42-f606fba81ae7';
+// ---------------------------------------------------------------------------
+// Role GUIDs — resolved FROM attached-service-kinds.ts so day-0 adoption and
+// day-2 attach can never grant different roles for the same service.
+// ---------------------------------------------------------------------------
+const ATTACH_BY_KIND = new Map(ATTACHED_KIND_DEFS.map((d) => [d.kind, d]));
 
-/**
- * The adoption catalog. Every entry's `armType` feeds the single generated ARG
- * query; every `enableFlag` is byte-compared against `main.bicep` in CI.
- *
- * Ordered by family so the discovery result groups sensibly without a second
- * sort table.
- */
+function role(kind: AttachedServiceKind): { roleGuid: string; roleName: string; attachKind: AttachedServiceKind } {
+  const d = ATTACH_BY_KIND.get(kind);
+  if (!d) {
+    // Not reachable through the closed enum, but a thrown error here is far
+    // better than silently emitting an undefined role into a grant plan.
+    throw new Error(`adoption-catalog: no attach kind def for '${kind}'`);
+  }
+  return { roleGuid: d.roleGuid, roleName: d.roleName, attachKind: kind };
+}
+
+const LOG_ANALYTICS_CONTRIBUTOR = '92aaf0da-9dab-42b6-94a3-d43ce8d16293';
+
 export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
-  // ---- governance ---------------------------------------------------------
   {
     key: 'purview',
     label: 'Microsoft Purview',
@@ -164,36 +202,73 @@ export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
     singleton: 'tenant',
     enableFlag: 'purviewEnabled',
     provisionVar: 'provisionPurview',
-    roleGuid: PURVIEW_DATA_SOURCE_ADMIN,
-    roleName: 'Purview Data Source Administrator',
-    consoleEnv: ['LOOM_PURVIEW_ACCOUNT', 'LOOM_PURVIEW_RG', 'LOOM_PURVIEW_SUB'],
-    usedFor: 'Data map, classification, lineage and the governance surfaces.',
+    provisionSink: 'purviewEnabled',
+    ...role('purview'),
+    consoleEnv: ['LOOM_PURVIEW_ACCOUNT'],
+    legacyEnv: { name: 'EXISTING_PURVIEW', rg: 'EXISTING_PURVIEW_RG', sub: 'EXISTING_PURVIEW_SUB' },
+    usedFor: 'the data catalog, classification, lineage and the sensitivity-label sweep',
     mutations: [
-      'registers Loom lake / Synapse / Databricks sources as Purview data sources',
+      'registers Loom lake, Synapse and Databricks sources as Purview data sources',
       'creates a Loom collection under the root collection',
-      'runs scheduled scans against the registered sources',
+      'creates and runs scan definitions against those sources',
+      'writes glossary terms and classification rules',
     ],
+    fitness: {
+      // Purview is one SKU. Cross-region is explicitly supported by
+      // main.bicep's purviewLocation, so the region check must not block.
+      regionPolicy: 'any',
+      familyChecks: ['purview.sameTenant', 'purview.rootCollectionAdmin', 'purview.capacityUnits'],
+    },
   },
-
-  // ---- analytics ----------------------------------------------------------
   {
-    key: 'synapse',
-    label: 'Synapse Analytics',
-    armType: 'microsoft.synapse/workspaces',
-    tileSlug: 'synapse-serverless-sql-pool',
-    family: 'analytics',
+    key: 'aisearch',
+    label: 'Azure AI Search',
+    armType: 'microsoft.search/searchservices',
+    tileSlug: 'ai-search',
+    family: 'search',
     cls: 'adoptable',
-    enableFlag: 'loomSynapseEnabled',
-    provisionVar: 'provisionSynapse',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_SYNAPSE_WORKSPACE', 'LOOM_SYNAPSE_RG', 'LOOM_SYNAPSE_SUB'],
-    usedFor: 'Serverless + dedicated SQL, Spark pools, and the pipeline runtime.',
+    enableFlag: 'aiSearchEnabled',
+    provisionVar: 'provisionAiSearch',
+    provisionSink: 'aiSearchEnabled',
+    ...role('ai-search'),
+    consoleEnv: ['LOOM_AI_SEARCH_SERVICE'],
+    legacyEnv: { name: 'EXISTING_AI_SEARCH_SERVICE', rg: 'EXISTING_AI_SEARCH_RG', sub: 'EXISTING_AI_SEARCH_SUB' },
+    usedFor: 'Copilot retrieval, the docs index and catalog search',
     mutations: [
-      'sets the Console UAMI as a Synapse SQL administrator',
-      'creates Loom Spark pools and serverless SQL external tables',
-      'creates managed private endpoints to the lake when the workspace uses a managed VNet',
+      'creates up to four indexes (loom-docs, loom-catalog, loom-items, loom-help)',
+      'creates the matching indexers and skillsets',
     ],
+    fitness: {
+      forbiddenSkus: [{
+        match: 'free',
+        why: 'the Free tier caps a service at 3 indexes and Loom creates 4',
+      }],
+      regionPolicy: 'prefer-hub',
+      familyChecks: ['aisearch.indexHeadroom'],
+    },
+  },
+  {
+    key: 'foundry',
+    label: 'Azure OpenAI / AI Foundry',
+    armType: 'microsoft.cognitiveservices/accounts',
+    armKindFilter: 'aiservices',
+    tileSlug: 'ai-foundry',
+    family: 'ai',
+    cls: 'adoptable',
+    enableFlag: 'aiFoundryEnabled',
+    provisionVar: 'provisionFoundry',
+    provisionSink: 'aiFoundryEnabled',
+    ...role('aoai'),
+    consoleEnv: ['LOOM_AOAI_ENDPOINT', 'LOOM_AOAI_DEPLOYMENT', 'LOOM_AOAI_EMBED_DEPLOYMENT'],
+    legacyEnv: { name: 'EXISTING_AOAI', rg: 'EXISTING_AOAI_RG', sub: 'EXISTING_AOAI_SUB' },
+    usedFor: 'Copilot, the data agents, AI functions and every embedding path',
+    mutations: [],
+    fitness: {
+      regionPolicy: 'prefer-hub',
+      // Adopting an account with NO deployment is unusable, not a bind failure
+      // discovered at first chat turn.
+      familyChecks: ['foundry.chatDeployment', 'foundry.embedDeployment', 'foundry.kind'],
+    },
   },
   {
     key: 'adx',
@@ -204,373 +279,309 @@ export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
     cls: 'adoptable',
     enableFlag: 'adxEnabled',
     provisionVar: 'provisionAdx',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_KUSTO_CLUSTER', 'LOOM_KUSTO_RG', 'LOOM_KUSTO_SUB'],
-    usedFor: 'Real-Time Intelligence — eventhouse, KQL databases, querysets, dashboards, and the graph engine.',
+    provisionSink: 'adxEnabled',
+    ...role('adx'),
+    consoleEnv: ['LOOM_KUSTO_CLUSTER_URI', 'LOOM_KUSTO_CLUSTER_NAME', 'LOOM_KUSTO_RG', 'LOOM_KUSTO_SUB'],
+    legacyEnv: { name: 'EXISTING_KUSTO_CLUSTER', rg: 'EXISTING_KUSTO_RG', sub: 'EXISTING_KUSTO_SUB' },
+    usedFor: 'the eventhouse / KQL database item type, real-time dashboards and the graph engine',
     mutations: [
-      'creates Loom KQL databases on the cluster',
+      'creates the loomdb_default database',
+      'creates data connections from the Loom Event Hubs namespace',
       'enables streaming ingestion if it is off',
-      'grants the Console UAMI database-admin on the databases it creates',
     ],
+    fitness: {
+      forbiddenSkus: [{
+        match: 'dev(no sla)_standard_e2a_v4',
+        why: 'a Dev/Test cluster has no SLA and a single node — it cannot carry a Loom eventhouse',
+      }],
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['adx.streamingIngestion', 'adx.databaseHeadroom'],
+    },
+  },
+  {
+    key: 'synapse',
+    label: 'Azure Synapse Analytics',
+    armType: 'microsoft.synapse/workspaces',
+    tileSlug: 'synapse-serverless-sql-pool',
+    family: 'analytics',
+    cls: 'adoptable',
+    enableFlag: 'loomSynapseEnabled',
+    provisionVar: 'provisionSynapse',
+    provisionSink: 'loomSynapseEnabled',
+    ...role('synapse'),
+    consoleEnv: ['LOOM_SYNAPSE_WORKSPACE', 'LOOM_SYNAPSE_RG', 'LOOM_SYNAPSE_SUB'],
+    legacyEnv: { name: 'EXISTING_SYNAPSE', rg: 'EXISTING_SYNAPSE_RG', sub: 'EXISTING_SYNAPSE_SUB' },
+    usedFor: 'serverless SQL over the lake, Spark notebooks and the warehouse item type',
+    mutations: [
+      'sets the Console managed identity as a Synapse SQL administrator',
+      'creates Spark pools when the Spark workload tier is enabled',
+      'creates a managed private endpoint to the lake when the workspace uses a managed VNet',
+    ],
+    fitness: {
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['synapse.managedVnetPrivateEndpoint', 'synapse.sqlAdminSettable'],
+    },
   },
   {
     key: 'databricks',
     label: 'Azure Databricks',
     armType: 'microsoft.databricks/workspaces',
     tileSlug: 'databricks-sql-warehouse',
-    family: 'analytics',
+    family: 'lakehouse',
     cls: 'adoptable',
     enableFlag: 'loomDatabricksEnabled',
     provisionVar: 'provisionDatabricks',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_DATABRICKS_WORKSPACE', 'LOOM_DATABRICKS_HOST', 'LOOM_DATABRICKS_RG', 'LOOM_DATABRICKS_SUB'],
-    usedFor: 'Notebooks, jobs, DLT pipelines, SQL warehouses and Unity Catalog.',
+    provisionSink: 'loomDatabricksEnabled',
+    ...role('databricks'),
+    consoleEnv: ['LOOM_DATABRICKS_HOSTNAME', 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID'],
+    legacyEnv: { name: 'EXISTING_DATABRICKS', rg: 'EXISTING_DATABRICKS_RG', sub: 'EXISTING_DATABRICKS_SUB' },
+    usedFor: 'Unity Catalog, the SQL warehouse, Delta jobs and DLT pipelines',
     mutations: [
       'assigns the workspace to a Unity Catalog metastore',
-      'creates a SCIM service principal for Loom',
+      'creates a SCIM service principal for the Console identity',
       'creates a SQL warehouse',
-      'creates Loom catalogs / schemas in Unity Catalog',
+      'creates Loom catalogs, schemas and external locations',
     ],
+    fitness: {
+      allowedSkuTiers: ['premium'],
+      forbiddenSkus: [{
+        match: 'standard',
+        why: 'Unity Catalog and SCIM provisioning both require the Premium tier',
+      }],
+      regionPolicy: 'must-match-hub',
+      // Reassigning a workspace already on a FOREIGN metastore is destructive to
+      // its existing UC objects, so it is unusable rather than a warning.
+      familyChecks: ['databricks.metastoreAssignment'],
+    },
   },
-  {
-    key: 'aml',
-    label: 'Azure Machine Learning',
-    armType: 'microsoft.machinelearningservices/workspaces',
-    tileSlug: 'ml-model',
-    family: 'analytics',
-    cls: 'adoptable',
-    enableFlag: 'mlWorkspaceEnabled',
-    provisionVar: 'provisionAml',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_AML_WORKSPACE', 'LOOM_AML_RG', 'LOOM_AML_SUB'],
-    usedFor: 'Model training, registry and managed endpoints for the ML item types.',
-    mutations: [
-      'creates a default compute instance / cluster for Loom jobs',
-      'registers Loom models and environments in the workspace registry',
-    ],
-  },
-
-  // ---- storage ------------------------------------------------------------
-  {
-    key: 'storage-adls',
-    label: 'Storage / ADLS Gen2',
-    armType: 'microsoft.storage/storageaccounts',
-    tileSlug: 'storage-adls',
-    family: 'storage',
-    cls: 'adoptable',
-    // Lake storage is provisioned with each landing zone and has no opt-out
-    // flag in main.bicep today. Recorded as null rather than invented.
-    enableFlag: null,
-    provisionVar: 'provisionLakeStorage',
-    roleGuid: STORAGE_BLOB_DATA_CONTRIB,
-    roleName: 'Storage Blob Data Contributor',
-    consoleEnv: ['LOOM_STORAGE_ACCOUNT', 'LOOM_STORAGE_RG', 'LOOM_STORAGE_SUB'],
-    usedFor: 'The medallion lakehouse (bronze / silver / gold Delta) and Org visuals.',
-    mutations: [
-      'creates bronze / silver / gold containers',
-      'writes Delta tables under the Loom lake root',
-      'creates a private endpoint + private DNS record when the account is PE-only',
-    ],
-  },
-
-  // ---- database -----------------------------------------------------------
-  {
-    key: 'cosmos',
-    label: 'Cosmos DB',
-    armType: 'microsoft.documentdb/databaseaccounts',
-    tileSlug: 'cosmos-account',
-    family: 'database',
-    cls: 'adoptable',
-    enableFlag: 'loomConsoleCosmosEnabled',
-    provisionVar: 'provisionConsoleCosmos',
-    roleGuid: COSMOS_CONTRIB,
-    roleName: 'DocumentDB Account Contributor',
-    consoleEnv: ['LOOM_COSMOS_ACCOUNT', 'LOOM_COSMOS_RG', 'LOOM_COSMOS_SUB'],
-    usedFor: 'Console metadata (items, workspaces, plans) and the graph / vector store.',
-    mutations: [
-      'creates the Loom database and its containers',
-      'writes Console metadata continuously',
-    ],
-  },
-  {
-    key: 'postgres',
-    label: 'PostgreSQL Flexible Server',
-    armType: 'microsoft.dbforpostgresql/flexibleservers',
-    tileSlug: 'postgres',
-    family: 'database',
-    cls: 'adoptable',
-    enableFlag: 'postgresEnabled',
-    provisionVar: 'provisionPostgres',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_POSTGRES_SERVER', 'LOOM_POSTGRES_RG', 'LOOM_POSTGRES_SUB'],
-    usedFor: 'The Loom Unity catalog and the DuckLake catalog backends.',
-    mutations: [
-      'creates the Loom Unity and DuckLake catalog databases',
-      'adds a firewall rule (or private endpoint) for the Container Apps egress',
-    ],
-  },
-  {
-    key: 'azure-sql',
-    label: 'Azure SQL',
-    armType: 'microsoft.sql/servers',
-    tileSlug: 'azure-sql-database',
-    family: 'database',
-    cls: 'reference-only',
-    enableFlag: null,
-    provisionVar: 'provisionAzureSql',
-    roleGuid: READER,
-    roleName: 'Reader',
-    consoleEnv: ['LOOM_PLAN_BACKING_SQL_SERVER'],
-    usedFor: 'Read-only source for federated queries and plan-backing metadata.',
-    mutations: [],
-  },
-
-  // ---- ai -----------------------------------------------------------------
-  {
-    key: 'foundry',
-    label: 'AI Foundry / Azure OpenAI',
-    armType: 'microsoft.cognitiveservices/accounts',
-    armKindFilter: 'aiservices',
-    tileSlug: 'ai-foundry',
-    family: 'ai',
-    cls: 'adoptable',
-    enableFlag: 'aiFoundryEnabled',
-    provisionVar: 'provisionFoundry',
-    roleGuid: COG_CONTRIB,
-    roleName: 'Cognitive Services Contributor',
-    consoleEnv: ['LOOM_AOAI_ACCOUNT', 'LOOM_AOAI_RG', 'LOOM_AOAI_SUB', 'LOOM_AOAI_CHAT_DEPLOYMENT', 'LOOM_AOAI_EMBED_DEPLOYMENT'],
-    usedFor: 'Copilot, the agent runtime, embeddings and every AI-assisted surface.',
-    mutations: [
-      'creates chat + embedding model deployments if the required ones are absent',
-      'consumes TPM quota on the account',
-    ],
-  },
-  {
-    key: 'aisearch',
-    label: 'AI Search',
-    armType: 'microsoft.search/searchservices',
-    tileSlug: 'ai-search',
-    family: 'ai',
-    cls: 'adoptable',
-    enableFlag: 'aiSearchEnabled',
-    provisionVar: 'provisionAiSearch',
-    roleGuid: SEARCH_CONTRIB,
-    roleName: 'Search Service Contributor',
-    consoleEnv: ['LOOM_AI_SEARCH_SERVICE', 'LOOM_AI_SEARCH_RG', 'LOOM_AI_SEARCH_SUB'],
-    usedFor: 'Catalog search, the docs corpus and the Copilot retrieval index.',
-    mutations: [
-      'creates Loom indexes, indexers and skillsets',
-      'consumes index and storage quota on the service',
-    ],
-  },
-
-  // ---- streaming ----------------------------------------------------------
-  {
-    key: 'eventhubs',
-    label: 'Event Hubs',
-    armType: 'microsoft.eventhub/namespaces',
-    tileSlug: 'event-hub',
-    family: 'streaming',
-    cls: 'adoptable',
-    enableFlag: 'loomEventHubEnabled',
-    provisionVar: 'provisionEventHubs',
-    roleGuid: EH_DATA_OWNER,
-    roleName: 'Azure Event Hubs Data Owner',
-    consoleEnv: ['LOOM_EVENTHUB_NAMESPACE', 'LOOM_EVENTHUB_RG', 'LOOM_EVENTHUB_SUB'],
-    usedFor: 'Eventstream sources, Data Explorer ingestion and mirroring CDC transport.',
-    mutations: [
-      'creates Loom event hubs and consumer groups in the namespace',
-      'consumes throughput units',
-    ],
-  },
-  {
-    key: 'streamanalytics',
-    label: 'Stream Analytics',
-    armType: 'microsoft.streamanalytics/streamingjobs',
-    tileSlug: 'stream-analytics-job',
-    family: 'streaming',
-    cls: 'adoptable',
-    enableFlag: 'loomStreamAnalyticsEnabled',
-    provisionVar: 'provisionStreamAnalytics',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_ASA_JOB', 'LOOM_ASA_RG', 'LOOM_ASA_SUB'],
-    usedFor: 'The stream-analytics-job editor and the Eventstream transform node.',
-    mutations: [
-      'REPLACES the job query with the Loom transform',
-      'stops and restarts the job to apply the query',
-      'rebinds the job inputs and outputs',
-    ],
-  },
-
-  // ---- integration --------------------------------------------------------
   {
     key: 'adf',
-    label: 'Data Factory',
+    label: 'Azure Data Factory',
     armType: 'microsoft.datafactory/factories',
     tileSlug: 'data-pipeline',
     family: 'integration',
     cls: 'adoptable',
     enableFlag: 'loomDataFactoryEnabled',
     provisionVar: 'provisionAdf',
-    roleGuid: ADF_CONTRIB,
-    roleName: 'Data Factory Contributor',
-    consoleEnv: ['LOOM_ADF_FACTORY', 'LOOM_ADF_RG', 'LOOM_ADF_SUB'],
-    usedFor: 'The data-pipeline item type — pipelines, datasets, linked services, dataflows.',
+    provisionSink: 'loomDataFactoryEnabled',
+    ...role('adf'),
+    consoleEnv: ['LOOM_ADF_NAME', 'LOOM_ADF_RG', 'LOOM_ADF_SUB'],
+    legacyEnv: { name: 'EXISTING_ADF', rg: 'EXISTING_ADF_RG', sub: 'EXISTING_ADF_SUB' },
+    usedFor: 'the data-pipeline item type, copy activities and the mirrored-database CDC path',
     mutations: [
-      'creates Loom pipelines, datasets and linked services in the factory',
-      'creates an integration runtime when none is reusable',
-      'creates managed private endpoints when the factory uses a managed VNet',
+      'creates Loom-named pipelines, datasets and linked services',
+      'creates a managed private endpoint to the lake when the factory uses a managed VNet',
     ],
+    fitness: {
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['adf.managedVnetPrivateEndpoint', 'adf.pipelineNameCollision'],
+    },
+  },
+  {
+    key: 'eventhubs',
+    label: 'Azure Event Hubs',
+    armType: 'microsoft.eventhub/namespaces',
+    tileSlug: 'event-hub',
+    family: 'streaming',
+    cls: 'adoptable',
+    enableFlag: 'loomEventHubEnabled',
+    provisionVar: 'provisionEventHubs',
+    provisionSink: 'loomEventHubEnabled',
+    ...role('eventhubs'),
+    consoleEnv: ['LOOM_EVENTHUB_NAMESPACE', 'LOOM_EVENTHUB_RG', 'LOOM_EVENTHUB_SUB'],
+    legacyEnv: { name: 'EXISTING_EVENTHUB_NAMESPACE', rg: 'EXISTING_EVENTHUB_RG', sub: 'EXISTING_EVENTHUB_SUB' },
+    usedFor: 'the eventstream item type and every real-time ingestion path',
+    mutations: [
+      'creates Loom event hubs and consumer groups in the namespace',
+      'grants the ADX cluster identity Azure Event Hubs Data Receiver',
+    ],
+    fitness: {
+      forbiddenSkus: [{
+        match: 'basic',
+        why: 'the Basic tier has no consumer groups beyond $Default and Loom needs its own',
+      }],
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['eventhubs.throughputHeadroom'],
+    },
+  },
+  {
+    key: 'streamanalytics',
+    label: 'Azure Stream Analytics',
+    armType: 'microsoft.streamanalytics/streamingjobs',
+    tileSlug: 'stream-analytics-job',
+    family: 'streaming',
+    cls: 'adoptable',
+    enableFlag: 'loomStreamAnalyticsEnabled',
+    provisionVar: 'provisionStreamAnalytics',
+    provisionSink: 'enableStreamAnalytics',
+    ...role('stream-analytics'),
+    consoleEnv: ['LOOM_ASA_RG', 'LOOM_ASA_SUB', 'LOOM_ASA_LOCATION'],
+    legacyEnv: { name: 'EXISTING_ASA_JOB', rg: 'EXISTING_ASA_RG', sub: 'EXISTING_ASA_SUB' },
+    usedFor: 'the eventstream transform surface and the stream-analytics-job item type',
+    mutations: [
+      'REPLACES the job query with the Loom transform',
+      'creates inputs and outputs against the Loom Event Hubs namespace and lake',
+    ],
+    fitness: {
+      regionPolicy: 'must-match-hub',
+      // Editing the query of a RUNNING job is destructive to the customer's
+      // workload, so it needs an explicit confirm rather than a silent adopt.
+      familyChecks: ['asa.jobStopped'],
+    },
+  },
+  {
+    key: 'cosmos',
+    label: 'Azure Cosmos DB',
+    armType: 'microsoft.documentdb/databaseaccounts',
+    tileSlug: 'cosmos-account',
+    family: 'operational-db',
+    cls: 'adoptable',
+    enableFlag: 'loomConsoleCosmosEnabled',
+    provisionVar: 'provisionConsoleCosmos',
+    provisionSink: 'deployConsoleCosmos',
+    ...role('cosmos'),
+    consoleEnv: ['LOOM_COSMOS_ENDPOINT', 'LOOM_COSMOS_ACCOUNT', 'LOOM_COSMOS_ACCOUNT_RG', 'LOOM_COSMOS_ACCOUNT_SUB'],
+    legacyEnv: { name: 'EXISTING_COSMOS_ACCOUNT', rg: 'EXISTING_COSMOS_ACCOUNT_RG', sub: 'EXISTING_COSMOS_ACCOUNT_SUB' },
+    usedFor: 'all Console control-plane metadata — items, workspaces, permissions, plans',
+    mutations: [
+      'creates roughly 90 Loom containers in the loom database',
+      'sets autoscale throughput on the database',
+    ],
+    fitness: {
+      regionPolicy: 'prefer-hub',
+      familyChecks: ['cosmos.serverlessAutoscale', 'cosmos.containerNameCollision'],
+    },
   },
   {
     key: 'apim',
     label: 'API Management',
     armType: 'microsoft.apimanagement/service',
     tileSlug: 'apim',
-    family: 'integration',
+    family: 'api',
     cls: 'adoptable',
     enableFlag: 'apimEnabled',
     provisionVar: 'provisionApim',
-    roleGuid: APIM_CONTRIB,
-    roleName: 'API Management Service Contributor',
+    provisionSink: 'apimEnabled',
+    ...role('apim'),
     consoleEnv: ['LOOM_APIM_NAME', 'LOOM_APIM_RG', 'LOOM_APIM_SUB'],
-    usedFor: 'The API marketplace — publish, Try-it, and the gateway policies.',
+    legacyEnv: { name: 'EXISTING_APIM', rg: 'EXISTING_APIM_RG', sub: 'EXISTING_APIM_SUB' },
+    usedFor: 'the API marketplace, the AOAI gateway and every published Loom API',
     mutations: [
-      'creates Loom APIs, products and policies',
-      'consumes API slots on the service',
+      'creates Loom APIs, products and subscriptions',
+      'adds policy fragments for the AOAI gateway backend',
     ],
+    fitness: {
+      forbiddenSkus: [{
+        match: 'consumption',
+        why: 'the Consumption tier does not support the policy features the AOAI gateway uses',
+      }],
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['apim.vnetMode'],
+    },
   },
   {
     key: 'maps',
     label: 'Azure Maps',
     armType: 'microsoft.maps/accounts',
     tileSlug: 'azure-maps',
-    family: 'integration',
+    family: 'geo',
     cls: 'adoptable',
     enableFlag: 'azureMapsEnabled',
     provisionVar: 'provisionMaps',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: ['LOOM_AZURE_MAPS_ACCOUNT'],
-    usedFor: 'The geo / map editors and the Org visuals basemap.',
-    mutations: ['reads the account key into Key Vault for the map surfaces'],
+    provisionSink: 'azureMapsEnabled',
+    ...role('maps'),
+    consoleEnv: ['LOOM_AZURE_MAPS_ACCOUNT', 'LOOM_MAPS_BACKEND'],
+    legacyEnv: { name: 'EXISTING_AZURE_MAPS_ACCOUNT', rg: 'EXISTING_AZURE_MAPS_RG', sub: 'EXISTING_AZURE_MAPS_SUB' },
+    usedFor: 'the geo editors, map tiles and geocoding',
+    mutations: [],
+    fitness: {
+      forbiddenSkus: [{
+        match: 's0',
+        why: 'S0 does not carry the render tier the Loom geo editors call',
+      }],
+      // Maps accounts are global; a region mismatch is meaningless.
+      regionPolicy: 'any',
+      familyChecks: ['maps.authMode'],
+    },
+  },
+  {
+    key: 'aml',
+    label: 'Azure Machine Learning',
+    armType: 'microsoft.machinelearningservices/workspaces',
+    tileSlug: 'ml-model',
+    family: 'ai',
+    cls: 'adoptable',
+    enableFlag: 'mlWorkspaceEnabled',
+    provisionVar: 'provisionAml',
+    provisionSink: 'if',
+    ...role('aml'),
+    consoleEnv: ['LOOM_AML_WORKSPACE', 'LOOM_AML_RG', 'LOOM_AML_DEFAULT_COMPUTE'],
+    legacyEnv: { name: 'EXISTING_AML_WORKSPACE', rg: 'EXISTING_AML_RG', sub: 'EXISTING_AML_SUB' },
+    usedFor: 'the ml-model item type and the notebook AML compute path',
+    mutations: [
+      'creates a default compute instance for notebooks',
+      'registers Loom models and environments',
+    ],
+    fitness: {
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['aml.computeQuota'],
+    },
   },
 
-  // ---- platform -----------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Not adoptable by suppression. Each carries the SPECIFIC technical
+  // reason, rendered in the UI on a locked row (deploy-integrity R5.3:
+  // never silently adopt, never silently duplicate — and never offer a
+  // choice that does not work).
+  // ------------------------------------------------------------------
+  {
+    key: 'azure-sql',
+    label: 'Azure SQL',
+    armType: 'microsoft.sql/servers',
+    tileSlug: 'azure-sql-database',
+    family: 'operational-db',
+    cls: 'reference-only',
+    createOnlyReason:
+      'Loom never creates an Azure SQL server. modules/shared/plan-backing-sql.bicep targets an EXISTING server you name (loomPlanBackingSqlServer) and only reads from it, so there is no create-or-adopt decision to make.',
+    ...role('azure-sql'),
+    consoleEnv: ['LOOM_PLAN_BACKING_SQL_SERVER'],
+    usedFor: 'read-only plan-backing queries against a server you already own',
+    mutations: [],
+    fitness: { regionPolicy: 'prefer-hub', familyChecks: [] },
+  },
+  {
+    key: 'storage-adls',
+    label: 'Storage / ADLS Gen2',
+    armType: 'microsoft.storage/storageaccounts',
+    tileSlug: 'storage-adls',
+    family: 'storage',
+    cls: 'attach-in-place',
+    createOnlyReason:
+      'Loom always creates its own platform lake account because it owns the Bronze/Silver/Gold container layout, the lifecycle policy and the CMK posture. An ADLS Gen2 account you already own is attached as an additional data source through the landing-zone attach path instead, where Loom reads it and never restructures it. Note that isHnsEnabled is create-time-only, so an account without a hierarchical namespace could not serve Delta through the Gen2 API even if it were adopted.',
+    ...role('storage-adls'),
+    consoleEnv: [],
+    usedFor: 'the lakehouse item type, Delta tables and every medallion layer',
+    mutations: [],
+    fitness: {
+      regionPolicy: 'must-match-hub',
+      familyChecks: ['adls.hns', 'adls.premiumPageBlob'],
+    },
+  },
   {
     key: 'loganalytics',
     label: 'Log Analytics workspace',
     armType: 'microsoft.operationalinsights/workspaces',
-    tileSlug: 'monitor',
-    family: 'platform',
-    cls: 'adoptable',
-    enableFlag: null,
-    provisionVar: 'provisionLogAnalytics',
-    roleGuid: LOG_ANALYTICS_CONTRIB,
-    roleName: 'Log Analytics Contributor',
-    consoleEnv: ['LOOM_LAW_ID', 'LOOM_LAW_RG', 'LOOM_LAW_SUB'],
-    usedFor: 'Container Apps logs, Application Insights, activity logs and the health probes.',
-    mutations: [
-      'sends Loom diagnostic settings and container logs to the workspace',
-      'creates Loom custom tables and saved queries',
-    ],
-  },
-  {
-    key: 'acr',
-    label: 'Container Registry',
-    armType: 'microsoft.containerregistry/registries',
-    tileSlug: 'container-registry',
-    family: 'platform',
-    cls: 'adoptable',
-    enableFlag: null,
-    provisionVar: 'provisionAcr',
-    roleGuid: ACR_PUSH,
-    roleName: 'AcrPush',
-    consoleEnv: ['LOOM_ACR_NAME', 'LOOM_ACR_RG', 'LOOM_ACR_SUB'],
-    usedFor: 'Hosts every Loom container image the Container Apps pull.',
-    mutations: [
-      'pushes Loom application images into the registry',
-      'does NOT modify the registry firewall — the registry must already be reachable from the build agent and the Container Apps environment',
-    ],
-  },
-
-  // ---- networking ---------------------------------------------------------
-  {
-    key: 'vnet',
-    label: 'Virtual Network',
-    armType: 'microsoft.network/virtualnetworks',
-    tileSlug: 'network',
-    family: 'networking',
-    cls: 'adoptable',
-    enableFlag: null,
-    provisionVar: 'provisionHubVnet',
-    roleGuid: NETWORK_CONTRIB,
-    roleName: 'Network Contributor',
-    consoleEnv: ['LOOM_HUB_VNET_ID'],
-    usedFor: 'The hub network the Container Apps environment, private endpoints and Bastion live in.',
-    mutations: [
-      'creates the Loom hub subnets inside free address space in the VNet',
-      'creates private endpoints for the Loom backing services',
-      'links the required privatelink DNS zones to the VNet',
-    ],
-  },
-  {
-    key: 'privatednszone',
-    label: 'Private DNS zone',
-    armType: 'microsoft.network/privatednszones',
-    tileSlug: 'network',
-    family: 'networking',
-    cls: 'adoptable',
-    enableFlag: null,
-    provisionVar: 'provisionPrivateDns',
-    roleGuid: PRIVATE_DNS_ZONE_CONTRIB,
-    roleName: 'Private DNS Zone Contributor',
-    consoleEnv: [],
-    usedFor: 'Resolves the privatelink.* names for every Loom private endpoint.',
-    mutations: [
-      'adds A records for the Loom private endpoints',
-      'adds a virtual-network link to the Loom hub VNet',
-    ],
-  },
-  {
-    key: 'firewallpolicy',
-    label: 'Azure Firewall policy',
-    armType: 'microsoft.network/firewallpolicies',
-    tileSlug: 'network',
-    family: 'networking',
-    cls: 'adoptable',
-    enableFlag: 'firewallEnabled',
-    provisionVar: 'provisionFirewallPolicy',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: [],
-    usedFor: 'Egress rules for the admin plane.',
-    mutations: [
-      'adds a uniquely-named Loom rule-collection group in a reserved priority band',
-      'does NOT renumber or modify any existing rule collection',
-    ],
-  },
-  {
-    key: 'azurefirewall',
-    label: 'Azure Firewall (instance)',
-    armType: 'microsoft.network/azurefirewalls',
-    tileSlug: 'network',
-    family: 'networking',
-    cls: 'create-only',
+    tileSlug: 'monitoring',
+    family: 'observability',
+    cls: 'attach-in-place',
     createOnlyReason:
-      'Rule-collection-group priority bands collide destructively and there is no safe merge — Loom cannot know which of your existing collections it may renumber. Loom adopts the firewall POLICY by resource id instead (adding its own uniquely-named rule-collection group in a reserved priority band) and deploys its own firewall instance.',
-    enableFlag: 'firewallEnabled',
-    provisionVar: 'provisionFirewall',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: [],
-    usedFor: 'Egress hardening for the admin plane.',
+      'Loom creates its own workspace so retention, the table set and the diagnostic-setting wiring are known. An existing workspace is attachable on the dlz-attach path via hubLawId; adopting one for a hub install is not wired yet, so it is not offered as a choice that would silently do nothing.',
+    roleGuid: LOG_ANALYTICS_CONTRIBUTOR,
+    roleName: 'Log Analytics Contributor',
+    consoleEnv: ['LOOM_LOG_ANALYTICS_WORKSPACE_ID'],
+    usedFor: 'diagnostics, the monitor item type and every workspace-scoped KQL query',
     mutations: [],
+    fitness: { regionPolicy: 'any', familyChecks: [] },
   },
   {
     key: 'keyvault',
@@ -580,72 +591,125 @@ export const ADOPTION_CATALOG: AdoptableServiceDef[] = [
     family: 'platform',
     cls: 'create-only',
     createOnlyReason:
-      "Loom's Key Vault is the trust root for the MSAL secret, data-plane credentials and cosign material. enableSoftDelete / enablePurgeProtection are one-way settings that cannot be turned on retroactively in a way Loom can guarantee, and adoption would mean Loom writes platform secrets into a vault whose access policies and network ACLs a third party mutates. Loom always deploys its own. (Referencing a customer vault as a read-only source for connection strings is a separate, later capability.)",
-    enableFlag: null,
-    provisionVar: 'provisionKeyVault',
-    roleGuid: CONTRIBUTOR,
-    roleName: 'Contributor',
-    consoleEnv: [],
-    usedFor: 'Stores the MSAL secret, SESSION_SECRET and the Loom Connections credential store.',
+      "Loom's Key Vault is the trust root for MSAL secrets, data-plane credentials and cosign material. enableSoftDelete and enablePurgeProtection are one-way settings that cannot be turned on retroactively in a way Loom can guarantee, so a vault with purge protection off cannot meet Loom's recovery contract — and adopting one would mean Loom writes platform secrets into a vault whose access policies and network ACLs a third party mutates. Loom always creates its own. Referencing a customer vault as a read-only source for connection strings is a separate, later capability with a different role and scope.",
+    consoleEnv: ['LOOM_KEY_VAULT_URI'],
+    usedFor: 'MSAL secrets, data-plane credentials and signing material',
     mutations: [],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
+  },
+  {
+    key: 'containerappsenv',
+    label: 'Container Apps environment',
+    armType: 'microsoft.app/managedenvironments',
+    tileSlug: 'container-app',
+    family: 'platform',
+    cls: 'create-only',
+    createOnlyReason:
+      "A Container Apps environment's infrastructure subnet and its internal-ingress mode are immutable after creation. Loom requires an internal-ingress environment in a delegated subnet of a specific minimum size, and the environment is the unit of .internal FQDN resolution. An existing environment created with internal=false, or in an undersized subnet, cannot be converted. Loom always creates its own — but it can create it inside a VNet and subnet you already own, which is the supported brownfield lever here.",
+    consoleEnv: [],
+    usedFor: 'every Loom container app and the .internal service mesh',
+    mutations: [],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
+  },
+  {
+    key: 'acr',
+    label: 'Container Registry',
+    armType: 'microsoft.containerregistry/registries',
+    tileSlug: 'container-registry',
+    family: 'platform',
+    cls: 'create-only',
+    createOnlyReason:
+      "Loom's two-phase image build opens the registry firewall, runs az acr build, then re-locks it. Loom will not perform that open-and-relock cycle against a registry you own, and it is the registry that carries the cosign trust root for every Loom image. Loom always creates its own.",
+    consoleEnv: ['LOOM_ACR_LOGIN_SERVER'],
+    usedFor: 'every Loom container image and the supply-chain attestation chain',
+    mutations: [],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
+  },
+  {
+    key: 'postgres',
+    label: 'Azure Database for PostgreSQL',
+    armType: 'microsoft.dbforpostgresql/flexibleservers',
+    tileSlug: 'postgres',
+    family: 'operational-db',
+    cls: 'create-only',
+    createOnlyReason:
+      'Loom migrates the Unity Catalog and DuckLake catalog schemas into this server in place, and no Console binding env exists for an externally-supplied server. Offering an adopt choice here would collect an answer the deployment could not honour, so it is locked rather than silently ignored.',
+    enableFlag: 'postgresEnabled',
+    consoleEnv: ['LOOM_POSTGRES_HOST'],
+    usedFor: 'the Loom Unity catalog and the DuckLake catalog',
+    mutations: [],
+    fitness: { regionPolicy: 'must-match-hub', familyChecks: [] },
   },
 ];
 
-const BY_KEY: Record<string, AdoptableServiceDef> = Object.fromEntries(
-  ADOPTION_CATALOG.map((d) => [d.key, d]),
-);
+const BY_KEY = new Map(ADOPTION_CATALOG.map((d) => [d.key, d]));
 
-/** Look up a catalog entry (undefined for an unknown key). */
+/** Look up a service def. Returns undefined for an unknown key. */
 export function getServiceDef(key: string): AdoptableServiceDef | undefined {
-  return BY_KEY[key];
+  return BY_KEY.get(key);
 }
 
-/** Human label for a key (falls back to the raw key). */
-export function serviceLabel(key: string): string {
-  return BY_KEY[key]?.label ?? key;
+/** Every key in the catalog, in catalog order. */
+export function allServiceKeys(): string[] {
+  return ADOPTION_CATALOG.map((d) => d.key);
+}
+
+/** The services whose adopt/create decision the bicep `adopt` bag actually honours. */
+export function adoptableServices(): AdoptableServiceDef[] {
+  return ADOPTION_CATALOG.filter((d) => d.cls === 'adoptable' || d.cls === 'adopt-required');
 }
 
 /**
- * Every distinct ARM type discovery must query, deduped and lower-cased.
- *
- * This is the ONLY place the ARG type list comes from — `discovery-model.ts`
- * generates its `type in~ (...)` literal from this function so a catalog entry
- * can never be added without the scanner looking for it. A hand-maintained
- * second list is exactly how `maps`, `postgres` and `storage` ended up offered
- * in the wizard but absent from the deploy.
+ * Every ARM type discovery should query, deduped. GENERATED — never a
+ * hand-maintained literal, which is how the six catalogs drifted apart.
  */
 export function adoptionArmTypes(): string[] {
   return Array.from(new Set(ADOPTION_CATALOG.map((d) => d.armType))).sort();
 }
 
 /**
- * Catalog entries that share an ARM type, in catalog order. Used by the row →
- * candidate mapper to disambiguate by `armKindFilter` (a Cognitive Services
- * account is `foundry` only when its kind is AIServices).
+ * The Resource Graph `type in~ (...)` operand, built from the catalog. Callers
+ * must use this rather than writing their own type list.
  */
-export function defsForArmType(armType: string): AdoptableServiceDef[] {
-  const t = (armType || '').toLowerCase();
-  return ADOPTION_CATALOG.filter((d) => d.armType === t);
+export function adoptionArmTypeFilter(): string {
+  return adoptionArmTypes().map((t) => `'${t}'`).join(', ');
 }
 
 /**
- * Resolve a discovered ARM row (type + optional resource `kind`) to the catalog
- * key it is a candidate for, or null when the row is not an adoption candidate.
- *
- * A kind-filtered def only claims a row whose `kind` matches; a row of a
- * kind-filtered ARM type that matches NO filter (e.g. a Speech account) is
- * correctly not a candidate rather than being mis-filed under `foundry`.
+ * Map a discovered ARM resource to a catalog key, disambiguating the Cognitive
+ * Services type by its ARM `kind` (AOAI is an AIServices account; a Maps or
+ * generic Cognitive account is not a Foundry adoption target).
  */
-export function armRowToServiceKey(armType: string, resourceKind?: string): string | null {
-  const matches = defsForArmType(armType);
+export function armTypeToServiceKey(armType: string, armResourceKind?: string): string | null {
+  const t = (armType || '').toLowerCase();
+  const k = (armResourceKind || '').toLowerCase();
+  const matches = ADOPTION_CATALOG.filter((d) => d.armType === t);
   if (matches.length === 0) return null;
-  const k = (resourceKind || '').toLowerCase();
-  const filtered = matches.find((d) => d.armKindFilter && k.includes(d.armKindFilter));
-  if (filtered) return filtered.key;
+  if (matches.length === 1 && !matches[0].armKindFilter) return matches[0].key;
+  const byKind = matches.find((d) => d.armKindFilter && k.includes(d.armKindFilter));
+  if (byKind) return byKind.key;
   return matches.find((d) => !d.armKindFilter)?.key ?? null;
 }
 
-/** Services the operator may choose to adopt (excludes create-only). */
-export function adoptableServices(): AdoptableServiceDef[] {
-  return ADOPTION_CATALOG.filter((d) => d.cls !== 'create-only');
+/**
+ * Whether the operator may choose `adopt` for this service at all. A locked row
+ * always renders `createOnlyReason` — never a disabled control with no reason.
+ */
+export function canAdopt(key: string): boolean {
+  const d = BY_KEY.get(key);
+  return !!d && (d.cls === 'adoptable' || d.cls === 'adopt-required');
+}
+
+/**
+ * Whether the operator may choose `create` for this service. False for a tenant
+ * singleton that already exists — "create new" is DISABLED with an explanation
+ * rather than offered and then failed at deploy time with
+ * EnterpriseTenantAlreadyExists.
+ */
+export function canCreate(key: string, candidateExists: boolean): boolean {
+  const d = BY_KEY.get(key);
+  if (!d) return false;
+  if (d.cls === 'reference-only' || d.cls === 'attach-in-place') return false;
+  if (d.cls === 'adopt-required' && candidateExists) return false;
+  return true;
 }

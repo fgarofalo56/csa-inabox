@@ -420,6 +420,9 @@ let _attachedServices: Container | null = null;
 // provisioning. Created lazily (createIfNotExists) here AND ARM-provisioned in
 // cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _landingZones: Container | null = null;
+// Adopt-or-create deployment plans (deploy-integrity R5) — append-only record
+// of what the estate is SUPPOSED to be, so drift is a diff, not a guess.
+let _deploymentPlans: Container | null = null;
 // Sign-in-boundary onboarding requests (front-door "Request access"). One doc
 // per unauthenticated submission, PK /tenantId (the deployment tenant bucket)
 // so the admin queue reads a single physical partition. Distinct from the two
@@ -1236,6 +1239,10 @@ async function ensure() {
   // per-tenant LZ list hits a single physical partition. ARM-provisioned in
   // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
   _landingZones = await mk('landing-zones', '/tenantId');
+  // Deployment plans — PK /tenantId (one physical partition per tenant).
+  // ARM-provisioned in cosmos.bicep; this createIfNotExists is the first-run
+  // fallback, because the FIRST plan is written by the deploy that made this account.
+  _deploymentPlans = await mk('deployment-plans', '/tenantId');
   // Sign-in-boundary onboarding requests — PK /tenantId (deployment bucket).
   // Created lazily so a fresh environment needs no extra ARM/Bicep step.
   _signinAccessRequests = await mk('signin-access-requests', '/tenantId');
@@ -1372,6 +1379,7 @@ export async function connectionsContainer(): Promise<Container> { await ensure(
 export async function attachedServicesContainer(): Promise<Container> { await ensure(); return _attachedServices!; }
 /** Logical Landing-Zone registry (dlz-brownfield Phase A) — PK /tenantId. */
 export async function landingZonesContainer(): Promise<Container> { await ensure(); return _landingZones!; }
+export async function deploymentPlansContainer(): Promise<Container> { await ensure(); return _deploymentPlans!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 export async function appInstallJobsContainer(): Promise<Container> { await ensure(); return _appInstallJobs!; }
@@ -1704,6 +1712,7 @@ const KNOWN_CONTAINER_IDS = [
   'cost-attribution',
   'attached-services',
   'landing-zones',
+  'deployment-plans',
   'copilot-skills', 'copilot-skill-states',
   'copilot-skill-usage',
   'copilot-memory',

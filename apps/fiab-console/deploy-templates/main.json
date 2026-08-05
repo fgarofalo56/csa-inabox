@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16403567563506056751"
+      "templateHash": "3131750698309811195"
     }
   },
   "definitions": {
@@ -93,6 +93,97 @@
       }
     }
   },
+  "functions": [
+    {
+      "namespace": "__bicep",
+      "members": {
+        "adoptMode": {
+          "parameters": [
+            {
+              "type": "object",
+              "name": "a"
+            },
+            {
+              "type": "string",
+              "name": "k"
+            }
+          ],
+          "output": {
+            "type": "string",
+            "value": "[coalesce(tryGet(tryGet(parameters('a'), parameters('k')), 'mode'), 'create')]"
+          }
+        },
+        "adoptName": {
+          "parameters": [
+            {
+              "type": "object",
+              "name": "a"
+            },
+            {
+              "type": "string",
+              "name": "k"
+            }
+          ],
+          "output": {
+            "type": "string",
+            "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'target'), 'name'), ''), '')]"
+          }
+        },
+        "adoptRg": {
+          "parameters": [
+            {
+              "type": "object",
+              "name": "a"
+            },
+            {
+              "type": "string",
+              "name": "k"
+            }
+          ],
+          "output": {
+            "type": "string",
+            "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'target'), 'rg'), ''), '')]"
+          }
+        },
+        "adoptSub": {
+          "parameters": [
+            {
+              "type": "object",
+              "name": "a"
+            },
+            {
+              "type": "string",
+              "name": "k"
+            }
+          ],
+          "output": {
+            "type": "string",
+            "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'target'), 'sub'), ''), '')]"
+          }
+        },
+        "adoptExtra": {
+          "parameters": [
+            {
+              "type": "object",
+              "name": "a"
+            },
+            {
+              "type": "string",
+              "name": "k"
+            },
+            {
+              "type": "string",
+              "name": "f"
+            }
+          ],
+          "output": {
+            "type": "string",
+            "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'extra'), parameters('f')), ''), '')]"
+          }
+        }
+      }
+    }
+  ],
   "parameters": {
     "environment": {
       "type": "string",
@@ -985,256 +1076,11 @@
         "description": "Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric \"fabric-devops-pipelines\" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com."
       }
     },
-    "existingAiSearchService": {
-      "type": "string",
-      "defaultValue": "",
+    "adopt": {
+      "type": "object",
+      "defaultValue": {},
       "metadata": {
-        "description": "Reuse an existing AI Search service (name) instead of provisioning one."
-      }
-    },
-    "existingAiSearchRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing AI Search service."
-      }
-    },
-    "existingApimName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing APIM service (name) instead of provisioning one."
-      }
-    },
-    "existingApimRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing APIM service."
-      }
-    },
-    "existingAdxClusterName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing ADX/Kusto cluster (name) instead of provisioning one."
-      }
-    },
-    "existingAdxClusterRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing ADX cluster."
-      }
-    },
-    "existingFoundryAccountName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing AI Foundry / AOAI (AIServices) account (name) instead of provisioning the Foundry hub."
-      }
-    },
-    "existingFoundryRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Foundry/AOAI account."
-      }
-    },
-    "existingAiSearchSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing AI Search service (cross-sub reuse)."
-      }
-    },
-    "existingApimSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing APIM service (cross-sub reuse)."
-      }
-    },
-    "existingAdxClusterSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing ADX cluster (cross-sub reuse)."
-      }
-    },
-    "existingFoundrySub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Foundry/AOAI account (cross-sub reuse)."
-      }
-    },
-    "existingFoundryChatDeployment": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Chat deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_CHAT_DEPLOYMENT). Wires LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT so Copilot / data-agent / AI-functions work against the existing account. Empty = the existing path stays honest-gated on the model."
-      }
-    },
-    "existingFoundryEmbedDeployment": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Embedding deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_EMBED_DEPLOYMENT). Wires LOOM_AOAI_EMBED_DEPLOYMENT."
-      }
-    },
-    "existingPurviewAccount": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Microsoft Purview account (short name). Overrides loomPurviewAccount."
-      }
-    },
-    "existingPurviewRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Purview account."
-      }
-    },
-    "existingPurviewSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Purview account (cross-sub reuse)."
-      }
-    },
-    "existingSynapseWorkspace": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Synapse workspace (name) for the navigator."
-      }
-    },
-    "existingSynapseRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Synapse workspace."
-      }
-    },
-    "existingSynapseSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Synapse workspace (cross-sub reuse)."
-      }
-    },
-    "existingCosmosAccount": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Cosmos DB account (name) for the control-plane navigator."
-      }
-    },
-    "existingCosmosRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Cosmos account."
-      }
-    },
-    "existingCosmosSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Cosmos account (cross-sub reuse)."
-      }
-    },
-    "existingEventHubNamespace": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Event Hubs namespace (name) for the Eventstream navigator."
-      }
-    },
-    "existingEventHubRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Event Hubs namespace."
-      }
-    },
-    "existingEventHubSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Event Hubs namespace (cross-sub reuse)."
-      }
-    },
-    "existingAsaJob": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Azure Stream Analytics job (name) for the stream-analytics-job / Eventstream transform editors instead of provisioning the per-DLZ starter job. When set, loomStreamAnalyticsEnabled is forced off for the new starter job and the Console binds LOOM_ASA_RG/SUB + the job name to this existing job."
-      }
-    },
-    "existingAsaRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Stream Analytics job."
-      }
-    },
-    "existingAsaSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Stream Analytics job (cross-sub reuse)."
-      }
-    },
-    "existingDatabricksWorkspace": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Databricks workspace (name) — informational for RBAC."
-      }
-    },
-    "existingDatabricksRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Databricks workspace."
-      }
-    },
-    "existingDatabricksSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Databricks workspace (cross-sub reuse)."
-      }
-    },
-    "existingDatabricksHostname": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Databricks workspace hostname (adb-*.azuredatabricks.net). Overrides the navigator binding; the byo-wizard resolves this from workspaceUrl."
-      }
-    },
-    "existingAdfFactory": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Reuse an existing Data Factory (name) for the Data Factory navigator / pipeline mounts."
-      }
-    },
-    "existingAdfRg": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Resource group of the existing Data Factory."
-      }
-    },
-    "existingAdfSub": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Subscription id of the existing Data Factory (cross-sub reuse)."
+        "description": "Adopt-or-create plan keyed by adoption-catalog service key. Replaces the 36 existing* scalars (ARM 256-param cap). Per key: { mode: \"adopt\"|\"create\"|\"skip\", target: { name, rg, sub }, extra: {} }. An absent key means create new. Emitted by lib/deploy/plan-to-arm.ts and transported as LOOM_ADOPT_JSON."
       }
     },
     "fabricEnabled": {
@@ -2105,6 +1951,56 @@
     "effectiveLoomUsageReportKind": "[if(not(empty(parameters('loomUsageReportKind'))), parameters('loomUsageReportKind'), if(variables('grafanaEmbedDayOne'), 'grafana', ''))]",
     "effectiveLoomGrafanaDashboardUid": "[if(not(empty(parameters('loomGrafanaDashboardUid'))), parameters('loomGrafanaDashboardUid'), if(variables('grafanaEmbedDayOne'), parameters('loomGrafanaGovernanceDashboardUidDefault'), ''))]",
     "effectiveLoomGrafanaUsageDashboardUid": "[if(not(empty(parameters('loomGrafanaUsageDashboardUid'))), parameters('loomGrafanaUsageDashboardUid'), if(variables('grafanaEmbedDayOne'), parameters('loomGrafanaUsageDashboardUidDefault'), ''))]",
+    "existingAiSearchService": "[__bicep.adoptName(parameters('adopt'), 'aisearch')]",
+    "existingAiSearchRg": "[__bicep.adoptRg(parameters('adopt'), 'aisearch')]",
+    "existingAiSearchSub": "[__bicep.adoptSub(parameters('adopt'), 'aisearch')]",
+    "existingApimName": "[__bicep.adoptName(parameters('adopt'), 'apim')]",
+    "existingApimRg": "[__bicep.adoptRg(parameters('adopt'), 'apim')]",
+    "existingApimSub": "[__bicep.adoptSub(parameters('adopt'), 'apim')]",
+    "existingAdxClusterName": "[__bicep.adoptName(parameters('adopt'), 'adx')]",
+    "existingAdxClusterRg": "[__bicep.adoptRg(parameters('adopt'), 'adx')]",
+    "existingAdxClusterSub": "[__bicep.adoptSub(parameters('adopt'), 'adx')]",
+    "existingFoundryAccountName": "[__bicep.adoptName(parameters('adopt'), 'foundry')]",
+    "existingFoundryRg": "[__bicep.adoptRg(parameters('adopt'), 'foundry')]",
+    "existingFoundrySub": "[__bicep.adoptSub(parameters('adopt'), 'foundry')]",
+    "existingFoundryChatDeployment": "[__bicep.adoptExtra(parameters('adopt'), 'foundry', 'chatDeployment')]",
+    "existingFoundryEmbedDeployment": "[__bicep.adoptExtra(parameters('adopt'), 'foundry', 'embedDeployment')]",
+    "existingPurviewAccount": "[__bicep.adoptName(parameters('adopt'), 'purview')]",
+    "existingPurviewRg": "[__bicep.adoptRg(parameters('adopt'), 'purview')]",
+    "existingPurviewSub": "[__bicep.adoptSub(parameters('adopt'), 'purview')]",
+    "existingSynapseWorkspace": "[__bicep.adoptName(parameters('adopt'), 'synapse')]",
+    "existingSynapseRg": "[__bicep.adoptRg(parameters('adopt'), 'synapse')]",
+    "existingSynapseSub": "[__bicep.adoptSub(parameters('adopt'), 'synapse')]",
+    "existingCosmosAccount": "[__bicep.adoptName(parameters('adopt'), 'cosmos')]",
+    "existingCosmosRg": "[__bicep.adoptRg(parameters('adopt'), 'cosmos')]",
+    "existingCosmosSub": "[__bicep.adoptSub(parameters('adopt'), 'cosmos')]",
+    "existingEventHubNamespace": "[__bicep.adoptName(parameters('adopt'), 'eventhubs')]",
+    "existingEventHubRg": "[__bicep.adoptRg(parameters('adopt'), 'eventhubs')]",
+    "existingEventHubSub": "[__bicep.adoptSub(parameters('adopt'), 'eventhubs')]",
+    "existingAsaJob": "[__bicep.adoptName(parameters('adopt'), 'streamanalytics')]",
+    "existingAsaRg": "[__bicep.adoptRg(parameters('adopt'), 'streamanalytics')]",
+    "existingAsaSub": "[__bicep.adoptSub(parameters('adopt'), 'streamanalytics')]",
+    "existingDatabricksWorkspace": "[__bicep.adoptName(parameters('adopt'), 'databricks')]",
+    "existingDatabricksRg": "[__bicep.adoptRg(parameters('adopt'), 'databricks')]",
+    "existingDatabricksSub": "[__bicep.adoptSub(parameters('adopt'), 'databricks')]",
+    "existingDatabricksHostname": "[__bicep.adoptExtra(parameters('adopt'), 'databricks', 'hostname')]",
+    "existingAdfFactory": "[__bicep.adoptName(parameters('adopt'), 'adf')]",
+    "existingAdfRg": "[__bicep.adoptRg(parameters('adopt'), 'adf')]",
+    "existingAdfSub": "[__bicep.adoptSub(parameters('adopt'), 'adf')]",
+    "provisionAiSearch": "[and(parameters('aiSearchEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'aisearch'), 'create'))]",
+    "provisionApim": "[and(parameters('apimEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'apim'), 'create'))]",
+    "provisionAdx": "[and(parameters('adxEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'adx'), 'create'))]",
+    "provisionFoundry": "[and(parameters('aiFoundryEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'foundry'), 'create'))]",
+    "provisionAgentFoundry": "[and(parameters('agentFoundryEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'foundry'), 'create'))]",
+    "provisionPurview": "[and(parameters('purviewEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'purview'), 'create'))]",
+    "provisionSynapse": "[and(parameters('loomSynapseEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'synapse'), 'create'))]",
+    "provisionDatabricks": "[and(parameters('loomDatabricksEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'databricks'), 'create'))]",
+    "provisionAdf": "[and(parameters('loomDataFactoryEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'adf'), 'create'))]",
+    "provisionConsoleCosmos": "[and(parameters('loomConsoleCosmosEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'cosmos'), 'create'))]",
+    "provisionEventHubs": "[and(parameters('loomEventHubEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'eventhubs'), 'create'))]",
+    "provisionStreamAnalytics": "[and(parameters('loomStreamAnalyticsEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'streamanalytics'), 'create'))]",
+    "provisionMaps": "[and(parameters('azureMapsEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'maps'), 'create'))]",
+    "provisionAml": "[and(parameters('mlWorkspaceEnabled'), equals(__bicep.adoptMode(parameters('adopt'), 'aml'), 'create'))]",
     "redisIsPremium": "[equals(parameters('redisSkuName'), 'Premium')]",
     "redisSkuFamily": "[if(variables('redisIsPremium'), 'P', 'C')]",
     "redisSkuCapacity": "[if(variables('redisIsPremium'), 1, 0)]",
@@ -2199,7 +2095,7 @@
             "value": "[parameters('defenderForAIEnabled')]"
           },
           "purviewEnabled": {
-            "value": "[parameters('purviewEnabled')]"
+            "value": "[variables('provisionPurview')]"
           },
           "atlasOnAksEnabled": {
             "value": "[parameters('atlasOnAksEnabled')]"
@@ -2250,13 +2146,13 @@
             "value": "[parameters('deployAppsEnabled')]"
           },
           "aiFoundryEnabled": {
-            "value": "[parameters('aiFoundryEnabled')]"
+            "value": "[variables('provisionFoundry')]"
           },
           "contentSafetyEnabled": {
             "value": "[parameters('contentSafetyEnabled')]"
           },
           "agentFoundryEnabled": {
-            "value": "[parameters('agentFoundryEnabled')]"
+            "value": "[variables('provisionAgentFoundry')]"
           },
           "loomAoaiCompletionDeployment": {
             "value": "[parameters('loomAoaiCompletionDeployment')]"
@@ -2265,13 +2161,13 @@
             "value": "[parameters('loomAmlRg')]"
           },
           "apimEnabled": {
-            "value": "[and(parameters('loomApimEnabled'), parameters('apimEnabled'))]"
+            "value": "[and(parameters('loomApimEnabled'), variables('provisionApim'))]"
           },
           "aiSearchEnabled": {
-            "value": "[parameters('aiSearchEnabled')]"
+            "value": "[variables('provisionAiSearch')]"
           },
           "adxEnabled": {
-            "value": "[parameters('adxEnabled')]"
+            "value": "[variables('provisionAdx')]"
           },
           "aasEnabled": {
             "value": "[parameters('aasEnabled')]"
@@ -2298,63 +2194,63 @@
             "value": "[parameters('loomPipelineCiEnabled')]"
           },
           "existingAiSearchService": {
-            "value": "[parameters('existingAiSearchService')]"
+            "value": "[variables('existingAiSearchService')]"
           },
           "existingAiSearchRg": {
-            "value": "[parameters('existingAiSearchRg')]"
+            "value": "[variables('existingAiSearchRg')]"
           },
           "existingApimName": {
-            "value": "[parameters('existingApimName')]"
+            "value": "[variables('existingApimName')]"
           },
           "existingApimRg": {
-            "value": "[parameters('existingApimRg')]"
+            "value": "[variables('existingApimRg')]"
           },
           "existingAdxClusterName": {
-            "value": "[parameters('existingAdxClusterName')]"
+            "value": "[variables('existingAdxClusterName')]"
           },
           "existingAdxClusterRg": {
-            "value": "[parameters('existingAdxClusterRg')]"
+            "value": "[variables('existingAdxClusterRg')]"
           },
           "existingFoundryAccountName": {
-            "value": "[parameters('existingFoundryAccountName')]"
+            "value": "[variables('existingFoundryAccountName')]"
           },
           "existingFoundryRg": {
-            "value": "[parameters('existingFoundryRg')]"
+            "value": "[variables('existingFoundryRg')]"
           },
           "byoExisting": {
             "value": {
-              "aiSearchSub": "[parameters('existingAiSearchSub')]",
-              "apimSub": "[parameters('existingApimSub')]",
-              "adxClusterSub": "[parameters('existingAdxClusterSub')]",
-              "foundrySub": "[parameters('existingFoundrySub')]",
-              "foundryChatDeployment": "[parameters('existingFoundryChatDeployment')]",
-              "foundryEmbedDeployment": "[parameters('existingFoundryEmbedDeployment')]",
-              "purviewAccount": "[parameters('existingPurviewAccount')]",
-              "purviewRg": "[parameters('existingPurviewRg')]",
-              "purviewSub": "[parameters('existingPurviewSub')]",
+              "aiSearchSub": "[variables('existingAiSearchSub')]",
+              "apimSub": "[variables('existingApimSub')]",
+              "adxClusterSub": "[variables('existingAdxClusterSub')]",
+              "foundrySub": "[variables('existingFoundrySub')]",
+              "foundryChatDeployment": "[variables('existingFoundryChatDeployment')]",
+              "foundryEmbedDeployment": "[variables('existingFoundryEmbedDeployment')]",
+              "purviewAccount": "[variables('existingPurviewAccount')]",
+              "purviewRg": "[variables('existingPurviewRg')]",
+              "purviewSub": "[variables('existingPurviewSub')]",
               "purviewLocation": "[parameters('purviewLocation')]",
-              "synapseWorkspace": "[parameters('existingSynapseWorkspace')]",
-              "synapseRg": "[parameters('existingSynapseRg')]",
-              "synapseSub": "[parameters('existingSynapseSub')]",
-              "cosmosAccount": "[parameters('existingCosmosAccount')]",
-              "cosmosRg": "[parameters('existingCosmosRg')]",
-              "cosmosSub": "[parameters('existingCosmosSub')]",
-              "eventHubNamespace": "[parameters('existingEventHubNamespace')]",
-              "eventHubRg": "[parameters('existingEventHubRg')]",
-              "eventHubSub": "[parameters('existingEventHubSub')]",
-              "databricksWorkspace": "[parameters('existingDatabricksWorkspace')]",
-              "databricksRg": "[parameters('existingDatabricksRg')]",
-              "databricksSub": "[parameters('existingDatabricksSub')]",
-              "databricksHostname": "[parameters('existingDatabricksHostname')]",
-              "adfFactory": "[parameters('existingAdfFactory')]",
-              "adfRg": "[parameters('existingAdfRg')]",
-              "adfSub": "[parameters('existingAdfSub')]",
+              "synapseWorkspace": "[variables('existingSynapseWorkspace')]",
+              "synapseRg": "[variables('existingSynapseRg')]",
+              "synapseSub": "[variables('existingSynapseSub')]",
+              "cosmosAccount": "[variables('existingCosmosAccount')]",
+              "cosmosRg": "[variables('existingCosmosRg')]",
+              "cosmosSub": "[variables('existingCosmosSub')]",
+              "eventHubNamespace": "[variables('existingEventHubNamespace')]",
+              "eventHubRg": "[variables('existingEventHubRg')]",
+              "eventHubSub": "[variables('existingEventHubSub')]",
+              "databricksWorkspace": "[variables('existingDatabricksWorkspace')]",
+              "databricksRg": "[variables('existingDatabricksRg')]",
+              "databricksSub": "[variables('existingDatabricksSub')]",
+              "databricksHostname": "[variables('existingDatabricksHostname')]",
+              "adfFactory": "[variables('existingAdfFactory')]",
+              "adfRg": "[variables('existingAdfRg')]",
+              "adfSub": "[variables('existingAdfSub')]",
               "deSynapse": "[parameters('loomSynapseEnabled')]",
               "deDatabricks": "[parameters('loomDatabricksEnabled')]",
               "deAdf": "[parameters('loomDataFactoryEnabled')]",
               "deShir": "[parameters('loomSelfHostedIrEnabled')]",
               "serviceBusNamespace": "[if(and(variables('useSingleDlz'), parameters('deployServiceBus')), format('sbns-loom-default-{0}', parameters('location')), '')]",
-              "amlDefaultCompute": "[if(and(variables('useSingleDlz'), parameters('mlWorkspaceEnabled')), take(format('ci-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24), '')]",
+              "amlDefaultCompute": "[if(and(variables('useSingleDlz'), variables('provisionAml')), take(format('ci-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24), '')]",
               "amlComputeIdleTtl": "[parameters('mlComputeIdleTtl')]",
               "batchAccount": "[if(and(variables('useSingleDlz'), parameters('batchEnabled')), take(format('batchloom{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24), '')]",
               "batchRg": "[if(and(variables('useSingleDlz'), parameters('batchEnabled')), format('rg-csa-loom-dlz-single-{0}', parameters('location')), '')]",
@@ -2364,8 +2260,8 @@
               "sparkPoolEnabled": "[parameters('sparkPoolEnabled')]"
             }
           },
-          "amlWorkspaceName": "[if(and(variables('useSingleDlz'), parameters('mlWorkspaceEnabled')), createObject('value', take(format('aml-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 33)), createObject('value', ''))]",
-          "amlWorkspaceRg": "[if(and(variables('useSingleDlz'), parameters('mlWorkspaceEnabled')), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', ''))]",
+          "amlWorkspaceName": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'aml'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'aml')), if(and(variables('useSingleDlz'), variables('provisionAml')), createObject('value', take(format('aml-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 33)), createObject('value', '')))]",
+          "amlWorkspaceRg": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'aml'))), createObject('value', __bicep.adoptRg(parameters('adopt'), 'aml')), if(and(variables('useSingleDlz'), variables('provisionAml')), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', '')))]",
           "vpnGatewayEnabled": {
             "value": "[parameters('vpnGatewayEnabled')]"
           },
@@ -2381,14 +2277,14 @@
           "loomStorageAccount": "[if(variables('useSingleDlz'), createObject('value', take(format('saloomdefault{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 24)), createObject('value', ''))]",
           "loomEventHubNamespace": "[if(and(variables('useSingleDlz'), parameters('loomEventHubEnabled')), createObject('value', format('evhns-loom-default-{0}', parameters('location'))), createObject('value', ''))]",
           "loomDlzRg": "[if(variables('useSingleDlz'), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', variables('adminPlaneRgName')))]",
-          "loomAsaRg": "[if(not(empty(parameters('existingAsaJob'))), createObject('value', parameters('existingAsaRg')), if(and(variables('useSingleDlz'), parameters('loomStreamAnalyticsEnabled')), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', '')))]",
-          "loomAsaSub": "[if(not(empty(parameters('existingAsaJob'))), createObject('value', parameters('existingAsaSub')), createObject('value', ''))]",
-          "loomAsaJobName": "[if(not(empty(parameters('existingAsaJob'))), createObject('value', parameters('existingAsaJob')), createObject('value', format('asa-loom-default-{0}', parameters('location'))))]",
+          "loomAsaRg": "[if(not(empty(variables('existingAsaJob'))), createObject('value', variables('existingAsaRg')), if(and(variables('useSingleDlz'), parameters('loomStreamAnalyticsEnabled')), createObject('value', format('rg-csa-loom-dlz-single-{0}', parameters('location'))), createObject('value', '')))]",
+          "loomAsaSub": "[if(not(empty(variables('existingAsaJob'))), createObject('value', variables('existingAsaSub')), createObject('value', ''))]",
+          "loomAsaJobName": "[if(not(empty(variables('existingAsaJob'))), createObject('value', variables('existingAsaJob')), createObject('value', format('asa-loom-default-{0}', parameters('location'))))]",
           "loomCosmosAccount": {
             "value": "[take(format('cosmos-loom-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 44)]"
           },
           "deployConsoleCosmos": {
-            "value": "[and(and(parameters('loomConsoleCosmosEnabled'), not(variables('useSingleDlz'))), empty(parameters('existingCosmosAccount')))]"
+            "value": "[and(variables('provisionConsoleCosmos'), not(variables('useSingleDlz')))]"
           },
           "loomCosmosVectorEndpoint": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', format('https://{0}.documents.{1}:443/', take(format('cosmos-loom-vec-default-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 44), variables('cosmosDocSuffix'))), createObject('value', ''))]",
           "loomCosmosVectorDatabase": "[if(and(variables('useSingleDlz'), parameters('cosmosGraphVectorEnabled')), createObject('value', 'loom-vectors'), createObject('value', ''))]",
@@ -2483,11 +2379,9 @@
           "loomMirrorBackend": {
             "value": "[parameters('loomMirrorBackend')]"
           },
-          "loomAzureMapsAccount": {
-            "value": "[parameters('loomAzureMapsAccount')]"
-          },
+          "loomAzureMapsAccount": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'maps'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'maps')), createObject('value', parameters('loomAzureMapsAccount')))]",
           "azureMapsEnabled": {
-            "value": "[and(parameters('loomMapsEnabled'), parameters('azureMapsEnabled'))]"
+            "value": "[and(parameters('loomMapsEnabled'), variables('provisionMaps'))]"
           },
           "firewallEnabled": {
             "value": "[and(parameters('loomFirewallEnabled'), parameters('hubFirewallEnabled'))]"
@@ -25525,16 +25419,16 @@
             "value": "[variables('adminPlaneRgName')]"
           },
           "adxEnabled": {
-            "value": "[parameters('adxEnabled')]"
+            "value": "[variables('provisionAdx')]"
           },
           "loomSynapseEnabled": {
-            "value": "[parameters('loomSynapseEnabled')]"
+            "value": "[variables('provisionSynapse')]"
           },
           "loomDatabricksEnabled": {
-            "value": "[parameters('loomDatabricksEnabled')]"
+            "value": "[variables('provisionDatabricks')]"
           },
           "loomDataFactoryEnabled": {
-            "value": "[parameters('loomDataFactoryEnabled')]"
+            "value": "[variables('provisionAdf')]"
           },
           "loomSelfHostedIrEnabled": {
             "value": "[parameters('loomSelfHostedIrEnabled')]"
@@ -25624,13 +25518,16 @@
             "value": "[parameters('weaveOntologyEnabled')]"
           },
           "loomEventHubEnabled": {
-            "value": "[parameters('loomEventHubEnabled')]"
+            "value": "[variables('provisionEventHubs')]"
+          },
+          "provisionCosmos": {
+            "value": "[variables('provisionConsoleCosmos')]"
           },
           "existingEventHubNamespaceName": {
-            "value": "[parameters('existingEventHubNamespace')]"
+            "value": "[variables('existingEventHubNamespace')]"
           },
           "enableStreamAnalytics": {
-            "value": "[and(parameters('loomStreamAnalyticsEnabled'), empty(parameters('existingAsaJob')))]"
+            "value": "[variables('provisionStreamAnalytics')]"
           },
           "deployServiceBus": {
             "value": "[parameters('deployServiceBus')]"
@@ -25641,14 +25538,54 @@
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15622652547805267163"
+              "templateHash": "5692119079870421666"
             }
           },
+          "functions": [
+            {
+              "namespace": "__bicep",
+              "members": {
+                "adoptMode": {
+                  "parameters": [
+                    {
+                      "type": "object",
+                      "name": "a"
+                    },
+                    {
+                      "type": "string",
+                      "name": "k"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[coalesce(tryGet(tryGet(parameters('a'), parameters('k')), 'mode'), 'create')]"
+                  }
+                },
+                "adoptName": {
+                  "parameters": [
+                    {
+                      "type": "object",
+                      "name": "a"
+                    },
+                    {
+                      "type": "string",
+                      "name": "k"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'target'), 'name'), ''), '')]"
+                  }
+                }
+              }
+            }
+          ],
           "parameters": {
             "location": {
               "type": "string",
@@ -25975,6 +25912,13 @@
                 "description": "Deploy the WORKLOAD-TIERED Synapse Spark pools (loometl = Medium ETL, loombatch = Large batch/ML) alongside the interactive loompool, each with baked best-practice Apache Spark config (AQE, skew-join, Delta optimize-write). DEFAULT-ON (loom_default_on_opt_out). false keeps only loompool. Requires loomSynapseEnabled."
               }
             },
+            "adopt": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Adopt-or-create plan keyed by adoption-catalog service key. Per key: { mode: \"adopt\"|\"create\"|\"skip\", target: { name, rg, sub }, extra: {} }. Absent key = create new. Supplied directly only on the dlz-attach path; the root orchestrator passes each decision explicitly instead."
+              }
+            },
             "loomEventHubEnabled": {
               "type": "bool",
               "defaultValue": true,
@@ -25984,7 +25928,7 @@
             },
             "existingEventHubNamespaceName": {
               "type": "string",
-              "defaultValue": "",
+              "defaultValue": "[__bicep.adoptName(parameters('adopt'), 'eventhubs')]",
               "metadata": {
                 "description": "Reuse an existing Event Hubs namespace (name) instead of provisioning a new one in this DLZ. When set, the new namespace is skipped; the Console env binds to this name. Empty + loomEventHubEnabled=true provisions new (the default)."
               }
@@ -26008,6 +25952,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy ADX database (requires admin-plane ADX cluster to exist). Default off until ADX cluster is provisioned."
+              }
+            },
+            "provisionCosmos": {
+              "type": "bool",
+              "defaultValue": "[equals(__bicep.adoptMode(parameters('adopt'), 'cosmos'), 'create')]",
+              "metadata": {
+                "description": "Provision a NEW Cosmos DB account for Loom application state in this DLZ. Default true (opt-out). The top-level orchestrator passes `provisionConsoleCosmos` here, which is false when the operator adopted an existing Cosmos account in the deployment plan (adopt.cosmos.mode == \"adopt\"). Previously this module was UNCONDITIONAL in the single-sub topology, so \"reuse my existing Cosmos\" was honoured in tenant/dlz-attach and silently ignored in single-sub - a second account was created next to the customer's."
               }
             },
             "enableStreamAnalytics": {
@@ -26101,8 +26052,8 @@
             "adfOn": "[and(and(parameters('adfEnabled'), parameters('loomDataFactoryEnabled')), not(empty(parameters('consolePrincipalId'))))]",
             "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]"
           },
-          "resources": [
-            {
+          "resources": {
+            "network": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-network",
@@ -26476,7 +26427,7 @@
                 }
               }
             },
-            {
+            "storage": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage",
@@ -26502,7 +26453,7 @@
                     "value": "[parameters('storageCmkIdentityId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneBlobId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'blob'), ''))]"
@@ -26963,10 +26914,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]"
+                "network"
               ]
             },
-            {
+            "databricks": {
               "condition": "[parameters('loomDatabricksEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -26984,13 +26935,13 @@
                     "value": "[parameters('domainName')]"
                   },
                   "spokeVnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.spokeVnetName.value]"
+                    "value": "[reference('network').outputs.spokeVnetName.value]"
                   },
                   "privateSubnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.databricksPrivateSubnetName.value]"
+                    "value": "[reference('network').outputs.databricksPrivateSubnetName.value]"
                   },
                   "publicSubnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.databricksPublicSubnetName.value]"
+                    "value": "[reference('network').outputs.databricksPublicSubnetName.value]"
                   },
                   "boundary": {
                     "value": "[parameters('boundary')]"
@@ -27002,7 +26953,7 @@
                     "value": "[parameters('adminPlaneLawId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "databricksPrivateDnsZoneId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'databricks'), ''))]"
@@ -27345,11 +27296,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "network",
+                "storage"
               ]
             },
-            {
+            "databricksStorageRbac": {
               "condition": "[parameters('loomDatabricksEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -27361,10 +27312,10 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "accessConnectorPrincipalId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.accessConnectorPrincipalId.value]"
+                    "value": "[reference('databricks').outputs.accessConnectorPrincipalId.value]"
                   },
                   "skipRoleGrants": {
                     "value": "[parameters('skipRoleGrants')]"
@@ -27423,11 +27374,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "databricks",
+                "storage"
               ]
             },
-            {
+            "databricksUcBootstrap": {
               "condition": "[and(and(and(and(parameters('loomDatabricksEnabled'), variables('dlzUcSupported')), not(empty(parameters('databricksAccountId')))), not(empty(parameters('databricksUcScriptUamiId')))), not(empty(parameters('consoleUamiAppId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -27446,10 +27397,10 @@
                   },
                   "accountHost": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), createObject('value', 'accounts.azuredatabricks.us'), createObject('value', 'accounts.azuredatabricks.net'))]",
                   "workspaceNumericId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceNumericId.value]"
+                    "value": "[reference('databricks').outputs.workspaceNumericId.value]"
                   },
                   "workspaceHost": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceHost.value]"
+                    "value": "[reference('databricks').outputs.workspaceHost.value]"
                   },
                   "consoleUamiClientId": {
                     "value": "[parameters('consoleUamiAppId')]"
@@ -27639,10 +27590,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]"
+                "databricks"
               ]
             },
-            {
+            "synapse": {
               "condition": "[parameters('loomSynapseEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -27660,7 +27611,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "defaultStorageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "adminEntraGroupId": {
                     "value": "[parameters('adminEntraGroupId')]"
@@ -27684,7 +27635,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "synapseSqlPrivateDnsZoneId": {
                     "value": "[parameters('synapseSqlPrivateDnsZoneId')]"
@@ -28822,12 +28773,12 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "databricks",
+                "network",
+                "storage"
               ]
             },
-            {
+            "synapseSparkPools": {
               "condition": "[and(parameters('loomSynapseEnabled'), parameters('deploySparkWorkloadTiers'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -29091,10 +29042,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "synapse"
               ]
             },
-            {
+            "aas": {
               "condition": "[parameters('deployAas')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -29346,7 +29297,7 @@
                 }
               }
             },
-            {
+            "storageRbacAdmin": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage-rbac-admin",
@@ -29357,7 +29308,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
@@ -29425,10 +29376,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "storageLifecycleRbac": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage-lifecycle-rbac",
@@ -29439,7 +29390,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
@@ -29521,10 +29472,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "synapseAutoPause": {
               "condition": "[parameters('loomSynapseEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -29542,10 +29493,10 @@
                     "value": "[parameters('domainName')]"
                   },
                   "synapseWorkspaceName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseWorkspaceName.value]"
+                    "value": "[reference('synapse').outputs.synapseWorkspaceName.value]"
                   },
                   "dedicatedPoolName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.dedicatedPoolName.value]"
+                    "value": "[reference('synapse').outputs.dedicatedPoolName.value]"
                   },
                   "complianceTags": {
                     "value": "[parameters('complianceTags')]"
@@ -29739,10 +29690,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "synapse"
               ]
             },
-            {
+            "eventhubs": {
               "condition": "[variables('provisionEventHub')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -29760,7 +29711,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneServicebusId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'servicebus'), ''))]"
@@ -29771,7 +29722,7 @@
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
                   },
-                  "adfPrincipalId": "[if(variables('adfOn'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryPrincipalId.value), createObject('value', ''))]",
+                  "adfPrincipalId": "[if(variables('adfOn'), createObject('value', reference('adf').outputs.factoryPrincipalId.value), createObject('value', ''))]",
                   "adxClusterPrincipalId": {
                     "value": "[parameters('adxClusterPrincipalId')]"
                   },
@@ -30283,15 +30234,15 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "eventgridBusiness": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-eventgrid-business",
@@ -30307,7 +30258,7 @@
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
                   },
-                  "eventHubResourceId": "[if(variables('provisionEventHub'), createObject('value', format('{0}/eventhubs/{1}', reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceId.value, reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.telemetryHubName.value)), createObject('value', ''))]",
+                  "eventHubResourceId": "[if(variables('provisionEventHub'), createObject('value', format('{0}/eventhubs/{1}', reference('eventhubs').outputs.namespaceId.value, reference('eventhubs').outputs.telemetryHubName.value)), createObject('value', ''))]",
                   "workspaceId": {
                     "value": "[parameters('adminPlaneLawId')]"
                   },
@@ -30520,10 +30471,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]"
+                "eventhubs"
               ]
             },
-            {
+            "servicebus": {
               "condition": "[parameters('deployServiceBus')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -30547,7 +30498,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneServicebusId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'servicebus'), ''))]"
@@ -30801,16 +30752,16 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventhubs",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "eventgrid": {
               "condition": "[parameters('deployEventGrid')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -30831,7 +30782,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "eventGridPrivateDnsZoneId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'eventgrid'), ''))]"
@@ -31061,17 +31012,17 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-servicebus')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventhubs",
+                "network",
+                "servicebus",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "adx": {
               "condition": "[parameters('adxEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -31357,7 +31308,8 @@
                 }
               }
             },
-            {
+            "cosmos": {
+              "condition": "[parameters('provisionCosmos')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-cosmos",
@@ -31374,7 +31326,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneCosmosId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'cosmos'), ''))]"
@@ -31408,7 +31360,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "15930758473991526080"
+                      "templateHash": "3872715568817084662"
                     }
                   },
                   "parameters": {
@@ -31717,6 +31669,10 @@
                       },
                       {
                         "name": "landing-zones",
+                        "partitionKey": "/tenantId"
+                      },
+                      {
+                        "name": "deployment-plans",
                         "partitionKey": "/tenantId"
                       },
                       {
@@ -32047,13 +32003,13 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "streamAnalytics": {
               "condition": "[and(parameters('enableStreamAnalytics'), not(empty(parameters('consolePrincipalId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -32083,7 +32039,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "adlsAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "adxClusterName": {
                     "value": "[parameters('adminPlaneAdxClusterName')]"
@@ -32293,10 +32249,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "aasRlsOls": {
               "condition": "[parameters('enableAas')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -32542,7 +32498,7 @@
                 }
               }
             },
-            {
+            "adf": {
               "condition": "[variables('adfOn')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -32563,7 +32519,7 @@
                     "value": "[parameters('consolePrincipalId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "adfPrivateDnsZoneId": {
                     "value": "[parameters('adfPrivateDnsZoneId')]"
@@ -32578,10 +32534,10 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "storageAccountId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountId.value]"
+                    "value": "[reference('storage').outputs.storageAccountId.value]"
                   },
                   "adlsAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "deployGeoEnrichPipeline": {
                     "value": "[parameters('deployGeoEnrichPipeline')]"
@@ -32934,14 +32890,14 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "cosmos",
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "approvalLogicApp": {
               "condition": "[parameters('approvalLogicAppEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -33217,7 +33173,7 @@
                 }
               }
             },
-            {
+            "shir": {
               "condition": "[variables('shirOn')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -33235,10 +33191,10 @@
                     "value": "[parameters('domainName')]"
                   },
                   "dataFactoryName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryName.value]"
+                    "value": "[reference('adf').outputs.factoryName.value]"
                   },
                   "subnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.workloadsSubnetId.value]"
+                    "value": "[reference('network').outputs.workloadsSubnetId.value]"
                   },
                   "adminPassword": {
                     "value": "[parameters('shirAdminPassword')]"
@@ -33511,11 +33467,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]"
+                "adf",
+                "network"
               ]
             },
-            {
+            "cosmosGraphVector": {
               "condition": "[parameters('cosmosGraphVectorEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -33536,7 +33492,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneCosmosId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'cosmos'), ''))]"
@@ -34094,18 +34050,18 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventgrid-topic')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-servicebus')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventgrid",
+                "eventhubs",
+                "network",
+                "servicebus",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "postgresWeave": {
               "condition": "[parameters('weaveOntologyEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -34411,51 +34367,51 @@
                 }
               }
             }
-          ],
+          },
           "outputs": {
             "spokeVnetId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.spokeVnetId.value]"
+              "value": "[reference('network').outputs.spokeVnetId.value]"
             },
             "databricksWorkspaceUrl": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceUrl.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceUrl.value, '')]"
             },
             "databricksWorkspaceId": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceId.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceId.value, '')]"
             },
             "databricksWorkspaceHost": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceHost.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceHost.value, '')]"
             },
             "synapseEndpoint": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseServerlessSqlEndpoint.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseServerlessSqlEndpoint.value, '')]"
             },
             "synapseSqlEndpoint": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseSqlEndpoint.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseSqlEndpoint.value, '')]"
             },
             "synapseWorkspaceName": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseWorkspaceName.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseWorkspaceName.value, '')]"
             },
             "synapseDedicatedPoolName": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.dedicatedPoolName.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.dedicatedPoolName.value, '')]"
             },
             "synapseManagedIdentityPrincipalId": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseManagedIdentityPrincipalId.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseManagedIdentityPrincipalId.value, '')]"
             },
             "databricksAccessConnectorPrincipalId": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.accessConnectorPrincipalId.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.accessConnectorPrincipalId.value, '')]"
             },
             "storageAccountName": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+              "value": "[reference('storage').outputs.storageAccountName.value]"
             },
             "dlzResourceGroupName": {
               "type": "string",
@@ -34463,119 +34419,119 @@
             },
             "adxDatabaseUrl": {
               "type": "string",
-              "value": "[if(parameters('adxEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adx-db'), '2025-04-01').outputs.databaseUri.value, '')]"
+              "value": "[if(parameters('adxEnabled'), reference('adx').outputs.databaseUri.value, '')]"
             },
             "lakehouseDfsEndpoint": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.dfsEndpoint.value]"
+              "value": "[reference('storage').outputs.dfsEndpoint.value]"
             },
             "bronzeContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.bronzeContainerUrl.value]"
+              "value": "[reference('storage').outputs.bronzeContainerUrl.value]"
             },
             "silverContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.silverContainerUrl.value]"
+              "value": "[reference('storage').outputs.silverContainerUrl.value]"
             },
             "goldContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.goldContainerUrl.value]"
+              "value": "[reference('storage').outputs.goldContainerUrl.value]"
             },
             "landingContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.landingContainerUrl.value]"
+              "value": "[reference('storage').outputs.landingContainerUrl.value]"
             },
             "eventHubsNamespaceFqdn": {
               "type": "string",
-              "value": "[if(variables('provisionEventHub'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceFqdn.value, '')]"
+              "value": "[if(variables('provisionEventHub'), reference('eventhubs').outputs.namespaceFqdn.value, '')]"
             },
             "eventHubsNamespaceName": {
               "type": "string",
-              "value": "[if(variables('provisionEventHub'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceName.value, parameters('existingEventHubNamespaceName'))]"
+              "value": "[if(variables('provisionEventHub'), reference('eventhubs').outputs.namespaceName.value, parameters('existingEventHubNamespaceName'))]"
             },
             "cosmosEndpoint": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos'), '2025-04-01').outputs.endpoint.value]"
+              "value": "[if(parameters('provisionCosmos'), reference('cosmos').outputs.endpoint.value, '')]"
             },
             "storageEventGridTopicId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.eventGridTopicId.value]"
+              "value": "[reference('storage').outputs.eventGridTopicId.value]"
             },
             "serviceBusNamespaceName": {
               "type": "string",
-              "value": "[if(parameters('deployServiceBus'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-servicebus'), '2025-04-01').outputs.namespaceName.value, '')]"
+              "value": "[if(parameters('deployServiceBus'), reference('servicebus').outputs.namespaceName.value, '')]"
             },
             "serviceBusNamespaceFqdn": {
               "type": "string",
-              "value": "[if(parameters('deployServiceBus'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-servicebus'), '2025-04-01').outputs.namespaceFqdn.value, '')]"
+              "value": "[if(parameters('deployServiceBus'), reference('servicebus').outputs.namespaceFqdn.value, '')]"
             },
             "eventGridTopicName": {
               "type": "string",
-              "value": "[if(parameters('deployEventGrid'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventgrid-topic'), '2025-04-01').outputs.topicName.value, '')]"
+              "value": "[if(parameters('deployEventGrid'), reference('eventgrid').outputs.topicName.value, '')]"
             },
             "cosmosGremlinEndpoint": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinEndpoint.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinEndpoint.value, '')]"
             },
             "cosmosGremlinDatabase": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinDatabase.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinDatabase.value, '')]"
             },
             "cosmosGremlinGraph": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinGraph.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinGraph.value, '')]"
             },
             "cosmosVectorEndpoint": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorEndpoint.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorEndpoint.value, '')]"
             },
             "cosmosVectorDatabase": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorDatabase.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorDatabase.value, '')]"
             },
             "cosmosVectorContainer": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorDefaultContainer.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorDefaultContainer.value, '')]"
             },
             "weavePgServerName": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgServerName.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
             },
             "weavePgFqdn": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgFqdn.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
             },
             "weavePgDatabase": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgDatabase.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
             },
             "adfFactoryId": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryId.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryId.value, '')]"
             },
             "adfFactoryName": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryName.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryName.value, '')]"
             },
             "approvalLogicAppName": {
               "type": "string",
-              "value": "[if(parameters('approvalLogicAppEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-approval-logicapp'), '2025-04-01').outputs.workflowName.value, '')]"
+              "value": "[if(parameters('approvalLogicAppEnabled'), reference('approvalLogicApp').outputs.workflowName.value, '')]"
             },
             "adfFactoryPrincipalId": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryPrincipalId.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryPrincipalId.value, '')]"
             },
             "aasXmlaEndpoint": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.xmlaEndpoint.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.xmlaEndpoint.value, '')]"
             },
             "aasServerName": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.serverName.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.serverName.value, '')]"
             },
             "aasConnectionString": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.aasConnectionString.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.aasConnectionString.value, '')]"
             }
           }
         }
@@ -34817,16 +34773,16 @@
             "value": "[variables('adminPlaneRgName')]"
           },
           "adxEnabled": {
-            "value": "[parameters('adxEnabled')]"
+            "value": "[variables('provisionAdx')]"
           },
           "loomSynapseEnabled": {
-            "value": "[parameters('loomSynapseEnabled')]"
+            "value": "[variables('provisionSynapse')]"
           },
           "loomDatabricksEnabled": {
-            "value": "[parameters('loomDatabricksEnabled')]"
+            "value": "[variables('provisionDatabricks')]"
           },
           "loomDataFactoryEnabled": {
-            "value": "[parameters('loomDataFactoryEnabled')]"
+            "value": "[variables('provisionAdf')]"
           },
           "loomSelfHostedIrEnabled": {
             "value": "[parameters('loomSelfHostedIrEnabled')]"
@@ -34916,22 +34872,65 @@
             "value": "[parameters('weaveOntologyEnabled')]"
           },
           "loomEventHubEnabled": {
-            "value": "[parameters('loomEventHubEnabled')]"
+            "value": "[variables('provisionEventHubs')]"
+          },
+          "provisionCosmos": {
+            "value": "[variables('provisionConsoleCosmos')]"
           },
           "enableStreamAnalytics": {
-            "value": "[parameters('loomStreamAnalyticsEnabled')]"
+            "value": "[variables('provisionStreamAnalytics')]"
           }
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15622652547805267163"
+              "templateHash": "5692119079870421666"
             }
           },
+          "functions": [
+            {
+              "namespace": "__bicep",
+              "members": {
+                "adoptMode": {
+                  "parameters": [
+                    {
+                      "type": "object",
+                      "name": "a"
+                    },
+                    {
+                      "type": "string",
+                      "name": "k"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[coalesce(tryGet(tryGet(parameters('a'), parameters('k')), 'mode'), 'create')]"
+                  }
+                },
+                "adoptName": {
+                  "parameters": [
+                    {
+                      "type": "object",
+                      "name": "a"
+                    },
+                    {
+                      "type": "string",
+                      "name": "k"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'target'), 'name'), ''), '')]"
+                  }
+                }
+              }
+            }
+          ],
           "parameters": {
             "location": {
               "type": "string",
@@ -35258,6 +35257,13 @@
                 "description": "Deploy the WORKLOAD-TIERED Synapse Spark pools (loometl = Medium ETL, loombatch = Large batch/ML) alongside the interactive loompool, each with baked best-practice Apache Spark config (AQE, skew-join, Delta optimize-write). DEFAULT-ON (loom_default_on_opt_out). false keeps only loompool. Requires loomSynapseEnabled."
               }
             },
+            "adopt": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Adopt-or-create plan keyed by adoption-catalog service key. Per key: { mode: \"adopt\"|\"create\"|\"skip\", target: { name, rg, sub }, extra: {} }. Absent key = create new. Supplied directly only on the dlz-attach path; the root orchestrator passes each decision explicitly instead."
+              }
+            },
             "loomEventHubEnabled": {
               "type": "bool",
               "defaultValue": true,
@@ -35267,7 +35273,7 @@
             },
             "existingEventHubNamespaceName": {
               "type": "string",
-              "defaultValue": "",
+              "defaultValue": "[__bicep.adoptName(parameters('adopt'), 'eventhubs')]",
               "metadata": {
                 "description": "Reuse an existing Event Hubs namespace (name) instead of provisioning a new one in this DLZ. When set, the new namespace is skipped; the Console env binds to this name. Empty + loomEventHubEnabled=true provisions new (the default)."
               }
@@ -35291,6 +35297,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy ADX database (requires admin-plane ADX cluster to exist). Default off until ADX cluster is provisioned."
+              }
+            },
+            "provisionCosmos": {
+              "type": "bool",
+              "defaultValue": "[equals(__bicep.adoptMode(parameters('adopt'), 'cosmos'), 'create')]",
+              "metadata": {
+                "description": "Provision a NEW Cosmos DB account for Loom application state in this DLZ. Default true (opt-out). The top-level orchestrator passes `provisionConsoleCosmos` here, which is false when the operator adopted an existing Cosmos account in the deployment plan (adopt.cosmos.mode == \"adopt\"). Previously this module was UNCONDITIONAL in the single-sub topology, so \"reuse my existing Cosmos\" was honoured in tenant/dlz-attach and silently ignored in single-sub - a second account was created next to the customer's."
               }
             },
             "enableStreamAnalytics": {
@@ -35384,8 +35397,8 @@
             "adfOn": "[and(and(parameters('adfEnabled'), parameters('loomDataFactoryEnabled')), not(empty(parameters('consolePrincipalId'))))]",
             "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]"
           },
-          "resources": [
-            {
+          "resources": {
+            "network": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-network",
@@ -35759,7 +35772,7 @@
                 }
               }
             },
-            {
+            "storage": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage",
@@ -35785,7 +35798,7 @@
                     "value": "[parameters('storageCmkIdentityId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneBlobId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'blob'), ''))]"
@@ -36246,10 +36259,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]"
+                "network"
               ]
             },
-            {
+            "databricks": {
               "condition": "[parameters('loomDatabricksEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -36267,13 +36280,13 @@
                     "value": "[parameters('domainName')]"
                   },
                   "spokeVnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.spokeVnetName.value]"
+                    "value": "[reference('network').outputs.spokeVnetName.value]"
                   },
                   "privateSubnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.databricksPrivateSubnetName.value]"
+                    "value": "[reference('network').outputs.databricksPrivateSubnetName.value]"
                   },
                   "publicSubnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.databricksPublicSubnetName.value]"
+                    "value": "[reference('network').outputs.databricksPublicSubnetName.value]"
                   },
                   "boundary": {
                     "value": "[parameters('boundary')]"
@@ -36285,7 +36298,7 @@
                     "value": "[parameters('adminPlaneLawId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "databricksPrivateDnsZoneId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'databricks'), ''))]"
@@ -36628,11 +36641,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "network",
+                "storage"
               ]
             },
-            {
+            "databricksStorageRbac": {
               "condition": "[parameters('loomDatabricksEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -36644,10 +36657,10 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "accessConnectorPrincipalId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.accessConnectorPrincipalId.value]"
+                    "value": "[reference('databricks').outputs.accessConnectorPrincipalId.value]"
                   },
                   "skipRoleGrants": {
                     "value": "[parameters('skipRoleGrants')]"
@@ -36706,11 +36719,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "databricks",
+                "storage"
               ]
             },
-            {
+            "databricksUcBootstrap": {
               "condition": "[and(and(and(and(parameters('loomDatabricksEnabled'), variables('dlzUcSupported')), not(empty(parameters('databricksAccountId')))), not(empty(parameters('databricksUcScriptUamiId')))), not(empty(parameters('consoleUamiAppId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -36729,10 +36742,10 @@
                   },
                   "accountHost": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), createObject('value', 'accounts.azuredatabricks.us'), createObject('value', 'accounts.azuredatabricks.net'))]",
                   "workspaceNumericId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceNumericId.value]"
+                    "value": "[reference('databricks').outputs.workspaceNumericId.value]"
                   },
                   "workspaceHost": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceHost.value]"
+                    "value": "[reference('databricks').outputs.workspaceHost.value]"
                   },
                   "consoleUamiClientId": {
                     "value": "[parameters('consoleUamiAppId')]"
@@ -36922,10 +36935,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]"
+                "databricks"
               ]
             },
-            {
+            "synapse": {
               "condition": "[parameters('loomSynapseEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -36943,7 +36956,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "defaultStorageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "adminEntraGroupId": {
                     "value": "[parameters('adminEntraGroupId')]"
@@ -36967,7 +36980,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "synapseSqlPrivateDnsZoneId": {
                     "value": "[parameters('synapseSqlPrivateDnsZoneId')]"
@@ -38105,12 +38118,12 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "databricks",
+                "network",
+                "storage"
               ]
             },
-            {
+            "synapseSparkPools": {
               "condition": "[and(parameters('loomSynapseEnabled'), parameters('deploySparkWorkloadTiers'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -38374,10 +38387,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "synapse"
               ]
             },
-            {
+            "aas": {
               "condition": "[parameters('deployAas')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -38629,7 +38642,7 @@
                 }
               }
             },
-            {
+            "storageRbacAdmin": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage-rbac-admin",
@@ -38640,7 +38653,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
@@ -38708,10 +38721,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "storageLifecycleRbac": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage-lifecycle-rbac",
@@ -38722,7 +38735,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
@@ -38804,10 +38817,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "synapseAutoPause": {
               "condition": "[parameters('loomSynapseEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -38825,10 +38838,10 @@
                     "value": "[parameters('domainName')]"
                   },
                   "synapseWorkspaceName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseWorkspaceName.value]"
+                    "value": "[reference('synapse').outputs.synapseWorkspaceName.value]"
                   },
                   "dedicatedPoolName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.dedicatedPoolName.value]"
+                    "value": "[reference('synapse').outputs.dedicatedPoolName.value]"
                   },
                   "complianceTags": {
                     "value": "[parameters('complianceTags')]"
@@ -39022,10 +39035,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "synapse"
               ]
             },
-            {
+            "eventhubs": {
               "condition": "[variables('provisionEventHub')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -39043,7 +39056,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneServicebusId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'servicebus'), ''))]"
@@ -39054,7 +39067,7 @@
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
                   },
-                  "adfPrincipalId": "[if(variables('adfOn'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryPrincipalId.value), createObject('value', ''))]",
+                  "adfPrincipalId": "[if(variables('adfOn'), createObject('value', reference('adf').outputs.factoryPrincipalId.value), createObject('value', ''))]",
                   "adxClusterPrincipalId": {
                     "value": "[parameters('adxClusterPrincipalId')]"
                   },
@@ -39566,15 +39579,15 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "eventgridBusiness": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-eventgrid-business",
@@ -39590,7 +39603,7 @@
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
                   },
-                  "eventHubResourceId": "[if(variables('provisionEventHub'), createObject('value', format('{0}/eventhubs/{1}', reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceId.value, reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.telemetryHubName.value)), createObject('value', ''))]",
+                  "eventHubResourceId": "[if(variables('provisionEventHub'), createObject('value', format('{0}/eventhubs/{1}', reference('eventhubs').outputs.namespaceId.value, reference('eventhubs').outputs.telemetryHubName.value)), createObject('value', ''))]",
                   "workspaceId": {
                     "value": "[parameters('adminPlaneLawId')]"
                   },
@@ -39803,10 +39816,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]"
+                "eventhubs"
               ]
             },
-            {
+            "servicebus": {
               "condition": "[parameters('deployServiceBus')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -39830,7 +39843,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneServicebusId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'servicebus'), ''))]"
@@ -40084,16 +40097,16 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventhubs",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "eventgrid": {
               "condition": "[parameters('deployEventGrid')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -40114,7 +40127,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "eventGridPrivateDnsZoneId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'eventgrid'), ''))]"
@@ -40344,17 +40357,17 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-servicebus')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventhubs",
+                "network",
+                "servicebus",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "adx": {
               "condition": "[parameters('adxEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -40640,7 +40653,8 @@
                 }
               }
             },
-            {
+            "cosmos": {
+              "condition": "[parameters('provisionCosmos')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-cosmos",
@@ -40657,7 +40671,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneCosmosId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'cosmos'), ''))]"
@@ -40691,7 +40705,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "15930758473991526080"
+                      "templateHash": "3872715568817084662"
                     }
                   },
                   "parameters": {
@@ -41000,6 +41014,10 @@
                       },
                       {
                         "name": "landing-zones",
+                        "partitionKey": "/tenantId"
+                      },
+                      {
+                        "name": "deployment-plans",
                         "partitionKey": "/tenantId"
                       },
                       {
@@ -41330,13 +41348,13 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "streamAnalytics": {
               "condition": "[and(parameters('enableStreamAnalytics'), not(empty(parameters('consolePrincipalId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -41366,7 +41384,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "adlsAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "adxClusterName": {
                     "value": "[parameters('adminPlaneAdxClusterName')]"
@@ -41576,10 +41594,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "aasRlsOls": {
               "condition": "[parameters('enableAas')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -41825,7 +41843,7 @@
                 }
               }
             },
-            {
+            "adf": {
               "condition": "[variables('adfOn')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -41846,7 +41864,7 @@
                     "value": "[parameters('consolePrincipalId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "adfPrivateDnsZoneId": {
                     "value": "[parameters('adfPrivateDnsZoneId')]"
@@ -41861,10 +41879,10 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "storageAccountId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountId.value]"
+                    "value": "[reference('storage').outputs.storageAccountId.value]"
                   },
                   "adlsAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "deployGeoEnrichPipeline": {
                     "value": "[parameters('deployGeoEnrichPipeline')]"
@@ -42217,14 +42235,14 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "cosmos",
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "approvalLogicApp": {
               "condition": "[parameters('approvalLogicAppEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -42500,7 +42518,7 @@
                 }
               }
             },
-            {
+            "shir": {
               "condition": "[variables('shirOn')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -42518,10 +42536,10 @@
                     "value": "[parameters('domainName')]"
                   },
                   "dataFactoryName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryName.value]"
+                    "value": "[reference('adf').outputs.factoryName.value]"
                   },
                   "subnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.workloadsSubnetId.value]"
+                    "value": "[reference('network').outputs.workloadsSubnetId.value]"
                   },
                   "adminPassword": {
                     "value": "[parameters('shirAdminPassword')]"
@@ -42794,11 +42812,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]"
+                "adf",
+                "network"
               ]
             },
-            {
+            "cosmosGraphVector": {
               "condition": "[parameters('cosmosGraphVectorEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -42819,7 +42837,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneCosmosId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'cosmos'), ''))]"
@@ -43377,18 +43395,18 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventgrid-topic')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-servicebus')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventgrid",
+                "eventhubs",
+                "network",
+                "servicebus",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "postgresWeave": {
               "condition": "[parameters('weaveOntologyEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -43694,51 +43712,51 @@
                 }
               }
             }
-          ],
+          },
           "outputs": {
             "spokeVnetId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.spokeVnetId.value]"
+              "value": "[reference('network').outputs.spokeVnetId.value]"
             },
             "databricksWorkspaceUrl": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceUrl.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceUrl.value, '')]"
             },
             "databricksWorkspaceId": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceId.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceId.value, '')]"
             },
             "databricksWorkspaceHost": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceHost.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceHost.value, '')]"
             },
             "synapseEndpoint": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseServerlessSqlEndpoint.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseServerlessSqlEndpoint.value, '')]"
             },
             "synapseSqlEndpoint": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseSqlEndpoint.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseSqlEndpoint.value, '')]"
             },
             "synapseWorkspaceName": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseWorkspaceName.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseWorkspaceName.value, '')]"
             },
             "synapseDedicatedPoolName": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.dedicatedPoolName.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.dedicatedPoolName.value, '')]"
             },
             "synapseManagedIdentityPrincipalId": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseManagedIdentityPrincipalId.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseManagedIdentityPrincipalId.value, '')]"
             },
             "databricksAccessConnectorPrincipalId": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.accessConnectorPrincipalId.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.accessConnectorPrincipalId.value, '')]"
             },
             "storageAccountName": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+              "value": "[reference('storage').outputs.storageAccountName.value]"
             },
             "dlzResourceGroupName": {
               "type": "string",
@@ -43746,119 +43764,119 @@
             },
             "adxDatabaseUrl": {
               "type": "string",
-              "value": "[if(parameters('adxEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adx-db'), '2025-04-01').outputs.databaseUri.value, '')]"
+              "value": "[if(parameters('adxEnabled'), reference('adx').outputs.databaseUri.value, '')]"
             },
             "lakehouseDfsEndpoint": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.dfsEndpoint.value]"
+              "value": "[reference('storage').outputs.dfsEndpoint.value]"
             },
             "bronzeContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.bronzeContainerUrl.value]"
+              "value": "[reference('storage').outputs.bronzeContainerUrl.value]"
             },
             "silverContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.silverContainerUrl.value]"
+              "value": "[reference('storage').outputs.silverContainerUrl.value]"
             },
             "goldContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.goldContainerUrl.value]"
+              "value": "[reference('storage').outputs.goldContainerUrl.value]"
             },
             "landingContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.landingContainerUrl.value]"
+              "value": "[reference('storage').outputs.landingContainerUrl.value]"
             },
             "eventHubsNamespaceFqdn": {
               "type": "string",
-              "value": "[if(variables('provisionEventHub'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceFqdn.value, '')]"
+              "value": "[if(variables('provisionEventHub'), reference('eventhubs').outputs.namespaceFqdn.value, '')]"
             },
             "eventHubsNamespaceName": {
               "type": "string",
-              "value": "[if(variables('provisionEventHub'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceName.value, parameters('existingEventHubNamespaceName'))]"
+              "value": "[if(variables('provisionEventHub'), reference('eventhubs').outputs.namespaceName.value, parameters('existingEventHubNamespaceName'))]"
             },
             "cosmosEndpoint": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos'), '2025-04-01').outputs.endpoint.value]"
+              "value": "[if(parameters('provisionCosmos'), reference('cosmos').outputs.endpoint.value, '')]"
             },
             "storageEventGridTopicId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.eventGridTopicId.value]"
+              "value": "[reference('storage').outputs.eventGridTopicId.value]"
             },
             "serviceBusNamespaceName": {
               "type": "string",
-              "value": "[if(parameters('deployServiceBus'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-servicebus'), '2025-04-01').outputs.namespaceName.value, '')]"
+              "value": "[if(parameters('deployServiceBus'), reference('servicebus').outputs.namespaceName.value, '')]"
             },
             "serviceBusNamespaceFqdn": {
               "type": "string",
-              "value": "[if(parameters('deployServiceBus'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-servicebus'), '2025-04-01').outputs.namespaceFqdn.value, '')]"
+              "value": "[if(parameters('deployServiceBus'), reference('servicebus').outputs.namespaceFqdn.value, '')]"
             },
             "eventGridTopicName": {
               "type": "string",
-              "value": "[if(parameters('deployEventGrid'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventgrid-topic'), '2025-04-01').outputs.topicName.value, '')]"
+              "value": "[if(parameters('deployEventGrid'), reference('eventgrid').outputs.topicName.value, '')]"
             },
             "cosmosGremlinEndpoint": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinEndpoint.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinEndpoint.value, '')]"
             },
             "cosmosGremlinDatabase": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinDatabase.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinDatabase.value, '')]"
             },
             "cosmosGremlinGraph": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinGraph.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinGraph.value, '')]"
             },
             "cosmosVectorEndpoint": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorEndpoint.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorEndpoint.value, '')]"
             },
             "cosmosVectorDatabase": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorDatabase.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorDatabase.value, '')]"
             },
             "cosmosVectorContainer": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorDefaultContainer.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorDefaultContainer.value, '')]"
             },
             "weavePgServerName": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgServerName.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
             },
             "weavePgFqdn": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgFqdn.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
             },
             "weavePgDatabase": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgDatabase.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
             },
             "adfFactoryId": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryId.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryId.value, '')]"
             },
             "adfFactoryName": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryName.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryName.value, '')]"
             },
             "approvalLogicAppName": {
               "type": "string",
-              "value": "[if(parameters('approvalLogicAppEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-approval-logicapp'), '2025-04-01').outputs.workflowName.value, '')]"
+              "value": "[if(parameters('approvalLogicAppEnabled'), reference('approvalLogicApp').outputs.workflowName.value, '')]"
             },
             "adfFactoryPrincipalId": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryPrincipalId.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryPrincipalId.value, '')]"
             },
             "aasXmlaEndpoint": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.xmlaEndpoint.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.xmlaEndpoint.value, '')]"
             },
             "aasServerName": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.serverName.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.serverName.value, '')]"
             },
             "aasConnectionString": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.aasConnectionString.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.aasConnectionString.value, '')]"
             }
           }
         }
@@ -44294,13 +44312,13 @@
             "value": false
           },
           "loomSynapseEnabled": {
-            "value": "[parameters('loomSynapseEnabled')]"
+            "value": "[variables('provisionSynapse')]"
           },
           "loomDatabricksEnabled": {
-            "value": "[parameters('loomDatabricksEnabled')]"
+            "value": "[variables('provisionDatabricks')]"
           },
           "loomDataFactoryEnabled": {
-            "value": "[parameters('loomDataFactoryEnabled')]"
+            "value": "[variables('provisionAdf')]"
           },
           "loomSelfHostedIrEnabled": {
             "value": "[parameters('loomSelfHostedIrEnabled')]"
@@ -44379,10 +44397,13 @@
             "value": "[parameters('aasEnabled')]"
           },
           "loomEventHubEnabled": {
-            "value": "[parameters('loomEventHubEnabled')]"
+            "value": "[variables('provisionEventHubs')]"
+          },
+          "provisionCosmos": {
+            "value": "[variables('provisionConsoleCosmos')]"
           },
           "enableStreamAnalytics": {
-            "value": "[parameters('loomStreamAnalyticsEnabled')]"
+            "value": "[variables('provisionStreamAnalytics')]"
           },
           "deployServiceBus": {
             "value": "[parameters('deployServiceBus')]"
@@ -44393,14 +44414,54 @@
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15622652547805267163"
+              "templateHash": "5692119079870421666"
             }
           },
+          "functions": [
+            {
+              "namespace": "__bicep",
+              "members": {
+                "adoptMode": {
+                  "parameters": [
+                    {
+                      "type": "object",
+                      "name": "a"
+                    },
+                    {
+                      "type": "string",
+                      "name": "k"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[coalesce(tryGet(tryGet(parameters('a'), parameters('k')), 'mode'), 'create')]"
+                  }
+                },
+                "adoptName": {
+                  "parameters": [
+                    {
+                      "type": "object",
+                      "name": "a"
+                    },
+                    {
+                      "type": "string",
+                      "name": "k"
+                    }
+                  ],
+                  "output": {
+                    "type": "string",
+                    "value": "[if(equals(__bicep.adoptMode(parameters('a'), parameters('k')), 'adopt'), coalesce(tryGet(tryGet(tryGet(parameters('a'), parameters('k')), 'target'), 'name'), ''), '')]"
+                  }
+                }
+              }
+            }
+          ],
           "parameters": {
             "location": {
               "type": "string",
@@ -44727,6 +44788,13 @@
                 "description": "Deploy the WORKLOAD-TIERED Synapse Spark pools (loometl = Medium ETL, loombatch = Large batch/ML) alongside the interactive loompool, each with baked best-practice Apache Spark config (AQE, skew-join, Delta optimize-write). DEFAULT-ON (loom_default_on_opt_out). false keeps only loompool. Requires loomSynapseEnabled."
               }
             },
+            "adopt": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Adopt-or-create plan keyed by adoption-catalog service key. Per key: { mode: \"adopt\"|\"create\"|\"skip\", target: { name, rg, sub }, extra: {} }. Absent key = create new. Supplied directly only on the dlz-attach path; the root orchestrator passes each decision explicitly instead."
+              }
+            },
             "loomEventHubEnabled": {
               "type": "bool",
               "defaultValue": true,
@@ -44736,7 +44804,7 @@
             },
             "existingEventHubNamespaceName": {
               "type": "string",
-              "defaultValue": "",
+              "defaultValue": "[__bicep.adoptName(parameters('adopt'), 'eventhubs')]",
               "metadata": {
                 "description": "Reuse an existing Event Hubs namespace (name) instead of provisioning a new one in this DLZ. When set, the new namespace is skipped; the Console env binds to this name. Empty + loomEventHubEnabled=true provisions new (the default)."
               }
@@ -44760,6 +44828,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy ADX database (requires admin-plane ADX cluster to exist). Default off until ADX cluster is provisioned."
+              }
+            },
+            "provisionCosmos": {
+              "type": "bool",
+              "defaultValue": "[equals(__bicep.adoptMode(parameters('adopt'), 'cosmos'), 'create')]",
+              "metadata": {
+                "description": "Provision a NEW Cosmos DB account for Loom application state in this DLZ. Default true (opt-out). The top-level orchestrator passes `provisionConsoleCosmos` here, which is false when the operator adopted an existing Cosmos account in the deployment plan (adopt.cosmos.mode == \"adopt\"). Previously this module was UNCONDITIONAL in the single-sub topology, so \"reuse my existing Cosmos\" was honoured in tenant/dlz-attach and silently ignored in single-sub - a second account was created next to the customer's."
               }
             },
             "enableStreamAnalytics": {
@@ -44853,8 +44928,8 @@
             "adfOn": "[and(and(parameters('adfEnabled'), parameters('loomDataFactoryEnabled')), not(empty(parameters('consolePrincipalId'))))]",
             "shirOn": "[and(and(and(parameters('selfHostedIrEnabled'), parameters('loomSelfHostedIrEnabled')), variables('adfOn')), not(empty(parameters('shirAdminPassword'))))]"
           },
-          "resources": [
-            {
+          "resources": {
+            "network": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-network",
@@ -45228,7 +45303,7 @@
                 }
               }
             },
-            {
+            "storage": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage",
@@ -45254,7 +45329,7 @@
                     "value": "[parameters('storageCmkIdentityId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneBlobId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'blob'), ''))]"
@@ -45715,10 +45790,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]"
+                "network"
               ]
             },
-            {
+            "databricks": {
               "condition": "[parameters('loomDatabricksEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -45736,13 +45811,13 @@
                     "value": "[parameters('domainName')]"
                   },
                   "spokeVnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.spokeVnetName.value]"
+                    "value": "[reference('network').outputs.spokeVnetName.value]"
                   },
                   "privateSubnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.databricksPrivateSubnetName.value]"
+                    "value": "[reference('network').outputs.databricksPrivateSubnetName.value]"
                   },
                   "publicSubnetName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.databricksPublicSubnetName.value]"
+                    "value": "[reference('network').outputs.databricksPublicSubnetName.value]"
                   },
                   "boundary": {
                     "value": "[parameters('boundary')]"
@@ -45754,7 +45829,7 @@
                     "value": "[parameters('adminPlaneLawId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "databricksPrivateDnsZoneId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'databricks'), ''))]"
@@ -46097,11 +46172,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "network",
+                "storage"
               ]
             },
-            {
+            "databricksStorageRbac": {
               "condition": "[parameters('loomDatabricksEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -46113,10 +46188,10 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "accessConnectorPrincipalId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.accessConnectorPrincipalId.value]"
+                    "value": "[reference('databricks').outputs.accessConnectorPrincipalId.value]"
                   },
                   "skipRoleGrants": {
                     "value": "[parameters('skipRoleGrants')]"
@@ -46175,11 +46250,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "databricks",
+                "storage"
               ]
             },
-            {
+            "databricksUcBootstrap": {
               "condition": "[and(and(and(and(parameters('loomDatabricksEnabled'), variables('dlzUcSupported')), not(empty(parameters('databricksAccountId')))), not(empty(parameters('databricksUcScriptUamiId')))), not(empty(parameters('consoleUamiAppId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -46198,10 +46273,10 @@
                   },
                   "accountHost": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), createObject('value', 'accounts.azuredatabricks.us'), createObject('value', 'accounts.azuredatabricks.net'))]",
                   "workspaceNumericId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceNumericId.value]"
+                    "value": "[reference('databricks').outputs.workspaceNumericId.value]"
                   },
                   "workspaceHost": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceHost.value]"
+                    "value": "[reference('databricks').outputs.workspaceHost.value]"
                   },
                   "consoleUamiClientId": {
                     "value": "[parameters('consoleUamiAppId')]"
@@ -46391,10 +46466,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]"
+                "databricks"
               ]
             },
-            {
+            "synapse": {
               "condition": "[parameters('loomSynapseEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -46412,7 +46487,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "defaultStorageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "adminEntraGroupId": {
                     "value": "[parameters('adminEntraGroupId')]"
@@ -46436,7 +46511,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "synapseSqlPrivateDnsZoneId": {
                     "value": "[parameters('synapseSqlPrivateDnsZoneId')]"
@@ -47574,12 +47649,12 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "databricks",
+                "network",
+                "storage"
               ]
             },
-            {
+            "synapseSparkPools": {
               "condition": "[and(parameters('loomSynapseEnabled'), parameters('deploySparkWorkloadTiers'))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -47843,10 +47918,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "synapse"
               ]
             },
-            {
+            "aas": {
               "condition": "[parameters('deployAas')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -48098,7 +48173,7 @@
                 }
               }
             },
-            {
+            "storageRbacAdmin": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage-rbac-admin",
@@ -48109,7 +48184,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
@@ -48177,10 +48252,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "storageLifecycleRbac": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-storage-lifecycle-rbac",
@@ -48191,7 +48266,7 @@
                 "mode": "Incremental",
                 "parameters": {
                   "storageAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
@@ -48273,10 +48348,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "synapseAutoPause": {
               "condition": "[parameters('loomSynapseEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -48294,10 +48369,10 @@
                     "value": "[parameters('domainName')]"
                   },
                   "synapseWorkspaceName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseWorkspaceName.value]"
+                    "value": "[reference('synapse').outputs.synapseWorkspaceName.value]"
                   },
                   "dedicatedPoolName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.dedicatedPoolName.value]"
+                    "value": "[reference('synapse').outputs.dedicatedPoolName.value]"
                   },
                   "complianceTags": {
                     "value": "[parameters('complianceTags')]"
@@ -48491,10 +48566,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "synapse"
               ]
             },
-            {
+            "eventhubs": {
               "condition": "[variables('provisionEventHub')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -48512,7 +48587,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneServicebusId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'servicebus'), ''))]"
@@ -48523,7 +48598,7 @@
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
                   },
-                  "adfPrincipalId": "[if(variables('adfOn'), createObject('value', reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryPrincipalId.value), createObject('value', ''))]",
+                  "adfPrincipalId": "[if(variables('adfOn'), createObject('value', reference('adf').outputs.factoryPrincipalId.value), createObject('value', ''))]",
                   "adxClusterPrincipalId": {
                     "value": "[parameters('adxClusterPrincipalId')]"
                   },
@@ -49035,15 +49110,15 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "eventgridBusiness": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-eventgrid-business",
@@ -49059,7 +49134,7 @@
                   "consolePrincipalId": {
                     "value": "[parameters('consolePrincipalId')]"
                   },
-                  "eventHubResourceId": "[if(variables('provisionEventHub'), createObject('value', format('{0}/eventhubs/{1}', reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceId.value, reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.telemetryHubName.value)), createObject('value', ''))]",
+                  "eventHubResourceId": "[if(variables('provisionEventHub'), createObject('value', format('{0}/eventhubs/{1}', reference('eventhubs').outputs.namespaceId.value, reference('eventhubs').outputs.telemetryHubName.value)), createObject('value', ''))]",
                   "workspaceId": {
                     "value": "[parameters('adminPlaneLawId')]"
                   },
@@ -49272,10 +49347,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]"
+                "eventhubs"
               ]
             },
-            {
+            "servicebus": {
               "condition": "[parameters('deployServiceBus')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -49299,7 +49374,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneServicebusId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'servicebus'), ''))]"
@@ -49553,16 +49628,16 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventhubs",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "eventgrid": {
               "condition": "[parameters('deployEventGrid')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -49583,7 +49658,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "eventGridPrivateDnsZoneId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'eventgrid'), ''))]"
@@ -49813,17 +49888,17 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-servicebus')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventhubs",
+                "network",
+                "servicebus",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "adx": {
               "condition": "[parameters('adxEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -50109,7 +50184,8 @@
                 }
               }
             },
-            {
+            "cosmos": {
+              "condition": "[parameters('provisionCosmos')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
               "name": "dlz-cosmos",
@@ -50126,7 +50202,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneCosmosId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'cosmos'), ''))]"
@@ -50160,7 +50236,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "15930758473991526080"
+                      "templateHash": "3872715568817084662"
                     }
                   },
                   "parameters": {
@@ -50469,6 +50545,10 @@
                       },
                       {
                         "name": "landing-zones",
+                        "partitionKey": "/tenantId"
+                      },
+                      {
+                        "name": "deployment-plans",
                         "partitionKey": "/tenantId"
                       },
                       {
@@ -50799,13 +50879,13 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "streamAnalytics": {
               "condition": "[and(parameters('enableStreamAnalytics'), not(empty(parameters('consolePrincipalId'))))]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -50835,7 +50915,7 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "adlsAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "adxClusterName": {
                     "value": "[parameters('adminPlaneAdxClusterName')]"
@@ -51045,10 +51125,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]"
+                "storage"
               ]
             },
-            {
+            "aasRlsOls": {
               "condition": "[parameters('enableAas')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -51294,7 +51374,7 @@
                 }
               }
             },
-            {
+            "adf": {
               "condition": "[variables('adfOn')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -51315,7 +51395,7 @@
                     "value": "[parameters('consolePrincipalId')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "adfPrivateDnsZoneId": {
                     "value": "[parameters('adfPrivateDnsZoneId')]"
@@ -51330,10 +51410,10 @@
                     "value": "[parameters('skipRoleGrants')]"
                   },
                   "storageAccountId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountId.value]"
+                    "value": "[reference('storage').outputs.storageAccountId.value]"
                   },
                   "adlsAccountName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+                    "value": "[reference('storage').outputs.storageAccountName.value]"
                   },
                   "deployGeoEnrichPipeline": {
                     "value": "[parameters('deployGeoEnrichPipeline')]"
@@ -51686,14 +51766,14 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "cosmos",
+                "databricks",
+                "network",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "approvalLogicApp": {
               "condition": "[parameters('approvalLogicAppEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -51969,7 +52049,7 @@
                 }
               }
             },
-            {
+            "shir": {
               "condition": "[variables('shirOn')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -51987,10 +52067,10 @@
                     "value": "[parameters('domainName')]"
                   },
                   "dataFactoryName": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryName.value]"
+                    "value": "[reference('adf').outputs.factoryName.value]"
                   },
                   "subnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.workloadsSubnetId.value]"
+                    "value": "[reference('network').outputs.workloadsSubnetId.value]"
                   },
                   "adminPassword": {
                     "value": "[parameters('shirAdminPassword')]"
@@ -52263,11 +52343,11 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]"
+                "adf",
+                "network"
               ]
             },
-            {
+            "cosmosGraphVector": {
               "condition": "[parameters('cosmosGraphVectorEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -52288,7 +52368,7 @@
                     "value": "[parameters('domainName')]"
                   },
                   "privateEndpointSubnetId": {
-                    "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.privateEndpointSubnetId.value]"
+                    "value": "[reference('network').outputs.privateEndpointSubnetId.value]"
                   },
                   "privateDnsZoneCosmosId": {
                     "value": "[string(coalesce(tryGet(parameters('adminPlanePrivateDnsZoneIds'), 'cosmos'), ''))]"
@@ -52846,18 +52926,18 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-adf')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-cosmos')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-databricks')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventgrid-topic')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-network')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-servicebus')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-storage')]",
-                "[resourceId('Microsoft.Resources/deployments', 'dlz-synapse')]"
+                "adf",
+                "cosmos",
+                "databricks",
+                "eventgrid",
+                "eventhubs",
+                "network",
+                "servicebus",
+                "storage",
+                "synapse"
               ]
             },
-            {
+            "postgresWeave": {
               "condition": "[parameters('weaveOntologyEnabled')]",
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -53163,51 +53243,51 @@
                 }
               }
             }
-          ],
+          },
           "outputs": {
             "spokeVnetId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-network'), '2025-04-01').outputs.spokeVnetId.value]"
+              "value": "[reference('network').outputs.spokeVnetId.value]"
             },
             "databricksWorkspaceUrl": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceUrl.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceUrl.value, '')]"
             },
             "databricksWorkspaceId": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceId.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceId.value, '')]"
             },
             "databricksWorkspaceHost": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.workspaceHost.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.workspaceHost.value, '')]"
             },
             "synapseEndpoint": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseServerlessSqlEndpoint.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseServerlessSqlEndpoint.value, '')]"
             },
             "synapseSqlEndpoint": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseSqlEndpoint.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseSqlEndpoint.value, '')]"
             },
             "synapseWorkspaceName": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseWorkspaceName.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseWorkspaceName.value, '')]"
             },
             "synapseDedicatedPoolName": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.dedicatedPoolName.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.dedicatedPoolName.value, '')]"
             },
             "synapseManagedIdentityPrincipalId": {
               "type": "string",
-              "value": "[if(parameters('loomSynapseEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-synapse'), '2025-04-01').outputs.synapseManagedIdentityPrincipalId.value, '')]"
+              "value": "[if(parameters('loomSynapseEnabled'), reference('synapse').outputs.synapseManagedIdentityPrincipalId.value, '')]"
             },
             "databricksAccessConnectorPrincipalId": {
               "type": "string",
-              "value": "[if(parameters('loomDatabricksEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-databricks'), '2025-04-01').outputs.accessConnectorPrincipalId.value, '')]"
+              "value": "[if(parameters('loomDatabricksEnabled'), reference('databricks').outputs.accessConnectorPrincipalId.value, '')]"
             },
             "storageAccountName": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.storageAccountName.value]"
+              "value": "[reference('storage').outputs.storageAccountName.value]"
             },
             "dlzResourceGroupName": {
               "type": "string",
@@ -53215,119 +53295,119 @@
             },
             "adxDatabaseUrl": {
               "type": "string",
-              "value": "[if(parameters('adxEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adx-db'), '2025-04-01').outputs.databaseUri.value, '')]"
+              "value": "[if(parameters('adxEnabled'), reference('adx').outputs.databaseUri.value, '')]"
             },
             "lakehouseDfsEndpoint": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.dfsEndpoint.value]"
+              "value": "[reference('storage').outputs.dfsEndpoint.value]"
             },
             "bronzeContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.bronzeContainerUrl.value]"
+              "value": "[reference('storage').outputs.bronzeContainerUrl.value]"
             },
             "silverContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.silverContainerUrl.value]"
+              "value": "[reference('storage').outputs.silverContainerUrl.value]"
             },
             "goldContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.goldContainerUrl.value]"
+              "value": "[reference('storage').outputs.goldContainerUrl.value]"
             },
             "landingContainerUrl": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.landingContainerUrl.value]"
+              "value": "[reference('storage').outputs.landingContainerUrl.value]"
             },
             "eventHubsNamespaceFqdn": {
               "type": "string",
-              "value": "[if(variables('provisionEventHub'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceFqdn.value, '')]"
+              "value": "[if(variables('provisionEventHub'), reference('eventhubs').outputs.namespaceFqdn.value, '')]"
             },
             "eventHubsNamespaceName": {
               "type": "string",
-              "value": "[if(variables('provisionEventHub'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventhubs'), '2025-04-01').outputs.namespaceName.value, parameters('existingEventHubNamespaceName'))]"
+              "value": "[if(variables('provisionEventHub'), reference('eventhubs').outputs.namespaceName.value, parameters('existingEventHubNamespaceName'))]"
             },
             "cosmosEndpoint": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos'), '2025-04-01').outputs.endpoint.value]"
+              "value": "[if(parameters('provisionCosmos'), reference('cosmos').outputs.endpoint.value, '')]"
             },
             "storageEventGridTopicId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Resources/deployments', 'dlz-storage'), '2025-04-01').outputs.eventGridTopicId.value]"
+              "value": "[reference('storage').outputs.eventGridTopicId.value]"
             },
             "serviceBusNamespaceName": {
               "type": "string",
-              "value": "[if(parameters('deployServiceBus'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-servicebus'), '2025-04-01').outputs.namespaceName.value, '')]"
+              "value": "[if(parameters('deployServiceBus'), reference('servicebus').outputs.namespaceName.value, '')]"
             },
             "serviceBusNamespaceFqdn": {
               "type": "string",
-              "value": "[if(parameters('deployServiceBus'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-servicebus'), '2025-04-01').outputs.namespaceFqdn.value, '')]"
+              "value": "[if(parameters('deployServiceBus'), reference('servicebus').outputs.namespaceFqdn.value, '')]"
             },
             "eventGridTopicName": {
               "type": "string",
-              "value": "[if(parameters('deployEventGrid'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-eventgrid-topic'), '2025-04-01').outputs.topicName.value, '')]"
+              "value": "[if(parameters('deployEventGrid'), reference('eventgrid').outputs.topicName.value, '')]"
             },
             "cosmosGremlinEndpoint": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinEndpoint.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinEndpoint.value, '')]"
             },
             "cosmosGremlinDatabase": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinDatabase.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinDatabase.value, '')]"
             },
             "cosmosGremlinGraph": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.gremlinGraph.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.gremlinGraph.value, '')]"
             },
             "cosmosVectorEndpoint": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorEndpoint.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorEndpoint.value, '')]"
             },
             "cosmosVectorDatabase": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorDatabase.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorDatabase.value, '')]"
             },
             "cosmosVectorContainer": {
               "type": "string",
-              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-cosmos-graph-vector'), '2025-04-01').outputs.vectorDefaultContainer.value, '')]"
+              "value": "[if(parameters('cosmosGraphVectorEnabled'), reference('cosmosGraphVector').outputs.vectorDefaultContainer.value, '')]"
             },
             "weavePgServerName": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgServerName.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgServerName.value, '')]"
             },
             "weavePgFqdn": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgFqdn.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgFqdn.value, '')]"
             },
             "weavePgDatabase": {
               "type": "string",
-              "value": "[if(parameters('weaveOntologyEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-postgres-weave'), '2025-04-01').outputs.weavePgDatabase.value, '')]"
+              "value": "[if(parameters('weaveOntologyEnabled'), reference('postgresWeave').outputs.weavePgDatabase.value, '')]"
             },
             "adfFactoryId": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryId.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryId.value, '')]"
             },
             "adfFactoryName": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryName.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryName.value, '')]"
             },
             "approvalLogicAppName": {
               "type": "string",
-              "value": "[if(parameters('approvalLogicAppEnabled'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-approval-logicapp'), '2025-04-01').outputs.workflowName.value, '')]"
+              "value": "[if(parameters('approvalLogicAppEnabled'), reference('approvalLogicApp').outputs.workflowName.value, '')]"
             },
             "adfFactoryPrincipalId": {
               "type": "string",
-              "value": "[if(variables('adfOn'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-adf'), '2025-04-01').outputs.factoryPrincipalId.value, '')]"
+              "value": "[if(variables('adfOn'), reference('adf').outputs.factoryPrincipalId.value, '')]"
             },
             "aasXmlaEndpoint": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.xmlaEndpoint.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.xmlaEndpoint.value, '')]"
             },
             "aasServerName": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.serverName.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.serverName.value, '')]"
             },
             "aasConnectionString": {
               "type": "string",
-              "value": "[if(parameters('enableAas'), reference(resourceId('Microsoft.Resources/deployments', 'dlz-aas'), '2025-04-01').outputs.aasConnectionString.value, '')]"
+              "value": "[if(parameters('enableAas'), reference('aas').outputs.aasConnectionString.value, '')]"
             }
           }
         }
@@ -58985,7 +59065,7 @@
       ]
     },
     "dpMlWorkspace": {
-      "condition": "[and(variables('useSingleDlz'), parameters('mlWorkspaceEnabled'))]",
+      "condition": "[and(variables('useSingleDlz'), variables('provisionAml'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "dp-mlworkspace",
