@@ -182,6 +182,9 @@ param entraAudiences string = ''
 @description('CIDR ranges allowed to reach this app on top of internal-ingress isolation — normally ONLY the Container Apps environment infrastructure subnet the Console runs in. Empty => no IP rules (internal ingress remains the sole network control, the pre-LU-2 posture). ACA supports Allow-only or Deny-only rule sets; these are emitted as Allow rules, so anything outside them is denied.')
 param consoleAllowedCidrs array = []
 
+@description('AUTO-BIND: the Entra OBJECT ID (principalId) of the Console managed identity — the `sub` claim of the app-only token it mints. When authorization is enforced, the entrypoint registers this id as an ENABLED Unity Catalog user at boot using the server\'s own admin token, because upstream AuthService.verifyPrincipal resolves the caller from `email` else `sub` and refuses any principal that is not `admin` or an enabled user. WITHOUT this the catalog is authenticated-but-unusable: the Console token exchange answers 401 and every surface breaks. Pass the identity\'s principalId, NOT its clientId. Empty => no auto-bind (the catalog still enforces authorization; only `admin` and pre-registered users can call it).')
+param consolePrincipalId string = ''
+
 // ── Optional ADLS credential vending (opt-in; secret via Key Vault only) ────
 
 @description('ADLS Gen2 storage account Loom Unity may vend short-lived delegation-SAS credentials for. Empty (DEFAULT) => no vending; data access stays on Loom managed-identity / ACL paths.')
@@ -393,6 +396,18 @@ var envVars = concat(
   (authEnabled && !empty(entraClientSecretUri)) ? [
     { name: 'LOOM_UNITY_ENTRA_CLIENT_SECRET', secretRef: 'unity-entra-client-secret' }
   ] : [],
+  // AUTO-BIND (.claude/rules/auto-bind-by-default.md §5). Enforcing authorization
+  // is only half a working catalog: upstream AuthService.verifyPrincipal resolves
+  // the caller from the subject token's `email` claim, falling back to `sub`, and
+  // an Entra APP-ONLY token (what the Console managed identity mints) has no
+  // `email` — so the subject is the principal's object id, which must exist as an
+  // ENABLED Unity Catalog user or the token exchange answers 401. The entrypoint
+  // registers it at boot using the server's own admin token, so no operator step
+  // and no external credential is involved. Only meaningful when authorization is
+  // actually enforced.
+  (authEnabled && !empty(consolePrincipalId)) ? [
+    { name: 'LOOM_UNITY_CONSOLE_PRINCIPAL_ID', value: consolePrincipalId }
+  ] : [],
   // Optional ADLS credential vending — secret ALWAYS via Key Vault secretref.
   empty(adlsAccount) ? [] : [
     { name: 'LOOM_UNITY_ADLS_ACCOUNT', value: adlsAccount }
@@ -559,6 +574,9 @@ output authorizationSealed bool = authSealed
 
 @description('LU-2 — TRUE when ingress is pinned to an IP allow-list on top of internal-ingress isolation.')
 output ingressIpRestricted bool = !empty(consoleAllowedCidrs)
+
+@description('AUTO-BIND — TRUE when the deploy passed the Console principal object id, so the entrypoint registers it as an ENABLED Unity Catalog user at boot and an enforced catalog is actually USABLE by the Console. FALSE with authorizationEnforced TRUE means only `admin` / pre-registered principals can call this catalog: correct-but-unusable, and the state that made earlier deploys opt out of authorization entirely.')
+output consolePrincipalAutoBound bool = authEnabled && !empty(consolePrincipalId)
 
 @description('LU-2 — the Entra audiences Loom Unity accepts. On the SEALED path this is the sentinel `.invalid` audience nothing can mint (the catalog is up but accepts nobody); empty only when authMode=disabled. NOTE: matching this audience is necessary but NOT sufficient — upstream only accepts tokens it issued itself, so a client must exchange its Entra token at /api/1.0/unity-control/auth/tokens first (docs/fiab/security/loom-unity-authz-proof.md).')
 output acceptedAudiences string = authEnabled ? (!empty(entraAudiences) ? entraAudiences : (authSealed ? sealedAudience : 'api://${entraClientId},${entraClientId}')) : ''

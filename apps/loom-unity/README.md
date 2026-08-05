@@ -180,13 +180,24 @@ token also needs its principal registered in the catalog.
 | internal token from the exchange above | 200 ✅ |
 | `LOOM_UNITY_TOKEN` — the server-minted token in `etc/conf/token.txt`, delivered as a Key Vault secretref | 200 ✅ |
 
-**So `LOOM_UNITY_TOKEN` is currently the only working Console credential.**
-`apps/fiab-console/lib/azure/uc-backend.ts` `ossUcAuthHeader()` sends the Entra
-token directly and therefore does not authenticate; `unityAuthorizationPosture()`
-reports `entra` as **not hardened** for that reason. The durable fix is a
-token-exchange client in the BFF plus registration of the Console principal as a
-Unity Catalog user — tracked as a follow-up, and the prerequisite for turning
-`authMode=entra` on for a live estate.
+**So `LOOM_UNITY_TOKEN` was, when that table was measured, the only working
+Console credential.** Both reasons are now closed (#2679, #2643):
+
+* `ossUcAuthHeader()` no longer sends the Entra token directly — it exchanges it
+  at the endpoint above and sends the internal token
+  (`apps/fiab-console/lib/azure/uc-token-exchange.ts`).
+* The `verifyPrincipal` requirement is satisfied by the platform. An Entra
+  app-only token has no `email` claim, so the subject falls back to `sub` — the
+  principal's OBJECT ID. This entrypoint registers that id as an ENABLED Unity
+  Catalog user at boot (`POST /api/1.0/unity-control/scim2/Users`, using the
+  admin token the server mints into `etc/conf/token.txt`), driven by
+  `LOOM_UNITY_CONSOLE_PRINCIPAL_ID` / `consolePrincipalId` on
+  `loom-unity-app.bicep`. See `console_bind_plan` / `bind_console_principal` in
+  `bin/loom-entrypoint.sh`.
+
+`unityAuthorizationPosture()` still reports `entra` as **not hardened**, and
+that is deliberate: the path above has not yet run against a live catalog, and
+the live `probe-loom-unity-authz` check is the authority.
 
 Threat model: `docs/fiab/security/loom-unity-threat-model.md`.
 

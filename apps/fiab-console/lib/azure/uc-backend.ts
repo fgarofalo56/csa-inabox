@@ -35,17 +35,15 @@
  * honestly — when nothing is configured and the catalog is therefore reachable
  * anonymously by anything on the VNet.
  *
- * KNOWN GAP — the `entra` mode does not authenticate against the OSS server.
- * Upstream `AuthDecorator` (unitycatalog v0.5.0, the pinned image, and v0.5.1)
- * rejects any bearer whose `iss` is not the server's own `internal` issuer, so a
- * Microsoft Entra access token presented directly on /api/2.1/unity-catalog/* is
- * answered 403 PERMISSION_DENIED even with an exact `server.audiences` match. A
- * client must first exchange it at POST /api/1.0/unity-control/auth/tokens and
- * present the returned internal token — a client this module does not implement
- * yet. Until it does, `LOOM_UNITY_TOKEN` (a server-minted token via Key Vault)
- * is the only working credential, and {@link unityAuthorizationPosture} reports
- * `entra` as NOT hardened. Both directions were verified by running the image;
- * transcript in docs/fiab/security/loom-unity-authz-proof.md.
+ * #2643 closed the last fail-open on this side: {@link resolveUnityAuthMode} no
+ * longer FALLS BACK to `anonymous`. Authorization is the default and going
+ * un-credentialed must be declared. The `entra` path itself is complete —
+ * `uc-token-exchange.ts` (#2679) trades the Entra bearer for the internal token
+ * upstream `AuthDecorator` requires, and the loom-unity entrypoint auto-binds the
+ * Console principal as an enabled Unity Catalog user so
+ * `AuthService.verifyPrincipal` accepts it. What remains unproven is live
+ * evidence, which is why `entra` still reports `hardened: false` and
+ * `probe-loom-unity-authz` is the authority.
  */
 
 export type UcBackend = 'databricks' | 'oss';
@@ -146,13 +144,17 @@ export function ossUcAuthToken(): string | undefined {
  *                 derived from `LOOM_UNITY_CLIENT_ID` / `LOOM_MSAL_CLIENT_ID`).
  *                 The server pins issuer + audience (server.allowed-issuers /
  *                 server.audiences — verified against upstream v0.5.1).
- *   'anonymous' — NOTHING is configured. Calls go out unauthenticated, which only
- *                 works against a server running `server.authorization=disable`:
- *                 the pre-LU-2 posture where anything on the VNet can read AND
- *                 mutate the catalog. This state is never silent — see
- *                 {@link unityAuthorizationPosture}, the `svc-loom-unity-authz`
- *                 gate, and the `probe-loom-unity-authz` live health probe, which
- *                 PROVES the open door by getting a 200 on an unauthenticated read.
+ *   'anonymous' — the Console presents NO credential. Only ever reached when it is
+ *                 EXPLICITLY declared (`LOOM_UNITY_AUTH_MODE=anonymous`); it is no
+ *                 longer an implicit fallback (#2643). Calls go out
+ *                 unauthenticated, which only works against a server running
+ *                 `server.authorization=disable`: the pre-LU-2 posture where
+ *                 anything on the VNet can read AND mutate the catalog. This state
+ *                 is never silent — see {@link unityAuthorizationPosture}, the
+ *                 `svc-loom-unity-authz` gate (which REJECTS this value rather
+ *                 than counting it as configured), and the
+ *                 `probe-loom-unity-authz` live health probe, which PROVES the
+ *                 open door by getting a 200 on an unauthenticated read.
  */
 export type UnityAuthMode = 'token' | 'entra' | 'anonymous';
 
@@ -170,24 +172,34 @@ export function unityAudience(): string | undefined {
 }
 
 /**
- * True when the operator has DECLARED a Loom Unity audience. Deliberately does
- * NOT count the `LOOM_MSAL_CLIENT_ID` fallback: inferring "authorization is on"
- * from a var every deployment sets would make the Console fail closed against
- * catalogs that never enabled authorization (every pre-LU-2 estate). Hardening is
- * therefore always the result of an explicit declaration, and the un-declared
- * state is reported — never guessed at.
+ * Resolve the active authentication mode. Explicit `LOOM_UNITY_AUTH_MODE` wins.
+ *
+ * DEFAULT-ON (#2643). The implicit fallback used to be `anonymous`: unless the
+ * operator had declared `LOOM_UNITY_CLIENT_ID` / `LOOM_UNITY_AUDIENCE`, the
+ * Console sent NO credential at all. That was the client half of the same
+ * finding as the server half — a deployment that forgot one variable got a
+ * Console that talked to its catalog bare, and the only surface that said so was
+ * a gate most estates never read. Authorization is now the default and
+ * `anonymous` must be DECLARED.
+ *
+ * The old fallback existed to keep pre-LU-2 estates working against catalogs
+ * that never enabled authorization. That trade is no longer the right one: an
+ * un-credentialed call only *succeeds* against a catalog anything on the VNet
+ * can also read and mutate, so "keeps working" meant "keeps being open". Those
+ * estates are not stranded — `LOOM_UNITY_AUTH_MODE=anonymous` is still an
+ * explicit, audited opt-out, and `gov-uc-purview-wire.yml` writes it verbatim
+ * whenever it applies the matching `authMode=disabled` server posture, so the
+ * two halves cannot silently disagree.
+ *
+ * When `entra` is the default but nothing can be minted, {@link ossUcAuthHeader}
+ * THROWS. That is deliberate: failing back to an anonymous request would be
+ * exactly the fail-open this default exists to remove.
  */
-function unityAudienceDeclared(): boolean {
-  return !!((process.env.LOOM_UNITY_AUDIENCE || '').trim() || (process.env.LOOM_UNITY_CLIENT_ID || '').trim());
-}
-
-/** Resolve the active authentication mode. Explicit `LOOM_UNITY_AUTH_MODE` wins. */
 export function resolveUnityAuthMode(): UnityAuthMode {
   const explicit = (process.env.LOOM_UNITY_AUTH_MODE || '').trim().toLowerCase();
   if (explicit === 'token' || explicit === 'entra' || explicit === 'anonymous') return explicit;
   if (ossUcAuthToken()) return 'token';
-  if (unityAudienceDeclared()) return 'entra';
-  return 'anonymous';
+  return 'entra';
 }
 
 export interface UnityAuthorizationPosture {
@@ -217,6 +229,23 @@ export function unityAuthorizationPosture(): UnityAuthorizationPosture {
     };
   }
   if (mode === 'entra') {
+    // DEFAULT-ON (#2643) made `entra` reachable with nothing declared, so the
+    // no-audience case is now a real state rather than an impossible one. Report
+    // it for what it is: authorization is being ENFORCED by the client (every
+    // call fails closed in ossUcAuthHeader — it never degrades to an anonymous
+    // request), but no credential can be minted, so nothing works until an
+    // audience exists. This is NOT the anonymous posture and must not read like
+    // it: the failure mode is "refused", not "open".
+    const declaredAudience = unityAudience();
+    if (!declaredAudience) {
+      return {
+        mode,
+        hardened: false,
+        detail: 'Loom Unity authorization is enforced by default, but no audience can be resolved (none of LOOM_UNITY_AUDIENCE, LOOM_UNITY_CLIENT_ID, LOOM_MSAL_CLIENT_ID is set), so the Console cannot mint a bearer. Every catalog call FAILS CLOSED — it is never retried anonymously.',
+        remediation:
+          'Set LOOM_UNITY_CLIENT_ID (the Entra app registration fronting Loom Unity — normally the same as LOOM_MSAL_CLIENT_ID) or LOOM_UNITY_AUDIENCE on the Console. compute/loom-unity-app.bicep pins the matching server-side audience from the same value. Deliberately running an unsecured catalog instead is LOOM_UNITY_AUTH_MODE=anonymous, an audited opt-out the svc-loom-unity-authz gate reports as the finding it is.',
+      };
+    }
     // Upstream unitycatalog rejects any bearer whose `iss` is not its own
     // `internal` issuer — identical in v0.5.0 (the pinned image) and v0.5.1 —
     // so an Entra token presented DIRECTLY is answered 403 PERMISSION_DENIED on
@@ -232,19 +261,25 @@ export function unityAuthorizationPosture(): UnityAuthorizationPosture {
     // a credential NO bicep module in the repo emits and no Key Vault secret
     // backs, so following it changed nothing. That text is corrected here.
     //
-    // `hardened` stays FALSE deliberately, and this is NOT a leftover: the
-    // exchange additionally requires the Console principal to be registered as
-    // an enabled Unity Catalog user (AuthService.verifyPrincipal — proof doc
-    // §"verifyPrincipal"), which no deploy step performs yet. Claiming hardened
-    // before that is proven on a live catalog would be a fabricated green. The
-    // live probe `probe-loom-unity-authz` is the authority either way.
+    // `hardened` stays FALSE deliberately, and this is NOT a leftover. The
+    // second prerequisite — AuthService.verifyPrincipal requires the token
+    // subject (`email`, else `sub`) to be `admin` or an ENABLED Unity Catalog
+    // user — DOES now have a deploy step: #2643 makes the loom-unity entrypoint
+    // AUTO-BIND the Console principal's object id as an enabled UC user at boot,
+    // using the server's own admin token (auto-bind-by-default.md §5), and
+    // loom-unity-app.bicep passes it as `consolePrincipalId`. What is still
+    // missing is EVIDENCE: that path has not yet run against the live Gov
+    // catalog, and claiming hardened before a real catalog has answered would be
+    // a fabricated green of exactly the kind this file already got wrong once.
+    // The live probe `probe-loom-unity-authz` is the authority, and readiness.ts
+    // GATE_PROBE_MAP now judges the gate on it.
     return {
       mode,
       hardened: false,
-      audience: unityAudience(),
-      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${unityAudience()}, exchanged at /api/1.0/unity-control/auth/tokens for the server-minted internal token the catalog accepts (the raw Entra token is rejected 403 by design). Not yet confirmed hardened on a live catalog: the exchange also requires the Console principal to be an enabled Unity Catalog user.`,
+      audience: declaredAudience,
+      detail: `Loom Unity calls carry a Microsoft Entra bearer minted by the Console managed identity for ${declaredAudience}, exchanged at /api/1.0/unity-control/auth/tokens for the server-minted internal token the catalog accepts (the raw Entra token is rejected 403 by design). The catalog-side prerequisite — the Console principal registered as an enabled Unity Catalog user — is now performed automatically by the loom-unity entrypoint at boot. Not yet confirmed against a live catalog.`,
       remediation:
-        'Register the Console managed identity as an enabled Unity Catalog user on the catalog (AuthService.verifyPrincipal requires the token subject to be `admin` or an enabled user), then confirm with the probe-loom-unity-authz health check that an unauthenticated read is rejected. The token-exchange client itself is already wired (lib/azure/uc-token-exchange.ts, #2679) — no LOOM_UNITY_TOKEN is required for this path, and no bicep module emits one. Evidence: docs/fiab/security/loom-unity-authz-proof.md.',
+        'Redeploy loom-unity from platform/fiab/bicep/modules/compute/loom-unity-app.bicep with authMode=entra (the default) and consolePrincipalId=<the Console managed identity principalId>. The entrypoint then registers that principal as an enabled Unity Catalog user at boot, so no manual catalog-user step is required (auto-bind-by-default.md §5). Confirm with the probe-loom-unity-authz health check that an unauthenticated read is rejected. Evidence: docs/fiab/security/loom-unity-authz-proof.md.',
     };
   }
   return {
