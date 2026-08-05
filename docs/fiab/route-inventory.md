@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1667 |
+| Total routes | 1668 |
 | Public (no session) | 100 |
 | Session-only | 576 |
-| Owner-scoped | 700 |
+| Owner-scoped | 701 |
 | Admin | 291 |
-| Gated (backend config) | 531 |
+| Gated (backend config) | 530 |
 | Areas | 120 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1410,8 +1410,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/lakehouse/[id]/query/route.ts` | POST | session-only | ● | Synapse SQL |
 | `items/lakehouse/route.ts` | GET | owner-scoped |  | Cosmos |
 | `items/linked-service/route.ts` | — | public |  | — |
-| `items/logic-app/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos |
-| `items/logic-app/[id]/run/route.ts` | POST | owner-scoped | ● | Cosmos |
+| `items/logic-app/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | — |
+| `items/logic-app/[id]/run/route.ts` | POST | owner-scoped |  | — |
+| `items/logic-app/[id]/runs/route.ts` | GET | owner-scoped |  | — |
 | `items/loom-app-runtime/[id]/assist/route.ts` | — | public |  | — |
 | `items/loom-app-runtime/[id]/build/route.ts` | GET POST | owner-scoped |  | — |
 | `items/loom-app-runtime/[id]/context/route.ts` | GET | owner-scoped |  | — |
