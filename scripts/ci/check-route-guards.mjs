@@ -87,6 +87,13 @@ const GUARD_SIGNAL_RE = new RegExp(
     // authorized exactly as a hand-rolled loadOwnedItem route is. Do not re-add
     // `assertOwner`: a token that can only ever appear in prose is not a signal.
     'authorizeItemWorkspace',
+    // #2988 — `authorizeNotebookItem(` is the databricks-notebook EXECUTION
+    // family's guard wrapper. It is matched AS A CALL (trailing `\(`), never as
+    // a bare word, so a `{@link authorizeNotebookItem}` in a comment cannot
+    // satisfy it — the specific way `assertOwner` lied above. The wrapper itself
+    // is verified structurally by `assertGuardWrappersAreReal()` below, so
+    // hollowing it out fails this checker instead of silently disarming it.
+    'authorizeNotebookItem\\s*\\(',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal
@@ -133,7 +140,7 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // directly OR routes through the WS-D1 toolkit wrappers (which call getSession
 // internally). Including the wrappers keeps toolkit-adopted routes IN scope so
 // the checker still verifies their guard rather than silently skipping them.
-const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(/;
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(|authorizeNotebookItem\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
@@ -809,7 +816,62 @@ function isAllowed(r) {
   return false;
 }
 
+/**
+ * #2988 — a guard SIGNAL is only trustworthy if the thing it names still guards.
+ *
+ * `assertOwner` taught this the hard way: it stayed in the signal lists after
+ * PR #2973 deleted the function, so 34 routes passed a merge-blocking check on
+ * the strength of a COMMENT. Wrapper signals are the same hazard one level up —
+ * a route delegating to `authorizeNotebookItem` is only authorized if that
+ * wrapper still resolves a session and still runs the canonical ladder.
+ *
+ * This asserts the wrapper's SUBSTANCE, not its name: the module must exist, and
+ * it must call `getSession(` and `authorizeItemWorkspace(`. Hollow the wrapper
+ * out — or delete the module — and this fails LOUDLY, instead of every consumer
+ * route silently sliding out of the checker's remit (which is exactly what the
+ * bare `getSession(` remit test did before this: a route with no literal
+ * `getSession` was SKIPPED, so moving the guard into a helper made the route
+ * invisible to the guard AND flipped it to `public` in the route inventory).
+ */
+const GUARD_WRAPPERS = [
+  {
+    name: 'authorizeNotebookItem',
+    file: path.join(
+      CONSOLE_ROOT, 'app', 'api', 'items', 'databricks-notebook', '_lib', 'notebook-exec-scope.ts',
+    ),
+    mustCall: ['getSession\\s*\\(', 'authorizeItemWorkspace\\s*\\('],
+  },
+];
+
+function assertGuardWrappersAreReal() {
+  const bad = [];
+  for (const w of GUARD_WRAPPERS) {
+    if (!fs.existsSync(w.file)) {
+      bad.push(`${w.name}: module missing (${rel(w.file)}) — routes delegating to it are unguarded`);
+      continue;
+    }
+    const src = fs.readFileSync(w.file, 'utf8');
+    if (!new RegExp(`export\\s+async\\s+function\\s+${w.name}\\b`).test(src)) {
+      bad.push(`${w.name}: not exported from ${rel(w.file)}`);
+      continue;
+    }
+    for (const must of w.mustCall) {
+      if (!new RegExp(must).test(src)) {
+        bad.push(`${w.name}: no longer calls /${must}/ — the wrapper no longer authorizes`);
+      }
+    }
+  }
+  if (bad.length) {
+    console.error('\n[route-guards] FAIL — a guard WRAPPER named in GUARD_SIGNAL_RE is not real:');
+    for (const b of bad) console.error(`  - ${b}`);
+    console.error('\nEvery route that delegates to it is therefore unguarded while still');
+    console.error('matching the signal. Restore the wrapper or remove it from GUARD_SIGNAL_RE.');
+    process.exit(1);
+  }
+}
+
 function main() {
+  assertGuardWrappersAreReal();
   // Widened (rel-T17): scan EVERY route under app/api, not just items/admin/adx.
   // The class-based ALLOWLIST_PREFIXES keep the legit session-only groups green.
   const files = walk(API_ROOT);
