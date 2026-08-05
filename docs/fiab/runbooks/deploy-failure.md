@@ -29,7 +29,7 @@ Common failure modes:
 | `InvalidTemplateDeployment` on Container Apps in IL4 | Container Apps not at IL4 | Set `containerPlatform = 'aks'` in `.bicepparam` |
 | `Forbidden` on Key Vault Premium HSM | Lacks `Microsoft.KeyVault/managedHsms/write` | Request elevated role |
 | `VnetAddressRangeInUse` | CIDR conflict | Pick a different CIDR; update `hubVnetCidr` param |
-| `PrivateDnsZoneAlreadyExists` | Re-deploy after previous failure | `az network private-dns zone delete` for conflicts; or set `existingPrivateDnsZones = true` |
+| `PrivateDnsZoneAlreadyExists` | Re-deploy after previous failure, or a brownfield estate that already owns the zone | Adopt the existing zone (link the hub VNet to it) or `az network private-dns zone delete` the conflict. **There is no `existingPrivateDnsZones` parameter** — an earlier revision of this table named one, and it has never existed in `platform/fiab/bicep`. |
 | `ManagedIdentityRoleAssignmentDelay` | Eventual-consistency on RBAC | Wait 5 min; re-run |
 
 ## Remediation

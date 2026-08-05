@@ -367,7 +367,20 @@ jobs:
           set -euo pipefail
           az acr login -n "$ACR" >/dev/null
           for T in ${TAG_LIST:-$TAG $SHA_TAG latest}; do
-            D=$(az acr repository show --name "$ACR" --image "${{ matrix.app }}:$T" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            # R7: `2>/dev/null || echo ""` collapsed a denial, a throttle and a
+            # genuine 404 into one empty string, and the branch below then
+            # stated the 404 as fact. Capture stderr and classify it instead.
+            set +e
+            SHOW_OUT=$(az acr repository show --name "$ACR" --image "${{ matrix.app }}:$T" --query digest -o tsv 2>&1)
+            SHOW_RC=$?
+            set -e
+            D=$(echo "$SHOW_OUT" | tr -d '\r')
+            [ $SHOW_RC -eq 0 ] || D=""
+            if [ -z "$D" ] && [ $SHOW_RC -ne 0 ] && ! node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" \
+                 --assert-signal config.image-tag-absent >/dev/null 2>&1; then
+              echo "::error::Could NOT read $ACR, so the existence of ${{ matrix.app }}:$T is UNPROVEN - not disproven. Refusing to deploy on an unverified tag. $(node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" --query)"
+              exit 1
+            fi
             if [ -z "$D" ]; then
               echo "::error::${{ matrix.app }}:$T is NOT in $ACR after the build. Gov templates pull :$TAG (readEnvironmentVariable('LOOM_<X>_TAG','v0.1') / appImageTags.?<app> ?? 'v0.1'; IL5 pins the console at v3.0; the synthetic-monitor job pulls loom-uat:latest), so a deploy would reference an image that does not exist and the Container App could not pull it."
               exit 1

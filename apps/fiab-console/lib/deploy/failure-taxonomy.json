@@ -1,0 +1,343 @@
+{
+  "$comment": [
+    "THE deployment failure taxonomy. ONE artifact, two consumers, no drift possible.",
+    "",
+    "  apps/fiab-console/lib/deploy/failure-taxonomy.ts  imports this file directly",
+    "                                                     (resolveJsonModule: true).",
+    "  scripts/ci/deploy-classify.mjs                     reads this file from disk.",
+    "",
+    "The design called for a Node 'twin' plus a guard that byte-compares the two",
+    "tables. A twin that CAN diverge and a guard that must notice is strictly worse",
+    "than one table that cannot: this repo's dominant defect class is exactly a",
+    "control that reads green while the two things it compares have drifted",
+    "(csa_loom_gates_that_measure_nothing). So there is one table. The only",
+    "constraint it has to respect is that the console image build context is",
+    "apps/fiab-console (csa_loom_console_build_context_gotcha) — hence the file",
+    "lives under the app, and the CI script reaches UP to it, never the reverse.",
+    "",
+    "ADDING A SIGNAL: only add a string you have OBSERVED Azure emit, and record",
+    "where you observed it in `observed`. scripts/ci/roll-gate-decision.mjs carries",
+    "the cautionary tale — its first draft matched 'the tag does not exist' when az",
+    "actually emits 'the specified tag does not exist', so a genuine not-found would",
+    "have been misclassified. A GUESSED signal is worse than no signal, because an",
+    "unmatched failure falls to `unknown` and fails closed with an honest 'I could",
+    "not classify this' — which is a correct outcome. A wrong match is not."
+  ],
+  "schemaVersion": 1,
+
+  "classPrecedence": [
+    "defect",
+    "permission",
+    "quota",
+    "config",
+    "registration",
+    "eventual-consistency",
+    "transient"
+  ],
+  "$precedenceRationale": [
+    "Evaluated first wins when a single stderr matches signals from several",
+    "classes. NON-RETRYABLE classes are listed FIRST deliberately: the dangerous",
+    "direction of a misclassification is calling a permanent failure transient,",
+    "because that burns the retry budget and then reports 'failed after N",
+    "attempts' without ever naming the real cause — which is precisely what",
+    "full-app-deploy-commercial.yml did to a QuotaExceeded (3 pointless attempts,",
+    "90 wasted seconds, and the word 'quota' nowhere in the final message).",
+    "Ties therefore resolve toward FAIL FAST, never toward retry."
+  ],
+
+  "classes": {
+    "transient": {
+      "retryable": true,
+      "label": "Transient",
+      "summary": "Azure was momentarily unable to service the request. The same request, unchanged, is expected to succeed shortly.",
+      "defaultMaxAttempts": 6,
+      "defaultBackoffSeconds": 30,
+      "exitCode": 10
+    },
+    "eventual-consistency": {
+      "retryable": true,
+      "label": "Eventual consistency",
+      "summary": "A principal or resource that was just created is not visible yet to the service being called. Entra directory replication is the usual cause.",
+      "defaultMaxAttempts": 8,
+      "defaultBackoffSeconds": 15,
+      "exitCode": 11
+    },
+    "registration": {
+      "retryable": false,
+      "retryableAfterRemediation": true,
+      "label": "Resource provider not registered",
+      "summary": "The subscription has not registered the resource provider this deployment needs. Registering it is idempotent and the platform can do it.",
+      "defaultMaxAttempts": 1,
+      "defaultBackoffSeconds": 0,
+      "exitCode": 12
+    },
+    "permission": {
+      "retryable": false,
+      "label": "Permission",
+      "summary": "The deploying identity is not authorized. Retrying cannot help — the grant has to change.",
+      "defaultMaxAttempts": 1,
+      "defaultBackoffSeconds": 0,
+      "exitCode": 13
+    },
+    "quota": {
+      "retryable": false,
+      "label": "Quota / capacity",
+      "summary": "The subscription or region is at a limit. Retrying cannot help — the quota, the SKU, or the region has to change.",
+      "defaultMaxAttempts": 1,
+      "defaultBackoffSeconds": 0,
+      "exitCode": 14
+    },
+    "config": {
+      "retryable": false,
+      "label": "Configuration",
+      "summary": "Something about the target estate conflicts with what the template asked for. Deterministic — the input has to change, or the existing resource has to be adopted.",
+      "defaultMaxAttempts": 1,
+      "defaultBackoffSeconds": 0,
+      "exitCode": 15
+    },
+    "defect": {
+      "retryable": false,
+      "label": "Loom defect",
+      "summary": "The failure is in CSA Loom's own template, script, or workflow — not in the customer's estate. This is a bug to file, not something the operator can fix.",
+      "defaultMaxAttempts": 1,
+      "defaultBackoffSeconds": 0,
+      "exitCode": 16
+    },
+    "unknown": {
+      "retryable": false,
+      "label": "Unclassified",
+      "summary": "The failure did not match any signal in the taxonomy. Nothing is asserted about its cause.",
+      "defaultMaxAttempts": 1,
+      "defaultBackoffSeconds": 0,
+      "exitCode": 17
+    }
+  },
+
+  "signals": [
+    {
+      "id": "defect.invalid-template",
+      "class": "defect",
+      "anyOf": ["invalidtemplate", "invalidtemplatedeployment", "deploymentfailed: the template"],
+      "not": ["skunotavailable", "quotaexceeded"],
+      "observed": "ARM rejects main.bicep's compiled template. Excluded when the nested reason is a SKU/quota problem, which InvalidTemplateDeployment also wraps.",
+      "remediationKind": "not-remediable",
+      "remediation": "The compiled ARM template is invalid — this is a CSA Loom defect, not an estate problem. Re-run `az bicep build` on an LF checkout, and if apps/fiab-console/deploy-templates/main.json changed, regenerate it (scripts/ci/check-deploy-template-sync.mjs enforces the byte-compare). File the run against the deploy-integrity label."
+    },
+    {
+      "id": "defect.acr-name-constructed",
+      "class": "defect",
+      "anyOf": ["registry names may contain only alpha numeric"],
+      "observed": "full-app-deploy-commercial.yml resolved an EMPTY ACR name and passed it to az. Always a Loom bug in name resolution, never an operator input problem.",
+      "remediationKind": "not-remediable",
+      "remediation": "A CSA Loom step passed an empty registry name to `az`. The real failure is upstream, in whatever was supposed to resolve the ACR — read the log ABOVE this error, not this line. Registry coordinates must be DISCOVERED (Resource Graph by tag), never constructed from a region input."
+    },
+    {
+      "id": "permission.authorization-failed",
+      "class": "permission",
+      "anyOf": ["authorizationfailed", "linkedauthorizationfailed", "does not have authorization to perform action"],
+      "observed": "ARM's standard RBAC denial. LinkedAuthorizationFailed is the cross-resource variant (e.g. assigning a UAMI you cannot read).",
+      "remediationKind": "operator-action",
+      "remediation": "The deploying identity lacks the role this action needs. A subscription-scoped deployment requires Contributor on the target subscription; creating role assignments additionally requires User Access Administrator or Owner. Grant the role at the scope named in the ARM message, then re-run.",
+      "grantHint": "az role assignment create --assignee <deploy-principal> --role Contributor --scope /subscriptions/<sub>"
+    },
+    {
+      "id": "permission.forbidden",
+      "class": "permission",
+      "anyOf": ["(forbidden)", "code: forbidden", "\"code\":\"forbidden\"", "operation returned an invalid status 'forbidden'"],
+      "observed": "Key Vault and other data planes return a bare Forbidden. Matched narrowly (with punctuation/JSON context) so the word 'forbidden' appearing inside prose does not trip it.",
+      "remediationKind": "operator-action",
+      "remediation": "A data plane refused the deploying identity. For Key Vault this is nearly always the vault firewall or a missing RBAC data-plane role (Key Vault Secrets Officer / Certificates Officer at the vault scope). Grant the data-plane role — a control-plane Contributor is NOT sufficient — then re-run."
+    },
+    {
+      "id": "permission.acr-denied",
+      "class": "permission",
+      "anyOf": ["denied: requested access to the resource is denied", "unauthorized: authentication required"],
+      "observed": "Docker/OCI registry denial from `az acr build` / `cosign` against ACR.",
+      "remediationKind": "operator-action",
+      "remediation": "The registry refused this identity. Grant AcrPush (build) or AcrPull (roll) on the registry, and confirm the ACR firewall lease is held — CSA Loom keeps publicNetworkAccess=Disabled between builds (scripts/csa-loom/acr-firewall-lease.sh)."
+    },
+    {
+      "id": "quota.exceeded",
+      "class": "quota",
+      "anyOf": ["quotaexceeded", "resourcequotaexceeded", "subscriptionoperationslimitexceeded", "operation could not be completed as it results in exceeding approved"],
+      "observed": "Verified verbatim from build-fiab-images-acr-tasks run 31022950740 (2026-08-05): 'QuotaExceeded: standardDDSv5Family Cores, Location: centralus, Current Limit: 200, Current Usage: 196, Additional Required: 8'.",
+      "remediationKind": "operator-action",
+      "remediation": "The subscription is at a quota limit in this region. Retrying cannot help. Request an increase for the family and region named in the message, or reduce what the deployment asks for. For an ACR Tasks agent-pool core denial specifically, the poolless hosted build is the fallback — but see scripts/ci/check-acr-agent-pool.mjs R1 before switching it off.",
+      "portalPath": "Subscription > Usage + quotas"
+    },
+    {
+      "id": "quota.sku-unavailable",
+      "class": "quota",
+      "anyOf": ["skunotavailable", "locationnotavailableforresourcetype", "the requested size for resource", "is currently not available in location"],
+      "observed": "ARM capacity/SKU refusals. Grouped with quota because the remediation shape is identical: change the ask, do not retry it.",
+      "remediationKind": "operator-action",
+      "remediation": "The requested SKU or resource type is not offered in this region (or is capacity-constrained right now). Pick the declared fallback SKU, or deploy this service cross-region. Purview specifically supports cross-region adoption via the purviewLocation parameter."
+    },
+    {
+      "id": "config.already-exists-purview",
+      "class": "config",
+      "anyOf": ["enterprisetenantalreadyexists"],
+      "observed": "Purview is a TENANT singleton — main.bicep:100 documents this. A second account always fails with exactly this code.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "This tenant already has a Purview account and only one is permitted. Loom must ADOPT it rather than create a second: set the Purview entry of the deployment plan to mode 'adopt' with the existing account's coordinates and re-run. Never attempt the create twice."
+    },
+    {
+      "id": "config.private-dns-zone-exists",
+      "class": "config",
+      "anyOf": ["privatednszonealreadyexists"],
+      "observed": "The classic brownfield re-deploy failure: the privatelink zone is already in the target scope. NOTE: docs/fiab/runbooks/deploy-failure.md remediates this with `existingPrivateDnsZones = true`, a parameter that DOES NOT EXIST in platform/fiab/bicep — do not repeat that instruction.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "A Private DNS zone of this name already exists. Loom must adopt it — flip that zone to mode 'adopt' in the plan's network decision and add the hub VNet link — rather than re-create it. There is no `existingPrivateDnsZones` parameter; any doc that says otherwise is wrong."
+    },
+    {
+      "id": "config.vnet-range-in-use",
+      "class": "config",
+      "anyOf": ["vnetaddressrangeinuse", "address space", "overlaps with"],
+      "not": ["authorizationfailed"],
+      "observed": "Hub or spoke CIDR collides with an existing VNet. Spoke CIDR is currently hardcoded 10.100.0.0/16 (landing-zone/main.bicep:115 is never passed from root), so any estate using that range collides deterministically.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The requested address space overlaps an existing VNet. Loom must re-plan the CIDR from the scanned VNet inventory (pick the next free block) and re-emit. If no free range of the required size exists, that is a hard stop — Loom cannot renumber a customer VNet, and the exact number and size of subnets required has to be surfaced instead."
+    },
+    {
+      "id": "config.name-taken",
+      "class": "config",
+      "anyOf": ["storageaccountalreadytaken", "is already in use", "name is not available", "alreadyexists"],
+      "not": ["enterprisetenantalreadyexists", "privatednszonealreadyexists"],
+      "observed": "Globally-unique-name collisions. The two more specific already-exists codes are excluded so they keep their own, better remediations.",
+      "remediationKind": "operator-action",
+      "remediation": "A globally-unique resource name is taken. If the existing resource is yours, adopt it in the deployment plan; if it belongs to someone else, the deterministic name suffix has to change."
+    },
+    {
+      "id": "config.resource-group-not-found",
+      "class": "config",
+      "anyOf": ["resourcegroupnotfound", "could not be found"],
+      "not": ["authorizationfailed", "subscriptionnotfound"],
+      "observed": "Verified verbatim from full-app-deploy-commercial run 31028909702 (2026-08-05): a default dispatch resolved rg-csa-loom-admin-eastus2 while the live estate is centralus. The step died here and the run's headline error became an unrelated registry-name complaint.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The named resource group does not exist in the target subscription. If the name was CONSTRUCTED from a region input, that is the bug: coordinates must be discovered (Resource Graph, by tag or name pattern) across the subscription, not assembled from a default. For a multi-subscription deployment, spoke resource groups must be pre-created — a subscription-scoped deployment cannot create a resource group in a remote subscription."
+    },
+    {
+      "id": "config.resource-not-found",
+      "class": "config",
+      "anyOf": ["resourcenotfound", "parentresourcenotfound", "was not found"],
+      "not": ["authorizationfailed", "resourcegroupnotfound", "forbidden", "in the registry", "manifestunknown", "manifest_unknown", "tagnotfound"],
+      "observed": "ARM's per-resource 404: az emits `(ResourceNotFound) The Resource 'Microsoft.App/containerApps/<name>' under resource group '<rg>' was not found.` This is the ONLY basis on which a workflow may say a resource does not exist — an `az … show` that failed for any OTHER reason establishes nothing about existence (deploy-integrity.md R7).",
+      "remediationKind": "platform-will-fix",
+      "remediation": "ARM answered and the resource genuinely does not exist yet. If a deploy step was supposed to create it, that step is what failed — look upstream. If this is a roll skipping an app the estate does not carry, that is a correct skip, but it must be stated as 'ARM answered ResourceNotFound', never inferred from a command that merely failed."
+    },
+    {
+      "id": "config.image-tag-absent",
+      "class": "config",
+      "anyOf": [
+        "manifestunknown",
+        "manifest_unknown",
+        "name_unknown",
+        "tagnotfound",
+        "the specified tag does not exist",
+        "was not found in the registry",
+        "repository name not known to registry"
+      ],
+      "not": ["denied: requested access", "unauthorized: authentication required", "not allowed access"],
+      "observed": "The registry ANSWERED and the answer was 'no such tag'. This signal is the ONLY basis on which any CSA Loom code may state that an image tag does not exist. scripts/ci/assert-acr-image-tags.sh encodes the same split (it treats a not-found signature as READABLE-and-absent and everything else as UNPROVEN), and the first draft of scripts/ci/roll-gate-decision.mjs matched 'the tag does not exist' when az actually emits 'the SPECIFIED tag does not exist' — hence the verbatim string here.",
+      "remediationKind": "operator-action",
+      "remediation": "The registry answered and the tag is genuinely absent. The image build for this SHA has not finished, or built a different app subset. Wait for the producing build workflow, or dispatch with a tag that exists. Do NOT roll — a revision that cannot pull its image is worse than no roll."
+    },
+    {
+      "id": "config.acr-unreachable",
+      "class": "config",
+      "anyOf": [
+        "could not connect to the registry login server",
+        "publicnetworkaccess",
+        "not allowed access",
+        "client with ip",
+        "is not allowed access"
+      ],
+      "observed": "ACR keeps publicNetworkAccess=Disabled between builds by design (#2603). Deterministic, not transient — retrying without taking the firewall lease will fail identically. CRITICAL: this outcome must NEVER be rendered as 'the tag does not exist'. The registry did not answer, so nothing is known about the tag (deploy-integrity.md R7 — the message that sent two investigations down the wrong path).",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The registry data plane is network-locked. Take the shared ACR firewall lease before the call (scripts/csa-loom/acr-firewall-lease.sh acquire) and release it after. Note the data plane lags the control plane by 30-90s in BOTH directions — poll `az acr login` after opening, and never trust a control-plane read to mean the data plane is already open."
+    },
+    {
+      "id": "registration.provider",
+      "class": "registration",
+      "anyOf": ["missingsubscriptionregistration", "noregisteredproviderfound", "the subscription is not registered to use namespace"],
+      "observed": "ARM's provider-registration refusal. Registration is idempotent and takes seconds to minutes.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The subscription has not registered a resource provider this deployment needs. Registering is idempotent and safe — the platform performs it and retries once. If it cannot (the identity lacks Microsoft.Resources/subscriptions/providers/register/action), the exact command is emitted instead.",
+      "grantHint": "az provider register --namespace <namespace> --wait"
+    },
+    {
+      "id": "eventual.principal-not-found",
+      "class": "eventual-consistency",
+      "anyOf": ["principalnotfound", "does not exist in the directory", "roleassignmentupdatenotpermitted", "managedidentityroleassignmentdelay"],
+      "observed": "A managed identity created earlier in the same deployment is not yet replicated to the directory the RBAC service reads. Resolves on its own in seconds.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "A principal created moments ago has not replicated through Entra yet. This resolves itself — the platform waits and retries. No operator action."
+    },
+    {
+      "id": "transient.throttled",
+      "class": "transient",
+      "anyOf": [
+        "toomanyrequests",
+        "throttl",
+        "retryableerror",
+        "request is being throttled",
+        "(429)",
+        "status: 429",
+        "status code: 429",
+        "http 429"
+      ],
+      "observed": "ARM and data-plane rate limiting. NOTE the bare string \"429\" is deliberately NOT a signal — an ARM resource id or a VM name can contain those three digits, and a false TRANSIENT match is the one direction that costs a full retry budget before reporting a cause it never established. Only the labelled forms az/ARM actually emit are matched.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "The service is rate-limiting this identity. The platform backs off and retries. No operator action unless it exhausts the budget."
+    },
+    {
+      "id": "transient.service-unavailable",
+      "class": "transient",
+      "anyOf": [
+        "serviceunavailable",
+        "gatewaytimeout",
+        "internalservererror",
+        "temporarily unavailable",
+        "(503)",
+        "(504)",
+        "status: 503",
+        "status: 504",
+        "status code: 503",
+        "status code: 504"
+      ],
+      "observed": "Azure-side 5xx. Bare \"503\"/\"504\" are excluded for the same reason as \"429\" — see transient.throttled.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "Azure returned a server-side error. The platform backs off and retries."
+    },
+    {
+      "id": "transient.operation-in-progress",
+      "class": "transient",
+      "anyOf": [
+        "deploymentactive",
+        "anotheroperationinprogress",
+        "containerappoperationinprogress",
+        "operationinprogress",
+        "active provisioning operation",
+        "conflictingoperation"
+      ],
+      "observed": "Verified verbatim in full-app-deploy-commercial.yml's roll() (the one classified retry that already existed in this repo, and the model this taxonomy generalises). A prior provisioning op on the same resource is still settling.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "A previous operation on this resource is still settling. The platform serializes and retries. If it exhausts the budget, something else is holding the resource — check for a concurrent deployment or roll of the same estate."
+    },
+    {
+      "id": "transient.operation-not-allowed-concurrent",
+      "class": "transient",
+      "anyOf": ["another operation"],
+      "allOf": ["operationnotallowed"],
+      "observed": "OperationNotAllowed is overloaded — it is also emitted for quota. Only the concurrency variant is transient, so this signal requires BOTH strings. The quota variant matches quota.exceeded and, per classPrecedence, quota wins a tie regardless.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "A concurrent operation on the same scope blocked this one. The platform retries."
+    }
+  ],
+
+  "remediationKinds": {
+    "platform-will-fix": "CSA Loom can and must perform this itself (auto-bind-by-default.md §5). Surfacing it to the operator as an instruction is a defect.",
+    "operator-action": "Requires a decision or a grant only the operator can make. MUST name the exact command, value, or role + scope.",
+    "not-remediable": "Nothing the operator can do — this is a Loom bug or a hard Azure constraint. Say which, and what the alternative is."
+  }
+}

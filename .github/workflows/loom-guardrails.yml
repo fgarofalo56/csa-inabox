@@ -103,6 +103,14 @@ jobs:
       # were violated by scripts that reachability passed (#2816 residual).
       - name: deploy-job-scripts (the job create can actually succeed — #2816 residual)
         run: node scripts/ci/check-deploy-job-scripts.mjs
+      # The three above say the deploy path RUNS, is WATCHED, and can SUCCEED.
+      # This one says that when it FAILS, the failure is classified, retried only
+      # if retrying can help, reported to somebody who is listening, and never
+      # asserts a cause the code did not establish (deploy-integrity.md R6/R7).
+      # Four workflows notified failure on issue #279 — CLOSED, 289 comments —
+      # which is how 47 days of daily deploy failure stayed invisible.
+      - name: deploy-failure-handling (classified retries + true error messages — deploy-integrity R6/R7)
+        run: node scripts/ci/check-deploy-failure-handling.mjs
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         run: node scripts/ci/check-image-producer-coverage.mjs
       # image-producer-coverage says the image gets BUILT. This says the build can

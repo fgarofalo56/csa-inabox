@@ -243,7 +243,16 @@ jobs:
           # has had a build exit 0 while pushing nothing (#2706). Assert it
           # INSIDE the same lease window: `az acr repository show` is a
           # data-plane call, and the registry is publicNetworkAccess=Disabled.
-          DIGEST=$(az acr repository show --name "$ACR" --image "${IMAGE}:${TAG}" --query digest -o tsv 2>/dev/null | tr -d '\r\n' || true)
+          # R7: an unreadable registry is NOT an absent image. This capture
+          # used to be `2>/dev/null || true`, so an RBAC denial, a throttle or
+          # the lease having lapsed all produced "" and the check below then
+          # stated "does NOT exist" as fact. Capture stderr and classify it.
+          set +e
+          SHOW_OUT=$(az acr repository show --name "$ACR" --image "${IMAGE}:${TAG}" --query digest -o tsv 2>&1)
+          SHOW_RC=$?
+          set -e
+          DIGEST=$(echo "$SHOW_OUT" | tr -d '\r\n')
+          [ $SHOW_RC -eq 0 ] || DIGEST=""
 
           # The lease is deliberately NOT released here. The Trivy step below
           # PULLS this image from the registry, so it must run while the data
@@ -255,7 +264,12 @@ jobs:
           # `always()` release AFTER the scan owns the unlock on every path.
 
           if [ -z "$DIGEST" ]; then
-            echo "::error::az acr build exited 0 but ${IMAGE}:${TAG} does NOT exist on $ACR — the build silently produced nothing (#2706)."
+            if [ $SHOW_RC -ne 0 ] && ! node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" \
+                 --assert-signal config.image-tag-absent >/dev/null 2>&1; then
+              echo "::error::Could NOT read $ACR, so whether ${IMAGE}:${TAG} was pushed is UNPROVEN - not disproven. $(node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" --query)"
+              exit 1
+            fi
+            echo "::error::The registry ANSWERED and ${IMAGE}:${TAG} is absent on $ACR - az acr build exited 0 having pushed nothing (#2706)."
             exit 1
           fi
           echo "IMAGE_DIGEST=$DIGEST" >> "$GITHUB_ENV"

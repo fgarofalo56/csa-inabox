@@ -1472,6 +1472,7 @@ nav:
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
+          - Failure recovery (classification, retries, remediation): fiab/deployment/failure-recovery.md
           - From azd CLI: fiab/deployment/azd-cli.md
           - Continuous-deployment pipelines:
               - GitHub Actions: fiab/deployment/pipelines/github-actions.md
