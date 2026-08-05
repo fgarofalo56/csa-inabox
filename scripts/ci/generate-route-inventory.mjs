@@ -56,7 +56,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * the `public` column, which is the column that matters. `[^(]*` rather than
  * `[^>]*` so nested generics (`<Foo<Bar>>`) still match.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*(?:<[^(]*>)?\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*(?:<[^(]*>)?\s*\(|authorizeNotebookItem\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -68,6 +68,13 @@ const OWNER_RE = new RegExp([
   // owner → tenant-admin → shared-ACL ladder). Kept in lockstep with
   // GUARD_SIGNAL_RE in check-route-guards.mjs — the two must not drift.
   'authorizeItemWorkspace',
+  // #2988 — the databricks-notebook execution family's guard wrapper, matched AS
+  // A CALL so a `{@link authorizeNotebookItem}` in prose cannot classify a route
+  // owner-scoped. Before this, moving `getSession()` into that wrapper made four
+  // genuinely-authorized routes report as `public` — the exact under-reporting
+  // this file's header warns trains readers to ignore the `public` column.
+  // Its substance is asserted by check-route-guards.assertGuardWrappersAreReal().
+  'authorizeNotebookItem\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',

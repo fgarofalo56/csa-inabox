@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1668 |
 | Public (no session) | 100 |
-| Session-only | 575 |
-| Owner-scoped | 702 |
+| Session-only | 572 |
+| Owner-scoped | 705 |
 | Admin | 291 |
 | Gated (backend config) | 530 |
 | Areas | 120 |
@@ -1252,11 +1252,11 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-job/[id]/run/route.ts` | POST | session-only |  | Databricks |
 | `items/databricks-job/[id]/runs/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-job/route.ts` | GET POST | session-only |  | Databricks |
-| `items/databricks-notebook/[id]/command/route.ts` | POST | session-only |  | Databricks |
-| `items/databricks-notebook/[id]/context/route.ts` | POST DELETE | session-only |  | Databricks |
+| `items/databricks-notebook/[id]/command/route.ts` | POST | owner-scoped |  | Databricks |
+| `items/databricks-notebook/[id]/context/route.ts` | POST DELETE | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/ensure-cluster/route.ts` | POST | owner-scoped | ● | Databricks |
 | `items/databricks-notebook/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Databricks |
-| `items/databricks-notebook/[id]/run/route.ts` | POST | session-only |  | Databricks |
+| `items/databricks-notebook/[id]/run/route.ts` | POST | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/runs/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-notebook/[id]/schedule/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Databricks |
 | `items/databricks-notebook/[id]/versions/route.ts` | GET POST | owner-scoped | ● | Cosmos |
