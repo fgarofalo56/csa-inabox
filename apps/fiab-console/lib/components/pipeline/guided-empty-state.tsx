@@ -36,9 +36,20 @@ const useStyles = makeStyles({
     // pointer events, the backdrop lets canvas panning through where it's clear.
     zIndex: 2,
     pointerEvents: 'none',
-    overflow: 'auto',
+    // NOT a scroll container. Scrolling the BACKDROP could never work as an
+    // affordance: it isn't a hit-test target (pointerEvents:none) and isn't
+    // focusable, so it can only ever be scrolled indirectly, by a wheel that
+    // chains up from the panel. And because the panel is centred, that chained
+    // scroll only ever reaches the overflow BELOW the panel — scrollTop cannot
+    // go negative, so the part of the panel pushed above the canvas top by
+    // `align-items: center` (hero, title, intro) stayed unreachable at every
+    // scroll position (#2972). Bounding + scrolling the panel fixes both ends.
+    overflow: 'hidden',
   },
   panel: {
+    // Re-enables hit-testing inside the click-through backdrop: this is what
+    // makes the launcher cards clickable (and, with the bounds below, wheel-
+    // scrollable) while panning still passes through the clear area (#2962).
     pointerEvents: 'auto',
     display: 'flex',
     flexDirection: 'column',
@@ -46,6 +57,13 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalL,
     maxWidth: '640px',
     width: '100%',
+    // Never taller than the canvas box, so `align-items: center` can't clip it;
+    // when the content genuinely doesn't fit, the panel itself scrolls. Tabbing
+    // to a card scrolls it into view, which is the keyboard path. `contain`
+    // stops the wheel chaining to React Flow underneath (which would zoom).
+    maxHeight: '100%',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
     textAlign: 'center',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,

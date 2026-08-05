@@ -25,7 +25,7 @@
 
 import type { ReactNode } from 'react';
 import {
-  Subtitle1, Subtitle2, Body1, Caption1, Link, makeStyles, tokens,
+  Subtitle1, Subtitle2, Body1, Caption1, Link, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { Sparkle24Regular, Open16Regular, type FluentIcon } from '@fluentui/react-icons';
 import { accentTint, accentGradient, accentForIndex, LOOM_ACCENT } from './accent-tokens';
@@ -37,8 +37,17 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: tokens.spacingHorizontalXL,
     zIndex: 2,
+    // The backdrop stays click-through so canvas panning still works in the
+    // clear area; `panel` re-enables hit-testing for the cards. It is
+    // deliberately NOT a scroll container: it isn't a hit-test target and isn't
+    // focusable, so it could only ever be scrolled by a wheel chaining up from
+    // the panel — which, with the panel centred, reaches the overflow BELOW it
+    // but never the part pushed above the top edge by `align-items: center`
+    // (scrollTop cannot go negative). That left the hero/title unreachable at
+    // every scroll position (#2972). Bounding + scrolling the panel
+    // (`panelScroll`) makes both ends reachable.
     pointerEvents: 'none',
-    overflow: 'auto',
+    overflow: 'hidden',
   },
   // 'block' — in-flow empty state.
   block: {
@@ -58,6 +67,17 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow28,
     paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalXXL,
     paddingLeft: tokens.spacingHorizontalXXL, paddingRight: tokens.spacingHorizontalXXL,
+  },
+  // Overlay-only. Bounds the panel to the canvas box so `align-items: center`
+  // can never clip it, and makes the panel itself the scroll container when the
+  // content genuinely doesn't fit (short/narrow canvas). Tabbing to a card
+  // scrolls it into view — that's the keyboard path. `contain` keeps the wheel
+  // from chaining to the canvas underneath (which would pan/zoom it). Not
+  // applied to 'block', which is in-flow and grows naturally.
+  panelScroll: {
+    maxHeight: '100%',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
   },
   hero: {
     width: '72px', height: '72px',
@@ -158,10 +178,15 @@ export function GuidedEmptyState({
   const s = useStyles();
   const Hero = heroIcon;
   const oneCol = (columns ?? (paths.length <= 1 ? 1 : 2)) === 1;
+  const isOverlay = variant === 'overlay';
 
   return (
-    <div className={variant === 'overlay' ? s.overlay : s.block} data-guided-empty-state>
-      <div className={s.panel} role="group" aria-label={ariaLabel ?? title}>
+    <div className={isOverlay ? s.overlay : s.block} data-guided-empty-state>
+      <div
+        className={mergeClasses(s.panel, isOverlay && s.panelScroll)}
+        role="group"
+        aria-label={ariaLabel ?? title}
+      >
         {Hero && <div className={s.hero} aria-hidden="true"><Hero /></div>}
         <Subtitle1>{title}</Subtitle1>
         {intro != null && <Body1 className={s.intro}>{intro}</Body1>}
