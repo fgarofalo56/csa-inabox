@@ -535,6 +535,12 @@ var existingFoundryRg = adoptRg(adopt, 'foundry')
 var existingFoundrySub = adoptSub(adopt, 'foundry')
 var existingFoundryChatDeployment = adoptExtra(adopt, 'foundry', 'chatDeployment')
 var existingFoundryEmbedDeployment = adoptExtra(adopt, 'foundry', 'embedDeployment')
+// Model-tier deployments on an ADOPTED AOAI account. Without these, choosing
+// "reuse my Azure OpenAI" left LOOM_AOAI_MINI_DEPLOYMENT / _STRONG_DEPLOYMENT
+// empty (there is no agentFoundry module to read them from), so the model-tier
+// router lost its tiers on exactly the brownfield path adoption exists to serve.
+var existingFoundryMiniDeployment = adoptExtra(adopt, 'foundry', 'miniDeployment')
+var existingFoundryStrongDeployment = adoptExtra(adopt, 'foundry', 'strongDeployment')
 var existingPurviewAccount = adoptName(adopt, 'purview')
 var existingPurviewRg = adoptRg(adopt, 'purview')
 var existingPurviewSub = adoptSub(adopt, 'purview')
@@ -1138,7 +1144,17 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: provisionFoundry
     contentSafetyEnabled: contentSafetyEnabled
-    agentFoundryEnabled: provisionAgentFoundry
+    // agentFoundryEnabled is the BIND mirror, NOT a create flag: admin-plane
+    // keys ~20 Console env expressions (LOOM_AOAI_*, LOOM_FOUNDRY_*) and three
+    // module outputs off it, so it must stay TRUE on an ADOPT pick or adopting
+    // your own Azure OpenAI account silently empties the model-tier env vars.
+    // The suppression of the NEW account travels separately as
+    // provisionAgentFoundry, which admin-plane ANDs into `agentFoundryCreate`.
+    // (Contrast purviewEnabled / aiSearchEnabled / adxEnabled above: every
+    // Console-env use of those is already `!empty(existing…) ? BYO : (flag ? …)`,
+    // so the BYO branch wins regardless and passing the provision var is lossless.)
+    agentFoundryEnabled: agentFoundryEnabled
+    provisionAgentFoundry: provisionAgentFoundry
     loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
     apimEnabled: (loomApimEnabled && provisionApim)
@@ -1179,6 +1195,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // Console env wires the full AOAI surface, not just the account name.
       foundryChatDeployment: existingFoundryChatDeployment
       foundryEmbedDeployment: existingFoundryEmbedDeployment
+      // Model-tier slots on the reused account (M3). Empty → admin-plane falls
+      // back to the reused account's chat deployment rather than to '', so the
+      // tier vars are never blank on an adopt (auto-bind-by-default).
+      foundryMiniDeployment: existingFoundryMiniDeployment
+      foundryStrongDeployment: existingFoundryStrongDeployment
       purviewAccount: existingPurviewAccount
       purviewRg: existingPurviewRg
       purviewSub: existingPurviewSub

@@ -101,6 +101,26 @@ function evaluate(node, scope) {
     return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : null;
   }
   if (lower === 'equals') return evaluate(args[0], scope) === evaluate(args[1], scope);
+  if (lower === 'empty') {
+    const v = evaluate(args[0], scope);
+    if (v === null || v === undefined) return true;
+    if (typeof v === 'string' || Array.isArray(v)) return v.length === 0;
+    if (typeof v === 'object') return Object.keys(v).length === 0;
+    return false;
+  }
+  if (lower === 'string') {
+    const v = evaluate(args[0], scope);
+    return typeof v === 'string' ? v : JSON.stringify(v);
+  }
+  if (lower === 'variables') {
+    const key = evaluate(args[0], scope);
+    const vars = scope.__variables ?? {};
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(vars, key),
+      `variable ${key} is not in the template under evaluation`,
+    );
+    return evalArm(vars[key], scope);
+  }
   if (lower === 'and') return args.every((a) => evaluate(a, scope) === true);
   if (lower === 'or') return args.some((a) => evaluate(a, scope) === true);
   if (lower === 'not') return evaluate(args[0], scope) !== true;
@@ -229,4 +249,142 @@ test('a partial entry is still a valid entry', () => {
   assert.equal(variable('existingAdxClusterRg', adopt), '');
   assert.equal(variable('existingAdxClusterSub', adopt), '');
   assert.equal(variable('provisionAdx', adopt, { adxEnabled: true }), false);
+});
+
+// ---------------------------------------------------------------------------
+// The agentFoundry CREATE decision vs the agentFoundry BIND decision.
+//
+// These are different questions, and for one release they shared one flag:
+// main.bicep passed the CREATE decision down as `agentFoundryEnabled`, which is
+// what admin-plane keys ~20 Console env expressions off. The result was that
+// choosing "reuse my Azure OpenAI account" made admin-plane indistinguishable
+// from "AOAI is switched off", and LOOM_AOAI_MINI_DEPLOYMENT /
+// LOOM_AOAI_STRONG_DEPLOYMENT shipped EMPTY on exactly the brownfield path
+// adoption exists to serve.
+//
+// Asserted against the SHIPPED artifact's nested admin-plane template, same as
+// every other case here — not against a copy of the logic.
+// ---------------------------------------------------------------------------
+
+/** The admin-plane nested template inside the shipped artifact. */
+function adminPlaneModule() {
+  const resources = Array.isArray(tpl.resources) ? tpl.resources : Object.values(tpl.resources);
+  const m = resources.find(
+    (r) =>
+      r && typeof r === 'object' &&
+      r.type === 'Microsoft.Resources/deployments' &&
+      JSON.stringify(r.name ?? '').includes('admin-plane'),
+  );
+  assert.ok(m, 'the compiled template must contain the admin-plane module deployment');
+  return m;
+}
+
+/** Evaluate a variable of the admin-plane NESTED template. */
+function adminVar(name, scope) {
+  const vars = adminPlaneModule().properties.template.variables ?? {};
+  assert.ok(vars[name] !== undefined, `admin-plane variable ${name} is not in the compiled template`);
+  return evalArm(vars[name], { ...scope, __variables: vars });
+}
+
+test('main.bicep hands admin-plane the BIND flag and the CREATE flag SEPARATELY', () => {
+  const passed = adminPlaneModule().properties.parameters;
+  assert.equal(
+    passed.agentFoundryEnabled?.value,
+    "[parameters('agentFoundryEnabled')]",
+    'agentFoundryEnabled is the BIND mirror — passing the provision var here makes an adopted AOAI account look identical to no AOAI at all',
+  );
+  assert.equal(
+    passed.provisionAgentFoundry?.value,
+    "[variables('provisionAgentFoundry')]",
+    'the create decision must still reach admin-plane, or an adopt pick would deploy a duplicate Foundry account',
+  );
+  const byo = adminPlaneModule().properties.parameters.byoExisting.value;
+  assert.equal(byo.foundryMiniDeployment, "[variables('existingFoundryMiniDeployment')]");
+  assert.equal(byo.foundryStrongDeployment, "[variables('existingFoundryStrongDeployment')]");
+  assert.equal(byo.foundryChatDeployment, "[variables('existingFoundryChatDeployment')]");
+});
+
+test('greenfield: agentFoundryCreate is TRUE, so the account deploys and its outputs are read', () => {
+  const provision = variable('provisionAgentFoundry', {}, { agentFoundryEnabled: true });
+  assert.equal(provision, true);
+  assert.equal(
+    adminVar('agentFoundryCreate', { agentFoundryEnabled: true, provisionAgentFoundry: provision }),
+    true,
+  );
+});
+
+test('adopt: the account is NOT created but the model-tier env vars are still bound', () => {
+  const adopt = {
+    foundry: {
+      mode: 'adopt',
+      target: { name: 'aoai-corp', rg: 'rg-ai', sub: 'sub-2' },
+      extra: {
+        chatDeployment: 'gpt-5.4-mini',
+        embedDeployment: '',
+        miniDeployment: 'gpt-5.4-mini',
+        strongDeployment: 'o3-deep-research',
+      },
+    },
+  };
+  const provision = variable('provisionAgentFoundry', adopt, { agentFoundryEnabled: true });
+  assert.equal(provision, false, 'an adopt pick must not stand up a second Foundry account');
+
+  const scope = { agentFoundryEnabled: true, provisionAgentFoundry: provision };
+  assert.equal(adminVar('agentFoundryCreate', scope), false);
+
+  // The values main.bicep hands down, evaluated from the same plan.
+  const byoExisting = {
+    foundryChatDeployment: variable('existingFoundryChatDeployment', adopt),
+    foundryMiniDeployment: variable('existingFoundryMiniDeployment', adopt),
+    foundryStrongDeployment: variable('existingFoundryStrongDeployment', adopt),
+  };
+  assert.equal(byoExisting.foundryMiniDeployment, 'gpt-5.4-mini');
+  assert.equal(byoExisting.foundryStrongDeployment, 'o3-deep-research');
+
+  assert.equal(adminVar('effByoMiniDeployment', { ...scope, byoExisting }), 'gpt-5.4-mini');
+  assert.equal(adminVar('effByoStrongDeployment', { ...scope, byoExisting }), 'o3-deep-research');
+});
+
+test('adopt with no distinct tier slots falls back to the chat deployment, never to empty', () => {
+  const adopt = {
+    foundry: {
+      mode: 'adopt',
+      target: { name: 'aoai-corp' },
+      extra: { chatDeployment: 'gpt-4o', embedDeployment: 'text-embedding-3-large' },
+    },
+  };
+  const byoExisting = {
+    foundryChatDeployment: variable('existingFoundryChatDeployment', adopt),
+    foundryMiniDeployment: variable('existingFoundryMiniDeployment', adopt),
+    foundryStrongDeployment: variable('existingFoundryStrongDeployment', adopt),
+  };
+  assert.equal(byoExisting.foundryMiniDeployment, '');
+  assert.equal(
+    adminVar('effByoMiniDeployment', { byoExisting }), 'gpt-4o',
+    'an empty tier var is a day-one gate the platform could have filled — mini==chat reproduces the documented single-default routing while staying inspectable',
+  );
+  assert.equal(adminVar('effByoStrongDeployment', { byoExisting }), 'gpt-4o');
+});
+
+test('the model-tier env entries consume the BYO fallback, not a literal empty string', () => {
+  // The apps[] env array compiles to one big concat(createArray(...)) expression;
+  // this pins the two entries the defect emptied, in the SHIPPED artifact.
+  const env = JSON.stringify(adminPlaneModule().properties.template);
+  for (const [name, fallback] of [
+    ['LOOM_AOAI_MINI_DEPLOYMENT', 'effByoMiniDeployment'],
+    ['LOOM_AOAI_STRONG_DEPLOYMENT', 'effByoStrongDeployment'],
+  ]) {
+    const needle =
+      `createObject('name', '${name}', 'value', if(variables('agentFoundryCreate'), ` +
+      `reference('agentFoundry').outputs.${fallback === 'effByoMiniDeployment' ? 'mini' : 'strong'}Deployment.value, ` +
+      `variables('${fallback}')))`;
+    assert.ok(
+      env.includes(needle),
+      `${name} must fall back to variables('${fallback}') on an adopt. Expected to find:\n  ${needle}`,
+    );
+  }
+  assert.ok(
+    !env.includes("createObject('name', 'LOOM_AOAI_MINI_DEPLOYMENT', 'value', if(parameters('agentFoundryEnabled')"),
+    'the pre-fix expression (gated on the bind flag, falling back to an empty string) must be gone',
+  );
 });

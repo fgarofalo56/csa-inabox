@@ -159,9 +159,24 @@ declare -a BLOCK_LINES ENV_LINES SUMMARY
 declare -a ADOPT_ENTRIES=()
 ADOPT_COUNT=0
 # AOAI/Foundry reused-account deployment names (resolved in the loop below).
-FOUNDRY_CHAT=""; FOUNDRY_EMBED=""; FOUNDRY_CHOICE="new"
+FOUNDRY_CHAT=""; FOUNDRY_EMBED=""; FOUNDRY_MINI=""; FOUNDRY_STRONG=""; FOUNDRY_CHOICE="new"
 
 upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
+
+# pick_by_rank <name\tmodel TSV> <model-regex>... -> the deployment NAME whose
+# MODEL matches the EARLIEST-listed regex (case-insensitive), else empty.
+# Ranked rather than first-match-wins because an account's deployment order is
+# arbitrary: `dml-ai-eastus-sandbox` lists grok-3 and DeepSeek-R1 before gpt-5,
+# so "first line matching /gpt/" is not the best chat model, it is a coin flip.
+pick_by_rank() {
+  local tsv="$1"; shift
+  local re hit
+  for re in "$@"; do
+    hit="$(awk -F'\t' -v re="$re" 'NF>=2 && tolower($2) ~ re {print $1; exit}' <<<"$tsv")"
+    if [[ -n "$hit" ]]; then printf '%s' "$hit"; return 0; fi
+  done
+  return 0
+}
 
 resolve_databricks_host() {  # name rg sub -> workspaceUrl
   local n="$1" r="$2" s="$3"
@@ -232,25 +247,53 @@ for row in "${SERVICES[@]}"; do
     HOST[$key]="$(resolve_databricks_host "$n" "$r" "$s")"
     [[ -z "${HOST[$key]}" ]] && echo "  (could not resolve workspaceUrl for $n — set EXISTING_DATABRICKS_HOSTNAME manually)"
   fi
-  # AOAI/Foundry — when REUSING an existing account, discover its gpt-4o-class
-  # chat deployment + an embeddings deployment so the Console env wires the full
-  # AOAI surface (LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT/_EMBED_DEPLOYMENT), not
-  # just the account name. Recommend reuse when both already exist (avoids
+  # AOAI/Foundry — when REUSING an existing account, discover the deployments the
+  # Console env needs (LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT/_EMBED_DEPLOYMENT and
+  # the model-tier pair LOOM_AOAI_MINI_DEPLOYMENT/_STRONG_DEPLOYMENT), not just
+  # the account name. Recommend reuse when chat+embed already exist (avoids
   # duplicate model cost); otherwise the operator should provision-new.
   if [[ "$key" == "foundry" && -n "$n" ]]; then
     dargs=(cognitiveservices account deployment list -n "$n" -g "$r")
     [[ -n "$s" ]] && dargs+=(--subscription "$s")
     deploys="$(q "${dargs[@]}" --query "[].{name:name,model:properties.model.name}" -o tsv 2>/dev/null || true)"
-    # chat: prefer a gpt-4o / gpt-4.1 / gpt-4 deployment; embed: a *embedding* model.
-    FOUNDRY_CHAT="$(awk -F'\t' 'tolower($2) ~ /gpt-4o|gpt-4\.1|gpt-4|gpt-35|gpt-3.5/ {print $1; exit}' <<<"$deploys")"
-    FOUNDRY_EMBED="$(awk -F'\t' 'tolower($2) ~ /embedding/ {print $1; exit}' <<<"$deploys")"
+    if [[ -z "$deploys" ]]; then
+      echo "  ! could not read the deployment list on $n (not signed in, no Cognitive Services Reader, or the account is empty)."
+      echo "    Set BYO_FOUNDRY_CHAT / BYO_FOUNDRY_EMBED / BYO_FOUNDRY_MINI / BYO_FOUNDRY_STRONG to name them explicitly."
+    fi
+    # Never guess a chat deployment out of an image/audio/embedding slot.
+    CHAT_POOL="$(awk -F'\t' 'NF>=2 && tolower($2) !~ /image|dall-e|sora|whisper|tts|embedding|flux|video|speech|moderation|rerank/ {print}' <<<"$deploys")"
+    # Chat/default tier: newest general chat model first; mini/nano only as a last
+    # resort. The pre-2026 list ('gpt-4o|gpt-4.1|gpt-4|gpt-35') matched NOTHING on
+    # a modern account (measured 2026-08-05 against alz-ai-services-westus, whose
+    # only chat slots are gpt-5.4-mini / gpt-5.4-nano / o3-deep-research), which is
+    # how a reuse pick emitted chatDeployment:'' and blanked LOOM_AOAI_*.
+    CHAT_MAIN="$(awk -F'\t' 'tolower($2) !~ /mini|nano/ {print}' <<<"$CHAT_POOL")"
+    CHAT_RANK=('gpt-5[.]6' 'gpt-5[.]5' 'gpt-5[.]4' 'gpt-5[.]3' 'gpt-5[.]2' 'gpt-5[.]1' 'gpt-5' 'gpt-chat-latest' 'gpt-4[.]1' 'gpt-4o' 'gpt-4' 'gpt-35|gpt-3[.]5' 'model-router' 'gpt-')
+    FOUNDRY_CHAT="$(pick_by_rank "$CHAT_MAIN" "${CHAT_RANK[@]}")"
+    [[ -z "$FOUNDRY_CHAT" ]] && FOUNDRY_CHAT="$(pick_by_rank "$CHAT_POOL" "${CHAT_RANK[@]}")"
+    # Mini tier: an explicitly small model. Empty is fine — admin-plane falls the
+    # tier back to the chat deployment rather than to ''.
+    FOUNDRY_MINI="$(pick_by_rank "$CHAT_POOL" 'gpt-5[.]6-mini' 'gpt-5[.]4-mini' 'gpt-5-mini' 'gpt-4[.]1-mini' 'gpt-4o-mini' 'mini' 'nano' 'gpt-35-turbo')"
+    # Strong tier: a reasoning-capable model. The o-series and the gpt-5 flagship
+    # outrank a generic *reasoning* substring — otherwise a small Phi-4-reasoning
+    # slot beats o1 on an account that has both (measured on dml-ai-eastus-sandbox).
+    FOUNDRY_STRONG="$(pick_by_rank "$CHAT_MAIN" '(^|[^a-z0-9])o3([^a-z0-9]|$)' '(^|[^a-z0-9])o1([^a-z0-9]|$)' '(^|[^a-z0-9])o4([^a-z0-9]|$)' 'gpt-5[.]6' 'gpt-5[.]5' 'gpt-5[.]4' 'gpt-5[.]2' 'gpt-5[.]1' 'gpt-5' 'deepseek-r1' 'reasoning' 'deep-research' 'gpt-4[.]1' 'gpt-4o')"
+    FOUNDRY_EMBED="$(pick_by_rank "$deploys" 'text-embedding-3-large' 'text-embedding-3-small' 'text-embedding-ada' 'embedding')"
+    # Explicit operator input always wins over discovery (and is the supported
+    # path when the wizard cannot read the account, e.g. an unattended CI run).
+    FOUNDRY_CHAT="${BYO_FOUNDRY_CHAT:-$FOUNDRY_CHAT}"
+    FOUNDRY_EMBED="${BYO_FOUNDRY_EMBED:-$FOUNDRY_EMBED}"
+    FOUNDRY_MINI="${BYO_FOUNDRY_MINI:-$FOUNDRY_MINI}"
+    FOUNDRY_STRONG="${BYO_FOUNDRY_STRONG:-$FOUNDRY_STRONG}"
     if [[ -n "$FOUNDRY_CHAT" && -n "$FOUNDRY_EMBED" ]]; then
       echo "  ✓ reuse recommended: found chat='$FOUNDRY_CHAT' + embed='$FOUNDRY_EMBED' on $n"
     elif [[ -n "$FOUNDRY_CHAT" ]]; then
       echo "  ~ chat='$FOUNDRY_CHAT' found but no embeddings deployment — add one, or provision-new."
     else
-      echo "  ! no gpt-4o-class chat deployment on $n — recommend provision-NEW (BYO_FOUNDRY=new) instead of reuse."
+      echo "  ! no chat-capable deployment resolved on $n — LOOM_AOAI_CHAT_DEPLOYMENT would be EMPTY."
+      echo "    Set BYO_FOUNDRY_CHAT='<deployment name>' or provision-NEW (BYO_FOUNDRY=new) instead of reuse."
     fi
+    echo "    model tiers: mini='${FOUNDRY_MINI:-(falls back to chat)}' strong='${FOUNDRY_STRONG:-(falls back to chat)}'"
   fi
   # Track the AOAI/Foundry choice so the emitted bicepparam sets the opt-out
   # flag explicitly (new/reuse → agentFoundryEnabled stays the bicepparam default
@@ -278,7 +321,7 @@ for row in "${SERVICES[@]}"; do
       entry+=", extra: { hostname: '${HOST[$key]}' }"
     fi
     if [[ "$key" == "foundry" ]]; then
-      entry+=", extra: { chatDeployment: '${FOUNDRY_CHAT}', embedDeployment: '${FOUNDRY_EMBED}' }"
+      entry+=", extra: { chatDeployment: '${FOUNDRY_CHAT}', embedDeployment: '${FOUNDRY_EMBED}', miniDeployment: '${FOUNDRY_MINI}', strongDeployment: '${FOUNDRY_STRONG}' }"
     fi
     entry+=" }"
     ADOPT_ENTRIES+=("$entry")
@@ -313,6 +356,12 @@ ENV_LINES+=("export EXISTING_DATABRICKS_HOSTNAME='${DBX_HOST}'")
 # Same story: they ride in the adopt bag's `extra`, not as standalone params.
 ENV_LINES+=("export EXISTING_AOAI_CHAT_DEPLOYMENT='${FOUNDRY_CHAT}'")
 ENV_LINES+=("export EXISTING_AOAI_EMBED_DEPLOYMENT='${FOUNDRY_EMBED}'")
+# Model-tier slots on the reused account (LOOM_AOAI_MINI/STRONG_DEPLOYMENT).
+# Empty is safe: admin-plane falls each tier back to the reused account's chat
+# deployment, which reproduces the documented "router rides the single resolved
+# default" behaviour instead of shipping a blank env var.
+ENV_LINES+=("export EXISTING_AOAI_MINI_DEPLOYMENT='${FOUNDRY_MINI}'")
+ENV_LINES+=("export EXISTING_AOAI_STRONG_DEPLOYMENT='${FOUNDRY_STRONG}'")
 # AOAI/Foundry is ON BY DEFAULT (agentFoundryEnabled defaults true in main.bicep
 # AND is set true in each boundary bicepparam). The flag lives OUTSIDE the BYO
 # block, so we do NOT inject it here (that would duplicate the param). If the
