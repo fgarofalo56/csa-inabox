@@ -129,21 +129,45 @@ describe('gate live status (evalEnv-backed)', () => {
   });
 
   it('reports OPT-IN (not blocked) for a spec.optIn=true gate when unset', () => {
-    // issue #2753: svc-loom-trino carries the explicit optIn flag (the AKS
-    // carve-out). Unset, it must NOT read as a red misconfiguration — its
-    // absence removes no capability (SQL Lab stays on the DuckDB default).
-    delete process.env.LOOM_TRINO_URL;
-    const st = gateStatus('svc-loom-trino')!;
+    // issue #2753. The subject used to be svc-loom-trino, which carried the
+    // optIn flag as the AKS carve-out. That carve-out is GONE — the engine
+    // moved to a scale-to-zero Container App the orchestrator deploys by
+    // default — so this now exercises svc-s3-gateway, which is genuinely still
+    // opt-in (an operator-deployed s3proxy). Repointing rather than deleting
+    // keeps the opt-in STATUS PATH under test; deleting it would have quietly
+    // removed the only coverage of that branch.
+    delete process.env.LOOM_S3_GATEWAY_URL;
+    const st = gateStatus('svc-s3-gateway')!;
     expect(st.status).toBe('opt-in');
     expect(st.status).not.toBe('blocked');
-    expect(st.missing).toContain('LOOM_TRINO_URL');
+    expect(st.missing).toContain('LOOM_S3_GATEWAY_URL');
   });
 
   it('an opt-in gate flips to configured once its var is set', () => {
+    process.env.LOOM_S3_GATEWAY_URL = 'https://s3proxy.internal.example';
+    try {
+      const st = gateStatus('svc-s3-gateway')!;
+      expect(st.status).toBe('configured');
+    } finally {
+      delete process.env.LOOM_S3_GATEWAY_URL;
+    }
+  });
+
+  it('svc-loom-trino is NO LONGER opt-in — it is deployed by the orchestrator', () => {
+    // The engine is default-ON (admin-plane/main.bicep -> loom-trino-aca.bicep),
+    // so an unset URL is a real deploy gap, not a neutral "you did not ask for
+    // this". It must read BLOCKED, and the Fix-it must still be reachable.
+    delete process.env.LOOM_TRINO_URL;
+    const st = gateStatus('svc-loom-trino')!;
+    expect(st.status).toBe('blocked');
+    expect(st.missing).toContain('LOOM_TRINO_URL');
     process.env.LOOM_TRINO_URL = 'https://trino.internal.example';
     try {
-      const st = gateStatus('svc-loom-trino')!;
-      expect(st.status).toBe('configured');
+      expect(gateStatus('svc-loom-trino')!.status).toBe('configured');
+      // ...and a bind-all placeholder must NOT read as configured (the class
+      // that let the live estate score svc-iceberg-catalog Ready while 503-ing).
+      process.env.LOOM_TRINO_URL = 'https://0.0.0.0:8080';
+      expect(gateStatus('svc-loom-trino')!.status).toBe('blocked');
     } finally {
       delete process.env.LOOM_TRINO_URL;
     }
