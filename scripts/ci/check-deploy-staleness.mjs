@@ -290,6 +290,89 @@ export const WATCHED = [
     ],
     maxDays: 7,
   },
+  // ── The APP-IMAGE path (the second silently-broken lane) ─────────────────
+  // no-vaporware.md names the canonical from-scratch Commercial path as THREE
+  // phases: (1) `az deployment sub create` with deployAppsEnabled=false, (2)
+  // full-app-deploy-commercial.yml to build every app image and roll the
+  // Container Apps onto them, (3) the post-deploy bootstrap. Phase 1 is the
+  // deploy-fiab-commercial entry above. Phase 2 was watched by NOTHING.
+  //
+  // Its state on 2026-08-05, which no signal anywhere surfaced: last success
+  // 2026-06-19, then SIX consecutive failures (2026-07-16, 07-20, 07-28 ×2,
+  // 07-31 ×2) plus a startup_failure. Six weeks of a red from-scratch app path,
+  // invisible. It is also the ONLY producer of five images —
+  // loom-wrangler-host, loom-dbt-runner, loom-transform-runner, loom-duckdb and
+  // loom-uat — because build-fiab-images-acr-tasks.yml's `all` matrix carries
+  // eleven apps and not those. loom-duckdb:v0.1 is absent from the Commercial
+  // ACR today for exactly that reason, which in turn blocks the phase-1 image
+  // preflight: the two lanes deadlock, and neither said so.
+  //
+  // WHY THESE PATHS. Deliberately NOT `apps/**`: the eleven images in the
+  // push-triggered builder are rebuilt on every merge, so listing them here
+  // would mark this entry stale on changes another lane already deployed —
+  // cry-wolf, which trains people to ignore the signal (the failure mode of
+  // this whole class). Listed instead are exactly the sources this lane and no
+  // other applies: the five orphan image contexts (minus loom-uat, already
+  // covered by its own deploy-loom-uat entry), the corpus-staging script that
+  // bakes the Copilot RAG index INTO the console image, and main.bicep — which
+  // this workflow compiles and PUBLISHES as main.json to the admin storage
+  // account, wiring LOOM_DLZ_TEMPLATE_URI. A stale published main.json is the
+  // day-one "Add landing zone" deploy running a template that is not main.
+  {
+    workflow: 'full-app-deploy-commercial.yml',
+    why: 'Phase 2 of the documented from-scratch Commercial path — the ONLY lane that builds every app image and rolls the Container Apps onto them, and the ONLY producer of loom-wrangler-host / loom-dbt-runner / loom-transform-runner / loom-duckdb / loom-uat. Stale or failing here means a from-scratch deploy CANNOT complete, and the images those five apps run are whatever was last pushed — with no signal anywhere that the path is red.',
+    paths: [
+      '.github/workflows/full-app-deploy-commercial.yml',
+      'scripts/csa-loom/stage-copilot-corpus.sh',
+      'platform/fiab/bicep/main.bicep',
+      'apps/fiab-wrangler-host/**',
+      'apps/fiab-dbt-runner/**',
+      'apps/loom-transform-runner/**',
+      'apps/loom-duckdb/**',
+    ],
+    maxDays: 21,
+  },
+];
+
+/**
+ * Live estates whose RUNNING build this check compares against main.
+ *
+ * WHY THIS EXISTS (the operator, 2026-08-05): "nothing surfaces 'the estate is
+ * N commits behind'". Every entry in WATCHED above compares a workflow's RUN
+ * HISTORY against GIT — it never looks at what is actually serving traffic. So
+ * a lane could be green while the estate ran a six-week-old image, and the two
+ * facts never met.
+ *
+ * `/build-marker.txt` is the console's own build fingerprint, written by the
+ * Dockerfile from the LOOM_BUILD_SHA build-arg and served from Next's public/
+ * dir. loom-roll-and-validate already probes it, so it is a load-bearing,
+ * deliberately-unauthenticated artifact — which is what makes this check
+ * possible with no credentials, no `az`, and no Azure login on the lane.
+ *
+ * GOV IS NOT LISTED, AND THAT IS REPORTED, NOT SILENT. The Gov console has no
+ * publicly-reachable marker (private ingress), so this check cannot see it.
+ * main() prints that omission explicitly: an estate we cannot measure must
+ * never read as an estate that is current — the "UNKNOWN reported as a result"
+ * trap this repo has been burned by three times.
+ */
+export const ESTATES = [
+  {
+    name: 'Commercial',
+    markerUrl: process.env.LOOM_ESTATE_MARKER_URL
+      || 'https://csa-loom.limitlessdata.ai/build-marker.txt',
+    // The Commercial estate is rolled onto a fresh image by
+    // build-fiab-images-acr-tasks + loom-roll-and-validate on merge, so a
+    // HEALTHY estate sits within a handful of commits of main and a burst of
+    // merges is ordinary. 20 is not a tolerance for normal lag — it is the
+    // assertion that the roll path is still running at all. On 2026-08-05 the
+    // live estate was 12 behind with a roll path that had been failing for
+    // hours, which is the shape this bound is set to catch before it becomes
+    // six weeks.
+    maxCommitsBehind: 20,
+    // Independent of commit count, because a quiet week on main can hide a dead
+    // roll path behind a low commits-behind number.
+    maxAgeDays: 7,
+  },
 ];
 
 /**
@@ -299,6 +382,20 @@ export const WATCHED = [
  * NOTHING — the precise "green on nothing" shape this file exists to catch.
  */
 const DRY_RUN_MARKER = 'DRY RUN';
+
+/**
+ * Consecutive completed failures that make a deploy path "failing".
+ *
+ * WHY A STREAK AND NOT ONE. A single red run is ordinary (a transient ACR agent
+ * hiccup, a lease collision). Three in a row is a broken path, not weather.
+ *
+ * WHY THIS IS SEPARATE FROM DRIFT AT ALL. classifyDrift only ever asked "when
+ * did this last SUCCEED?", so a lane that succeeded yesterday and has failed on
+ * every run since reads `ok` — the last-success timestamp is recent and nothing
+ * looks at the failures. That is precisely how full-app-deploy-commercial went
+ * six weeks and deploy-fiab-commercial eight consecutive nights unnoticed.
+ */
+export const FAILING_STREAK = 3;
 
 export const DAY_MS = 86_400_000;
 
@@ -364,6 +461,214 @@ function lastCodeChange(paths) {
   }
 }
 
+// ── "has this deploy path been FAILING?" ────────────────────────────────────
+// classifyDrift asks only "when did this last succeed?". A lane that succeeded
+// recently and has failed on every run since therefore reads `ok`. These two
+// pure functions close that blind spot.
+
+/**
+ * Consecutive completed FAILURES at the head of a run history. PURE.
+ *
+ * `rows` are `gh run list` rows, newest first, UNFILTERED by status.
+ *
+ * WHAT COUNTS. Only a COMPLETED run with conclusion `failure` / `timed_out` /
+ * `startup_failure` extends the streak; a `success` ends it. `cancelled`,
+ * `skipped`, `action_required`, `neutral` and any still-running row (conclusion
+ * null) are SKIPPED — they are not evidence either way, and counting an
+ * in-flight run as a failure is the mirror of the 2026-08-02 trap where an
+ * in-progress check was read as "not found". Skipping, rather than terminating
+ * the streak, is deliberate: a cancelled run in the middle of six failures does
+ * not make the path healthy.
+ *
+ * `queryFailed` is NOT modelled here — an unknown history cannot show a streak,
+ * and classifyDrift already fails that case loudly. Inventing a streak from a
+ * broken query would be an UNKNOWN reported as a NEGATIVE.
+ *
+ * @param {{conclusion?:string|null}[]} rows newest-first run rows
+ * @param {number} threshold consecutive failures that mean "failing"
+ * @returns {{failureStreak:number, lastConclusion:string|null, failing:boolean}}
+ */
+export function classifyRunHealth(rows, threshold = FAILING_STREAK) {
+  const FAIL = new Set(['failure', 'timed_out', 'startup_failure']);
+  let streak = 0;
+  let lastConclusion = null;
+  for (const r of rows || []) {
+    const c = r?.conclusion || null;
+    if (c === 'success') { lastConclusion ??= c; break; }
+    if (!FAIL.has(c)) continue; // cancelled / skipped / in-flight → no evidence
+    lastConclusion ??= c;
+    streak += 1;
+  }
+  return { failureStreak: streak, lastConclusion, failing: streak >= threshold };
+}
+
+/**
+ * Is a watched deploy workflow switched OFF? PURE.
+ *
+ * WHY THIS MATTERS SEPARATELY FROM DRIFT. deploy-fiab-commercial.yml — the ONLY
+ * lane that applies main.bicep to the Commercial estate — is
+ * `disabled_manually` today. Its daily cron therefore cannot fire at all, so it
+ * will accrue drift forever and the drift row alone reads like ordinary lag.
+ * "The reconcile is switched off" is a different fact with a different fix, and
+ * it has to be said out loud.
+ *
+ * `state === undefined` means the workflow was not in the listing we fetched.
+ * That is UNKNOWN, not active: `gh workflow list` defaults to 50 rows and this
+ * repo has 117 workflows, so a truncated page silently omitted
+ * full-app-deploy-commercial.yml when this was first written. Reporting that
+ * omission as "active" would be a false green produced by pagination — the
+ * per_page truncation trap, again.
+ *
+ * @param {string|undefined} state gh workflow `state` field
+ * @returns {{state:string, disabled:boolean, unknown:boolean}}
+ */
+export function classifyWorkflowState(state) {
+  if (state === undefined || state === null || state === '') {
+    return { state: 'unknown', disabled: false, unknown: true };
+  }
+  return { state, disabled: state !== 'active', unknown: false };
+}
+
+// ── "is the LIVE estate behind main?" ───────────────────────────────────────
+
+/**
+ * Estate-drift verdict for one live deployment. PURE.
+ *
+ * Inputs are already-measured facts: the sha the estate reports serving, how
+ * many commits main is ahead of it, and how old that build's commit is.
+ *
+ *   error / liveSha null / commitsBehind null  → UNKNOWN, and UNKNOWN IS STALE.
+ *       We could not measure the estate, so we must not report it current. This
+ *       repo has been burned three separate times by an unmeasured thing
+ *       rendering as a negative result; the fix is always the same — give the
+ *       unknown its own state and let it fail.
+ *   commitsBehind === 0                        → current.
+ *   behind, within both bounds                 → behind but tolerated (ok).
+ *   over EITHER bound                          → stale.
+ *
+ * `ancestor:false` is called out separately: a live sha that is not an ancestor
+ * of main is not "behind", it is a DIVERGENT build (a force-push, a revert, or
+ * an image built off a branch). Reporting a commit distance for it would be
+ * arithmetic on two unrelated histories.
+ *
+ * @param {{name:string, liveSha?:string|null, commitsBehind?:number|null,
+ *          ageDays?:number|null, ancestor?:boolean, error?:string|null,
+ *          maxCommitsBehind:number, maxAgeDays:number}} a
+ */
+export function classifyEstate({
+  name, liveSha, commitsBehind, ageDays, ancestor, error,
+  maxCommitsBehind, maxAgeDays,
+}) {
+  if (error || !liveSha) {
+    return {
+      name, state: 'unknown', stale: true, liveSha: liveSha || null,
+      commitsBehind: null, ageDays: null,
+      detail: `could not measure the live estate — ${error || 'no build sha in the marker'}`,
+    };
+  }
+  if (ancestor === false) {
+    return {
+      name, state: 'divergent', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
+      detail: `the running build ${liveSha.slice(0, 8)} is NOT an ancestor of main — it was built from a branch, a revert, or a force-pushed history`,
+    };
+  }
+  if (commitsBehind === null || commitsBehind === undefined) {
+    return {
+      name, state: 'unknown', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
+      detail: `the running build ${liveSha.slice(0, 8)} is not in this checkout — the commit distance to main could not be computed`,
+    };
+  }
+  const overCommits = commitsBehind > maxCommitsBehind;
+  const overAge = (ageDays ?? 0) > maxAgeDays;
+  const state = commitsBehind === 0 ? 'current' : 'behind';
+  const bound = overCommits
+    ? `${commitsBehind} commits behind main (limit ${maxCommitsBehind})`
+    : `the running build is ${ageDays}d old (limit ${maxAgeDays}d)`;
+  return {
+    name,
+    state,
+    stale: overCommits || overAge,
+    liveSha,
+    commitsBehind,
+    ageDays: ageDays ?? null,
+    detail: (overCommits || overAge)
+      ? `${bound} — the roll path has stopped applying main to this estate`
+      : `${commitsBehind} commit(s) behind main, build ${ageDays ?? '?'}d old`,
+  };
+}
+
+/** Recent runs of `workflow`, ANY conclusion, newest first. */
+function recentRuns(workflow) {
+  try {
+    const out = gh([
+      'run', 'list', '--workflow', workflow, '--limit', '30',
+      '--json', 'conclusion,status,createdAt', '--repo', REPO,
+    ]);
+    return { rows: JSON.parse(out || '[]') };
+  } catch (e) {
+    return { rows: [], queryFailed: true, error: String(e?.stderr || e?.message || e).slice(0, 160) };
+  }
+}
+
+/**
+ * path → state for every workflow in the repo.
+ *
+ * `--limit 300` is load-bearing, not padding: the default is 50 and this repo
+ * has 117 workflows, so the default silently omitted the lane this check was
+ * extended to cover. An omitted workflow becomes UNKNOWN downstream, never
+ * "active".
+ */
+function workflowStates() {
+  try {
+    const out = gh(['workflow', 'list', '--all', '--limit', '300', '--json', 'path,state', '--repo', REPO]);
+    const map = new Map();
+    for (const w of JSON.parse(out || '[]')) map.set(String(w.path || '').split('/').pop(), w.state);
+    return map;
+  } catch {
+    return new Map(); // every lookup → undefined → UNKNOWN, which fails loudly
+  }
+}
+
+/**
+ * Measure one live estate: fetch its /build-marker.txt, then ask GIT how far
+ * main is ahead of the sha it reports.
+ *
+ * No credentials, no `az`, no Azure login. The marker is served unauthenticated
+ * because loom-roll-and-validate already probes it.
+ */
+async function probeEstate(estate) {
+  let liveSha = null;
+  try {
+    const res = await fetch(estate.markerUrl, { redirect: 'follow' });
+    if (!res.ok) {
+      return classifyEstate({ ...estate, error: `marker fetch HTTP ${res.status}` });
+    }
+    const txt = await res.text();
+    liveSha = txt.match(/sha=([0-9a-f]{7,40})/i)?.[1] || null;
+    if (!liveSha) return classifyEstate({ ...estate, error: 'marker carried no sha= field' });
+  } catch (e) {
+    return classifyEstate({ ...estate, error: `marker unreachable — ${String(e?.message || e).slice(0, 120)}` });
+  }
+
+  const git = (args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+  let ancestor;
+  let commitsBehind = null;
+  let ageDays = null;
+  try {
+    git(['cat-file', '-e', `${liveSha}^{commit}`]);
+    ancestor = (() => {
+      try { git(['merge-base', '--is-ancestor', liveSha, 'HEAD']); return true; } catch { return false; }
+    })();
+    if (ancestor) commitsBehind = Number(git(['rev-list', '--count', `${liveSha}..HEAD`]));
+    ageDays = Math.max(0, Math.round((Date.now() - Date.parse(git(['log', '-1', '--format=%cI', liveSha]))) / DAY_MS));
+  } catch {
+    // The sha is not in this checkout (shallow clone, or a build off a deleted
+    // branch). UNKNOWN — classifyEstate turns that into a loud stale, not a green.
+    return classifyEstate({ ...estate, liveSha, commitsBehind: null, ageDays: null });
+  }
+  return classifyEstate({ ...estate, liveSha, commitsBehind, ageDays, ancestor });
+}
+
 /**
  * Classify one watched entry. PURE — the entire drift decision lives here so the
  * self-test drives every branch with fixtures. `run` is the shape
@@ -395,6 +700,15 @@ export function classifyDrift({ codeAt, run, maxDays }) {
 
 /**
  * The exit decision over classified rows. PURE. Any stale row ⇒ exit 1.
+ *
+ * `stale` is the union of ALL the ways a deploy path can be broken, not just
+ * undeployed-code drift: a lane whose recent runs are a failure streak, a lane
+ * that has been switched off, and an estate running a build too far behind main
+ * are each set stale by their own classifier before they reach here. One exit
+ * decision over every signal means no signal can be added and then forgotten to
+ * be wired into the exit code — a control that computes a verdict and discards
+ * it is the "gate that cannot fail" shape.
+ *
  * @param {{stale:boolean}[]} rows
  * @returns {{stale:object[], code:number}}
  */
@@ -405,56 +719,118 @@ export function decide(rows) {
 
 /** Build the classified rows from the live IO (gh run-history + git log). */
 function buildRows() {
+  const states = workflowStates();
   const rows = [];
   for (const entry of WATCHED) {
     const run = lastSuccessfulRun(entry.workflow);
     const codeAt = lastCodeChange(entry.paths);
     if (!codeAt) continue; // path removed from the tree — nothing to compare.
-    rows.push({ ...entry, codeAt, ...classifyDrift({ codeAt, run, maxDays: entry.maxDays }) });
+    const drift = classifyDrift({ codeAt, run, maxDays: entry.maxDays });
+    const history = recentRuns(entry.workflow);
+    const health = classifyRunHealth(history.rows, entry.maxFailureStreak || FAILING_STREAK);
+    const wf = classifyWorkflowState(states.get(entry.workflow));
+    rows.push({
+      ...entry,
+      codeAt,
+      ...drift,
+      ...health,
+      workflowState: wf.state,
+      disabled: wf.disabled,
+      stateUnknown: wf.unknown,
+      // Any ONE of the three is enough to fail. Drift already had teeth; the
+      // other two are what six weeks of red full-app-deploy-commercial and
+      // eight consecutive red nightly reconciles needed and did not have.
+      stale: drift.stale || health.failing || wf.disabled || wf.unknown,
+    });
   }
   return rows;
 }
 
-function main() {
+/** One line per row, for both the ok and the fail report. */
+function describeRow(r) {
+  const when = r.queryFailed ? 'UNKNOWN (run-history query failed)'
+    : r.neverRan ? 'NEVER RUN'
+      : `last success ${r.runAt.slice(0, 10)}`;
+  const drift = (r.queryFailed || r.neverRan) ? '' : `, code ${r.codeAt.slice(0, 10)} (+${r.driftDays}d)`;
+  // Named, not silent: a dry run that was skipped is the difference between
+  // "nobody dispatched this" and "somebody dispatched it and it deployed
+  // nothing", and those need different responses.
+  const dry = r.dryRunsSkipped ? `  [${r.dryRunsSkipped} dry run(s) ignored]` : '';
+  const fail = r.failureStreak ? `  [${r.failureStreak} consecutive FAILURE(s) since]` : '';
+  const off = r.stateUnknown ? '  [workflow state UNKNOWN]' : r.disabled ? `  [workflow ${r.workflowState}]` : '';
+  return `${when}${drift}${dry}${fail}${off}`;
+}
+
+/** Everything wrong with one row, as operator-readable lines. */
+function reasonsFor(r) {
+  const out = [];
+  if (r.queryFailed) out.push(`run history UNKNOWN — the gh query failed: ${r.queryError}`);
+  else if (r.neverRan) out.push(`has NEVER run${r.dryRunsSkipped ? ` for real (${r.dryRunsSkipped} dry run(s) ignored — a dry run deploys nothing)` : ''}`);
+  else if (r.stale && r.driftDays > r.maxDays) out.push(`${r.driftDays} days of undeployed code (limit ${r.maxDays})`);
+  if (r.failing) out.push(`THE DEPLOY PATH IS FAILING — ${r.failureStreak} consecutive failed run(s), newest conclusion "${r.lastConclusion}". A recent last-success does NOT mean this path works.`);
+  if (r.disabled) out.push(`THE WORKFLOW IS SWITCHED OFF (state "${r.workflowState}") — it cannot run on its schedule or on dispatch until re-enabled: gh workflow enable ${r.workflow}`);
+  if (r.stateUnknown) out.push('workflow state UNKNOWN — it was not in the `gh workflow list` page we read, so we cannot say whether it is enabled. Not the same as active.');
+  return out;
+}
+
+async function main() {
   const rows = buildRows();
+  const estates = [];
+  for (const e of ESTATES) estates.push(await probeEstate(e));
 
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify(rows, null, 2));
+    console.log(JSON.stringify({ rows, estates }, null, 2));
   }
+
+  // ── the LIVE estate, first: it is the fact the operator was missing ───────
+  console.log('[deploy-staleness] live estate vs main:');
+  for (const e of estates) {
+    const verdict = e.stale ? 'BEHIND' : 'ok    ';
+    console.log(`  ${verdict}  ${e.name.padEnd(12)} ${e.liveSha ? e.liveSha.slice(0, 8) : '????????'}  ${e.detail}`);
+  }
+  // An estate we cannot see must never read as an estate that is current.
+  console.log('  note: Azure Government is NOT measured here — its console has no publicly');
+  console.log('        reachable /build-marker.txt. Its drift is UNKNOWN, not zero.');
 
   console.log('[deploy-staleness] watched deploy paths:');
   for (const r of rows) {
-    const when = r.queryFailed ? 'UNKNOWN (run-history query failed)'
-      : r.neverRan ? 'NEVER RUN'
-        : `last success ${r.runAt.slice(0, 10)}`;
-    const drift = (r.queryFailed || r.neverRan) ? '' : `, code ${r.codeAt.slice(0, 10)} (+${r.driftDays}d)`;
-    // Named, not silent: a dry run that was skipped is the difference between
-    // "nobody dispatched this" and "somebody dispatched it and it deployed
-    // nothing", and those need different responses.
-    const dry = r.dryRunsSkipped ? `  [${r.dryRunsSkipped} dry run(s) ignored]` : '';
-    console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${when}${drift}${dry}`);
+    console.log(`  ${r.stale ? 'STALE' : 'ok   '}  ${r.workflow.padEnd(38)} ${describeRow(r)}`);
   }
 
   const { stale, code } = decide(rows);
-  if (stale.length === 0) {
-    console.log('[deploy-staleness] OK — every watched deploy path has run since its code last changed.');
-    return code;
+  const badEstates = estates.filter((e) => e.stale);
+  if (stale.length === 0 && badEstates.length === 0) {
+    console.log('[deploy-staleness] OK — every watched deploy path has run since its code last');
+    console.log('  changed, none is failing or disabled, and every measured estate is current.');
+    return 0;
   }
 
-  console.error(`\n[deploy-staleness] FAIL — ${stale.length} deploy path(s) carry code that was never applied.\n`);
-  for (const r of stale) {
-    console.error(`  ${r.workflow}`);
-    console.error(`    ${r.queryFailed ? `run history UNKNOWN — the gh query failed: ${r.queryError}` : r.neverRan ? `has NEVER run${r.dryRunsSkipped ? ` for real (${r.dryRunsSkipped} dry run(s) ignored — a dry run deploys nothing)` : ''}` : `${r.driftDays} days of undeployed code (limit ${r.maxDays})`}`);
-    console.error(`    why it matters: ${r.why}`);
-    console.error(`    dispatch: gh workflow run ${r.workflow} --ref main\n`);
+  if (badEstates.length) {
+    console.error(`\n[deploy-staleness] FAIL — ${badEstates.length} live estate(s) are not running main.\n`);
+    for (const e of badEstates) {
+      console.error(`  ${e.name} — ${e.detail}`);
+      console.error(`    running: ${e.liveSha ? e.liveSha.slice(0, 12) : 'unknown'}   marker: ${ESTATES.find((x) => x.name === e.name)?.markerUrl}`);
+      console.error('    roll it: gh workflow run loom-roll-and-validate.yml --ref main\n');
+    }
   }
-  console.error('  A merged fix is not a deployed fix. If the drift is intentional, raise maxDays');
-  console.error('  for that entry WITH a reason — that is a deployment review, not a config tweak.\n');
-  return code;
+
+  if (stale.length) {
+    console.error(`\n[deploy-staleness] FAIL — ${stale.length} deploy path(s) are stale, failing or disabled.\n`);
+    for (const r of stale) {
+      console.error(`  ${r.workflow}`);
+      for (const reason of reasonsFor(r)) console.error(`    ${reason}`);
+      console.error(`    why it matters: ${r.why}`);
+      console.error(`    dispatch: gh workflow run ${r.workflow} --ref main\n`);
+    }
+    console.error('  A merged fix is not a deployed fix. If the drift is intentional, raise maxDays');
+    console.error('  for that entry WITH a reason — that is a deployment review, not a config tweak.');
+    console.error('  A FAILING or DISABLED path is never signed off that way: fix or re-enable it.\n');
+  }
+  return code || 1;
 }
 
 const invokedDirectly = process.argv[1]
   && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
-  process.exit(main());
+  main().then((c) => process.exit(c));
 }

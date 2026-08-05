@@ -34,9 +34,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyDrift,
+  classifyEstate,
+  classifyRunHealth,
+  classifyWorkflowState,
   decide,
   pickLastRealSuccess,
   DAY_MS,
+  ESTATES,
+  FAILING_STREAK,
   WATCHED,
 } from '../check-deploy-staleness.mjs';
 
@@ -201,5 +206,217 @@ test('the three #2775-documented deploy paths are all watched', () => {
     'csa-loom-post-deploy-bootstrap.yml',
   ]) {
     assert.ok(watched.has(wf), `${wf} (documented in #2775) must be a WATCHED entry`);
+  }
+});
+
+// ===========================================================================
+// THE ESTATE SIGNAL (2026-08-05) — "make deploy failure impossible to miss".
+//
+// The operator watched unchanged gates for two weeks while PRs merged green,
+// because nothing anywhere surfaced "the estate is N commits behind" or "the
+// last infra deploy failed". classifyDrift could not have surfaced either: it
+// asks ONLY "when did this workflow last SUCCEED?", so
+//
+//   - a lane that succeeded recently and has failed on every run since reads
+//     `ok` (full-app-deploy-commercial: 6 failures since 2026-06-19;
+//      deploy-fiab-commercial: 8 consecutive failed nightlies),
+//   - a lane that has been SWITCHED OFF reads as ordinary lag
+//     (deploy-fiab-commercial is `disabled_manually` — its cron cannot fire),
+//   - and the LIVE estate was never looked at at all.
+//
+// Each classifier below closes one of those, and each CONTROL case is chosen
+// to die under an obvious mutation of the code it guards.
+// ===========================================================================
+
+/** Run rows as `gh run list` returns them: newest first. */
+const runs = (...conclusions) => conclusions.map((c) => ({ conclusion: c }));
+
+// --- classifyRunHealth ------------------------------------------------------
+
+test('a failure STREAK is failing even though a success exists behind it', () => {
+  // full-app-deploy-commercial's real shape: one success, then nothing but red.
+  const h = classifyRunHealth(runs('failure', 'failure', 'failure', 'failure', 'success'));
+  assert.equal(h.failureStreak, 4);
+  assert.equal(h.failing, true);
+  assert.equal(h.lastConclusion, 'failure');
+});
+
+test('CONTROL: below the streak threshold is NOT failing (one red run is weather)', () => {
+  // Pins the boundary in the other direction: flip `>=` to `>` in
+  // classifyRunHealth and the exactly-3 case below goes green, killing that.
+  const h = classifyRunHealth(runs('failure', 'failure', 'success'));
+  assert.equal(h.failureStreak, 2);
+  assert.equal(h.failing, false);
+});
+
+test('the streak threshold bites at exactly FAILING_STREAK', () => {
+  assert.equal(classifyRunHealth(runs('failure', 'failure', 'failure', 'success')).failing, true);
+  assert.equal(FAILING_STREAK, 3);
+});
+
+test('a newest SUCCESS ends the streak — a repaired path is not reported failing', () => {
+  const h = classifyRunHealth(runs('success', 'failure', 'failure', 'failure', 'failure'));
+  assert.equal(h.failureStreak, 0);
+  assert.equal(h.failing, false);
+  assert.equal(h.lastConclusion, 'success');
+});
+
+test('in-flight and cancelled runs are SKIPPED, not counted as failures', () => {
+  // The mirror of the 2026-08-02 "UNKNOWN reported as NEGATIVE" trap: a run
+  // that has not concluded is not evidence of failure. Drop the skip and this
+  // two-failure history reads as a four-failure streak.
+  const h = classifyRunHealth([
+    { conclusion: null }, { conclusion: 'cancelled' },
+    { conclusion: 'failure' }, { conclusion: 'failure' }, { conclusion: 'success' },
+  ]);
+  assert.equal(h.failureStreak, 2);
+  assert.equal(h.failing, false);
+});
+
+test('a cancelled run in the MIDDLE does not rescue a failing path', () => {
+  const h = classifyRunHealth(runs('failure', 'cancelled', 'failure', 'failure', 'success'));
+  assert.equal(h.failureStreak, 3);
+  assert.equal(h.failing, true);
+});
+
+test('startup_failure and timed_out count as failures', () => {
+  assert.equal(classifyRunHealth(runs('timed_out', 'startup_failure', 'failure')).failing, true);
+});
+
+test('an empty history shows no streak (never-run is classifyDrift job)', () => {
+  assert.deepEqual(classifyRunHealth([]), { failureStreak: 0, lastConclusion: null, failing: false });
+});
+
+// --- classifyWorkflowState --------------------------------------------------
+
+test('a disabled_manually workflow is reported DISABLED, not merely stale', () => {
+  // deploy-fiab-commercial's live state: the only lane that applies main.bicep
+  // to Commercial cannot run at all, on schedule or on dispatch.
+  const s = classifyWorkflowState('disabled_manually');
+  assert.equal(s.disabled, true);
+  assert.equal(s.unknown, false);
+  assert.equal(s.state, 'disabled_manually');
+});
+
+test('CONTROL: an active workflow is neither disabled nor unknown', () => {
+  assert.deepEqual(classifyWorkflowState('active'), { state: 'active', disabled: false, unknown: false });
+});
+
+test('a workflow MISSING from the listing is UNKNOWN, never "active"', () => {
+  // `gh workflow list` defaults to 50 rows; this repo has 117, and the default
+  // page silently omitted full-app-deploy-commercial.yml. Reporting that
+  // omission as active would be a false green produced by pagination.
+  for (const missing of [undefined, null, '']) {
+    const s = classifyWorkflowState(missing);
+    assert.equal(s.unknown, true, `${String(missing)} must be unknown`);
+    assert.equal(s.state, 'unknown');
+    assert.equal(s.disabled, false, 'unknown is its own state, not "disabled"');
+  }
+});
+
+test('disabled_inactivity (the 60-day auto-disable) also counts as disabled', () => {
+  assert.equal(classifyWorkflowState('disabled_inactivity').disabled, true);
+});
+
+// --- classifyEstate ---------------------------------------------------------
+
+const ESTATE_BOUNDS = { name: 'Commercial', maxCommitsBehind: 20, maxAgeDays: 7 };
+const estate = (over) => classifyEstate({ ...ESTATE_BOUNDS, ...over });
+
+test('an estate too many commits behind main is STALE', () => {
+  const e = estate({ liveSha: 'abc1234567', commitsBehind: 40, ageDays: 2, ancestor: true });
+  assert.equal(e.stale, true);
+  assert.equal(e.state, 'behind');
+  assert.match(e.detail, /40 commits behind main/);
+});
+
+test('CONTROL: an estate within BOTH bounds is ok (ordinary merge lag)', () => {
+  // The live 2026-08-05 reading: 12 behind, built the same day. Invert either
+  // comparison in classifyEstate and this case flips to stale.
+  const e = estate({ liveSha: '678b53bc', commitsBehind: 12, ageDays: 0, ancestor: true });
+  assert.equal(e.stale, false);
+  assert.equal(e.state, 'behind');
+  assert.equal(e.commitsBehind, 12);
+});
+
+test('an OLD build is stale even when few commits behind (a quiet week hides a dead roll)', () => {
+  const e = estate({ liveSha: 'abc1234567', commitsBehind: 1, ageDays: 30, ancestor: true });
+  assert.equal(e.stale, true);
+  assert.match(e.detail, /30d old/);
+});
+
+test('the estate bounds bite at exactly the limit, in both directions', () => {
+  const at = (commitsBehind, ageDays) =>
+    estate({ liveSha: 'abc1234567', commitsBehind, ageDays, ancestor: true }).stale;
+  assert.equal(at(20, 7), false, 'exactly at both limits is tolerated');
+  assert.equal(at(21, 7), true, 'one commit past the commit bound is stale');
+  assert.equal(at(20, 8), true, 'one day past the age bound is stale');
+});
+
+test('an estate exactly on main is current', () => {
+  const e = estate({ liveSha: 'abc1234567', commitsBehind: 0, ageDays: 0, ancestor: true });
+  assert.equal(e.state, 'current');
+  assert.equal(e.stale, false);
+});
+
+test('an UNMEASURABLE estate is STALE, never "current" (the recurring trap)', () => {
+  // Three separate incidents in this repo were an unknown rendering as a
+  // result. Drop the `error ||` guard and an unreachable console reads green.
+  const unreachable = estate({ error: 'marker unreachable — ETIMEDOUT' });
+  assert.equal(unreachable.stale, true);
+  assert.equal(unreachable.state, 'unknown');
+
+  const noSha = estate({ liveSha: null });
+  assert.equal(noSha.stale, true);
+  assert.equal(noSha.state, 'unknown');
+
+  const notInCheckout = estate({ liveSha: 'abc1234567', commitsBehind: null, ageDays: null });
+  assert.equal(notInCheckout.stale, true);
+  assert.equal(notInCheckout.state, 'unknown');
+});
+
+test('a build that is NOT an ancestor of main is DIVERGENT, not "0 behind"', () => {
+  const e = estate({ liveSha: 'deadbeef99', commitsBehind: null, ageDays: 1, ancestor: false });
+  assert.equal(e.state, 'divergent');
+  assert.equal(e.stale, true);
+  assert.equal(e.commitsBehind, null);
+});
+
+// --- the tables themselves --------------------------------------------------
+
+test('the two silently-broken deploy paths are BOTH watched', () => {
+  const watched = new Set(WATCHED.map((e) => e.workflow));
+  // deploy-fiab-commercial = the sub-level infra deploy (az deployment sub
+  // create -f main.bicep); full-app-deploy = the app-image build + roll path.
+  // Both were red for weeks; only the first was watched, and even that entry
+  // could not say "failing" or "disabled".
+  assert.ok(watched.has('deploy-fiab-commercial.yml'), 'the sub-level infra deploy is watched');
+  assert.ok(watched.has('full-app-deploy-commercial.yml'), 'the app-image deploy path is watched');
+});
+
+test('full-app-deploy watches the image contexts NO other lane builds', () => {
+  const entry = WATCHED.find((e) => e.workflow === 'full-app-deploy-commercial.yml');
+  // build-fiab-images-acr-tasks.yml's `all` matrix carries eleven apps and not
+  // these; full-app-deploy is their only producer, which is why loom-duckdb:v0.1
+  // is absent from the Commercial ACR today.
+  for (const ctx of [
+    'apps/loom-duckdb/**',
+    'apps/loom-transform-runner/**',
+    'apps/fiab-dbt-runner/**',
+    'apps/fiab-wrangler-host/**',
+  ]) {
+    assert.ok(entry.paths.includes(ctx), `${ctx} is watched by the only lane that builds it`);
+  }
+});
+
+test('ESTATES is non-empty and every entry carries BOTH bounds', () => {
+  // An empty ESTATES would make the live-estate half of this control measure
+  // nothing while still printing a header — the hollow-gate shape.
+  assert.ok(Array.isArray(ESTATES) && ESTATES.length > 0);
+  for (const e of ESTATES) {
+    assert.equal(typeof e.name, 'string');
+    assert.match(e.markerUrl, /^https:\/\/.+\/build-marker\.txt$/);
+    assert.equal(typeof e.maxCommitsBehind, 'number');
+    assert.equal(typeof e.maxAgeDays, 'number');
   }
 });
