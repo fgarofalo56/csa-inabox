@@ -13,9 +13,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { migrateLegacyState, type NotebookCell, type NotebookCellLang } from '@/lib/types/notebook-cell';
 import { recordItemOpen } from '@/lib/items/record-open';
 
@@ -24,22 +24,24 @@ export const dynamic = 'force-dynamic';
 
 
 
-async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    return resource?.tenantId === tenantId ? resource : null;
-  } catch (e: any) { if (e?.code === 404) return null; throw e; }
-}
-
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
   try {
-    const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return apiError('workspace not found', 404);
+    // #2947 — was `loadWs(workspaceId, s.claims.oid)`: `assertOwner` inlined under
+    // another name (a point read in the CALLER's partition), so it answered "did
+    // you CREATE this workspace" and 404'd a tenant admin / shared member on the
+    // editor's own primary READ. Canonical ladder, read-scoped.
+    {
+      const denied = await authorizeItemWorkspace(s, {
+        workspaceId, itemId: (await ctx.params).id, itemType: 'notebook',
+        allowReadRoles: true,
+        notFound: 'workspace not found',
+      });
+      if (denied) return denied;
+    }
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'notebook') return apiError('notebook not found', 404);
@@ -98,8 +100,17 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
-    const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return apiError('workspace not found', 404);
+    // #2947 — was `loadWs(workspaceId, s.claims.oid)`: `assertOwner` inlined under
+    // another name (a point read in the CALLER's partition), so it answered "did
+    // you CREATE this workspace" and 404'd a tenant admin / shared member on the
+    // editor's own SAVE. Canonical ladder, write-scoped.
+    {
+      const denied = await authorizeItemWorkspace(s, {
+        workspaceId, itemId: (await ctx.params).id, itemType: 'notebook',
+        notFound: 'workspace not found',
+      });
+      if (denied) return denied;
+    }
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'notebook') return apiError('notebook not found', 404);
@@ -189,7 +200,15 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('notebook not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'notebook',
+      notFound: 'notebook not found',
+    });
+    if (denied) return denied;
+  }
   try {
     const items = await itemsContainer();
     await items.item((await ctx.params).id, workspaceId).delete();

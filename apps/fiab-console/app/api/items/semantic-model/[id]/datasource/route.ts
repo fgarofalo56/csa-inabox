@@ -48,7 +48,7 @@
  * No mocks. All errors surfaced verbatim.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace, authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import {
   AasError,
   buildCompositeTmsl,
@@ -83,6 +83,7 @@ import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { withSession } from '@/lib/api/route-toolkit';
+import type { SessionPayload } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -101,9 +102,20 @@ function dqGate(missing: string, detail: string) {
   return NextResponse.json({ ok: false, code: 'not_configured', missing, error: detail }, { status: 503 });
 }
 
-/** Resolve an item by id cross-partition, then verify the caller's tenant owns
- *  its workspace — never returns another tenant's item. */
-async function dqFindItem(itemId: string, ownerOid: string): Promise<WorkspaceItem | null> {
+/** Resolve an item by id cross-partition, then authorize the caller against its
+ *  workspace — never returns another tenant's item.
+ *
+ *  #2947 — this used `assertOwner(item.workspaceId, ownerOid)`, a point read in
+ *  the CALLER's partition, so it answered "did you CREATE this workspace" and
+ *  returned null (→ "not persisted") for a tenant admin or a shared-ACL member.
+ *  Now the canonical ladder, scoped by the CALLER: the GET reader passes
+ *  `allowReadRoles`, `dqSaveConfig` does not, so a read-only Viewer that may
+ *  read the config still cannot persist one. */
+async function dqFindItem(
+  itemId: string,
+  session: SessionPayload,
+  opts: { allowReadRoles?: boolean } = {},
+): Promise<WorkspaceItem | null> {
   try {
     const items = await itemsContainer();
     const { resources } = await items.items
@@ -114,16 +126,17 @@ async function dqFindItem(itemId: string, ownerOid: string): Promise<WorkspaceIt
       .fetchAll();
     const item = resources[0] ?? null;
     if (!item) return null;
-    if (!(await assertOwner(item.workspaceId, ownerOid))) return null;
+    if (await authorizeWorkspace(session, item.workspaceId, opts)) return null;
     return item;
   } catch {
     return null;
   }
 }
 
-async function dqSaveConfig(itemId: string | null, ownerOid: string, config: DqSourceConfig): Promise<boolean> {
+async function dqSaveConfig(itemId: string | null, session: SessionPayload, config: DqSourceConfig): Promise<boolean> {
   if (!itemId) return false;
-  const existing = await dqFindItem(itemId, ownerOid);
+  // No `allowReadRoles` — persisting the datasource config is a MUTATION.
+  const existing = await dqFindItem(itemId, session);
   if (!existing) return false;
   const items = await itemsContainer();
   const next: WorkspaceItem = {
@@ -147,7 +160,7 @@ async function dqResolveDefaultServer(sourceType: DqSourceType, database: string
 
 export const GET = withSession<{ id: string }>(async (req: NextRequest, { session }) => {
   const itemId = req.nextUrl.searchParams.get('itemId');
-  const existing = itemId ? await dqFindItem(itemId, session.claims.oid) : null;
+  const existing = itemId ? await dqFindItem(itemId, session, { allowReadRoles: true }) : null;
   const config = (existing?.state as any)?.dqSource ?? null;
   return NextResponse.json({ ok: true, config });
 });
@@ -252,7 +265,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
         appliedAt: new Date().toISOString(),
       };
       await applyDqSource(config);
-      const persisted = await dqSaveConfig(itemId, session.claims.oid, config);
+      const persisted = await dqSaveConfig(itemId, session, config);
       return NextResponse.json({ ok: true, action: 'applied', config, persisted });
     }
 
@@ -265,7 +278,7 @@ export const PUT = withSession<{ id: string }>(async (req: NextRequest, { sessio
         tables,
         appliedAt: new Date().toISOString(),
       };
-      const persisted = await dqSaveConfig(itemId, session.claims.oid, config);
+      const persisted = await dqSaveConfig(itemId, session, config);
       return NextResponse.json({ ok: true, action: 'saved', config, persisted });
     }
 
@@ -306,7 +319,15 @@ function fabricBackend(workspaceId: string): { ws: string } | null {
 export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: params.id, itemType: 'semantic-model',
+      notFound: 'semantic model not found',
+    });
+    if (denied) return denied;
+  }
   const id = params.id;
 
   const body = (await req.json().catch(() => ({}))) as DatasourceBody;

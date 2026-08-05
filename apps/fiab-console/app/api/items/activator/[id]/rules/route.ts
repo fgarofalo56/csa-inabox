@@ -13,7 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import {
   listRules, addRule, triggerRule, setTriggerState, deleteTrigger, ActivatorError,
@@ -80,7 +80,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'activator',
+      allowReadRoles: true,
+      notFound: 'activator not found',
+    });
+    if (denied) return denied;
+  }
   const { id } = await ctx.params;
 
   // ── Fabric Reflex (opt-in) ──
@@ -118,7 +127,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'activator',
+      notFound: 'activator not found',
+    });
+    if (denied) return denied;
+  }
   const { id } = await ctx.params;
   const triggerId = req.nextUrl.searchParams.get('trigger');
 
@@ -234,7 +251,15 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'activator',
+      notFound: 'activator not found',
+    });
+    if (denied) return denied;
+  }
   const { id } = await ctx.params;
   const ruleId = req.nextUrl.searchParams.get('ruleId');
   if (!ruleId) return NextResponse.json({ ok: false, error: 'ruleId required' }, { status: 400 });
@@ -302,7 +327,15 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'activator',
+      notFound: 'activator not found',
+    });
+    if (denied) return denied;
+  }
   const { id } = await ctx.params;
   const ruleId = req.nextUrl.searchParams.get('ruleId');
   if (!ruleId) return NextResponse.json({ ok: false, error: 'ruleId required' }, { status: 400 });
@@ -358,7 +391,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(session, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'activator',
+      notFound: 'activator not found',
+    });
+    if (denied) return denied;
+  }
   const { id } = await ctx.params;
   const ruleId = req.nextUrl.searchParams.get('ruleId');
   if (!ruleId) return NextResponse.json({ ok: false, error: 'ruleId required' }, { status: 400 });

@@ -270,7 +270,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/workspaces/[id]/connections/[connId]/route.ts` | DELETE | admin |  | — |
 | `admin/workspaces/[id]/connections/adls-accounts/route.ts` | GET | admin |  | — |
 | `admin/workspaces/[id]/connections/log-analytics-workspaces/route.ts` | GET | admin |  | — |
-| `admin/workspaces/[id]/connections/route.ts` | GET POST | admin |  | Cosmos |
+| `admin/workspaces/[id]/connections/route.ts` | GET POST | admin |  | — |
 | `admin/workspaces/[id]/folders/route.ts` | GET POST PATCH DELETE | admin |  | — |
 | `admin/workspaces/[id]/git/branch-out/route.ts` | POST | admin |  | Cosmos |
 | `admin/workspaces/[id]/git/meta/route.ts` | GET | admin |  | — |
@@ -285,9 +285,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/workspaces/[id]/networking/trusted-resources/route.ts` | GET POST DELETE | admin | ● | — |
 | `admin/workspaces/[id]/networking/trusted/route.ts` | GET POST DELETE | admin |  | — |
 | `admin/workspaces/[id]/route.ts` | GET PATCH DELETE | admin |  | Cosmos |
-| `admin/workspaces/[id]/spark/environment/route.ts` | GET POST | admin | ● | Cosmos |
+| `admin/workspaces/[id]/spark/environment/route.ts` | GET POST | admin | ● | — |
 | `admin/workspaces/[id]/spark/jobs/route.ts` | GET POST | admin | ● | — |
-| `admin/workspaces/[id]/spark/pools/route.ts` | GET POST DELETE | admin | ● | Cosmos |
+| `admin/workspaces/[id]/spark/pools/route.ts` | GET POST DELETE | admin | ● | — |
 | `admin/workspaces/[id]/spark/runtime/route.ts` | GET POST | admin | ● | — |
 | `admin/workspaces/[id]/storage-metrics/route.ts` | GET | admin | ● | Azure Monitor |
 | `admin/workspaces/[id]/task-flows/[flowId]/route.ts` | GET PUT DELETE | admin |  | — |

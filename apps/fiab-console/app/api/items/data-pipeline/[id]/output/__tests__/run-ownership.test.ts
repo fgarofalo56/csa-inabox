@@ -25,7 +25,9 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: () => ({ claims: { oid: TENANT, upn: 'u@loom.test' } }),
 }));
 vi.mock('@/lib/auth/workspace-guard', () => ({
-  assertOwner: vi.fn(async () => true),
+  // #2947 — the route now runs the canonical ladder via authorizeItemWorkspace
+  // (null = admitted); `assertOwner` no longer exists.
+  authorizeItemWorkspace: vi.fn(async () => null),
   loadOwnedItem: vi.fn(async () => state.item),
 }));
 

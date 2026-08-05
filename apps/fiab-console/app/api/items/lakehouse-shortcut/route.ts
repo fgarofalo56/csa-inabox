@@ -29,8 +29,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { authorizeItemWorkspace, authorizeWorkspace } from '@/lib/auth/workspace-guard';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getAccountName, hasConfiguredContainers } from '@/lib/azure/adls-client';
 import { getDfsSuffix } from '@/lib/azure/cloud-endpoints';
 import {
@@ -40,7 +40,7 @@ import {
 import {
   putShortcutSecret, deleteShortcutSecret, shortcutKeyVaultConfigGate,
 } from '@/lib/azure/kv-secrets-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 import {
   pickTablesEngine, createTablesShortcut, dropShortcutObject, bindExternalSource,
@@ -137,14 +137,6 @@ function err(error: string, status: number, extra?: Record<string, unknown>) {
 
 function sanitize(e: any): string {
   return (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
-}
-
-async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    return resource?.tenantId === tenantId ? resource : null;
-  } catch (e: any) { if (e?.code === 404) return null; throw e; }
 }
 
 /** Sovereign-cloud-correct abfss:// for an ADLS-family target (bare account name). */
@@ -298,8 +290,14 @@ export async function GET(req: NextRequest) {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
   try {
-    const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return err('workspace not found', 404);
+    // #2947 — was `loadWs(workspaceId, s.claims.oid)`: `assertOwner` inlined under
+    // another name (a point read in the CALLER's partition), so it answered "did
+    // you CREATE this workspace" and 404'd a tenant admin / shared member on the
+    // editor's own shortcut LIST. Canonical ladder, read-scoped.
+    {
+      const denied = await authorizeWorkspace(s, workspaceId, { allowReadRoles: true });
+      if (denied) return err('workspace not found', 404);
+    }
     const items = await itemsContainer();
     const { resources } = await items.items.query<WorkspaceItem>({
       query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.itemType = @t ORDER BY c.updatedAt DESC',
@@ -329,8 +327,14 @@ export async function POST(req: NextRequest) {
   const format: TableFormat = TABLE_FORMATS.includes(body?.format) ? body.format : 'delta';
 
   try {
-    const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return err('workspace not found', 404);
+    // #2947 — was `loadWs(workspaceId, s.claims.oid)`: `assertOwner` inlined under
+    // another name (a point read in the CALLER's partition), so it answered "did
+    // you CREATE this workspace" and 404'd a tenant admin / shared member on the
+    // editor's own shortcut CREATE/QUERY. Canonical ladder, write-scoped.
+    {
+      const denied = await authorizeWorkspace(s, workspaceId);
+      if (denied) return err('workspace not found', 404);
+    }
 
     // Zero-copy QUERY: run SELECT TOP n over a Tables shortcut's engine object
     // through the Synapse Serverless SQL endpoint (the lakehouse SQL endpoint) —
@@ -488,7 +492,15 @@ export async function DELETE(req: NextRequest) {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const id = req.nextUrl.searchParams.get('id');
   if (!workspaceId || !id) return err('workspaceId and id required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('workspace not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, write-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: id, itemType: 'lakehouse-shortcut',
+      notFound: 'workspace not found',
+    });
+    if (denied) return denied;
+  }
   try {
     const items = await itemsContainer();
     // Best-effort: read the row first so we can also drop the engine object +

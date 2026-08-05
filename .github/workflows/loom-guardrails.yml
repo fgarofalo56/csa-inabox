@@ -60,6 +60,8 @@ jobs:
         run: node scripts/ci/check-no-bare-client-fetch.mjs
       - name: route-toolkit (hand-rolled session-route ratchet — loom-next-level R3)
         run: node scripts/ci/check-route-toolkit.mjs
+      - name: owner-only-workspace-guard (a workspace point-read that asks "did you CREATE it" — #2947)
+        run: node scripts/ci/check-owner-only-workspace-guard.mjs
       - name: url-boundary (no substring URL validation — parse the host instead)
         run: node scripts/ci/check-url-boundary.mjs
       - name: remote-path-containment (no HTTP-response value becomes a filesystem path — js/http-to-file-access)

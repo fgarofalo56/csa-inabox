@@ -26,7 +26,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -75,7 +75,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('pipeline not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'data-pipeline',
+      allowReadRoles: true,
+      notFound: 'pipeline not found',
+    });
+    if (denied) return denied;
+  }
 
   const gate = approvalConfigGate();
   if (gate) {

@@ -25,17 +25,30 @@ import { loadWorkspaceAdmin } from '@/lib/clients/workspaces-client';
 import { cosmosIdFromLoomId } from '@/app/api/items/_lib/loom-content-id';
 import type { Workspace } from '@/lib/types/workspace';
 
-/** Point-read the workspace on (id, ownerOid); true when the caller owns it. */
-export async function assertOwner(workspaceId: string, tenantId: string): Promise<boolean> {
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
-    return !!resource && resource.tenantId === tenantId;
-  } catch (e: any) {
-    if (e?.code === 404) return false;
-    throw e;
-  }
-}
+/**
+ * #2947 — `assertOwner(workspaceId, oid)` USED TO LIVE HERE AND IS DELIBERATELY
+ * GONE. Do not re-add it, and do not re-inline its body.
+ *
+ * It was a partition point-read `workspacesContainer().item(workspaceId, oid)`.
+ * The `workspaces` container is partitioned on `/tenantId` and `Workspace.tenantId`
+ * stores the CREATOR's Entra oid, so a workspace document exists ONLY in its
+ * creator's partition. The function could therefore only ever answer "did this
+ * caller CREATE this workspace" — never "may this caller ACCESS it". A tenant
+ * admin, a shared-ACL member, or any non-creator was refused, which is how two
+ * live editors shipped broken (#2941 semantic-model, #2942 pipeline canvas).
+ *
+ * Use instead:
+ *   {@link authorizeItemWorkspace} — item-scoped BFF routes (resolves the
+ *      workspace FROM THE ITEM when the caller omits the param, so authorization
+ *      cannot be skipped, and keeps the route's own 404 wording).
+ *   {@link authorizeWorkspace}     — workspace-scoped routes.
+ *   {@link resolveAdminWorkspace}  — when the handler needs the workspace DOC.
+ * All three are read/write scoped: pass `{ allowReadRoles: true }` ONLY from a
+ * strictly read-only handler.
+ *
+ * Guarded by scripts/ci/check-owner-only-workspace-guard.mjs, which fails on a
+ * re-inlined owner-only workspace point-read anywhere in the console.
+ */
 
 /**
  * Resolve the OWNING WORKSPACE of an item by (id, itemType) — no authorization,

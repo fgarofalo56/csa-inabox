@@ -13,7 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { assertOwner } from '@/lib/auth/workspace-guard';
+import { authorizeItemWorkspace } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { listUcSchemas, listUcTables } from '@/lib/azure/databricks-client';
@@ -31,7 +31,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
-  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('mirrored databricks catalog not found', 404);
+  // #2947 — was owner-only `assertOwner` ("did you CREATE this workspace"),
+  // which 404'd a tenant admin / shared member. Canonical ladder, read-scoped.
+  {
+    const denied = await authorizeItemWorkspace(s, {
+      workspaceId, itemId: (await ctx.params).id, itemType: 'mirrored-databricks',
+      allowReadRoles: true,
+      notFound: 'mirrored databricks catalog not found',
+    });
+    if (denied) return denied;
+  }
 
   if (!process.env.LOOM_DATABRICKS_HOSTNAME) {
     return err(
