@@ -220,6 +220,28 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     }
   }, [clustersLoaded, clustersError, clusters.length, ensuringCluster, ensureCluster]);
 
+  // ---- Anchor the tree to THIS notebook's authorized scope (#2977) ----
+  // The BFF now binds every path it touches to the item's own Databricks folder
+  // — a caller authorized for this notebook cannot export/import/delete outside
+  // it. Ask the route for that root and open the tree there, so browsing, "New
+  // notebook" and Save all land inside the scope the server will authorize
+  // instead of at a `/Workspace` root the server refuses.
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch(`/api/items/databricks-notebook/${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (cancelled || !j?.ok || typeof j.root !== 'string' || !j.root) return;
+        setRootPath(j.root);
+        setExpanded(new Set([j.root]));
+      } catch { /* keep the default root — the tree still renders */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
   // ---- Hydrate from the installed item's bundle cells ----
   // A bundle-installed databricks-notebook has its NotebookContent cells
   // stamped into Cosmos (state.cells, or state.content.cells when only the

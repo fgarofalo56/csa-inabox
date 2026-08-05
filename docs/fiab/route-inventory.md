@@ -1255,7 +1255,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-notebook/[id]/command/route.ts` | POST | session-only |  | Databricks |
 | `items/databricks-notebook/[id]/context/route.ts` | POST DELETE | session-only |  | Databricks |
 | `items/databricks-notebook/[id]/ensure-cluster/route.ts` | POST | owner-scoped | ● | Databricks |
-| `items/databricks-notebook/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Cosmos, Databricks |
+| `items/databricks-notebook/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/run/route.ts` | POST | session-only |  | Databricks |
 | `items/databricks-notebook/[id]/runs/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-notebook/[id]/schedule/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Databricks |
