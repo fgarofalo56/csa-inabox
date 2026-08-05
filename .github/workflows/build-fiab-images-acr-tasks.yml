@@ -365,16 +365,30 @@ jobs:
           # to declare success unless the SHA matches.
           # 2026-07-16: the console compile outgrew the DEFAULT ACR Task agent
           # (8 GB) — five consecutive builds were cgroup-OOM-SIGKILLed with no
-          # code change (runs cjdq..cjdv). The console builds on the dedicated
-          # 16 GB S3 pool `loombuild` (scaled 0↔1 around the build; proven on
-          # run cjdy). Other app images stay on default agents.
+          # code change (runs cjdq..cjdv). The console builds on a dedicated
+          # 16 GB S3 pool (scaled 0↔1 around the build; proven on run cjdy).
+          # Other app images stay on default agents.
+          #
+          # #2706 — the pool is `loombuild2`, NOT `loombuild`. boundary=GCC-High
+          # and boundary=IL5 both resolve usgovvirginia with the AZURE_GOV_*
+          # secret set, i.e. the SAME Gov registry whose original `loombuild`
+          # pool has a backing queue stuck in "being deleted" (409): builds
+          # submitted to it sit ~60min and `az acr build` exits 0 having pushed
+          # NOTHING (runs 30552543683, 30558316496). #2938 moved gov-console-roll
+          # + gov-build-images off it and MISSED this lane. One name across both
+          # boundaries keeps every console builder on the same proven pool and
+          # removes the branch that let this one silently inherit the dead queue;
+          # the `show || create` below makes it self-healing on Commercial, where
+          # the pool is simply created on first use.
+          POOL="loombuild2"
           POOL_ARGS=""
           if [ "${{ matrix.name }}" = "loom-console" ]; then
-            az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
-              || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
-            CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
-            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
-            POOL_ARGS="--agent-pool loombuild"
+            az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
+              || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+            CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
+            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
+            POOL_ARGS="--agent-pool $POOL"
+            echo "::notice::#2706 — building loom-console on ACR agent pool: $POOL (boundary=$BOUNDARY)"
           fi
           # loom-uat carries the Playwright specs, but apps/fiab-console/.dockerignore
           # excludes e2e/ + tests/ to keep the CONSOLE image lean — and ACR Tasks
@@ -402,8 +416,8 @@ jobs:
           if [ -n "$POOL_ARGS" ]; then
             # Scale the pool back to 0 when nothing else is queued (pool
             # allocation is what bills; idle pools cost nothing at count 0).
-            q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
+            q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
           fi
 
       # ── SC1: supply-chain gate — Trivy CRITICAL scan + keyless cosign sign ──
