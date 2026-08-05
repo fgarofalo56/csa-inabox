@@ -38,12 +38,14 @@ on:
     paths:
       - '**/requirements.txt'
       - 'apps/loom-transform-runner/**'
+      - 'apps/fiab-dbt-runner/**'
       - '.github/workflows/python-deps-resolve.yml'
   push:
     branches: [main]
     paths:
       - '**/requirements.txt'
       - 'apps/loom-transform-runner/**'
+      - 'apps/fiab-dbt-runner/**'
       - '.github/workflows/python-deps-resolve.yml'
   schedule:
     # Weekly — catches upstream releases that break a pin set with no commit.
@@ -158,4 +160,49 @@ jobs:
 
       - name: Import smoke — both engines, every adapter, the app
         working-directory: apps/loom-transform-runner
+        run: python smoke_imports.py
+
+  # Same shape as transform-runner-imports, for the OTHER dbt image. The two
+  # apps share dbt-core 1.8.9 and therefore share the deepdiff / CVE-2025-58367
+  # finding; the transform runner adopted the second-pass override and this one
+  # did not, which is why `Build loom-dbt-runner` has failed the SC1 Trivy gate
+  # on every full-app-deploy-commercial run since the app joined that matrix.
+  # A guard that exists in one app and not its sibling is the guard-adoption gap
+  # this repo keeps getting burned by, so both are wired now.
+  dbt-runner-imports:
+    name: dbt-runner import smoke (real install + security override)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
+        with:
+          python-version: '3.11'
+
+      # dbt-synapse / dbt-fabric import pyodbc, which needs libodbc at import
+      # time. The image installs unixodbc-dev + msodbcsql18; this smoke only
+      # imports (it never opens a connection), so plain unixodbc is enough.
+      - name: Install unixodbc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq unixodbc
+
+      - name: Install the pinned dependency set
+        working-directory: apps/fiab-dbt-runner
+        run: pip install --no-cache-dir -r requirements.txt
+
+      # Second pass, exactly as the Dockerfile does it. Skipping it here would
+      # mean CI smoke-tests a dependency tree the image does not ship.
+      - name: Apply the security overrides (same second pass as the Dockerfile)
+        working-directory: apps/fiab-dbt-runner
+        run: pip install --no-cache-dir -r requirements-security.txt
+
+      # The Dockerfile's own assertion, run here too: pip exits 0 on a conflict
+      # advisory, so a typo in requirements-security.txt fails SILENTLY.
+      - name: Assert the override actually landed
+        working-directory: apps/fiab-dbt-runner
+        run: python scripts/assert_security_pins.py
+
+      - name: Import smoke — dbt, both adapters, the deepdiff API, the app
+        working-directory: apps/fiab-dbt-runner
         run: python smoke_imports.py

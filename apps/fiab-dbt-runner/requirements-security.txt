@@ -1,0 +1,49 @@
+# CSA Loom — dbt runner SECURITY OVERRIDES (SC1 Trivy CRITICAL gate).
+#
+# Installed as a SECOND pip pass, AFTER requirements.txt, so the image and CI
+# can never disagree about what actually ships.
+#
+# WHY A SECOND PASS INSTEAD OF A LINE IN requirements.txt
+# -------------------------------------------------------
+# These pins deliberately VIOLATE a transitive dependency's declared range. Put
+# them in requirements.txt and pip's resolver backtracks over dbt-core /
+# dbt-common looking for a combination that satisfies everything, finds none,
+# and dies with ResolutionImpossible. That is not theoretical here: the
+# 2026-07-31 build log of this very image (run 30600236939, job 91063974608)
+# shows pip trying `deepdiff<9.0,>=7.0` -> 8.6.2 first, then BACKTRACKING to
+# `deepdiff<8.0,>=7.0` -> 7.0.1 once it re-resolved dbt-common under
+# dbt-core 1.8.9's protobuf fence. A second `pip install` overrides the
+# already-resolved tree, prints a loud "dependency conflicts" advisory, and
+# exits 0. scripts/assert_security_pins.py then ASSERTS the resulting version
+# so the override cannot silently no-op.
+#
+# ── deepdiff — CVE-2025-58367 (CRITICAL) ───────────────────────────────────
+# This is the SAME finding, from the SAME root cause, that
+# apps/loom-transform-runner/requirements-security.txt already burned down —
+# that sibling adopted the fix and this app never did, so the SC1 Trivy gate
+# has failed `Build loom-dbt-runner` on every full-app-deploy-commercial run
+# since. Verbatim from the 2026-07-31 scan of loom-dbt-runner:
+#
+#   usr/local/lib/python3.11/site-packages/deepdiff-7.0.1.dist-info/METADATA
+#   Total: 1 (CRITICAL: 1)
+#   deepdiff (METADATA)  CVE-2025-58367  CRITICAL  fixed  7.0.1  ->  8.6.1
+#
+# INTRODUCED BY: dbt-common 1.27.1 (`deepdiff<8.0,>=7.0`) — nothing in this
+# app's own source imports deepdiff. dbt-common is not directly pinned here; it
+# is fenced at 1.27.1 by dbt-core 1.8.9's `protobuf<6.0` (dbt-common 1.28.0+
+# moved to `protobuf<7.0,>=6.0`).
+#
+# WHY UPGRADE-IN-PLACE IS THE CORRECT FIX, NOT A WAIVER: see the long-form
+# justification in apps/loom-transform-runner/requirements-security.txt. Short
+# version — dbt-common RELAXED this pin to `deepdiff<9.0,>=7.0` at 1.29.0 and
+# has kept it there, it touches deepdiff in exactly one lazy
+# `from deepdiff import DeepDiff` inside `dbt_common/record.py`, and every
+# symbol that call site uses is unchanged in 8.x. 8.6.2 is the newest 8.x;
+# 9.x is outside dbt-common's declared `<9.0`, so it is the right ceiling
+# rather than "latest".
+#
+# RE-CHECK / REMOVAL PLAN: this line disappears the day dbt-core moves off the
+# `protobuf<6` fence and dbt-common 1.29.0+ can be resolved normally — a
+# coordinated adapter bump gated on dbt-synapse. Revisit when dbt-synapse ships
+# a 1.9+/1.10+ line. Keep this file in lockstep with the transform-runner's.
+deepdiff==8.6.2
