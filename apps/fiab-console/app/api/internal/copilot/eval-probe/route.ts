@@ -25,52 +25,28 @@ import * as path from 'node:path';
 import { isValidInternalToken, INTERNAL_TOKEN_HEADER } from '@/lib/auth/internal-token';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { searchDocs, DEFAULT_DOC_RETRIEVAL_TOP } from '@/lib/azure/loom-docs-index';
-import { aoaiChat, NoAoaiDeploymentError, type AoaiChatMessage } from '@/lib/azure/aoai-chat-client';
+import { aoaiChat, NoAoaiDeploymentError } from '@/lib/azure/aoai-chat-client';
 import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
 import { routeTurnTier } from '@/lib/foundry/model-tier-router';
+import { buildGroundedDocsMessages, EVIDENCE_CHARS } from '@/lib/copilot/docs-grounding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Characters of each retrieved chunk that count as EVIDENCE — the single source
- * of truth for both the answer prompt and the `preview` the evaluator hands the
- * judge.
- *
- * Issue #2585 P3: these were 1500 and 300 respectively, so the judge was asked
- * "is this claim supported by the excerpts?" while holding 20% of the text the
- * model actually answered from. Any claim drawn from characters 301–1500 looked
- * ungrounded to the judge even when it was perfectly grounded, which made
- * `groundingAvg` untrustworthy in both directions. One constant, both call
- * sites — they cannot drift apart again.
+ * Re-exported so the existing probe tests (and any caller asserting the judge
+ * sees the SAME slice the model answered from, #2585 P3) keep one import site.
+ * The constant itself now lives in `lib/copilot/docs-grounding` alongside the
+ * prompt that consumes it — see that module's header for why the whole grounded
+ * prompt moved out of this route (#2929: it was a private copy, so improving the
+ * eval's answers and improving the product's answers were separable).
  */
-export const EVIDENCE_CHARS = 1500;
+export { EVIDENCE_CHARS };
 
 function authed(req: NextRequest): boolean {
   const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
   const header = req.headers.get(INTERNAL_TOKEN_HEADER);
   return isValidInternalToken(bearer || null) || isValidInternalToken(header);
-}
-
-/** Grounded single-turn messages — the docs-RAG shape the evaluator judges. */
-function buildTurnMessages(question: string, excerpts: { path: string; heading?: string; content: string }[]): AoaiChatMessage[] {
-  const context = excerpts.length
-    ? excerpts
-        .map((e, i) => `[${i + 1}] ${e.path}${e.heading ? ` — ${e.heading}` : ''}\n${e.content.slice(0, EVIDENCE_CHARS)}`)
-        .join('\n\n')
-    : '(no documentation excerpts were retrieved)';
-  return [
-    {
-      role: 'system',
-      content:
-        'You are the CSA Loom help Copilot. CSA Loom is an Azure-native analytics platform — NOT Microsoft Fabric; ' +
-        'no feature requires a Fabric capacity or Power BI workspace (Fabric backends are strictly opt-in). ' +
-        'Answer the question grounded ONLY in the documentation excerpts provided. ' +
-        'If the excerpts do not cover the question, say so honestly instead of inventing an answer.\n\n' +
-        `Documentation excerpts:\n${context}`,
-    },
-    { role: 'user', content: question },
-  ];
 }
 
 /** The staged corpus manifest (stage-copilot-corpus.sh) — image or repo checkout. */
@@ -117,7 +93,10 @@ export async function POST(req: NextRequest) {
     // 2. REAL Copilot turn through the unified aoai-chat-client. The tier
     //    reported is the same routeTurnTier decision applyTierRouting makes
     //    inside the client for this turn (cfg-less default path).
-    const messages = buildTurnMessages(question, hits.map((h) => ({ path: h.path, heading: h.heading, content: h.content })));
+    const messages = buildGroundedDocsMessages(
+      question,
+      hits.map((h) => ({ path: h.path, heading: h.heading, content: h.content })),
+    );
     const target = await resolveAoaiTarget(null); // honest 503 below when absent
     const sel = routeTurnTier({ cfg: null, messages, baseDeployment: target.deployment });
     const t1 = Date.now();
