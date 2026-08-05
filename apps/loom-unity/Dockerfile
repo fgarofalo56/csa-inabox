@@ -162,9 +162,41 @@ USER root
 # talks to 127.0.0.1 over HTTP. It is not assumed to be present in the upstream
 # base: an auto-bind that silently no-ops because a tool is missing would leave
 # the catalog refusing its own Console with no obvious cause.
-RUN apk upgrade --no-cache \
-    && apk add --no-cache curl \
-    && apk info -v libcrypto3 libssl3 | sort -u
+#
+# RETRY, and why it is NOT `--force-missing-repositories` ───────────────────────
+# On 2026-08-05 this layer failed the build at main de3ad20f (run 30976360448,
+# ACR task cj2tq) with:
+#   WARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.20/main:
+#            temporary error (try again later)
+#   ERROR: Not continuing due to stale/unavailable repositories.
+#          Use --force-missing-repositories to continue.
+# That was a TRANSIENT dl-cdn blip, not a stale pin — proven three ways:
+#   (1) in the SAME failing build, step 4 fetched that EXACT index 74 s earlier
+#       (05:01:41) and succeeded;
+#   (2) this image built green at 02:12, 03:34, 04:33 and again at 05:50 (run
+#       30979142799) on a byte-identical layer, with no code change;
+#   (3) both v3.20 indexes served HTTP 200 on demand.
+# apk prints "stale/unavailable repositories" for ANY repo whose index fetch
+# failed, so the wording misleads; the preceding "temporary error (try again
+# later)" is apk's phrasing for a failed HTTP fetch.
+#
+# `--force-missing-repositories` would be exactly the WRONG fix here: it would
+# build the image against whatever repos happened to answer, silently DROPPING
+# `main` — the repo that carries the openssl 3.3.7-r0 upgrade this very layer
+# exists to apply. A security-critical, federal-facing service would then ship
+# with an unknown package set and a silently un-patched CRITICAL. So instead we
+# retry the fetch, unchanged and still pinned, and FAIL HARD if the CDN is
+# genuinely unreachable — a real outage still stops the build, loudly.
+RUN set -eu; \
+    ok=0; \
+    for attempt in 1 2 3 4 5; do \
+      if apk upgrade --no-cache && apk add --no-cache curl; then ok=1; break; fi; \
+      echo "loom-unity: apk attempt ${attempt}/5 failed (transient index fetch?) - retrying in $((attempt * 5))s"; \
+      sleep "$((attempt * 5))"; \
+    done; \
+    [ "$ok" -eq 1 ] || { echo "ERROR: apk upgrade/add failed 5 consecutive times - refusing to build a security-critical image against an unverified package set"; exit 1; }; \
+    command -v curl >/dev/null || { echo "ERROR: curl absent after apk add - the entrypoint AUTO-BIND step would silently no-op"; exit 1; }; \
+    apk info -v libcrypto3 libssl3 | sort -u
 
 # Preserve the image's seeded catalog DB so a fresh Azure Files mount (which
 # shadows etc/db) can be seeded with a valid schema on first boot. Best-effort:
