@@ -128,6 +128,15 @@ jobs:
         run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
+      # The adoption catalog (brownfield discovery) names bicep enable flags and
+      # ARM types. Six earlier "service catalogs" disagreed on those names in
+      # ways nothing caught: `maps` carried loomMapsEnabled in the CLI and
+      # azureMapsEnabled in TypeScript, and `foundry` pointed at two DIFFERENT
+      # Azure accounts. The vitest that was meant to prevent it asserted only
+      # `expect(def.enabledFlag).toBeTruthy()` — it compared no names at all.
+      # This compares names against platform/fiab/bicep/main.bicep on disk.
+      - name: adoption-catalog-sync (brownfield catalog names match main.bicep)
+        run: node scripts/ci/check-adoption-catalog-sync.mjs
       # bicep-sync above judges the SOURCE. This judges the COMPILED OUTPUT that
       # actually deploys: apps/fiab-console/deploy-templates/main.json is COPY'd
       # into the console image and submitted INLINE to ARM, and until #2945

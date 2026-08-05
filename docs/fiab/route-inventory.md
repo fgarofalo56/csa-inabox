@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1668 |
+| Total routes | 1669 |
 | Public (no session) | 100 |
 | Session-only | 562 |
 | Owner-scoped | 715 |
-| Admin | 291 |
+| Admin | 292 |
 | Gated (backend config) | 530 |
-| Areas | 120 |
+| Areas | 121 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -704,6 +704,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `demo/deploy/[jobId]/route.ts` | GET | owner-scoped |  | Cosmos |
 | `demo/deploy/route.ts` | GET POST | owner-scoped |  | — |
+
+## deploy
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `deploy/discovery/route.ts` | POST | admin |  | — |
 
 ## deployment-pipelines
 

@@ -1472,6 +1472,8 @@ nav:
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
+          - Multi-subscription discovery & adoption: fiab/deployment/discovery-and-adoption.md
+          - Bring your own services: fiab/bring-your-own-services.md
           - From azd CLI: fiab/deployment/azd-cli.md
           - Continuous-deployment pipelines:
               - GitHub Actions: fiab/deployment/pipelines/github-actions.md
