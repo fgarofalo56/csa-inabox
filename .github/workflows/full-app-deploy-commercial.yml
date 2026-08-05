@@ -89,10 +89,23 @@ jobs:
             }
       - id: acr
         run: |
-          set -uo pipefail
+          # GitHub invokes this with `bash -e`, so a non-zero `az` ABORTS THE
+          # STEP. `set -u -o pipefail` does not clear -e (it only adds flags),
+          # so the discovery fallback below has to be reached explicitly:
+          # `set +e` plus `|| true` on the probe. Proven the hard way — run
+          # 31028909702 died on ResourceGroupNotFound (exit 3) at the FIRST az
+          # call, never reaching the `if [[ -z "$ACR" ]]` branch.
+          set +e -u -o pipefail
+          probe_acr() {
+            # stderr is deliberately NOT merged, so a real az error still
+            # appears in the job log; only stdout is filtered.
+            az acr list --resource-group "$1" \
+              --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv \
+              | tr -d '\r' | grep -E '^acrloom' || true
+          }
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
           REGION="$AZURE_LOCATION"
-          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv | tr -d '\r')
+          ACR=$(probe_acr "$RG")
           if [[ -z "$ACR" ]]; then
             # The `region` input still defaults to eastus2 while the live
             # Commercial estate is centralus, so a DEFAULT dispatch resolved
@@ -105,7 +118,7 @@ jobs:
             if [[ ${#CANDIDATES[@]} -eq 1 ]]; then
               RG="${CANDIDATES[0]}"
               REGION="${RG#rg-csa-loom-admin-}"
-              ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv | tr -d '\r')
+              ACR=$(probe_acr "$RG")
               echo "::notice::Adopted $RG (region $REGION) — the only Admin Plane RG in this subscription."
             elif [[ ${#CANDIDATES[@]} -gt 1 ]]; then
               echo "::error::Multiple Admin Plane resource groups found (${CANDIDATES[*]}). Ambiguous — re-dispatch with the 'region' input set to the one you mean."
@@ -113,15 +126,20 @@ jobs:
             fi
           fi
           if [[ -z "$ACR" ]]; then
-            echo "::error::ACR not found in $RG — run deploy-fiab-commercial first."
+            echo "::error::ACR not found in $RG (and no unambiguous Admin Plane RG in this subscription) — run deploy-fiab-commercial first."
             exit 1
           fi
-          SERVER=$(az acr show --name "$ACR" --query "loginServer" -o tsv)
+          SERVER=$(az acr show --name "$ACR" --query "loginServer" -o tsv | tr -d '\r')
+          ADMIN_SUB=$(az account show --query id -o tsv | tr -d '\r')
+          if [[ -z "$SERVER" || -z "$ADMIN_SUB" ]]; then
+            echo "::error::could not read the login server / subscription for $ACR — refusing to continue on half-resolved coordinates."
+            exit 1
+          fi
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
           echo "acr_login_server=$SERVER" >> "$GITHUB_OUTPUT"
           echo "rg=$RG" >> "$GITHUB_OUTPUT"
           # Coordinates for the chained post-deploy bootstrap (rel-T34).
-          echo "admin_sub=$(az account show --query id -o tsv)" >> "$GITHUB_OUTPUT"
+          echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
           echo "region=$REGION" >> "$GITHUB_OUTPUT"
           echo "::notice::ACR=$ACR login=$SERVER rg=$RG region=$REGION"
 
@@ -652,7 +670,11 @@ jobs:
     # signature pushes + verification reads are done; `always()` still
     # guarantees the ACR is re-locked even when a gate fails.
     needs: [resolve, build, verify-images]
-    if: always() && !inputs.skip_build
+    # `always()` still guarantees the re-lock when a gate FAILS. But if resolve
+    # never produced an ACR, open-acr (which needs resolve) never ran, so there
+    # is nothing open and nothing to close — releasing a lease for an empty
+    # registry name just adds a confusing red job to an already-failed run.
+    if: always() && !inputs.skip_build && needs.resolve.result == 'success'
     runs-on: ubuntu-latest
     steps:
       # Needed for scripts/csa-loom/acr-firewall-lease.sh (#2603).
