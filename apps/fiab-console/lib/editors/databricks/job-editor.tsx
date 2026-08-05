@@ -609,7 +609,10 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       if (jobId === null) {
         const r = await clientFetch('/api/items/databricks-job', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ spec }),
+          // #2997 — the new job is created AGAINST this Loom item, so the
+          // platform stamps ownership at birth and every later Run / Save /
+          // Delete binds against it. The user performs no binding step.
+          body: JSON.stringify({ itemId: id, spec }),
         });
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
