@@ -105,6 +105,17 @@ jobs:
         run: node scripts/ci/check-deploy-job-scripts.mjs
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         run: node scripts/ci/check-image-producer-coverage.mjs
+      # image-producer-coverage says the image gets BUILT. This says the build can
+      # actually EXECUTE: the `loombuild` ACR agent pool on the Gov registry has a
+      # backing queue stuck in "being deleted", so builds sent to it are accepted,
+      # never run, and `az acr build` exits 0 having pushed NOTHING after ~60min
+      # (4h25m unbounded). #2938 moved two Gov lanes onto the fresh `loombuild2`
+      # and missed the other two — including console-bluegreen-roll, the
+      # documented successor to the in-place roll. Also forbids `--no-logs` on a
+      # POOL build: that is what made a dead queue indistinguishable from a slow
+      # compile for most of a day (#2706).
+      - name: acr-agent-pool (no Gov build on the wedged pool; no silent pool build — #2706)
+        run: node scripts/ci/check-acr-agent-pool.mjs
       # image-producer-coverage says the image gets BUILT. This says the console
       # image gets built with its CONTENTS: docs/ + PRPs/ sit outside the
       # apps/fiab-console build context and copilot-corpus/ is a tracked

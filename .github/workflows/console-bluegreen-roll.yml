@@ -37,6 +37,10 @@ on:
         description: 'Health-gate polls (30s each) before declaring green unhealthy'
         required: false
         default: '24'
+      agent_pool_name:
+        description: 'ACR agent pool to build on (#2706). Default loombuild2 — the ORIGINAL `loombuild` pool on the Gov ACR has a backing queue stuck in "being deleted" (409); builds submitted to it sit ~60min and `az acr build` exits 0 having pushed NOTHING. loombuild2 is proven by 8+ consecutive green Gov rolls (17-23min each). If it ever wedges the same way, pass a FRESH name (loombuild3) — recreating a wedged pool 409s.'
+        type: string
+        default: 'loombuild2'
 
 permissions:
   contents: read
@@ -45,6 +49,12 @@ jobs:
   bluegreen:
     name: Blue-green roll (${{ inputs.cloud }})
     runs-on: ubuntu-latest
+    # #2706 — bound the run. Without this the job inherits the 6-hour default,
+    # and a wedged ACR agent pool burned 4h25m in `az acr build` before anyone
+    # could act (Commercial builds the same commit in ~15min, Gov ~17-23min on a
+    # healthy pool). A bound turns "silently stuck" into a failed run. Sized to
+    # cover build (~25min) + health-gate (24 polls x 30s = 12min) with headroom.
+    timeout-minutes: 90
     env:
       APP: ${{ inputs.app }}
       HEALTH_RETRIES: ${{ inputs.health_retries }}
@@ -149,7 +159,12 @@ jobs:
           # #2603: take the ACR firewall lease instead of a bare toggle, so this
           # job's re-lock below cannot deny a concurrent build's in-flight push
           # (and vice versa). See docs/fiab/acr-firewall-lease.md.
-          LOOM_ACR_LEASE_TTL_MINUTES=120 \
+          # #2706 — sized just above the job's timeout-minutes (90) so the lease
+          # outlives any run that can still be alive, and no longer: an expired
+          # lease mid-build lets the sweeper close the data plane under an
+          # in-flight push, and an over-long one leaves the registry reachable
+          # after a dead run. Matches gov-console-roll.yml.
+          LOOM_ACR_LEASE_TTL_MINUTES=100 \
             bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # 2026-07-16: console builds run on the dedicated 16 GB S3 pool —
@@ -157,10 +172,59 @@ jobs:
           # NOTE: pool builds do NOT get the trusted-service network bypass, so
           # the ACR must stay open for the duration of the build (it already is
           # for the tarball upload).
-          az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
-            || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
-          CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
-          [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
+          #
+          # #2706 — the pool is `loombuild2`, NOT `loombuild`. This workflow takes
+          # `cloud: gov`, so it resolves the SAME Gov registry whose original
+          # `loombuild` pool has a backing queue stuck in "being deleted" (409):
+          # builds submitted to it sit ~60min and `az acr build` exits 0 having
+          # pushed NOTHING (runs 30552543683, 30558316496). #2938 moved
+          # gov-console-roll + gov-build-images off it and MISSED this lane, which
+          # is the documented blue-green successor to the in-place roll — so the
+          # safer roll path was the one still aimed at the dead queue.
+          # loombuild2 is proven on that registry by 8+ consecutive green rolls.
+          POOL="${{ inputs.agent_pool_name }}"
+          POOL="${POOL:-loombuild2}"
+          echo "::notice::building on ACR agent pool: $POOL"
+          az acr agentpool show -r "$ACR" -n "$POOL" -o none 2>/dev/null \
+            || az acr agentpool create -r "$ACR" -n "$POOL" --tier S3 -o none
+          CNT=$(az acr agentpool show -r "$ACR" -n "$POOL" --query count -o tsv | tr -d '\r')
+          [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n "$POOL" --count 1 -o none
+
+          # #2706 — QUEUE DEPTH IS THE SIGNAL, and on the wedged pool it was
+          # printed and DISCARDED. Measured on the Gov registry:
+          #   loombuild  (wedged queue)  queued=3 / queued=4  -> ~60min, exit 0, NO image
+          #   loombuild2 (healthy)       queued=0  x8 runs    -> 17-23min, image pushed
+          # This run already holds the ACR firewall lease — a real mutex that
+          # every `az acr build` call site on this registry takes — so a queue
+          # that will not drain is a STUCK queue, not contention. An unreadable
+          # probe is UNKNOWN, never "clear".
+          read_queue() {
+            az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null \
+              | tr -d '\r' | grep -E '^[0-9]+$' | tail -1 || true
+          }
+          Q="$(read_queue)"
+          if [ -n "$Q" ] && [ "$Q" != "0" ]; then
+            echo "::warning::#2706 — $POOL reports $Q queued item(s); waiting up to 5min for it to drain."
+            for i in $(seq 1 20); do
+              sleep 15
+              N="$(read_queue)"
+              if [ -z "$N" ]; then
+                echo "  queued: UNKNOWN (read failed) — NOT treating that as drained ($i/20)"
+                continue
+              fi
+              Q="$N"
+              echo "  queued: $Q ($i/20)"
+              if [ "$Q" = "0" ]; then break; fi
+            done
+          fi
+          if [ -z "$Q" ]; then
+            echo "::warning::#2706 — could not read the queue depth for $POOL. UNKNOWN, not zero; if this build runs long and pushes nothing, the wedged-queue failure mode is the first thing to check."
+          elif [ "$Q" != "0" ]; then
+            echo "::error::#2706 — the '$POOL' queue on $ACR still holds $Q item(s) after 5 minutes, and this run holds the ACR firewall lease so nothing legitimate is building. That is the signature of the queue stuck in 'being deleted' that made az acr build exit 0 after ~60min having pushed NO image. Do NOT retry on this pool and do NOT recreate it (that returned 409 in run 30565655935) — re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3."
+            exit 1
+          else
+            echo "::notice::  queued: 0 — the $POOL queue is clear"
+          fi
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # #2929 — stage the Copilot RAG corpus INTO the build context before
           # the build. docs/ + PRPs/ live at repo root, outside apps/fiab-console,
@@ -169,13 +233,28 @@ jobs:
           # while the quality evals measure a stale index.
           # Enforced by scripts/ci/check-console-corpus-staged.mjs.
           bash scripts/csa-loom/stage-copilot-corpus.sh
-          az acr build --registry "$ACR" --no-logs --agent-pool loombuild \
+          # #2706 — logs STREAM (the `--no-logs` opt-out is gone). A silent build
+          # is exactly the shape this repo got burned by: with --no-logs a stalled
+          # build and a slow build are indistinguishable, which is how the wedged
+          # pool consumed 4h25m before anyone could learn anything. This lane runs
+          # on the pool, so it is precisely the one where a stall is invisible.
+          az acr build --registry "$ACR" --agent-pool "$POOL" \
             --image "loom-console:$SHA" --image "loom-console:latest" \
             --file apps/fiab-console/Dockerfile \
             --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
             apps/fiab-console
-          q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
-          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
+          # #2706 — VERIFY THE TAG EXISTS HERE. `az acr build` exiting 0 is NOT
+          # proof a tag landed: on the wedged pool it exited 0 having pushed
+          # nothing, and the failure only surfaced a step later as a confusing
+          # supply-chain error. Green deploys the image it just "built", so a
+          # silent no-op here would roll a revision at an image that does not exist.
+          if ! az acr repository show -n "$ACR" --image "loom-console:$SHA" -o none 2>/dev/null; then
+            echo "::error::az acr build exited 0 but loom-console:$SHA does NOT exist on $ACR — the build silently produced nothing (#2706). Re-dispatch with agent_pool_name set to a FRESH name, e.g. loombuild3."
+            exit 1
+          fi
+          echo "::notice::verified loom-console:$SHA exists on $ACR"
+          q=$(az acr agentpool show -r "$ACR" -n "$POOL" --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n "$POOL" --count 0 --no-wait -o none || true
           # Re-locks only if this run still holds the lease; re-locks
           # unconditionally when nobody does (fail closed).
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
