@@ -115,6 +115,28 @@ jobs:
         run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
+      # bicep-sync above judges the SOURCE. This judges the COMPILED OUTPUT that
+      # actually deploys: apps/fiab-console/deploy-templates/main.json is COPY'd
+      # into the console image and submitted INLINE to ARM, and until #2945
+      # nothing regenerated or verified it. It had drifted from its own bicep
+      # and the drift shipped — carrying a role assignment against a role GUID
+      # that does not exist, and an airflow image still pulled straight from
+      # Docker Hub, i.e. #2682's supply-chain fix INERT in the deploying
+      # artifact months after it merged.
+      #
+      # This step is deliberately NOT path-filtered: loom-guardrails.yml has a
+      # bare `on: pull_request:`, so it runs on every PR. A path filter is how
+      # the sibling gates in this repo went quiet (#2775, #2939) and there is no
+      # filter that would be correct here anyway — main.bicep's transitive
+      # closure is ~200 modules.
+      #
+      # It compiles only; it makes no Azure API call and needs no credentials
+      # (`az bicep install` + `az bicep build` are local). `az` is preinstalled
+      # on ubuntu-latest; if it were ever absent the guard FAILS rather than
+      # skipping, because a compile gate that cannot compile has not verified
+      # anything.
+      - name: deploy-template-sync (the compiled ARM template that SHIPS must match its bicep — #2945)
+        run: node scripts/ci/check-deploy-template-sync.mjs
       # deploy-staleness (above) says the reconcile has not RUN. This says that
       # when it does run, it cannot destroy, duplicate or re-image the estate:
       # no destructive step on the schedule, one image repository per
