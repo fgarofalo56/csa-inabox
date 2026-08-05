@@ -1,5 +1,22 @@
 name: loom-roll-and-validate
 
+# #2963 — SAY WHICH SHA THIS RUN ROLLS.
+#
+# A `workflow_run`-triggered run is stamped by GitHub with `github.sha`, i.e.
+# the DEFAULT-BRANCH HEAD at trigger time — NOT the SHA it is about to roll
+# (that is `github.event.workflow_run.head_sha`, the SHA of the image build
+# that fired it). With no `run-name`, `gh run list` and the Actions UI show
+# only that misleading head_sha, so every automatic roll appears to be "for"
+# a commit it never touched. Live 2026-08-04, twice within the hour:
+#   run 30961850347  stamped 75e7bf48  ROLLED 57c01e95
+#   run 30963436640  stamped 8935fa43  ROLLED 75e7bf48
+# Both deployed exactly the SHA they were given; both were read as deploying
+# the wrong image, and #2963 was filed (and then auto-closed, see the
+# auto-close step) off that misreading. The run title now states the truth.
+run-name: >-
+  roll ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.image_tag }}
+  (${{ github.event_name == 'workflow_run' && 'build-triggered' || 'manual dispatch' }})
+
 # Roll a built loom-console image to the Container App and validate the live
 # URL actually serves it. Per user feedback after the 2026-05-26 incident
 # where the image-build workflow succeeded but stale code shipped: every
@@ -200,6 +217,30 @@ jobs:
               echo "::notice::Resolved ':latest' → immutable tag $TAG (newest successfully built main commit)."
             fi
           fi
+
+          # #2963 — THE VALIDATION THAT WAS OPTIONAL ON THE RECOVERY PATH.
+          #
+          # `expected_sha` is a dispatch input that DEFAULTS TO EMPTY, and the
+          # only place EXPECTED was ever derived from TAG was inside the
+          # ':latest' branch above. So the operator's own emergency path —
+          # dispatch with an explicit 40-hex image_tag, leave expected_sha
+          # blank — reached loom-validate-live.sh with EXPECTED="", where BOTH
+          # SHA assertions are conditional on it:
+          #     if [[ -n "$EXPECTED_SHA" ]] && grep -q "sha=${EXPECTED_SHA}"
+          #   → else "build-marker.txt is present (no SHA check requested)" PASS
+          #     else "no expected SHA passed … (informational)"            PASS
+          # i.e. the roll reported SUCCESS having proven nothing about which
+          # image is live — exactly the property #2963 says must never hold.
+          # A tag that IS a commit SHA always carries its own expectation.
+          if [[ -z "$EXPECTED" && "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            EXPECTED="${TAG:0:8}"
+            echo "::notice::No expected_sha given — derived '$EXPECTED' from the rolled tag. The live build-marker MUST carry it or this roll fails."
+          fi
+          if [[ -z "$EXPECTED" ]]; then
+            echo "::error::Refusing to roll '$TAG' with no expected SHA to validate against: the live-URL gate would pass without proving which image is serving (#2963). Dispatch with a 40-hex commit SHA as image_tag, or set expected_sha."
+            exit 1
+          fi
+
           URL="${{ inputs.url }}"
           [[ -z "$URL" ]] && URL='https://csa-loom.limitlessdata.ai'
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -238,6 +279,60 @@ jobs:
             SKIP_VERIFY="true"
           fi
           echo "skip_verify=$SKIP_VERIFY" >> "$GITHUB_OUTPUT"
+
+      - name: Gate — the image must EXIST in ACR (unskippable)
+        id: imageexists
+        # #2963 — ADOPT THE PREFLIGHT THE DEPLOY LANES ALREADY USE.
+        #
+        # scripts/ci/assert-acr-image-tags.sh has proven "this tag is really in
+        # that registry" for deploy-fiab-{commercial,gcch,il5} since #2640, with
+        # its own test (scripts/ci/test-assert-acr-image-tags.sh). The roll —
+        # the one lane that mutates the LIVE console — never adopted it. The
+        # only thing standing between a roll and a nonexistent image was a
+        # side-effect of the SC1 cosign gate (its empty-digest branch), and that
+        # gate is SKIPPABLE by `skip_signature_verify` / LOOM_ROLL_SKIP_VERIFY.
+        # "I could not verify the signature" is a fine reason to skip signature
+        # verification; it is not a reason to stop asking whether the image
+        # exists at all. This step therefore carries NO `if:` — the emergency
+        # valves cannot switch it off.
+        #
+        # THREE STATES, KEPT APART (the #2819 lesson — do not let "could not
+        # ask" collapse into "the answer is no", or the reverse):
+        #   present     → proceed
+        #   absent      → REFUSE. Nothing to roll; rolling would create a
+        #                 revision that can never pull.
+        #   unreachable → loud WARNING, proceed. Unreachable ≠ absent, and a
+        #                 locked registry must not permanently block an
+        #                 emergency roll. This is SAFE because the post-roll
+        #                 build-marker assertion is now unconditional (see the
+        #                 EXPECTED derivation above): if a nonexistent image
+        #                 were somehow rolled, traffic stays on the old
+        #                 revision, the marker will not carry the expected SHA,
+        #                 and Validate live URL fails + rolls back. The
+        #                 end-to-end invariant "never green having deployed a
+        #                 different SHA" holds without this step guessing.
+        env:
+          LOOM_ACR_LEASE_TTL_MINUTES: '15'
+        run: |
+          set -uo pipefail
+          REF="${{ env.APP_NAME }}:${{ steps.vars.outputs.tag }}"
+          OUT=$(bash scripts/ci/assert-acr-image-tags.sh \
+                  --acr "${{ env.ACR_NAME }}" --rg "${{ env.RG_NAME }}" --lease "$REF" 2>&1)
+          STATUS=$?
+          echo "$OUT"
+          if [[ $STATUS -eq 0 ]]; then
+            echo "::notice::image-exists gate PASSED — ${{ env.ACR_NAME }}/$REF is in the registry."
+            exit 0
+          fi
+          # The helper exits 1 for both "absent" and "could not read". Split
+          # them on its own markers rather than treating every failure as proof
+          # of absence.
+          if grep -q 'could not READ registry' <<<"$OUT"; then
+            echo "::warning::Could not READ ${{ env.ACR_NAME }} (private endpoint / lease held by a concurrent build), so the existence of $REF is UNPROVEN — not disproven. Proceeding; the post-roll build-marker assertion (expected SHA ${{ steps.vars.outputs.expected }}) is the definitive check and will fail + roll back if the wrong image ends up serving."
+            exit 0
+          fi
+          echo "::error::REFUSING TO ROLL — ${{ env.ACR_NAME }}/$REF does not exist in the registry. The image build for this commit has not finished (or built a different app subset). Nothing to deploy; a roll would create a revision that can never pull. Wait for build-fiab-images-acr-tasks to finish this SHA, or dispatch with an image_tag that is built."
+          exit 1
 
       - name: Gate — require vitest (node 20) success for the rolled commit
         id: vitest_gate
@@ -364,15 +459,49 @@ jobs:
           echo "::notice::Rolled to revision $NEW_REV with image ${{ steps.vars.outputs.image }}"
 
       - name: Wait for revision health
+        id: health
+        # #2963 — THIS LOOP COULD NOT FAIL.
+        #
+        # It ran ten probes, `break`-ing on Healthy+Running, and then simply
+        # ENDED. An image that never pulls (a tag that is not in the registry
+        # → ImagePullBackOff) walked straight through a step named "Wait for
+        # revision health" and reported success — the result of every probe was
+        # discarded. Same class as the `|| true` purge (#2828) and the
+        # 164ms ACR probe that never called ACR (#2819): a control that runs,
+        # observes the bad state, and reads green.
+        #
+        # It now has a verdict, and the verdict has teeth. It also asserts the
+        # revision is actually running THE IMAGE WE ASKED FOR — the roll's core
+        # promise, checked against the control plane before we go anywhere near
+        # a cached HTTP probe.
         run: |
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          set -uo pipefail
+          REV="${{ steps.roll.outputs.new_revision }}"
+          WANT="${{ steps.vars.outputs.image }}"
+          OK=false
+          for i in $(seq 1 10); do
             STATE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
-              --revision ${{ steps.roll.outputs.new_revision }} \
+              --revision "$REV" \
               --query "{health:properties.healthState, running:properties.runningState}" -o tsv)
             echo "[$i] $STATE"
-            if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then break; fi
+            if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then OK=true; break; fi
             sleep 10
           done
+          if [[ "$OK" != "true" ]]; then
+            echo "::error::Revision $REV never reached Healthy+Running after ~100s (last state: ${STATE:-<none>}). The most common cause is an image the revision cannot pull. NOT proceeding to validation on an unhealthy roll."
+            exit 1
+          fi
+
+          # The revision must be running the image this run resolved. If these
+          # disagree, the roll did not do what the run says it did — which is
+          # the entire subject of #2963.
+          GOT=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+            --revision "$REV" --query "properties.template.containers[0].image" -o tsv | tr -d '\r')
+          if [[ "$GOT" != "$WANT" ]]; then
+            echo "::error::Revision $REV is running '$GOT' but this roll resolved '$WANT'. A roll must never report success having deployed a different image than it was asked for (#2963)."
+            exit 1
+          fi
+          echo "::notice::Revision $REV is Healthy+Running on $GOT (matches the requested image)."
 
       # #2828 — the purge that had NEVER executed.
       #
@@ -707,9 +836,18 @@ jobs:
         # Roll back whenever we shipped a new revision and EITHER the live-URL
         # validation OR the in-VNet UAT gate failed. (A pre-roll vitest-gate
         # failure never reaches here — nothing was rolled.)
-        if: failure() && steps.roll.outcome == 'success' && (steps.validate.outcome == 'failure' || steps.uat.outcome == 'failure')
+        #
+        # #2963: `health` is in this list now. Before, the health wait could not
+        # fail at all; now that it can (unhealthy revision, or a revision running
+        # a different image than we asked for), it must ALSO trigger the revert
+        # — otherwise making the gate honest would leave the estate parked on a
+        # broken revision with no rollback, i.e. a fix that made things worse.
+        if: >-
+          failure() && steps.roll.outcome == 'success' &&
+          (steps.validate.outcome == 'failure' || steps.uat.outcome == 'failure' ||
+           steps.health.outcome == 'failure')
         run: |
-          echo "::error::Post-roll gate failed (validate=${{ steps.validate.outcome }}, uat=${{ steps.uat.outcome }}) — rolling back to previous revision ${{ steps.vars.outputs.previous_revision }}"
+          echo "::error::Post-roll gate failed (health=${{ steps.health.outcome }}, validate=${{ steps.validate.outcome }}, uat=${{ steps.uat.outcome }}) — rolling back to previous revision ${{ steps.vars.outputs.previous_revision }}"
           PREV_IMAGE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
             --revision "${{ steps.vars.outputs.previous_revision }}" \
             --query "properties.template.containers[0].image" -o tsv)
@@ -737,12 +875,20 @@ jobs:
               ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
-              state: 'open', labels: 'deploy-validation', per_page: 1,
+              state: 'open', labels: 'deploy-validation', per_page: 50,
             });
-            if (existing.data.length > 0) {
+            // #2963 — dedupe onto THIS WORKFLOW'S OWN issue. Taking `[0]` of
+            // everything wearing the label meant a roll failure got appended as
+            // a comment to whatever human-filed report happened to be newest,
+            // burying it (the mirror image of the auto-close that closed #2963).
+            const SELF_TITLE = /^loom-roll-and-validate failing\b/;
+            const mine = existing.data.filter(
+              (i) => !i.pull_request && i.user && i.user.login === 'github-actions[bot]' && SELF_TITLE.test(i.title),
+            );
+            if (mine.length > 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: existing.data[0].number,
+                issue_number: mine[0].number,
                 body: `Roll failed again for tag \`${{ steps.vars.outputs.tag }}\`.\n\n${body}`,
               });
             } else {
@@ -756,18 +902,47 @@ jobs:
       - name: Auto-close stale deploy-validation issues on success
         if: success()
         uses: actions/github-script@v7
+        env:
+          ROLLED_TAG: ${{ steps.vars.outputs.tag }}
         with:
           script: |
-            // A green roll means the live console validated — close any open
-            // deploy-validation issues so transient past failures don't accumulate.
+            // A green roll means the live console validated — close the issues
+            // THIS WORKFLOW FILED so transient past failures don't accumulate.
+            //
+            // #2963 — IT USED TO CLOSE ANYTHING WEARING THE LABEL, and that is
+            // how it ate its own bug report. A human filed #2963 ("roll reports
+            // success for a SHA it did not deploy") with the `deploy-validation`
+            // label; the next green roll — for an entirely unrelated commit —
+            // commented "Auto-resolved: loom-roll-and-validate is GREEN … live
+            // console validated. Closing." and closed it. The workflow was
+            // grading its own homework: a report ABOUT the roll's reporting
+            // being untrustworthy was dismissed by that same reporting. This is
+            // the "silently consumes the one signal that would reveal the
+            // problem" mechanism, and it is why the defect survived long enough
+            // to recur twice in an hour.
+            //
+            // Now: bot-authored + this workflow's own title shape ONLY. A
+            // human-filed issue is never auto-closed by a machine. If the
+            // deduped-comment title shape in "File issue on failure" changes,
+            // change it here too — they are a pair.
+            const SELF_TITLE = /^loom-roll-and-validate failing\b/;
             const open = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,
               state: 'open', labels: 'deploy-validation', per_page: 50,
             });
             for (const iss of open.data) {
+              if (iss.pull_request) continue;
+              const botFiled = iss.user && iss.user.login === 'github-actions[bot]';
+              if (!botFiled || !SELF_TITLE.test(iss.title)) {
+                core.notice(
+                  `Leaving #${iss.number} ("${iss.title}") open: it was not filed by this workflow. ` +
+                  `A green roll of ${process.env.ROLLED_TAG} is evidence about THAT roll, not a verdict on a human-filed report (#2963).`,
+                );
+                continue;
+              }
               await github.rest.issues.createComment({
                 owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number,
-                body: `Auto-resolved: loom-roll-and-validate is GREEN (run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) — live console validated. Closing.`,
+                body: `Auto-resolved: loom-roll-and-validate is GREEN for \`${process.env.ROLLED_TAG}\` (run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) — live console validated. Closing this auto-filed issue.`,
               });
               await github.rest.issues.update({
                 owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number, state: 'closed',
