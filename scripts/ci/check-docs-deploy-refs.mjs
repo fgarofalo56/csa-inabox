@@ -26,7 +26,10 @@
  *   4. `platform/fiab/bicep/...`             — must exist (allowing *.generated.*
  *                                              which is an OUTPUT, not a source)
  *   5. `param <name> = …` in a published      — `<name>` must be DECLARED by the
- *      bicepparam snippet                      template that snippet binds to
+ *      bicepparam snippet                      template that snippet binds to,
+ *                                              and that template must be
+ *                                              RESOLVABLE (an unreadable
+ *                                              template fails; it never skips)
  *
  * WHY 3 AND 5 EXIST — EXISTENCE IS NOT WORKINGNESS
  * ------------------------------------------------
@@ -50,6 +53,20 @@
  * by the customer. Check 5 needs no `az bicep`: BCP259 is precisely "assigned
  * but not declared", which is a set difference.
  *
+ * AND AN UNRESOLVABLE TEMPLATE IS A FAILURE, NOT A SKIP
+ * -----------------------------------------------------
+ * Check 5's first cut did `if (declared === null) continue` — i.e. "I could not
+ * read the template, so I will accept every assignment under it". MEASURED
+ * 2026-08-05: an injected snippet whose `using` normalised to a path that does
+ * not exist was reported OK. That is the UNKNOWN-rendered-as-FINE class this
+ * repo keeps re-finding. The old justification ("the `bicep` extractor reports
+ * the missing template anyway") only holds when the path appears VERBATIM in
+ * the doc, and the two interesting resolution arms do not put it there: a
+ * doc-embedded `using 'x.bicep'` is normalised against `params/`, and a
+ * `.bicepparam` mention is followed through ITS OWN `using`. Either can yield a
+ * path the extractor never sees. So an unreadable template is now reported as
+ * `bicepparam-template`, once per template per doc.
+ *
  * STILL DELIBERATELY NOT CHECKED
  *   - parameter names appearing in PROSE rather than in a `param … =`
  *     assignment. A regex over English produces false positives on ordinary
@@ -60,7 +77,10 @@
  *      docs/fiab/deployment/greenfield.md   -> exits 1 naming it.
  *   2. Append a fenced `param definitelyNotAParam = 'x'` to a deployment doc
  *                                           -> exits 1 citing BCP259.
- *   3. Remove them                          -> exits 0.
+ *   3. Append a fenced `using 'no-such-template.bicep'` followed by any
+ *      `param x = 1`                        -> exits 1 as `bicepparam-template`
+ *                                              (it must NOT report OK).
+ *   4. Remove them                          -> exits 0.
  *
  * Tests: node --test scripts/ci/__tests__/docs-deploy-refs.test.mjs
  */
@@ -178,13 +198,15 @@ export function templateOfParamFile(paramPath) {
  *   3. the most recent `platform/fiab/bicep/**.bicep` mentioned;
  *   4. DEFAULT_TEMPLATE.
  *
- * @returns {{line:number, param:string, template:string, file:string}[]}
+ * @returns {{line:number, param:string, template:string, file:string,
+ *   unresolvedTemplate?: boolean}[]}
  */
 export function undeclaredParamAssignments(text, fileForMsg = '') {
   const lines = text.split(/\r?\n/);
   const out = [];
   let template = DEFAULT_TEMPLATE;
   const cache = new Map();
+  const reportedUnresolved = new Set();
   const declFor = (t) => {
     if (!cache.has(t)) cache.set(t, declaredParams(t));
     return cache.get(t);
@@ -215,9 +237,29 @@ export function undeclaredParamAssignments(text, fileForMsg = '') {
     const assign = /^\s*param\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
     if (!assign) continue;
     const declared = declFor(template);
-    // The template itself being missing is reported by the `bicep` extractor;
-    // saying it twice adds no information.
-    if (declared === null) continue;
+    if (declared === null) {
+      // UNKNOWN IS NOT A PASS. This used to `continue`, on the reasoning that
+      // the `bicep` extractor would report the missing template anyway. That is
+      // only true when the path appears VERBATIM in the doc — and the two
+      // interesting resolution arms do not put it there: a doc-embedded
+      // `using 'x.bicep'` is normalised against params/, and a `.bicepparam`
+      // mention is followed through ITS OWN `using`. Either can normalise to a
+      // path that is not in the text, so the extractor never sees it, the
+      // declaration set comes back null, and EVERY assignment under that
+      // heading was silently accepted. A guard that cannot resolve its subject
+      // has measured nothing and must say so (deploy-integrity R7).
+      if (!reportedUnresolved.has(template)) {
+        reportedUnresolved.add(template);
+        out.push({
+          line: i + 1,
+          param: assign[1],
+          template,
+          file: fileForMsg,
+          unresolvedTemplate: true,
+        });
+      }
+      continue;
+    }
     if (!declared.has(assign[1])) {
       out.push({ line: i + 1, param: assign[1], template, file: fileForMsg });
     }
@@ -282,12 +324,15 @@ if (isMain) {
       failures.push({
         file,
         line: hit.line,
-        kind: 'bicepparam-decl',
-        ref: hit.param,
+        kind: hit.unresolvedTemplate ? 'bicepparam-template' : 'bicepparam-decl',
+        ref: hit.unresolvedTemplate ? hit.template : hit.param,
         src: (lines[hit.line - 1] ?? '').trim(),
-        why:
-          `is assigned in a published bicepparam snippet but is NOT declared in ${hit.template} — ` +
-          'a customer pasting this gets BCP259 and a template that cannot compile',
+        why: hit.unresolvedTemplate
+          ? `is the template this snippet's \`param … =\` assignments bind to, and it could not be read — ` +
+            'so NOTHING under this heading was checked. Point the `using` (or the .bicepparam/.bicep path ' +
+            'above it) at a template that exists. An unresolvable subject is a failure, not a skip.'
+          : `is assigned in a published bicepparam snippet but is NOT declared in ${hit.template} — ` +
+            'a customer pasting this gets BCP259 and a template that cannot compile',
       });
     }
   }

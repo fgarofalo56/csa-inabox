@@ -102,6 +102,40 @@ test('the target template is resolved from the doc, not assumed', () => {
   assert.equal(bare[0].template, MAIN);
 });
 
+const NL = '\n';
+
+test('MUTATION PROOF — an UNRESOLVABLE template is a FAILURE, not a silent pass', () => {
+  // The hole this closes: `if (declared === null) continue` accepted every
+  // assignment under a template it could not read. Both arms below normalise to
+  // a path that is NOT in the doc text, so the `bicep` extractor never reports
+  // it either — the whole snippet was checked by nothing.
+  const viaUsing = [
+    '```bicepparam',
+    "using 'no-such-template.bicep'",   // -> platform/fiab/bicep/params/no-such-template.bicep
+    "param whateverThisIs = 'x'",
+    "param andThisOne = 'y'",
+    '```',
+  ].join(NL);
+  const hits = undeclaredParamAssignments(viaUsing, 'x.md');
+  assert.equal(hits.length, 1, 'reported once per unresolvable template, not once per assignment');
+  assert.equal(hits[0].unresolvedTemplate, true);
+  assert.equal(hits[0].template, 'platform/fiab/bicep/params/no-such-template.bicep');
+  assert.equal(declaredParams(hits[0].template), null, 'the template really is unreadable');
+
+  // Control: the SAME shape against a template that exists is checked normally,
+  // so the test fails if the arm stops resolving rather than passing either way.
+  const resolvable = [
+    '```bicepparam',
+    `using '${MAIN}'`,
+    "param whateverThisIs = 'x'",
+    '```',
+  ].join(NL);
+  const ok = undeclaredParamAssignments(resolvable, 'x.md');
+  assert.equal(ok.length, 1);
+  assert.equal(ok[0].unresolvedTemplate, undefined);
+  assert.equal(ok[0].param, 'whateverThisIs');
+});
+
 test('templateOfParamFile follows `using` for every boundary params file', () => {
   const dir = path.join(REPO_ROOT, 'platform', 'fiab', 'bicep', 'params');
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.bicepparam'));
