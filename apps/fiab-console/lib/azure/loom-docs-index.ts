@@ -25,6 +25,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -184,6 +185,73 @@ export async function ensureDocsIndex(): Promise<{ ok: boolean; created: boolean
   }
 }
 
+/**
+ * Outcome of ONE `POST /docs/index` batch, read from the response BODY rather
+ * than from the HTTP status alone.
+ *
+ * WHY THE BODY (issue #2964) — `r.ok` is NOT a success signal for this API.
+ * When some actions in a batch fail, AI Search answers **HTTP 207 Multi-Status**,
+ * which is a 2xx: `response.ok === true`. The real verdict is per document, in
+ * `value[i].status` / `value[i].errorMessage`. A caller that only checks `r.ok`
+ * therefore reports a write that the service REJECTED as a success — which is
+ * exactly how the corpus manifest silently failed to persist for the whole life
+ * of the incremental-index feature. Confirmed against a live search service:
+ *
+ *   content = 32,766 bytes → HTTP 200, status:true
+ *   content = 32,770 bytes → HTTP 207, status:false,
+ *     "Field 'content' contains a term that is too large to process.
+ *      The max length for UTF-8 encoded terms is 32766 bytes."
+ */
+interface IndexBatchOutcome {
+  /** Every action in the batch was accepted by the service. */
+  ok: boolean;
+  /** Actions the service reported `status:true` for. */
+  succeeded: number;
+  failed: number;
+  error?: string;
+}
+
+/**
+ * POST one `docs/index` batch and decide the outcome from the per-document
+ * results. An unparseable answer is a FAILURE, never a pass — a body we cannot
+ * read cannot be read as success.
+ */
+async function indexBatch(
+  svc: string,
+  tok: string,
+  actions: Array<Record<string, unknown>>,
+): Promise<IndexBatchOutcome> {
+  const r = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ value: actions }),
+  });
+  const raw = await r.text();
+  if (!r.ok) {
+    return { ok: false, succeeded: 0, failed: actions.length, error: `HTTP ${r.status}: ${raw.slice(0, 200)}` };
+  }
+  let parsed: any = null;
+  try { parsed = JSON.parse(raw); } catch { /* handled below */ }
+  const results = Array.isArray(parsed?.value) ? parsed.value : null;
+  if (!results) {
+    return {
+      ok: false, succeeded: 0, failed: actions.length,
+      error: `HTTP ${r.status} with an unreadable body (no per-document results): ${raw.slice(0, 200)}`,
+    };
+  }
+  const bad = results.filter((d: any) => d?.status !== true);
+  const succeeded = results.length - bad.length;
+  if (bad.length === 0) return { ok: true, succeeded, failed: 0 };
+  const first = bad[0];
+  return {
+    ok: false,
+    succeeded,
+    failed: bad.length,
+    error: `${bad.length}/${results.length} document(s) rejected (HTTP ${r.status}); first: ` +
+      `${first?.key ?? '?'} — ${String(first?.errorMessage ?? 'no errorMessage').slice(0, 240)}`,
+  };
+}
+
 async function pushChunksToSearch(chunks: DocChunk[]): Promise<{ ok: boolean; uploaded: number; error?: string }> {
   const svc = searchServiceName();
   if (!svc) return { ok: false, uploaded: 0, error: 'LOOM_AI_SEARCH_SERVICE not set' };
@@ -191,23 +259,30 @@ async function pushChunksToSearch(chunks: DocChunk[]): Promise<{ ok: boolean; up
   try {
     const tok = await searchToken();
     let uploaded = 0;
+    let rejected = 0;
+    let firstError: string | undefined;
     // AI Search caps batches at 1000 docs / 16MB
     const BATCH = 100;
     for (let i = 0; i < chunks.length; i += BATCH) {
       const batch = chunks.slice(i, i + BATCH);
-      const body = {
-        value: batch.map((c) => ({ '@search.action': 'mergeOrUpload', ...c })),
-      };
-      const r = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        return { ok: false, uploaded, error: `Upload batch ${i / BATCH}: ${r.status} ${t.slice(0, 200)}` };
+      const out = await indexBatch(svc, tok, batch.map((c) => ({ '@search.action': 'mergeOrUpload', ...c })));
+      // `uploaded` counts what the SERVICE accepted, not what we sent — the
+      // reindex result is compared against the manifest's chunk count, so an
+      // optimistic count would make that comparison meaningless.
+      uploaded += out.succeeded;
+      if (!out.ok) {
+        // A batch where nothing landed is a broken backend (auth, index gone,
+        // throttling): stop and let the caller fall back to Cosmos. A batch with
+        // SOME rejections is real, partial data loss — surfaced, not swallowed.
+        if (out.succeeded === 0) {
+          return { ok: false, uploaded, error: `Upload batch ${i / BATCH}: ${out.error}` };
+        }
+        rejected += out.failed;
+        firstError = firstError ?? out.error;
       }
-      uploaded += batch.length;
+    }
+    if (rejected > 0) {
+      return { ok: true, uploaded, error: `${rejected} chunk document(s) rejected by AI Search; first: ${firstError}` };
     }
     return { ok: true, uploaded };
   } catch (e: any) {
@@ -227,17 +302,9 @@ async function deleteChunksFromSearch(ids: string[]): Promise<{ ok: boolean; del
     const BATCH = 100;
     for (let i = 0; i < ids.length; i += BATCH) {
       const batch = ids.slice(i, i + BATCH);
-      const body = { value: batch.map((id) => ({ '@search.action': 'delete', id })) };
-      const r = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        return { ok: false, deleted, error: `Delete batch ${i / BATCH}: ${r.status} ${t.slice(0, 200)}` };
-      }
-      deleted += batch.length;
+      const out = await indexBatch(svc, tok, batch.map((id) => ({ '@search.action': 'delete', id })));
+      deleted += out.succeeded;
+      if (!out.ok) return { ok: false, deleted, error: `Delete batch ${i / BATCH}: ${out.error}` };
     }
     return { ok: true, deleted };
   } catch (e: any) {
@@ -904,65 +971,207 @@ function collectSources(): CollectedCorpus {
 }
 
 // ---------- Manifest persistence (WS-G / G1 + G2) ----------
+//
+// #2964 — WHY THE AI SEARCH MANIFEST IS SPLIT ACROSS DOCUMENTS
+// -----------------------------------------------------------
+// The manifest carries a per-source-file map (`files`) that is ~480 KB for the
+// live corpus (2,604 files). It used to be written as ONE AI Search document
+// with the whole JSON in `content`, and AI Search rejected it every single time:
+//
+//   HTTP 207, value[0].status = false,
+//   "Field 'content' contains a term that is too large to process.
+//    The max length for UTF-8 encoded terms is 32766 bytes."
+//
+// 207 is a 2xx, so `response.ok` was true, the rejection lived only in the
+// response BODY (which nothing read), and the write silently no-op'd. The
+// manifest therefore never existed, `corpusFreshness()` answered
+// `never-indexed` forever, and the incremental path could never engage — every
+// reindex was a full rebuild. Verified against a live search service: 32,766
+// bytes is accepted, 32,770 is not.
+//
+// So the manifest is now persisted as:
+//   `corpus-manifest`      — the HEAD: everything EXCEPT `files`, ~250 bytes.
+//                            This is all `corpusFreshness()` needs, so the
+//                            completion signal CI gates on is one small read.
+//   `corpus-manifest_f<i>` — gzip+base64 shards of the `files` map, each well
+//                            under the term ceiling. base64 is ASCII, so a
+//                            character budget IS a byte budget (no multi-byte
+//                            slicing hazard).
+// Shards are written BEFORE the head, so an interrupted write leaves no head at
+// all → `never-indexed` → a safe full rebuild, never a half-manifest that reads
+// as complete.
+//
+// Cosmos keeps the single-document form: its 2 MB document ceiling accommodates
+// the whole manifest and that round-trip is covered by the existing tests.
 
-/** Read the corpus manifest from the store the chunks live in (AI Search index
- *  doc or the Cosmos corpus container). Returns null when absent/unreadable —
- *  which safely forces a full rebuild. */
-async function loadManifest(backend: 'ai-search' | 'cosmos'): Promise<CorpusManifest | null> {
+/** Empirically confirmed AI Search ceiling for a single indexed term. */
+const SEARCH_MAX_TERM_BYTES = 32_766;
+/** base64 chars per shard — ASCII, so this is also the byte count. */
+const MANIFEST_SHARD_CHARS = 24_000;
+const manifestShardKey = (i: number): string => `${MANIFEST_KEY}_f${i}`;
+
+/** The manifest minus its bulky `files` map, plus how many shards carry it. */
+type CorpusManifestHead = Omit<CorpusManifest, 'files'> & {
+  /** Number of `corpus-manifest_f<i>` shards holding the gzip+base64 `files` map. */
+  fileShards?: number;
+  /** Present on the LEGACY single-document form (Cosmos). */
+  files?: Record<string, ManifestFileEntry>;
+};
+
+function encodeFiles(files: Record<string, ManifestFileEntry>): string[] {
+  const b64 = zlib.gzipSync(Buffer.from(JSON.stringify(files), 'utf-8')).toString('base64');
+  const shards: string[] = [];
+  for (let i = 0; i < b64.length; i += MANIFEST_SHARD_CHARS) {
+    shards.push(b64.slice(i, i + MANIFEST_SHARD_CHARS));
+  }
+  return shards;
+}
+
+function decodeFiles(b64: string): Record<string, ManifestFileEntry> {
+  return JSON.parse(zlib.gunzipSync(Buffer.from(b64, 'base64')).toString('utf-8'));
+}
+
+/** One AI Search document lookup by key. Returns null on 404/transient. */
+async function lookupSearchDoc(svc: string, tok: string, key: string): Promise<any | null> {
+  const r = await fetchWithTimeout(
+    `https://${svc}.search.windows.net/indexes/${INDEX}/docs/${encodeURIComponent(key)}?api-version=${SEARCH_API}`,
+    { headers: { authorization: `Bearer ${tok}` } },
+  );
+  if (!r.ok) return null; // 404 (never indexed) or transient → full rebuild
+  return r.json();
+}
+
+/**
+ * Read ONLY the manifest head — the cheap, single-read path used by
+ * `corpusFreshness()` (and therefore by the health probe and the CI reindex
+ * poller). Never pulls the `files` shards.
+ */
+async function loadManifestHead(backend: 'ai-search' | 'cosmos'): Promise<CorpusManifestHead | null> {
   try {
     if (backend === 'ai-search') {
       const svc = searchServiceName();
       if (!svc) return null;
       const tok = await searchToken();
-      const r = await fetchWithTimeout(
-        `https://${svc}.search.windows.net/indexes/${INDEX}/docs/${MANIFEST_KEY}?api-version=${SEARCH_API}`,
-        { headers: { authorization: `Bearer ${tok}` } },
-      );
-      if (!r.ok) return null; // 404 (never indexed) or transient → full rebuild
-      const j: any = await r.json();
+      const j = await lookupSearchDoc(svc, tok, MANIFEST_KEY);
       if (!j?.content) return null;
-      return JSON.parse(j.content) as CorpusManifest;
+      return JSON.parse(j.content) as CorpusManifestHead;
     }
     const c = await helpCorpusContainer();
     const r = await c.item(MANIFEST_KEY, META_KIND).read<any>().catch(() => ({ resource: null }));
     const doc = r.resource;
     if (!doc?.content) return null;
-    return JSON.parse(doc.content) as CorpusManifest;
+    return JSON.parse(doc.content) as CorpusManifestHead;
   } catch (e: any) {
-    console.warn('[loom-docs-index] manifest load failed', e?.message);
+    console.warn('[loom-docs-index] manifest head load failed', e?.message);
     return null;
   }
 }
 
-/** Persist the corpus manifest into the same store as the chunks. */
-async function saveManifest(backend: 'ai-search' | 'cosmos', manifest: CorpusManifest): Promise<void> {
-  const content = JSON.stringify(manifest);
+/** Read the corpus manifest from the store the chunks live in (AI Search index
+ *  doc or the Cosmos corpus container). Returns null when absent/unreadable —
+ *  which safely forces a full rebuild. */
+async function loadManifest(backend: 'ai-search' | 'cosmos'): Promise<CorpusManifest | null> {
+  const head = await loadManifestHead(backend);
+  if (!head) return null;
+  // Cosmos (and any legacy doc) still carries `files` inline.
+  if (head.files) return head as CorpusManifest;
+  const shardCount = head.fileShards ?? 0;
+  if (shardCount <= 0) return null; // no file map → nothing to diff against
   try {
-    if (backend === 'ai-search') {
-      const svc = searchServiceName();
-      if (!svc) return;
-      const tok = await searchToken();
-      const body = {
-        value: [{
-          '@search.action': 'mergeOrUpload',
-          id: MANIFEST_KEY, kind: META_KIND, path: '__corpus_manifest__',
-          content, touchedAt: manifest.builtAt,
-        }],
-      };
-      await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      return;
+    const svc = searchServiceName();
+    if (backend !== 'ai-search' || !svc) return null;
+    const tok = await searchToken();
+    let b64 = '';
+    for (let i = 0; i < shardCount; i++) {
+      const j = await lookupSearchDoc(svc, tok, manifestShardKey(i));
+      if (typeof j?.content !== 'string') {
+        console.warn(`[loom-docs-index] manifest shard ${i}/${shardCount} missing — forcing a full rebuild`);
+        return null;
+      }
+      b64 += j.content;
     }
-    const c = await helpCorpusContainer();
-    await c.items.upsert({ id: MANIFEST_KEY, kind: META_KIND, path: '__corpus_manifest__', content, touchedAt: manifest.builtAt });
+    const { fileShards: _shards, ...rest } = head;
+    return { ...(rest as Omit<CorpusManifest, 'files'>), files: decodeFiles(b64) };
   } catch (e: any) {
-    console.warn('[loom-docs-index] manifest save failed', e?.message);
+    console.warn('[loom-docs-index] manifest files load failed', e?.message);
+    return null;
   }
 }
 
+/**
+ * Persist the corpus manifest into the same store as the chunks.
+ *
+ * Returns a VERIFIED outcome. The freshness signal the whole reindex gate
+ * depends on is this write, so a failure here must never be swallowed — before
+ * #2964 it was, and the gate reported success while measuring nothing.
+ */
+async function saveManifest(
+  backend: 'ai-search' | 'cosmos',
+  manifest: CorpusManifest,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    if (backend === 'ai-search') {
+      const svc = searchServiceName();
+      if (!svc) return { ok: false, error: 'LOOM_AI_SEARCH_SERVICE not set' };
+      const tok = await searchToken();
+      const shards = encodeFiles(manifest.files);
+      const { files: _files, ...headFields } = manifest;
+      const head: CorpusManifestHead = { ...headFields, fileShards: shards.length };
+      const headContent = JSON.stringify(head);
+      if (Buffer.byteLength(headContent, 'utf-8') > SEARCH_MAX_TERM_BYTES) {
+        return { ok: false, error: `manifest head is ${Buffer.byteLength(headContent, 'utf-8')} bytes, over the ${SEARCH_MAX_TERM_BYTES}-byte AI Search term ceiling` };
+      }
+
+      // Shards FIRST — the head is the completion marker.
+      for (let i = 0; i < shards.length; i++) {
+        const out = await indexBatch(svc, tok, [{
+          '@search.action': 'mergeOrUpload',
+          id: manifestShardKey(i), kind: META_KIND, path: '__corpus_manifest__',
+          content: shards[i], touchedAt: manifest.builtAt,
+        }]);
+        if (!out.ok) return { ok: false, error: `manifest shard ${i}/${shards.length}: ${out.error}` };
+      }
+      const headOut = await indexBatch(svc, tok, [{
+        '@search.action': 'mergeOrUpload',
+        id: MANIFEST_KEY, kind: META_KIND, path: '__corpus_manifest__',
+        content: headContent, touchedAt: manifest.builtAt,
+      }]);
+      if (!headOut.ok) return { ok: false, error: `manifest head: ${headOut.error}` };
+
+      // Drop shards left over from a LARGER previous manifest. Harmless if they
+      // linger (readers only walk 0..fileShards-1 and `kind:'__meta__'` is
+      // filtered out of every query), but they would otherwise accumulate.
+      await pruneManifestShards(svc, tok, shards.length);
+      return { ok: true };
+    }
+    const c = await helpCorpusContainer();
+    await c.items.upsert({
+      id: MANIFEST_KEY, kind: META_KIND, path: '__corpus_manifest__',
+      content: JSON.stringify(manifest), touchedAt: manifest.builtAt,
+    });
+    return { ok: true };
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    console.warn('[loom-docs-index] manifest save failed', msg);
+    return { ok: false, error: msg };
+  }
+}
+
+/** Best-effort removal of `corpus-manifest_f<i>` docs at or beyond `keep`. */
+async function pruneManifestShards(svc: string, tok: string, keep: number): Promise<void> {
+  const stale: string[] = [];
+  // Walk forward until the first gap; shard keys are dense by construction.
+  for (let i = keep; i < keep + 64; i++) {
+    const j = await lookupSearchDoc(svc, tok, manifestShardKey(i));
+    if (!j) break;
+    stale.push(manifestShardKey(i));
+  }
+  if (stale.length === 0) return;
+  const out = await indexBatch(svc, tok, stale.map((id) => ({ '@search.action': 'delete', id })));
+  if (!out.ok) console.warn('[loom-docs-index] stale manifest shard prune incomplete', out.error);
+}
+
+/** Persist the corpus manifest into the same store as the chunks. */
 interface ManifestDiff {
   /** Paths that are new or content-changed → re-upload their chunks. */
   changedPaths: Set<string>;
@@ -1068,13 +1277,15 @@ export function corpusSourceCount(): number {
 
 /**
  * Compare the staged/source corpus against what was last indexed. Cheap: a
- * stat-only walk + a single manifest read (no file contents re-hashed). Used by
- * the copilot-corpus health probe so a stale corpus is detectable at runtime.
+ * stat-only walk + a SINGLE manifest-head read (no file contents re-hashed, no
+ * `files` shards pulled). Used by the copilot-corpus health probe so a stale
+ * corpus is detectable at runtime, and by the CI reindex poller as the durable
+ * cross-replica completion signal.
  */
 export async function corpusFreshness(): Promise<CorpusFreshness> {
   const backend: 'ai-search' | 'cosmos' = isSearchConfigured() ? 'ai-search' : 'cosmos';
   const currentStat = statFingerprint(enumerateSourceFiles(detectRoots()));
-  const manifest = await loadManifest(backend);
+  const manifest = await loadManifestHead(backend);
   const { state, reason } = evaluateFreshness(currentStat, manifest);
   return {
     state, reason, backend,
@@ -1161,6 +1372,33 @@ export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult>
   });
   const changedCount = Object.keys(files).length;
 
+  /**
+   * Persist the manifest and FOLD the verified outcome into the result.
+   *
+   * #2964 — the manifest IS the completion signal (`corpusFreshness()` →
+   * `state:'fresh'`), which the CI poller and `console-bluegreen-roll` gate on.
+   * A run that uploaded every chunk but could not persist the manifest has NOT
+   * completed as far as any caller can observe, so it must report `ok:false`.
+   * Before this, the write was fire-and-forget: the job went `succeeded`,
+   * freshness stayed `never-indexed`, and the poller could only time out after
+   * 900s with no reason. Now the failure is immediate and names the cause.
+   */
+  const persist = async (be: 'ai-search' | 'cosmos', result: ReindexResult): Promise<ReindexResult> => {
+    const saved = await saveManifest(be, buildManifest(be));
+    if (saved.ok) return result;
+    return {
+      ...result,
+      ok: false,
+      error: `Corpus indexed, but the freshness manifest could not be persisted to ${be}: ${saved.error}. ` +
+        'Callers gate on corpusFreshness() === "fresh", which reads that manifest, so this run is NOT complete.',
+    };
+  };
+
+  /** A push that partially succeeded still returns ok — surface the loss. */
+  const noteChunkLoss = (r: { ok: boolean; error?: string }) => {
+    if (r.ok && r.error) warnings.push(r.error);
+  };
+
   // Full-rebuild path (also the AI-Search→Cosmos fallback), preserving the
   // original resilience: if AI Search upload fails, fall back to a full Cosmos push.
   const runFull = async (): Promise<ReindexResult> => {
@@ -1169,15 +1407,13 @@ export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult>
       if (!r.ok) {
         warnings.push(`AI Search upload failed: ${r.error}. Falling back to Cosmos.`);
         const c = await pushChunksToCosmos(chunks);
-        await saveManifest('cosmos', buildManifest('cosmos'));
-        return { ok: c.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: c.uploaded, byKind, warnings, error: c.error, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 };
+        return persist('cosmos', { ok: c.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: c.uploaded, byKind, warnings, error: c.error, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 });
       }
-      await saveManifest('ai-search', buildManifest('ai-search'));
-      return { ok: true, backend: 'ai-search', totalChunks: chunks.length, uploaded: r.uploaded, byKind, warnings, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 };
+      noteChunkLoss(r);
+      return persist('ai-search', { ok: true, backend: 'ai-search', totalChunks: chunks.length, uploaded: r.uploaded, byKind, warnings, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 });
     }
     const c = await pushChunksToCosmos(chunks);
-    await saveManifest('cosmos', buildManifest('cosmos'));
-    return { ok: c.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: c.uploaded, byKind, warnings, error: c.error, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 };
+    return persist('cosmos', { ok: c.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: c.uploaded, byKind, warnings, error: c.error, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 });
   };
 
   // Decide full vs incremental. Incremental requires a same-backend manifest and
@@ -1196,19 +1432,17 @@ export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult>
       warnings.push(`AI Search incremental upload failed: ${up.error}. Falling back to a full Cosmos rebuild.`);
       backend = 'cosmos';
       const c = await pushChunksToCosmos(chunks);
-      await saveManifest('cosmos', buildManifest('cosmos'));
-      return { ok: c.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: c.uploaded, byKind, warnings, error: c.error, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 };
+      return persist('cosmos', { ok: c.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: c.uploaded, byKind, warnings, error: c.error, mode: 'full', skipped: 0, changed: changedCount, removed: 0, deleted: 0 });
     }
+    noteChunkLoss(up);
     const del = await deleteChunksFromSearch(diff.deleteIds);
     if (!del.ok) warnings.push(`AI Search stale-chunk delete incomplete: ${del.error}`);
-    await saveManifest('ai-search', buildManifest('ai-search'));
-    return { ok: true, backend: 'ai-search', totalChunks: chunks.length, uploaded: up.uploaded, byKind, warnings, mode: 'incremental', skipped, changed: diff.changed, removed: diff.removed, deleted: del.deleted };
+    return persist('ai-search', { ok: true, backend: 'ai-search', totalChunks: chunks.length, uploaded: up.uploaded, byKind, warnings, mode: 'incremental', skipped, changed: diff.changed, removed: diff.removed, deleted: del.deleted });
   }
 
   const up = await pushChunksToCosmos(toUpsert);
   const del = await deleteChunksFromCosmos(diff.deleteEntries);
-  await saveManifest('cosmos', buildManifest('cosmos'));
-  return { ok: up.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: up.uploaded, byKind, warnings, error: up.error, mode: 'incremental', skipped, changed: diff.changed, removed: diff.removed, deleted: del.deleted };
+  return persist('cosmos', { ok: up.ok, backend: 'cosmos', totalChunks: chunks.length, uploaded: up.uploaded, byKind, warnings, error: up.error, mode: 'incremental', skipped, changed: diff.changed, removed: diff.removed, deleted: del.deleted });
 }
 
 // ---------- Test-only internals (WS-G) ----------
@@ -1226,4 +1460,12 @@ export const __testInternals = {
   // test can prove the AI Search path and the Cosmos path produce the same
   // ordering for the same candidate documents.
   rankChunks,
+  // #2964 — the manifest shard codec + the AI Search ceiling it exists to stay
+  // under, so a test can prove no single manifest document can exceed it.
+  encodeFiles,
+  decodeFiles,
+  SEARCH_MAX_TERM_BYTES,
+  MANIFEST_SHARD_CHARS,
+  MANIFEST_KEY,
+  manifestShardKey,
 };
