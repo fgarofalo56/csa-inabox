@@ -6,12 +6,36 @@
  * real DLT SQL, imports it as a workspace notebook, and creates the pipeline via
  * POST /api/2.0/pipelines — asserting the compiled SQL actually travels to the
  * Workspace Import REST. fetch is stubbed so the real client runs end-to-end.
+ *
+ * #2996 — the route now authorizes the caller against the pipeline ITEM before
+ * any of this, so the guard and the item lookup are stubbed to the AUTHORIZED
+ * case here; the refusal cases are proved in
+ * `app/api/items/databricks-pipeline/[id]/__tests__/pipeline-scope-authz.test.ts`.
+ * The import target also moved from the caller-derived `/Shared/loom-dlt/<name>`
+ * to the item-derived `/Shared/loom-dlt/<item>/<name>` — asserted below, since
+ * the un-scoped path (with `overwrite=true`) was the clobber vector.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/auth/session', () => ({
   getSession: vi.fn(() => ({ claims: { oid: 'oid', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 })),
+}));
+vi.mock('@/lib/auth/workspace-guard', () => ({
+  authorizeItemWorkspace: vi.fn(async () => null),
+}));
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  itemsContainer: async () => ({
+    items: {
+      query: () => ({
+        fetchAll: async () => ({
+          resources: [
+            { id: 'p1', itemType: 'databricks-pipeline', workspaceId: 'ws-1', state: {} },
+          ],
+        }),
+      }),
+    },
+  }),
 }));
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 }; } }
@@ -54,11 +78,13 @@ const validModel = {
   edges: [{ id: 'e1', source: 'src1', target: 'st1' }],
 };
 
+const ctx = { params: Promise.resolve({ id: 'p1' }) } as any;
+
 describe('POST /databricks-pipeline/[id]/spec', () => {
   it('honest-gates 503 not_configured when no workspace is wired', async () => {
     delete process.env.LOOM_DATABRICKS_HOSTNAME;
     const { POST } = await import('@/app/api/items/databricks-pipeline/[id]/spec/route');
-    const res = await POST(postReq({ model: validModel }));
+    const res = await POST(postReq({ model: validModel }), ctx);
     const j = await res.json();
     expect(res.status).toBe(503);
     expect(j.code).toBe('not_configured');
@@ -68,7 +94,7 @@ describe('POST /databricks-pipeline/[id]/spec', () => {
   it('rejects an invalid model with 400 + problems', async () => {
     process.env.LOOM_DATABRICKS_HOSTNAME = 'adb.azuredatabricks.net';
     const { POST } = await import('@/app/api/items/databricks-pipeline/[id]/spec/route');
-    const res = await POST(postReq({ model: { ...validModel, nodes: [], edges: [] } }));
+    const res = await POST(postReq({ model: { ...validModel, nodes: [], edges: [] } }), ctx);
     const j = await res.json();
     expect(res.status).toBe(400);
     expect(Array.isArray(j.problems)).toBe(true);
@@ -81,12 +107,14 @@ describe('POST /databricks-pipeline/[id]/spec', () => {
       return { body: {} }; // mkdirs + import
     });
     const { POST } = await import('@/app/api/items/databricks-pipeline/[id]/spec/route');
-    const res = await POST(postReq({ model: validModel }));
+    const res = await POST(postReq({ model: validModel }), ctx);
     const j = await res.json();
     expect(res.status).toBe(200);
     expect(j.ok).toBe(true);
     expect(j.pipeline_id).toBe('pl-123');
-    expect(j.libraryPath).toBe('/Shared/loom-dlt/sales_pipeline');
+    // #2996 — item-scoped, so `overwrite=true` cannot clobber another tenant's
+    // notebook by naming a model the same thing.
+    expect(j.libraryPath).toBe('/Shared/loom-dlt/p1/sales_pipeline');
 
     // The compiled SQL reached the Workspace Import REST (base64 of DLT SQL).
     const importCall = calls.find((c) => c.url.includes('/api/2.0/workspace/import'));
@@ -102,6 +130,9 @@ describe('POST /databricks-pipeline/[id]/spec', () => {
     const createBody = JSON.parse(String(createCall!.init!.body));
     expect(createBody.serverless).toBe(true);
     expect(createBody.catalog).toBe('main');
-    expect(createBody.libraries[0].notebook.path).toBe('/Shared/loom-dlt/sales_pipeline');
+    // …and the created pipeline carries its owning Loom item, which is what
+    // every other route in this family authorizes against.
+    expect(createBody.configuration).toEqual({ loom_item_id: 'p1' });
+    expect(createBody.libraries[0].notebook.path).toBe('/Shared/loom-dlt/p1/sales_pipeline');
   });
 });

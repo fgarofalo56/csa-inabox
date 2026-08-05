@@ -56,7 +56,7 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * the `public` column, which is the column that matters. `[^(]*` rather than
  * `[^>]*` so nested generics (`<Foo<Bar>>`) still match.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*(?:<[^(]*>)?\s*\(|authorizeNotebookItem\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*(?:<[^(]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -75,6 +75,10 @@ const OWNER_RE = new RegExp([
   // this file's header warns trains readers to ignore the `public` column.
   // Its substance is asserted by check-route-guards.assertGuardWrappersAreReal().
   'authorizeNotebookItem\\s*\\(',
+  // #2996/#2997 - sibling guard wrappers for the databricks-job and
+  // databricks-pipeline families. Matched AS CALLS, never as prose.
+  'authorizeDatabricksJobItem\\s*\\(',
+  'authorizeDatabricksPipelineItem\\s*\\(',
   'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',

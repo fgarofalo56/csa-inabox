@@ -6,21 +6,21 @@
  * [id] is the Loom item id; the underlying Databricks numeric job id
  * is passed via the `jobId` query parameter so we don't conflate the
  * two id spaces.
+ *
+ * #2997 — all three handlers used to run on nothing but `getSession()`, with the
+ * caller-supplied `jobId` reaching `jobs/get` / `jobs/reset` / `jobs/delete`
+ * directly: any signed-in user could read, rewrite, or DELETE another tenant's
+ * job in the shared Databricks workspace. Each is now authorized against the job
+ * ITEM with its jobId bound to that item (`_lib/job-scope.ts`). Read vs write
+ * scope is decided from each HANDLER BODY, not from its verb (#2973).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getJob, updateJob, deleteJob } from '@/lib/azure/databricks-client';
 import { loadContentBackedItem, databricksJobFromContent } from '../../_lib/ai-content-fallback';
+import { authorizeDatabricksJobItem, resolveAuthorizedJobId, withOwnerTag } from '../_lib/job-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function jobIdFrom(req: NextRequest): number | null {
-  const v = req.nextUrl.searchParams.get('jobId');
-  if (!v) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 /**
  * Build the editor's job shape from the installed bundle's DatabricksJobContent
@@ -35,20 +35,32 @@ async function jobContentFallback(id: string, tenantId: string) {
   return built ? { job: built.job, source: 'bundle' } : null;
 }
 
+/**
+ * READ-scoped: the body performs a single `jobs/get` (or reads the installed
+ * bundle content). Nothing in Databricks is written.
+ */
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
-  const jobId = jobIdFrom(req);
-  // No live Databricks job id — surface the bundle definition for this item so
-  // the editor seeds its form from the stamped tasks + cluster.
-  if (jobId === null) {
+  const { item, session, denied } = await authorizeDatabricksJobItem(id, {
+    workspaceId: req.nextUrl.searchParams.get('workspaceId'),
+    read: true,
+  });
+  if (denied) return denied;
+
+  const jobIdParam = req.nextUrl.searchParams.get('jobId');
+  // No live Databricks job id named — surface the bundle definition for this
+  // item so the editor seeds its form from the stamped tasks + cluster. The
+  // fallback is additionally owner-scoped by `loadContentBackedItem`.
+  if (!jobIdParam) {
     const fb = await jobContentFallback(id, session.claims.oid);
     if (fb) return NextResponse.json({ ok: true, ...fb });
-    return NextResponse.json({ ok: false, error: 'jobId is required' }, { status: 400 });
   }
+
+  const bound = await resolveAuthorizedJobId(item, id, jobIdParam);
+  if (!bound.ok) return NextResponse.json({ ok: false, error: bound.error }, { status: bound.status });
+
   try {
-    const job = await getJob(jobId);
+    const job = await getJob(bound.jobId);
     return NextResponse.json({ ok: true, job });
   } catch (e: any) {
     const status = e?.status === 404 ? 404 : e?.status === 403 ? 403 : 502;
@@ -56,18 +68,27 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 }
 
-export async function PUT(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-  const jobId = jobIdFrom(req);
-  if (jobId === null)
-    return NextResponse.json({ ok: false, error: 'jobId is required' }, { status: 400 });
+/** WRITE-scoped: `jobs/reset` replaces the job's settings wholesale. */
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const { item, denied } = await authorizeDatabricksJobItem(id, {
+    workspaceId: req.nextUrl.searchParams.get('workspaceId'),
+  });
+  if (denied) return denied;
+
+  const bound = await resolveAuthorizedJobId(item, id, req.nextUrl.searchParams.get('jobId'));
+  if (!bound.ok) return NextResponse.json({ ok: false, error: bound.error }, { status: bound.status });
+
   const body = await req.json().catch(() => ({}));
   const spec = body?.spec ?? body;
   if (!spec || typeof spec !== 'object')
     return NextResponse.json({ ok: false, error: 'spec is required' }, { status: 400 });
   try {
-    await updateJob(jobId, spec);
+    // `jobs/reset` REPLACES settings, so a caller-supplied spec that omits tags
+    // would silently strip Loom's ownership marker and re-open legacy adoption
+    // on this job. Re-stamp on every save — this is already a write path, so no
+    // read handler is made to mutate (#2973).
+    await updateJob(bound.jobId, withOwnerTag(spec, id));
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     const status = e?.status === 403 ? 403 : 502;
@@ -75,14 +96,19 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-  const jobId = jobIdFrom(req);
-  if (jobId === null)
-    return NextResponse.json({ ok: false, error: 'jobId is required' }, { status: 400 });
+/** WRITE-scoped: destroys the job. */
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const { item, denied } = await authorizeDatabricksJobItem(id, {
+    workspaceId: req.nextUrl.searchParams.get('workspaceId'),
+  });
+  if (denied) return denied;
+
+  const bound = await resolveAuthorizedJobId(item, id, req.nextUrl.searchParams.get('jobId'));
+  if (!bound.ok) return NextResponse.json({ ok: false, error: bound.error }, { status: bound.status });
+
   try {
-    await deleteJob(jobId);
+    await deleteJob(bound.jobId);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     const status = e?.status === 403 ? 403 : 502;

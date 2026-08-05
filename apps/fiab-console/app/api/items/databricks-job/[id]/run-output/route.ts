@@ -11,30 +11,46 @@
  * `get-output` only works for single-task runs; for a multi-task run we still
  * return the run metadata and a precise note so the UI can explain why output
  * is per-task (Databricks requires a task run_id, not the parent run_id).
+ *
+ * #2997 — THIS IS THE FAMILY'S SECOND PIVOT, and neither issue names it.
+ * `runId` is a coordinate in its OWN right: this route never accepted a job
+ * parameter at all, so binding `jobId` everywhere else would have left it fully
+ * open. What it returns is another tenant's EXECUTION OUTPUT — the notebook
+ * return value, the stdout logs, the error trace — which is frequently the data
+ * itself. Same shape as the `contextId` pivot #2995 found on the notebook
+ * family: live state reachable without ever naming the resource that produced
+ * it. The run is now resolved to its parent job (`runs/get`) and that job must
+ * be the one this item owns.
+ *
+ * READ-scoped: the body performs two GETs and writes nothing.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getJobRun, getRunOutput } from '@/lib/azure/databricks-client';
+import { authorizeDatabricksJobItem, resolveAuthorizedRunId } from '../../_lib/job-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-  const runIdStr = req.nextUrl.searchParams.get('runId');
-  const runId = runIdStr ? Number(runIdStr) : NaN;
-  if (!Number.isFinite(runId))
-    return NextResponse.json({ ok: false, error: 'runId is required' }, { status: 400 });
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const { item, denied } = await authorizeDatabricksJobItem(id, {
+    workspaceId: req.nextUrl.searchParams.get('workspaceId'),
+    read: true,
+  });
+  if (denied) return denied;
+
+  const bound = await resolveAuthorizedRunId(item, id, req.nextUrl.searchParams.get('runId'));
+  if (!bound.ok) return NextResponse.json({ ok: false, error: bound.error }, { status: bound.status });
+
   try {
-    const run = await getJobRun(runId);
+    const run = await getJobRun(bound.runId);
     // get-output: best-effort. Multi-task parent runs 400 with a message that
     // output must be fetched per task run_id — surface that as a note, not a
     // hard failure, so the run metadata still renders.
     let output: unknown = null;
     let outputNote: string | null = null;
     try {
-      output = await getRunOutput(runId);
+      output = await getRunOutput(bound.runId);
     } catch (oe: any) {
       outputNote = oe?.message || String(oe);
     }
