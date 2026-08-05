@@ -198,6 +198,13 @@ describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
     return installFetchMock({
       '/api/config/ui': () => ({ biBackend: 'powerbi' }),
       '/api/powerbi/workspaces': () => ({ ok: true, workspaces: [{ id: PBI_WS, name: 'fabric-csa-dev' }] }),
+      // #2968 — the item's Loom workspace is MAPPED to the Power BI group. That
+      // mapping is now the ONLY thing that binds a Power BI workspace: an
+      // unmapped item deliberately binds nothing and calls no Power BI REST.
+      '/powerbi-mapping': () => ({
+        ok: true, pbiConfigured: true,
+        mapping: { pbiWorkspaceId: PBI_WS, pbiWorkspaceName: 'fabric-csa-dev' },
+      }),
       // The item record — the ONLY source of the opened item's Loom workspace.
       '/api/cosmos-items/semantic-model/': () => ({
         id: ITEM_ID, workspaceId: LOOM_WS, itemType: 'semantic-model',
@@ -277,6 +284,70 @@ describe('SemanticModelEditor — workspace id namespaces (#2649)', () => {
     // Give any opt-in fetch a chance to fire before asserting it never did.
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/cosmos-items/'))).toBe(true), { timeout: 5000 });
     expect(calls.filter((c) => c.url.includes('/api/powerbi/'))).toEqual([]);
+  });
+
+  // ── #2968 — the Power BI CONTENT fan-out must follow a BOUND workspace ─────
+  // With the opt-in ON but the item's Loom workspace never mapped, the binding
+  // used to fall back to the first group the tenant listing returned. The
+  // navigator then fanned out at that arbitrary group on EVERY open, and under
+  // the default user-passthrough token Power BI answered 401 for whichever
+  // collections the caller's own RBAC did not cover — observed live as a
+  // permanent `401 GET /api/powerbi/dashboards` + `401 GET /api/powerbi/dataflows`
+  // on a healthy page. no-fabric-dependency.md admits the Fabric-family leg only
+  // behind the opt-in PLUS a bound workspace, so unmapped ⇒ no content calls.
+  /** The four workspace-scoped content collections the navigator fans out to. */
+  const PBI_CONTENT = /\/api\/powerbi\/(datasets|reports|dashboards|dataflows)\b/;
+
+  it('makes ZERO Power BI content calls when the workspace is UNMAPPED, even with the opt-in ON (#2968)', async () => {
+    const { calls } = installFetchMock({
+      '/api/config/ui': () => ({ biBackend: 'powerbi' }),
+      '/api/powerbi/workspaces': () => ({ ok: true, workspaces: [{ id: PBI_WS, name: 'fabric-csa-dev' }] }),
+      // Resolution COMPLETES with no mapping — the confirmed-unmapped case.
+      '/powerbi-mapping': () => ({ ok: true, pbiConfigured: true, mapping: null }),
+      '/api/cosmos-items/semantic-model/': () => ({
+        id: ITEM_ID, workspaceId: LOOM_WS, itemType: 'semantic-model',
+        displayName: 'Sales Semantic Model (Direct Lake)',
+        createdBy: '', createdAt: '', updatedAt: '', state: {},
+      }),
+    });
+    render(<SemanticModelEditor item={makeItem('semantic-model', 'Semantic model')} id={ITEM_ID} />);
+    // Wait until the opt-in HAS resolved and the workspace listing HAS been
+    // fetched — i.e. the moment the old fallback would have bound a group.
+    await waitFor(
+      () => expect(calls.some((c) => c.url.includes('/api/powerbi/workspaces'))).toBe(true),
+      { timeout: 8000 },
+    );
+    await waitFor(
+      () => expect(calls.some((c) => c.url.includes('/powerbi-mapping'))).toBe(true),
+      { timeout: 8000 },
+    );
+    // Then let the render settle. This is load-bearing, not decoration: the two
+    // waits above only prove the requests went OUT, while the auto-pick effect
+    // and the navigator's fan-out run several ticks later. Asserting on `calls`
+    // immediately after them — or on a DOM state that is already true on the
+    // first render — passes on the buggy tree too (both verified by mutation).
+    await new Promise((r) => setTimeout(r, 1000));
+    // MUTATION-PROOF: restore `|| listed[0].id` in resolveEditorPbiBinding and
+    // this collects the dashboards + dataflows URLs from the issue and goes red.
+    expect(calls.filter((c) => PBI_CONTENT.test(c.url)).map((c) => c.url)).toEqual([]);
+    // …and the navigator is still in its unbound state, not showing content for
+    // a group nobody chose.
+    expect(screen.getByText(/Choose a Power BI workspace above/i)).toBeInTheDocument();
+  });
+
+  it('DOES fan out to Power BI content once the workspace is MAPPED — the opt-in still works (#2968)', async () => {
+    // The opposite direction: a one-way test would pass just as well if the
+    // Power BI leg were deleted outright. With opt-in ON + a mapped, visible
+    // group, dashboards and dataflows must still be requested for that group.
+    const { calls } = await mountOpenedItem();
+    await waitFor(
+      () => expect(calls.some((c) => c.url.includes('/api/powerbi/dashboards'))).toBe(true),
+      { timeout: 8000 },
+    );
+    expect(calls.some((c) => c.url.includes('/api/powerbi/dataflows'))).toBe(true);
+    for (const c of calls.filter((x) => PBI_CONTENT.test(x.url))) {
+      expect(c.url).toContain(PBI_WS);
+    }
   });
 
   // ── The legs #2797 missed (reopened 2026-08-01 on the live click-walk) ──────

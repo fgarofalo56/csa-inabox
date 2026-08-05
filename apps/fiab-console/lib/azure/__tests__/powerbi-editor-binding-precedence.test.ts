@@ -67,29 +67,40 @@ describe('resolveEditorPbiBinding — the rule the editor executes', () => {
     expect(got).toBeUndefined();
   });
 
-  it('falls back to the first listed workspace only once the item is confirmed UNMAPPED', () => {
+  it('binds NOTHING once the item is confirmed UNMAPPED — never the first listed workspace (#2968)', () => {
     const got = resolveEditorPbiBinding({
       mapped: '', // resolved: no mapping
       listed: [{ id: FIRST_LISTED }, { id: MAPPED }],
       loomWorkspaceId: 'loom-ws-1',
     });
-    expect(got).toBe(FIRST_LISTED);
+    // MUTATION-PROOF for #2968: restoring the `|| listed[0].id` fallback yields
+    // FIRST_LISTED and fails here. That fallback is what kept the navigator
+    // fanning /api/powerbi/{datasets,reports,dashboards,dataflows} at an
+    // arbitrary group on every open — 401 on whichever the caller's Power BI
+    // RBAC does not cover (observed live: dashboards + dataflows).
+    expect(got).toBeUndefined();
   });
 
   it('ignores a mapping that points at a workspace the caller cannot see', () => {
     // A stale mapping must not pin an invisible group — that would guarantee the
-    // 401 this change is meant to remove.
+    // 401 this change is meant to remove. With no VISIBLE mapping the persisted
+    // item is effectively unmapped, so nothing binds (#2968).
     const got = resolveEditorPbiBinding({
       mapped: MAPPED,
       listed: [{ id: FIRST_LISTED }],
       loomWorkspaceId: 'loom-ws-1',
     });
+    expect(got).toBeUndefined();
+  });
+
+  it('still auto-binds a `new` item — it has no mapping to honour yet (auto-bind-by-default)', () => {
+    const got = resolveEditorPbiBinding({ mapped: null, listed: [{ id: FIRST_LISTED }], loomWorkspaceId: '' });
     expect(got).toBe(FIRST_LISTED);
   });
 
-  it('does not block a `new` item (no Loom workspace to map from)', () => {
-    const got = resolveEditorPbiBinding({ mapped: null, listed: [{ id: FIRST_LISTED }], loomWorkspaceId: '' });
-    expect(got).toBe(FIRST_LISTED);
+  it('still binds the mapped workspace for a `new` item once one is known', () => {
+    const got = resolveEditorPbiBinding({ mapped: MAPPED, listed: [{ id: FIRST_LISTED }, { id: MAPPED }], loomWorkspaceId: '' });
+    expect(got).toBe(MAPPED);
   });
 
   it('binds nothing when the caller can see no workspaces at all', () => {

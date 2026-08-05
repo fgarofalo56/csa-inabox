@@ -634,6 +634,22 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     role: 'AAD administrator-created role for the Console UAMI on the server (azure_ad_user)',
   },
   {
+    id: 'bi-powerbi-backend', category: 'azure-services', title: 'Power BI backend (Fabric-family) — opt-in', severity: 'optional',
+    required: ['LOOM_BI_BACKEND'], warnOnMiss: true,
+    // OPT-IN BY DESIGN (.claude/rules/no-fabric-dependency.md). Power BI is
+    // Fabric-family, so it is never the default: the semantic-model, report,
+    // dashboard and scorecard surfaces run on the Azure-native tabular layer
+    // (AAS / Synapse / Cosmos) with zero loss of function. Turning this on adds
+    // the Power BI workspace navigator, model build/push and embed. Its absence
+    // removes NO capability, so it must read as the neutral 'opt-in' state and
+    // never as a red misconfiguration (#2968).
+    optIn: true,
+    remediation: 'Optional / opt-in. The BI surfaces are fully functional on the Azure-native default. To also browse and publish to Power BI, set the backend to "powerbi" — either at runtime in Admin → Runtime config → Power BI backend (no redeploy), or via LOOM_BI_BACKEND=powerbi / loomBackends.bi=\'powerbi\' in the bicepparam. A Power BI admin must then enable "Service principals can use Fabric APIs" and add the Console identity to each target workspace, and each Loom workspace must be MAPPED to a Power BI workspace in Workspace settings — an unmapped workspace deliberately makes no Power BI calls.',
+    provisionedBy: 'modules/admin-plane/main.bicep (var effectiveBiBackend → apps[] env LOOM_BI_BACKEND; \'aas\' when Analysis Services is deployed, never \'powerbi\' by default)',
+    role: 'Power BI workspace Member or Contributor (Console UAMI / signed-in user under OBO passthrough)',
+    docs: '.claude/rules/no-fabric-dependency.md',
+  },
+  {
     id: 'svc-eventgrid', category: 'azure-services', title: 'Event Grid (business-events topics / shims)', severity: 'optional',
     anyOf: [['LOOM_EVENTGRID_BUSINESS_TOPIC', 'LOOM_EVENTGRID_RG', 'LOOM_DLZ_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_EVENTGRID_BUSINESS_TOPIC (custom topic for business events; RG falls back to LOOM_DLZ_RG). Grant the Console UAMI "EventGrid Contributor" on the RG and "EventGrid Data Sender" on the topic.',

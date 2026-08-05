@@ -447,6 +447,24 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_POSTGRES_HOST: L.pgFqdn },
   },
+  'bi-powerbi-backend': {
+    surfaces: [
+      { path: '/items/semantic-model', label: 'Semantic model editor — Power BI workspace navigator' },
+      { path: '/items/report', label: 'Report editor — Power BI embed renderer' },
+      { path: '/workspaces', label: 'Workspace settings — mapped Power BI content' },
+      { path: '/api/powerbi/*', label: 'Power BI navigator BFF (datasets / reports / dashboards / dataflows)' },
+    ],
+    // The real switch is the RUNTIME admin setting (Admin → Runtime config →
+    // Power BI backend, PowerBiBackendCard → PUT /api/admin/platform-settings),
+    // which needs no redeploy — so this is a wizard Fix-it, not a plain env
+    // write. The guided card the surfaces render links straight to it.
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'Enable at Admin → Runtime config → Power BI backend (/admin/env-config). A Power BI admin must also enable "Service principals can use Fabric APIs" in the tenant settings and add the Console identity as Member/Contributor on each target workspace, then map each Loom workspace to a Power BI workspace in Workspace settings.',
+    },
+    autoResolveNote: 'Unset → the Azure-native BI path (AAS / Synapse / Cosmos tabular layer + the Loom-native report renderer) serves every BI surface with zero loss of function, and the console makes NO Power BI requests at all (no-fabric-dependency.md).',
+    legacyCodes: [],
+  },
   'svc-eventgrid': {
     surfaces: [{ path: '/admin/webhooks', label: 'Business-event topics' }],
     fixit: { kind: 'env-picker' },

@@ -322,6 +322,11 @@ function ReportLikeEditor({
   const s = useStyles();
   // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
   // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  // ReportLikeEditor only mounts when the Power BI opt-in is ON (see the
+  // ReportEditor renderer split below), so this is `true` here — it is read
+  // explicitly rather than hard-coded so the governance panels state WHERE
+  // their opt-in comes from (#2968, no-fabric-dependency.md).
+  const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [reports, setReports] = useState<ReportLite[] | null>(null);
@@ -833,11 +838,11 @@ function ReportLikeEditor({
               </div>
               {kind !== 'paginated' && reportId && (
                 <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
-                  <EndorsementControl workspaceId={workspaceId} itemId={reportId} itemType="reports" />
+                  <EndorsementControl enabled={pbiOptIn} workspaceId={workspaceId} itemId={reportId} itemType="reports" />
                 </div>
               )}
               <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
-                <ManageAccessPanel workspaceId={workspaceId} />
+                <ManageAccessPanel enabled={pbiOptIn} workspaceId={workspaceId} />
               </div>
               {kind !== 'paginated' && reportId && (
                 <div className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>

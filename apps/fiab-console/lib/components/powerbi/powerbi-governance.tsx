@@ -59,7 +59,7 @@ interface GroupUser {
   principalType?: string;
 }
 
-export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
+export function ManageAccessPanel({ enabled, workspaceId }: { enabled: boolean; workspaceId: string }) {
   const s = useStyles();
   const [users, setUsers] = useState<GroupUser[]>([]);
   const [loading, setLoading] = useState(false);
@@ -80,7 +80,7 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
   }, []);
 
   const load = useCallback(async () => {
-    if (!workspaceId) { setUsers([]); return; }
+    if (!enabled || !workspaceId) { setUsers([]); return; }
     setLoading(true); setErr(null); setHint(null);
     try {
       const body = await clientFetch(`/api/powerbi/access?workspaceId=${encodeURIComponent(workspaceId)}`).then(readJson);
@@ -90,7 +90,7 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
       setUsers(body.users || []);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setLoading(false); }
-  }, [workspaceId, applyGate]);
+  }, [enabled, workspaceId, applyGate]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -234,8 +234,9 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
 // ============================================================
 
 export function EndorsementControl({
-  workspaceId, itemId, itemType,
+  enabled, workspaceId, itemId, itemType,
 }: {
+  enabled: boolean;
   workspaceId: string;
   itemId: string;
   itemType: 'datasets' | 'reports' | 'dataflows';
@@ -249,7 +250,7 @@ export function EndorsementControl({
   const [msg, setMsg] = useState<{ ok: boolean; text: string; hint?: string } | null>(null);
 
   const load = useCallback(async () => {
-    if (!workspaceId || !itemId) return;
+    if (!enabled || !workspaceId || !itemId) return;
     setLoading(true); setMsg(null);
     try {
       const body = await clientFetch(`/api/powerbi/endorsement?workspaceId=${encodeURIComponent(workspaceId)}&itemId=${encodeURIComponent(itemId)}`).then(readJson);
@@ -257,7 +258,7 @@ export function EndorsementControl({
       else setMsg({ ok: false, text: body.error || 'failed to read endorsement', hint: body.hint });
     } catch (e: any) { setMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setLoading(false); }
-  }, [workspaceId, itemId]);
+  }, [enabled, workspaceId, itemId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -332,7 +333,7 @@ interface Datasource {
 }
 interface Gateway { id: string; name?: string; type?: string; gatewayStatus?: string }
 
-export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceId: string; datasetId: string }) {
+export function GatewayDatasourcesPanel({ enabled, workspaceId, datasetId }: { enabled: boolean; workspaceId: string; datasetId: string }) {
   const s = useStyles();
   const [datasources, setDatasources] = useState<Datasource[]>([]);
   const [bound, setBound] = useState<Datasource[]>([]);
@@ -351,7 +352,7 @@ export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceI
   }, []);
 
   const load = useCallback(async () => {
-    if (!workspaceId || !datasetId) return;
+    if (!enabled || !workspaceId || !datasetId) return;
     setLoading(true); setErr(null); setHint(null);
     try {
       const body = await clientFetch(`/api/powerbi/datasources?workspaceId=${encodeURIComponent(workspaceId)}&datasetId=${encodeURIComponent(datasetId)}`).then(readJson);
@@ -364,9 +365,9 @@ export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceI
       if (!gatewayId && body.gateways?.[0]?.id) setGatewayId(body.gateways[0].id);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setLoading(false); }
-  }, [workspaceId, datasetId, applyGate, gatewayId]);
+  }, [enabled, workspaceId, datasetId, applyGate, gatewayId]);
 
-  useEffect(() => { load(); }, [workspaceId, datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [enabled, workspaceId, datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const bind = useCallback(async () => {
     if (!workspaceId || !datasetId || !gatewayId) return;

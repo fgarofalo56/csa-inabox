@@ -802,10 +802,26 @@ test.describe.serial('semantic-model tab click-walk (#2648 / #2649)', () => {
       type: 'powerbi',
       description: `powerBiEnabled=${powerBiEnabled} calls=${pbiCalls.length}`,
     });
-    test.skip(
-      powerBiEnabled,
-      'the runtime Power BI opt-in is ON for this estate, so /api/powerbi/* calls are expected here',
-    );
+    if (powerBiEnabled) {
+      // #2968 — this used to `test.skip` outright whenever the opt-in was on,
+      // so on the ONLY estate that runs it (biBackend=powerbi) the gate measured
+      // NOTHING and never saw the permanent `401 GET /api/powerbi/dashboards` +
+      // `401 GET /api/powerbi/dataflows` a live walk found on every model open.
+      // With the opt-in on there IS a rule left to enforce: no-fabric-dependency
+      // admits the Fabric-family leg behind the opt-in PLUS a bound workspace,
+      // and `ensureScratch` creates a BRAND-NEW workspace, which has no Power BI
+      // mapping. So the workspace-scoped CONTENT collections must not be
+      // requested at all. Listing groups (/api/powerbi/workspaces) is fine —
+      // that is what feeds the picker the operator binds with.
+      const contentCalls = pbiCalls.filter((c) =>
+        /\/api\/powerbi\/(datasets|reports|dashboards|dataflows)\b/.test(c.url));
+      expect(
+        contentCalls.map((c) => `${c.method} ${c.url}`),
+        'no-fabric-dependency.md: with the Power BI opt-in ON but this workspace UNMAPPED, the editor must ' +
+          'bind no group and request no workspace-scoped Power BI content (#2968)',
+      ).toEqual([]);
+      return;
+    }
     expect(
       pbiCalls.map((c) => `${c.method} ${c.url}`),
       'no-fabric-dependency.md: the default semantic-model render must make ZERO Power BI calls',

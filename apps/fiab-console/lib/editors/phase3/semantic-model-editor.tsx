@@ -1108,6 +1108,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} collabPresence
       leftPanel={
         <PowerBiTree
+          enabled={pbiOptIn}
           workspaceId={pbiWorkspaceId}
           selectedDatasetId={datasetId}
           onOpenDataset={(dsId) => { setDatasetId(dsId); setTab('tables'); }}
@@ -2103,12 +2104,12 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                     {/* F17 — read-only sensitivity label inherited from the model's
                         upstream lineage source (warehouse / lakehouse it's built on). */}
                     <UpstreamSensitivityField itemId={id} />
-                    <EndorsementControl workspaceId={pbiWorkspaceId} itemId={datasetId} itemType="datasets" />
-                    <GatewayDatasourcesPanel workspaceId={pbiWorkspaceId} datasetId={datasetId} />
+                    <EndorsementControl enabled={pbiOptIn} workspaceId={pbiWorkspaceId} itemId={datasetId} itemType="datasets" />
+                    <GatewayDatasourcesPanel enabled={pbiOptIn} workspaceId={pbiWorkspaceId} datasetId={datasetId} />
                   </div>
                 )}
                 {tab === 'access' && (
-                  <ManageAccessPanel workspaceId={pbiWorkspaceId} />
+                  <ManageAccessPanel enabled={pbiOptIn} workspaceId={pbiWorkspaceId} />
                 )}
                 {tab === 'embed' && powerBiConfigured && (
                   <MessageBar intent="info">

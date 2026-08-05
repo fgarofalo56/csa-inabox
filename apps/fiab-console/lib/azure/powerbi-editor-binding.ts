@@ -20,6 +20,26 @@
  * pure function so it is executable in a unit test WITHOUT the test having to
  * re-implement the rule (a test that re-implements its subject cannot fail).
  *
+ * #2968 — THE HALF THE FIRST FIX LEFT BEHIND. The original fix re-ordered the
+ * precedence (mapped before first-listed) but KEPT `listed[0].id` as the
+ * fallback for a CONFIRMED-unmapped item. On any estate where the Power BI
+ * opt-in is on and the item's Loom workspace was never mapped — the common
+ * case — that fallback still pinned the arbitrary first-listed group, and the
+ * navigator still fanned out /api/powerbi/{datasets,reports,dashboards,
+ * dataflows} at it. Under the DEFAULT user-passthrough token (powerbi-client
+ * `getToken`) the caller's own Power BI RBAC decides each one, so the endpoints
+ * their rights don't cover answer 401 — observed live as a permanent
+ *   401 GET /api/powerbi/dashboards?workspaceId=<arbitrary group>
+ *   401 GET /api/powerbi/dataflows?workspaceId=<arbitrary group>
+ * on EVERY semantic-model open. `.claude/rules/no-fabric-dependency.md` admits
+ * a Fabric-family backend only behind an explicit opt-in **plus a bound
+ * workspace**; a group picked out of a tenant listing is not a bound workspace.
+ * So the fallback is gone for a persisted item: unmapped ⇒ bind NOTHING, make
+ * ZERO Power BI calls, and let the operator pick explicitly (WorkspacePicker)
+ * or map the workspace once in Workspace settings. An unsaved (`new`) item has
+ * no mapping to honour and still binds the first listed group, so authoring
+ * comes up bound per `auto-bind-by-default.md`.
+ *
  * NO-FABRIC-DEPENDENCY: this only decides WHICH Power BI group an
  * already-opted-in Power BI leg addresses. It is never called on the default
  * Azure-native path (the editors gate the whole Power BI leg behind
@@ -55,18 +75,29 @@ export interface EditorPbiBindingInput {
  *
  * Order:
  *   1. Nothing listed → bind nothing (never invent a workspace).
- *   2. Mapping still resolving for a PERSISTED item → wait, so the arbitrary
- *      fallback cannot win the race. A `new` item has no mapping to wait for.
+ *   2. Mapping still resolving for a PERSISTED item → wait, so the fallback
+ *      cannot win the race.
  *   3. The MAPPED group — but only when the caller can actually see it. A stale
  *      mapping pointing at an invisible group would guarantee the very 401 this
  *      is meant to remove.
- *   4. Otherwise the first listed group (the previous behavior), which is now
- *      only reached once the item is CONFIRMED unmapped.
+ *   4. A PERSISTED item that is CONFIRMED unmapped → bind NOTHING (#2968).
+ *   5. A `new` item → the first listed group, as before.
+ *
+ * The asymmetry between 4 and 5 is the point. A persisted item HAS an identity
+ * and a Loom workspace, so there is exactly one right answer (its mapping) and
+ * guessing produces the live 401s. A `new` item has nothing to map to yet, the
+ * operator sees the picked workspace in the WorkspacePicker beside the canvas
+ * and can change it, and `auto-bind-by-default.md` requires the authoring
+ * surface to come up bound rather than demanding a manual pick first.
  */
 export function resolveEditorPbiBinding(input: EditorPbiBindingInput): string | undefined {
   const { mapped, listed, loomWorkspaceId } = input;
   if (!listed || listed.length === 0) return undefined;
   if (mapped === null && loomWorkspaceId) return undefined;
   const visibleMapped = mapped && listed.some((w) => w.id === mapped) ? mapped : '';
-  return visibleMapped || listed[0].id;
+  if (visibleMapped) return visibleMapped;
+  // Persisted + confirmed unmapped ⇒ bind nothing. This is the #2968 fix: the
+  // old `|| listed[0].id` here is what pinned an arbitrary group and fanned
+  // /api/powerbi/{datasets,reports,dashboards,dataflows} at it on every open.
+  return loomWorkspaceId ? undefined : listed[0].id;
 }
