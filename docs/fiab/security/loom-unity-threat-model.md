@@ -159,9 +159,56 @@ stays OPEN until it has. Consequences recorded honestly rather than papered over
   restrictions), user-assigned managed identity, Key Vault secretrefs, Microsoft Entra.
   No external SaaS, no public network path, no Databricks or Fabric dependency
   (`.claude/rules/no-fabric-dependency.md`).
-- Air-gapped IL5: the catalog is a container on the deployment's own environment reading the
-  deployment's own storage. Nothing in LU-2 adds an outbound dependency — token acquisition is
-  in-boundary IMDS + the sovereign Entra endpoint.
+
+### 5.1 CORRECTION — enabling authorization DOES add an outbound dependency
+
+An earlier revision of this section read *"Air-gapped IL5: … **nothing in LU-2 adds an
+outbound dependency** — token acquisition is in-boundary IMDS + the sovereign Entra
+endpoint."* **That is wrong, and the way it is wrong is the dangerous way.**
+
+Upstream verifies a bearer token by doing plain OIDC discovery against each
+`server.allowed-issuers` value and then fetching that document's `jwks_uri`:
+`JwksOperations.loadJwkProvider`, exercised end-to-end in
+`docs/fiab/security/loom-unity-authz-proof.md`. **The container makes those two HTTPS
+calls itself.** They are not IMDS, and the sovereign Entra endpoint is not in-boundary —
+it is a public endpoint reached over the Container Apps environment's egress.
+
+So `server.authorization=enable` introduces a hard runtime requirement:
+
+> **The CAE infrastructure subnet MUST be able to reach the Entra authority host on 443**
+> — `login.microsoftonline.us` in Azure Government, `login.microsoftonline.com` in
+> Commercial. Both the discovery document and the `jwks_uri` it advertises are on that
+> same host (measured 2026-08-05: `…/common/v2.0/.well-known/openid-configuration` → 200,
+> advertising `…/common/discovery/v2.0/keys` → 200).
+
+**Why this matters more than an ordinary prerequisite.** If that egress is blocked, every
+token verification fails and the catalog refuses *every* caller — while answering an
+anonymous read with **401**, which is byte-identical to correct enforcement. A deploy that
+checks only "is anonymous access refused?" therefore **reports success while the catalog is
+dark**, converting an availability-safe finding (`svc-loom-unity-authz`: anonymous but
+working) into a silent outage. That is a strictly worse failure than the one being fixed.
+
+**Posture of this estate (measured from the templates, 2026-08-05):** the egress is
+permitted, and the flip is safe here.
+
+| Evidence | Where |
+|---|---|
+| No UDR anywhere — nothing forces egress to the hub firewall | `grep -rl Microsoft.Network/routeTables platform/fiab/bicep` returns **zero** files |
+| Subnet NSGs carry only INBOUND rules (`DenyInternetInbound`, `AllowVnetInbound`, + APIM/AppGw inbound); Azure's default `AllowInternetOutbound` (65001) stands | `modules/admin-plane/network.bicep` `nsgs` resource |
+| The hub Azure Firewall is deployed but not in the path | `platform/fiab/bicep/main.bicep` — *"nothing consumes the hub firewall"* |
+| A sibling app in the SAME CAE already reaches this exact host + port server-side, and Gov sign-in works | `apps/fiab-console/lib/auth/msal.ts` (confidential-client code redemption) and `lib/azure/obo-token-store.ts` `POST ${authorityHost()}/${tenant}/oauth2/v2.0/token` |
+
+What this does **not** prove is that the live estate has not drifted from those templates
+(an out-of-band route table or an outbound NSG rule would not appear above), and that
+cannot be settled from outside Azure Government. So the requirement is no longer *assumed*:
+the entrypoint MEASURES it at boot and states the verdict on one line, and the deploy gates
+on that line before it points the Console at the catalog — see §6.
+
+**Air-gapped / disconnected deployments** therefore cannot run `authMode=entra` against a
+public Entra issuer at all. They need an in-boundary OIDC issuer pinned through
+`LOOM_UNITY_ALLOWED_ISSUERS` (the probe follows whatever issuer is configured, so it
+validates that path too), or the audited `LOOM_UNITY_AUTH=disable` opt-out with the
+exposure accepted in writing.
 
 ## 6. Verification
 
@@ -174,6 +221,31 @@ stays OPEN until it has. Consequences recorded honestly rather than papered over
 | No inferred hardening | Same suite — `LOOM_MSAL_CLIENT_ID` alone does not flip the mode. |
 | Live posture | `probe-loom-unity-authz` on `/admin/health` (must report an unauthenticated read rejected) + the `authorization` block on `/api/catalog/unity/capabilities`. **This is the G1 browser receipt for LU-2.** |
 | Bicep | `az bicep build` clean; `check-bicep-sync`, `check-bicep-param-cap`, `check-env-sync`, `check-duplicate-env`, `check-health-coverage` green. |
+| **IdP reachable (§5.1)** | `probe_idp_reachability` in `apps/loom-unity/bin/loom-entrypoint.sh` prints `IDP-REACHABILITY: ok\|FAILED host=… discovery=… jwks=…` on every enforced boot. `.github/workflows/gov-uc-purview-wire.yml` reads it from the container's own logs and **refuses to wire the Console** on `FAILED` — or on the marker being absent. Verdicts covered by `scripts/ci/__tests__/gov-unity-verify-gate.test.mjs`, which drives the workflow's real shell and includes a mutation proof that removing the check turns the outage case green. |
+| **Enforcement observed on Gov** | Same step, from `ANON-READ: <code>` — a loopback unauthenticated read the entrypoint performs. Loopback because `az containerapp exec` does **not** return the executed command's stdout in Azure Government, which is why the previous exec-based probe could never have failed (see below). |
+| **The Console can actually use it** | Same step, from the auto-bind marker. `gov-bff-verify.yml` then exercises `/api/catalog/metastores` — an AUTHENTICATED read through the token exchange — for the end-to-end receipt. |
+
+### 6.1 Why the pre-2026-08-05 Gov probe could not have caught any of this
+
+`gov-uc-purview-wire.yml` asserted the posture by running `az containerapp exec … --command
+"node -e fetch(...)"` inside the Console container and grepping the captured output for
+`UC 200` / `UC 401`. On Azure Government that command returns only its connection banner,
+never the executed command's stdout — the limitation `gov-provision-maps.yml` and
+`deploy-loom-sharing.yml` both record and both work around by reading container logs. It
+also wants a TTY a headless runner does not provide.
+
+The proof is the workflow's own history. The entire captured probe output of the
+2026-07-15 run (the last Gov deploy of `loom-unity`) was:
+
+```
+INFO: Connecting to the container 'loom-console'...
+```
+
+With that capture empty, **every** branch that could have failed the run — including the
+two that called `exit 1` — was unreachable, and the run reported success without ever
+observing the catalog's authorization posture. A check whose result is structurally
+unobservable is not a weak check; it is a green light nobody earned. That step is now
+explicitly demoted to a human-readable trace, and the assertion moved to the boot markers.
 
 ## 7. Review sign-off
 

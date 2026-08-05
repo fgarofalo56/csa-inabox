@@ -306,3 +306,67 @@ test('ADLS credential-vending block renders only when an account is configured',
   assert.match(r.stdout, /adls\.tenantId\.0=tenant-guid/);
   assert.match(r.stdout, /adls\.clientId\.0=client-guid/);
 });
+
+// ── #2643 follow-up: the IdP-reachability probe ────────────────────────────
+//
+// With authorization ON, upstream fetches the issuer's JWKS over the network on
+// every verification it cannot serve from cache. If the Container Apps subnet
+// cannot egress to the authority host, the catalog refuses EVERY caller — and
+// from outside that is indistinguishable from "correctly enforcing", because
+// both answer 401 to an anonymous read. The boot-time probe states which one it
+// is on a line the deploy gates on, so these tests pin the DECISION the same way
+// the auto-bind tests pin theirs: a probe only exercisable on a live container is
+// a probe nobody notices has stopped running.
+
+test('#2643 probe: an enforced Gov catalog plans to probe the SOVEREIGN authority host', { skip: !shAvailable }, () => {
+  const r = render({ ...AUTHZ_WIRED, LOOM_UNITY_AUTHORITY_HOST: 'login.microsoftonline.us' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /server\.authorization=enable/);
+  assert.match(r.stdout, /idp-reachability=probe:login\.microsoftonline\.us/);
+});
+
+test('#2643 probe: Commercial derives login.microsoftonline.com — the host is never hard-coded', { skip: !shAvailable }, () => {
+  const r = render({ ...AUTHZ_WIRED });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /idp-reachability=probe:login\.microsoftonline\.com/);
+});
+
+test('#2643 probe: the marker carries the HOST ONLY — no Entra tenant id leaks into CI logs', { skip: !shAvailable }, () => {
+  // This line is read back through GitHub Actions logs by
+  // .github/workflows/gov-uc-purview-wire.yml. The issuer embeds the tenant id;
+  // the marker must not. Asserting the absence is the point of the test — the
+  // obvious "simplification" (echo the whole issuer) is what it prevents.
+  const TENANT = '11111111-2222-3333-4444-555555555555';
+  const r = render({
+    LOOM_UNITY_ENTRA_TENANT_ID: TENANT,
+    LOOM_UNITY_ENTRA_CLIENT_ID: 'client-guid',
+    LOOM_UNITY_AUTHORITY_HOST: 'login.microsoftonline.us',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const marker = r.stdout.split('\n').find((l) => l.startsWith('idp-reachability='));
+  assert.ok(marker, 'no idp-reachability marker rendered');
+  assert.equal(marker, 'idp-reachability=probe:login.microsoftonline.us');
+  assert.ok(!marker.includes(TENANT), `tenant id leaked into the probe marker: ${marker}`);
+});
+
+test('#2643 probe: an EXPLICIT issuer list is honoured, first entry wins', { skip: !shAvailable }, () => {
+  // `server.allowed-issuers` is a comma list. The first entry is the issuer this
+  // deployment mints against, so it is the one whose keys must be fetchable.
+  const r = render({
+    LOOM_UNITY_AUTH: 'enable',
+    LOOM_UNITY_ALLOWED_ISSUERS: 'https://sts.example.gov/abc/v2.0,https://other.example/v2.0',
+    LOOM_UNITY_AUDIENCES: 'api://loom-unity',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /idp-reachability=probe:sts\.example\.gov/);
+  assert.doesNotMatch(r.stdout, /idp-reachability=probe:other\.example/);
+});
+
+test('#2643 probe: the audited disable opt-out has nothing to reach', { skip: !shAvailable }, () => {
+  // No token is ever verified, so no JWKS is ever fetched. Reporting a network
+  // finding here would be noise, and — worse — a deploy gating on "ok" would
+  // then block the documented opt-out.
+  const r = render({ LOOM_UNITY_AUTH: 'disable' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /idp-reachability=skipped-authorization-disabled/);
+});

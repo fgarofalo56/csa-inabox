@@ -135,6 +135,45 @@ catalog access attributable (and is what LU-3 hangs the audit rows on).
 > and change its authorization mode. `loom-unity-app.bicep` remains a standalone
 > entrypoint, orphan-allowlisted in `scripts/ci/check-bicep-sync.mjs`.
 
+### Status 2026-08-05 — the blockers above are cleared; the deploy path is now gated
+
+Everything the blockquote defers to "the same change as the token-exchange client"
+has landed: `lib/azure/uc-token-exchange.ts` (#2679), the `unitycatalog-server:0.5.1`
+overlay that fixes the permissions-GET 500 (fact 3), and the entrypoint AUTO-BIND that
+registers the Console principal as an enabled UC user (#2974). The live Gov catalog is
+still on the audited `authMode=disabled` opt-out — the flip is one dispatch of
+`gov-uc-purview-wire.yml` at `main`, and that job does **not** touch the ACR agent
+pools, build a console image, or run `main.bicep`.
+
+Before dispatching, note the requirement §5.1 of the threat model now records: with
+authorization on, the container fetches OIDC discovery **and** JWKS from
+`login.microsoftonline.us` itself. Blocked egress there does not fail loudly — the
+catalog answers 401 to everyone, which looks exactly like correct enforcement. On this
+estate the egress is permitted (no route tables anywhere in the bicep tree, no outbound
+NSG deny, and the Console already reaches that host server-side from the same CAE for
+every sign-in), but the workflow no longer relies on that:
+
+1. The entrypoint measures it at boot and prints
+   `IDP-REACHABILITY: ok|FAILED host=… discovery=… jwks=…`, plus
+   `ANON-READ: <code>` from a loopback unauthenticated read.
+2. A new step reads those markers from the **loom-unity container's own logs**, pinned
+   to the revision this run deployed, and must see all three of: IdP reachable,
+   anonymous read refused, Console principal bound. Anything else — including a
+   **missing** marker — refuses to wire the Console and leaves the estate on its
+   previous posture.
+3. Rollback is symmetric and equally cheap: re-dispatch with
+   `unity_auth_mode=disabled`.
+
+Reading the logs rather than `az containerapp exec` is not a style choice. Gov does not
+return the exec'd command's stdout, so the previous probe's captured output on
+2026-07-15 was one connection banner and nothing else — every branch that could have
+failed the run was unreachable. See threat model §6.1.
+
+After the flip, dispatch `gov-bff-verify.yml` for the positive end-to-end receipt: it
+exercises `/api/catalog/metastores`, an **authenticated** read through the token
+exchange. The pre-wire gate proves the door is locked and that we hold a key; that
+dispatch proves the key turns.
+
 ### The SEALED state
 
 An Entra app registration is a Microsoft Graph object ARM/bicep cannot create, and

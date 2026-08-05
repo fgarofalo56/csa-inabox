@@ -325,6 +325,172 @@ EOF
 # (every caller refused) rather than being taken down, and probe-loom-unity-authz
 # reports the posture from the outside either way.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# IdP REACHABILITY — is the JWKS endpoint actually reachable from THIS subnet?
+#
+# WHY THIS EXISTS (#2643 follow-up). With `server.authorization=enable`, upstream
+# `JwksOperations.loadJwkProvider` does plain OIDC discovery against each value in
+# `server.allowed-issuers` and then fetches that document's `jwks_uri` — over the
+# NETWORK, from inside this container, on every token verification it cannot serve
+# from cache. On Azure Government both URLs are on `login.microsoftonline.us`.
+#
+# If the Container Apps environment's subnet cannot egress there, EVERY token
+# verification fails and the catalog refuses every caller. That converts an
+# availability-SAFE finding (anonymous but working) into a silent OUTAGE — and
+# nothing in the deploy says so, because from the outside "refuses everyone
+# because it is secure" and "refuses everyone because it cannot fetch keys" are
+# byte-identical: both answer 401 to an anonymous read, which is exactly what the
+# deploy's own probe is looking for. The probe would report success.
+#
+# So the reachability is MEASURED at boot and stated on one deterministic line
+# that a deploy can gate on. Two design choices worth defending:
+#
+#   * NOT FATAL. Consistent with AUTO-BIND below: an unreachable IdP leaves the
+#     catalog sealed-but-correct (every caller refused), which is the safe side.
+#     Dying instead would take the app down entirely and give the deploy a
+#     crash-loop to diagnose rather than a sentence. The DEPLOY is the
+#     enforcement point (.github/workflows/gov-uc-purview-wire.yml gates on this
+#     line and refuses to point the Console at an unusable catalog).
+#   * HOST ONLY in the marker. The issuer embeds the Entra tenant id and this
+#     line is read back through CI logs, so the greppable marker carries the
+#     authority HOST and the two HTTP codes — enough to diagnose, nothing to leak.
+# ---------------------------------------------------------------------------
+# Strip scheme and path from a URL, leaving the bare host.
+url_host() {
+  printf '%s' "$1" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#[/?].*$##'
+}
+
+# Decide — WITHOUT side effects — what the reachability probe will do. Same
+# rationale as console_bind_plan: a probe only exercisable on a live container is
+# a probe nobody notices has stopped running. Echoes one of:
+#   skipped-authorization-disabled   no token is ever verified, nothing to reach
+#   no-issuer                        authorization is on but no issuer is pinned
+#                                    (render_server already fails closed on this)
+#   probe:<host>                     will probe OIDC discovery + JWKS on <host>
+idp_probe_plan() {
+  if [ "${LOOM_UNITY_AUTH:-enable}" != "enable" ]; then
+    echo "skipped-authorization-disabled"
+    return 0
+  fi
+  probe_issuers="${LOOM_UNITY_ALLOWED_ISSUERS:-}"
+  if [ -z "${probe_issuers}" ] && [ -n "${LOOM_UNITY_ENTRA_TENANT_ID:-}" ]; then
+    probe_issuers="https://$(unity_authority_host)/${LOOM_UNITY_ENTRA_TENANT_ID}/v2.0"
+  fi
+  if [ -z "${probe_issuers}" ]; then
+    echo "no-issuer"
+    return 0
+  fi
+  # `server.allowed-issuers` is a comma list; the first entry is the one this
+  # deployment mints against, so it is the one whose keys must be fetchable.
+  echo "probe:$(url_host "${probe_issuers%%,*}")"
+}
+
+# Resolve the issuer the probe should use (full URL — never logged verbatim).
+idp_probe_issuer() {
+  probe_issuers="${LOOM_UNITY_ALLOWED_ISSUERS:-}"
+  if [ -z "${probe_issuers}" ] && [ -n "${LOOM_UNITY_ENTRA_TENANT_ID:-}" ]; then
+    probe_issuers="https://$(unity_authority_host)/${LOOM_UNITY_ENTRA_TENANT_ID}/v2.0"
+  fi
+  printf '%s' "${probe_issuers%%,*}"
+}
+
+probe_idp_reachability() {
+  idp_issuer="$(idp_probe_issuer)"
+  idp_host="$(url_host "${idp_issuer}")"
+  idp_disc_code="000"
+  idp_jwks_code="000"
+  idp_jwks_host=""
+  idp_body=""
+  idp_try=0
+
+  # DNS and the CNI can both lag the container by a few seconds on a cold ACA
+  # replica, so a single curl would report a network posture that is not the
+  # steady-state one. Retry a bounded number of times before concluding.
+  #
+  # ONE request per attempt: `-w '\n%{http_code}'` appends the status after the
+  # body, so the body and the code come from the SAME response. Fetching them
+  # with two curls would let a flapping endpoint report a 200 next to a body that
+  # never arrived. `|| true` guards the non-zero exit curl returns on a transport
+  # failure (set -e is on); `%{http_code}` is already `000` in that case, so the
+  # code is never invented — hence no `|| echo 000`, which appended a SECOND
+  # `000` and produced the nonsense `discovery=000000`.
+  while [ "${idp_try}" -lt 6 ]; do
+    idp_resp="$(curl -sS -m 10 -w '\n%{http_code}' "${idp_issuer%/}/.well-known/openid-configuration" 2>/dev/null)" || true
+    idp_disc_code="$(printf '%s' "${idp_resp}" | tail -n 1)"
+    [ -n "${idp_disc_code}" ] || idp_disc_code="000"
+    idp_body="$(printf '%s' "${idp_resp}" | sed '$d')"
+    if [ "${idp_disc_code}" = "200" ]; then
+      break
+    fi
+    idp_try=$((idp_try + 1))
+    sleep 5
+  done
+
+  if [ "${idp_disc_code}" = "200" ]; then
+    # No jq in the upstream image. Entra returns compact JSON; squeezing
+    # whitespace first makes the match tolerant of a pretty-printed document too
+    # (a URL cannot contain whitespace, so this cannot corrupt the value).
+    idp_jwks_url="$(printf '%s' "${idp_body}" | tr -d ' \011\012\015' | grep -o '"jwks_uri":"[^"]*"' | head -n 1 | cut -d'"' -f4)"
+    if [ -n "${idp_jwks_url}" ]; then
+      idp_jwks_host="$(url_host "${idp_jwks_url}")"
+      idp_jwks_code="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 "${idp_jwks_url}" 2>/dev/null)" || true
+      [ -n "${idp_jwks_code}" ] || idp_jwks_code="000"
+    fi
+  fi
+
+  if [ "${idp_disc_code}" = "200" ] && [ "${idp_jwks_code}" = "200" ]; then
+    echo "[loom-unity] IDP-REACHABILITY: ok host=${idp_host} discovery=200 jwks=200 jwks-host=${idp_jwks_host}"
+    return 0
+  fi
+
+  echo "[loom-unity] IDP-REACHABILITY: FAILED host=${idp_host} discovery=${idp_disc_code} jwks=${idp_jwks_code} — authorization is ENABLED but this container cannot fetch the issuer's signing keys, so EVERY token verification will fail and the catalog will refuse every caller (including the Console). This is a NETWORK finding, not a config one: allow egress from the Container Apps environment subnet to ${idp_host} on 443 (Azure Government uses login.microsoftonline.us; a UDR to a firewall or an outbound NSG deny is the usual cause). Until then the catalog is sealed. See docs/fiab/security/loom-unity-threat-model.md." >&2
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# ANONYMOUS SELF-READ — does an unauthenticated call actually get refused?
+#
+# The deploy used to answer this with `az containerapp exec` + curl from the
+# Console container. That CANNOT work on Azure Government: `az containerapp exec`
+# returns only its connection banner there, never the command's stdout (the same
+# limitation gov-provision-maps.yml and deploy-loom-sharing.yml both record and
+# work around). The 2026-07-15 run proves it — the probe's entire captured output
+# was `INFO: Connecting to the container 'loom-console'...`, so every branch that
+# could have failed the run was unreachable and the workflow reported success
+# without ever observing the catalog's authorization posture.
+#
+# A loopback read from inside THIS container is observable the way Gov actually
+# permits: through the container's own logs. 127.0.0.1 bypasses ingress IP rules
+# and reaches the same authorization filter a VNet caller hits, so the status
+# code is a true statement about AUTHORIZATION rather than about the network.
+# ---------------------------------------------------------------------------
+self_probe_anonymous_read() {
+  anon_base="http://127.0.0.1:${LOOM_UNITY_PORT:-8080}"
+  anon_code="000"
+  anon_try=0
+  while [ "${anon_try}" -lt 60 ]; do
+    anon_code="$(curl -sS -o /dev/null -w '%{http_code}' -m 10 \
+      "${anon_base}/api/2.1/unity-catalog/catalogs" 2>/dev/null || echo 000)"
+    if [ "${anon_code}" != "000" ]; then
+      break
+    fi
+    anon_try=$((anon_try + 1))
+    sleep 2
+  done
+  echo "[loom-unity] ANON-READ: ${anon_code} (unauthenticated GET /api/2.1/unity-catalog/catalogs over loopback; authorization=${LOOM_UNITY_AUTH:-enable})"
+}
+
+# One backgrounded job for both post-boot probes, so the boot path grows exactly
+# one `&`. Ordering matters: reachability needs no server, the anonymous read
+# does, and running them in this order means the reachability verdict is already
+# in the log by the time anything waits on the server.
+post_boot_probes() {
+  if [ "${LOOM_UNITY_AUTH:-enable}" = "enable" ]; then
+    probe_idp_reachability
+  fi
+  self_probe_anonymous_read
+}
+
 # Decide — WITHOUT side effects — what the auto-bind step will do. Factored out
 # so the dry-run renders the same decision the real boot takes: a bind that is
 # only exercised on a live container is a bind nobody notices has stopped
@@ -439,6 +605,8 @@ if [ "${LOOM_UNITY_DRYRUN:-}" = "1" ]; then
   echo "=== auto-bind ==="
   echo "console-principal-bind=$(console_bind_plan)"
   announce_bind_plan "$(console_bind_plan)"
+  echo "=== probes ==="
+  echo "idp-reachability=$(idp_probe_plan)"
   exit 0
 fi
 
@@ -472,6 +640,12 @@ case "${BIND_PLAN}" in
     bind_console_principal "${BIND_PLAN#bind:}" &
     ;;
 esac
+
+# POST-BOOT PROBES (see probe_idp_reachability / self_probe_anonymous_read).
+# Unconditional: the anonymous read is exactly as worth stating when
+# authorization is the audited `disable` opt-out — that is the finding #2643
+# tracks, and a deploy should be able to see it rather than infer it.
+post_boot_probes &
 
 echo "[loom-unity] starting OSS Unity Catalog server on :${LOOM_UNITY_PORT:-8080}"
 exec ./bin/start-uc-server

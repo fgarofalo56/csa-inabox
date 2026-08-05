@@ -247,6 +247,127 @@ jobs:
             echo "loom-unity health=$H"; [ "$H" = "Healthy" ] && break; sleep 15
           done
 
+      - name: Verify the catalog is ENFORCED and USABLE before wiring the Console (#2643)
+        if: ${{ inputs.skip_unity != 'true' }}
+        run: |
+          set -euo pipefail
+          # ── WHY THIS STEP EXISTS ────────────────────────────────────────────
+          # Turning authorization on has TWO failure modes and they are
+          # indistinguishable from outside the container:
+          #
+          #   A. it is not enforcing        -> anonymous read answers 200
+          #   B. it is enforcing but CANNOT VERIFY ANY TOKEN, because the CAE
+          #      subnet has no egress to the issuer's JWKS endpoint
+          #      (login.microsoftonline.us on this boundary), or because the
+          #      Console principal was never registered as a UC user
+          #      -> anonymous read answers 401, and so does every real caller
+          #
+          # B answers 401 to an anonymous read — which is exactly what a probe
+          # looking for "authorization is enforced" wants to see. So a probe that
+          # only checks the negative REPORTS SUCCESS while the catalog is dark.
+          # That converts #2643 from an availability-safe finding (anonymous but
+          # working) into a silent outage. This step gates on the POSITIVE
+          # evidence too, and refuses to point the Console at a catalog that
+          # cannot serve it.
+          #
+          # ── WHY IT READS LOGS AND NOT `az containerapp exec` ────────────────
+          # `az containerapp exec` does NOT return the executed command's stdout
+          # on Azure Government — only its connection banner. gov-provision-maps.yml
+          # and deploy-loom-sharing.yml both record that and both work around it by
+          # reading the container's own logs. The proof it applies here too is in
+          # this workflow's own history: the 2026-07-15 run's entire captured probe
+          # output was `INFO: Connecting to the container 'loom-console'...`, so
+          # every branch that could have failed that run was unreachable. The
+          # markers below are printed by apps/loom-unity/bin/loom-entrypoint.sh
+          # precisely so this is observable the way Gov actually permits.
+          NEWREV=$(az containerapp show -n "$UNITY_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+          if [ -z "${NEWREV:-}" ]; then
+            echo "::error::Could not resolve the loom-unity revision this run deployed — refusing to wire the Console on unverified evidence."
+            exit 1
+          fi
+          echo "::notice::verifying loom-unity revision $NEWREV (authMode=${UNITY_AUTH_MODE:-entra})"
+          # Pin to THIS revision. Reading the app-wide tail would let the PREVIOUS
+          # revision's markers satisfy the gate — stale evidence for a posture
+          # that is exactly what changed.
+          LOGS=""
+          # Bounded wait. The knob exists so scripts/ci/__tests__/gov-unity-verify-gate.test.mjs
+          # can exercise the "marker never appears" branches — the most important
+          # ones, because they are where an UNKNOWN must NOT become a pass — without
+          # a six-minute test. CI never sets it; the suite asserts this default is 24.
+          ATTEMPTS="${LOOM_UNITY_VERIFY_ATTEMPTS:-24}"
+          for i in $(seq 1 "$ATTEMPTS"); do
+            # stderr is deliberately NOT sent to /dev/null: a failing log read
+            # already yields a REFUSE (markers absent), and hiding the reason would
+            # leave the operator with an empty capture and no cause.
+            LOGS=$(az containerapp logs show -n "$UNITY_APP" -g "$RG" --revision "$NEWREV" \
+              --type console --tail 300 --format text || true)
+            if printf '%s' "$LOGS" | grep -q 'ANON-READ:'; then break; fi
+            echo "  attempt $i — waiting for the boot probes to report"
+            sleep "${LOOM_UNITY_VERIFY_SLEEP:-15}"
+          done
+          echo "===== loom-unity boot markers ====="
+          printf '%s\n' "$LOGS" | grep -E 'IDP-REACHABILITY:|ANON-READ:|auto-bind|AUTO-BIND|rendering config' || true
+          echo "===== end markers ====="
+
+          IDP_OK=$(printf '%s' "$LOGS" | grep -c 'IDP-REACHABILITY: ok' || true)
+          IDP_BAD=$(printf '%s' "$LOGS" | grep -c 'IDP-REACHABILITY: FAILED' || true)
+          # `|| true` is load-bearing on EVERY one of these, this pipeline most of
+          # all: `set -o pipefail` is on, and `grep` exits 1 when it matches
+          # nothing — which is precisely the ABSENT-MARKER case this step exists
+          # to catch. Without it `set -e` kills the step at the assignment, so it
+          # still fails (closed, which is the safe side) but prints no ::error::
+          # and no diagnostics: a correct verdict delivered as a mystery.
+          ANON=$(printf '%s' "$LOGS" | grep -oE 'ANON-READ: [0-9]{3}' | tail -n 1 | awk '{print $2}' || true)
+          BIND_OK=$(printf '%s' "$LOGS" | grep -cE 'auto-bind: (registered|the Console principal .* is already)' || true)
+          BIND_BAD=$(printf '%s' "$LOGS" | grep -c 'AUTO-BIND FAILED' || true)
+
+          if [ "${UNITY_AUTH_MODE:-entra}" != "entra" ]; then
+            # The audited opt-out. Assert the finding is REAL rather than assuming
+            # it: a 401 here would mean the running container disagrees with what
+            # this run deployed, which is worth knowing either way.
+            echo "::warning::svc-loom-unity-authz is OPEN on this estate by explicit dispatch input (unity_auth_mode=disabled). Anything on the Gov CAE subnet can read AND mutate catalog metadata anonymously. Observed anonymous read: ${ANON:-<no marker>}."
+            if [ "${ANON:-}" != "200" ] && [ -n "${ANON:-}" ]; then
+              echo "::warning::deployed authMode=disabled but the anonymous read answered ${ANON} — the running container disagrees with the template."
+            fi
+            exit 0
+          fi
+
+          FAIL=0
+          # 1. CAN IT VERIFY A TOKEN AT ALL? Absence of the marker is NOT a pass:
+          #    it means the image predates this probe or the logs are unavailable,
+          #    i.e. UNKNOWN — and shipping an UNKNOWN as a pass is how a sealed
+          #    catalog gets declared healthy.
+          if [ "${IDP_BAD:-0}" != "0" ]; then
+            echo "::error::loom-unity reported IDP-REACHABILITY: FAILED — authorization is ON but the container cannot fetch the issuer's signing keys, so it will refuse EVERY caller including the Console. This is a NETWORK finding: the Container Apps environment subnet needs egress to the Entra authority host on 443 (login.microsoftonline.us on this boundary). NOT wiring the Console. Re-dispatch with unity_auth_mode=disabled to restore the previous (open, audited) posture while the egress is fixed."
+            FAIL=1
+          elif [ "${IDP_OK:-0}" = "0" ]; then
+            echo "::error::No IDP-REACHABILITY marker from loom-unity revision $NEWREV. The catalog's ability to verify tokens is UNVERIFIED, and an enforcing catalog that cannot reach its IdP refuses everyone while looking correctly secured from outside. Refusing to wire the Console on unknown evidence. If the running image predates apps/loom-unity/bin/loom-entrypoint.sh's boot probes, rebuild it (this workflow's own build step does)."
+            FAIL=1
+          fi
+          # 2. IS IT ACTUALLY ENFORCING? (the original #2643 assertion, now from a
+          #    source Gov lets us read)
+          case "${ANON:-}" in
+            401|403) echo "::notice::anonymous read answered ${ANON} — Entra bearer authorization is enforced." ;;
+            200)     echo "::error::loom-unity answered an UNAUTHENTICATED read with 200 while deployed authMode=entra — authorization is NOT being enforced (svc-loom-unity-authz is still OPEN)."; FAIL=1 ;;
+            "")      echo "::error::No ANON-READ marker from loom-unity revision $NEWREV — whether authorization is enforced is UNVERIFIED. Refusing to report success."; FAIL=1 ;;
+            *)       echo "::error::anonymous read answered ${ANON}, which is neither a refusal (401/403) nor a success (200) — the catalog is not in a state this deploy can vouch for."; FAIL=1 ;;
+          esac
+          # 3. DO WE HOLD THE KEY? Enforcement without the Console bound is
+          #    "authenticated and unusable" — the state that kept this workflow
+          #    deploying the audited opt-out in the first place.
+          if [ "${BIND_BAD:-0}" != "0" ] || [ "${BIND_OK:-0}" = "0" ]; then
+            echo "::error::The Console principal was NOT confirmed registered as an ENABLED Unity Catalog user (auto-bind marker missing or FAILED). With authorization enforced, every Console call would 401 at the token exchange — the catalog would be sealed against its own front end. NOT wiring the Console."
+            FAIL=1
+          fi
+          if [ "$FAIL" != "0" ]; then
+            echo "===== loom-unity diagnostics ====="
+            az containerapp logs show -n "$UNITY_APP" -g "$RG" --revision "$NEWREV" --type console --tail 120 --format text 2>&1 | tail -120 || true
+            az containerapp logs show -n "$UNITY_APP" -g "$RG" --revision "$NEWREV" --type system --tail 40 --format text 2>&1 | tail -40 || true
+            echo "===== end diagnostics ====="
+            exit 1
+          fi
+          echo "::notice::loom-unity verified ENFORCED (anonymous ${ANON}) and USABLE (IdP reachable + Console principal bound) — safe to wire the Console."
+
       - name: Discover the Gov Purview account
         if: ${{ inputs.skip_purview != 'true' }}
         run: |
@@ -315,40 +436,38 @@ jobs:
             exit 1
           fi
 
-      - name: Probe the wired backends from inside the console
+      - name: Probe the wired backends from inside the console (DIAGNOSTIC ONLY)
         run: |
           set -euo pipefail
-          # The console is behind Front Door with MSAL; probe the UNAUTH health route
-          # for liveness, and use the self-audit checks for the two new backends on
-          # the next operator sign-in. Here we verify the loom-unity app itself
-          # answers on its catalog root (internal ingress — reachable only in-VNet,
-          # so we exec a curl inside the console container).
+          # ── THIS STEP DOES NOT DECIDE ANYTHING, AND MUST NOT ────────────────
+          # It used to carry the svc-loom-unity-authz assertion. It could never
+          # have enforced it: `az containerapp exec` does NOT return the executed
+          # command's stdout on Azure Government (gov-provision-maps.yml and
+          # deploy-loom-sharing.yml both record the same limitation), and it also
+          # wants a TTY that a headless runner does not give it. The evidence is
+          # this workflow's own 2026-07-15 run, whose ENTIRE captured probe output
+          # was:
+          #
+          #     INFO: Connecting to the container 'loom-console'...
+          #
+          # With `$OUT` empty, every `grep`ped branch — including the two that
+          # called `exit 1` — was unreachable, so the run reported success without
+          # ever observing the catalog's authorization posture. A check whose
+          # result is structurally unobservable is worse than no check: it is a
+          # green light nobody earned.
+          #
+          # The real assertion now lives in "Verify the catalog is ENFORCED and
+          # USABLE before wiring the Console (#2643)" above, which reads the
+          # loom-unity container's own boot markers — the one channel Gov does
+          # return — and runs BEFORE the Console is pointed at the catalog. What
+          # is left here is an in-VNet reachability trace for a human reading the
+          # log, and it is explicitly allowed to produce nothing.
           if [ "${{ inputs.skip_unity }}" != "true" ] && [ -n "${UNITY_FQDN:-}" ]; then
             REP=$(az containerapp replica list -n "$APP" -g "$RG" --query '[0].name' -o tsv | tr -d '\r')
             OUT=$(az containerapp exec -n "$APP" -g "$RG" --replica "$REP" --container "$APP" \
-              --command "node -e \"fetch('https://$UNITY_FQDN/api/2.1/unity-catalog/catalogs').then(r=>r.text().then(t=>console.log('UC',r.status,t.slice(0,200)))).catch(e=>console.log('UC ERR',e.message))\"" 2>/dev/null || true)
+              --command "node -e \"fetch('https://$UNITY_FQDN/api/2.1/unity-catalog/catalogs').then(r=>r.text().then(t=>console.log('UC',r.status,t.slice(0,200)))).catch(e=>console.log('UC ERR',e.message))\"" 2>&1 || true)
+            echo "console -> loom-unity trace (may be empty on Gov, by design of az containerapp exec):"
             echo "$OUT"
-            # svc-loom-unity-authz — this is an UNAUTHENTICATED read, and the
-            # assertion is keyed to the authorization mode THIS RUN deployed
-            # (UNITY_AUTH_MODE), never to an assumption. Before this change the
-            # probe treated an anonymous HTTP 200 as SUCCESS, which is why the
-            # finding survived in Gov for months: the gate was measuring
-            # reachability, not authorization.
-            AUTHZ="${UNITY_AUTH_MODE:-disabled}"
-            if echo "$OUT" | grep -q "UC 200"; then
-              if [ "$AUTHZ" = "entra" ]; then
-                echo "::error::Loom Unity answered an UNAUTHENTICATED read with 200 while it was deployed authMode=entra — authorization is NOT being enforced (svc-loom-unity-authz). Check the loom-unity container logs for the LOOM_UNITY_AUTH value it booted with."
-                exit 1
-              fi
-              echo "::warning::svc-loom-unity-authz is OPEN on this estate: Loom Unity answered an UNAUTHENTICATED read with 200 because it is deployed with the audited authMode=disabled opt-out. Ingress is IP-pinned to the CAE infrastructure subnet, so the exposure is bounded to that subnet — but any workload there can read AND mutate catalog metadata. Closing it needs the Console token-exchange client (upstream only accepts tokens it issued itself; see docs/fiab/security/loom-unity-authz-proof.md), after which this workflow flips UNITY_AUTH_MODE to entra."
-            elif echo "$OUT" | grep -qE "UC (401|403)"; then
-              if [ "$AUTHZ" = "entra" ]; then
-                echo "::notice::Loom Unity rejected the unauthenticated read — Entra bearer authorization is enforced."
-              else
-                echo "::warning::Loom Unity rejected an unauthenticated read although it was deployed authMode=disabled — the running container disagrees with the template. Check its LOOM_UNITY_AUTH env value."
-              fi
-            else
-              echo "::warning::Unexpected Loom Unity probe result (first boot can take ~1 min, and a fail-closed boot returns a connection error). Check the loom-unity container logs."
-            fi
           fi
           echo "::notice::Purview + UC wiring applied. Operator: open the Gov console → Governance; the Purview gates should be gone. If Atlas calls 403, grant the console UAMI Data Reader + Data Curator on the Purview ROOT collection (Purview portal → Data Map → Collections → Role assignments)."
+          echo "::notice::Loom Unity authorization was verified from the catalog's own boot markers before the Console was wired. To confirm the round trip end to end, dispatch gov-bff-verify.yml — it exercises /api/catalog/metastores, which is an AUTHENTICATED read through the token exchange."
