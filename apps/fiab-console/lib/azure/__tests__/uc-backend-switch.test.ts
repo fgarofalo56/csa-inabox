@@ -36,7 +36,8 @@ import {
 } from '../unity-catalog-client';
 
 const UC_ENV = [
-  'LOOM_UC_BACKEND', 'LOOM_UNITY_URL', 'LOOM_UNITY_TOKEN',
+  'LOOM_UC_BACKEND', 'LOOM_UNITY_URL', 'LOOM_UNITY_TOKEN', 'LOOM_UNITY_AUTH_MODE',
+  'LOOM_UNITY_CLIENT_ID', 'LOOM_UNITY_AUDIENCE', 'LOOM_MSAL_CLIENT_ID',
   'LOOM_DATABRICKS_HOSTNAME', 'LOOM_DATABRICKS_HOSTNAMES',
   'LOOM_CLOUD', 'AZURE_CLOUD',
 ];
@@ -157,6 +158,15 @@ describe('ucFetch backend routing', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     clearUcEnv();
+    // These cases are about PATH ROUTING, not authorization posture. Since #2643
+    // authorization is ON by default, so an un-declared OSS estate fails closed
+    // in ossUcAuthHeader() before any URL is built — which would make every
+    // routing assertion below fail for a reason that has nothing to do with
+    // routing. Declaring the audited anonymous opt-out is exactly what a real
+    // unsecured estate now does, and it keeps these tests measuring their own
+    // subject. The default itself is asserted directly, below and in
+    // uc-authz.test.ts.
+    process.env.LOOM_UNITY_AUTH_MODE = 'anonymous';
     fetchMock = vi.fn(async () => okResponse({ catalogs: [] }));
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -171,7 +181,7 @@ describe('ucFetch backend routing', () => {
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer fake-aad-token');
   });
 
-  it('oss backend hits LOOM_UNITY_URL and sends NO auth header when no token is set', async () => {
+  it('oss backend hits LOOM_UNITY_URL and sends no auth header under the DECLARED anonymous opt-out', async () => {
     process.env.LOOM_UC_BACKEND = 'oss';
     process.env.LOOM_UNITY_URL = 'https://loom-unity.internal/';
     await listCatalogs('ignored-host');
@@ -179,6 +189,18 @@ describe('ucFetch backend routing', () => {
     // Trailing slash on the base is normalised; the workspace host arg is ignored.
     expect(url).toBe('https://loom-unity.internal/api/2.1/unity-catalog/catalogs');
     expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+  });
+
+  it('#2643: an UN-declared oss estate does NOT route bare — it fails closed before the fetch', async () => {
+    // The counterpart to the case above, and the actual finding: this used to
+    // send exactly the same un-credentialed request, which only ever SUCCEEDS
+    // against a catalog anything on the VNet can also mutate. Nothing may reach
+    // the network.
+    delete process.env.LOOM_UNITY_AUTH_MODE;
+    process.env.LOOM_UC_BACKEND = 'oss';
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    await expect(listCatalogs('ignored-host')).rejects.toThrow(/authorization is not configured/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('oss backend sends a bearer token when LOOM_UNITY_TOKEN is set', async () => {

@@ -230,6 +230,54 @@ test('LU-2: LOOM_UNITY_AUTH=disable is an explicit, warned opt-out even with a t
   assert.match(r.stderr, /SECURITY WARNING: authorization is DISABLED/);
 });
 
+// ── #2643 AUTO-BIND ─────────────────────────────────────────────────────────
+// Enforcing authorization is only half a working catalog. Upstream
+// AuthService.verifyPrincipal resolves the caller from the subject token's
+// `email` claim, falling back to `sub`; an Entra APP-ONLY token has no `email`,
+// so the subject is the principal's OBJECT ID, which must exist as an ENABLED
+// Unity Catalog user or the token exchange answers 401. Without that step,
+// turning authorization on produces a catalog that is correct-but-unusable —
+// which is exactly why gov-uc-purview-wire.yml kept deploying authMode=disabled.
+// The entrypoint therefore registers the principal itself, using the server's
+// own admin token (auto-bind-by-default.md §5).
+
+const PRINCIPAL = '11111111-2222-3333-4444-555555555555';
+
+test('#2643 auto-bind: an enforced catalog with a principal id BINDS it', { skip: !shAvailable }, () => {
+  const r = render({ ...AUTHZ_WIRED, LOOM_UNITY_CONSOLE_PRINCIPAL_ID: PRINCIPAL });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /server\.authorization=enable/);
+  assert.match(r.stdout, new RegExp(`console-principal-bind=bind:${PRINCIPAL}`));
+});
+
+test('#2643 auto-bind: an enforced catalog with NO principal id is announced, not silent', { skip: !shAvailable }, () => {
+  // Correct-but-unusable is a real state and must be visible: authorization is
+  // enforced, but only `admin` / pre-registered users can call the catalog.
+  const r = render({ ...AUTHZ_WIRED });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /server\.authorization=enable/);
+  assert.match(r.stdout, /console-principal-bind=not-configured/);
+  assert.match(r.stderr, /no LOOM_UNITY_CONSOLE_PRINCIPAL_ID was passed/);
+});
+
+test('#2643 auto-bind: a non-GUID principal id is REFUSED, not interpolated into the SCIM body', { skip: !shAvailable }, () => {
+  // The id is interpolated into a JSON request body, so a value carrying a quote
+  // would break out of the string. Shape-validating it is cheaper than escaping
+  // and makes the misconfiguration (e.g. passing the clientId, or a resource id)
+  // obvious instead of producing a confusing server-side error.
+  const r = render({ ...AUTHZ_WIRED, LOOM_UNITY_CONSOLE_PRINCIPAL_ID: 'not-a-guid","active":false,"x":"' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /console-principal-bind=invalid-principal-id/);
+  assert.doesNotMatch(r.stdout, /console-principal-bind=bind:/);
+  assert.match(r.stderr, /not an Entra object id/);
+});
+
+test('#2643 auto-bind: nothing to bind when authorization is the audited disable opt-out', { skip: !shAvailable }, () => {
+  const r = render({ LOOM_UNITY_AUTH: 'disable', LOOM_UNITY_CONSOLE_PRINCIPAL_ID: PRINCIPAL });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /console-principal-bind=authorization-disabled/);
+});
+
 test('explicit IdP endpoints still win over the derived Entra ones', { skip: !shAvailable }, () => {
   const r = render({
     LOOM_UNITY_AUTH: 'enable',

@@ -126,15 +126,41 @@ registered in the catalog first.
 Consequences, stated plainly:
 
 * `LOOM_UNITY_TOKEN` (the server-minted token in `etc/conf/token.txt`, delivered
-  as a Key Vault secretref) is **today the only credential that works** —
-  case 7.
+  as a Key Vault secretref) was, at the time of this transcript, the only
+  credential that worked — case 7.
 * `unityAuthorizationPosture()` now reports `entra` as **not hardened**. It
   previously reported `hardened: true`, which told an operator the hop was
   secured when it was in fact broken.
 * Enabling authorization on the **live Gov catalog** would not secure it, it
-  would take it down. `gov-uc-purview-wire.yml` therefore deploys the explicit,
-  audited `authMode=disabled` opt-out and its probe reports the finding as
-  **OPEN**, until the token-exchange client lands.
+  would take it down. `gov-uc-purview-wire.yml` therefore deployed the explicit,
+  audited `authMode=disabled` opt-out and its probe reported the finding as
+  **OPEN**, until the token-exchange client landed.
+
+> **UPDATE 2026-08-05 (#2643) — both blockers are closed in the tree.**
+> The bullets above describe the state as measured; two of them are now
+> superseded and it matters which.
+>
+> 1. **The exchange exists.** `lib/azure/uc-token-exchange.ts` (#2679) POSTs the
+>    Entra token to `/api/1.0/unity-control/auth/tokens` and sends back the
+>    internal token, so case 4's 403 is no longer on the Console's path.
+> 2. **`verifyPrincipal` is satisfied by the platform, not the operator.** Read
+>    at the tag, it resolves the subject as
+>    `claims.getOrDefault(EMAIL, claim(SUBJECT))` — so an Entra **app-only**
+>    token, which carries no `email`, resolves to the principal's OBJECT ID.
+>    The loom-unity entrypoint now registers that object id as an ENABLED Unity
+>    Catalog user at boot (`POST /api/1.0/unity-control/scim2/Users`, authorised
+>    with the admin token the server mints for itself), driven by
+>    `consolePrincipalId` on `loom-unity-app.bicep`. Per
+>    `.claude/rules/auto-bind-by-default.md` §5 this is the platform's job, not a
+>    "register a catalog user" instruction in a runbook.
+>
+> Consequently `gov-uc-purview-wire.yml` no longer hard-codes
+> `UNITY_AUTH_MODE=disabled` — `entra` is the default and the step FAILS rather
+> than falling back to an anonymous catalog when it cannot resolve the audience
+> or the Console principal id. **Deploy-gated:** none of this has run against
+> the live Gov catalog yet, which is why `unityAuthorizationPosture()`
+> deliberately still reports `entra` as `hardened: false` and
+> `probe-loom-unity-authz` remains the authority.
 
 ## Finding 3 — v0.5.0's permission GET routes 500 when authorization is on
 

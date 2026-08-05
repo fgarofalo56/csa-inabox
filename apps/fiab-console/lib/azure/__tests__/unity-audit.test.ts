@@ -174,7 +174,18 @@ describe('unityOutcomeForError — denials stay separable from failures', () => 
 });
 
 describe('the choke point audits EVERY call', () => {
-  beforeEach(reset);
+  beforeEach(() => {
+    reset();
+    // #2643 — authorization is ON by default, so an un-declared OSS estate now
+    // fails closed in ossUcAuthHeader() before any request is made. These cases
+    // are about the AUDIT choke point, and they need calls that actually reach
+    // the network to have rows to assert on; declaring the audited anonymous
+    // opt-out reproduces the unsecured-estate shape they were written against.
+    // The fail-closed path has its own case in this suite ("FAILS CLOSED before
+    // the network — no fetch, still audited"), so the behaviour is still
+    // covered here, not merely configured away.
+    process.env.LOOM_UNITY_AUTH_MODE = 'anonymous';
+  });
   afterEach(() => { reset(); vi.unstubAllGlobals(); });
 
   async function lastAuditRow() {
@@ -227,6 +238,10 @@ describe('the choke point audits EVERY call', () => {
   it('records a call that FAILS CLOSED before the network — no fetch, still audited', async () => {
     // LU-2 refuses to call the catalog when it cannot mint a credential. An
     // emitter placed after the fetch would lose this event entirely.
+    // The suite-level beforeEach declares the anonymous opt-out so the ROUTING
+    // cases can reach the network; this case is specifically about the
+    // fail-closed path, so it opts back into an enforcing posture.
+    delete process.env.LOOM_UNITY_AUTH_MODE;
     process.env.LOOM_UC_BACKEND = 'oss';
     process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
     process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';

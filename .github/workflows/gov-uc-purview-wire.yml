@@ -41,6 +41,14 @@ on:
         description: 'Skip the Purview wiring arm'
         required: false
         default: 'false'
+      unity_auth_mode:
+        description: 'Loom Unity authorization posture. entra (DEFAULT) enforces Entra bearer authorization. disabled is an AUDITED OPT-OUT that leaves the catalog readable AND writable by anything that can reach it — issue #2643. Choosing it is a deliberate acceptance of that finding, not a fallback.'
+        required: false
+        type: choice
+        options:
+          - entra
+          - disabled
+        default: 'entra'
 
 permissions:
   contents: read
@@ -134,42 +142,47 @@ jobs:
         if: ${{ inputs.skip_unity != 'true' }}
         run: |
           set -euo pipefail
-          # svc-loom-unity-authz — this workflow used to deploy the catalog with
-          # NO entraClientId, and the module silently downgraded to
+          # svc-loom-unity-authz (#2643) — this workflow used to deploy the
+          # catalog with NO entraClientId, and the module silently downgraded to
           # server.authorization=disable: anything on the Gov CAE VNet could read
           # AND mutate catalog metadata anonymously.
           #
-          # WHY THIS STILL DEPLOYS authMode=disabled, EXPLICITLY.
-          # Turning authorization ON here would take the LIVE Gov catalog down
-          # rather than secure it. Proven in a local container run of this exact
-          # image (docs/fiab/security/loom-unity-authz-proof.md): upstream
-          # AuthDecorator — identical in v0.5.0 and v0.5.1 — rejects every token
-          # whose `iss` is not the server's own `internal` issuer, so the Entra
-          # bearer the Console mints (lib/azure/uc-backend.ts ossUcAuthHeader)
-          # gets 403 PERMISSION_DENIED even with a byte-exact audience match. A
-          # caller must first exchange its Entra token at
-          # /api/1.0/unity-control/auth/tokens; the Console does not do that yet.
-          # Flipping authMode=entra today therefore converts "anonymous but
-          # working" into "authenticated and unusable" on a federal estate.
+          # It then deployed authMode=disabled EXPLICITLY, because at that time
+          # turning authorization on would have taken the live Gov catalog down
+          # rather than secured it. Two things blocked it, both now cleared:
           #
-          # So this step ships the two things that ARE safe now:
-          #   * the mode is DECLARED, not inferred — `disabled` is the module's
-          #     audited opt-out, the container logs a SECURITY WARNING on every
-          #     boot, and the svc-loom-unity-authz gate reports the finding OPEN
-          #     instead of a silent stderr line nobody reads;
-          #   * ingress is IP-pinned to the Container Apps infrastructure subnet,
-          #     so "anything on the Gov VNet" narrows to "anything in the CAE
-          #     infrastructure subnet" at the network layer.
-          # Set UNITY_AUTH_MODE=entra here (and update the console-env step
-          # below) in the SAME change that lands the Console token-exchange
-          # client — not before.
-          UNITY_AUTH_MODE=disabled
+          #   1. The Console sent its Entra bearer DIRECTLY, and upstream
+          #      AuthDecorator rejects any bearer whose `iss` is not its own
+          #      `internal` issuer (403, even on a byte-exact audience). The
+          #      token-exchange client LANDED in #2679 —
+          #      lib/azure/uc-token-exchange.ts, called by ossUcAuthHeader() —
+          #      so the Console now exchanges at
+          #      /api/1.0/unity-control/auth/tokens and sends the internal token.
+          #   2. AuthService.verifyPrincipal additionally requires the subject to
+          #      be `admin` or an ENABLED Unity Catalog user, and an Entra
+          #      app-only token has no `email` claim, so the subject is the
+          #      principal's OBJECT ID. Nothing registered it. The entrypoint now
+          #      AUTO-BINDS that object id as an enabled UC user at boot using the
+          #      server's own admin token (auto-bind-by-default.md §5), which is
+          #      why consolePrincipalId is resolved and passed below.
+          #
+          # So the stated precondition — "set UNITY_AUTH_MODE=entra in the SAME
+          # change that lands the Console token-exchange client, not before" — is
+          # met. Authorization is ON, and this step now FAILS rather than falling
+          # back to an anonymous catalog if it cannot resolve what enforcement
+          # needs. `disabled` remains reachable only as a deliberate, audited
+          # dispatch input, never as the default this file hard-codes.
+          UNITY_AUTH_MODE="${{ inputs.unity_auth_mode || 'entra' }}"
           UNITY_CLIENT_ID=$(az containerapp show -n "$APP" -g "$RG" \
             --query "properties.template.containers[0].env[?name=='LOOM_MSAL_CLIENT_ID'].value | [0]" -o tsv | tr -d '\r')
+          if [ "$UNITY_AUTH_MODE" = "entra" ] && [ -z "${UNITY_CLIENT_ID:-}" ]; then
+            echo "::error::Cannot resolve LOOM_MSAL_CLIENT_ID from the Console app, so no audience can be pinned. Refusing to deploy — with authMode=entra the module would deploy the catalog SEALED (up, accepting nobody). Run the MSAL app-registration bootstrap first (scripts/csa-loom/bootstrap-msal-app-reg.sh)."
+            exit 1
+          fi
           CAE_SUBNET_ID=$(az containerapp env show --ids "$CAE_ID" --query properties.vnetConfiguration.infrastructureSubnetId -o tsv | tr -d '\r')
           CAE_CIDR=$(az network vnet subnet show --ids "$CAE_SUBNET_ID" --query addressPrefix -o tsv | tr -d '\r')
           if [ -z "${CAE_CIDR:-}" ]; then
-            echo "::error::Could not resolve the CAE infrastructure subnet CIDR from $CAE_SUBNET_ID — refusing to deploy without the ingress IP pin."
+            echo "::error::Could not resolve the CAE infrastructure subnet CIDR — refusing to deploy without the ingress IP pin."
             exit 1
           fi
           echo "::notice::Loom Unity authMode=$UNITY_AUTH_MODE, ingress pinned to $CAE_CIDR"
@@ -184,6 +197,21 @@ jobs:
             echo "::notice::dedicated uami-loom-unity-${LOCATION} not present — using the Console UAMI."
           fi
           UNITY_UAMI_CLIENT_ID=$(az identity show --ids "$UNITY_UAMI_ID" --query clientId -o tsv 2>/dev/null | tr -d '\r' || true)
+          # AUTO-BIND — the OBJECT ID (principalId) of the identity the CONSOLE
+          # runs as. That is the `sub` claim of the app-only token the Console
+          # mints, and upstream verifyPrincipal resolves the caller from `email`
+          # else `sub`, so this is the value that must exist as an ENABLED Unity
+          # Catalog user. It is deliberately read off the CONSOLE app rather than
+          # from $UAMI_ID: those are usually the same identity, but if the Console
+          # is ever moved to its own UAMI, binding the deployer's identity would
+          # register the wrong principal and the catalog would refuse every real
+          # call while reporting a successful bind.
+          CONSOLE_PRINCIPAL_ID=$(az containerapp show -n "$APP" -g "$RG" \
+            --query "identity.userAssignedIdentities.*.principalId | [0]" -o tsv | tr -d '\r')
+          if [ "$UNITY_AUTH_MODE" = "entra" ] && [ -z "${CONSOLE_PRINCIPAL_ID:-}" ]; then
+            echo "::error::Could not resolve the Console managed identity's principalId, so the entrypoint cannot register it as an enabled Unity Catalog user. Deploying authMode=entra now would leave the catalog correct-but-unusable (every Console call 401s at the token exchange). Refusing. Re-run once the Console app has a user-assigned identity."
+            exit 1
+          fi
           az deployment group create -g "$RG" \
             -n "loom-unity-$(date -u +%Y%m%d%H%M%S)" \
             -f platform/fiab/bicep/modules/compute/loom-unity-app.bicep \
@@ -196,6 +224,7 @@ jobs:
                dbEphemeral=true \
                authMode="$UNITY_AUTH_MODE" \
                entraClientId="$UNITY_CLIENT_ID" \
+               consolePrincipalId="$CONSOLE_PRINCIPAL_ID" \
                consoleAllowedCidrs="[\"$CAE_CIDR\"]" \
                complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
             -o none
@@ -235,17 +264,25 @@ jobs:
           set -euo pipefail
           VARS=""
           if [ "${{ inputs.skip_unity }}" != "true" ] && [ -n "${UNITY_FQDN:-}" ]; then
-            # svc-loom-unity-authz — the CONSOLE half, kept in lockstep with the
-            # authorization mode the deploy step actually applied. While the
-            # catalog is authMode=disabled the Console must stay in `anonymous`
-            # mode: setting LOOM_UNITY_AUTH_MODE=entra would make uc-backend.ts
-            # mint an Entra bearer that this server answers 403 to (proof:
-            # docs/fiab/security/loom-unity-authz-proof.md), turning every live
-            # Gov Unity surface into an error. LOOM_UNITY_AUTH_MODE=anonymous is
-            # DECLARED rather than inferred so the svc-loom-unity-authz gate and
-            # /api/catalog/unity/capabilities report the open posture explicitly.
+            # svc-loom-unity-authz (#2643) — the CONSOLE half, kept in lockstep
+            # with the authorization mode the deploy step actually applied.
+            #
+            # On the `entra` path the Console mints an Entra bearer and exchanges
+            # it at /api/1.0/unity-control/auth/tokens for the internal token the
+            # catalog accepts (lib/azure/uc-token-exchange.ts, #2679); the
+            # entrypoint's AUTO-BIND has registered the Console principal as an
+            # enabled UC user so that exchange succeeds. Sending the raw Entra
+            # bearer would still be answered 403 by design — the exchange is what
+            # makes this work (docs/fiab/security/loom-unity-authz-proof.md).
+            #
+            # `anonymous` is written ONLY when the deploy applied the audited
+            # authMode=disabled opt-out, so the two halves can never disagree.
+            # It is DECLARED rather than inferred so the svc-loom-unity-authz
+            # gate (which now rejects that value) and
+            # /api/catalog/unity/capabilities report the open posture explicitly
+            # instead of it reading as configured.
             VARS="$VARS LOOM_UC_BACKEND=oss LOOM_UNITY_URL=https://$UNITY_FQDN"
-            if [ "${UNITY_AUTH_MODE:-disabled}" = "entra" ]; then
+            if [ "${UNITY_AUTH_MODE:-entra}" = "entra" ]; then
               VARS="$VARS LOOM_UNITY_CLIENT_ID=$UNITY_CLIENT_ID"
               VARS="$VARS LOOM_UNITY_AUDIENCE=api://$UNITY_CLIENT_ID/.default"
               VARS="$VARS LOOM_UNITY_AUTH_MODE=entra"

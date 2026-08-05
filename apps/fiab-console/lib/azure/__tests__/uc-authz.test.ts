@@ -70,16 +70,33 @@ describe('resolveUnityAuthMode / unityAudience', () => {
   beforeEach(clearAuthEnv);
   afterEach(clearAuthEnv);
 
-  it('is anonymous when nothing is declared (pre-LU-2 estates keep working)', () => {
-    expect(resolveUnityAuthMode()).toBe('anonymous');
+  it('#2643: authorization is ON BY DEFAULT — an un-declared estate is entra, never anonymous', () => {
+    // This is the client half of #2643. The old default was `anonymous`, so a
+    // deployment that forgot one variable talked to its catalog with NO
+    // credential — and an un-credentialed call only SUCCEEDS against a catalog
+    // anything on the VNet can also mutate.
+    expect(resolveUnityAuthMode()).toBe('entra');
   });
 
-  it('does NOT infer hardening from LOOM_MSAL_CLIENT_ID alone', () => {
-    // Every deployment sets the Console app registration; inferring "authorization
-    // is on" from it would make the Console fail closed against catalogs that
-    // never enabled authorization.
+  it('#2643: LOOM_MSAL_CLIENT_ID alone now yields a mintable entra audience', () => {
+    // The old behaviour deliberately did NOT infer from this var, to keep
+    // pre-LU-2 estates talking to unsecured catalogs. That trade is gone: the
+    // Console app registration is a perfectly good audience, and the estates it
+    // protected are served by the explicit `anonymous` opt-out instead.
     process.env.LOOM_MSAL_CLIENT_ID = 'console-app-id';
-    expect(resolveUnityAuthMode()).toBe('anonymous');
+    expect(resolveUnityAuthMode()).toBe('entra');
+    expect(unityAudience()).toBe('api://console-app-id/.default');
+  });
+
+  it('#2643: entra with NO derivable audience is reported as refused-closed, not open', () => {
+    // The dangerous misreading would be "no audience => nothing enforced =>
+    // effectively anonymous". It is the opposite: every call throws.
+    const p = unityAuthorizationPosture();
+    expect(p.mode).toBe('entra');
+    expect(p.hardened).toBe(false);
+    expect(p.audience).toBeUndefined();
+    expect(p.detail).toMatch(/FAILS CLOSED/);
+    expect(p.detail).not.toMatch(/UNAUTHENTICATED/);
   });
 
   it('a declared client id selects entra and derives api://<id>/.default', () => {
@@ -118,7 +135,10 @@ describe('unityAuthorizationPosture', () => {
   beforeEach(clearAuthEnv);
   afterEach(clearAuthEnv);
 
-  it('reports the un-declared posture as UN-hardened with the exact remediation', () => {
+  it('reports the DECLARED anonymous opt-out as UN-hardened with the exact remediation', () => {
+    // #2643: anonymous is no longer reachable implicitly, so this posture must be
+    // provoked the same way a real estate provokes it — by declaring it.
+    process.env.LOOM_UNITY_AUTH_MODE = 'anonymous';
     const p = unityAuthorizationPosture();
     expect(p.mode).toBe('anonymous');
     expect(p.hardened).toBe(false);
@@ -151,8 +171,11 @@ describe('unityAuthorizationPosture', () => {
     // posture now names the exchange and the real outstanding prerequisite.
     expect(p.detail).toMatch(/unity-control\/auth\/tokens/);
     expect(p.detail).toMatch(/enabled Unity Catalog user/i);
-    expect(p.remediation).toMatch(/uc-token-exchange/);
-    expect(p.remediation).toMatch(/enabled Unity Catalog user/i);
+    // #2643 — the UC-user prerequisite now HAS a deploy step (the entrypoint
+    // auto-binds the Console principal), so the remediation must describe that
+    // rather than telling an operator to go register a catalog user by hand.
+    expect(p.remediation).toMatch(/consolePrincipalId/);
+    expect(p.remediation).toMatch(/no manual catalog-user step/i);
     // and it must NOT send operators back to the dead pre-shared-token path
     expect(p.remediation).not.toMatch(/Set LOOM_UNITY_TOKEN/);
   });
@@ -225,7 +248,40 @@ describe('ossUcAuthHeader', () => {
     expect(getToken).not.toHaveBeenCalled();
   });
 
-  it('stays anonymous (no header) when nothing is declared', async () => {
+  // ── #2643 proof bar — the two cases the fix is actually about ──────────────
+  // "Valid token accepted" proves nothing here: the bug was that an ABSENT or
+  // REJECTED credential still produced a request. Both must be refused.
+
+  it('#2643 ABSENT TOKEN: an un-declared estate sends NO anonymous header — it throws', async () => {
+    // Previously this resolved to {} and the call went out bare. That is the
+    // client half of the finding: bare calls only SUCCEED against an open
+    // catalog, so "it worked" was the symptom, not the reassurance.
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    await expect(ossUcAuthHeader()).rejects.toBeInstanceOf(OssUcAuthNotConfiguredError);
+    expect(getToken).not.toHaveBeenCalled();
+  });
+
+  it('#2643 INVALID TOKEN: a bearer the catalog rejects (401) is NOT waved through', async () => {
+    // The fail-open shape to guard against is "exchange failed, send the raw
+    // Entra token / send nothing and hope". Neither is allowed: no fetch may
+    // carry a credential the catalog already refused, and no header may be
+    // returned at all.
+    process.env.LOOM_UNITY_CLIENT_ID = 'unity-app-id';
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal';
+    getToken.mockResolvedValue({ token: 'stale-entra-token', expiresOnTimestamp: Date.now() + 3_600_000 });
+    const fetchMock = vi.fn().mockResolvedValue(new Response('User not allowed', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(ossUcAuthHeader()).rejects.toThrow(/token exchange|rejected the token/i);
+    // exactly ONE call — the exchange attempt. No retry, and nothing that could
+    // become a catalog request carrying the unexchanged token.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('#2643: anonymous requires an EXPLICIT declaration — and only then sends no header', async () => {
+    process.env.LOOM_UNITY_AUTH_MODE = 'anonymous';
     await expect(ossUcAuthHeader()).resolves.toEqual({});
     expect(getToken).not.toHaveBeenCalled();
   });
