@@ -25,6 +25,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.86.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.3...csa-inabox-v0.86.4) (2026-08-05)
+
+
+### Bug Fixes
+
+* **powerbi,semantic-model:** stop calling Power BI for an unbound workspace (fixes [#2968](https://github.com/fgarofalo56/csa-inabox/issues/2968)) ([#2989](https://github.com/fgarofalo56/csa-inabox/issues/2989)) ([c8a0b7e](https://github.com/fgarofalo56/csa-inabox/commit/c8a0b7e88bffba61eb9bc66af522077fa8e47109))
+* **security:** databricks-notebook execution family — authorize the caller and bind clusterId/contextId/path (fixes [#2988](https://github.com/fgarofalo56/csa-inabox/issues/2988)) ([#2995](https://github.com/fgarofalo56/csa-inabox/issues/2995)) ([fd2aeff](https://github.com/fgarofalo56/csa-inabox/commit/fd2aeff95a853ad1822d9a1d99282eaeecb2ac07))
+
 ## [0.86.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.2...csa-inabox-v0.86.3) (2026-08-05)
 
 
