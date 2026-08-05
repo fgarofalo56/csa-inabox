@@ -70,7 +70,23 @@ const API_ROOT = path.join(CONSOLE_ROOT, 'app', 'api');
 
 const GUARD_SIGNAL_RE = new RegExp(
   [
-    'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'assertOwner',
+    'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem',
+    // #2977 — `assertOwner` USED TO BE LISTED HERE AND IS DELIBERATELY GONE.
+    // PR #2973 DELETED the function (see lib/auth/workspace-guard.ts), so from
+    // that merge on, every `assertOwner` in the tree was PROSE — the word inside
+    // a migration comment. It kept matching, so 34 routes that had correctly
+    // moved to `authorizeItemWorkspace` were passing this checker (and were
+    // classified `owner-scoped` in the route inventory) on the strength of a
+    // COMMENT MENTIONING A DELETED FUNCTION, not on any code. Rewriting one such
+    // route's header comment — with the real guard untouched and STRENGTHENED —
+    // flipped it to a violation, which is how this was found.
+    //
+    // Replaced by the real thing: `authorizeItemWorkspace` runs the canonical
+    // owner → tenant-admin → shared-ACL ladder and resolves the workspace FROM
+    // THE ITEM when the caller omits the param, so a route threading it is
+    // authorized exactly as a hand-rolled loadOwnedItem route is. Do not re-add
+    // `assertOwner`: a token that can only ever appear in prose is not a signal.
+    'authorizeItemWorkspace',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal

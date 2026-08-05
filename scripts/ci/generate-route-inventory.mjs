@@ -61,7 +61,14 @@ const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|Te
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
   'softDeleteOwnedItem', 'restoreOwnedItem', 'purgeRecycledItem', 'loadRecycledItem',
-  'listOwnedItems', 'listAllOwnedItems', 'assertOwner', 'authorizeWorkspace',
+  // #2977 — `assertOwner` was here and is deliberately gone: PR #2973 deleted the
+  // function, so every remaining occurrence is PROSE in a migration comment and
+  // this list was classifying 34 routes `owner-scoped` on a comment rather than
+  // on code. `authorizeItemWorkspace` is the real successor signal (canonical
+  // owner → tenant-admin → shared-ACL ladder). Kept in lockstep with
+  // GUARD_SIGNAL_RE in check-route-guards.mjs — the two must not drift.
+  'authorizeItemWorkspace',
+  'listOwnedItems', 'listAllOwnedItems', 'authorizeWorkspace',
   'requireWorkspace', 'withWorkspaceOwner', 'loadKustoItem', 'guardAdxRequest',
   'resolveOwnedItemDatabase', 'loadContentBackedItem', 'resolveItemAccessByOid',
   'resolveWorkspaceAccessByOid', 'denyIfNoDlzAccess', 'pdpCheck',
