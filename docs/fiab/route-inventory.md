@@ -15,8 +15,8 @@ same classic + WS-D1 toolkit export styles).
 | --- | ---: |
 | Total routes | 1668 |
 | Public (no session) | 100 |
-| Session-only | 572 |
-| Owner-scoped | 705 |
+| Session-only | 562 |
+| Owner-scoped | 715 |
 | Admin | 291 |
 | Gated (backend config) | 530 |
 | Areas | 120 |
@@ -1248,10 +1248,10 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-cluster/options/route.ts` | GET | session-only |  | Databricks |
 | `items/databricks-cluster/route.ts` | GET POST | session-only |  | Databricks |
 | `items/databricks-job/[id]/route.ts` | GET PUT DELETE | owner-scoped |  | Databricks |
-| `items/databricks-job/[id]/run-output/route.ts` | GET | session-only |  | Databricks |
-| `items/databricks-job/[id]/run/route.ts` | POST | session-only |  | Databricks |
-| `items/databricks-job/[id]/runs/route.ts` | GET | session-only |  | Databricks |
-| `items/databricks-job/route.ts` | GET POST | session-only |  | Databricks |
+| `items/databricks-job/[id]/run-output/route.ts` | GET | owner-scoped |  | Databricks |
+| `items/databricks-job/[id]/run/route.ts` | POST | owner-scoped |  | Databricks |
+| `items/databricks-job/[id]/runs/route.ts` | GET | owner-scoped |  | Databricks |
+| `items/databricks-job/route.ts` | GET POST | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/command/route.ts` | POST | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/context/route.ts` | POST DELETE | owner-scoped |  | Databricks |
 | `items/databricks-notebook/[id]/ensure-cluster/route.ts` | POST | owner-scoped | ● | Databricks |
@@ -1261,12 +1261,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/databricks-notebook/[id]/schedule/route.ts` | GET POST PATCH DELETE | owner-scoped | ● | Databricks |
 | `items/databricks-notebook/[id]/versions/route.ts` | GET POST | owner-scoped | ● | Cosmos |
 | `items/databricks-notebook/list/route.ts` | GET | session-only |  | Databricks |
-| `items/databricks-pipeline/[id]/events/route.ts` | GET | session-only | ● | Databricks |
-| `items/databricks-pipeline/[id]/pipelines/route.ts` | GET | session-only | ● | Databricks |
-| `items/databricks-pipeline/[id]/spec/route.ts` | GET POST | session-only | ● | Databricks |
-| `items/databricks-pipeline/[id]/start/route.ts` | POST | session-only | ● | Databricks |
-| `items/databricks-pipeline/[id]/stop/route.ts` | POST | session-only | ● | Databricks |
-| `items/databricks-pipeline/[id]/updates/route.ts` | GET | session-only | ● | Databricks |
+| `items/databricks-pipeline/[id]/events/route.ts` | GET | owner-scoped | ● | Databricks |
+| `items/databricks-pipeline/[id]/pipelines/route.ts` | GET | owner-scoped | ● | Databricks |
+| `items/databricks-pipeline/[id]/spec/route.ts` | GET POST | owner-scoped | ● | Databricks |
+| `items/databricks-pipeline/[id]/start/route.ts` | POST | owner-scoped | ● | Databricks |
+| `items/databricks-pipeline/[id]/stop/route.ts` | POST | owner-scoped | ● | Databricks |
+| `items/databricks-pipeline/[id]/updates/route.ts` | GET | owner-scoped | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/cancel/route.ts` | POST | session-only | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/clone/route.ts` | POST | session-only | ● | Databricks |
 | `items/databricks-sql-warehouse/[id]/connection/route.ts` | GET | session-only |  | — |

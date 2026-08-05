@@ -94,6 +94,14 @@ const GUARD_SIGNAL_RE = new RegExp(
     // is verified structurally by `assertGuardWrappersAreReal()` below, so
     // hollowing it out fails this checker instead of silently disarming it.
     'authorizeNotebookItem\\s*\\(',
+    // #2996/#2997 - the databricks-job and databricks-pipeline guard wrappers.
+    // Matched AS CALLS (trailing open-paren) for the same reason
+    // `authorizeNotebookItem` is: a {@link ...} in a comment must never satisfy a
+    // guard signal, which is exactly how `assertOwner` lied. Both are verified
+    // structurally by `assertGuardWrappersAreReal()` below, so hollowing either
+    // one out fails this checker instead of silently disarming it.
+    'authorizeDatabricksJobItem\\s*\\(',
+    'authorizeDatabricksPipelineItem\\s*\\(',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal
@@ -140,7 +148,7 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // directly OR routes through the WS-D1 toolkit wrappers (which call getSession
 // internally). Including the wrappers keeps toolkit-adopted routes IN scope so
 // the checker still verifies their guard rather than silently skipping them.
-const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(|authorizeNotebookItem\s*\(/;
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
@@ -838,6 +846,20 @@ const GUARD_WRAPPERS = [
     name: 'authorizeNotebookItem',
     file: path.join(
       CONSOLE_ROOT, 'app', 'api', 'items', 'databricks-notebook', '_lib', 'notebook-exec-scope.ts',
+    ),
+    mustCall: ['getSession\\s*\\(', 'authorizeItemWorkspace\\s*\\('],
+  },
+  {
+    name: 'authorizeDatabricksJobItem',
+    file: path.join(
+      CONSOLE_ROOT, 'app', 'api', 'items', 'databricks-job', '_lib', 'job-scope.ts',
+    ),
+    mustCall: ['getSession\\s*\\(', 'authorizeItemWorkspace\\s*\\('],
+  },
+  {
+    name: 'authorizeDatabricksPipelineItem',
+    file: path.join(
+      CONSOLE_ROOT, 'app', 'api', 'items', 'databricks-pipeline', '_lib', 'pipeline-scope.ts',
     ),
     mustCall: ['getSession\\s*\\(', 'authorizeItemWorkspace\\s*\\('],
   },

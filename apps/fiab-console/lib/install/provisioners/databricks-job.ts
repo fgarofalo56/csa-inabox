@@ -41,6 +41,7 @@ import {
   type JobRun,
 } from '@/lib/azure/databricks-client';
 import { buildDatabricksSource } from './_seed-databricks';
+import { withOwnerTag } from '@/app/api/items/databricks-job/_lib/job-scope';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 
@@ -288,7 +289,11 @@ export const databricksJobProvisioner: Provisioner = async (input): Promise<Prov
     steps.push(`Task notebook import failed (${e?.message || String(e)}); using bundle notebook paths.`);
   }
 
-  const spec = buildJobSpec(content, jobName, notebookPaths);
+  // #2997 — stamp the owning Loom item onto the job at creation. Every
+  // per-item route authorizes a jobId against this marker (see
+  // app/api/items/databricks-job/_lib/job-scope.ts), so a job created without it
+  // would sit in the adoptable-unmarked state that only pre-#2997 jobs need.
+  const spec = withOwnerTag(buildJobSpec(content, jobName, notebookPaths), input.cosmosItemId);
 
   // Idempotency: reuse the existing job by name, else create.
   let jobId: number;
