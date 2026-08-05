@@ -17,7 +17,12 @@
  * Each CONTROL case is chosen to DIE under an obvious mutation:
  *   - drop the `error ||` guard in classifyEstateDrift → the unreachable-GitHub
  *     case reports current; the unknown test goes red.
- *   - flip `aheadBy > max` to `<` → the behind/ok pair swaps; both go red.
+ *   - flip `behindForMinutes > grace` to `<` → the in-flight and past-grace pair
+ *     swaps; both go red (and the boundary pair pins it to the minute).
+ *   - reintroduce ANY commit-count tolerance → the "13 behind for 16h" case and
+ *     the "1 commit past the grace" case both go green, and both assert error.
+ *   - default a missing `behindForMinutes` to 0 instead of null → the
+ *     unmeasurable-wait case reads ok; it asserts error.
  *   - reorder classifyDeployPath so `failing` is tested before `disabled` → the
  *     disabled test's asserted state changes; it goes red.
  *   - count cancelled/in-flight runs as failures → the skip test goes red.
@@ -29,11 +34,12 @@ import {
   classifyDeployPath,
   classifyEstateDrift,
   deployPathsForCloud,
+  oldestUnappliedAt,
   summarizeDeployStatus,
   worstSeverity,
   DEPLOY_PATHS,
+  BEHIND_GRACE_MINUTES,
   FAILING_STREAK,
-  MAX_COMMITS_BEHIND,
   MAX_DAYS_SINCE_SUCCESS,
   type DeployPathHealth,
   type RunLite,
@@ -43,6 +49,15 @@ const REPO = 'fgarofalo56/csa-inabox';
 const SHA = '678b53bccccc4c23ae6afa7f851a22a6910d7bb0';
 const NOW = Date.parse('2026-08-05T12:00:00.000Z');
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
+const minsAgo = (n: number) => new Date(NOW - n * 60_000).toISOString();
+
+/** A compare result whose missing commits are all `mins` old. */
+const behindBy = (n: number, mins: number | null) => ({
+  status: 'ahead' as const,
+  ahead_by: n,
+  behind_by: 0,
+  commits: mins === null ? [] : [{ commit: { committer: { date: minsAgo(mins) } } }],
+});
 
 const runs = (...conclusions: (string | null)[]): RunLite[] =>
   conclusions.map((c, i) => ({ conclusion: c, created_at: daysAgo(i) }));
@@ -52,37 +67,88 @@ const path = (over: Partial<Parameters<typeof classifyDeployPath>[0]>): DeployPa
   classifyDeployPath({ def: DEF, repo: REPO, workflowState: 'active', now: NOW, ...over });
 
 describe('classifyEstateDrift — how far behind main is the image serving this page', () => {
-  it('reports the exact commit count when the estate is behind but within bound', () => {
-    // The live 2026-08-05 reading. GitHub's compare/{buildSha}...main returns
-    // status 'ahead' with ahead_by = the commits main has that we do not
-    // (verified against the live API).
+  it('MUTATION PROOF: the REAL 2026-08-05 estate (13 behind, ~16h) is NOT ok', () => {
+    // THE CASE THIS SURFACE EXISTS FOR, and the one its first cut could not fire
+    // on. Live reading on 2026-08-05: marker sha 678b53bc, 13 commits behind
+    // main, oldest unapplied commit merged ~15.6 HOURS earlier. Under the
+    // shipped `MAX_COMMITS_BEHIND = 20` this rendered severity 'ok' — the
+    // estate-drift half never fired on the actual drift.
+    //
+    // A threshold that cannot fire on today's real condition is not a signal.
     const e = classifyEstateDrift({
-      buildSha: SHA, buildStamp: '20260805T054836Z', repo: REPO,
-      compare: { status: 'ahead', ahead_by: 12, behind_by: 0 },
+      buildSha: SHA, buildStamp: '20260805T054836Z', repo: REPO, now: NOW,
+      compare: behindBy(13, 936), // 15.6h
     });
     expect(e.state).toBe('behind');
-    expect(e.commitsBehind).toBe(12);
-    expect(e.severity).toBe('ok'); // 12 <= MAX_COMMITS_BEHIND: ordinary merge lag
+    expect(e.commitsBehind).toBe(13);
+    expect(e.severity).toBe('error');
+    expect(e.behindForMinutes).toBe(936);
+    expect(e.detail).toMatch(/roll path has stopped/);
     expect(e.compareUrl).toBe(`https://github.com/${REPO}/compare/${SHA}...main`);
   });
 
-  it('turns ERROR past the bound and says the roll path has stopped', () => {
+  it('the SAME 13 commits, one minute old, is a roll in flight and reads ok', () => {
+    // It is the TIME that fires, not the count. Delete the grace and this goes
+    // red; reintroduce a count band and the case above does.
     const e = classifyEstateDrift({
-      buildSha: SHA, repo: REPO,
-      compare: { status: 'ahead', ahead_by: 120, behind_by: 0 },
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(13, 1),
+    });
+    expect(e.state).toBe('behind');
+    expect(e.severity).toBe('ok');
+    expect(e.headline).toMatch(/roll is in flight/);
+  });
+
+  it('ONE commit behind past the grace is an ERROR — there is no count band', () => {
+    const e = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(1, BEHIND_GRACE_MINUTES + 1),
     });
     expect(e.state).toBe('behind');
     expect(e.severity).toBe('error');
-    expect(e.headline).toContain('120 commits behind');
-    expect(e.detail).toMatch(/roll path has stopped/);
+    expect(e.headline).toContain('1 commit behind');
   });
 
-  it('the bound bites at exactly MAX_COMMITS_BEHIND, in both directions', () => {
-    const at = (n: number) => classifyEstateDrift({
-      buildSha: SHA, repo: REPO, compare: { status: 'ahead', ahead_by: n, behind_by: 0 },
+  it('the grace bites at exactly BEHIND_GRACE_MINUTES, in both directions', () => {
+    const at = (mins: number) => classifyEstateDrift({
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(5, mins),
     }).severity;
-    expect(at(MAX_COMMITS_BEHIND)).toBe('ok');
-    expect(at(MAX_COMMITS_BEHIND + 1)).toBe('error');
+    expect(at(BEHIND_GRACE_MINUTES)).toBe('ok');
+    expect(at(BEHIND_GRACE_MINUTES + 1)).toBe('error');
+  });
+
+  it('behind with NO measurable wait is an ERROR — unmeasured is not "recent"', () => {
+    // No commit dates in the compare ⇒ nothing demonstrates an in-flight roll,
+    // so the allowance must not apply. Default behindForMinutes to 0 and this
+    // goes green — the recurring "unknown rendered as a result" trap.
+    const e = classifyEstateDrift({
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(9, null),
+    });
+    expect(e.state).toBe('behind');
+    expect(e.severity).toBe('error');
+    expect(e.behindForMinutes).toBeNull();
+    expect(e.detail).toMatch(/could not be measured/);
+  });
+
+  it('oldestUnappliedAt takes the MINIMUM date, not commits[0]', () => {
+    // Ordering-independent on purpose: GitHub documents oldest-first, but a
+    // verdict turning on ordering nobody re-checks is a verdict waiting to be
+    // wrong. Reverse the array and the answer must not change.
+    const rows = [
+      { commit: { committer: { date: minsAgo(10) } } },
+      { commit: { committer: { date: minsAgo(500) } } },
+      { commit: { committer: { date: minsAgo(50) } } },
+    ];
+    expect(oldestUnappliedAt({ status: 'ahead', ahead_by: 3, behind_by: 0, commits: rows }))
+      .toBe(minsAgo(500));
+    expect(oldestUnappliedAt({ status: 'ahead', ahead_by: 3, behind_by: 0, commits: [...rows].reverse() }))
+      .toBe(minsAgo(500));
+    // author.date is the documented fallback when committer is absent.
+    expect(oldestUnappliedAt({
+      status: 'ahead', ahead_by: 1, behind_by: 0,
+      commits: [{ commit: { author: { date: minsAgo(7) } } }],
+    })).toBe(minsAgo(7));
+    // Nothing usable ⇒ null, which the caller must treat as untolerated.
+    expect(oldestUnappliedAt({ status: 'ahead', ahead_by: 1, behind_by: 0, commits: [] })).toBeNull();
+    expect(oldestUnappliedAt(null)).toBeNull();
   });
 
   it('an identical build is CURRENT', () => {
@@ -260,7 +326,7 @@ describe('summarizeDeployStatus — the one line the banner shows', () => {
 
   it('leads with the estate when the estate is the worse fact, and names both', () => {
     const behind = classifyEstateDrift({
-      buildSha: SHA, repo: REPO, compare: { status: 'ahead', ahead_by: 400, behind_by: 0 },
+      buildSha: SHA, repo: REPO, now: NOW, compare: behindBy(400, 5_000),
     });
     const broken = path({ runs: runs('failure', 'failure', 'failure') });
     const r = summarizeDeployStatus(behind, [broken], { generatedAt: 'x', repo: REPO });

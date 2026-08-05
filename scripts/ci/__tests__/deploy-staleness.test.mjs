@@ -319,44 +319,101 @@ test('disabled_inactivity (the 60-day auto-disable) also counts as disabled', ()
 });
 
 // --- classifyEstate ---------------------------------------------------------
+//
+// MEASUREMENT DISCIPLINE, for whoever re-walks this: measure the check's exit
+// code DIRECTLY, never through a pipe.
+//     node scripts/ci/check-deploy-staleness.mjs ; echo "EXIT=$?"     # correct
+//     node scripts/ci/check-deploy-staleness.mjs | tee x ; echo "$?"  # reads
+//                                                    tee's 0, ALWAYS
+// A reviewer measuring this control through a pipe read EXIT=0 when it was
+// really 1, and deploy-staleness.yml itself shipped the same `| tee` bug (fixed
+// there by capturing $? from the command and re-raising it). If you must pipe,
+// use ${PIPESTATUS[0]}.
 
-const ESTATE_BOUNDS = { name: 'Commercial', maxCommitsBehind: 20, maxAgeDays: 7 };
+const GRACE = 90;
+const ESTATE_BOUNDS = { name: 'Commercial', behindGraceMinutes: GRACE, maxAgeDays: 7 };
 const estate = (over) => classifyEstate({ ...ESTATE_BOUNDS, ...over });
+/** Minutes → the ISO date that many minutes ago (for behindSince). */
+const minsAgo = (m) => new Date(Date.now() - m * 60_000).toISOString();
 
-test('an estate too many commits behind main is STALE', () => {
-  const e = estate({ liveSha: 'abc1234567', commitsBehind: 40, ageDays: 2, ancestor: true });
-  assert.equal(e.stale, true);
-  assert.equal(e.state, 'behind');
-  assert.match(e.detail, /40 commits behind main/);
+test('MUTATION PROOF — the REAL 2026-08-05 estate (13 behind, ~16h) is NOT green', () => {
+  // THE CASE THIS CONTROL EXISTS FOR, and the one its first cut could not fire
+  // on. Live reading on 2026-08-05: marker sha 678b53bc, 13 commits behind main
+  // (14 once #3001 landed), oldest unapplied commit merged ~15.6 HOURS earlier,
+  // build commit ~16h old. Under the shipped `maxCommitsBehind: 20` this
+  // classified `ok` — the estate-drift half never fired on the actual drift, and
+  // the exit-1 came entirely from the WATCHED workflow rows.
+  //
+  // A threshold that cannot fire on today's real condition is not a signal.
+  const real = estate({
+    liveSha: '678b53bccccc4c23ae6afa7f851a22a6910d7bb0',
+    commitsBehind: 13,
+    ageDays: 1,
+    ancestor: true,
+    behindSince: minsAgo(936), // 15.6h
+    behindForMinutes: 936,
+  });
+  assert.equal(real.stale, true, 'a 13-commits-behind estate must produce a non-green signal');
+  assert.equal(real.state, 'behind');
+  assert.equal(real.commitsBehind, 13);
+  assert.match(real.detail, /roll path has stopped/);
+
+  // And it is the TIME, not the count, that fires: the same 13 commits with the
+  // oldest merged one minute ago is a roll in flight and is tolerated. Delete
+  // the grace and this goes red; restore a count band and the case above does.
+  const inFlight = estate({
+    liveSha: '678b53bc', commitsBehind: 13, ageDays: 0, ancestor: true,
+    behindSince: minsAgo(1), behindForMinutes: 1,
+  });
+  assert.equal(inFlight.stale, false, 'a merge one minute old is a roll in flight, not drift');
+  assert.equal(inFlight.state, 'behind');
 });
 
-test('CONTROL: an estate within BOTH bounds is ok (ordinary merge lag)', () => {
-  // The live 2026-08-05 reading: 12 behind, built the same day. Invert either
-  // comparison in classifyEstate and this case flips to stale.
-  const e = estate({ liveSha: '678b53bc', commitsBehind: 12, ageDays: 0, ancestor: true });
-  assert.equal(e.stale, false);
+test('ONE commit behind, past the grace, is STALE — there is no count band', () => {
+  // The strongest statement of the new rule: being behind AT ALL is the
+  // condition. Reintroduce any `commitsBehind > N` tolerance and this dies.
+  const e = estate({ liveSha: 'abc1234567', commitsBehind: 1, ageDays: 0, ancestor: true, behindForMinutes: GRACE + 1 });
+  assert.equal(e.stale, true);
   assert.equal(e.state, 'behind');
-  assert.equal(e.commitsBehind, 12);
 });
 
-test('an OLD build is stale even when few commits behind (a quiet week hides a dead roll)', () => {
-  const e = estate({ liveSha: 'abc1234567', commitsBehind: 1, ageDays: 30, ancestor: true });
+test('the grace bites at exactly behindGraceMinutes, in both directions', () => {
+  const at = (behindForMinutes) =>
+    estate({ liveSha: 'abc1234567', commitsBehind: 5, ageDays: 0, ancestor: true, behindForMinutes }).stale;
+  assert.equal(at(GRACE), false, 'exactly at the allowance is tolerated');
+  assert.equal(at(GRACE + 1), true, 'one minute past the allowance is stale');
+  // …and flipping `>` to `<` in classifyEstate swaps both of these.
+});
+
+test('behind with an UNMEASURABLE wait is STALE — unmeasured is not "recent"', () => {
+  // The recurring trap in its newest clothes: with no commit date there is
+  // nothing demonstrating an in-flight roll, so the allowance must not apply.
+  // Default behindForMinutes to 0 instead of null and this goes green.
+  for (const missing of [undefined, null]) {
+    const e = estate({ liveSha: 'abc1234567', commitsBehind: 9, ageDays: 0, ancestor: true, behindForMinutes: missing });
+    assert.equal(e.stale, true, `behindForMinutes=${String(missing)} must not buy a green`);
+    assert.equal(e.state, 'behind');
+    assert.match(e.detail, /could not be measured/);
+  }
+});
+
+test('an OLD build is stale even sitting exactly on main (a quiet week hides a dead build lane)', () => {
+  const e = estate({ liveSha: 'abc1234567', commitsBehind: 0, ageDays: 30, ancestor: true });
   assert.equal(e.stale, true);
+  assert.equal(e.state, 'current');
   assert.match(e.detail, /30d old/);
 });
 
-test('the estate bounds bite at exactly the limit, in both directions', () => {
-  const at = (commitsBehind, ageDays) =>
-    estate({ liveSha: 'abc1234567', commitsBehind, ageDays, ancestor: true }).stale;
-  assert.equal(at(20, 7), false, 'exactly at both limits is tolerated');
-  assert.equal(at(21, 7), true, 'one commit past the commit bound is stale');
-  assert.equal(at(20, 8), true, 'one day past the age bound is stale');
-});
-
-test('an estate exactly on main is current', () => {
+test('an estate exactly on main with a fresh build is current', () => {
   const e = estate({ liveSha: 'abc1234567', commitsBehind: 0, ageDays: 0, ancestor: true });
   assert.equal(e.state, 'current');
   assert.equal(e.stale, false);
+});
+
+test('the age bound bites at exactly maxAgeDays', () => {
+  const at = (ageDays) => estate({ liveSha: 'abc1234567', commitsBehind: 0, ageDays, ancestor: true }).stale;
+  assert.equal(at(7), false);
+  assert.equal(at(8), true);
 });
 
 test('an UNMEASURABLE estate is STALE, never "current" (the recurring trap)', () => {
@@ -409,14 +466,23 @@ test('full-app-deploy watches the image contexts NO other lane builds', () => {
   }
 });
 
-test('ESTATES is non-empty and every entry carries BOTH bounds', () => {
+test('ESTATES carries a SMALL time allowance and NO commit-count band', () => {
   // An empty ESTATES would make the live-estate half of this control measure
   // nothing while still printing a header — the hollow-gate shape.
   assert.ok(Array.isArray(ESTATES) && ESTATES.length > 0);
   for (const e of ESTATES) {
     assert.equal(typeof e.name, 'string');
     assert.match(e.markerUrl, /^https:\/\/.+\/build-marker\.txt$/);
-    assert.equal(typeof e.maxCommitsBehind, 'number');
+    assert.equal(typeof e.behindGraceMinutes, 'number');
     assert.equal(typeof e.maxAgeDays, 'number');
+    // The band that made this control unable to fire on the real estate must
+    // not come back under any name.
+    assert.equal(e.maxCommitsBehind, undefined,
+      `${e.name}: a commit-count tolerance is what let a 13-behind estate read ok`);
+    // "Keep it small" with teeth. 4 hours is already far past this repo's
+    // measured ~56-minute build-and-roll cycle; anything beyond it is a
+    // tolerance for a broken roll path, not for a build in flight.
+    assert.ok(e.behindGraceMinutes > 0 && e.behindGraceMinutes <= 240,
+      `${e.name}: the roll-in-flight allowance must stay small (got ${e.behindGraceMinutes}min)`);
   }
 });

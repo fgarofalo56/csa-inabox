@@ -325,6 +325,11 @@ export const WATCHED = [
       '.github/workflows/full-app-deploy-commercial.yml',
       'scripts/csa-loom/stage-copilot-corpus.sh',
       'platform/fiab/bicep/main.bicep',
+      // refs #2958/#3001 — this lane now runs the same ACR image preflight the
+      // phase-1 reconcile does, so the script that decides whether the deploy
+      // proceeds is a deploy source of THIS lane too. check-deploy-paths-coverage
+      // caught its absence the moment #3001 landed underneath this entry.
+      'scripts/ci/assert-acr-image-tags.sh',
       'apps/fiab-wrangler-host/**',
       'apps/fiab-dbt-runner/**',
       'apps/loom-transform-runner/**',
@@ -360,17 +365,36 @@ export const ESTATES = [
     name: 'Commercial',
     markerUrl: process.env.LOOM_ESTATE_MARKER_URL
       || 'https://csa-loom.limitlessdata.ai/build-marker.txt',
-    // The Commercial estate is rolled onto a fresh image by
-    // build-fiab-images-acr-tasks + loom-roll-and-validate on merge, so a
-    // HEALTHY estate sits within a handful of commits of main and a burst of
-    // merges is ordinary. 20 is not a tolerance for normal lag — it is the
-    // assertion that the roll path is still running at all. On 2026-08-05 the
-    // live estate was 12 behind with a roll path that had been failing for
-    // hours, which is the shape this bound is set to catch before it becomes
-    // six weeks.
-    maxCommitsBehind: 20,
-    // Independent of commit count, because a quiet week on main can hide a dead
-    // roll path behind a low commits-behind number.
+    // THERE IS NO COMMIT-COUNT TOLERANCE, and the first cut of this entry having
+    // one is the point. It shipped `maxCommitsBehind: 20` while the live estate
+    // was 13 behind — so the control written because "nothing surfaces 'the
+    // estate is N commits behind'" classified the actual estate `ok`, and the
+    // exit-1 came entirely from the WATCHED rows. A signal that cannot fire on
+    // the condition it was written for is not a signal. A 20-commit band also
+    // lets an estate sit two thirds of the way to a fortnight's divergence and
+    // read green — the exact state that went unnoticed for two weeks. Per the
+    // deploy-integrity rule (#3004, R3), drift is a defect with an owner,
+    // not a tolerance band.
+    //
+    // BEHIND AT ALL IS THE CONDITION. The only tolerance is a small TIME window
+    // for a roll that is legitimately in flight, measured against the OLDEST
+    // commit the estate is missing — "how long has merged code been undeployed"
+    // — never against a count.
+    //
+    // WHY NOT "AGE OF THE RUNNING BUILD": a healthy estate that rolled three
+    // hours ago and takes a merge one minute ago is behind by 1 with a
+    // three-hour-old build. Grading on build age would fire on every merge into
+    // a healthy estate; grading on the missing commit's age says "one minute"
+    // and correctly waits.
+    //
+    // WHY 90 MINUTES — measured from this repo's own merge→estate cycle on
+    // 2026-08-05: build-fiab-images-acr-tasks successes ran 7–38 min,
+    // loom-roll-and-validate successes 8–18 min ⇒ ~56 min observed worst case.
+    // 90 is ~1.6× headroom and nothing more.
+    behindGraceMinutes: 90,
+    // Independent second bound, kept from the first cut: an image older than
+    // this means the image-build lane has produced nothing for a week, which is
+    // a dead roll path even on a quiet branch where commitsBehind stays low.
     maxAgeDays: 7,
   },
 ];
@@ -535,16 +559,27 @@ export function classifyWorkflowState(state) {
  * Estate-drift verdict for one live deployment. PURE.
  *
  * Inputs are already-measured facts: the sha the estate reports serving, how
- * many commits main is ahead of it, and how old that build's commit is.
+ * many commits main is ahead of it, how old that build's commit is, and how long
+ * the OLDEST commit it is missing has been waiting.
  *
  *   error / liveSha null / commitsBehind null  → UNKNOWN, and UNKNOWN IS STALE.
  *       We could not measure the estate, so we must not report it current. This
  *       repo has been burned three separate times by an unmeasured thing
  *       rendering as a negative result; the fix is always the same — give the
  *       unknown its own state and let it fail.
- *   commitsBehind === 0                        → current.
- *   behind, within both bounds                 → behind but tolerated (ok).
- *   over EITHER bound                          → stale.
+ *   commitsBehind === 0                        → current (stale only if the
+ *       running image is older than maxAgeDays, i.e. nothing has built in a
+ *       week — a dead build lane a quiet branch would otherwise hide).
+ *   behind, oldest missing commit within the
+ *       grace                                  → behind but tolerated (ok).
+ *   behind, past the grace                     → STALE.
+ *   behind, grace UNMEASURABLE                 → STALE. An unmeasured wait is
+ *       not a short wait; the allowance exists for a roll that is demonstrably
+ *       in flight, and with no date there is nothing demonstrating it.
+ *
+ * THERE IS NO COMMIT-COUNT THRESHOLD — see the ESTATES entry for why the
+ * 20-commit band was removed (it classified a 13-behind live estate as `ok`,
+ * i.e. it could not fire on the condition this control exists for).
  *
  * `ancestor:false` is called out separately: a live sha that is not an ancestor
  * of main is not "behind", it is a DIVERGENT build (a force-push, a revert, or
@@ -553,47 +588,75 @@ export function classifyWorkflowState(state) {
  *
  * @param {{name:string, liveSha?:string|null, commitsBehind?:number|null,
  *          ageDays?:number|null, ancestor?:boolean, error?:string|null,
- *          maxCommitsBehind:number, maxAgeDays:number}} a
+ *          behindSince?:string|null, behindForMinutes?:number|null,
+ *          behindGraceMinutes:number, maxAgeDays:number}} a
  */
 export function classifyEstate({
   name, liveSha, commitsBehind, ageDays, ancestor, error,
-  maxCommitsBehind, maxAgeDays,
+  behindSince, behindForMinutes,
+  behindGraceMinutes, maxAgeDays,
 }) {
   if (error || !liveSha) {
     return {
       name, state: 'unknown', stale: true, liveSha: liveSha || null,
-      commitsBehind: null, ageDays: null,
+      commitsBehind: null, ageDays: null, behindSince: null, behindForMinutes: null,
       detail: `could not measure the live estate — ${error || 'no build sha in the marker'}`,
     };
   }
   if (ancestor === false) {
     return {
       name, state: 'divergent', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
+      behindSince: null, behindForMinutes: null,
       detail: `the running build ${liveSha.slice(0, 8)} is NOT an ancestor of main — it was built from a branch, a revert, or a force-pushed history`,
     };
   }
   if (commitsBehind === null || commitsBehind === undefined) {
     return {
       name, state: 'unknown', stale: true, liveSha, commitsBehind: null, ageDays: ageDays ?? null,
+      behindSince: null, behindForMinutes: null,
       detail: `the running build ${liveSha.slice(0, 8)} is not in this checkout — the commit distance to main could not be computed`,
     };
   }
-  const overCommits = commitsBehind > maxCommitsBehind;
+
   const overAge = (ageDays ?? 0) > maxAgeDays;
-  const state = commitsBehind === 0 ? 'current' : 'behind';
-  const bound = overCommits
-    ? `${commitsBehind} commits behind main (limit ${maxCommitsBehind})`
-    : `the running build is ${ageDays}d old (limit ${maxAgeDays}d)`;
+  const shell = {
+    name, liveSha, commitsBehind, ageDays: ageDays ?? null,
+    behindSince: behindSince ?? null, behindForMinutes: behindForMinutes ?? null,
+  };
+
+  if (commitsBehind === 0) {
+    return {
+      ...shell,
+      state: 'current',
+      stale: overAge,
+      detail: overAge
+        ? `on main, but the running image is ${ageDays}d old (limit ${maxAgeDays}d) — nothing has built for a week`
+        : `on main (0 commits behind), build ${ageDays ?? '?'}d old`,
+    };
+  }
+
+  // Behind at all. The ONLY thing that can tolerate it is a demonstrably
+  // in-flight roll, and that has to be demonstrated with a timestamp.
+  if (behindForMinutes === null || behindForMinutes === undefined) {
+    return {
+      ...shell,
+      state: 'behind',
+      stale: true,
+      detail: `${commitsBehind} commit(s) behind main, and HOW LONG they have been waiting could not be measured `
+        + `— the ${behindGraceMinutes}min roll-in-flight allowance cannot apply. Unmeasured is not "recent"`,
+    };
+  }
+  const pastGrace = behindForMinutes > behindGraceMinutes;
   return {
-    name,
-    state,
-    stale: overCommits || overAge,
-    liveSha,
-    commitsBehind,
-    ageDays: ageDays ?? null,
-    detail: (overCommits || overAge)
-      ? `${bound} — the roll path has stopped applying main to this estate`
-      : `${commitsBehind} commit(s) behind main, build ${ageDays ?? '?'}d old`,
+    ...shell,
+    state: 'behind',
+    stale: pastGrace || overAge,
+    detail: pastGrace
+      ? `${commitsBehind} commit(s) behind main, oldest unapplied for ${behindForMinutes}min (allowance ${behindGraceMinutes}min) `
+        + '— longer than a build and roll take, so the roll path has stopped applying main to this estate'
+      : overAge
+        ? `${commitsBehind} commit(s) behind main and the running image is ${ageDays}d old (limit ${maxAgeDays}d)`
+        : `${commitsBehind} commit(s) behind main, oldest unapplied only ${behindForMinutes}min ago — a roll is plausibly in flight`,
   };
 }
 
@@ -631,7 +694,8 @@ function workflowStates() {
 
 /**
  * Measure one live estate: fetch its /build-marker.txt, then ask GIT how far
- * main is ahead of the sha it reports.
+ * main is ahead of the sha it reports AND how long the oldest commit it is
+ * missing has been waiting.
  *
  * No credentials, no `az`, no Azure login. The marker is served unauthenticated
  * because loom-roll-and-validate already probes it.
@@ -654,19 +718,39 @@ async function probeEstate(estate) {
   let ancestor;
   let commitsBehind = null;
   let ageDays = null;
+  let behindSince = null;
+  let behindForMinutes = null;
   try {
     git(['cat-file', '-e', `${liveSha}^{commit}`]);
     ancestor = (() => {
       try { git(['merge-base', '--is-ancestor', liveSha, 'HEAD']); return true; } catch { return false; }
     })();
-    if (ancestor) commitsBehind = Number(git(['rev-list', '--count', `${liveSha}..HEAD`]));
+    if (ancestor) {
+      commitsBehind = Number(git(['rev-list', '--count', `${liveSha}..HEAD`]));
+      if (commitsBehind > 0) {
+        // The OLDEST unapplied commit's date — "how long has merged code been
+        // sitting undeployed". Reduced rather than indexed so it does not depend
+        // on git's output ordering, and reduced rather than Math.min(...spread)
+        // so a badly-behind estate cannot blow the argument limit.
+        const oldest = git(['log', '--format=%cI', `${liveSha}..HEAD`])
+          .split('\n')
+          .map((s) => Date.parse(s.trim()))
+          .reduce((min, t) => (Number.isFinite(t) && t < min ? t : min), Number.POSITIVE_INFINITY);
+        if (Number.isFinite(oldest)) {
+          behindSince = new Date(oldest).toISOString();
+          behindForMinutes = Math.max(0, Math.round((Date.now() - oldest) / 60_000));
+        }
+        // A null behindForMinutes here is left null on purpose: classifyEstate
+        // treats an unmeasurable wait as stale, never as a fresh one.
+      }
+    }
     ageDays = Math.max(0, Math.round((Date.now() - Date.parse(git(['log', '-1', '--format=%cI', liveSha]))) / DAY_MS));
   } catch {
     // The sha is not in this checkout (shallow clone, or a build off a deleted
     // branch). UNKNOWN — classifyEstate turns that into a loud stale, not a green.
     return classifyEstate({ ...estate, liveSha, commitsBehind: null, ageDays: null });
   }
-  return classifyEstate({ ...estate, liveSha, commitsBehind, ageDays, ancestor });
+  return classifyEstate({ ...estate, liveSha, commitsBehind, ageDays, ancestor, behindSince, behindForMinutes });
 }
 
 /**
@@ -785,8 +869,12 @@ async function main() {
   // ── the LIVE estate, first: it is the fact the operator was missing ───────
   console.log('[deploy-staleness] live estate vs main:');
   for (const e of estates) {
-    const verdict = e.stale ? 'BEHIND' : 'ok    ';
-    console.log(`  ${verdict}  ${e.name.padEnd(12)} ${e.liveSha ? e.liveSha.slice(0, 8) : '????????'}  ${e.detail}`);
+    // The verdict word is STALE/ok, not BEHIND/ok: an estate can be exactly on
+    // main and still stale (nothing has built for a week), and one that is
+    // behind by a few minutes is not. Printing the classifier's own state next
+    // to it keeps the two facts from being conflated.
+    const verdict = e.stale ? 'STALE' : 'ok   ';
+    console.log(`  ${verdict}  ${e.name.padEnd(12)} ${e.liveSha ? e.liveSha.slice(0, 8) : '????????'}  [${e.state}] ${e.detail}`);
   }
   // An estate we cannot see must never read as an estate that is current.
   console.log('  note: Azure Government is NOT measured here — its console has no publicly');

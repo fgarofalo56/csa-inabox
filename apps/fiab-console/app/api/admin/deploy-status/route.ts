@@ -29,7 +29,7 @@
  * optional LOOM_FEEDBACK_GITHUB_TOKEN is used only to raise the rate limit.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { readBuildMarker } from '@/lib/updates/current-version';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
@@ -109,6 +109,11 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
   const cloud = detectLoomCloud();
 
   // 1. How far behind the default branch is the image serving this request?
+  //    The compare response's `commits[]` is load-bearing, not incidental: it
+  //    carries the DATE of the oldest commit this estate is missing, which is
+  //    what classifyEstateDrift tolerates a roll-in-flight against. There is no
+  //    commit-count tolerance any more — being behind at all is the condition —
+  //    so the only thing standing between "behind" and "error" is that date.
   const compare = build.sha
     ? await ghJson<CompareResult>(`/repos/${REPO}/compare/${build.sha}...${BRANCH}`)
     : { error: 'this image carries no build sha' };
@@ -149,10 +154,20 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
   });
 }
 
-export async function GET() {
-  const session = getSession();
-  const gate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (gate) return gate;
+/**
+ * ROUTE-TOOLKIT (R3). The session prologue is `withSession`, not a hand-rolled
+ * `getSession()` — this route is net-new, so shipping it hand-rolled would have
+ * ADDED to the ratchet baseline the toolkit migration exists to drain (and it
+ * did: check-route-toolkit failed this file at 1 over a baseline of 0). The
+ * capability gate runs INSIDE the wrapper, the same composition
+ * /api/admin/gates/[id]/options uses: withSession answers "is there a session"
+ * (401), enforceCapability answers "may this session do admin work" (403).
+ * Byte-compatible 401 — `apiUnauthorized()` is `{ok:false,error:'unauthenticated'}`
+ * at 401, exactly what `enforceCapability(null, …)` returned before.
+ */
+export const GET = withSession(async (_req, { session }) => {
+  const capGate = await enforceCapability(session, 'admin.env-config', 'Admin');
+  if (capGate) return capGate;
 
   // Up to 9 upstream calls; unauthenticated GitHub allows 60/hour per egress IP.
   // A 10-minute TTL keeps a busy readiness page well inside that budget while
@@ -167,4 +182,4 @@ export async function GET() {
   );
 
   return NextResponse.json({ ok: true, ...value, stale: meta.stale ?? false });
-}
+});

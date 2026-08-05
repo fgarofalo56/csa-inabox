@@ -53,6 +53,19 @@ export interface CompareResult {
   ahead_by: number;
   /** Commits the running build has that the default branch does not. */
   behind_by: number;
+  /**
+   * The commits in base..head — i.e. exactly the ones this estate is MISSING,
+   * oldest first. Load-bearing, not decoration: their dates are the only way to
+   * ask "how LONG has this code been undeployed", which is what replaced the
+   * commit-count tolerance below. Capped by GitHub at 250 per page, starting
+   * from the oldest, so the oldest is always present when ahead_by > 0.
+   */
+  commits?: Array<{
+    commit?: {
+      committer?: { date?: string | null } | null;
+      author?: { date?: string | null } | null;
+    } | null;
+  } | null> | null;
 }
 
 export interface EstateDrift {
@@ -65,6 +78,10 @@ export interface EstateDrift {
   state: DeployDriftState;
   /** Commits the branch is ahead of the running build; null when unknown. */
   commitsBehind: number | null;
+  /** Date of the OLDEST commit this estate is missing; null when unmeasured. */
+  behindSince: string | null;
+  /** How long this estate has been missing that commit; null when unmeasured. */
+  behindForMinutes: number | null;
   severity: DeploySeverity;
   headline: string;
   detail: string;
@@ -102,16 +119,39 @@ export interface DeployStatusReport {
 }
 
 /**
- * How far behind main the running build may drift before the banner turns.
+ * How long merged code may sit UNAPPLIED to this estate before the banner turns.
  *
- * NOT zero: the estate is rolled onto a fresh image on merge, so a burst of
- * merges legitimately leaves it a few commits behind for minutes. This bound is
- * not a tolerance for that — it is the assertion that the roll path is running
- * at all. Matched deliberately to ESTATES[].maxCommitsBehind in
+ * THERE IS NO COMMIT-COUNT TOLERANCE, and the first cut of this file having one
+ * is the point. It shipped `MAX_COMMITS_BEHIND = 20`, and the live estate was 13
+ * behind — so the control written because "nothing surfaces 'the estate is N
+ * commits behind'" classified the actual estate as `ok` and could not fire on
+ * the condition it exists for. A 20-commit band lets an estate sit two thirds of
+ * the way to a fortnight's divergence and read green, which is exactly the state
+ * that went unnoticed for two weeks. Per the deploy-integrity rule
+ * (#3004, R3), drift is a defect with an owner, not a tolerance band.
+ *
+ * So: BEHIND AT ALL IS THE CONDITION. `commitsBehind > 0` is reported, always.
+ * The only tolerance is a small TIME window for a roll that is legitimately in
+ * flight, and it is measured against the OLDEST commit the estate is missing —
+ * "how long has merged code been undeployed" — not against a count.
+ *
+ * WHY THAT CLOCK AND NOT "AGE OF THE RUNNING BUILD". A healthy estate that
+ * rolled three hours ago and takes a merge one minute ago is behind by 1 with a
+ * three-hour-old build; grading it on build age would fire on every merge into a
+ * perfectly healthy estate. Grading it on the age of the missing commit says
+ * "one minute" and correctly waits.
+ *
+ * WHY 90 MINUTES. Measured, not guessed, from this repo's own merge→estate
+ * cycle on 2026-08-05: build-fiab-images-acr-tasks successes ran 7–38 min and
+ * loom-roll-and-validate successes 8–18 min, so the observed worst case is ~56
+ * minutes end to end. 90 leaves ~1.6× headroom and nothing more. Anything longer
+ * would be a tolerance for a broken roll path wearing a build's clothes.
+ *
+ * Matched deliberately to ESTATES[].behindGraceMinutes in
  * scripts/ci/check-deploy-staleness.mjs so CI and the console cannot disagree
  * about what "behind" means (one number, two surfaces).
  */
-export const MAX_COMMITS_BEHIND = 20;
+export const BEHIND_GRACE_MINUTES = 90;
 
 /**
  * Consecutive completed failures that make a deploy lane "failing".
@@ -184,6 +224,28 @@ export function deployPathsForCloud(cloud: string | undefined | null): DeployPat
 }
 
 /**
+ * Date of the OLDEST commit in a compare result — the one this estate has been
+ * missing longest. PURE. Returns null when the response carried no usable date,
+ * which the caller must treat as UNMEASURED (and therefore untolerated), never
+ * as zero.
+ *
+ * Scans every row rather than trusting `commits[0]`: GitHub documents the array
+ * as oldest-first, but a verdict that turns on ordering nobody re-checks is a
+ * verdict waiting to be wrong. `min` over the set is ordering-independent.
+ */
+export function oldestUnappliedAt(compare: CompareResult | null | undefined): string | null {
+  const rows = compare?.commits;
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let min = Number.POSITIVE_INFINITY;
+  for (const r of rows) {
+    const d = r?.commit?.committer?.date || r?.commit?.author?.date || null;
+    const t = d ? Date.parse(d) : NaN;
+    if (Number.isFinite(t) && t < min) min = t;
+  }
+  return Number.isFinite(min) ? new Date(min).toISOString() : null;
+}
+
+/**
  * Estate-drift verdict. PURE.
  *
  * `compare` is GitHub's `compare/{buildSha}...{branch}` result, where BASE is
@@ -198,8 +260,15 @@ export function deployPathsForCloud(cloud: string | undefined | null): DeployPat
  *                                  between unrelated histories is meaningless,
  *                                  so none is reported.
  *   identical                    → CURRENT.
- *   ahead within the bound       → BEHIND, ok (ordinary merge lag).
- *   ahead past the bound         → BEHIND, error — the roll path has stopped.
+ *   behind, oldest missing commit
+ *     within BEHIND_GRACE_MINUTES → BEHIND, ok — a roll is plausibly in flight.
+ *   behind, past the grace        → BEHIND, error — the roll path has stopped.
+ *   behind, grace UNMEASURABLE    → BEHIND, error. An unmeasured grace is not a
+ *                                  grace; the one thing this file never does is
+ *                                  let an unknown buy a green.
+ *
+ * NOTE THE ABSENCE OF A COUNT THRESHOLD. Any `ahead_by > 0` is reported as
+ * behind. See BEHIND_GRACE_MINUTES for why the count band was removed.
  */
 export function classifyEstateDrift(input: {
   buildSha?: string | null;
@@ -208,17 +277,24 @@ export function classifyEstateDrift(input: {
   repo?: string;
   compare?: CompareResult | null;
   error?: string | null;
-  maxCommitsBehind?: number;
+  /** Injected in tests; defaults to now. */
+  now?: number;
+  graceMinutes?: number;
 }): EstateDrift {
   const branch = input.branch || 'main';
   const buildSha = input.buildSha || null;
   const buildStamp = input.buildStamp || null;
-  const max = input.maxCommitsBehind ?? MAX_COMMITS_BEHIND;
+  const now = input.now ?? Date.now();
+  const grace = input.graceMinutes ?? BEHIND_GRACE_MINUTES;
   const short = buildSha ? buildSha.slice(0, 8) : null;
   const compareUrl = buildSha && input.repo
     ? `https://github.com/${input.repo}/compare/${buildSha}...${branch}`
     : null;
-  const base = { buildSha, buildStamp, branch, compareUrl };
+  const base = {
+    buildSha, buildStamp, branch, compareUrl,
+    behindSince: null as string | null,
+    behindForMinutes: null as number | null,
+  };
 
   if (!buildSha) {
     return {
@@ -267,20 +343,49 @@ export function classifyEstateDrift(input: {
       detail: `Running build ${short}${buildStamp ? ` (built ${buildStamp})` : ''} — no commits behind ${branch}.`,
     };
   }
-  const over = aheadBy > max;
+
+  const behindSince = oldestUnappliedAt(input.compare);
+  const behindForMinutes = behindSince
+    ? Math.max(0, Math.round((now - Date.parse(behindSince)) / 60_000))
+    : null;
+  const built = buildStamp ? ` (built ${buildStamp})` : '';
+  const plural = aheadBy === 1 ? 'commit' : 'commits';
+
+  // An UNMEASURED wait is not a short wait. The grace exists for a roll that is
+  // demonstrably in flight; with no date to demonstrate it, the estate is behind
+  // and that is what gets said.
+  if (behindForMinutes === null) {
+    return {
+      ...base,
+      state: 'behind',
+      commitsBehind: aheadBy,
+      severity: 'error',
+      headline: `This estate is ${aheadBy} ${plural} behind ${branch}`,
+      detail: `Running build ${short}${built}. ${aheadBy} merged ${plural} have never reached this estate, and `
+        + `HOW LONG they have been waiting could not be measured (the compare carried no commit dates), so the `
+        + `${grace}-minute roll-in-flight allowance cannot apply. Unmeasured is not "recent".`,
+    };
+  }
+
+  const inFlight = behindForMinutes <= grace;
   return {
     ...base,
+    behindSince,
+    behindForMinutes,
     state: 'behind',
     commitsBehind: aheadBy,
-    severity: over ? 'error' : 'ok',
-    headline: over
-      ? `This estate is ${aheadBy} commits behind ${branch}`
-      : `This estate is ${aheadBy} commit(s) behind ${branch}`,
-    detail: over
-      ? `Running build ${short}${buildStamp ? ` (built ${buildStamp})` : ''}. ${aheadBy} merged commits have never reached this estate `
-        + `(limit ${max}) — the roll path has stopped applying ${branch}. Everything merged since ${short} is inert here, `
-        + 'including any capability fix you are looking at on this page.'
-      : `Running build ${short}${buildStamp ? ` (built ${buildStamp})` : ''}. Ordinary merge lag — within the ${max}-commit bound.`,
+    severity: inFlight ? 'ok' : 'error',
+    headline: inFlight
+      ? `This estate is ${aheadBy} ${plural} behind ${branch} (a roll is in flight)`
+      : `This estate is ${aheadBy} ${plural} behind ${branch}`,
+    detail: inFlight
+      ? `Running build ${short}${built}. The oldest unapplied commit merged ${behindForMinutes} minute(s) ago — `
+        + `inside the ${grace}-minute build-and-roll window, so a roll is plausibly still running. `
+        + 'This is the ONLY tolerated form of behind.'
+      : `Running build ${short}${built}. ${aheadBy} merged ${plural} have never reached this estate, the oldest `
+        + `waiting ${behindForMinutes} minutes (allowance ${grace}) — that is longer than a build and roll take, so `
+        + `the roll path has stopped applying ${branch}. Everything merged since ${short} is inert here, including `
+        + 'any capability fix you are looking at on this page.',
   };
 }
 

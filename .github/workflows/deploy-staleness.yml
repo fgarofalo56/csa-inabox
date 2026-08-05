@@ -61,10 +61,23 @@ jobs:
       # The verdict is written to the RUN SUMMARY as well as the log. A control
       # whose output is buried twelve steps into a log is a control nobody
       # reads, which is the failure mode this lane exists to prevent — so the
-      # answer renders on the run page itself. `tee` keeps the log copy; the
-      # step still fails on a non-zero exit because the pipe is not swallowed
-      # (pipefail is on by default for `run:` under bash -eo pipefail).
+      # answer renders on the run page itself.
+      #
+      # MEASURE THE EXIT CODE DIRECTLY, NOT THROUGH A PIPE. The first cut of
+      # this step was `node … | tee -a "$GITHUB_STEP_SUMMARY"` with a comment
+      # asserting "pipefail is on by default". IT IS NOT: GitHub's default
+      # non-Windows shell is `bash -e {0}`; only an explicit `shell: bash` gets
+      # `-eo pipefail`. So the pipeline's status was `tee`'s — always 0 — and
+      # this step would have reported SUCCESS while the check exited 1. That is
+      # the "gate that cannot fail" shape, inside the gate written to stop deploy
+      # failures being missed. The same trap bit a reviewer measuring this PR's
+      # exit code through a pipe and reading EXIT=0 when it was really 1.
+      #
+      # So: redirect to a file, capture `$?` from the command itself, print it,
+      # append it, and re-raise. No pipe, no `|| true`, no continue-on-error —
+      # `rc` is propagated verbatim by the final `exit`.
       - name: Check the live estate + every watched deploy path
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -73,10 +86,18 @@ jobs:
             echo
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          node scripts/ci/check-deploy-staleness.mjs 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          set +e
+          node scripts/ci/check-deploy-staleness.mjs > "$RUNNER_TEMP/deploy-staleness.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/deploy-staleness.txt"
+          cat "$RUNNER_TEMP/deploy-staleness.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo "[deploy-staleness] exit=$rc (measured directly, not through a pipe)"
+          exit "$rc"
 
       - name: Close the summary code fence
         if: always()
+        shell: bash
         run: |
           {
             echo '```'
