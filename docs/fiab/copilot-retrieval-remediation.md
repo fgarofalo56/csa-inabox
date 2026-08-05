@@ -511,3 +511,66 @@ scoring profile, which §4 measured as *not* a free win.
    the §9 ranker change AND a reindexed target.
 4. **Floors untouched.** As with P0–P2, nothing here licenses a floor change; P4
    still requires ≥3 real runs through the raise-only ratchet.
+
+## 10. The freshness manifest could never be written on AI Search (#2964)
+
+`#2953` made `freshness.state === 'fresh'` — the DURABLE, cross-replica corpus
+manifest — the completion signal for the reindex gate, and made a poll timeout a
+failure. Both decisions were right. But the manifest write had never worked on
+the backend the console actually runs (**AI Search**), so the gate could only
+ever time out: `copilot-quality-evals` run `30964329751` died in its reindex
+step after 900s of `freshness=never-indexed job=succeeded`, and the evals never
+ran at all.
+
+**Root cause.** The manifest carries a per-source-file map — ~482 KB for the
+live corpus (3,942 files) — and it was written as ONE AI Search document with
+the whole JSON in the `content` field. Azure AI Search rejects that:
+
+```
+POST /indexes/loom-docs/docs/index
+-> HTTP 207
+   value[0].status       = false
+   value[0].errorMessage = "Field 'content' contains a term that is too large to
+                            process. The max length for UTF-8 encoded terms is
+                            32766 bytes."
+```
+
+**207 Multi-Status is a 2xx**, so `response.ok` was `true`. The rejection existed
+only in the response body, which `saveManifest` never read, and `saveManifest`
+returned `void` so `reindex()` could not have surfaced it anyway. The write was
+a silent no-op on every run since the incremental index shipped — which is also
+why every AI Search reindex was a FULL rebuild: the incremental path needs a
+manifest to diff against and there was never one to load.
+
+Measured against a live search service on the exact index definition:
+`content` = 32,766 bytes is accepted; 32,770 bytes is rejected.
+
+**Fix.**
+
+1. **The manifest is split** so no single document can approach the ceiling:
+   * `corpus-manifest` — the HEAD (everything except `files`, plus a
+     `fileShards` count). ~265 bytes. This is all `corpusFreshness()` reads, so
+     the signal CI gates on is one small lookup.
+   * `corpus-manifest_f<i>` — gzip+base64 shards of the `files` map, 24,000
+     bytes each (base64 is ASCII, so a character budget is a byte budget). The
+     live corpus produces 7 shards.
+   Shards are written BEFORE the head, so an interrupted write leaves no head →
+   `never-indexed` → a safe full rebuild, never a half-manifest that reads as
+   complete. Cosmos keeps the single-document form; its 2 MB document ceiling
+   accommodates the whole manifest.
+2. **Every `docs/index` write is verified from the response BODY**, not from the
+   HTTP status — a shared `indexBatch()` helper parses `value[i].status` /
+   `errorMessage`, and an unparseable body is a failure, never a pass. This also
+   makes `uploaded` count what the service ACCEPTED rather than what was sent,
+   so comparing it against `freshness.indexedChunkCount` finally means something.
+3. **A failed manifest write fails the run.** `reindex()` returns `ok:false` with
+   the AI Search error, so `job.state` goes `failed`, and
+   `scripts/ci/reindex-loom-docs.sh` breaks out of its poll loop immediately
+   (`POLL_OUTCOME=failed` → exit 1) instead of waiting out the 900s cap with no
+   reason. A run that indexed every chunk but could not persist the manifest has
+   not completed as far as any caller can observe.
+
+Covered by `lib/azure/__tests__/loom-docs-index-manifest-persistence.test.ts`,
+whose emulator enforces the same 32,766-byte ceiling and the same 207 semantics
+measured on the live service — and asserts that it does, so the fixture cannot
+degrade into one that merely agrees with the code.
