@@ -1471,6 +1471,11 @@ nav:
       # ------------------------------------------------------------
       - Deployment:
           - Index: fiab/deployment/index.md
+          - Greenfield (empty subscription): fiab/deployment/greenfield.md
+          - Brownfield (adopt existing infrastructure): fiab/deployment/brownfield.md
+          - Discovery and Adoption Reference: fiab/deployment/discovery-and-adoption.md
+          - Failure Recovery: fiab/deployment/failure-recovery.md
+          - Bring-Your-Own Services: fiab/bring-your-own-services.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
           - From azd CLI: fiab/deployment/azd-cli.md
           - Continuous-deployment pipelines:

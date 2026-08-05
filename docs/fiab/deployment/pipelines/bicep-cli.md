@@ -62,10 +62,21 @@ full sequence + VNet peering.
 After Bicep finishes, run the post-deploy bootstrap (Power BI tenant SP
 grant, Databricks SCIM with allow-cluster-create, Dataverse AppUser):
 
+> **The canonical, tested bootstrap is the
+> `csa-loom-post-deploy-bootstrap.yml` workflow** — it runs the cloud-agnostic
+> composite steps against any boundary and is what this repo's own deploy
+> workflows chain. Prefer it. The individual scripts below are the same work,
+> for pipelines that cannot dispatch a GitHub workflow.
+
 ```bash
-bash scripts/csa-loom/bootstrap-all.sh \
-  --boundary "$BOUNDARY" \
-  --environment prod
+gh workflow run csa-loom-post-deploy-bootstrap.yml \
+  -f boundary="$BOUNDARY" -f region="$LOOM_LOCATION" \
+  -f admin_subscription="$SUBSCRIPTION_ID"
+
+# …or, script-by-script, outside GitHub Actions:
+bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+bash scripts/csa-loom/grant-navigator-rbac.sh
+bash scripts/csa-loom/grant-powerplatform-sp.sh
 ```
 
 ## Validation

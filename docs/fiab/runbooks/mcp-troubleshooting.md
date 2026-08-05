@@ -67,7 +67,7 @@ az role assignment list --assignee <mcp-mi-client-id>
 - Pin Azure MCP image to a stable release tag (don't track `main`)
 - Add health-check monitor with alert if `/health` returns non-200
 - Monitor `mcp-tool-call-success-rate` < 99% → alert
-- Document MCP MI permissions in `platform/fiab/bicep/modules/admin-plane/mcp-app.bicep`
+- Document MCP MI permissions in `platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep`
 
 ## Related
 

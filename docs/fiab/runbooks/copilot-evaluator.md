@@ -2,7 +2,7 @@
 
 **Scope:** the `func-cpeval-*` Azure Function
 (`azure-functions/copilot-evaluator`, deployed by
-`platform/fiab/bicep/modules/admin-plane/copilot-evaluator-function.bicep`) —
+`platform/fiab/bicep/modules/admin-plane/copilot-evaluator-job.bicep`) —
 nightly + on-demand Copilot quality evals over the E1 golden sets
 (`content/evals/*.jsonl`), scored against the REAL retrieval + AOAI path via
 the console's internal `POST /api/internal/copilot/eval-probe` route and

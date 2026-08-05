@@ -7,6 +7,51 @@ Loom Console URL in your tenant. The platform is shipped as
 infrastructure-as-code; you deploy it into your own Azure
 subscription via one of two paths.
 
+## Start here — greenfield or brownfield?
+
+This is the first decision, and it is not a preference. It is determined by what
+is already in your subscriptions.
+
+<div class="grid cards" markdown>
+
+-   :material-sprout: [**Greenfield** — empty subscription](greenfield.md)
+
+    The target subscription contains no Azure resource Loom could adopt and no
+    existing `rg-csa-loom-admin-*` hub. Every backing service is deployed new.
+    Three phases: infrastructure → app images → post-deploy bootstrap.
+
+-   :material-office-building-cog: [**Brownfield** — adopt what exists](brownfield.md)
+
+    Your tenant already has a Purview account, a shared AI Search, an ADLS lake,
+    an existing VNet, or a previous Loom hub. Loom inventories your
+    subscriptions and you decide, per service, adopt / create / skip.
+
+</div>
+
+Two supporting references, used by both paths:
+
+<div class="grid cards" markdown>
+
+-   :material-magnify-scan: [**Discovery and adoption reference**](discovery-and-adoption.md)
+
+    What Loom scans, what it uses each service for, what it **changes** about a
+    service you let it adopt, and how to supply existing-infrastructure values
+    by hand.
+
+-   :material-lifebuoy: [**Failure recovery**](failure-recovery.md)
+
+    The eight failure classes — transient, eventual-consistency, registration,
+    permission, quota, config, defect, unknown — with the ARM codes that map to
+    each and the remediation per class.
+
+</div>
+
+> **Not sure which you are?** Run
+> `bash scripts/csa-loom/discover-services.sh`. If it returns no candidates in
+> any subscription you intend to use, you are greenfield. Greenfield working
+> proves nothing about brownfield and vice versa — the two are verified
+> independently.
+
 ## Deployment paths
 
 <div class="grid cards" markdown>
