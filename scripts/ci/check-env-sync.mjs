@@ -398,6 +398,15 @@ const ALLOWLIST = new Set([
   'LOOM_GITHUB_REPO_OWNER',         // opt-in GitHub integration
   'LOOM_FEEDBACK_REPO_NAME',        // opt-in feedback repo
   'LOOM_FEEDBACK_REPO_OWNER',       // opt-in feedback repo
+  // Default branch the /api/admin/deploy-status estate-drift comparison runs
+  // against. Same family as the two above and allowlisted for the same reason:
+  // it names the UPSTREAM repo, not anything this deployment owns, and its
+  // default ('main') is correct for every estate that tracks this repo. Only a
+  // fork whose default branch is not `main` needs to set it. Deliberately NOT a
+  // bicep param — main.bicep sits at 251/256 and this buys no capability.
+  // If it is wrong, the compare call 404s and the banner reports UNKNOWN, which
+  // is a visible warning rather than a false "up to date".
+  'LOOM_UPSTREAM_BRANCH',           // opt-in upstream default-branch override
   'LOOM_IOTHUB_RG',                 // opt-in IoT Hub resource group
   'LOOM_IOTHUB_SUB',                // opt-in IoT Hub subscription
   'LOOM_KUSTO_FABRIC_MANAGED',      // opt-in Fabric-managed Kusto flag

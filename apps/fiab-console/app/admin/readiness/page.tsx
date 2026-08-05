@@ -35,6 +35,100 @@ import {
   WORKLOADS,
   type CapabilityNode, type ReadinessReport, type ReadinessState, type WorkloadScore,
 } from '@/lib/admin/readiness';
+import type { DeployStatusReport } from '@/lib/admin/deploy-status';
+
+// ── deploy status (2026-08-05) ───────────────────────────────────────────────
+// The operator watched this page report 98/100 for two weeks while the two
+// lanes that put code into the estate were red and merged bicep was inert.
+// Nothing on this surface — or anywhere else — said "the estate is N commits
+// behind" or "the last infra deploy failed", so every capability row was
+// describing an estate nobody was updating.
+//
+// This banner is that missing fact, first thing on the page, above the score.
+// It is deliberately NOT foldable into the readiness score: a capability being
+// configured and the estate running the code that configures it are different
+// claims, and averaging them is how the signal got lost in the first place.
+
+/** Fluent intent per deploy severity. `ok` is informative, never green-on-nothing. */
+const DEPLOY_INTENT = { ok: 'info', warning: 'warning', error: 'error' } as const;
+
+function DeployStatusBanner() {
+  const [status, setStatus] = useState<DeployStatusReport | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await clientFetch('/api/admin/deploy-status', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
+        const j = await res.json();
+        if (!alive) return;
+        if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+        setStatus(j as DeployStatusReport);
+      } catch (e: any) {
+        // The banner failing to load is itself reported — silence here would
+        // recreate the exact blind spot this banner exists to close.
+        if (alive) setFailed(e?.message || String(e));
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  if (failed) {
+    return (
+      <MessageBar intent="warning" layout="multiline" style={{ marginBottom: tokens.spacingVerticalM }}>
+        <MessageBarBody>
+          <MessageBarTitle>Deploy status unavailable</MessageBarTitle>
+          Could not determine whether this estate is running the latest code — {failed}. Everything below
+          describes the capabilities of an estate whose freshness is UNKNOWN, not confirmed current.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (!status) return null;
+
+  const problems = status.paths.filter((p) => p.severity !== 'ok');
+  return (
+    <MessageBar
+      intent={DEPLOY_INTENT[status.severity]}
+      layout="multiline"
+      style={{ marginBottom: tokens.spacingVerticalM }}
+    >
+      <MessageBarBody>
+        <MessageBarTitle>{status.headline}</MessageBarTitle>
+        {status.estate.detail}
+        {status.estate.compareUrl && status.estate.state === 'behind' && status.estate.commitsBehind ? (
+          <> <a href={status.estate.compareUrl} target="_blank" rel="noreferrer">See the {status.estate.commitsBehind} commits</a>.</>
+        ) : null}
+        {problems.length > 0 && (
+          <div style={{ marginTop: tokens.spacingVerticalS }}>
+            <Button appearance="transparent" size="small" onClick={() => setOpen((v) => !v)}>
+              {open ? 'Hide' : `Show ${problems.length} deploy path(s) needing attention`}
+            </Button>
+            {open && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS }}>
+                {problems.map((p) => (
+                  <div key={p.workflow} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 }}>
+                      <Badge appearance="filled" size="small" color={p.severity === 'error' ? 'danger' : 'warning'}>
+                        {p.state}
+                      </Badge>
+                      <Body1 style={{ minWidth: 0 }}>{p.title}</Body1>
+                    </div>
+                    <Caption1>{p.detail}</Caption1>
+                    <Caption1>{p.why}</Caption1>
+                    <a href={p.runsUrl} target="_blank" rel="noreferrer">Open {p.workflow} in Actions</a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </MessageBarBody>
+    </MessageBar>
+  );
+}
 
 // ── state visuals ────────────────────────────────────────────────────────────
 
@@ -295,6 +389,10 @@ export default function AdminReadinessPage() {
         ],
       }}
     >
+      {/* FIRST, above the score: is this estate even running the code the score
+          is describing? Two weeks of an unchanged 98/100 over a dead deploy
+          path is what this answers. */}
+      <DeployStatusBanner />
       {error && (
         <MessageBar intent="error" layout="multiline" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Could not load readiness</MessageBarTitle>{error}</MessageBarBody>
