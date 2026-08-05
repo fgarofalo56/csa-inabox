@@ -72,6 +72,15 @@ export function normalizeRuns(json) {
     retrievalHitRate: numOrNull(d.totals?.retrievalHitRate ?? d.retrievalHitRate),
     groundingAvg: numOrNull(d.totals?.groundingAvg ?? d.groundingAvg),
     passRate: numOrNull(d.totals?.passRate ?? d.passRate),
+    // #2979 — the parity-inversion channel. `productFidelityJudged` is the
+    // COVERAGE counter: judged > 0 with productFidelityJudged === 0 means the
+    // judge deployment never returned the rubric field, i.e. the channel
+    // measured NOTHING that run. It is reported, never inferred from a healthy
+    // groundingAvg.
+    judged: numOrNull(d.totals?.judged ?? d.judged),
+    productFidelityAvg: numOrNull(d.totals?.productFidelityAvg ?? d.productFidelityAvg),
+    productFidelityJudged: numOrNull(d.totals?.productFidelityJudged ?? d.productFidelityJudged),
+    parityInversions: numOrNull(d.totals?.parityInversions ?? d.parityInversions),
   });
   if (Array.isArray(json)) {
     for (const d of json) put(fromDoc(d));
@@ -283,6 +292,29 @@ export function renderMarkdown(report, meta = {}) {
     lines.push('', '### Warnings', '');
     for (const w of report.warnings) lines.push(`- ⚠️ ${w}`);
   }
+  // #2979 — the parity-inversion channel, reported explicitly. Grounding cannot
+  // see this class (a claim copied out of a parity doc's Fabric inventory IS
+  // supported by the retrieved context), so its coverage has to be stated
+  // rather than inferred from a healthy grounding average.
+  const inverted = report.rows.filter((r) => Number.isFinite(r.parityInversions) && r.parityInversions > 0);
+  const unmeasured = report.rows.filter(
+    (r) => Number.isFinite(r.judged) && r.judged > 0 && r.productFidelityJudged === 0,
+  );
+  if (inverted.length || unmeasured.length) {
+    lines.push('', '### Parity-inversion channel (#2979)', '');
+    for (const r of inverted) {
+      lines.push(
+        `- ❌ \`${r.surface}\` — ${r.parityInversions} answer(s) reported another product's ` +
+        'capability as CSA Loom\'s (deterministic detector).',
+      );
+    }
+    for (const r of unmeasured) {
+      lines.push(
+        `- ⚠️ \`${r.surface}\` — the judge returned NO \`productFidelity\` score on any of ` +
+        `${r.judged} judged question(s): this channel was NOT measured this run.`,
+      );
+    }
+  }
   if (meta.floorsProvisional) {
     lines.push('', '_Floors are PROVISIONAL (set pre-first-run); `ratchet-eval-floors.mjs` raises them from measured runs — raise-only._');
   }
@@ -300,6 +332,11 @@ export function attachQuestions(report, current) {
     const cur = current.get(row.surface);
     if (cur && Number.isFinite(cur.questions)) row.questions = cur.questions;
     if (cur && Number.isFinite(cur.rowsAttempted)) row.rowsAttempted = cur.rowsAttempted;
+    // #2979 — display-only carry-through for the parity-inversion channel.
+    if (cur && Number.isFinite(cur.judged)) row.judged = cur.judged;
+    if (cur && Number.isFinite(cur.productFidelityAvg)) row.productFidelityAvg = cur.productFidelityAvg;
+    if (cur && Number.isFinite(cur.productFidelityJudged)) row.productFidelityJudged = cur.productFidelityJudged;
+    if (cur && Number.isFinite(cur.parityInversions)) row.parityInversions = cur.parityInversions;
   }
   return report;
 }

@@ -13,6 +13,8 @@ import {
   chunkPath,
   scoreRetrieval,
   deterministicGuards,
+  classifyExcerptProvenance,
+  detectParityInversion,
   buildJudgeMessages,
   parseJudge,
   computePass,
@@ -28,6 +30,7 @@ import {
   scoreTierDecision,
   reduceTierConfusion,
   type EvalResult,
+  type RetrievedExcerpt,
   type SearchResult,
   type TierDecisionScore,
   type TierLabelRow,
@@ -159,7 +162,9 @@ describe('deterministicGuards (gate BEFORE the judge)', () => {
 
 describe('buildJudgeMessages / parseJudge', () => {
   it('grounds the rubric on excerpts + gold answer and bakes in the no-Fabric ground truth', () => {
-    const msgs = buildJudgeMessages(row, 'candidate', ['excerpt one']);
+    const msgs = buildJudgeMessages(row, 'candidate', [
+      { path: 'docs/fiab/lakehouse.md', heading: null, content: 'excerpt one' },
+    ]);
     expect(msgs[0].role).toBe('system');
     expect(msgs[0].content).toContain('NOT Microsoft Fabric');
     expect(msgs[0].content).toContain('grounding');
@@ -177,6 +182,198 @@ describe('buildJudgeMessages / parseJudge', () => {
     expect(parseJudge('Sure! {"grounding":2,"relevance":2,"completeness":2,"rationale":""} hope that helps')).toMatchObject({ grounding: 2 });
     expect(parseJudge('no json here')).toBeNull();
     expect(parseJudge('{"grounding":"high"}')).toBeNull();
+  });
+});
+
+// ── #2979 — parity-doc product provenance ────────────────────────────────────
+//
+// FIXTURES ARE REAL CORPUS TEXT, NOT PARAPHRASE. Every excerpt below is copied
+// verbatim out of the docs it claims to come from, with the breadcrumb the
+// #2969 chunker actually produces (`documentTitle › innermost heading`). A
+// fixture written to match what this code EXPECTS rather than what the corpus
+// CONTAINS is how a guard passes while the thing it guards is broken, so these
+// strings are lifted from the files and the round-trip through the real
+// chunker is asserted below.
+describe('parity-doc provenance (#2979)', () => {
+  // docs/fiab/parity/activator-run-history.md — a LABELLED inventory H2.
+  const ACTIVATOR_TITLE =
+    'activator-run-history — parity with Fabric Activator "Recent activity" / Azure Monitor alert history';
+  const inventoryExcerpt: RetrievedExcerpt = {
+    path: 'docs/fiab/parity/activator-run-history.md',
+    heading: `${ACTIVATOR_TITLE} › Azure/Fabric feature inventory (run history surface)`,
+    content:
+      '| 1 | List fired/resolved events for the object\'s rules, newest-first | one row per alert instance |\n' +
+      '| 2 | Timestamp of each event (fired / last modified / resolved) | `essentials.startDateTime` |\n' +
+      '| 3 | State badge — Fired vs Resolved | `essentials.monitorCondition` |',
+  };
+  const coverageExcerpt: RetrievedExcerpt = {
+    path: 'docs/fiab/parity/activator-run-history.md',
+    heading: `${ACTIVATOR_TITLE} › Loom coverage`,
+    content:
+      '| 1 | Fired/resolved list newest-first | ✅ | `ActivatorEditor` → Run history tab; ' +
+      '`getActivatorHistory()` merges per-rule + sorts desc |\n' +
+      '| 3 | Fired/Resolved badge | ✅ | Fluent `Badge` (danger / success) |',
+  };
+
+  it('classifies inventory vs Loom-coverage vs plain-docs sections off the #2969 breadcrumb', () => {
+    expect(classifyExcerptProvenance(inventoryExcerpt)).toBe('other-product');
+    expect(classifyExcerptProvenance(coverageExcerpt)).toBe('loom');
+    expect(
+      classifyExcerptProvenance({ path: 'docs/fiab/parity/data-agent.md', heading: 'x › Build plan (prioritized)' }),
+    ).toBe('loom-plan');
+    // A heading naming BOTH halves is mixed, never silently "other product".
+    expect(
+      classifyExcerptProvenance({ path: 'docs/fiab/parity/lakehouse.md', heading: 'x › Feature inventory → Loom coverage' }),
+    ).toBe('mixed');
+    // Ordinary Loom docs are untouched by the rule.
+    expect(classifyExcerptProvenance({ path: 'docs/fiab/copilot-quality-triage.md', heading: 'x › §2.5' })).toBe('general');
+  });
+
+  it('DOES NOT guess a role for an unlabelled H3 inside a comparison doc', () => {
+    // The measured limit (see evaluator-core's section header): the breadcrumb
+    // is `title › INNERMOST heading`, so `### A. Data sources` under
+    // `## Real feature inventory` — the actual data-agent-013 chunk — carries no
+    // inventory label. ~459 such H3s exist and they split roughly evenly
+    // between inventory-side and Loom-side parents, so guessing would mislabel
+    // about one in six. It must stay 'unlabelled' (disclosed to the judge,
+    // never deterministically hard-failed).
+    expect(
+      classifyExcerptProvenance({
+        path: 'docs/fiab/parity/data-agent.md',
+        heading:
+          'data-agent — parity with Microsoft Fabric Data Agent (NL-to-query AI data agent) › A. Data sources (left "explorer" rail)',
+      }),
+    ).toBe('unlabelled');
+  });
+
+  it('the breadcrumbs these fixtures assert are the ones the shipped corpus actually produces', () => {
+    // Guards the fixtures against drift in either direction: if docs-chunker
+    // changes its breadcrumb shape, or the doc is retitled, this fails rather
+    // than letting the classifier keep agreeing with a stale fixture.
+    const repo = path.resolve(__dirname, '..', '..', '..');
+    const doc = path.join(repo, 'docs', 'fiab', 'parity', 'activator-run-history.md');
+    if (!fs.existsSync(doc)) return; // corpus not staged in this checkout
+    const text = fs.readFileSync(doc, 'utf-8');
+    const title = text.split(/\r?\n/).find((l) => /^# /.test(l))!.replace(/^#\s+/, '').trim();
+    expect(title).toBe(ACTIVATOR_TITLE);
+    expect(text).toContain('## Azure/Fabric feature inventory (run history surface)');
+    expect(text).toContain('## Loom coverage');
+  });
+
+  // ── MUTATION PROOF, both directions ────────────────────────────────────────
+  it('FAILS an answer that reports a labelled Fabric-inventory row as a CSA Loom fact', () => {
+    // The inversion: a span that exists ONLY in the inventory excerpt, restated
+    // as Loom's own behaviour, with the other product never named.
+    const inverted =
+      'Yes. Loom will list fired/resolved events for the object\'s rules, newest-first, ' +
+      'with a timestamp of each event (fired / last modified / resolved).';
+    const d = detectParityInversion({ answer: inverted, excerpts: [inventoryExcerpt, coverageExcerpt] });
+    expect(d.hit).toBe(true);
+    expect(d.borrowed.length).toBeGreaterThanOrEqual(2);
+    // …and the verdict actually flips. Grounding is a perfect 5 — the sentence
+    // IS in the retrieved context — which is precisely why grounding alone
+    // passed this answer before.
+    const scored = {
+      retrievalHit: true,
+      mentionPass: true,
+      forbiddenHit: false,
+      parityInversionHit: d.hit,
+      judgeStatus: 'scored' as const,
+      judge: { grounding: 5, relevance: 5, completeness: 5, rationale: 'fully supported by the excerpt' },
+    };
+    expect(computePass(scored)).toBe(false);
+    expect(computePass({ ...scored, parityInversionHit: false })).toBe(true); // the ONLY thing that changed
+  });
+
+  it('PASSES a legitimate Loom-coverage citation, and an attributed Fabric mention', () => {
+    const legitimate =
+      'Loom shows the fired/resolved list newest-first in the ActivatorEditor Run history tab; ' +
+      '`getActivatorHistory()` merges per-rule and sorts desc, with a Fluent `Badge` for Fired/Resolved.';
+    const legit = detectParityInversion({ answer: legitimate, excerpts: [inventoryExcerpt, coverageExcerpt] });
+    expect(legit.hit).toBe(false);
+    expect(
+      computePass({
+        retrievalHit: true, mentionPass: true, forbiddenHit: false,
+        parityInversionHit: legit.hit, judgeStatus: 'scored',
+        judge: { grounding: 5, relevance: 5, completeness: 5, productFidelity: 5, rationale: '' },
+      }),
+    ).toBe(true);
+
+    // docs-grounding rule 2: describing the OTHER product AS the other product
+    // is correct, not an inversion. Naming it is attribution.
+    const attributed = detectParityInversion({
+      answer:
+        'Fabric Activator will list fired/resolved events for the object\'s rules, newest-first, ' +
+        'with a timestamp of each event (fired / last modified / resolved); Loom does the same over Azure Monitor.',
+      excerpts: [inventoryExcerpt, coverageExcerpt],
+    });
+    expect(attributed.attributed).toBe(true);
+    expect(attributed.hit).toBe(false);
+  });
+
+  it('never fires when no labelled other-product excerpt was retrieved', () => {
+    expect(
+      detectParityInversion({
+        answer: 'Loom stores lakehouse tables as Delta on ADLS Gen2.',
+        excerpts: [{ path: 'docs/fiab/lakehouse.md', heading: 'Lakehouse › Storage', content: 'Delta on ADLS Gen2.' }],
+      }).hit,
+    ).toBe(false);
+  });
+
+  it('labels every excerpt with its product provenance in the judge prompt', () => {
+    const msgs = buildJudgeMessages(row, 'candidate', [inventoryExcerpt, coverageExcerpt]);
+    expect(msgs[0].content).toContain('productFidelity');
+    expect(msgs[0].content).toContain('INDEPENDENT of grounding');
+    // The path + breadcrumb reach the judge at all — the regression that was
+    // the whole bug (probeConsole flattened excerpts to bare `preview` text).
+    expect(msgs[1].content).toContain('docs/fiab/parity/activator-run-history.md');
+    expect(msgs[1].content).toContain('Azure/Fabric feature inventory (run history surface)');
+    expect(msgs[1].content).toContain('OTHER PRODUCT');
+    expect(msgs[1].content).toContain('CSA LOOM — authoritative');
+  });
+
+  it('productFidelity: parsed when returned, absent when not, and blocks a pass below 4', () => {
+    expect(
+      parseJudge('{"grounding":5,"relevance":5,"completeness":5,"productFidelity":1,"rationale":"reports Fabric as Loom"}'),
+    ).toMatchObject({ grounding: 5, productFidelity: 1 });
+    // A judge deployment that ignores the new field must NOT null out the whole
+    // question — that would make groundingAvg null, which E3 reads as
+    // no-change, and the gate would go green having measured nothing.
+    const legacy = parseJudge('{"grounding":4,"relevance":4,"completeness":4,"rationale":"ok"}');
+    expect(legacy).not.toBeNull();
+    expect(legacy!.productFidelity).toBeUndefined();
+
+    const base = {
+      retrievalHit: true, mentionPass: true, forbiddenHit: false, judgeStatus: 'scored' as const,
+    };
+    expect(computePass({ ...base, judge: { grounding: 5, relevance: 5, completeness: 5, productFidelity: 5, rationale: '' } })).toBe(true);
+    expect(computePass({ ...base, judge: { grounding: 5, relevance: 5, completeness: 5, productFidelity: 3, rationale: '' } })).toBe(false);
+    // absent → grounding-only verdict, never an implied 5
+    expect(computePass({ ...base, judge: { grounding: 5, relevance: 5, completeness: 5, rationale: '' } })).toBe(true);
+  });
+
+  it('rollup reports the fidelity channel as NOT MEASURED rather than implying coverage', () => {
+    const mk = (id: string, judge: any, extra: Partial<EvalResult> = {}): EvalResult => ({
+      questionId: id, surface: 'data-agent', retrievalHit: true, mrr: 1, mentionPass: true,
+      forbiddenHit: false, judgeStatus: 'scored', judge, pass: true, latencyMs: 10, ...extra,
+    });
+    const noFidelity = rollupRun([
+      mk('a', { grounding: 5, relevance: 5, completeness: 5, rationale: '' }),
+      mk('b', { grounding: 4, relevance: 4, completeness: 4, rationale: '' }),
+    ]);
+    expect(noFidelity.judged).toBe(2);
+    expect(noFidelity.productFidelityJudged).toBe(0);
+    expect(noFidelity.productFidelityAvg).toBeNull(); // "not measured", not 5
+    expect(noFidelity.parityInversions).toBe(0);
+
+    const withFidelity = rollupRun([
+      mk('a', { grounding: 5, relevance: 5, completeness: 5, productFidelity: 5, rationale: '' }),
+      mk('b', { grounding: 5, relevance: 5, completeness: 5, productFidelity: 1, rationale: '' }, { pass: false }),
+      mk('c', { grounding: 5, relevance: 5, completeness: 5, rationale: '' }, { pass: false, parityInversionHit: true }),
+    ]);
+    expect(withFidelity.productFidelityJudged).toBe(2);
+    expect(withFidelity.productFidelityAvg).toBe(3); // (5 + 1) / 2 — the un-returned one is NOT averaged in
+    expect(withFidelity.parityInversions).toBe(1);
   });
 });
 

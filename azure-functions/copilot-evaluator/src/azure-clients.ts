@@ -33,7 +33,7 @@ import { CosmosClient, type Container } from '@azure/cosmos';
 import { bestReasoningModelFor } from '../../../apps/fiab-console/lib/foundry/model-tier-router';
 import type { LoomCloud } from '../../../apps/fiab-console/lib/azure/cloud-endpoints';
 import type {
-  EvalResult, JudgeScores, ProbeResult, RunTotals, SearchResult, SearchRunTotals, TierConfusion,
+  EvalResult, JudgeScores, ProbeResult, RetrievedExcerpt, RunTotals, SearchResult, SearchRunTotals, TierConfusion,
 } from './evaluator-core';
 import { parseJudge } from './evaluator-core';
 
@@ -86,12 +86,21 @@ export class ProbeError extends Error {
 
 /** POST the console's internal eval-probe: real searchDocs + one real Copilot
  *  turn through aoai-chat-client. Auth = the shared VNet-internal trust token.
- *  Returns the probe result + the retrieved-chunk previews (judge evidence). */
+ *  Returns the probe result + the retrieved-chunk excerpts (judge evidence).
+ *
+ *  #2979 — the excerpts carry `path` and the #2969 `"<title> › <section>"`
+ *  breadcrumb, not just `preview`. They used to be flattened to
+ *  `String(c.preview)` here, which threw away the ONLY signal that distinguishes
+ *  a parity doc's "Azure/Fabric feature inventory" (the other product) from its
+ *  "Loom coverage" (ours) — so the judge was asked to grade a two-product
+ *  document with the product labels removed, and a factually inverted answer
+ *  scored full marks on grounding. The route has always returned both fields;
+ *  nothing new is fetched. */
 export async function probeConsole(
   baseUrl: string,
   internalToken: string,
   body: ProbeRequest,
-): Promise<{ probe: ProbeResult; excerpts: string[] }> {
+): Promise<{ probe: ProbeResult; excerpts: RetrievedExcerpt[] }> {
   const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/internal/copilot/eval-probe`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', [INTERNAL_TOKEN_HEADER]: internalToken },
@@ -110,7 +119,13 @@ export async function probeConsole(
       backend: j.backend ? String(j.backend) : undefined,
       latencyMs: Number(j.latencyMs ?? 0),
     },
-    excerpts: chunks.map((c: any) => String(c?.preview ?? '')).filter(Boolean),
+    excerpts: chunks
+      .map((c: any): RetrievedExcerpt => ({
+        path: String(c?.path ?? ''),
+        heading: c?.heading ? String(c.heading) : null,
+        content: String(c?.preview ?? ''),
+      }))
+      .filter((e) => e.content.length > 0),
   };
 }
 
