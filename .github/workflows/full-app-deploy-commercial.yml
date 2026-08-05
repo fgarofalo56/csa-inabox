@@ -48,6 +48,19 @@ permissions:
   # short-lived Fulcio certificate.
   id-token: write
 
+# This workflow holds a 180-minute ACR firewall lease (open-acr) for the whole
+# build matrix. A SECOND dispatch inside that window cannot get the lease and
+# dies after `acquire`'s bounded 25-minute wait — which is exactly what killed
+# run 30600323509 (dispatched two minutes after 30600236939):
+#     [acr-lease] TIMED OUT after 25m … holder = run 30600236939
+# and its `Roll Container Apps` then ran anyway against a half-built registry
+# and failed the console health gate. Serialise instead of colliding.
+# cancel-in-progress is deliberately FALSE: cancelling a holder mid-push is the
+# other half of the #2603 incident this lease exists to prevent.
+concurrency:
+  group: full-app-deploy-commercial-${{ inputs.region || 'auto' }}
+  cancel-in-progress: false
+
 env:
   AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}
 
@@ -61,6 +74,7 @@ jobs:
       rg: ${{ steps.acr.outputs.rg }}
       admin_sub: ${{ steps.acr.outputs.admin_sub }}
       region: ${{ steps.acr.outputs.region }}
+      contract_refs: ${{ steps.contract.outputs.contract_refs }}
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
@@ -75,8 +89,29 @@ jobs:
             }
       - id: acr
         run: |
+          set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
-          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv)
+          REGION="$AZURE_LOCATION"
+          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv | tr -d '\r')
+          if [[ -z "$ACR" ]]; then
+            # The `region` input still defaults to eastus2 while the live
+            # Commercial estate is centralus, so a DEFAULT dispatch resolved
+            # rg-csa-loom-admin-eastus2 — which does not exist — and died right
+            # here. Per auto-bind-by-default.md the platform discovers this
+            # rather than making the operator know it. Ambiguity (more than one
+            # Admin Plane RG) still fails loudly; guessing would be worse.
+            echo "::warning::No ACR in $RG. Discovering the Admin Plane RG in this subscription instead."
+            mapfile -t CANDIDATES < <(az group list --query "[?starts_with(name,'rg-csa-loom-admin-')].name" -o tsv | tr -d '\r')
+            if [[ ${#CANDIDATES[@]} -eq 1 ]]; then
+              RG="${CANDIDATES[0]}"
+              REGION="${RG#rg-csa-loom-admin-}"
+              ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv | tr -d '\r')
+              echo "::notice::Adopted $RG (region $REGION) — the only Admin Plane RG in this subscription."
+            elif [[ ${#CANDIDATES[@]} -gt 1 ]]; then
+              echo "::error::Multiple Admin Plane resource groups found (${CANDIDATES[*]}). Ambiguous — re-dispatch with the 'region' input set to the one you mean."
+              exit 1
+            fi
+          fi
           if [[ -z "$ACR" ]]; then
             echo "::error::ACR not found in $RG — run deploy-fiab-commercial first."
             exit 1
@@ -87,8 +122,45 @@ jobs:
           echo "rg=$RG" >> "$GITHUB_OUTPUT"
           # Coordinates for the chained post-deploy bootstrap (rel-T34).
           echo "admin_sub=$(az account show --query id -o tsv)" >> "$GITHUB_OUTPUT"
-          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
-          echo "::notice::ACR=$ACR login=$SERVER rg=$RG"
+          echo "region=$REGION" >> "$GITHUB_OUTPUT"
+          echo "::notice::ACR=$ACR login=$SERVER rg=$RG region=$REGION"
+
+      # ── The DEPLOY CONTRACT (refs #2958) ──────────────────────────────────
+      # THE bug this workflow shipped for months: the build stamped
+      # `--image $APP:$TAG` where TAG is the `tag` INPUT, so a dispatch that
+      # passed an explicit tag (0.79.0 on 2026-07-28, 0.80.0 on 2026-07-31 —
+      # both real) produced NO `:v0.1`. But `params/commercial.bicepparam`
+      # resolves every appImageTags key through
+      # `readEnvironmentVariable('LOOM_<APP>_TAG', 'v0.1')`, and
+      # scripts/ci/reconcile-resolve.mjs only exports a pin for apps that are
+      # ALREADY RUNNING — so a not-yet-deployed app (loom-duckdb, which
+      # admin-plane/main.bicep now deploys BY DEFAULT) falls back to a `v0.1`
+      # nothing had ever pushed. `loom-duckdb` itself BUILT green in both runs;
+      # only the tag was missing, and that one missing tag is what fails the
+      # image preflight in deploy-fiab-commercial and blocks the whole
+      # apps-enabled deploy.
+      #
+      # So the contract set is derived here from the two files that actually
+      # decide it (reconcile-policy's APP_IMAGE_TAGS + the paramfile defaults)
+      # using the SAME resolver the deploy lane preflights with, and every
+      # matrix build stamps its contract tag in addition to :$TAG. Deriving it
+      # rather than hard-coding 'v0.1' is the property that makes it survive a
+      # paramfile edit — a hard-coded list is how the duckdb-only Gov preflight
+      # missed four other images.
+      - name: Derive the deploy-contract image tags
+        id: contract
+        run: |
+          set -euo pipefail
+          node scripts/ci/resolve-image-preflight-refs.mjs \
+            --param-file platform/fiab/bicep/params/commercial.bicepparam \
+            --boundary commercial > /tmp/contract-refs.txt
+          REFS=$(tr '\n' ' ' < /tmp/contract-refs.txt | sed 's/  */ /g; s/^ *//; s/ *$//')
+          if [[ -z "$REFS" ]]; then
+            echo "::error::resolve-image-preflight-refs.mjs produced NO refs. Either the paramfile moved or the resolver broke — refusing to build a set of images nobody can prove the deploy will be able to pull."
+            exit 1
+          fi
+          echo "contract_refs=$REFS" >> "$GITHUB_OUTPUT"
+          echo "::notice::deploy contract: $REFS"
 
   open-acr:
     name: Temporarily open ACR public access + grant AcrPush
@@ -152,7 +224,9 @@ jobs:
         run: |
           set +e
           ACR_ID=$(az acr show --name "${{ needs.resolve.outputs.acr_name }}" --query id -o tsv)
-          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          # Use the RG the resolve job actually adopted — AZURE_LOCATION may be
+          # the (stale) `region` input default while the estate is elsewhere.
+          RG='${{ needs.resolve.outputs.rg }}'
 
           # AcrPush to deploy SP (push images)
           SP_OID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
@@ -241,6 +315,19 @@ jobs:
             ctx: ./apps/copilot-maf
           - app: loom-wrangler-host
             ctx: ./apps/fiab-wrangler-host
+          # The sandboxed R/Python script-visual executor behind the report
+          # designer's Power-BI-parity script visual. `params/commercial.bicepparam`
+          # declares `scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG','v0.1')`,
+          # so an apps-enabled deploy on an estate where it is not already
+          # running pulls `loom-script-runner:v0.1` — but as of 2026-08-05
+          # `grep -rn script-runner .github/workflows/*.yml` found NO workflow
+          # that builds this image at all. It exists in the live Commercial
+          # registry only because it was pushed out of band, which means a
+          # genuine from-scratch estate could never produce it and the
+          # "two-phase image path" in no-vaporware.md was incomplete. Added
+          # here, where the rest of the Commercial image set is produced.
+          - app: loom-script-runner
+            ctx: ./platform/runners/script-runner
           # dbt execution runtime for the Synapse / opt-in Fabric dbt-job targets.
           - app: loom-dbt-runner
             ctx: ./apps/fiab-dbt-runner
@@ -318,9 +405,31 @@ jobs:
 
       - name: Build + push via ACR Tasks (az acr build)
         shell: bash
+        env:
+          CONTRACT_REFS: ${{ needs.resolve.outputs.contract_refs }}
         run: |
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
           APP="${{ matrix.app }}"; CTX="${{ matrix.ctx }}"; TAG="${{ inputs.tag || 'v0.1' }}"
+          # The tag the apps-enabled DEPLOY will pull for this app, derived in
+          # the resolve job from params/commercial.bicepparam. Stamped IN
+          # ADDITION to :$TAG so a dispatch that passes an explicit tag still
+          # leaves the deploy able to pull. Empty for images with no
+          # appImageTags key (loom-uat — the jobs pull :latest, which is always
+          # stamped; loom-unity — deployed out-of-band, not by admin-plane).
+          CONTRACT_TAG=""
+          for REF in $CONTRACT_REFS; do
+            case "$REF" in
+              "$APP":*) CONTRACT_TAG="${REF#*:}" ;;
+            esac
+          done
+          CONTRACT_ARGS=""
+          if [ -n "$CONTRACT_TAG" ] && [ "$CONTRACT_TAG" != "$TAG" ]; then
+            CONTRACT_ARGS="--image $APP:$CONTRACT_TAG"
+            echo "::notice::$APP — also stamping the deploy-contract tag :$CONTRACT_TAG (params/commercial.bicepparam) so an apps-enabled deploy can pull it whatever tag this dispatch used."
+          fi
+          # All tags in ONE `az acr build` push the SAME manifest, so the cosign
+          # signature (which is on the digest) covers the contract tag too — no
+          # second signing pass is needed for it to satisfy verify-before-roll.
           # Most apps build ./<ctx>/Dockerfile; loom-uat is a second image out of
           # the console context (Dockerfile.uat), so the matrix may override it.
           FILE="${{ matrix.file || '' }}"; [ -n "$FILE" ] || FILE="$CTX/Dockerfile"
@@ -354,6 +463,7 @@ jobs:
           build() {
             az acr build --registry "$ACR_NAME" $POOL_ARGS \
               --image "$APP:$TAG" --image "$APP:${{ github.sha }}" --image "$APP:latest" \
+              $CONTRACT_ARGS \
               --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
               --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
               --file "$FILE" "$CTX"
@@ -438,6 +548,8 @@ jobs:
     if: ${{ always() && !inputs.skip_build && needs.resolve.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      # Needed for scripts/ci/assert-acr-image-tags.sh (the contract gate below).
+      - uses: actions/checkout@v4
       - name: Azure login
         uses: Azure/login@v2
         with:
@@ -466,9 +578,12 @@ jobs:
             exit 1
           fi
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
-          # Keep in sync with the build matrix above. Verify the :TAG refs —
-          # that is exactly what the redeploy-with-apps job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave)
+          # MUST stay in sync with the build matrix above — enforced by
+          # scripts/ci/check-full-app-deploy-contract.mjs (loom-guardrails), so
+          # a matrix entry can no longer be added without being verified here.
+          # Verify the :TAG refs — that is exactly what the redeploy-with-apps
+          # job rolls.
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-script-runner loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave)
           FAILED=()
           for APP in "${APPS[@]}"; do
             DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
@@ -492,6 +607,44 @@ jobs:
             exit 1
           fi
           echo "::notice::SC1 supply-chain gate PASSED — every existing :$TAG image is cosign-signed by a trusted workflow."
+
+      # ── The image contract (refs #2958) ───────────────────────────────────
+      # The cosign gate above is deliberately LENIENT about a missing image: it
+      # `continue`s past any :$TAG it cannot find so a partial build failure
+      # still rolls whatever DID build. That leniency is what let run
+      # 30600323509 print "SC1 supply-chain gate PASSED" after verifying 4 of
+      # 16 images, and it is structurally unable to notice the defect that
+      # matters here — a tag that was never stamped at all.
+      #
+      # This step is the opposite and it is NOT optional: every ref the
+      # apps-enabled deploy will pull must exist in the registry NOW. Missing
+      # means the next `deploy-fiab-commercial` dies at its own image preflight
+      # (or, worse, an older deploy adopts the live estate and takes the
+      # running Container Apps down with it). Reporting THIS run green while
+      # leaving that landmine is exactly the false-green class.
+      #
+      # Runs even when the cosign step failed (both problems visible in one
+      # run) and even under skip_supply_chain — this is a "did you produce what
+      # the deploy needs" gate, not a supply-chain gate.
+      - name: Image contract — every tag the apps-enabled deploy pulls must now exist
+        if: ${{ !cancelled() }}
+        env:
+          CONTRACT_REFS: ${{ needs.resolve.outputs.contract_refs }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${CONTRACT_REFS// /}" ]]; then
+            echo "::error::the resolve job produced no deploy contract — cannot prove this build made the images the deploy needs."
+            exit 1
+          fi
+          # The ACR is still open (open-acr ran this run, close-acr needs this
+          # job), so no second firewall lease is taken. assert-acr-image-tags.sh
+          # owns the three outcomes: present / absent / unprovable — and an
+          # unreadable registry FAILS rather than passing as "not found".
+          # shellcheck disable=SC2086
+          bash scripts/ci/assert-acr-image-tags.sh \
+            --acr "${{ needs.resolve.outputs.acr_name }}" \
+            --rg "${{ needs.resolve.outputs.rg }}" \
+            $CONTRACT_REFS
 
   close-acr:
     name: Re-lock ACR (private endpoint only)
