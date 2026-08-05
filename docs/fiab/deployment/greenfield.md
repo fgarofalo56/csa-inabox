@@ -11,9 +11,24 @@ proves nothing about brownfield, and the two are verified independently
 (`deploy-integrity.md` R4).
 
 > **How to tell without guessing.** Run the read-only inventory in
-> [Discovery and adoption](discovery-and-adoption.md#run-the-inventory-yourself).
+> [Discovery and adoption](discovery-and-adoption.md#7-verifying-the-scan-yourself).
 > If it returns no candidates in any subscription you intend to use, you are
 > greenfield.
+
+## Verification status (`deploy-integrity.md` R4)
+
+R4 requires each cloud to be verified independently. This page states where that
+has happened and where it has not.
+
+| Cloud | Status of this walkthrough |
+|---|---|
+| **Azure Commercial** | **Verified in part.** The three-phase path is the one CI exercises: `full-app-deploy-commercial.yml` and `deploy-fiab-commercial.yml` both run regularly (most recent runs include failures — check `gh run list` before assuming the lane is healthy). Template validation passes for `commercial-full.bicepparam`. **A from-scratch phase-1 → phase-2 → phase-3 run into a clean, empty subscription has not been performed for this revision of the doc.** |
+| **Azure Government — GCC-High / IL4** | **Not verified for this revision.** `deploy-fiab-gcch.yml` exists and runs, but its three most recent runs all ended `failure` (2026-08-01, -02, -03). The workflow-input semantics below are read from the workflow definition, not from a successful run. |
+| **DoD IL5** | **Never executed.** `gh run list --workflow deploy-fiab-il5.yml` returns nothing. |
+| **Gov image build** | **Never executed.** `gh run list --workflow gov-build-images.yml` returns nothing. |
+
+Where a step below has never been run, it says so inline. Do not read the
+absence of a warning as a claim of success — read the table above.
 
 ---
 
@@ -73,10 +88,16 @@ pull from it.
 > Azure-native by default; Fabric and Power BI are strictly opt-in
 > (`no-fabric-dependency.md`).
 
-The six resource providers the deploy needs are registered for you by the
-platform when it runs the preflight; if that registration is refused you get the
-exact `az provider register` commands (see
-[Failure recovery → registration](failure-recovery.md#registration)).
+**Resource-provider registration is not automatic on the path you are about to
+run.** `lib/setup/deploy-preflight.ts` *reads* the registration state of the
+required providers and **emits** the `az provider register --namespace <ns>
+--subscription <sub>` lines for any that are missing — it does not register
+them. Automatic registration exists only on the CI deploy path, where
+`scripts/ci/deploy-retry.mjs --remediate` reads the namespace out of a
+`MissingSubscriptionRegistration` failure, registers it and retries once (see
+[Failure recovery → registration](failure-recovery.md#registration)). Running
+`az deployment sub create` by hand, as below, gets neither: register up front or
+expect a mid-deploy failure with the exact command to run.
 
 ---
 
@@ -143,7 +164,15 @@ explicitly rather than discovering it mid-deploy:
 |---|---|---|
 | Purview unavailable (e.g. `centralus`) | `purviewEnabled=false` | The Loom catalog falls back to its Azure-native backend (AI Search + Cosmos). You can attach a cross-region Purview later via `purviewLocation`. |
 | Azure Maps unavailable | `azureMapsEnabled=false` | The Geo editors honest-gate. |
-| You do not want hub egress filtering yet | `loomFirewallEnabled=false` | No hub Azure Firewall is created. Nothing else consumes it. **Not `firewallEnabled`** — that is a different, deploy-planner-scoped firewall which already defaults to `false`. `hubFirewallEnabled` is a deprecated alias for `loomFirewallEnabled`; either works. |
+| You do not want hub egress filtering yet | `loomFirewallEnabled=false` | No hub Azure Firewall is created. Nothing else consumes it. **Not `firewallEnabled`** — that is a different, deploy-planner-scoped firewall which already defaults to `false`. |
+
+> **`loomFirewallEnabled` and `hubFirewallEnabled` are conjunctive, not
+> aliases.** `main.bicep:1395` passes `firewallEnabled: (loomFirewallEnabled &&
+> hubFirewallEnabled)` into the admin plane, and both default to `true`. Setting
+> **either** to `false` suppresses the hub firewall, which is why "either works"
+> for disabling it — but they are two independent switches, and an earlier
+> version of this page described `hubFirewallEnabled` as a deprecated alias.
+> It is not one.
 
 ### Phase 2 — build the images and bring the apps up (15–25 min)
 
@@ -195,11 +224,34 @@ Then open the Console in a browser and confirm:
 
 1. Sign-in completes (proves phase 3 landed).
 2. `/admin/readiness` renders with no **Blocked** capability.
-3. `/admin/gates` shows zero unresolved day-one gates — per
-   `ux-baseline.md` G2 a greenfield install should have none.
+3. `/admin/gates` shows zero unresolved day-one gates.
 
 > A `curl` 200 is not a verification receipt. Per `ux-baseline.md` G1, a deploy
 > is verified by a live in-browser walk, not by a health endpoint.
+
+> **Steps 2 and 3 are the `ux-baseline.md` G2 target, not a measured
+> guarantee.** A fresh greenfield install has not been measured against them for
+> this revision of the doc. If your install shows Blocked capabilities or open
+> gates, that is a defect to report — not something to work around — but do not
+> read the steps above as a promise that it will not happen.
+
+---
+
+## Status: what this page does not yet cover
+
+`deploy-integrity.md` R8 requires the docs and the deploy to agree. The
+greenfield-relevant disagreements, measured on this branch on 2026-08-05:
+
+| Gap | Effect on a greenfield deploy | Tracked |
+|---|---|---|
+| No classified retry on any Gov deploy path | GCC-High / IL5 failures are unclassified; you triage by hand from [Failure recovery](failure-recovery.md) | **#3017** |
+| The CI failure-handling guard is scoped by **filename** (`/(^\|[-_])(deploy\|build\|roll\|rollback)/i`) | 13 `gov-provision-*` workflows that mutate Azure are invisible to it, so a hand-rolled retry loop can land there unnoticed | **#3017** |
+| Resource-provider registration is emitted, not performed, on the local-CLI path | Register up front or hit a mid-deploy `MissingSubscriptionRegistration` | — |
+| `gov-build-images.yml`, `deploy-fiab-il5.yml` have never run | The Gov image phase and the whole IL5 path are unexercised | — |
+
+Greenfield does **not** cover adopting anything that already exists — that is
+[Brownfield](brownfield.md), which carries its own status list, including four
+open defects.
 
 ---
 
@@ -232,6 +284,18 @@ gh workflow run deploy-fiab-gcch.yml \
 
 The workflow requires manual approval on the `gcc-high-deploy` environment
 protection rule before it touches the Gov subscription.
+
+> **This lane is currently red.** `deploy-fiab-gcch.yml`'s three most recent
+> runs all ended `failure` — 2026-08-01, 2026-08-02, 2026-08-03. Check
+> `gh run list --workflow deploy-fiab-gcch.yml` before you dispatch, and expect
+> to be debugging the lane rather than following a known-good procedure.
+>
+> **There is also no failure classification on this path (#3017).**
+> `deploy-fiab-gcch.yml` does not invoke `scripts/ci/deploy-retry.mjs` — the
+> eight-class taxonomy, bounded retry and `deploy-failure.json` artifact
+> described in [Failure recovery](failure-recovery.md) are wired into the
+> **Commercial** workflows only. A Gov deploy that hits a throttle or an Entra
+> replication lag fails outright, unclassified, and you classify by hand.
 
 **The Gov image phase.** `deploy-fiab-gcch.yml` runs an image-build job before
 the deploy, because `gcc-high.bicepparam` sets `deployAppsEnabled=true` and the

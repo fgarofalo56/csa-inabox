@@ -7,10 +7,33 @@ to earn rather than assume.
 
 Related: [Bring your own services](../bring-your-own-services.md)
 
-> The end-to-end greenfield and brownfield walkthroughs
-> (`greenfield.md` / `brownfield.md`) are being written in a separate change and
-> are **not** in the docs tree yet. This page is deliberately self-contained
-> until they land, and does not link to them.
+> **Where this page sits.** The end-to-end walkthroughs are
+> [**Greenfield**](greenfield.md) and [**Brownfield**](brownfield.md); this page
+> is the service-by-service reference they both link into. Read a walkthrough
+> first if you are actually deploying.
+
+---
+
+## 0. Two scanners exist. Only one has a coverage ledger.
+
+Everything on this page describes **`POST /api/deploy/discovery`**
+(`lib/setup/estate-scan.ts`) — the scanner with the three-step coverage
+establishment, real `$skipToken` paging and the per-subscription ledger.
+
+The Console's `/setup` → *Scan & choose* step calls a **different** route,
+`POST /api/setup/scan-services`, which does not have any of that
+(**#3015**):
+
+| | `/api/deploy/discovery` | `/api/setup/scan-services` (the wizard) |
+|---|---|---|
+| Page-size key | `$top` (correct) | `top` — a **silent no-op**; the 1000-row default is returned by coincidence |
+| Paging | `$skipToken` loop | none — silently truncated past the first page |
+| `allowPartialScopes` | set | not set |
+| Coverage ledger | per requested subscription | none; the counter counts subscriptions that produced a *match* |
+
+**If you are scanning anything larger than a small estate, or across more than a
+couple of subscriptions, use `/api/deploy/discovery` or the CLI** — not the
+wizard step — until #3015 closes. The rest of this page assumes the former.
 
 ---
 
@@ -260,8 +283,22 @@ worse than explaining why.
   `none-exist`.
 - **Fitness is not evaluated here.** Discovery answers *does it exist*. Whether
   an existing resource is *usable* — SKU, region, reachability from the Console
-  subnet, and the RBAC the deploy identity holds or can grant — is the
-  validation step of the plan, not of the scan.
+  subnet, and the RBAC the deploy identity holds or can grant — belongs to the
+  deployment plan's validation step.
+  **That validation step is written but not wired (#3014):**
+  `lib/deploy/fitness.ts` implements all five criteria and exports a blocking
+  `assertPlanIsDeployable()`, and nothing outside its own unit test calls it. So
+  today nothing evaluates fitness — not discovery, and not the plan. An
+  unusable adopted resource surfaces as an ARM error mid-deploy.
+
+---
+
+## 6a. Verification status (`deploy-integrity.md` R4)
+
+| Cloud | Status |
+|---|---|
+| **Azure Commercial** | **Verified.** The coverage behaviours in §2 were measured against the live Commercial Resource Graph REST API (`api-version=2022-10-01`) on 2026-08-05: `options.top` returning 1000 for `{"top":5}`, `resultTruncated` staying `false` while a `$skipToken` is outstanding, and a 4-readable + 1-unreadable scope set returning HTTP 200 with four rows and no field naming the dropped scope. The receipt harness in §7 re-runs them. |
+| **Azure Government** | **Not verified.** Gov is never scanned from a workstation and no Actions-hosted run of the discovery harness against a Gov tenant has been performed. The code is boundary-agnostic (it reads the ARM host from the cloud config), but that is an argument, not a measurement. |
 
 ---
 

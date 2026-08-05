@@ -157,9 +157,9 @@ This is the **brownfield class**. Most of these mean *something already exists*
 
 | Code | Meaning | Fix |
 |---|---|---|
-| `EnterpriseTenantAlreadyExists` | A Purview account already exists in this tenant. Only one is allowed | Adopt it: `EXISTING_PURVIEW=<name>` (+ `_RG`, `_SUB`). No enable-flag override is needed — `provisionPurview` is already false for an `adopt` decision. See [Brownfield](brownfield.md#step-2--choose-adopt-or-create-per-service) |
+| `EnterpriseTenantAlreadyExists` | A Purview account already exists in this tenant. Only one is allowed | Adopt it: `EXISTING_PURVIEW=<name>` (+ `_RG`, `_SUB`). No enable-flag override is needed — `provisionPurview` is already false for an `adopt` decision. See [Brownfield](brownfield.md#step-2-choose-adopt-or-create-per-service) |
 | `PrivateDnsZoneAlreadyExists` | The `privatelink.*` zone exists — almost always a re-deploy after a partial failure | Delete the conflicting zone (`az network private-dns zone delete -n <zone> -g <rg>`) or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter.** An earlier version of this runbook claimed one; it has never existed |
-| `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c--no-adoption-path-exists-today) |
+| `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c-no-adoption-path-exists-today) |
 | `StorageAccountAlreadyTaken` | Storage account names are globally unique | Change the deployment name prefix |
 | `RoleAssignmentExists` | Re-deploy over existing grants | Re-run with `skip_role_grants=true`, or delete the conflicting assignment |
 | `InvalidTemplateDeployment` on Container Apps in IL4/IL5 | Container Apps is not available at that impact level | Set `containerPlatform = 'aks'` in the parameter file |
@@ -244,10 +244,31 @@ Two exceptions:
 
 ## The retry harness
 
-`scripts/ci/deploy-retry.mjs` is the only retry primitive. Every deploy, build,
-and roll step that mutates Azure goes through it, and
+`scripts/ci/deploy-retry.mjs` is the only retry primitive, and
 `scripts/ci/check-deploy-failure-handling.mjs` (merge-blocking, in
-`loom-guardrails.yml`) fails the build if a new hand-rolled retry loop appears.
+`loom-guardrails.yml`) fails the build if a new hand-rolled retry loop appears
+**in a workflow it can see**.
+
+> **Two limits on that sentence, both measured on this branch (#3017).**
+>
+> **1. Only two workflows use the harness.**
+> `grep -l deploy-retry.mjs .github/workflows/*.yml` returns
+> `deploy-fiab-commercial.yml` and `full-app-deploy-commercial.yml` — and
+> nothing else. `grep -c deploy-retry .github/workflows/deploy-fiab-gcch.yml`
+> returns **0**. Classification, bounded retry, `--remediate` and the
+> `deploy-failure.json` artifact are **Azure Commercial only**. On Gov you
+> classify by hand, from this page.
+>
+> **2. The guard is scoped by filename, not by behaviour.**
+> `check-deploy-failure-handling.mjs:71` selects files with
+> `/(^|[-_])(deploy|build|roll|rollback)/i`. Workflows that mutate Azure but
+> whose names do not contain those words are invisible to it — including **13
+> `gov-provision-*` workflows**. Spot-checked: `gov-provision-aisearch.yml`
+> runs `az deployment group create`; `gov-provision-maps.yml` runs
+> `az acr build`. On a broad definition of "mutates Azure" the split is 24 in
+> scope / 36 out. This is the same shape as a name-based security guard that
+> misses the routes it was written to cover: where the guard is the only
+> control, a filename filter is not a control.
 
 ```bash
 node scripts/ci/deploy-retry.mjs \
@@ -422,14 +443,25 @@ done
 `deploy-integrity.md` R6 requires every failure to classify itself, retry what is
 retryable, and hand back a concrete remediation. Measured against this branch:
 
+**R4 — which cloud this was verified against.** The classifier and the retry
+harness are exercised by their own corpus-pinned suites and by the two
+Commercial workflows that invoke them; the classifications below are therefore
+**verified on Azure Commercial**. **No part of the failure engine has been
+exercised on Azure Government** — Gov deploys do not call it at all (#3017). The
+ARM codes and class boundaries are boundary-independent and remain usable for
+manual triage on Gov; the *automation* is not present there.
+
 | Capability | State |
 |---|---|
 | The eight-class taxonomy as a shared module both CI and the product use | **Implemented.** `apps/fiab-console/lib/deploy/failure-taxonomy.json` is read by the console (`failure-taxonomy.ts`) and by CI (`scripts/ci/deploy-classify.mjs`); one corpus pins both |
-| Bounded, classified retry on `az deployment sub create` | **Implemented** — `deploy-fiab-commercial.yml` runs it under `deploy-retry.mjs --step "az deployment sub create (…)"` |
-| Classified retry on the Container Apps roll | **Implemented** — `full-app-deploy-commercial.yml`, `--step "az containerapp update (…)"` |
-| Classified retry on `az acr build` | **Implemented** — `full-app-deploy-commercial.yml`, `--step "az acr build (…)"`. A deterministic quota denial is now attempted **once** instead of three times |
+| Bounded, classified retry on `az deployment sub create` | **Implemented, Commercial only** — `deploy-fiab-commercial.yml` runs it under `deploy-retry.mjs --step "az deployment sub create (…)"` |
+| Classified retry on the Container Apps roll | **Implemented, Commercial only** — `full-app-deploy-commercial.yml`, `--step "az containerapp update (…)"` |
+| Classified retry on `az acr build` | **Implemented, Commercial only** — `full-app-deploy-commercial.yml`, `--step "az acr build (…)"`. A deterministic quota denial is now attempted **once** instead of three times |
+| **Any classified retry on a Gov deploy path** | **Not implemented (#3017).** `deploy-fiab-gcch.yml` never invokes `deploy-retry.mjs`; `deploy-fiab-il5.yml` and `gov-build-images.yml` have never run at all. GCC-High's three most recent runs all ended `failure` (2026-08-01/02/03) |
+| **The guard that would catch a hand-rolled retry loop, on Gov** | **Not effective (#3017).** `check-deploy-failure-handling.mjs` selects files by filename; 13 `gov-provision-*` workflows that mutate Azure are out of scope |
 | Quota preflight before the image build | **Not wired** into the build workflow. The Console wizard runs one; the workflow does not |
-| Platform self-remediation | **Partial.** `--remediate` registers a missing resource provider and retries once, and reads the namespace out of the message rather than guessing. Role grants, private endpoints and CIDR re-planning are **not** automated |
+| Day-0 adoption fitness before any resource is created | **Not wired (#3014).** `lib/deploy/fitness.ts` exists and is unit-tested; no production caller. An unusable adopted resource still fails mid-deploy |
+| Platform self-remediation | **Partial.** `--remediate` registers a missing resource provider and retries once, and reads the namespace out of the message rather than guessing. Role grants, private endpoints and CIDR re-planning are **not** automated. On the **local-CLI** path nothing is auto-registered — `lib/setup/deploy-preflight.ts` only emits the `az provider register` commands |
 | Failure notification to a watched target | **Implemented** — one dedicated OPEN issue per failing workflow (`deploy-notify-failure.mjs`), guarded against a regression to a hard-coded number |
 | Estate-drift signal on `/admin/readiness` | **Not implemented on this branch** — no live-SHA or commits-behind indicator exists in the Console. Tracked separately (#3000) |
 
