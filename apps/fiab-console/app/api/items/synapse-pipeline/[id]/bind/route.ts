@@ -14,15 +14,21 @@
  * `[id]` is the Loom Cosmos item GUID. Binding is persisted to the item's
  * `state.pipelineName`. Real Synapse dev REST via synapse-dev-client; real
  * Cosmos write via persistBinding. No mocks.
+ *
+ * #2942 / auto-bind-by-default: the GET AUTO-BINDS before answering, so the
+ * editor opens on its canvas instead of a "Bind to an existing pipeline" form.
+ * See the ADF sibling's header for the full rationale. `?autoBind=0` opts a
+ * single request out for the explicit re-bind flow.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listPipelines, upsertPipeline } from '@/lib/azure/synapse-dev-client';
 import {
   loadPipelineItem, persistBinding, bindingErrorResponse, ItemNotFoundError,
   pipelineDefinitionFromContent,
 } from '@/lib/azure/pipeline-binding';
+import { autoBindOnOpen, autoBindWireStatus } from '@/lib/azure/auto-bind';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,13 +40,21 @@ const ITEM_TYPE = 'synapse-pipeline';
 const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 const NAME_RE = /^[A-Za-z0-9_-]{1,140}$/;
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const GET = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   try {
     const item = await loadPipelineItem(id, ACCEPTED_TYPES, session.claims.oid);
     if (!item) throw new ItemNotFoundError(ITEM_TYPE, id);
+
+    // AUTO-BIND before answering — see the header. Idempotent; a bound item
+    // takes the probe path and writes nothing.
+    const autoBindRequested = req.nextUrl.searchParams.get('autoBind') !== '0';
+    let autoBind: ReturnType<typeof autoBindWireStatus> | undefined;
+    if (autoBindRequested) {
+      const res = await autoBindOnOpen(item, ITEM_TYPE);
+      autoBind = autoBindWireStatus(res.outcome);
+    }
+
     const bound = typeof item.state?.pipelineName === 'string' ? (item.state.pipelineName as string) : null;
     let pipelines: Array<{ name: string }> = [];
     let listError: string | undefined;
@@ -54,17 +68,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     // FULLY BUILT-OUT canvas while the bind gate still prompts the user to push
     // it to a real Synapse workspace pipeline. Null when no pipeline content.
     const preview = bound ? null : pipelineDefinitionFromContent(item.state?.content);
-    return NextResponse.json({ ok: true, bound, pipelines, listError, preview });
+    return NextResponse.json({ ok: true, bound, pipelines, listError, preview, autoBind });
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
   const pipelineName = typeof body?.pipelineName === 'string' ? body.pipelineName.trim() : '';
   const create = body?.create === true;
@@ -84,4 +96,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { status, body: errBody } = bindingErrorResponse(e);
     return NextResponse.json(errBody, { status });
   }
-}
+});

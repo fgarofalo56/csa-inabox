@@ -88,6 +88,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Stage Copilot RAG corpus (loom-console only)
+        if: matrix.app == 'loom-console'
+        shell: bash
+        run: |
+          # #2929 — this is the PUBLIC channel image, so it must carry the same
+          # Copilot corpus the private one does. docs/ + PRPs/ live at repo root,
+          # outside the apps/fiab-console build context, and
+          # apps/fiab-console/copilot-corpus/ is only a tracked .gitkeep — so
+          # without this the Dockerfile COPY packages an EMPTY corpus and the
+          # console's loom-docs index is dead on arrival ("No corpus chunks
+          # discovered"). Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+
       - name: Build + push (public channel)
         uses: docker/build-push-action@v6
         with:

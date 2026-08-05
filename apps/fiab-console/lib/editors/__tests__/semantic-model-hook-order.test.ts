@@ -9,15 +9,24 @@
  *
  * The golden in `fixtures/semantic-model-hook-order.txt` was generated from
  * commit 20b3fe93 (`apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx`
- * at 3,025 LOC, before any R10 slice landed). It was 193 entries; it is now 195.
+ * at 3,025 LOC, before any R10 slice landed). It was 193 entries; it is now 197.
  *
- * The +2 (a `useState` + a `useEffect` inserted at index 6) is the ONE
- * legitimate hook ADDITION since: #2649 split the editor's single `workspaceId`
- * into `pbiWorkspaceId` (a Power BI groupId) and `loomWorkspaceId` (the item's
- * own Loom workspace, resolved from its record), because feeding one value to
- * both namespaces 404'd every assertOwner-guarded Loom item route on open. Per
- * the regeneration policy at the foot of this comment, the golden was
- * regenerated in that same commit and the two-line fixture diff is the artifact.
+ * The legitimate hook ADDITIONS since, both regenerated in the commit that made
+ * them (per the regeneration policy at the foot of this comment):
+ *
+ *   +2 at index 6 — #2649 split the editor's single `workspaceId` into
+ *   `pbiWorkspaceId` (a Power BI groupId) and `loomWorkspaceId` (the item's own
+ *   Loom workspace, resolved from its record), because feeding one value to both
+ *   namespaces 404'd every assertOwner-guarded Loom item route on open.
+ *
+ *   +2 at index 6 — the Power BI workspace BINDING PRECEDENCE fix: a `useState`
+ *   holding the Loom-workspace -> Power BI-workspace mapping (three-state:
+ *   null = resolving) plus the `useEffect` that resolves it. Without them the
+ *   editor bound `ws.workspaces[0].id` — an ARBITRARY group the caller may hold
+ *   no role on — and every workspace-scoped Power BI call 401'd. Both are
+ *   unconditional top-level hooks in the component body (before any conditional
+ *   return), so hook order stays stable across renders; the fixture diff is
+ *   +1 `useState` +1 `useEffect` with NO reordering of the remaining 193.
  *
  * This guard is not theoretical. The first push of PR #2565 (commit 25e464b0)
  * collapsed the incremental-refresh cluster into a single
@@ -51,6 +60,7 @@ describe('R10 decomposition — SemanticModelEditorInner hook order', () => {
       read(path.join(EDITORS, 'phase3', 'semantic-model-editor.tsx')),
       'SemanticModelEditorInner',
       {
+        usePbiWorkspaceBinding: read(path.join(DIR, 'pbi-workspace-binding.ts')),
         useSemanticModelAggregations: read(path.join(DIR, 'aggregations-tab.tsx')),
         useSemanticModelDirectLake: read(path.join(DIR, 'direct-lake-tab.tsx')),
         useSemanticModelIncrementalRefreshState: read(path.join(DIR, 'incremental-refresh-tab.tsx')),
@@ -58,7 +68,7 @@ describe('R10 decomposition — SemanticModelEditorInner hook order', () => {
       },
     );
 
-    expect(golden.length).toBe(195);
+    expect(golden.length).toBe(197);
     // Compare as joined strings so a failure prints the first differing region
     // rather than 193 lines of noise.
     const firstDiff = actual.findIndex((h, i) => h !== golden[i]);

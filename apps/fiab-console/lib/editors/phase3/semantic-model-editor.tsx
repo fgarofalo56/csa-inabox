@@ -42,6 +42,7 @@ import { loomDocUrl } from '@/lib/learn/content';
 import { ModelTabsExtra } from '../components/model-tabs-extra';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
+import { resolveEditorPbiBinding } from '@/lib/azure/powerbi-editor-binding';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 // WAVE 2 — "Pick a Loom item" ingest source: resolves a PBI_SOURCEABLE Loom item
@@ -68,7 +69,6 @@ import { MetricViewBuilder } from '../components/metric-view-builder';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
-import { getItem } from '@/lib/api/workspaces';
 import { useBiBackend, useSemanticBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
 import { AskAffordance } from '@/lib/components/ask/AskAffordance';
@@ -91,6 +91,7 @@ import { SemanticModelSecurityTab } from './semantic-model-editor/security-tab';
 import { SemanticModelCopilotPane } from './semantic-model-editor/copilot-pane';
 import { SemanticModelPrepForAiPane } from './semantic-model-editor/prep-for-ai-pane';
 import { LoomNativeModelView } from './semantic-model-editor/loom-native-model-view';
+import { usePbiWorkspaceBinding } from './semantic-model-editor/pbi-workspace-binding';
 // N9 — Verified Semantic Contract + VQR authoring tab (governed metric registry
 // + approved question→query pairs; the data agent retrieves verified queries
 // first and refuses out-of-contract questions).
@@ -134,29 +135,14 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // editor keeps its Loom-native surface.
   const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces(pbiOptIn);
-  // ── TWO workspace namespaces, never interchangeable (#2649) ────────────────
-  // `pbiWorkspaceId` — a POWER BI groupId (usePowerBiWorkspaces →
-  //   /api/powerbi/workspaces). Only Power BI-backed calls may receive it:
-  //   list / detail / refresh / refresh-schedule / take-over / measures / build /
-  //   direct-lake / app.powerbi.com deep links + the PBI governance panels.
-  // `loomWorkspaceId` — THIS item's own Loom workspace GUID (its Cosmos
-  //   partition key). The assertOwner-guarded Loom item routes (`[id]/model`,
-  //   `[id]/datasource`) accept nothing else and answer 404 "semantic model not
-  //   found" for a Power BI groupId — which is what 404'd them on EVERY open.
-  //   Resolved from the item record exactly as the sibling Power BI-family
-  //   editor in this folder already does (paginated-report-editor.tsx).
-  const [pbiWorkspaceId, setPbiWorkspaceId] = useState('');
-  const [loomWorkspaceId, setLoomWorkspaceId] = useState('');
-  useEffect(() => {
-    if (!id || id === 'new') return;
-    let cancelled = false;
-    // Best-effort: the Loom routes treat an ABSENT workspaceId as "no owner
-    // check", so degrading to '' still works — unlike sending a foreign id.
-    getItem(item.slug, id)
-      .then((it) => { if (!cancelled && it?.workspaceId) setLoomWorkspaceId(it.workspaceId); })
-      .catch(() => { /* leave loomWorkspaceId unresolved */ });
-    return () => { cancelled = true; };
-  }, [item.slug, id]);
+  // Workspace identity cluster (3 states + 2 effects) — extracted to
+  // ./semantic-model-editor/pbi-workspace-binding. Called HERE, at the exact
+  // position the inline `pbiWorkspaceId` state occupied, so the expanded hook
+  // order is unchanged. The auto-pick effect that consumes this stays below at
+  // its original position (moving it would reorder effect execution).
+  const {
+    pbiWorkspaceId, setPbiWorkspaceId, loomWorkspaceId, mappedPbiWorkspaceId,
+  } = usePbiWorkspaceBinding({ itemSlug: item.slug, id, pbiOptIn });
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
@@ -258,7 +244,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     if (!q) return;
     setDaxCopilotBusy(true); setDaxCopilotResult(null); setDaxCopilotErr(null);
     try {
-      const res = await fetch('/api/copilot/dax', {
+      const res = await clientFetch('/api/copilot/dax', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ prompt: q, itemId: id, itemType: item.slug || 'semantic-model' }),
       });
@@ -731,16 +717,29 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     finally { setFpBusy(false); }
   }, [datasetId, loomWorkspaceId, fieldParams]);
 
-  // Auto-pick the first Power BI workspace once loaded so the list fetch fires
-  // and a dataset binds — enabling New measure / Refresh / Open immediately
-  // instead of leaving them disabled behind a manual pick. Matches the
-  // Eventstream/Activator auto-pick pattern. Users can still switch.
+  // Bind the Power BI workspace once loaded so the list fetch fires and a
+  // dataset binds — enabling New measure / Refresh / Open immediately instead
+  // of leaving them disabled behind a manual pick. Users can still switch.
+  //
   // #2649: this auto-pick is POWER BI-ONLY. It must never reach a Loom item
   // route — `loomWorkspaceId` (resolved from the item record above) is the only
   // value those accept, and the auto-picked groupId 404'd all of them.
+  //
+  // The precedence rule (mapped group over the arbitrary first-listed one, and
+  // WAITING while the mapping resolves so the fallback cannot win the race) is
+  // a PURE function in lib/azure/powerbi-editor-binding.ts — see that module for
+  // the full rationale and the 401 it removes. It lives there so its unit test
+  // executes the real thing instead of a copy (a test that re-implements its
+  // subject cannot fail).
   useEffect(() => {
-    if (!pbiWorkspaceId && ws.workspaces && ws.workspaces.length > 0) setPbiWorkspaceId(ws.workspaces[0].id);
-  }, [pbiWorkspaceId, ws.workspaces]);
+    if (pbiWorkspaceId) return;
+    const next = resolveEditorPbiBinding({
+      mapped: mappedPbiWorkspaceId,
+      listed: ws.workspaces ?? [],
+      loomWorkspaceId,
+    });
+    if (next) setPbiWorkspaceId(next);
+  }, [pbiWorkspaceId, ws.workspaces, mappedPbiWorkspaceId, loomWorkspaceId]);
   useEffect(() => { if (pbiWorkspaceId) loadList(pbiWorkspaceId); }, [pbiWorkspaceId, loadList]);
   useEffect(() => {
     // #2649: BOTH of these forward straight to Power BI REST — `getDataset` and

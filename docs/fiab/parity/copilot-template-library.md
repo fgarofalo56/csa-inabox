@@ -27,12 +27,14 @@ Learn: <https://learn.microsoft.com/microsoft-copilot-studio/authoring-first-bot
 The gallery is Cosmos-backed (cloud-agnostic); "Use template" instantiates a
 real agent via **Power Platform / Dataverse**, so its sovereign routing is
 Dataverse-specific. `lib/azure/copilot-studio-client.ts` reads the BAP host from
-env (`LOOM_POWER_PLATFORM_BAP_BASE`) so the same code targets each cloud.
+env (auto-derived from the detected cloud by
+`cloud-endpoints.powerPlatformEndpoints()`; `LOOM_BAP_BASE` overrides) so the same
+code targets each cloud.
 
 | Concern | Commercial / GCC | GCC-High | IL5 / DoD |
 | --- | --- | --- | --- |
 | Gallery (Cosmos) | works in every cloud | works | works (template list renders; "Use" gated) |
-| BAP base (`LOOM_POWER_PLATFORM_BAP_BASE`) | `api.bap.microsoft.com` | `api.bap.microsoft.us` | Power Platform unavailable — honest ⚠️ gate on "Use template" |
+| BAP base (auto-derived; `LOOM_BAP_BASE` overrides) | `api.bap.microsoft.com` | `gov.api.bap.microsoft.us` (GCC) / `high.api.bap.microsoft.us` (GCC High) / `api.bap.appsplatform.us` (DoD) | Power Platform unavailable — honest ⚠️ gate on "Use template" |
 | Dataverse host | `*.crm.dynamics.com` / `*.crm9.dynamics.com` (GCC) | `*.crm.microsoftdynamics.us` | N/A |
 | Dataverse auth | `LOOM_DATAVERSE_CLIENT_ID` / `_SECRET` / `_TENANT_ID` (MSAL SP) | same vars, US-cloud audience | N/A |
 | Availability | GA | GA with limits | "Use template" not available — render `MessageBar intent="error"` |

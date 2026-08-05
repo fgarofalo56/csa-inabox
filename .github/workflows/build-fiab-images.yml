@@ -176,6 +176,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Stage Copilot RAG corpus (loom-console only)
+        if: matrix.app == 'loom-console'
+        shell: bash
+        run: |
+          # #2929 — see build-fiab-images-acr-tasks.yml for the full note. The
+          # corpus lives at repo-root docs/ + PRPs/, outside the
+          # apps/fiab-console build context; without this step the image ships
+          # copilot-corpus/ holding only .gitkeep and the reindex 502s with
+          # "No corpus chunks discovered".
+          # Enforced by scripts/ci/check-console-corpus-staged.mjs.
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+
       - name: Build + push
         uses: docker/build-push-action@v6
         with:

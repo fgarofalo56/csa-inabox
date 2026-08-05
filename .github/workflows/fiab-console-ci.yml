@@ -255,24 +255,23 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=3072
         # SHARDED, and deliberately WITHIN one job rather than a matrix.
         #
-        # WHY SHARDED. vitest 3 fails a run on an unhandled error that vitest 2
-        # tolerated, and this suite produces
-        #     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
-        # — the worker->main RPC missing its deadline while REPORTING, while
-        # every test passes. Halving the per-run file count reduces the window
-        # in which that can happen. It does NOT eliminate it: this job still
-        # trips the error on a 4-core runner, and switching the coverage
-        # provider to istanbul did not change that (it is a main-thread
-        # starvation problem against a 60s deadline hardcoded in vitest's
-        # bundled birpc — no config option, no VITEST_* env var. See the long
-        # note in vitest.config.ts before forming a theory about it, and DO NOT
-        # conclude anything from a local run: on 32 cores this suite is clean
-        # under istanbul and still fails here).
+        # WHY SHARDED — FOR MEMORY. At 6144 per fork the whole suite OOM-killed a
+        # fork on a ~16 GB runner and closed its IPC channel
+        # (ERR_IPC_CHANNEL_CLOSED) with no blob written. Half-suite shards at 3072
+        # fit with headroom. That is the reason sharding is here and stays here.
         #
-        # Sharding also earns its keep on memory, which is the reason to KEEP it
-        # regardless: at 6144 per fork the whole suite OOM-killed a fork on a
-        # ~16 GB runner and closed its IPC channel (ERR_IPC_CHANNEL_CLOSED) with
-        # no blob written. Half-suite shards at 3072 fit with headroom.
+        # SHARDING IS **NOT** A REMEDY FOR `Timeout calling "onTaskUpdate"`, and
+        # the note that used to claim it "reduces the window" was wrong. #2944
+        # measured the mechanism: that error is a spec file blocking its own
+        # worker's event loop past birpc's hardcoded 60s reply deadline, so it is
+        # a function of ONE FILE's cumulative synchronous CPU. A shard still runs
+        # each file whole, so sharding cannot buy any of it back — nor can the
+        # fork cap (it reproduces at maxForks 1, with the main thread idle), nor
+        # the coverage provider. The actual culprit was
+        # lib/azure/__tests__/unity-audit-guard.test.ts at 108,699ms — the only
+        # file over 60s out of 1,354 — and it was fixed in the guard it exercises.
+        # See the poolOptions note in apps/fiab-console/vitest.config.ts for the
+        # controlled measurements before forming a theory about this error.
         #
         # WHY NOT A MATRIX. `vitest (node 20)` is the ROLL GATE — see the header
         # of this file and loom-roll-and-validate.yml, which reads a check-run of

@@ -338,8 +338,12 @@ export const dataFactoryItems: FabricItemType[] = [
           "body": "The Code view tab shows the full Workflow Definition Language JSON in a Monaco editor."
         },
         {
+          "title": "Design it on the canvas",
+          "body": "The Designer tab is a real visual canvas: drag operations from the palette, connect steps to set their run-after order, and configure each step with typed controls in the inspector. Save writes the workflow to the backing Microsoft.Logic/workflows resource, which Loom provisions and binds for you when the item is created."
+        },
+        {
           "title": "Run the trigger",
-          "body": "Run trigger fires the manual trigger on the bound workflow and polls run history, or surfaces an honest gate naming LOOM_LOGIC_SUB / LOOM_LOGIC_RG / LOOM_LOGIC_LOCATION + the Logic App Contributor role."
+          "body": "Run trigger fires the manual trigger on the bound workflow and polls run history; the Runs tab shows every run and each action's status, duration and error. If the deployment is missing its Logic Apps coordinates, an inline Fix it wizard sets them."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/logic-apps/workflow-definition-language-schema"

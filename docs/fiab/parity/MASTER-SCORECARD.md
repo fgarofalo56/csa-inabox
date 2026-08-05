@@ -337,7 +337,7 @@ parity doc under `docs/fiab/parity/` showing **zero ❌** (every inventory row
 built ✅ or honest-gate ⚠️). All AOAI-backed personas are Azure-native by
 default and work with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (per
 `no-fabric-dependency.md`); the Copilot Studio family is a Power Platform /
-Dataverse workload routed by `LOOM_POWER_PLATFORM_BAP_BASE`.
+Dataverse workload routed by `cloud-endpoints.powerPlatformEndpoints()` (override: `LOOM_BAP_BASE`).
 
 | # | Persona | Parity doc | Grade | Default backend |
 |---|---|---|:--:|---|

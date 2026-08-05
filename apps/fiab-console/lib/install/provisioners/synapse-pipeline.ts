@@ -33,7 +33,7 @@ import {
 } from '@/lib/azure/synapse-dev-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { upsertAndRunDevPipeline, type DevPipelineAdapter } from './_seed-dev-pipeline';
-import { trimEdges } from '@/lib/util/trim';
+import { safePipelineName } from '@/lib/azure/backing-name';
 
 /** synapse-dev-client throws `Missing env var: <K>` for the three workspace
  * vars; surface that as a structured config gate instead of a bare failure. */
@@ -44,12 +44,15 @@ function synapseConfigGate(): { missing: string } | null {
   return null;
 }
 
-/** Synapse pipeline names allow a wider character set than ADF, but we keep
- * the Loom display name portable: letters/digits/_/- only, ≤ 140 chars. */
-function safePipelineName(displayName: string): string {
-  const cleaned = trimEdges(displayName.replace(/[^A-Za-z0-9_-]+/g, '-'), '-').slice(0, 140);
-  return cleaned || 'loom-synapse-pipeline';
-}
+/**
+ * Synapse pipeline names allow a wider character set than ADF, but we keep the
+ * Loom display name portable: letters/digits/_/- only, ≤ 140 chars.
+ *
+ * Delegates to the SHARED mapping in `lib/azure/backing-name` — see the note in
+ * `adf-pipeline.ts` for why install-time and auto-bind-time naming must be one
+ * function rather than two identical-looking copies.
+ */
+const SYNAPSE_PIPELINE_FALLBACK = 'loom-synapse-pipeline';
 
 const adapter: DevPipelineAdapter = {
   label: 'Synapse',
@@ -90,7 +93,7 @@ export const synapsePipelineProvisioner: Provisioner = async (input): Promise<Pr
     };
   }
 
-  const pipelineName = safePipelineName(input.displayName);
+  const pipelineName = safePipelineName(input.displayName, SYNAPSE_PIPELINE_FALLBACK);
   const seed = await upsertAndRunDevPipeline(adapter, pipelineName, input.content);
   steps.push(...seed.steps);
 

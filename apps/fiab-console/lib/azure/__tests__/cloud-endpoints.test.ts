@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
+  powerPlatformEndpoints,
+  assertPowerPlatformAvailable,
   detectLoomCloud,
   getDfsSuffix,
   getArmEndpoint,
@@ -409,5 +411,117 @@ describe('App Config scope — endpoint-aware (issue #1531)', () => {
     expect(getAppConfigScope()).toBe('https://azconfig.azure.us/.default');
     withCloud('Commercial');
     expect(getAppConfigScope()).toBe('https://azconfig.io/.default');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Power Platform control plane (BAP / Power Apps / Flow)
+// ---------------------------------------------------------------------------
+//
+// These pin the resolver that replaced TWO divergent module-level env reads:
+// powerplatform-client used `LOOM_BAP_BASE` (the var bicep actually emits) while
+// copilot-studio-client used `LOOM_POWER_PLATFORM_BAP_BASE` (which NOTHING in
+// the repo sets, yet seven parity docs told operators to set it and
+// check-env-sync exempted it as "derived from cloud endpoints"). The Copilot
+// Studio family was therefore pinned to the Commercial host in every boundary,
+// silently.
+describe('powerPlatformEndpoints — BAP host per boundary', () => {
+  afterEach(() => {
+    delete process.env.LOOM_BAP_BASE;
+    delete process.env.LOOM_POWER_PLATFORM_BAP_BASE;
+    delete process.env.LOOM_POWERAPPS_BASE;
+    delete process.env.LOOM_FLOW_BASE;
+  });
+
+  it('derives the documented BAP host for each cloud', () => {
+    // Hosts from learn.microsoft.com/power-automate/ip-address-configuration
+    // ("Allow users on your network to use Power Automate").
+    withCloud('Commercial');
+    expect(powerPlatformEndpoints().bapBase).toBe('https://api.bap.microsoft.com');
+    withCloud('GCC');
+    expect(powerPlatformEndpoints().bapBase).toBe('https://gov.api.bap.microsoft.us');
+    withCloud('GCC-High');
+    expect(powerPlatformEndpoints().bapBase).toBe('https://high.api.bap.microsoft.us');
+    withCloud('DoD');
+    expect(powerPlatformEndpoints().bapBase).toBe('https://api.bap.appsplatform.us');
+  });
+
+  it('never returns a Commercial host in a sovereign boundary', () => {
+    // MUTATION-PROOF for the ACTUAL production defect: a hard-coded Commercial
+    // default (what copilot-studio-client had) fails every one of these.
+    for (const c of ['GCC', 'GCC-High', 'DoD'] as const) {
+      withCloud(c);
+      expect(powerPlatformEndpoints().bapBase).not.toContain('microsoft.com');
+    }
+  });
+
+  it('honors LOOM_BAP_BASE and the legacy LOOM_POWER_PLATFORM_BAP_BASE alias', () => {
+    withCloud('Commercial');
+    process.env.LOOM_BAP_BASE = 'https://canonical.example.test/';
+    expect(powerPlatformEndpoints().bapBase).toBe('https://canonical.example.test');
+    delete process.env.LOOM_BAP_BASE;
+    process.env.LOOM_POWER_PLATFORM_BAP_BASE = 'https://legacy.example.test';
+    expect(powerPlatformEndpoints().bapBase).toBe('https://legacy.example.test');
+  });
+
+  it('treats an EMPTY env value as absent (bicep emits "" when the param is unset)', () => {
+    // The bicep params default to '' , so a naive `process.env.X ?? default`
+    // would pin the empty string and produce "/providers/..." URLs.
+    withCloud('GCC-High');
+    process.env.LOOM_BAP_BASE = '';
+    expect(powerPlatformEndpoints().bapBase).toBe('https://high.api.bap.microsoft.us');
+  });
+
+  it('derives the BAP scope from whichever base won', () => {
+    withCloud('DoD');
+    expect(powerPlatformEndpoints().bapScope).toBe('https://api.bap.appsplatform.us/.default');
+  });
+});
+
+describe('assertPowerPlatformAvailable — honest gate, never an invented host', () => {
+  afterEach(() => {
+    delete process.env.LOOM_POWERAPPS_BASE;
+    delete process.env.LOOM_FLOW_BASE;
+  });
+
+  it('is always available for BAP (documented in every boundary)', () => {
+    for (const c of CLOUDS) {
+      withCloud(c);
+      expect(() => assertPowerPlatformAvailable('bap')).not.toThrow();
+    }
+  });
+
+  it('resolves Power Apps / Flow on Commercial + GCC', () => {
+    for (const c of ['Commercial', 'GCC'] as const) {
+      withCloud(c);
+      expect(powerPlatformEndpoints().powerAppsBase).toBe('https://api.powerapps.com');
+      expect(powerPlatformEndpoints().flowBase).toBe('https://api.flow.microsoft.com');
+      expect(() => assertPowerPlatformAvailable('powerapps')).not.toThrow();
+      expect(() => assertPowerPlatformAvailable('flow')).not.toThrow();
+    }
+  });
+
+  it('GATES (rather than guessing) Power Apps / Flow in GCC-High and DoD', () => {
+    // Microsoft publishes sovereign MAKER portal URLs but not the management
+    // REST bases. Inventing one fails opaquely, so we gate with a named var.
+    for (const c of ['GCC-High', 'DoD'] as const) {
+      withCloud(c);
+      expect(powerPlatformEndpoints().powerAppsBase).toBeNull();
+      expect(powerPlatformEndpoints().flowBase).toBeNull();
+      expect(() => assertPowerPlatformAvailable('powerapps')).toThrow(/LOOM_POWERAPPS_BASE/);
+      expect(() => assertPowerPlatformAvailable('flow')).toThrow(/LOOM_FLOW_BASE/);
+    }
+  });
+
+  it('the gate names the bicep parameter, so the fix is a redeploy not a manual edit', () => {
+    withCloud('DoD');
+    expect(() => assertPowerPlatformAvailable('flow')).toThrow(/powerPlatformFlowBase/);
+  });
+
+  it('clears once the operator sets the override', () => {
+    withCloud('GCC-High');
+    process.env.LOOM_FLOW_BASE = 'https://flow.example.us';
+    expect(() => assertPowerPlatformAvailable('flow')).not.toThrow();
+    expect(powerPlatformEndpoints().flowBase).toBe('https://flow.example.us');
   });
 });

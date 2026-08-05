@@ -46,60 +46,68 @@ export default defineConfig({
     pool: 'forks',
     poolOptions: {
       forks: {
-        // ROOT CAUSE of the vitest-3 upgrade blocker (#2671 / PR #2785).
+        // ── `[vitest-worker]: Timeout calling "onTaskUpdate"` — SOLVED (#2944)
         //
-        // vitest 3 FAILS a run on an unhandled error that vitest 2 tolerated.
-        // On this suite the unhandled error was always:
-        //     Error: [vitest-worker]: Timeout calling "onTaskUpdate"
-        // — the worker->main RPC missing its deadline while REPORTING results.
-        // Every one of the 1302 files and 13320 tests passed; only the
-        // reporting channel timed out.
+        // READ THIS BEFORE FORMING A THEORY. The explanation that lived here
+        // until 2026-08-04 — "main-thread contention: too many forks outrun the
+        // single main thread that must answer every RPC" — is WRONG, and it sent
+        // four rounds of investigation at the wrong variable. What is true:
         //
-        // It is a main-thread contention problem, not a bad spec. Left
-        // uncapped, vitest spawns one fork per core — ~31 on a 32-core box —
-        // and their combined task-update traffic outruns the single main
-        // thread that must answer every call. Capping the forks fixes it:
-        //   uncapped  -> 1 unhandled error, every run (Windows AND Linux CI)
-        //   maxForks 4 -> clean, twice in a row
+        //   THE WORKER BLOCKS ITS OWN EVENT LOOP. vitest reports results with a
+        //   birpc CALL, `onTaskUpdate`, whose reply arrives as an IPC message —
+        //   readable only in the event loop's POLL phase. vitest chains tests in
+        //   one promise chain, so between two SYNCHRONOUS test bodies the loop
+        //   drains microtasks and goes straight into the next test; it never
+        //   reaches poll. The reply therefore sits unread in the pipe for as long
+        //   as the file keeps doing synchronous CPU, and birpc's DEFAULT_TIMEOUT
+        //   (60s, hardcoded in vitest's bundled copy — `createForksRpcOptions`
+        //   passes no override, and it is reachable from neither the config types
+        //   nor any VITEST_* env var) rejects the call. Every test still PASSES;
+        //   only the reporting channel dies, so the run fails carrying no
+        //   information about the code under test.
         //
-        // Three other explanations were tested and disproved first, recorded
-        // here so nobody re-walks them: a specific spec leaking hanging
-        // promises (agents-route.test.ts is clean alone, 14/14), the teardown
-        // budget (raising teardownTimeout changed nothing), and worker console
-        // volume saturating the same channel (--silent changed nothing).
+        // MEASURED, controlled, `maxForks: 1`, main thread otherwise idle:
+        //     20 x 2.5s SYNC  (  50s total)  -> clean
+        //     40 x 2.5s SYNC  ( 100s total)  -> Timeout calling "onTaskUpdate"
+        //     40 x 2.5s ASYNC ( 101s total)  -> clean
+        //      1 x  70s SYNC  (  70s total)  -> Timeout calling "onTaskUpdate"
+        // So the metric is CUMULATIVE SYNCHRONOUS CPU PER FILE crossing 60s. It
+        // is NOT wall clock (the async file ran 101s clean), NOT fork count (this
+        // reproduces at ONE fork), and NOT the coverage provider.
         //
-        // COST, stated plainly: ~253s -> ~716s locally on 32 cores. CI runners
-        // have far fewer cores, so the cap binds much less there. That is a
-        // real price for a suite that reports honestly rather than one that
-        // needs dangerouslyIgnoreUnhandledErrors to look green.
+        // That is why every earlier remedy failed, and each failure is now
+        // explained rather than merely recorded: a leaking spec (there was none),
+        // teardownTimeout (irrelevant — the deadline is on a reporting call),
+        // `--silent` (irrelevant), v8 -> istanbul (a coverage provider does not
+        // change a spec's own sync CPU), SHARDING (a shard still runs the
+        // offending FILE whole), and lowering maxForks (same).
+        //
+        // THE ACTUAL CULPRIT, and the fix: `lib/azure/__tests__/
+        // unity-audit-guard.test.ts` ran 31 whole-tree scans of ~5,345 files as
+        // straight-line synchronous CPU — 108,699ms on CI, the ONLY file over 60s
+        // out of 1,354 and 4.6x the next slowest. #2944 made the guard's two
+        // whole-tree loops short-circuit before masking, taking the file to
+        // ~12s. Nothing was removed from what it asserts.
+        //
+        // KEEP FILES OFF THE CLIFF. If you add a spec that does heavy synchronous
+        // work, the budget is that file's own sync CPU, not the suite's. Check it
+        // with `vitest run <file>` and keep it well under 60s.
+        //
+        // WHY THE CAP IS STILL HERE. It is NO LONGER justified by the RPC
+        // deadline — that justification is void. It stays for MEMORY, which is
+        // independently evidenced: a GitHub runner has ~16 GB, and at higher fork
+        // counts a fork was OOM-killed, closing its IPC channel
+        // (`ERR_IPC_CHANNEL_CLOSED`) with NO blob written for that shard. Raising
+        // it is now a legitimate experiment (it may buy back wall clock), but it
+        // needs its own memory evidence, so it is not being churned here.
+        //
         // A CEILING, never a floor. `maxForks: 4` as a flat number was WRONG:
         // vitest's own default is roughly (cores - 1), so on a 4-core CI runner
         // a literal 4 RAISED parallelism from 3 to 4 and starved a CPU-heavy
-        // guard spec into `Test timed out in 30000ms` x3 — a failure my 32-core
+        // guard spec into `Test timed out in 30000ms` x3 — a failure a 32-core
         // box could never reproduce, because there the same literal was a large
         // reduction. Same config, opposite effect, decided by core count.
-        //
-        // min(cap, cores - 1) caps the big machines where the RPC saturates and
-        // never RAISES parallelism on a small one.
-        //
-        // THE CAP IS 2 UNDER CI (2026-08-01, #2671). The main thread is single
-        // and serves BOTH every worker's vite transform AND every worker's
-        // `onTaskUpdate` reporting RPC — and that RPC has a 60s deadline
-        // hardcoded in vitest's bundled birpc (see the coverage note below).
-        // With 3 forks on a 4-core runner a task update could sit behind their
-        // transform queue for over a minute, which is the unhandled error that
-        // has blocked this upgrade all along.
-        //
-        // Two pieces of evidence that it is CONTENTION and not a deterministic
-        // end-of-run flush: (a) both shards do IDENTICAL end-of-run coverage
-        // work and only ONE of the two tripped; (b) sharding never fixed it,
-        // which follows, because each shard still imports nearly the whole
-        // console dependency graph — so sharding barely reduces main-thread
-        // transform work. Only lowering the concurrent demand on it does.
-        //
-        // COST, stated plainly: fewer forks means a longer wall clock. That is
-        // the trade. A slower run that reports honestly beats a fast one that
-        // needs dangerouslyIgnoreUnhandledErrors to look green.
+        // min(cap, cores - 1) never RAISES parallelism on a small machine.
         maxForks: Math.max(1, Math.min(process.env.CI ? 2 : 4, (cpus().length || 2) - 1)),
       },
     },
@@ -149,26 +157,17 @@ export default defineConfig({
     // THE REASON IS MEASUREMENT QUALITY. It is NOT that istanbul fixes the
     // vitest-3 blocker — it does not, and that was checked the hard way.
     //
-    // 1. WHAT DOES NOT WORK, recorded so nobody re-runs it. vitest 3 fails a
-    //    run on unhandled errors that vitest 2 tolerated, and this suite
-    //    produces `[vitest-worker]: Timeout calling "onTaskUpdate"` — the
-    //    worker->main reporting RPC missing its deadline while every test
-    //    passes. Switching to istanbul makes that error disappear on a 32-core
-    //    box (full suite: exit 0, 1302 files, 0 unhandled errors) and it STILL
-    //    HAPPENS on a 4-core CI runner. Same error, same shape as v8.
-    //
-    //    The provider was never the root cause. The deadline is birpc's
-    //    DEFAULT_TIMEOUT — 60s, hardcoded in vitest's bundled copy, passed no
-    //    override by `createForksRpcOptions`, and reachable from neither the
-    //    config types nor any VITEST_* env var. So a worker waited over a
-    //    MINUTE for the main thread. Both providers add main-thread work
-    //    (istanbul's Babel pass runs inside the vite transform the main thread
-    //    serves), which is why istanbul is if anything worse for it: CI per-blob
-    //    went 534s/562s under v8 to 729s/752s under istanbul. On 32 cores with
-    //    maxForks 4 the main thread has headroom and never trips the deadline;
-    //    on 4 cores with 3 forks it does. THAT is the local-vs-CI divergence
-    //    that has misled this investigation repeatedly — do not conclude
-    //    anything about this error from a local run alone.
+    // 1. WHAT DOES NOT WORK, recorded so nobody re-runs it. Switching provider
+    //    does not change `[vitest-worker]: Timeout calling "onTaskUpdate"`,
+    //    under EITHER provider, and #2944 explains why: that error is a spec
+    //    file blocking its own worker's event loop past birpc's 60s reply
+    //    deadline, so it is a function of the SPEC's synchronous CPU, which a
+    //    coverage provider does not change. (The 2026-08-01 note here reasoned
+    //    instead about which provider adds more main-thread work — a real
+    //    difference, but not the one that decides this error. See the
+    //    poolOptions block above for the measured mechanism.) What the provider
+    //    DOES change is wall clock: CI per-blob went 534s/562s under v8 to
+    //    729s/752s under istanbul.
     //
     // 2. THE ACTUAL REASON TO BE HERE: THE BRANCH FLOOR FELL 58 -> 21 IN THIS
     //    SWITCH, AND THAT IS THE GATE GETTING STRICTER, NOT WEAKER. Do not
