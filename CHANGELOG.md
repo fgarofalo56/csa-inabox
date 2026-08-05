@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.86.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.0...csa-inabox-v0.86.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **copilot:** chunk the RAG corpus on line boundaries with a title breadcrumb (refs [#2929](https://github.com/fgarofalo56/csa-inabox/issues/2929)) ([#2969](https://github.com/fgarofalo56/csa-inabox/issues/2969)) ([7869d43](https://github.com/fgarofalo56/csa-inabox/commit/7869d43441548499572e4915a141a59e801fd1e4))
+
 ## [0.86.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.85.0...csa-inabox-v0.86.0) (2026-08-05)
 
 
