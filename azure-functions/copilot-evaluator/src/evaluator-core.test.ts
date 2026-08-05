@@ -18,6 +18,7 @@ import {
   buildJudgeMessages,
   parseJudge,
   computePass,
+  passPredicateFor,
   rollupRun,
   rollupBackends,
   resolveEvalRoot,
@@ -414,6 +415,59 @@ describe('computePass + rollupRun', () => {
   });
   it('empty run → zeroed totals with null judge averages', () => {
     expect(rollupRun([])).toMatchObject({ questions: 0, groundingAvg: null, answerAvg: null });
+  });
+
+  /**
+   * Issue #2992 — `passRate` was emitted under one name for two different
+   * quantities. When the judge deferred on every question, `computePass` fell
+   * back to the deterministic verdict and the resulting (necessarily HIGHER)
+   * rate went out as `passRate`, where a CI gate subtracted it from a judged
+   * baseline and reported the difference as `+20`.
+   *
+   * The rollup now REFUSES to publish that number under the judged name.
+   */
+  describe('#2992 — the pass predicate is declared, and a degraded rate is renamed', () => {
+    const judged = { ...base };
+    const deferred: EvalResult = { ...base, judgeStatus: 'deferred', judge: undefined };
+
+    it('emits NO passRate when the judge scored no row — the value is deterministicPassRate', () => {
+      const t = rollupRun([deferred, { ...deferred, questionId: 'q2' }]);
+      expect(t.groundingAvg).toBeNull();
+      expect(t.passRate).toBeNull();          // ← the defect: this used to be 1.0
+      expect(t.deterministicPassRate).toBe(1);
+      expect(t.passPredicate).toMatchObject({ id: 'deterministic', degraded: true });
+    });
+
+    it('emits passRate (and no deterministicPassRate) on a judged run', () => {
+      const t = rollupRun([judged, { ...judged, questionId: 'q2' }]);
+      expect(t.passRate).toBe(1);
+      expect(t.deterministicPassRate).toBeUndefined();
+      expect(t.passPredicate).toMatchObject({ id: 'deterministic+grounding', degraded: false });
+    });
+
+    it('records the productFidelity conjunct only when the judge returned it (#2979)', () => {
+      const withFid: EvalResult = {
+        ...base,
+        judge: { grounding: 5, relevance: 5, completeness: 5, productFidelity: 5, rationale: '' },
+      };
+      expect(passPredicateFor([withFid]).id).toBe('deterministic+grounding+productFidelity');
+      expect(passPredicateFor([judged]).id).toBe('deterministic+grounding');
+    });
+
+    it('measures judge coverage over the JUDGEABLE set (auto-fails spend no judge call)', () => {
+      const autoFail: EvalResult = { ...base, judgeStatus: 'auto-fail', judge: undefined, forbiddenHit: true, pass: false };
+      // 2 judged + 2 auto-failed = full coverage of what could be judged
+      expect(passPredicateFor([judged, { ...judged, questionId: 'q2' }, autoFail, { ...autoFail, questionId: 'q4' }]).judgeCoverage).toBe(1);
+      // 1 judged of 2 judgeable = half
+      expect(passPredicateFor([judged, deferred]).judgeCoverage).toBe(0.5);
+    });
+
+    it('an errored judge degrades exactly like a deferred one', () => {
+      const errored: EvalResult = { ...base, judgeStatus: 'error', judge: undefined };
+      const t = rollupRun([errored]);
+      expect(t.passRate).toBeNull();
+      expect(t.passPredicate?.degraded).toBe(true);
+    });
   });
 
   // Catches the #2798 observability gap, the same shape as #2585's `backends`

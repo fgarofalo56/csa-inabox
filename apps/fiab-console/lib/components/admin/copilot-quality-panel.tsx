@@ -291,7 +291,11 @@ export function CopilotQualityPanel() {
                   rows={s.trend.map((p) => ({
                     Run: (p.finishedAt || '').slice(5, 10),
                     'Hit-rate': Math.round(p.retrievalHitRate * 100),
-                    'Pass-rate': Math.round(p.passRate * 100),
+                    // #2992 — a run the judge never scored has no pass-rate.
+                    // Plotting its deterministic-only rate here would draw a
+                    // RISE at the exact moment the judge broke; `null` leaves a
+                    // gap in the line instead, which is what happened.
+                    'Pass-rate': p.passRate == null ? null : Math.round(p.passRate * 100),
                   }))}
                 />
               ) : (

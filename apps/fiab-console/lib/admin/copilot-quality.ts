@@ -44,7 +44,13 @@ export interface SurfaceTrendPoint {
   retrievalHitRate: number;
   /** null in a run where the judge was deferred / judge-less (E2 daily cap). */
   groundingAvg: number | null;
-  passRate: number;
+  /**
+   * null when the judge scored no row (#2992): the pass predicate lost its
+   * `grounding >= 4` conjunct, so the run produced a `deterministicPassRate`
+   * rather than this quantity. Plotting the degraded value on the pass-rate
+   * trend would draw a rise at the moment the judge broke.
+   */
+  passRate: number | null;
   questions: number;
 }
 

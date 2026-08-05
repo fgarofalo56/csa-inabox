@@ -41,6 +41,7 @@ import {
   computePass,
   rollupRun,
   type EvalResult,
+  type PassPredicate,
   type SearchResult,
   type TierDecisionScore,
 } from './evaluator-core';
@@ -72,7 +73,16 @@ export interface RunSummary {
     questions: number;
     retrievalHitRate: number;
     groundingAvg: number | null;
-    passRate: number;
+    /**
+     * #2992 — null when the judge scored no row: the `grounding >= 4` conjunct
+     * was applied to nothing, so this run produced no pass rate. The degraded
+     * value rides `deterministicPassRate`, and `passPredicate` names the
+     * conjuncts that were actually in force, so the CI gate never subtracts two
+     * rates computed under different predicates.
+     */
+    passRate: number | null;
+    deterministicPassRate?: number;
+    passPredicate?: PassPredicate;
     /**
      * #2979 — the parity-inversion channel. `productFidelityAvg: null` with
      * `productFidelityJudged: 0` means the judge never returned the dimension,
@@ -282,6 +292,8 @@ export async function runEvals(
       retrievalHitRate: totals.retrievalHitRate,
       groundingAvg: totals.groundingAvg,
       passRate: totals.passRate,
+      deterministicPassRate: totals.deterministicPassRate,
+      passPredicate: totals.passPredicate,
       productFidelityAvg: totals.productFidelityAvg,
       productFidelityJudged: totals.productFidelityJudged,
       parityInversions: totals.parityInversions,

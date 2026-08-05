@@ -63,7 +63,13 @@ export interface PromptEvalScore {
   retrievalHitRate: number;
   /** null when the judge was deferred (E2 daily cap) — E3 treats that as no-change. */
   groundingAvg: number | null;
-  passRate: number;
+  /**
+   * null when the judge scored NO row in that run (#2992): the pass predicate
+   * lost its `grounding >= 4` conjunct, so the run produced a
+   * `deterministicPassRate`, not this quantity. Stamping the degraded value here
+   * would let a prompt version be approved on a rate the judge never checked.
+   */
+  passRate: number | null;
   /** True when ANY measured metric sat below its E3 floor in that run. */
   belowFloor: boolean;
   /** Which metrics were below floor (empty when clean). */

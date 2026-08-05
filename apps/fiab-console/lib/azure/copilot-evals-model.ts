@@ -40,7 +40,21 @@ export interface CopilotEvalRunDoc {
     mrrAvg: number;
     groundingAvg: number | null;
     answerAvg: number | null;
-    passRate: number;
+    /**
+     * #2992 — null when the judge scored NO row: with the `grounding >= 4`
+     * conjunct applied to nothing, this run produced no pass rate. The degraded
+     * value rides `deterministicPassRate` under its own name so it can never be
+     * compared against a judged baseline, and `passPredicate` records which
+     * conjuncts were actually in force.
+     */
+    passRate: number | null;
+    deterministicPassRate?: number;
+    passPredicate?: {
+      id: string;
+      conjuncts: string[];
+      judgeCoverage: number;
+      degraded: boolean;
+    };
     judged: number;
     deferred: number;
     autoFailed: number;
