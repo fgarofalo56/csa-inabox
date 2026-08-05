@@ -909,11 +909,34 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
           </div>
         </div>
       )}
-      <div className={s.hint}>
-        <Caption1 className={s.hintText}>
-          drag to pan · wheel to zoom · I/O zoom · F fit · A align · N nested · Shift+Arrow pan · Backspace back
-        </Caption1>
-      </div>
+      {/* Canvas shortcut strip — suppressed while the canvas is EMPTY (#2962).
+          The strip is docked bottom-left of the canvas box, but an empty canvas
+          is covered edge-to-edge by an empty-state overlay: either this canvas's
+          own `s.empty` (inset:0) or — on the designer path — the host's
+          GuidedEmptyStateLauncher (inset:0, z-index 2), whose centred panel
+          reaches the bottom edge on a short canvas. The strip's z-index 5 lives
+          in the SAME stacking context, so it painted over the launcher's lower
+          cards ("Sample pipeline" / "Browse templates").
+
+          Suppressing by STATE rather than reserving a gutter is the only fix
+          that holds at every width: the strip wraps to two or three lines as the
+          canvas narrows, so no fixed bottom inset on the overlays can be right,
+          and lowering its z-index would just move the clipping onto the strip
+          (the overlay panels are opaque) — still occluded content.
+
+          Nothing is lost. At zero nodes every shortcut it advertises (pan, zoom,
+          fit, align, nested, back) operates on a graph that does not exist; the
+          shortcuts themselves keep working, stay in the canvas aria-label, and
+          the full sheet is one `?` away (CanvasShortcutDialog above). Drill-back
+          additionally has the designer's always-visible drill Breadcrumb. The
+          strip returns the moment the first activity lands. */}
+      {activities.length > 0 && (
+        <div className={s.hint}>
+          <Caption1 className={s.hintText}>
+            drag to pan · wheel to zoom · I/O zoom · F fit · A align · N nested · Shift+Arrow pan · Backspace back
+          </Caption1>
+        </div>
+      )}
     </div>
   );
 });
