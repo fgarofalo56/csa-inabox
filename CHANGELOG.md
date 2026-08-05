@@ -25,6 +25,17 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.86.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.2...csa-inabox-v0.86.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **ci:** roll digest gate — ask the control plane, not a stale-open data plane (refs [#2980](https://github.com/fgarofalo56/csa-inabox/issues/2980), [#2982](https://github.com/fgarofalo56/csa-inabox/issues/2982)) ([#2990](https://github.com/fgarofalo56/csa-inabox/issues/2990)) ([1634ff6](https://github.com/fgarofalo56/csa-inabox/commit/1634ff667abf66db27a7693f7abc2826f6b8bcb1))
+* **evals:** make the judge product-aware so an inverted parity-doc answer fails ([#2979](https://github.com/fgarofalo56/csa-inabox/issues/2979)) ([#2984](https://github.com/fgarofalo56/csa-inabox/issues/2984)) ([a152b60](https://github.com/fgarofalo56/csa-inabox/commit/a152b605f7b35c13177cb8a05e97d12de355da4c))
+* **gov:** [#2938](https://github.com/fgarofalo56/csa-inabox/issues/2938) fixed 2 of 4 Gov ACR build lanes — the other 2 still aim at the dead queue (refs [#2706](https://github.com/fgarofalo56/csa-inabox/issues/2706)) ([#2983](https://github.com/fgarofalo56/csa-inabox/issues/2983)) ([729339c](https://github.com/fgarofalo56/csa-inabox/commit/729339c8eda99e364e970adfb3c1342d94043e2f))
+* **security:** databricks-notebook/[id] — authorize the caller and bind ?path= to the item ([#2977](https://github.com/fgarofalo56/csa-inabox/issues/2977)) ([#2985](https://github.com/fgarofalo56/csa-inabox/issues/2985)) ([2a14635](https://github.com/fgarofalo56/csa-inabox/commit/2a146351b352a8efe8db8b72a15f8844afd08799))
+* **ui:** make the guided empty-state launcher reachable at narrow widths ([#2972](https://github.com/fgarofalo56/csa-inabox/issues/2972)) ([#2986](https://github.com/fgarofalo56/csa-inabox/issues/2986)) ([9c71246](https://github.com/fgarofalo56/csa-inabox/commit/9c712464b58773f6f8b1e94d68a95b717bb29f3f))
+
 ## [0.86.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.1...csa-inabox-v0.86.2) (2026-08-05)
 
 
