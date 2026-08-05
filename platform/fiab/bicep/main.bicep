@@ -472,88 +472,116 @@ param setupTemplateUri string = ''
 @description('Enable the headless CI Bearer-token path on the Loom deployment-pipeline routes so an Azure DevOps / GitHub Actions agent can drive deploys + management via the CSA Loom DevOps task (Fabric "fabric-devops-pipelines" parity). Off by default — Console-session callers always work; this only gates the token path, which fails closed when off. When true the Console gets LOOM_PIPELINE_CI_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN as the default Bearer secret. Cloud-agnostic: the ADO task talks only to the tenant own Loom URL + Entra, never api.fabric.microsoft.com.')
 param loomPipelineCiEnabled bool = false
 
-// ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
-// Set any of these (via params/<boundary>.bicepparam readEnvironmentVariable('EXISTING_*',''))
-// to reuse an EXISTING resource in any RG/sub instead of provisioning a new one.
-// Empty → provision new per the matching *Enabled flag. See docs/fiab/bring-your-own-services.md.
-@description('Reuse an existing AI Search service (name) instead of provisioning one.')
-param existingAiSearchService string = ''
-@description('Resource group of the existing AI Search service.')
-param existingAiSearchRg string = ''
-@description('Reuse an existing APIM service (name) instead of provisioning one.')
-param existingApimName string = ''
-@description('Resource group of the existing APIM service.')
-param existingApimRg string = ''
-@description('Reuse an existing ADX/Kusto cluster (name) instead of provisioning one.')
-param existingAdxClusterName string = ''
-@description('Resource group of the existing ADX cluster.')
-param existingAdxClusterRg string = ''
-@description('Reuse an existing AI Foundry / AOAI (AIServices) account (name) instead of provisioning the Foundry hub.')
-param existingFoundryAccountName string = ''
-@description('Resource group of the existing Foundry/AOAI account.')
-param existingFoundryRg string = ''
+// ---------- ADOPT-OR-CREATE: the operator's per-service decision ----------
+// ONE object param carrying the whole adoption plan, keyed by the service key in
+// `apps/fiab-console/lib/deploy/adoption-catalog.ts`. It REPLACES the 36
+// `existing*` scalars this block used to declare.
+//
+// WHY A BAG, NOT SCALARS. ARM caps a template at 256 parameters and main.bicep
+// was at 251/256, so a name/rg/sub triple could not be added for even ONE more
+// service - adoption of networking (VNet/subnets/DNS/firewall policy), Log
+// Analytics, storage or ACR was structurally impossible, not merely unbuilt.
+// Collapsing the 36 scalars into one object is the same technique that took
+// modules/admin-plane/main.bicep from 256 to 233 (see the `byoExisting` bag
+// below and docs/fiab/deployment/index.md "Bicep param-bag rule").
+//
+// SHAPE - per service key; every field optional; an ABSENT key means create-new:
+//   {
+//     '<serviceKey>': {
+//       mode:   'adopt' | 'create' | 'skip'
+//       target: { name: '<resource name>', rg: '<resource group>', sub: '<subscription id>' }
+//       extra:  { <service-specific values, e.g. foundry chat/embed deployments> }
+//     }
+//   }
+//
+// PRODUCED BY `planToArmParameters()` in apps/fiab-console/lib/deploy/plan-to-arm.ts -
+// the single serializer every deploy tier uses - and transported as the
+// LOOM_ADOPT_JSON environment variable. The boundary .bicepparam files union it
+// OVER the legacy per-service EXISTING_* reads, so pre-existing tooling
+// (byo-wizard.sh, scan-and-deploy.sh, a hand-exported shell) keeps working while
+// an explicit plan always wins.
+@description('Adopt-or-create plan keyed by adoption-catalog service key. Replaces the 36 existing* scalars (ARM 256-param cap). Per key: { mode: "adopt"|"create"|"skip", target: { name, rg, sub }, extra: {} }. An absent key means create new. Emitted by lib/deploy/plan-to-arm.ts and transported as LOOM_ADOPT_JSON.')
+param adopt object = {}
 
-// ---- Cross-subscription (…Sub) dimension + remaining BYO services (full
-// reuse-vs-new surface per docs/fiab/design/full-deployment-and-byo.md §4.2).
-// All are forwarded to the admin-plane module, where they build the
-// LOOM_<SVC>_SUB Console env vars + override the navigator binding when set.
-// Emit these from scripts/csa-loom/byo-wizard.sh (the bicepparam generator).
-@description('Subscription id of the existing AI Search service (cross-sub reuse).')
-param existingAiSearchSub string = ''
-@description('Subscription id of the existing APIM service (cross-sub reuse).')
-param existingApimSub string = ''
-@description('Subscription id of the existing ADX cluster (cross-sub reuse).')
-param existingAdxClusterSub string = ''
-@description('Subscription id of the existing Foundry/AOAI account (cross-sub reuse).')
-param existingFoundrySub string = ''
-@description('Chat deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_CHAT_DEPLOYMENT). Wires LOOM_AOAI_DEPLOYMENT/_CHAT_DEPLOYMENT so Copilot / data-agent / AI-functions work against the existing account. Empty = the existing path stays honest-gated on the model.')
-param existingFoundryChatDeployment string = ''
-@description('Embedding deployment name on the REUSED existing AOAI account (from scan EXISTING_AOAI_EMBED_DEPLOYMENT). Wires LOOM_AOAI_EMBED_DEPLOYMENT.')
-param existingFoundryEmbedDeployment string = ''
-@description('Reuse an existing Microsoft Purview account (short name). Overrides loomPurviewAccount.')
-param existingPurviewAccount string = ''
-@description('Resource group of the existing Purview account.')
-param existingPurviewRg string = ''
-@description('Subscription id of the existing Purview account (cross-sub reuse).')
-param existingPurviewSub string = ''
-@description('Reuse an existing Synapse workspace (name) for the navigator.')
-param existingSynapseWorkspace string = ''
-@description('Resource group of the existing Synapse workspace.')
-param existingSynapseRg string = ''
-@description('Subscription id of the existing Synapse workspace (cross-sub reuse).')
-param existingSynapseSub string = ''
-@description('Reuse an existing Cosmos DB account (name) for the control-plane navigator.')
-param existingCosmosAccount string = ''
-@description('Resource group of the existing Cosmos account.')
-param existingCosmosRg string = ''
-@description('Subscription id of the existing Cosmos account (cross-sub reuse).')
-param existingCosmosSub string = ''
-@description('Reuse an existing Event Hubs namespace (name) for the Eventstream navigator.')
-param existingEventHubNamespace string = ''
-@description('Resource group of the existing Event Hubs namespace.')
-param existingEventHubRg string = ''
-@description('Subscription id of the existing Event Hubs namespace (cross-sub reuse).')
-param existingEventHubSub string = ''
-@description('Reuse an existing Azure Stream Analytics job (name) for the stream-analytics-job / Eventstream transform editors instead of provisioning the per-DLZ starter job. When set, loomStreamAnalyticsEnabled is forced off for the new starter job and the Console binds LOOM_ASA_RG/SUB + the job name to this existing job.')
-param existingAsaJob string = ''
-@description('Resource group of the existing Stream Analytics job.')
-param existingAsaRg string = ''
-@description('Subscription id of the existing Stream Analytics job (cross-sub reuse).')
-param existingAsaSub string = ''
-@description('Reuse an existing Databricks workspace (name) — informational for RBAC.')
-param existingDatabricksWorkspace string = ''
-@description('Resource group of the existing Databricks workspace.')
-param existingDatabricksRg string = ''
-@description('Subscription id of the existing Databricks workspace (cross-sub reuse).')
-param existingDatabricksSub string = ''
-@description('Reuse an existing Databricks workspace hostname (adb-*.azuredatabricks.net). Overrides the navigator binding; the byo-wizard resolves this from workspaceUrl.')
-param existingDatabricksHostname string = ''
-@description('Reuse an existing Data Factory (name) for the Data Factory navigator / pipeline mounts.')
-param existingAdfFactory string = ''
-@description('Resource group of the existing Data Factory.')
-param existingAdfRg string = ''
-@description('Subscription id of the existing Data Factory (cross-sub reuse).')
-param existingAdfSub string = ''
+// Safe accessors. An absent key, an absent target, or an absent field all
+// degrade to the create-new default rather than erroring - a partial plan is
+// always a valid plan.
+func adoptMode(a object, k string) string => a[?k].?mode ?? 'create'
+// The coordinate accessors are GATED ON MODE, deliberately. `union()` in bicep
+// DEEP-merges, so a plan that says {purview:{mode:'create'}} layered over a
+// legacy EXISTING_PURVIEW env keeps the legacy `target` sub-object. Returning
+// that name would rebind the Console to the customer's resource WHILE ALSO
+// creating a new one - the exact duplicate-and-misbind defect this work closes.
+// A coordinate is only ever surfaced for a decision that is actually 'adopt'.
+func adoptName(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?name ?? '') : ''
+func adoptRg(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?rg ?? '') : ''
+func adoptSub(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?sub ?? '') : ''
+func adoptExtra(a object, k string, f string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?extra[?f] ?? '') : ''
+
+// The 36 former scalars, now DERIVED from the plan. Every downstream reference
+// (the byoExisting bag, the admin-plane invocation, the Console env wiring) is
+// unchanged - only the SOURCE of each value moved from a parameter to the plan.
+var existingAiSearchService = adoptName(adopt, 'aisearch')
+var existingAiSearchRg = adoptRg(adopt, 'aisearch')
+var existingAiSearchSub = adoptSub(adopt, 'aisearch')
+var existingApimName = adoptName(adopt, 'apim')
+var existingApimRg = adoptRg(adopt, 'apim')
+var existingApimSub = adoptSub(adopt, 'apim')
+var existingAdxClusterName = adoptName(adopt, 'adx')
+var existingAdxClusterRg = adoptRg(adopt, 'adx')
+var existingAdxClusterSub = adoptSub(adopt, 'adx')
+var existingFoundryAccountName = adoptName(adopt, 'foundry')
+var existingFoundryRg = adoptRg(adopt, 'foundry')
+var existingFoundrySub = adoptSub(adopt, 'foundry')
+var existingFoundryChatDeployment = adoptExtra(adopt, 'foundry', 'chatDeployment')
+var existingFoundryEmbedDeployment = adoptExtra(adopt, 'foundry', 'embedDeployment')
+var existingPurviewAccount = adoptName(adopt, 'purview')
+var existingPurviewRg = adoptRg(adopt, 'purview')
+var existingPurviewSub = adoptSub(adopt, 'purview')
+var existingSynapseWorkspace = adoptName(adopt, 'synapse')
+var existingSynapseRg = adoptRg(adopt, 'synapse')
+var existingSynapseSub = adoptSub(adopt, 'synapse')
+var existingCosmosAccount = adoptName(adopt, 'cosmos')
+var existingCosmosRg = adoptRg(adopt, 'cosmos')
+var existingCosmosSub = adoptSub(adopt, 'cosmos')
+var existingEventHubNamespace = adoptName(adopt, 'eventhubs')
+var existingEventHubRg = adoptRg(adopt, 'eventhubs')
+var existingEventHubSub = adoptSub(adopt, 'eventhubs')
+var existingAsaJob = adoptName(adopt, 'streamanalytics')
+var existingAsaRg = adoptRg(adopt, 'streamanalytics')
+var existingAsaSub = adoptSub(adopt, 'streamanalytics')
+var existingDatabricksWorkspace = adoptName(adopt, 'databricks')
+var existingDatabricksRg = adoptRg(adopt, 'databricks')
+var existingDatabricksSub = adoptSub(adopt, 'databricks')
+var existingDatabricksHostname = adoptExtra(adopt, 'databricks', 'hostname')
+var existingAdfFactory = adoptName(adopt, 'adf')
+var existingAdfRg = adoptRg(adopt, 'adf')
+var existingAdfSub = adoptSub(adopt, 'adf')
+
+// ---------- provision<Service>: the SUPPRESSION half of adopt-or-create ----------
+// A BYO value that only rebinds the Console env while the module still creates a
+// SECOND resource is the defect class this closes. Purview failed the whole
+// deployment with EnterpriseTenantAlreadyExists; Maps and Foundry silently
+// deployed a duplicate next to the customer's and then bound the NEW one.
+//
+// Each var is `<enableFlag> && adoptMode(adopt, '<key>') == 'create'`, byte-
+// compared against apps/fiab-console/lib/deploy/adoption-catalog.ts by
+// scripts/ci/check-adoption-catalog-sync.mjs - which also asserts the raw enable
+// flag is no longer handed to the module that creates the service.
+var provisionAiSearch = aiSearchEnabled && adoptMode(adopt, 'aisearch') == 'create'
+var provisionApim = apimEnabled && adoptMode(adopt, 'apim') == 'create'
+var provisionAdx = adxEnabled && adoptMode(adopt, 'adx') == 'create'
+var provisionFoundry = aiFoundryEnabled && adoptMode(adopt, 'foundry') == 'create'
+var provisionAgentFoundry = agentFoundryEnabled && adoptMode(adopt, 'foundry') == 'create'
+var provisionPurview = purviewEnabled && adoptMode(adopt, 'purview') == 'create'
+var provisionSynapse = loomSynapseEnabled && adoptMode(adopt, 'synapse') == 'create'
+var provisionDatabricks = loomDatabricksEnabled && adoptMode(adopt, 'databricks') == 'create'
+var provisionAdf = loomDataFactoryEnabled && adoptMode(adopt, 'adf') == 'create'
+var provisionConsoleCosmos = loomConsoleCosmosEnabled && adoptMode(adopt, 'cosmos') == 'create'
+var provisionEventHubs = loomEventHubEnabled && adoptMode(adopt, 'eventhubs') == 'create'
+var provisionStreamAnalytics = loomStreamAnalyticsEnabled && adoptMode(adopt, 'streamanalytics') == 'create'
+var provisionMaps = azureMapsEnabled && adoptMode(adopt, 'maps') == 'create'
+var provisionAml = mlWorkspaceEnabled && adoptMode(adopt, 'aml') == 'create'
 
 @description('Microsoft Fabric mode. DEFAULT false (Azure-native, no Fabric dependency per no-fabric-dependency.md). When false, no Fabric capacity/workspace is bound and loomDefaultFabricWorkspace is forced empty; the Console gates Fabric calls on UAMI authz and stays fully functional on Azure-native backends. Set true ONLY to opt into a bound Fabric workspace.')
 param fabricEnabled bool = false
@@ -1071,7 +1099,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     catalogPrimary: catalogPrimary
     foundryPortalEnabled: foundryPortalEnabled
     defenderForAIEnabled: defenderForAIEnabled
-    purviewEnabled: purviewEnabled
+    purviewEnabled: provisionPurview
     atlasOnAksEnabled: atlasOnAksEnabled
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     // Databricks ACCOUNT API → Console. Forwarding the account GUID makes the
@@ -1101,14 +1129,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       cosmosCmkIdentityId: drConfig.?cosmosCmkIdentityId
     }
     deployAppsEnabled: deployAppsEnabled
-    aiFoundryEnabled: aiFoundryEnabled
+    aiFoundryEnabled: provisionFoundry
     contentSafetyEnabled: contentSafetyEnabled
-    agentFoundryEnabled: agentFoundryEnabled
+    agentFoundryEnabled: provisionAgentFoundry
     loomAoaiCompletionDeployment: loomAoaiCompletionDeployment
     loomAmlRg: loomAmlRg
-    apimEnabled: (loomApimEnabled && apimEnabled)
-    aiSearchEnabled: aiSearchEnabled
-    adxEnabled: adxEnabled
+    apimEnabled: (loomApimEnabled && provisionApim)
+    aiSearchEnabled: provisionAiSearch
+    adxEnabled: provisionAdx
     // audit day-one gap-closure: aasEnabled + reportSubscriptionsEnabled were
     // declared on admin-plane/main.bicep but never passed from the top level, so
     // AAS (semantic-model / BI Azure-native default) and the report-subscription
@@ -1186,7 +1214,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // so the Console auto-selects the real CI and the notebook "No Compute
       // Instance available" gate clears with zero post-deploy steps. Carried on
       // byoExisting (not scalar params) to stay under admin-plane's 256-param ceiling.
-      amlDefaultCompute: (useSingleDlz && mlWorkspaceEnabled) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
+      amlDefaultCompute: (useSingleDlz && provisionAml) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
       amlComputeIdleTtl: mlComputeIdleTtl
       // Azure Batch account (SVC-5) — feed the DEPLOYED dpBatch account name +
       // its RG into the Console env so LOOM_BATCH_ACCOUNT resolves and the
@@ -1222,8 +1250,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // we wire it WITHOUT referencing dpMlWorkspace.outputs (that module depends
     // on adminPlane's UAMI principal — referencing its output here would create
     // a cycle). Empty when the module isn't enabled → AML toggle honest-gates.
-    amlWorkspaceName: (useSingleDlz && mlWorkspaceEnabled) ? take('aml-loom-${uniqueString(singleDlzRg.id)}', 33) : ''
-    amlWorkspaceRg: (useSingleDlz && mlWorkspaceEnabled) ? singleDlzRg.name : ''
+    amlWorkspaceName: !empty(adoptName(adopt, 'aml')) ? adoptName(adopt, 'aml') : ((useSingleDlz && provisionAml) ? take('aml-loom-${uniqueString(singleDlzRg.id)}', 33) : '')
+    amlWorkspaceRg: !empty(adoptName(adopt, 'aml')) ? adoptRg(adopt, 'aml') : ((useSingleDlz && provisionAml) ? singleDlzRg.name : '')
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
@@ -1263,7 +1291,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // via the DLZ cosmos.bicep; BYO Cosmos overrides both. loomConsoleCosmosEnabled
     // (default true) is the opt-out flag — disabling it is only valid alongside a
     // BYO existingCosmosAccount (the empty() guard already enforces that).
-    deployConsoleCosmos: loomConsoleCosmosEnabled && !useSingleDlz && empty(existingCosmosAccount)
+    deployConsoleCosmos: provisionConsoleCosmos && !useSingleDlz
     // Forward the Cosmos data-plane endpoints to the Console so the vector-store
     // and graph editors bind to the deployed accounts by default (no manual
     // config). The DLZ `cosmos-graph-vector` module (cosmosGraphVectorEnabled,
@@ -1355,8 +1383,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomSessionSecret: loomSessionSecret
     loomMsalAppReg: loomMsalAppReg
     loomMirrorBackend: loomMirrorBackend
-    loomAzureMapsAccount: loomAzureMapsAccount
-    azureMapsEnabled: (loomMapsEnabled && azureMapsEnabled)
+    loomAzureMapsAccount: !empty(adoptName(adopt, 'maps')) ? adoptName(adopt, 'maps') : loomAzureMapsAccount
+    azureMapsEnabled: (loomMapsEnabled && provisionMaps)
     firewallEnabled: (loomFirewallEnabled && hubFirewallEnabled)
     loomMirrorSourceLinkedService: loomMirrorSourceLinkedService
     loomMirrorAdlsLinkedService: loomMirrorAdlsLinkedService
@@ -1564,10 +1592,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     adminPlaneAppInsightsConnectionString: hub.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
-    adxEnabled: adxEnabled
-    loomSynapseEnabled: loomSynapseEnabled
-    loomDatabricksEnabled: loomDatabricksEnabled
-    loomDataFactoryEnabled: loomDataFactoryEnabled
+    adxEnabled: provisionAdx
+    loomSynapseEnabled: provisionSynapse
+    loomDatabricksEnabled: provisionDatabricks
+    loomDataFactoryEnabled: provisionAdf
     loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
@@ -1604,9 +1632,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     // Single-sub: the Eventstream/Data Explorer navigators bind to this DLZ's
     // namespace, so reuse-an-existing skips provisioning here AND the admin-plane
     // env points at the reused namespace (existingEventHubNamespace below).
-    loomEventHubEnabled: loomEventHubEnabled
+    loomEventHubEnabled: provisionEventHubs
+    provisionCosmos: provisionConsoleCosmos
     existingEventHubNamespaceName: existingEventHubNamespace
-    enableStreamAnalytics: loomStreamAnalyticsEnabled && empty(existingAsaJob)
+    enableStreamAnalytics: provisionStreamAnalytics
     // Service Bus + Event Grid navigators (queues/topics + custom topics). Both
     // default-on (opt-out). Single-sub binds the admin-plane env to these names.
     deployServiceBus: deployServiceBus
@@ -1668,10 +1697,10 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlaneAppInsightsConnectionString: hub.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: hubPrivateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
-    adxEnabled: adxEnabled
-    loomSynapseEnabled: loomSynapseEnabled
-    loomDatabricksEnabled: loomDatabricksEnabled
-    loomDataFactoryEnabled: loomDataFactoryEnabled
+    adxEnabled: provisionAdx
+    loomSynapseEnabled: provisionSynapse
+    loomDatabricksEnabled: provisionDatabricks
+    loomDataFactoryEnabled: provisionAdf
     loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: hub.adxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
@@ -1707,8 +1736,9 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
     // namespace + Stream Analytics job (existingEventHubNamespace is the hub-
     // navigator binding, not a per-DLZ skip), so only the enable flags forward.
-    loomEventHubEnabled: loomEventHubEnabled
-    enableStreamAnalytics: loomStreamAnalyticsEnabled
+    loomEventHubEnabled: provisionEventHubs
+    provisionCosmos: provisionConsoleCosmos
+    enableStreamAnalytics: provisionStreamAnalytics
   }
 }]
 
@@ -1823,9 +1853,9 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // needed. So the deploy-time ADX DB is skipped here; every other DLZ backend
     // (ADLS, Synapse, Databricks, Event Hubs, Cosmos) is in-sub and deploys normally.
     adxEnabled: false
-    loomSynapseEnabled: loomSynapseEnabled
-    loomDatabricksEnabled: loomDatabricksEnabled
-    loomDataFactoryEnabled: loomDataFactoryEnabled
+    loomSynapseEnabled: provisionSynapse
+    loomDatabricksEnabled: provisionDatabricks
+    loomDataFactoryEnabled: provisionAdf
     loomSelfHostedIrEnabled: loomSelfHostedIrEnabled
     adxClusterPrincipalId: effHubAdxClusterPrincipalId
     adminEntraGroupId: adminEntraGroupId
@@ -1868,8 +1898,9 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // RTI opt-out flags. dlz-attach: the attached DLZ provisions its own Event
     // Hubs namespace + Stream Analytics starter job (ADX DB is created at runtime
     // — see adxEnabled:false above), so only the enable flags forward.
-    loomEventHubEnabled: loomEventHubEnabled
-    enableStreamAnalytics: loomStreamAnalyticsEnabled
+    loomEventHubEnabled: provisionEventHubs
+    provisionCosmos: provisionConsoleCosmos
+    enableStreamAnalytics: provisionStreamAnalytics
     // Service Bus + Event Grid navigators on the attached DLZ (default-on). The
     // names flow back via dlzAttach outputs into the hub-console env patch above.
     deployServiceBus: deployServiceBus
@@ -2319,7 +2350,7 @@ module dpTranslator 'modules/deploy-planner/cognitive-account.bicep' = if (useSi
   }
 }
 
-module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingleDlz && mlWorkspaceEnabled) {
+module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingleDlz && provisionAml) {
   name: 'dp-mlworkspace'
   scope: singleDlzRg
   params: {

@@ -32,6 +32,10 @@ jobs:
           node-version: "20"
       - name: env-sync (LOOM_* read-but-not-emitted)
         run: node scripts/ci/check-env-sync.mjs
+      - name: adoption-catalog-sync (adopt-or-create catalog must match the bicep that honours it)
+        run: node scripts/ci/check-adoption-catalog-sync.mjs
+      - name: fitness-messages (every adoption check records what it OBSERVED; unknown never claims non-existence)
+        run: node scripts/ci/check-fitness-messages.mjs
       - name: route-guards (cross-tenant BFF authorization)
         run: node scripts/ci/check-route-guards.mjs
       - name: credential-route-authz (routes returning keys must authorize, not just authenticate)
