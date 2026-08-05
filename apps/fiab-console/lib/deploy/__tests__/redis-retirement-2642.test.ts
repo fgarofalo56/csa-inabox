@@ -213,7 +213,16 @@ describe('#2642 — the SHIPPED artifact carries the change, not just the source
   // deploy-templates/main.json is COPY'd into the production image and
   // submitted INLINE to ARM by lib/setup/user-arm-deploy.ts. A .bicep-only fix
   // is INERT on that path (cf. #2729, where CVE floors never reached the
-  // shipped image). Nothing in CI regenerates this file, so assert it here.
+  // shipped image).
+  //
+  // These assertions predate the gate. As of #2945,
+  // `scripts/ci/check-deploy-template-sync.mjs` (merge-blocking `guardrails`
+  // lane, no path filter) recompiles the bicep and byte-compares the committed
+  // artifact, so staleness is now caught GENERALLY rather than one asserted
+  // fact at a time. They are kept because they are cheap and they pin THIS
+  // change specifically — but note they run in a vitest job gated on
+  // `^apps/fiab-console/`, i.e. on the ARTIFACT's directory and not on the
+  // bicep SOURCE's, which is exactly why they could never have caught #2945.
   const bundled = read(BUNDLED_ARM);
 
   it('contains the redisEnterprise provider', () => {
