@@ -36,6 +36,7 @@ import {
   scoreTierDecision,
   reduceTierConfusion,
   deterministicGuards,
+  detectParityInversion,
   buildJudgeMessages,
   computePass,
   rollupRun,
@@ -72,6 +73,14 @@ export interface RunSummary {
     retrievalHitRate: number;
     groundingAvg: number | null;
     passRate: number;
+    /**
+     * #2979 — the parity-inversion channel. `productFidelityAvg: null` with
+     * `productFidelityJudged: 0` means the judge never returned the dimension,
+     * i.e. NOT measured; it is deliberately distinguishable from a measured 5.
+     */
+    productFidelityAvg?: number | null;
+    productFidelityJudged?: number;
+    parityInversions?: number;
     /** Which retrieval backend served the questions (#2585 — see RunTotals). */
     backends?: Record<string, number>;
     /** Golden rows attempted, and probe failures by status (#2798 — see RunTotals). */
@@ -157,6 +166,23 @@ export async function runEvals(
       }
       const { hit, mrr } = scoreRetrieval(row.expectedChunks, probe.probe.retrievedChunks);
       const guards = deterministicGuards(probe.probe.answer, row);
+      // #2979 — the deterministic half of the parity-inversion rule: did the
+      // answer lift a distinctive span out of a LABELLED other-product
+      // (Fabric / Azure-portal inventory) excerpt and present it as a CSA Loom
+      // capability? Ranked with `forbiddenHit`: wrong about the product is
+      // wrong regardless of how well the sentence is grounded. It does NOT
+      // short-circuit the judge — `productFidelity` still has to be measured on
+      // the answers this conservative detector cannot see (the unlabelled-H3
+      // case), otherwise a run could report zero inversions purely because the
+      // deterministic layer is the only one that ever looked.
+      const inversion = detectParityInversion({ answer: probe.probe.answer, excerpts: probe.excerpts });
+      if (inversion.hit) {
+        context.warn(
+          `[copilot-evaluator] ${set.surface}/${row.id}: parity inversion — the answer reports an ` +
+            `other-product (Fabric/Azure inventory) capability as CSA Loom's. Borrowed span(s): ` +
+            `${JSON.stringify(inversion.borrowed.slice(0, 3))}`,
+        );
+      }
       const decision = judgeDecision({ forbiddenHit: guards.forbiddenHit, judgeDeployment, judgedToday, cap });
 
       let judgeStatus: EvalResult['judgeStatus'] =
@@ -185,6 +211,7 @@ export async function runEvals(
         mrr,
         mentionPass: guards.mentionPass,
         forbiddenHit: guards.forbiddenHit,
+        parityInversionHit: inversion.hit,
         judgeStatus,
         judge,
         latencyMs: probe.probe.latencyMs,
@@ -235,14 +262,29 @@ export async function runEvals(
     context.log(
       `[copilot-evaluator] run ${set.surface}: ${totals.questions}/${set.rows.length} Q, hit-rate ${totals.retrievalHitRate}, ` +
         `grounding ${totals.groundingAvg ?? 'deferred'} (judged=${totals.judged} deferred=${totals.deferred} auto-fail=${totals.autoFailed}) ` +
+        `product-fidelity ${totals.productFidelityAvg ?? 'not-returned'} (scored=${totals.productFidelityJudged ?? 0}/${totals.judged}) ` +
+        `parity-inversions=${totals.parityInversions ?? 0} ` +
         `backend=${JSON.stringify(totals.backends ?? {})} probe-errors=${JSON.stringify(probeErrors)}`,
     );
+    // #2979 — a judge deployment that ignores the productFidelity rubric field
+    // measures NOTHING on the inversion channel. Say so rather than letting a
+    // healthy-looking grounding average imply the dimension was covered.
+    if (totals.judged > 0 && (totals.productFidelityJudged ?? 0) === 0) {
+      context.warn(
+        `[copilot-evaluator] ${set.surface}: the judge returned NO productFidelity score on any of ` +
+          `${totals.judged} judged question(s) — the parity-inversion channel was not measured this run ` +
+          `(only the deterministic detector applied). Check the judge deployment honors the rubric field.`,
+      );
+    }
     summary.surfaces.push({
       surface: set.surface,
       questions: totals.questions,
       retrievalHitRate: totals.retrievalHitRate,
       groundingAvg: totals.groundingAvg,
       passRate: totals.passRate,
+      productFidelityAvg: totals.productFidelityAvg,
+      productFidelityJudged: totals.productFidelityJudged,
+      parityInversions: totals.parityInversions,
       backends: totals.backends,
       rowsAttempted: totals.rowsAttempted,
       probeErrors: totals.probeErrors,

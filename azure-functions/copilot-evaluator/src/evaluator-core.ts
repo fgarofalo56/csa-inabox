@@ -70,6 +70,20 @@ export interface JudgeScores {
   grounding: number;
   relevance: number;
   completeness: number;
+  /**
+   * #2979 — is every capability the answer attributes to CSA Loom drawn from a
+   * CSA-Loom-authoritative span? Independent of `grounding`, which a claim
+   * copied out of the other product's inventory satisfies perfectly.
+   *
+   * OPTIONAL on purpose. A judge deployment that ignores the new rubric field
+   * must not collapse every question into `judgeStatus: 'error'` — that would
+   * null out `groundingAvg`, which the E3 gate treats as no-change, and the
+   * gate would go green having measured nothing (the failure class this repo
+   * keeps finding). When absent the run is scored on grounding alone and the
+   * absence is COUNTED in `RunTotals.productFidelityJudged` so a receipt can
+   * never quietly hide that the dimension was never returned.
+   */
+  productFidelity?: number;
   rationale: string;
 }
 
@@ -81,6 +95,13 @@ export interface EvalResult {
   mrr: number;
   mentionPass: boolean;
   forbiddenHit: boolean;
+  /**
+   * #2979 — the answer lifted a distinctive span from a labelled other-product
+   * (Fabric / Azure-portal inventory) excerpt and presented it as a CSA Loom
+   * capability. A deterministic hard fail, ranked with `forbiddenHit`. Absent
+   * on docs written before this field existed.
+   */
+  parityInversionHit?: boolean;
   /** 'scored' — judged; 'deferred' — daily judge cap reached (retrieval-only,
    *  E3 treats deferred as no-change); 'auto-fail' — forbidden phrase, no judge
    *  spend; 'error' — the judge call failed. */
@@ -269,22 +290,255 @@ export function deterministicGuards(
   };
 }
 
+// ── Parity-doc provenance (#2979) ────────────────────────────────────────────
+//
+// WHY THIS SECTION EXISTS
+// -----------------------
+// A `docs/fiab/parity/*.md` describes TWO products (`.claude/rules/ui-parity.md`
+// mandates the shape): a feature-inventory section stating what the OTHER
+// product (Fabric / the Azure portal) does, followed by a `Loom coverage`
+// section stating what CSA Loom actually does. An answer that lifts a row out
+// of the inventory and reports it as a CSA Loom fact is FACTUALLY INVERTED —
+// and the grounding judge passed it, because grounding asks "is this claim
+// supported by the retrieved context?" and the sentence really is in there. The
+// context simply describes a different product.
+//
+// The measured instance (#2979): `data-agent-013` asks whether tables can be
+// picked from a schema tree. `docs/fiab/parity/data-agent.md` says, in its
+// inventory, "Schema selection — a browsable schema tree to check specific
+// Tables / Views / Functions"; six sections later its Loom-coverage table says
+// "| 3 | Schema selection | ❌ | only a comma-separated `tables` text Input …
+// no schema tree picker". The Copilot answered "Yes, a browsable schema tree"
+// and the row counted as a PASS.
+//
+// WHAT WAS ACTUALLY BROKEN (the one-line finding)
+// -----------------------------------------------
+// The provenance signal was already present and was DISCARDED one call before
+// the judge. #2969 gives every chunk a `"<title> › <section>"` breadcrumb, and
+// the eval probe returns `{id, path, heading, kind, preview}` per chunk — but
+// `azure-clients.probeConsole` mapped that to `String(c.preview)`, so
+// `buildJudgeMessages` received bare prose with NO path and NO section. The
+// judge was being asked to detect a two-product confusion while holding
+// evidence stripped of the only labels that distinguish the two products. The
+// ANSWER prompt (`lib/copilot/docs-grounding.renderDocExcerpts`) has always
+// rendered `path — heading`; only the JUDGE was blind.
+//
+// LIMIT OF THE DETERMINISTIC LAYER — stated, not papered over
+// -----------------------------------------------------------
+// The breadcrumb is `title › innermost-heading`; the chunker (docs-chunker.ts)
+// breaks on H1–H3 and keeps only the innermost. So an H3 UNDER an inventory H2
+// (e.g. `### A. Data sources` under `## Real feature inventory` — exactly the
+// data-agent-013 chunk) carries no inventory label. Measured over the corpus:
+// 459 H3 sections across 469 parity docs, of which ~75 sit under a "real
+// feature inventory" H2 but ~76 sit under Loom-side H2s (`Loom coverage`,
+// `Backend per control`, `Build plan`, `Waves`). Guessing "unlabelled H3 in a
+// parity doc ⇒ other product" would therefore mislabel roughly one in six —
+// far too coarse to hard-fail on. So `unlabelled` is its OWN class: it is
+// disclosed to the judge (which can read the prose and compare against the
+// sibling Loom-coverage rows) and it NEVER triggers the deterministic verdict.
+// Carrying the full ancestor path as a non-searchable chunk field would close
+// that gap without touching ranking; it is a follow-up, deliberately not folded
+// in here so this PR cannot move retrieval numbers.
+
+/** Breadcrumb separator emitted by the corpus chunker (lib/azure/docs-chunker.ts). */
+export const BREADCRUMB_SEP = ' › ';
+
+/** Docs that describe two products side by side (`.claude/rules/ui-parity.md`). */
+const COMPARISON_DOC_RE = /(?:^|\/)docs\/fiab\/parity\/[^/]+\.md$|-parity-spec\.md$/i;
+
+/** Section headings that state what the OTHER product does. */
+const OTHER_PRODUCT_SECTION_RE = /\binventor(?:y|ies)\b|\bsource ui\b/i;
+
+/** Section headings that state what CSA Loom SHIPS today. */
+const LOOM_SECTION_RE =
+  /\bloom coverage\b|\bcoverage\b|\bbackend per control\b|\bverification\b|\bbicep\b|\bper-cloud\b|\btests?\b|\bgrade\b|\bfiles\b/i;
+
+/** Section headings that state what CSA Loom PLANS to build (not shipped). */
+const LOOM_PLAN_SECTION_RE = /\bbuild plan\b|\bwaves?\b|\bgaps? to build\b|\broadmap\b|\bbacklog\b/i;
+
+/**
+ * Provenance of one retrieved excerpt — which product its claims are about.
+ *
+ *   'other-product' — a labelled feature-inventory / source-UI section: what
+ *                     Fabric or the Azure portal does. Background ONLY.
+ *   'loom'          — a labelled Loom-coverage / backend / verification section:
+ *                     authoritative about what CSA Loom ships.
+ *   'loom-plan'     — a build-plan / waves section: PLANNED, not shipped.
+ *   'mixed'         — one heading naming both sides (e.g. "Feature inventory →
+ *                     Loom coverage → Backend per control").
+ *   'unlabelled'    — a comparison doc whose section role is not determinable
+ *                     from the breadcrumb (the H3-under-H2 case above).
+ *   'general'       — not a comparison doc; ordinary CSA Loom documentation.
+ */
+export type ExcerptProvenance =
+  | 'other-product'
+  | 'loom'
+  | 'loom-plan'
+  | 'mixed'
+  | 'unlabelled'
+  | 'general';
+
+/** One retrieved chunk as the judge sees it — path + breadcrumb + evidence text. */
+export interface RetrievedExcerpt {
+  /** Repo-root-relative corpus doc path (`docs/fiab/parity/data-agent.md`). */
+  path: string;
+  /** The #2969 `"<title> › <section>"` breadcrumb, when the chunk carries one. */
+  heading?: string | null;
+  /** The evidence slice — the SAME `EVIDENCE_CHARS` prefix the model answered from. */
+  content: string;
+}
+
+/** The section half of a `"<title> › <section>"` breadcrumb (or the whole thing). */
+export function excerptSection(heading?: string | null): string {
+  const h = (heading || '').trim();
+  if (!h) return '';
+  const i = h.lastIndexOf(BREADCRUMB_SEP);
+  return i >= 0 ? h.slice(i + BREADCRUMB_SEP.length).trim() : h;
+}
+
+/**
+ * Classify which product an excerpt's claims are about.
+ *
+ * Deliberately conservative: a comparison-doc section that does not match a
+ * known heading vocabulary is `'unlabelled'`, never guessed into
+ * `'other-product'` (see the section header for the measured mislabel rate).
+ */
+export function classifyExcerptProvenance(e: Pick<RetrievedExcerpt, 'path' | 'heading'>): ExcerptProvenance {
+  if (!COMPARISON_DOC_RE.test(String(e.path || ''))) return 'general';
+  const section = excerptSection(e.heading);
+  if (!section) return 'unlabelled';
+  const other = OTHER_PRODUCT_SECTION_RE.test(section);
+  const loom = LOOM_SECTION_RE.test(section) || LOOM_PLAN_SECTION_RE.test(section);
+  if (other && loom) return 'mixed';
+  if (other) return 'other-product';
+  if (LOOM_PLAN_SECTION_RE.test(section)) return 'loom-plan';
+  if (loom) return 'loom';
+  return 'unlabelled';
+}
+
+/** Human-readable evidence label the judge keys on. */
+const PROVENANCE_LABEL: Record<ExcerptProvenance, string> = {
+  'other-product':
+    'OTHER PRODUCT (Fabric / Azure portal feature inventory) — background only, NOT a statement about CSA Loom',
+  loom: 'CSA LOOM — authoritative for what Loom ships today',
+  'loom-plan': 'CSA LOOM ROADMAP — planned, NOT shipped; must not be reported as an existing capability',
+  mixed: 'COMPARISON SECTION — contains both the other product\'s inventory and CSA Loom\'s coverage; read the row markers',
+  unlabelled:
+    'COMPARISON DOC, section role unlabelled — may describe EITHER product; verify against the CSA Loom coverage rows before treating it as a Loom fact',
+  general: 'CSA LOOM documentation',
+};
+
+// ── Deterministic parity-inversion detector (#2979) ──────────────────────────
+
+/** Word-shingle width for the borrowed-span test. */
+const SHINGLE_N = 5;
+/** Distinct other-product-only shingles that constitute an inversion. */
+const MIN_BORROWED_SHINGLES = 2;
+
+/**
+ * Naming the other product is legitimate attribution, and per
+ * `lib/copilot/docs-grounding` rule 2 an answer MAY describe an opt-in Fabric /
+ * Power BI path. An answer that names it is therefore never a deterministic
+ * inversion — it is attributed background, and the judge's `productFidelity`
+ * dimension is what grades whether the attribution is correct.
+ */
+const ATTRIBUTION_RE = /\bfabric\b|\bpower\s*bi\b|\bonelake\b|\bmicrosoft graph\b/i;
+
+/** Normalized word tokens (markdown syntax, punctuation and case removed). */
+function tokens(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[`*_~|#>[\]()]/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+/** Distinct n-word shingles of `text`. */
+function shingles(text: string, n: number = SHINGLE_N): Set<string> {
+  const t = tokens(text);
+  const out = new Set<string>();
+  for (let i = 0; i + n <= t.length; i++) out.add(t.slice(i, i + n).join(' '));
+  return out;
+}
+
+/**
+ * Deterministic backstop for the inversion class: did the answer lift a
+ * distinctive span that exists ONLY in a labelled other-product excerpt, while
+ * never naming the other product?
+ *
+ * Precision over recall, on purpose. It fires only when every one of these
+ * holds, so it cannot punish a correct answer:
+ *   1. a LABELLED `other-product` excerpt is in the retrieved context;
+ *   2. the answer reproduces >= MIN_BORROWED_SHINGLES distinct 5-word spans
+ *      from it that appear in NO other excerpt (so a span the Loom-coverage
+ *      section also contains is never counted — that is shared vocabulary,
+ *      not a borrowing);
+ *   3. the answer never names the other product, i.e. it presents the borrowed
+ *      capability as CSA Loom's own.
+ *
+ * Its blind spot is the `'unlabelled'` H3 case (see the section header); the
+ * judge's `productFidelity` dimension covers that, and the golden negative rows
+ * cover the specific capabilities that matter.
+ */
+export function detectParityInversion(input: {
+  answer: string;
+  excerpts: RetrievedExcerpt[];
+}): { hit: boolean; borrowed: string[]; attributed: boolean } {
+  const answer = String(input.answer || '');
+  const excerpts = input.excerpts || [];
+  const other = excerpts.filter((e) => classifyExcerptProvenance(e) === 'other-product');
+  if (other.length === 0) return { hit: false, borrowed: [], attributed: false };
+
+  const attributed = ATTRIBUTION_RE.test(answer);
+  if (attributed) return { hit: false, borrowed: [], attributed: true };
+
+  const otherShingles = new Set<string>();
+  for (const e of other) for (const s of shingles(e.content)) otherShingles.add(s);
+  const elsewhere = new Set<string>();
+  for (const e of excerpts) {
+    if (classifyExcerptProvenance(e) === 'other-product') continue;
+    for (const s of shingles(e.content)) elsewhere.add(s);
+  }
+
+  const borrowed: string[] = [];
+  for (const s of shingles(answer)) {
+    if (otherShingles.has(s) && !elsewhere.has(s)) borrowed.push(s);
+  }
+  return { hit: borrowed.length >= MIN_BORROWED_SHINGLES, borrowed, attributed: false };
+}
+
 // ── LLM judge (grounding-fidelity rubric) ────────────────────────────────────
+
+/** Render one excerpt as labelled evidence: index, provenance, path, breadcrumb, text. */
+function renderJudgeExcerpt(e: RetrievedExcerpt, i: number): string {
+  const provenance = classifyExcerptProvenance(e);
+  const crumb = e.heading ? ` — ${e.heading}` : '';
+  return `[${i + 1}] ${e.path}${crumb}\n    provenance: ${PROVENANCE_LABEL[provenance]}\n${e.content}`;
+}
 
 /**
  * Build the judge messages: grounding-fidelity rubric — grounding / relevance /
- * completeness each 1–5, strict-JSON reply. The judge sees the retrieved
- * excerpts (the ONLY permitted evidence), the gold answer, and the model
- * answer. The system prompt bakes in the platform ground truth so a judge
- * never rewards a Fabric-dependency hallucination.
+ * completeness / productFidelity each 1–5, strict-JSON reply. The judge sees the
+ * retrieved excerpts (the ONLY permitted evidence), each one LABELLED with its
+ * path, `<title> › <section>` breadcrumb and product provenance, plus the gold
+ * answer and the model answer.
+ *
+ * `productFidelity` exists because grounding structurally cannot catch the
+ * inversion class (#2979): a claim copied out of the Fabric inventory IS
+ * supported by the retrieved context, so it scores 5 on grounding while being
+ * false about CSA Loom. Grading "which product is this claim about?" as its own
+ * dimension keeps grounding meaning what it says and gives the inversion its
+ * own, independent failure channel.
  */
 export function buildJudgeMessages(
   row: Pick<EvalRow, 'question' | 'expectedAnswer'>,
   answer: string,
-  retrievedExcerpts: string[],
+  retrievedExcerpts: RetrievedExcerpt[],
 ): { role: 'system' | 'user'; content: string }[] {
   const excerpts = retrievedExcerpts.length
-    ? retrievedExcerpts.map((e, i) => `[${i + 1}] ${e}`).join('\n')
+    ? retrievedExcerpts.map((e, i) => renderJudgeExcerpt(e, i)).join('\n\n')
     : '(no chunks were retrieved)';
   return [
     {
@@ -292,20 +546,37 @@ export function buildJudgeMessages(
       content:
         'You are the CSA Loom Copilot answer judge. CSA Loom is an Azure-native analytics platform — ' +
         'NOT Microsoft Fabric; no feature requires a Fabric capacity or Power BI workspace (Fabric is strictly opt-in). ' +
+        'Every question you grade is a question ABOUT CSA LOOM.\n\n' +
+        'EVIDENCE PROVENANCE. Each excerpt is labelled with the product its claims are about. ' +
+        'Excerpts from docs/fiab/parity/*.md and *-parity-spec.md compare CSA Loom against ANOTHER product: a ' +
+        'feature-inventory or source-UI section states what that OTHER product does and is background only, while ' +
+        'a "Loom coverage" / "Backend per control" section states what CSA Loom actually ships (rows marked ✅ built, ' +
+        '⚠️ honest-gate, ❌ MISSING). A "build plan" / "waves" section is PLANNED work, not shipped. When an excerpt ' +
+        'is labelled as unlabelled-role, decide which product it describes by checking it against the CSA Loom ' +
+        'coverage rows before believing it about Loom.\n\n' +
         'Grade the candidate answer on a grounding-fidelity rubric, each dimension an integer 1–5:\n' +
-        '  grounding    — every claim is supported by the retrieved excerpts (5 = fully grounded; 1 = fabricated).\n' +
-        '  relevance    — the answer addresses the question asked (5 = direct; 1 = off-topic).\n' +
-        '  completeness — the answer covers what the reference answer covers (5 = complete; 1 = missing the point).\n' +
-        'Penalize grounding for any claim the excerpts do not support — especially any claim that Microsoft Fabric, ' +
-        'a Fabric capacity, or a Power BI workspace is required. ' +
-        'Reply with STRICT JSON only: {"grounding":n,"relevance":n,"completeness":n,"rationale":"one sentence"}.',
+        '  grounding       — every claim is supported by the retrieved excerpts (5 = fully grounded; 1 = fabricated).\n' +
+        '  relevance       — the answer addresses the question asked (5 = direct; 1 = off-topic).\n' +
+        '  completeness    — the answer covers what the reference answer covers (5 = complete; 1 = missing the point).\n' +
+        '  productFidelity — every capability the answer attributes to CSA Loom is drawn from a CSA-Loom-authoritative ' +
+        'span (5 = correct throughout). Score 1 when the answer reports the OTHER product\'s capability, or a ' +
+        'planned/❌-MISSING capability, as something CSA Loom does today — even if that sentence appears verbatim in ' +
+        'the excerpts. Describing the other product\'s behaviour AS the other product\'s, or describing an opt-in ' +
+        'Fabric / Power BI integration the excerpts document, is correct and scores 5.\n\n' +
+        'productFidelity is INDEPENDENT of grounding: a claim lifted from the other product\'s inventory is fully ' +
+        'grounded and still wrong about CSA Loom. Do not raise productFidelity because the sentence is present in ' +
+        'the context; that is exactly the failure this dimension exists to catch. ' +
+        'Penalize grounding separately for any claim the excerpts do not support — especially any claim that ' +
+        'Microsoft Fabric, a Fabric capacity, or a Power BI workspace is REQUIRED. ' +
+        'Reply with STRICT JSON only: ' +
+        '{"grounding":n,"relevance":n,"completeness":n,"productFidelity":n,"rationale":"one sentence"}.',
     },
     {
       role: 'user',
       content:
-        `Question:\n${row.question}\n\n` +
-        `Retrieved excerpts (the only permitted evidence):\n${excerpts}\n\n` +
-        `Reference answer:\n${row.expectedAnswer}\n\n` +
+        `Question about CSA Loom:\n${row.question}\n\n` +
+        `Retrieved excerpts (the only permitted evidence; each labelled with the product it describes):\n${excerpts}\n\n` +
+        `Reference answer (the true CSA Loom answer):\n${row.expectedAnswer}\n\n` +
         `Candidate answer to grade:\n${answer}`,
     },
   ];
@@ -347,26 +618,49 @@ export function parseJudge(text: string): JudgeScores | null {
   const relevance = clampScore(obj.relevance);
   const completeness = clampScore(obj.completeness);
   if (grounding === undefined || relevance === undefined || completeness === undefined) return null;
-  return { grounding, relevance, completeness, rationale: String(obj.rationale || '').slice(0, 500) };
+  // #2979: optional — see JudgeScores.productFidelity for why a missing value
+  // is recorded as absent rather than turning the whole question into an error.
+  const productFidelity = clampScore(obj.productFidelity);
+  return {
+    grounding,
+    relevance,
+    completeness,
+    ...(productFidelity === undefined ? {} : { productFidelity }),
+    rationale: String(obj.rationale || '').slice(0, 500),
+  };
 }
 
 // ── Pass + run rollup ────────────────────────────────────────────────────────
 
 /**
- * pass = retrievalHit && mentionPass && !forbiddenHit && grounding≥4 (spec).
+ * pass = retrievalHit && mentionPass && !forbiddenHit && !parityInversionHit
+ *        && grounding≥4 && (productFidelity≥4 when the judge returned it).
+ *
+ * `parityInversionHit` is a DETERMINISTIC hard fail, ranked with `forbiddenHit`
+ * rather than folded into the judge score: an answer that presents the other
+ * product's capability as CSA Loom's is wrong about the product regardless of
+ * how well it is grounded (#2979).
+ *
  * A deferred/errored judge keeps the deterministic verdict (E3 treats deferred
- * as no-change — never a regression, never a fabricated pass on grounding).
+ * as no-change — never a regression, never a fabricated pass on grounding), and
+ * a judge that omitted `productFidelity` is scored on grounding alone; the
+ * omission is counted in the rollup, not silently treated as a 5.
  */
 export function computePass(r: {
   retrievalHit: boolean;
   mentionPass: boolean;
   forbiddenHit: boolean;
+  parityInversionHit?: boolean;
   judgeStatus: EvalResult['judgeStatus'];
   judge?: JudgeScores;
 }): boolean {
-  const deterministic = r.retrievalHit && r.mentionPass && !r.forbiddenHit;
+  const deterministic = r.retrievalHit && r.mentionPass && !r.forbiddenHit && !r.parityInversionHit;
   if (!deterministic) return false;
-  if (r.judgeStatus === 'scored' && r.judge) return r.judge.grounding >= 4;
+  if (r.judgeStatus === 'scored' && r.judge) {
+    if (r.judge.grounding < 4) return false;
+    if (r.judge.productFidelity !== undefined && r.judge.productFidelity < 4) return false;
+    return true;
+  }
   return true; // deferred / error: deterministic-only verdict (judge no-change)
 }
 
@@ -380,6 +674,25 @@ export interface RunTotals {
   judged: number;
   deferred: number;
   autoFailed: number;
+  /**
+   * #2979 — mean `productFidelity` over the judged questions that actually
+   * RETURNED the dimension. `null` when the judge deployment never returned it
+   * (see `productFidelityJudged`), which is the honest "not measured" value —
+   * never a fabricated 5.
+   */
+  productFidelityAvg?: number | null;
+  /**
+   * #2979 — how many judged questions carried a `productFidelity` score. A run
+   * with `judged > 0` and `productFidelityJudged === 0` means the judge
+   * deployment ignored the rubric field entirely: the inversion channel measured
+   * NOTHING that run, and the receipt says so instead of implying coverage.
+   */
+  productFidelityJudged?: number;
+  /**
+   * #2979 — questions the deterministic parity-inversion detector hard-failed
+   * (the answer presented a labelled other-product capability as CSA Loom's).
+   */
+  parityInversions?: number;
   /**
    * Which retrieval backend actually answered, counted per question
    * (`{"ai-search": 15}`). Issue #2585: `backend` was captured on every
@@ -437,6 +750,7 @@ export function rollupRun(
     return {
       questions: 0, retrievalHitRate: 0, mrrAvg: 0, groundingAvg: null,
       answerAvg: null, passRate: 0, judged: 0, deferred: 0, autoFailed: 0,
+      productFidelityAvg: null, productFidelityJudged: 0, parityInversions: 0,
       backends: {},
       ...probeInfo,
     };
@@ -450,6 +764,13 @@ export function rollupRun(
   const answerAvg = judgedResults.length
     ? round3(avg(judgedResults.map((r) => (r.judge!.grounding + r.judge!.relevance + r.judge!.completeness) / 3)))
     : null;
+  // #2979 — averaged over the judged questions that actually RETURNED the
+  // dimension. A judge that never returns it yields null + a zero count, which
+  // reads as "not measured"; averaging over the full judged set instead would
+  // silently score the missing ones and manufacture coverage that does not exist.
+  const fidelityScores = judgedResults
+    .map((r) => r.judge!.productFidelity)
+    .filter((v): v is number => v !== undefined);
   return {
     questions: n,
     retrievalHitRate: round3(results.filter((r) => r.retrievalHit).length / n),
@@ -460,6 +781,9 @@ export function rollupRun(
     judged: judgedResults.length,
     deferred: results.filter((r) => r.judgeStatus === 'deferred').length,
     autoFailed: results.filter((r) => r.judgeStatus === 'auto-fail').length,
+    productFidelityAvg: fidelityScores.length ? round3(avg(fidelityScores)) : null,
+    productFidelityJudged: fidelityScores.length,
+    parityInversions: results.filter((r) => r.parityInversionHit).length,
     backends: rollupBackends(results),
     ...probeInfo,
   };
