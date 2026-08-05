@@ -194,6 +194,12 @@ jobs:
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)
         run: node scripts/ci/check-docs-hygiene.mjs
+      # deploy-integrity.md R8 — a deployment doc that tells a customer to run a
+      # script or dispatch a workflow that does not exist is drift with teeth.
+      # A 2026-08 survey found EIGHT such references across docs/fiab/deployment
+      # and docs/fiab/runbooks.
+      - name: docs-deploy-refs (every script/workflow/bicep path a deploy doc names exists)
+        run: node scripts/ci/check-docs-deploy-refs.mjs
       - name: health-coverage (every Azure client + item family has a health check mapping)
         run: node scripts/ci/check-health-coverage.mjs
       - name: parity-doc-freshness (parity docs vs their source files; warn-first)

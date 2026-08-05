@@ -85,9 +85,13 @@ stages:
                         --location $(LOOM_LOCATION) \
                         --template-file $(BicepFile) \
                         --parameters $(ParamFile) \
-                        --parameters loomAdminGroupObjectId=$(LOOM_ADMIN_GROUP_OBJECT_ID)
-                      bash scripts/csa-loom/bootstrap-all.sh \
-                        --boundary ${{ parameters.boundary }} --environment dev
+                        --parameters adminEntraGroupId=$(LOOM_ADMIN_GROUP_OBJECT_ID)
+                      # Post-deploy bootstrap. The canonical, tested path is the
+                      # csa-loom-post-deploy-bootstrap.yml workflow; these are the
+                      # same steps for pipelines that cannot dispatch it.
+                      bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+                      bash scripts/csa-loom/grant-navigator-rbac.sh
+                      bash scripts/csa-loom/grant-powerplatform-sp.sh
 
   - stage: DeployStage
     dependsOn: DeployDev
@@ -113,7 +117,7 @@ stages:
                         --location $(LOOM_LOCATION) \
                         --template-file $(BicepFile) \
                         --parameters $(ParamFile) \
-                        --parameters loomAdminGroupObjectId=$(LOOM_ADMIN_GROUP_OBJECT_ID)
+                        --parameters adminEntraGroupId=$(LOOM_ADMIN_GROUP_OBJECT_ID)
 
   - stage: DeployProd
     dependsOn: DeployStage
@@ -139,9 +143,13 @@ stages:
                         --location $(LOOM_LOCATION) \
                         --template-file $(BicepFile) \
                         --parameters $(ParamFile) \
-                        --parameters loomAdminGroupObjectId=$(LOOM_ADMIN_GROUP_OBJECT_ID)
-                      bash scripts/csa-loom/bootstrap-all.sh \
-                        --boundary ${{ parameters.boundary }} --environment prod
+                        --parameters adminEntraGroupId=$(LOOM_ADMIN_GROUP_OBJECT_ID)
+                      # Post-deploy bootstrap. The canonical, tested path is the
+                      # csa-loom-post-deploy-bootstrap.yml workflow; these are the
+                      # same steps for pipelines that cannot dispatch it.
+                      bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+                      bash scripts/csa-loom/grant-navigator-rbac.sh
+                      bash scripts/csa-loom/grant-powerplatform-sp.sh
 ```
 
 ## Approvals + post-deploy

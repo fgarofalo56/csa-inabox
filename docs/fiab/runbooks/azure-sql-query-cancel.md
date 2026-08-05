@@ -57,8 +57,8 @@ cancel POST must reach the **same** replica that started the query.
   so the cancel POST is routed to the originating replica:
 
   ```bicep
-  // platform/fiab/bicep/modules/container-apps/console.bicep
-  // (or wherever the console containerApp resource is defined)
+  // platform/fiab/bicep/modules/admin-plane/main.bicep
+  // (the `loom-console` Microsoft.App/containerApps resource)
   properties: {
     configuration: {
       ingress: {
