@@ -3,10 +3,13 @@
 **Issue:** [#2585](https://github.com/fgarofalo56/csa-inabox/issues/2585) ·
 **Diagnosis:** [`copilot-quality-triage.md`](copilot-quality-triage.md) ·
 **Status:** P0, P1, P1b, P2, P3 implemented and measured offline; the AI Search
-retrieval path is now wired through the same ranker (#2929, §9 — deploy-gated);
-P4 (floor re-baseline) NOT started ·
-**Floors:** `content/evals/eval-floors.json` is **unchanged** — re-baselining is
-P4 and happens last, from ≥3 real runs through the existing raise-only ratchet.
+retrieval path is wired through the same ranker (#2929, §9) and now scores it
+with corpus-wide BM25 statistics (#2970, §11 — deploy-gated); P4 (floor
+re-baseline) **DONE 2026-08-06** — `retrievalHitRate` ratcheted from six measured
+runs, see `content/evals/eval-floors.json` `_meta.ratchetBasis` ·
+**Floors:** `content/evals/eval-floors.json` — `retrievalHitRate` is now measured,
+`groundingAvg` and `passRate` are still the provisional seed (the ratchet
+correctly refused both: the six-run window mixes judged and judge-less runs).
 
 Everything below is labelled **MEASURED** (reproducible from this repo with no
 Azure access and zero judge-token spend) or **INFERRED** (reasoning from code,
@@ -19,6 +22,10 @@ node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs
 node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8
 node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8 --source-weights 0.9:0.75:0.7
 node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --explain health
+# #2970 — the TWO-STAGE simulation. Every other invocation above ranks the FULL
+# corpus, i.e. it assumes stage-1 recall is perfect: an UPPER BOUND on live
+# behaviour, never a prediction of it. See §11.
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8 --stage1 100,200,400,800,inf
 ```
 
 `scripts/csa-loom/measure-retrieval.mjs` **imports the shipping ranker**
@@ -574,3 +581,156 @@ Covered by `lib/azure/__tests__/loom-docs-index-manifest-persistence.test.ts`,
 whose emulator enforces the same 32,766-byte ceiling and the same 207 semantics
 measured on the live service — and asserts that it does, so the fixture cannot
 degrade into one that merely agrees with the code.
+
+---
+
+## 11. The AI Search re-rank was scoring against the WRONG corpus statistics (#2970)
+
+**Issue:** [#2970](https://github.com/fgarofalo56/csa-inabox/issues/2970) ·
+**Status:** fixed in code + unit-proved; **live confirmation OWED** (a
+`loom-docs` reindex + a `copilot-quality-evals` run on `main`).
+
+### 11.1 What #2970 suspected, and what was actually true
+
+#2970 observed that the offline harness over-predicted live retrieval by ~2x and
+proposed a cause: AI Search's `queryType:'simple'` / `searchMode:'any'` stage-1
+query was losing the gold document out of the candidate window before the
+re-ranker ever saw it. That was a reasonable hypothesis. It is not what happens.
+
+`measure-retrieval.mjs --stage1` now simulates BOTH stages — a bounded stage-1
+window scored without the surface boost or source weights (the two knobs AI
+Search does not have), then the REAL re-rank over exactly those candidates.
+**MEASURED**, 153 golden rows at top-8:
+
+| stage-1 window | 100 | 200 | 400 | 800 | full corpus |
+|---|---|---|---|---|---|
+| **stage-1 recall** (gold doc inside the window at all) | 0.967 | 0.987 | 0.993 | 1.000 | 1.000 |
+| end-to-end, **window-local** BM25 stats (as shipped) | 0.797 | 0.804 | 0.784 | 0.850 | 0.889 |
+| end-to-end, **corpus-wide** BM25 stats (the fix) | **0.889** | **0.889** | **0.889** | **0.889** | **0.889** |
+
+Stage-1 recall at the shipped window of 100 is **0.967** — the gold document is
+almost always there. Only 5 of 153 rows miss it (`deploy-planner-005`,
+`deploy-planner-009`, `help-001`, `help-004`, `help-019`). Widening the window is
+therefore not the lever; the document was already inside it.
+
+### 11.2 The actual defect
+
+`loom-docs-index.rankChunks` builds a fresh BM25 index over the candidate window,
+and `bm25Rank` takes `size`, `df` and `avgdl` from whatever index it is handed.
+Every candidate in that window was selected *because* it matches the query, so
+`df/size` approaches 1 for precisely the query's terms and
+
+```
+idf = log(1 + (size - df + 0.5) / (df + 0.5))
+```
+
+collapses toward 0 for all of them at once. The re-ranker loses the ability to
+weight a rare, discriminating term above a ubiquitous one — which is the entire
+reason BM25 outranks term-presence counting (§1).
+
+§9 of this document called that "the one residual asymmetry" and moved on. It was
+not residual: substituting corpus-wide statistics recovers **the whole gap**, and
+a 100-candidate window then scores identically to ranking the entire corpus. The
+tell was visible in the numbers all along — the window-local row above is **not
+monotonic** in window width (400 scores *below* 200). A ranking whose quality
+wanders with the candidate count is distorted statistics, not a recall ceiling.
+
+### 11.3 What shipped
+
+* `docs-ranker.Bm25CorpusStats` + `createCorpusStatsAccumulator()` — corpus-wide
+  `size` / `avgdl` / `df`, accumulated **streaming** (one chunk counted and
+  dropped) so the ~75 MB of corpus text is never resident.
+* `Bm25RankOptions.corpusStats` — when supplied, IDF and length normalisation use
+  corpus statistics while term frequency, chunk length, title tokens and source
+  class stay local to the chunk (they are per-chunk facts, identical either way).
+  Omitting it is byte-identical to the previous behaviour.
+* `loom-docs-index.localCorpusStats()` — memoised per process, built from the
+  corpus BUNDLED IN THE IMAGE (the same tree `collectSources()` walks), which is
+  the same corpus the reindex populated the search index from. An unreachable
+  corpus yields `null` and an honest degradation to the previous window-local
+  ranking — never a crash, never a zero-sized corpus.
+
+### 11.4 The harness lied, and that is fixed too
+
+Every full-corpus column in this document ranks the whole corpus, i.e. it is a
+**stage-2 measurement with stage 1 assumed perfect** — a strict upper bound, not
+a live prediction. #2970 was right that a harness which mispredicts is itself a
+defect. `--stage1` is the fix, and the full-corpus column is now printed under
+the label `inf (upper bound)`:
+
+```bash
+node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 8 --stage1 100,200,400,800,inf
+```
+
+### 11.5 What this does NOT establish
+
+Per G1, none of the above is a live number. The stage-1 model is BM25, not AI
+Search's own scoring, and the live gap is wider than the model predicts (live
+overall 0.750 on run 31064239486 vs the model's 0.797 at w=100) — so AI Search's
+real stage 1 is somewhat worse than modelled. **The live confirmation is owed:** a
+`loom-docs` reindex followed by a `copilot-quality-evals` run on `main`, read
+against the per-surface hit-rates above. Until that run exists this is a
+code-and-simulation result.
+
+---
+
+## 12. Parity-doc provenance: the H2 ancestor was thrown away (#2979 follow-up)
+
+**Status:** fixed in code + unit-proved; **live confirmation OWED** (same run as
+§11.5).
+
+`data-agent` was the worst surface on the last fully-judged run (31064239486):
+`retrievalHitRate` 0.900, `groundingAvg` 4.33 — and `passRate` **0.100** against a
+0.40 floor, with `productFidelityAvg` **1.889** of 5. Retrieval was fine and the
+answers were well grounded. They were grounded in the wrong product.
+
+`docs/fiab/parity/data-agent.md` puts every capability fact in an H3 beneath
+`## Real feature inventory` — Microsoft Fabric's inventory — with CSA Loom's
+actual behaviour in a separate `## Loom coverage` table. The chunker labelled each
+chunk `title › INNERMOST heading`, so `### A. Data sources` reached both the
+answer prompt and the judge carrying no product label at all.
+`classifyExcerptProvenance` therefore returned `'unlabelled'` and told the judge
+the excerpt "may describe either product" — for a surface whose entire gold
+document is that one file.
+
+Fixed in two places:
+
+1. `docs-chunker.ancestryHeading` emits the FULL heading ancestry
+   (`title › H2 › H3`), closing deeper levels when a shallower heading opens.
+2. `evaluator-core.classifyExcerptProvenance` reads that ancestry. An inventory /
+   source-UI ancestor **governs its whole subtree** — which has to outrank a
+   nearer match, because inventory H3s are topic names (`### C. Build / test
+   loop`) that collide with the loose Loom vocabulary (`\btests?\b`). Only the
+   STRONG markers (`Loom coverage`, `Backend per control`) may overrule it, which
+   is what keeps `## Feature inventory + Loom coverage (W4)` correctly `'mixed'`.
+
+**MEASURED** over `docs/fiab/parity/**.md` (3,979 chunks):
+
+| provenance | before | after |
+|---|---:|---:|
+| `unlabelled` | 1711 | **1249** |
+| `other-product` | 346 | **468** |
+| `mixed` | 241 | 447 |
+| `loom` | 1609 | 1683 |
+| `loom-plan` | 72 | 132 |
+
+All six inventory chunks of `data-agent.md` moved `unlabelled` → `other-product`.
+`unlabelled` remains a real, non-failing class — it is simply no longer the
+default for the commonest shape in the corpus.
+
+### 12.1 The golden set was mis-specified too
+
+15 of `data-agent.jsonl`'s 18 rows pointed `expectedChunks` at a **Fabric
+inventory** anchor while their `mustMention` token exists only in the Loom
+coverage table (`Cosmos`, `cURL`, `LLM-as-judge`, `tools`, `SELECT`). The eval
+simultaneously demanded that the retriever surface the other product's inventory
+and that the answer carry a Loom-only token — then scored the answer with
+`productFidelity`, which hard-fails exactly the behaviour it had asked for.
+
+Those 15 rows now point at `#loom-coverage-built---honest-gate---missing-`.
+Retrieval is scored at DOCUMENT level (`evaluator-core.chunkPath` strips the
+anchor), so this **cannot move `retrievalHitRate`** — it makes the golden set say
+what it means, in line with `docs-grounding` rule 1 ("answer with what LOOM
+does"). Two genuine corpus gaps were closed at the same time: the Loom coverage
+rows now state "up to **5 data sources**" and "up to **15,000** characters"
+explicitly, so those facts are answerable without reading Fabric's inventory.

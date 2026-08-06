@@ -41,12 +41,14 @@ import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import {
   buildBm25Index,
   bm25Rank,
+  createCorpusStatsAccumulator,
   diversifyByDocument,
   rankSubstring,
   surfaceTopicTerms,
   DEFAULT_MAX_CHUNKS_PER_DOC,
   DEFAULT_SURFACE_BOOST,
   DEFAULT_SOURCE_WEIGHTS,
+  type Bm25CorpusStats,
   type Bm25Index,
 } from './docs-ranker';
 
@@ -451,7 +453,81 @@ function corpusSignature(chunks: DocChunk[]): string {
 /** Drop the memoised BM25 index (called after a reindex; exported for tests). */
 export function resetDocsRankerCache(): void {
   bm25Cache = null;
+  corpusStatsCache = undefined;
 }
+
+// ---------- Corpus-wide BM25 statistics for the AI Search path (#2970) -------
+//
+// The AI Search branch re-ranks a per-query CANDIDATE WINDOW. Building BM25
+// statistics from that window is wrong in a specific, measurable way — every
+// candidate matches the query, so `df/size` approaches 1 for the query's terms
+// and IDF collapses for all of them together. See `docs-ranker.Bm25CorpusStats`
+// for the numbers (0.797 → 0.889 over the golden sets at a 100-candidate
+// window, i.e. the entire gap to full-corpus ranking).
+//
+// The statistics come from the corpus BUNDLED IN THE IMAGE (the same
+// `copilot-corpus/` tree `collectSources()` walks) rather than from the search
+// index, because they must describe the whole corpus and a query can only ever
+// see a slice of it. They are accumulated STREAMING — one file chunked, counted
+// and dropped — so the ~75 MB of corpus text is never resident.
+//
+// `undefined` = not attempted yet; `null` = attempted and unavailable (no
+// bundled corpus — a dev checkout without docs, or an image built without the
+// staging step). Null is an HONEST degradation to the previous window-local
+// behaviour, never a crash and never a silent wrong answer: the ranking is
+// simply the one that shipped before this fix.
+let corpusStatsCache: Bm25CorpusStats | null | undefined;
+
+/**
+ * Test-only override for the corpus-statistics source.
+ *
+ * The production invariant is that BOTH retrieval backends score against the
+ * SAME corpus statistics — the Cosmos path because its index IS the corpus, the
+ * AI Search path because `localCorpusStats()` reads the same bundled corpus the
+ * reindex built Cosmos from. A unit test that stands up a synthetic Cosmos
+ * corpus has no way to satisfy that without pointing this at the same synthetic
+ * corpus; without the hook the AI Search path would silently score against the
+ * repo's REAL docs and the backend-symmetry assertion would fail for a reason
+ * that has nothing to do with the behaviour under test.
+ */
+let corpusStatsOverride: Bm25CorpusStats | null | undefined;
+
+/**
+ * Corpus-wide `size` / `avgdl` / `df`, built once per process from the bundled
+ * corpus. Returns null when no corpus is reachable.
+ */
+function localCorpusStats(): Bm25CorpusStats | null {
+  if (corpusStatsOverride !== undefined) return corpusStatsOverride;
+  if (corpusStatsCache !== undefined) return corpusStatsCache;
+  try {
+    const refs = enumerateSourceFiles(detectRoots());
+    if (refs.length === 0) {
+      corpusStatsCache = null;
+      return null;
+    }
+    const acc = createCorpusStatsAccumulator();
+    for (const ref of refs) {
+      let raw = '';
+      try { raw = fs.readFileSync(ref.abs, 'utf-8'); } catch { continue; }
+      if (ref.kind === 'repo') {
+        const summary = summarizeSource(ref.abs, raw);
+        if (summary) acc.add({ content: summary });
+        continue;
+      }
+      for (const b of chunkMarkdown(raw)) acc.add({ heading: b.heading, content: b.content });
+    }
+    const stats = acc.finish();
+    // A corpus that produced no chunks is not statistics — it is an empty
+    // corpus, and scoring against `size: 0` would make every IDF identical.
+    corpusStatsCache = stats.size > 0 ? stats : null;
+    return corpusStatsCache;
+  } catch (e: any) {
+    console.warn('[loom-docs-index] corpus statistics build failed, falling back to window-local BM25', e?.message);
+    corpusStatsCache = null;
+    return null;
+  }
+}
+
 
 function bm25IndexFor(chunks: DocChunk[]): Bm25Index {
   const signature = corpusSignature(chunks);
@@ -504,7 +580,17 @@ function rankChunks(
   resources: DocChunk[],
   query: string,
   top: number,
-  opts: { bm25: boolean; surfaceTerms?: readonly string[]; sourceWeights: boolean },
+  opts: {
+    bm25: boolean;
+    surfaceTerms?: readonly string[];
+    sourceWeights: boolean;
+    /**
+     * #2970 — corpus-wide BM25 statistics. MUST be supplied when `resources` is
+     * a query-selected subset (the AI Search candidate window); omitted on the
+     * Cosmos path, whose index already covers the whole corpus.
+     */
+    corpusStats?: Bm25CorpusStats | null;
+  },
   buildIndex: (chunks: DocChunk[]) => Bm25Index = buildBm25Index,
 ): DocHit[] {
   if (opts.bm25 === false) {
@@ -521,6 +607,7 @@ function rankChunks(
     surfaceBoost: opts.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
     // #2585 P2 — rank published product docs above the engineering ledger.
     sourceWeights: opts.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
+    corpusStats: opts.corpusStats ?? null,
   });
   // Normalise to the 0..1 `DocHit.score` contract (BM25 is unbounded above and
   // only comparable within one result set) — citations and the Copilot tool
@@ -589,17 +676,27 @@ export interface SearchDocsOptions {
  * Pipeline (#2585 P0/P1): over-fetch candidates → rank via BM25 + surface boost
  * + source weighting (`rankChunks`) → cap chunks-per-document → slice to `top`.
  *
- * Backend symmetry (#2929): BOTH paths now decide the final order with the SAME
- * ranker (`rankChunks`). AI Search is used for RECALL only — it returns a WIDE
- * candidate window (`AI_SEARCH_CANDIDATE_WINDOW`) which is then re-ranked by the
- * identical BM25 + surface-boost + source-weight pipeline the Cosmos path uses,
- * so the two backends produce the same ordering for the same candidate
- * documents. The one residual asymmetry: BM25 corpus statistics (IDF, avgdl)
- * are computed over the full corpus on the Cosmos path but over the AI-Search
- * candidate window on the AI Search path. The offline harness
- * (`scripts/csa-loom/measure-retrieval.mjs`) exercises the Cosmos path; per G1
- * the AI Search path's live numbers confirm only after a `loom-docs` reindex +
- * a real `copilot-quality-evals` run.
+ * Backend symmetry (#2929, completed by #2970): BOTH paths decide the final
+ * order with the SAME ranker (`rankChunks`). AI Search is used for RECALL only —
+ * it returns a WIDE candidate window (`AI_SEARCH_CANDIDATE_WINDOW`) which is then
+ * re-ranked by the identical BM25 + surface-boost + source-weight pipeline the
+ * Cosmos path uses, so the two backends produce the same ordering for the same
+ * candidate documents.
+ *
+ * #2929 left ONE asymmetry — BM25 corpus statistics were computed over the full
+ * corpus on the Cosmos path but over the AI-Search candidate window on the AI
+ * Search path — and recorded it as residual. It was not residual: it was the
+ * entire remaining gap. Every candidate in the window matches the query, so
+ * `df/size` approaches 1 for the query's terms and IDF collapses for all of them
+ * at once. Measured over the golden sets at top-8 with a 100-candidate window,
+ * window-local statistics score 0.797 and corpus-wide statistics score 0.889 —
+ * exactly the full-corpus number. `localCorpusStats()` now supplies the
+ * corpus-wide half, so the paths agree on the ranking as well as on the ranker.
+ *
+ * The offline harness (`scripts/csa-loom/measure-retrieval.mjs`) models BOTH
+ * stages under `--stage1`; its full-corpus columns are an UPPER BOUND, not a
+ * live prediction. Per G1 the AI Search path's live numbers confirm only after a
+ * `loom-docs` reindex + a real `copilot-quality-evals` run.
  */
 export async function searchDocs(
   query: string,
@@ -653,7 +750,15 @@ export async function searchDocs(
         // same candidate set.
         const ordered = bm25Enabled
           ? rankChunks(candidates, query, overfetch, {
-              bm25: true, surfaceTerms, sourceWeights: weightSources,
+              bm25: true,
+              surfaceTerms,
+              sourceWeights: weightSources,
+              // #2970 — the candidate window is a query-selected subset, so its
+              // own df/size/avgdl are distorted (every candidate matches the
+              // query). Score with corpus-wide statistics instead; null when no
+              // bundled corpus is reachable, which degrades to the previous
+              // window-local behaviour rather than failing.
+              corpusStats: localCorpusStats(),
             })
           : candidates;
         const hits = finish(ordered);
@@ -1435,4 +1540,11 @@ export const __testInternals = {
   MANIFEST_SHARD_CHARS,
   MANIFEST_KEY,
   manifestShardKey,
+  // #2970 — point the AI Search path's corpus statistics at a synthetic corpus
+  // so a backend-symmetry test can hold BOTH paths to the same corpus. Pass
+  // `undefined` to restore the real bundled-corpus source.
+  setCorpusStatsForTests: (stats: Bm25CorpusStats | null | undefined): void => {
+    corpusStatsOverride = stats;
+  },
+  localCorpusStats,
 };

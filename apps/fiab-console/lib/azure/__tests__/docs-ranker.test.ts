@@ -11,6 +11,8 @@ import {
   tokenize,
   buildBm25Index,
   bm25Rank,
+  buildCorpusStats,
+  createCorpusStatsAccumulator,
   diversifyByDocument,
   rankSubstring,
   surfaceTopicTerms,
@@ -325,5 +327,130 @@ describe('rankSubstring (kill-switch path)', () => {
 
   it('still matches substrings — the defect BM25 replaces, preserved for revert fidelity', () => {
     expect(rankSubstring('report', 'reporting pipeline', undefined)).toBeGreaterThan(0);
+  });
+});
+
+// ── #2970 — corpus-wide BM25 statistics for a query-selected window ──────────
+//
+// THE DEFECT, stated as a property rather than as an implementation shape:
+// when the index handed to `bm25Rank` is a CANDIDATE WINDOW (every member
+// selected because it matches the query), the window's own document
+// frequencies say every query term is ubiquitous, so IDF collapses for all of
+// them together and the ranker can no longer tell a rare discriminating term
+// from a common one. Substituting corpus-wide statistics restores it.
+describe('bm25Rank — corpusStats (#2970)', () => {
+  // Two documents. Both carry the common term; only the gold one carries the
+  // rare term. Across the CORPUS the rare term appears in 1 of 200 chunks, so it
+  // holds almost all the discriminating power — but inside a candidate WINDOW of
+  // just these two, both terms look equally (un)common.
+  const gold = { path: 'docs/gold.md', heading: 'Gold', content: `eventstream telemetry ${'filler '.repeat(20)}` };
+  const decoy = { path: 'docs/decoy.md', heading: 'Decoy', content: `telemetry telemetry telemetry telemetry ${'filler '.repeat(20)}` };
+  const windowChunks = [gold, decoy];
+
+  /** A corpus where `telemetry` is everywhere and `eventstream` is rare. */
+  const corpus = [
+    gold,
+    decoy,
+    ...Array.from({ length: 198 }, (_, i) => ({
+      path: `docs/other-${i}.md`,
+      heading: `Other ${i}`,
+      content: `telemetry ${'filler '.repeat(20)}`,
+    })),
+  ];
+
+  it('window-local statistics COMPRESS the rare term\'s advantage — the shipped defect', () => {
+    // The mechanism, asserted as a ratio rather than as a specific flip (the
+    // aggregate flip evidence is the harness receipt cited above: 0.797 vs
+    // 0.889 over 153 golden rows). Inside a query-selected window every query
+    // term looks ubiquitous, so IDF collapses for all of them TOGETHER and the
+    // ranker loses its ability to weight `eventstream` above `telemetry`.
+    const idx = buildBm25Index(windowChunks);
+    const scoreOf = (opts: object) => {
+      const m = new Map(bm25Rank(idx, 'eventstream telemetry', 2, opts).map((h) => [windowChunks[h.index].path, h.score]));
+      return m.get('docs/gold.md')! / m.get('docs/decoy.md')!;
+    };
+    const windowRatio = scoreOf({});
+    const corpusRatio = scoreOf({ corpusStats: buildCorpusStats(corpus) });
+    // `eventstream` is 1-in-200 in the corpus and 1-in-2 in the window, so the
+    // corpus knows it is ~4.9 nats' worth of evidence where the window thinks
+    // it is ~0.7. The gold document's lead must be materially larger under
+    // corpus statistics.
+    expect(corpusRatio).toBeGreaterThan(windowRatio * 2);
+  });
+
+  it('corpus-wide statistics put the gold document first', () => {
+    const idx = buildBm25Index(windowChunks);
+    const ranked = bm25Rank(idx, 'eventstream telemetry', 2, { corpusStats: buildCorpusStats(corpus) });
+    // `eventstream` is 1-in-200 across the corpus; that IDF dominates the
+    // decoy's raw term frequency — the behaviour BM25 is supposed to have, and
+    // the reason full-corpus ranking scored 0.889 over the golden sets where the
+    // window-local path scored 0.797.
+    expect(windowChunks[ranked[0].index].path).toBe('docs/gold.md');
+  });
+
+  it('ranks a window with corpus stats identically to ranking the whole corpus', () => {
+    // The property the production fix relies on: BM25 scores are independent per
+    // chunk, so scoring a subset against corpus statistics gives the same ORDER
+    // as scoring the corpus and then keeping the subset.
+    const windowOrder = bm25Rank(buildBm25Index(windowChunks), 'eventstream telemetry', 2, {
+      corpusStats: buildCorpusStats(corpus),
+    }).map((h) => windowChunks[h.index].path);
+    const corpusOrder = bm25Rank(buildBm25Index(corpus), 'eventstream telemetry', corpus.length)
+      .map((h) => corpus[h.index].path)
+      .filter((p) => p === 'docs/gold.md' || p === 'docs/decoy.md');
+    expect(windowOrder).toEqual(corpusOrder);
+  });
+
+  it('omitting corpusStats is byte-identical to before the option existed', () => {
+    const idx = buildBm25Index(windowChunks);
+    expect(bm25Rank(idx, 'eventstream telemetry', 2, { corpusStats: null }))
+      .toEqual(bm25Rank(idx, 'eventstream telemetry', 2));
+  });
+
+  it('treats a term the corpus has never seen as maximally rare, not as locally common', () => {
+    // Mixing the two statistic sources inside one score is the bug being fixed,
+    // so an unknown term takes df 0 rather than falling back to the window count.
+    const stats = buildCorpusStats([{ path: 'docs/x.md', content: 'unrelated words here' }]);
+    const ranked = bm25Rank(buildBm25Index(windowChunks), 'eventstream', 2, { corpusStats: stats });
+    expect(windowChunks[ranked[0].index].path).toBe('docs/gold.md');
+  });
+});
+
+describe('createCorpusStatsAccumulator', () => {
+  it('counts each chunk once per DISTINCT term (document frequency, not term frequency)', () => {
+    const acc = createCorpusStatsAccumulator();
+    acc.add({ content: 'alpha alpha alpha beta' });
+    acc.add({ content: 'beta gamma' });
+    const stats = acc.finish();
+    expect(stats.size).toBe(2);
+    expect(stats.df.get('alpha')).toBe(1); // 3 occurrences, 1 document
+    expect(stats.df.get('beta')).toBe(2);
+    expect(stats.df.get('gamma')).toBe(1);
+  });
+
+  it('matches buildCorpusStats over the same chunks (streaming == batch)', () => {
+    const chunks = [
+      { path: 'a.md', heading: 'A', content: 'lakehouse delta storage' },
+      { path: 'b.md', heading: 'B', content: 'lakehouse synapse' },
+    ];
+    const acc = createCorpusStatsAccumulator();
+    for (const c of chunks) acc.add(c);
+    const streamed = acc.finish();
+    const batch = buildCorpusStats(chunks);
+    expect(streamed.size).toBe(batch.size);
+    expect(streamed.avgdl).toBe(batch.avgdl);
+    expect([...streamed.df.entries()].sort()).toEqual([...batch.df.entries()].sort());
+  });
+
+  it('includes the heading in the counted tokens (it is indexed alongside content)', () => {
+    const acc = createCorpusStatsAccumulator();
+    acc.add({ heading: 'Loom coverage', content: 'body text' });
+    expect(acc.finish().df.get('loom')).toBe(1);
+  });
+
+  it('an empty corpus yields size 0 and avgdl 0 rather than NaN', () => {
+    const stats = createCorpusStatsAccumulator().finish();
+    expect(stats.size).toBe(0);
+    expect(stats.avgdl).toBe(0);
   });
 });

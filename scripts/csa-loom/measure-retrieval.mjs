@@ -22,10 +22,40 @@
  * now come from the REAL `lib/azure/docs-chunker.ts`, the same module
  * `loom-docs-index.ts` imports.
  *
+ * ── THE HARNESS USED TO LIE BY ~2x, AND WHY (#2970, measured 2026-08-06) ─────
+ *
+ * Every column below except the `--stage1` sweep ranks the ENTIRE corpus. The
+ * SHIPPED AI Search path does not: `loom-docs-index.searchDocs` asks AI Search
+ * for a bounded candidate window (`AI_SEARCH_CANDIDATE_WINDOW`) scored by AI
+ * Search's OWN `queryType:'simple'` / `searchMode:'any'` ranking — which carries
+ * NEITHER the surface boost NOR the corpus source weighting — and only THEN
+ * re-ranks that window with `rankChunks`. A gold document AI Search leaves
+ * outside the window can never be recovered, however good the re-ranker is.
+ *
+ * So a full-corpus number is a STAGE-2 measurement with stage 1 assumed perfect:
+ * a strict UPPER BOUND on live behaviour, not a prediction of it. #2970 observed
+ * the consequence (offline 0.667 vs live 0.333 on lakehouse) and correctly
+ * called the harness itself a defect. Measured against run 31064239486 the gap
+ * is still concentrated exactly where it hurts:
+ *
+ *   surface        offline(∞)   live(AI Search)   ratio
+ *   eventstream        0.917            0.583      0.64
+ *   rbac               1.000            0.667      0.67
+ *   kql-database       1.000            0.765      0.77
+ *   deploy-planner     0.800            0.615      0.77
+ *   OVERALL            0.889            0.750      0.84
+ *
+ * `--stage1 N` closes that blind spot: it models stage 1 as plain BM25 (no
+ * surface boost, no source weights — the two knobs AI Search does not have)
+ * truncated to N candidates, then runs the REAL re-rank over exactly those
+ * candidates. The `stage1=∞` column is still printed, now labelled as the upper
+ * bound it always was.
+ *
  * Usage (from the repo root):
  *   node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs
  *   node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --top 10
  *   node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --explain lakehouse
+ *   node --max-old-space-size=6144 scripts/csa-loom/measure-retrieval.mjs --stage1 100,200,400,800,inf
  *
  * Read-only, no network, no Azure credentials, zero judge-token spend.
  */
@@ -61,6 +91,13 @@ const flag = (name, dflt) => {
 };
 const TOP = Number(flag('--top', 5)) || 5;
 const EXPLAIN = flag('--explain', null);
+/**
+ * #2970 — stage-1 candidate-window sweep. Comma-separated widths; `inf` is the
+ * full-corpus upper bound. When present, the script prints the stage-1 recall
+ * table INSTEAD of the ranker-variant table, because that is the question being
+ * asked ("how wide must AI Search's window be?"), not "which re-ranker knob".
+ */
+const STAGE1 = flag('--stage1', null);
 /** Override the surface-boost strength to sweep its sensitivity. */
 const SFC = flag('--surface-boost', null);
 /**
@@ -212,7 +249,197 @@ if (EXPLAIN) {
   process.exit(0);
 }
 
+/**
+ * The same two-stage pipeline, but the stage-2 re-rank scores the candidates
+ * with CORPUS-WIDE BM25 statistics instead of window-local ones.
+ *
+ * BM25 scores are independent per chunk, so ranking the full corpus and then
+ * keeping only the candidates is EXACTLY equivalent to scoring just the
+ * candidates against global `size`/`df`/`avgdl` — which is what a production fix
+ * would do. That equivalence is why this can be measured honestly here before
+ * any production code changes.
+ */
+function twoStageGlobalIdf(corpus, index, n) {
+  return (query, top, surface) => {
+    const candIdx = new Set(stage1Candidates(index, corpus, query, n));
+    // Rank globally, then keep only what stage 1 admitted.
+    const wide = bm25Rank(index, query, Math.max(candIdx.size, top * OVERFETCH), {
+      titleBoost: 0,
+      surfaceTerms: surfaceTopicTerms(surface),
+      surfaceBoost: DEFAULT_SURFACE_BOOST,
+      sourceWeights,
+    })
+      .filter((h) => candIdx.has(h.index))
+      .slice(0, Math.max(top * OVERFETCH, top))
+      .map((h) => corpus[h.index]);
+    return diversifyByDocument(wide, top, DEFAULT_MAX_CHUNKS_PER_DOC);
+  };
+}
+
+// ── #2970: two-stage simulation (stage-1 recall → stage-2 re-rank) ───────────
+
+
+/**
+ * Model of AI Search stage 1: plain BM25 over the whole corpus with NEITHER the
+ * surface boost NOR the corpus source weighting, truncated to `n` candidates.
+ *
+ * Those two omissions are the point. `searchSearch()` sends
+ * `queryType:'simple'` / `searchMode:'any'` and AI Search scores with its own
+ * BM25; it has no notion of "this question came from the eventstream surface"
+ * and no notion of "a published product doc outranks the engineering ledger".
+ * Those knobs live ONLY in `rankChunks`, which runs on whatever survived the
+ * window. So the model is: rank without them, cut, then re-rank with them.
+ *
+ * It is a MODEL, not the service — AI Search's per-field scoring and analyzer
+ * differ in detail. It reproduces the structural property that matters and that
+ * the full-corpus harness lacks entirely: a bounded stage 1 that can evict the
+ * gold document before the re-ranker ever sees it.
+ */
+function stage1Candidates(index, corpus, query, n) {
+  if (!Number.isFinite(n)) return corpus.map((_, i) => i);
+  return bm25Rank(index, query, n, {
+    titleBoost: 0,
+    surfaceTerms: [],
+    surfaceBoost: 0,
+    sourceWeights: null,
+  }).map((h) => h.index);
+}
+
+/**
+ * The full live pipeline at a given stage-1 width: stage-1 window → the REAL
+ * re-rank (surface boost + source weights) over exactly those candidates →
+ * per-document diversification → top-K. Mirrors `searchDocs`'s AI Search branch.
+ */
+function twoStageSearch(corpus, index, n) {
+  return (query, top, surface) => {
+    const candIdx = stage1Candidates(index, corpus, query, n);
+    const candidates = candIdx.map((i) => corpus[i]);
+    // The AI Search branch builds a FRESH BM25 index over the candidate window
+    // (loom-docs-index.rankChunks default `buildIndex`), so corpus statistics
+    // come from the window — replicated here rather than reusing the full index.
+    const windowIndex = Number.isFinite(n) ? buildBm25Index(candidates) : index;
+    const wide = bm25Rank(windowIndex, query, Math.max(top * OVERFETCH, top), {
+      titleBoost: 0,
+      surfaceTerms: surfaceTopicTerms(surface),
+      surfaceBoost: DEFAULT_SURFACE_BOOST,
+      sourceWeights,
+    }).map((h) => candidates[h.index]);
+    return diversifyByDocument(wide, top, DEFAULT_MAX_CHUNKS_PER_DOC);
+  };
+}
+
+/** Was the gold document present in the stage-1 window at all, and at what rank? */
+function stage1Recall(corpus, index, row, n) {
+  const candIdx = stage1Candidates(index, corpus, row.question, n);
+  const expected = new Set(row.expectedChunks.map(chunkPath));
+  for (let r = 0; r < candIdx.length; r++) {
+    if (expected.has(chunkPath(corpus[candIdx[r]].path))) return { hit: true, rank: r + 1 };
+  }
+  return { hit: false, rank: null };
+}
+
+if (STAGE1) {
+  const widths = STAGE1.split(',').map((s) => s.trim()).filter(Boolean)
+    .map((s) => (/^(inf|full|all)$/i.test(s) ? Infinity : Number(s)))
+    .filter((n) => n === Infinity || (Number.isFinite(n) && n > 0));
+  if (widths.length === 0) {
+    console.error('--stage1 expects a comma-separated list of widths, e.g. 100,200,400,inf');
+    process.exit(2);
+  }
+  const label = (n) => (n === Infinity ? 'inf (upper bound)' : `w=${n}`);
+  console.log('#2970 — two-stage simulation: AI Search candidate window -> real re-rank\n');
+  console.log('STAGE-1 RECALL — is the gold document inside the candidate window at all?');
+  console.log('(An "inf" column is 1.000 by construction: the full corpus always contains it.)\n');
+  console.log('surface'.padEnd(17) + widths.map((n) => label(n).padStart(19)).join(''));
+  console.log('-'.repeat(17 + 19 * widths.length));
+  const s1tot = widths.map(() => 0);
+  let s1rows = 0;
+  const misses = new Map(); // width -> [rowId]
+  for (const set of sets) {
+    const vals = widths.map((n, wi) => {
+      let hits = 0;
+      for (const row of set.rows) {
+        const { hit } = stage1Recall(corpus, index, row, n);
+        if (hit) hits += 1;
+        else {
+          const k = String(n);
+          misses.set(k, [...(misses.get(k) ?? []), `${row.id}`]);
+        }
+      }
+      s1tot[wi] += hits;
+      return hits / set.rows.length;
+    });
+    s1rows += set.rows.length;
+    console.log(set.surface.padEnd(17) + vals.map((v) => v.toFixed(3).padStart(19)).join(''));
+  }
+  console.log('-'.repeat(17 + 19 * widths.length));
+  console.log('OVERALL'.padEnd(17) + s1tot.map((t) => (t / s1rows).toFixed(3).padStart(19)).join(''));
+
+  console.log('\n\nEND-TO-END hit-rate@' + TOP + ' — stage-1 window -> real re-rank -> diversify');
+  console.log('(This is what the LIVE AI Search path produces. The inf column is the number the');
+  console.log(' full-corpus harness has always printed: an UPPER BOUND, never a live prediction.)\n');
+  console.log('surface'.padEnd(17) + widths.map((n) => label(n).padStart(19)).join(''));
+  console.log('-'.repeat(17 + 19 * widths.length));
+  const e2eCells = widths.map((n) => twoStageSearch(corpus, index, n));
+  const e2etot = widths.map(() => 0);
+  let e2erows = 0;
+  for (const set of sets) {
+    const vals = e2eCells.map((cell) => {
+      let hits = 0;
+      for (const row of set.rows) {
+        const got = cell(row.question, TOP, set.surface);
+        if (docHit(row.expectedChunks, got.map((g) => g.path))) hits += 1;
+      }
+      return hits;
+    });
+    vals.forEach((v, i) => { e2etot[i] += v; });
+    e2erows += set.rows.length;
+    console.log(set.surface.padEnd(17) + vals.map((v) => (v / set.rows.length).toFixed(3).padStart(19)).join(''));
+  }
+  console.log('-'.repeat(17 + 19 * widths.length));
+  console.log('OVERALL'.padEnd(17) + e2etot.map((t) => (t / e2erows).toFixed(3).padStart(19)).join(''));
+
+  // ── The decisive experiment: same windows, CORPUS-WIDE IDF in stage 2 ──────
+  // `rankChunks` on the AI Search path builds a fresh BM25 index over the
+  // candidate window, so `index.size` is the window and `df` is counted inside
+  // it. Every candidate contains the query terms by construction, so df/size
+  // approaches 1 and `log(1 + (size-df+0.5)/(df+0.5))` collapses toward 0 —
+  // the re-ranker loses precisely the IDF signal that makes BM25 work. This
+  // column isolates that term.
+  console.log('\n\nEND-TO-END hit-rate@' + TOP + ' with CORPUS-WIDE IDF in stage 2');
+  console.log('(Identical stage-1 windows; only the re-rank\'s BM25 statistics change.)\n');
+  console.log('surface'.padEnd(17) + widths.map((n) => label(n).padStart(19)).join(''));
+  console.log('-'.repeat(17 + 19 * widths.length));
+  const gCells = widths.map((n) => twoStageGlobalIdf(corpus, index, n));
+  const gtot = widths.map(() => 0);
+  for (const set of sets) {
+    const vals = gCells.map((cell) => {
+      let hits = 0;
+      for (const row of set.rows) {
+        const got = cell(row.question, TOP, set.surface);
+        if (docHit(row.expectedChunks, got.map((g) => g.path))) hits += 1;
+      }
+      return hits;
+    });
+    vals.forEach((v, i) => { gtot[i] += v; });
+    console.log(set.surface.padEnd(17) + vals.map((v) => (v / set.rows.length).toFixed(3).padStart(19)).join(''));
+  }
+  console.log('-'.repeat(17 + 19 * widths.length));
+  console.log('OVERALL'.padEnd(17) + gtot.map((t) => (t / e2erows).toFixed(3).padStart(19)).join(''));
+
+  console.log(`\n(${e2erows} golden rows across ${sets.length} surfaces; shipped window is`
+    + ' AI_SEARCH_CANDIDATE_WINDOW in apps/fiab-console/lib/azure/loom-docs-index.ts)');
+
+  for (const n of widths) {
+    if (n === Infinity) continue;
+    const m = misses.get(String(n)) ?? [];
+    if (m.length) console.log(`\nstage-1 MISSES at w=${n} (${m.length}): ${m.join(', ')}`);
+  }
+  process.exit(0);
+}
+
 /** Each measured cell: name → (question, top, surface) => chunks. */
+
 const cells = {
   'substring (before)': substringSearch(corpus),
   'bm25+div': bm25Search(corpus, index, {}),

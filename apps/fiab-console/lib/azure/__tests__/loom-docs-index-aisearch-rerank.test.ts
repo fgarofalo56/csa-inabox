@@ -23,7 +23,7 @@
  * `copilot-quality-evals` run, which the offline harness structurally cannot
  * exercise.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 interface Cand { path: string; kind: string; heading?: string; content: string; score: number }
 
@@ -137,6 +137,7 @@ vi.mock('@azure/identity', async () => {
 });
 
 import { searchDocs, resetDocsRankerCache, AI_SEARCH_CANDIDATE_WINDOW, __testInternals } from '../loom-docs-index';
+import { buildCorpusStats } from '../docs-ranker';
 
 const asChunks = () =>
   candidates().map((c) => ({ id: c.path, kind: c.kind, path: c.path, heading: c.heading, content: c.content, touchedAt: TS }));
@@ -149,6 +150,21 @@ beforeEach(() => {
   corpus = asChunks();
   lastSearchTop = undefined;
   delete process.env.LOOM_AI_SEARCH_SERVICE;
+  // #2970 — the AI Search path now scores its candidate window against
+  // CORPUS-WIDE BM25 statistics rather than the window's own (see
+  // docs-ranker.Bm25CorpusStats). In production both backends therefore use the
+  // same statistics: the Cosmos path because its index IS the corpus, the AI
+  // Search path because those statistics are built from the same bundled corpus
+  // the reindex populated Cosmos from. This suite's corpus is synthetic, so it
+  // has to say which corpus that is — otherwise the AI Search arm would score
+  // against the repo's REAL docs while the Cosmos arm scored against these 11,
+  // and the backend-symmetry assertion below would fail for a reason unrelated
+  // to what it tests.
+  __testInternals.setCorpusStatsForTests(buildCorpusStats(asChunks()));
+});
+
+afterEach(() => {
+  __testInternals.setCorpusStatsForTests(undefined);
 });
 
 describe('searchDocs — AI Search retrieve-then-rerank (#2929)', () => {
@@ -190,6 +206,43 @@ describe('searchDocs — AI Search retrieve-then-rerank (#2929)', () => {
 
     expect(ai.hits.map((h) => h.path)).toEqual(cosmos.hits.map((h) => h.path));
     expect(ai.hits[0].path).toBe(GOLD);
+  });
+
+  // MUTATION PROOF for #2970: the AI Search path must actually CONSULT the
+  // corpus statistics. Point them at a corpus in which the discriminating query
+  // terms are ubiquitous and the ordering has to change; if `corpusStats` is
+  // ever dropped from the `rankChunks` call this assertion cannot move, because
+  // the window-local statistics would be identical either way.
+  it('the AI Search re-rank actually consults the corpus statistics (#2970)', async () => {
+    process.env.LOOM_AI_SEARCH_SERVICE = 'loom-search';
+    const withRealStats = await searchDocs(QUERY, 8, undefined, { surface: 'lakehouse' });
+    expect(withRealStats.hits[0].path).toBe(GOLD);
+
+    // A corpus where `liquid` and `clustering` appear in EVERY document: they
+    // stop discriminating, so the gold doc's advantage on them evaporates.
+    resetDocsRankerCache();
+    __testInternals.setCorpusStatsForTests(
+      buildCorpusStats(
+        Array.from({ length: 500 }, (_, i) => ({
+          path: `docs/filler-${i}.md`,
+          content: 'liquid clustering lakehouse delta partitioning layout rewrite',
+        })),
+      ),
+    );
+    const withFlatStats = await searchDocs(QUERY, 8, undefined, { surface: 'lakehouse' });
+    expect(withFlatStats.hits.map((h) => h.path)).not.toEqual(withRealStats.hits.map((h) => h.path));
+  });
+
+  it('falls back to window-local statistics when no corpus is reachable', async () => {
+    // Honest degradation (dev checkout / an image built without the corpus
+    // staging step): null stats must rank exactly as the pre-#2970 path did,
+    // never throw and never score against a zero-sized corpus.
+    process.env.LOOM_AI_SEARCH_SERVICE = 'loom-search';
+    __testInternals.setCorpusStatsForTests(null);
+    const { hits, backend } = await searchDocs(QUERY, 8, undefined, { surface: 'lakehouse' });
+    expect(backend).toBe('ai-search');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].path).toBe(GOLD);
   });
 
   // With the BM25 kill-switch OFF, the AI Search path reverts to its native
