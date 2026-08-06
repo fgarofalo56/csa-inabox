@@ -50,6 +50,51 @@ az deployment sub create \
 | Direct Lake parity | Full warm-cache materializer; native Direct Lake when forward-migrating to Fabric | (same warm-cache; native Direct Lake not yet in Gov) |
 | Defender for Cloud AI Threat Protection | ✅ enabled | (Gov: manual Sentinel pipeline) |
 
+## Loom Unity (OSS Unity Catalog) on Commercial
+
+`loom-unity` — the Unity-Catalog-compatible OSS metastore — is **default-ON on
+Commercial** (not Gov-only) and is produced by the normal three-step path, with
+no opt-in and no manual binding:
+
+1. **Infra + app**: `admin-plane/main.bicep` invokes
+   `data-plane/loom-unity-postgres.bicep` (Entra-only, private-endpoint-only
+   PostgreSQL flexible server; skipped only where `postgresQuotaAvailable=false`,
+   in which case the catalog runs an EmptyDir H2 store) and
+   `compute/loom-unity-app.bicep` (`authMode=entra` hard-wired, ingress IP-pinned
+   to the Container Apps infrastructure subnet), and emits `LOOM_UNITY_URL` /
+   `LOOM_UNITY_CLIENT_ID` / `LOOM_UNITY_AUDIENCE` / `LOOM_UNITY_AUTH_MODE` onto
+   the Console app. Toggle (opt-OUT): `loomBackends.unity='disabled'`.
+2. **Image**: `full-app-deploy-commercial.yml` builds `loom-unity:v0.1` into the
+   estate ACR (build matrix, `apps/loom-unity`) — required in ACR before the
+   app phase, like every other app image.
+3. **Unseal**: on a genuinely fresh estate the Entra app registration does not
+   exist at ARM time, so the catalog deploys SEALED (up, authorization ON,
+   sentinel audience, scaled to zero). `csa-loom-post-deploy-bootstrap.yml`
+   ("Unseal Loom Unity + wire the Console") pins the real client id the moment
+   the MSAL registration exists — an env update, deliberately NOT a module
+   redeploy (a partial-param redeploy would silently migrate persistence off
+   Postgres).
+
+**Private DNS note:** the Postgres store resolves through
+`privatelink.postgres.database.azure.com` on Commercial (Gov:
+`privatelink.postgres.database.usgovcloudapi.net`). Estates deployed before
+2026-08-06 may carry an empty, stale `privatelink.postgres.database.windows.net`
+zone from the earlier (wrong) suffix derivation — it is inert for resolution;
+`scripts/csa-loom/migrate-private-dns-zone-owner.mjs` is the cleanup path
+(#3039).
+
+**Out-of-band repair** (estate has no `loom-unity` app but the orchestrator
+deploy is not runnable right now): deploy the two modules targeted, in order —
+`loom-unity-postgres.bicep` first (pass the hub `snet-private-endpoints` subnet
+id and the loom-unity UAMI principal), then `loom-unity-app.bicep` with the
+Postgres `fqdn`/`aadUser` outputs, the Console's `LOOM_MSAL_CLIENT_ID` as
+`entraClientId`, the Console UAMI's **principalId** as `consolePrincipalId`, and
+`consoleAllowedCidrs=[<CAE infrastructure subnet CIDR>]`. Both module headers
+carry the exact `az deployment group create` invocation. What-if first; grant
+the loom-unity UAMI AcrPull before the app deploy or the first revision fails
+its image pull. The Console's `LOOM_UNITY_*` env still arrives only via the
+admin-plane deploy.
+
 ## Validation
 
 After deploy:
