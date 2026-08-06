@@ -78,3 +78,10 @@ platform/fiab/bicep/** text eol=lf
 # format error) and silently break the default-ON Federated SQL engine, so pin
 # the whole app to LF.
 apps/loom-trino/** text eol=lf
+
+# The AOAI deployment picker + its self-test are executed by `bash` on the Linux
+# guardrails runner (and the picker is SOURCED by the two BYO scanners, which the
+# deploy lanes run there too). A CRLF checkout makes bash choke on the trailing
+# \r ("$'\r': command not found"), so pin both to LF regardless of core.autocrlf.
+scripts/csa-loom/aoai-deployment-pick.sh text eol=lf
+scripts/ci/test-aoai-deployment-pick.sh text eol=lf

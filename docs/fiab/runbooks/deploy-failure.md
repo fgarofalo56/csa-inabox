@@ -6,6 +6,13 @@
 > [**Failure recovery**](../deployment/failure-recovery.md). Start here for a
 > known symptom; go there for anything not in the table below.
 
+> **On Azure Government, none of this is automated (#3017).** The classifier and
+> the bounded-retry harness are wired into the two Commercial deploy workflows
+> only; `deploy-fiab-gcch.yml` does not invoke `scripts/ci/deploy-retry.mjs`, and
+> `deploy-fiab-il5.yml` has never run. The class column below is still the right
+> way to triage a Gov failure — you just do it by hand, and no
+> `deploy-failure.json` is produced.
+
 ## Symptom
 
 `azd up` or Loom Setup Wizard deploy fails with a non-`Succeeded`
@@ -66,10 +73,10 @@ Common failure modes:
 - Pre-check quotas: `az vm list-usage -l <region>`
 - Pre-check the deploy identity's roles and the six resource-provider
   registrations — see
-  [Failure recovery → preflight](../deployment/failure-recovery.md#preflight--check-before-you-spend)
+  [Failure recovery → preflight](../deployment/failure-recovery.md#preflight-check-before-you-spend)
 - On a brownfield estate, validate adoption candidates (HNS, SKU, deployments,
   metastore assignment) **before** the deploy — see
-  [Brownfield → what is validated](../deployment/brownfield.md#step-4--what-is-validated-per-service)
+  [Brownfield → what is validated](../deployment/brownfield.md#step-4-what-is-validated-per-service)
 - Keep `.bicepparam` files under Git review
 
 ## Escalation

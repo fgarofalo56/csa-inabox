@@ -13,6 +13,29 @@ proves nothing about brownfield.
 > greenfield plus a decision per service. The three-phase shape (infra →
 > images → bootstrap) is identical, and every phase-1 caveat still applies.
 
+## Verification status (`deploy-integrity.md` R4)
+
+R4 requires greenfield and brownfield to be verified **independently**, per
+cloud. This page states where that has happened and where it has not, rather
+than letting the reader assume.
+
+| Cloud | Status of this walkthrough |
+|---|---|
+| **Azure Commercial** | **Template-level only.** `az bicep build` + `az deployment sub validate` were run against a `byo-wizard.sh`-generated `.bicepparam` carrying a three-service adopt bag (Purview + Synapse + Databricks) and it validated. **No adopt-or-create deploy has been executed against a real populated Commercial estate**, so nothing past ARM's own validation is proven. |
+| **Azure Government (GCC / GCC-High)** | **Not verified.** No Gov brownfield deploy has been run. `deploy-fiab-gcch.yml`'s three most recent runs all ended `failure` (2026-08-01, -02, -03). |
+| **DoD IL5** | **Never executed.** `gh run list --workflow deploy-fiab-il5.yml` returns nothing. |
+
+**What "template-level only" excludes.** Validation proves the template
+compiles and ARM accepts the parameters. It does **not** prove that an adopted
+resource is reachable, correctly permissioned, or that the Console binds to it
+at runtime — and it does not exercise the `adopt` suppression logic against a
+subscription that actually contains those resources. Treat a first brownfield
+deploy as the test of that path.
+
+Every disagreement between this page and the shipped code is listed in
+[**Status**](#status-what-is-implemented-and-what-is-not) — including four
+that are open defects with tracked issue numbers.
+
 ---
 
 ## The rule this path exists to honour
@@ -52,11 +75,23 @@ Open `/setup` → step **Scan & choose**. The wizard queries Resource Graph acro
 the tenant and returns, per service: the candidates it found, a recommendation,
 and the reason Loom wants that service.
 
-> **Limitation you must know about (2026-08-05).** `/setup` **redirects to
-> `/admin/landing-zones` as soon as a Loom hub exists** in the tenant. On an
-> estate that already has a hub — which includes any retry or reconcile — the
-> Scan & choose step is unreachable from the Console. Use the CLI path below.
-> See [Status](#status-what-the-wizard-does-and-does-not-implement).
+> **This is not the scanner with the coverage ledger (#3015).** `/setup` calls
+> `POST /api/setup/scan-services`, which sends `options: { top: 1000 }` — and
+> `top` is a **silent no-op** in Resource Graph; the real key is `$top`. That
+> route has no `$skipToken` paging loop and does not set `allowPartialScopes`,
+> so an estate with more than 1000 matching resources is truncated with nothing
+> in the response to say so, and a subscription you cannot read is dropped
+> silently. The honest scanner — three-step coverage probe, per-subscription
+> ledger, real paging — is `POST /api/deploy/discovery`, described in
+> [Discovery and adoption](discovery-and-adoption.md#2-the-part-that-matters-most-coverage).
+> Use the CLI or that endpoint for anything larger than a small estate.
+
+> **`/setup` no longer redirects away when a hub exists.** An earlier version of
+> this page said it did; that redirect was removed and
+> `scripts/ci/check-setup-entrypoints.mjs` fails the build if `redirect(`
+> reappears in `app/setup/page.tsx`. The invariant it was standing in for lives
+> where it belongs: `POST /api/setup/deploy` rejects `topology='tenant'` when a
+> hub is already present.
 
 ### From the CLI (works on any estate)
 
@@ -84,7 +119,7 @@ and `temp/<name>.byo-exports.sh`.
 
 Sixteen service types today. The full list, with the ARM type queried, the
 environment variables it emits and what Loom uses each service for, is in
-[**Discovery and adoption**](discovery-and-adoption.md#what-is-scanned).
+[**Discovery and adoption**](discovery-and-adoption.md#what-it-scans-for).
 
 ### Permissions the scan needs
 
@@ -96,14 +131,19 @@ environment variables it emits and what Loom uses each service for, is in
 
 > **Coverage caveat.** Resource Graph silently returns fewer rows when your
 > principal lacks Reader — it does not tell you a subscription was invisible.
-> The wizard's "N subscriptions scanned" counter is derived from subscriptions
-> that produced a *match*, so a subscription with Reader but no adoptable
-> resources is not counted, and a subscription with no Reader looks identical to
-> one with nothing in it. **Confirm your subscription list independently**
-> (`az account list -o table`) rather than trusting the counter. Fixing this so
-> a per-subscription ledger distinguishes *scanned-and-empty* from
-> *could-not-read* is in flight — see
-> [Status](#status-what-the-wizard-does-and-does-not-implement).
+> Verified against live Commercial ARG (`2022-10-01`): four readable scopes plus
+> one unreadable returns **HTTP 200, four rows, `facets: []`, and no field
+> naming the dropped scope**, even with `allowPartialScopes: true`.
+>
+> `POST /api/deploy/discovery` handles this — it establishes coverage from ARM
+> and a container probe *before* the inventory query, and reports a per
+> subscription status of `scanned` · `no-access` · `truncated`. **The `/setup`
+> wizard's scanner does not** (#3015): its "N subscriptions scanned" counter is
+> derived from subscriptions that produced a *match*, so a subscription with
+> Reader but no adoptable resources is not counted, and one with no Reader looks
+> identical to one with nothing in it. On the wizard path, confirm your
+> subscription list independently (`az account list -o table`) rather than
+> trusting the counter.
 
 ---
 
@@ -178,12 +218,21 @@ always created new by the deploy.
 
 ### The ADX grant caveat
 
-When ADX is adopted, the module that grants the cluster's identity **Event Hubs
-Data Receiver** and sets up the export RBAC is gated on the same
-`empty(existingAdxClusterName)` condition as the cluster module — so it is
-skipped too. **An adopted ADX cluster receives no grants and cannot ingest until
-you grant them.** Run the post-deploy RBAC pass (below) and verify with the
-Real-Time Intelligence editors before declaring it working.
+The grants an ADX cluster needs — **Event Hubs Data Receiver** on the DLZ Event
+Hubs namespace, and **Storage Blob Data Contributor** on the DLZ lake for
+continuous export — are **parameters of the `adx-cluster.bicep` module itself**
+(`ehNamespaceName` / `ehNamespaceRg` / `adlsAccountName`, admin-plane
+`main.bicep:2923-2952`), not a separate module. That module is gated:
+
+```bicep
+module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName))
+```
+
+An `adopt` decision for ADX makes `existingAdxClusterName` non-empty, so the
+module is skipped — **and the grants go with it**. An adopted ADX cluster
+receives no grants and cannot ingest until you grant them. Run the post-deploy
+RBAC pass (below), then verify with the Real-Time Intelligence editors before
+declaring it working.
 
 ---
 
@@ -216,17 +265,35 @@ az deployment sub create \
   --parameters deployAppsEnabled=false \
 ```
 
-`EXISTING_*` coverage per parameter file:
+`EXISTING_*` coverage per parameter file — **measured** by counting the
+`readEnvironmentVariable('EXISTING_…')` occurrences and the distinct services
+folded into `legacyAdoptFromEnv` in each file on this branch:
 
-| Parameter file | `EXISTING_*` reads | Adoption available? |
+| Parameter file | `EXISTING_*` reads | Services foldable into `adopt` |
 |---|---|---|
-| `commercial-full.bicepparam` | 35 | yes |
-| `commercial.bicepparam` | 32 | yes |
-| `gcc.bicepparam` | 36 | yes |
-| `gcc-high.bicepparam` | 35 | yes |
-| `il5.bicepparam` | 34 | yes |
-| `tenant-dmlz.bicepparam` | 30 | yes |
-| **`dlz-attach.bicepparam`** | **0** | **no — the add-a-landing-zone path cannot adopt anything at deploy time** |
+| `commercial-full.bicepparam` | 60 | 13 |
+| `commercial.bicepparam` | 60 | 13 |
+| `gcc.bicepparam` | 61 | 13 |
+| `gcc-high.bicepparam` | 60 | 13 |
+| `il5.bicepparam` | 59 | 13 |
+| `tenant-dmlz.bicepparam` | 58 | 13 |
+| `dlz-attach.bicepparam` | 58 | 13 |
+
+> **This table changed shape, and an earlier version of it was wrong.** Before
+> the `adopt` bag each file carried a different, hand-maintained subset (the
+> counts published here were 35 / 32 / 36 / 35 / 34 / 30 / **0**). Every file
+> now folds the **same** 13 services through the shared `legacyAdoptFromEnv`
+> block, so the counts differ only by incidental formatting.
+>
+> **`dlz-attach.bicepparam` is no longer "0".** It declares `param adopt` and
+> folds the same 13 services (`dlz-attach.bicepparam:147,162`). An earlier
+> version of this page said the add-a-landing-zone path "cannot adopt anything
+> at deploy time"; that is now false as a statement about the parameter file.
+> **What has *not* been established is whether the `dlz-attach` topology
+> honours each entry** — that topology skips the admin plane, and the
+> `provision<Svc>` vars gate admin-plane modules. No `dlz-attach` adopt deploy
+> has been run. Treat adoption on that path as untested rather than as working
+> or as unavailable, and prefer the day-2 attach wizard until it is exercised.
 
 ### 3b. The generated parameter file
 
@@ -317,8 +384,20 @@ reachability, network posture, and emits the exact
 registry-level (it records an attachment and wires runtime env); it is not the
 day-0 deploy input.
 
-The blocking day-0 fitness suite is in flight. When it lands, each adopted
-resource is checked against five criteria before any resource is created:
+> **The day-0 fitness suite is written but NOT WIRED (#3014).**
+> `apps/fiab-console/lib/deploy/fitness.ts` implements all five criteria below
+> and exports a blocking gate, `assertPlanIsDeployable()`. Its own header says
+> it "runs before a single resource is created". **It does not.** A repo-wide
+> search for `assertPlanIsDeployable`, `evaluateFitness` and
+> `AdoptionNotDeployableError` finds callers in exactly two files: `fitness.ts`
+> and its own unit test. No deploy tier calls it.
+>
+> Do not read the presence of this module — or its passing tests — as
+> protection. Until #3014 wires it, the checks below are **yours to run by
+> hand**, and an unusable adopted resource still fails mid-deploy.
+
+The five criteria, as implemented in `fitness.ts` and as they will apply once
+that module is invoked:
 
 | Check | Establishes | Example failure |
 |---|---|---|
@@ -328,8 +407,8 @@ resource is checked against five criteria before any resource is created:
 | **C4 RBAC** | the deploy identity holds — or can grant — the role the service needs | no `Microsoft.Authorization/roleAssignments/write` at that scope |
 | **C5 Family-specific** | the service-specific precondition | ADLS **without hierarchical namespace**; a Databricks workspace already assigned to a *different* Unity Catalog metastore; an AOAI account with no chat/embed deployment |
 
-Until that lands, **validate these yourself before you adopt.** The checks that
-most often bite, and how to run them by hand:
+**Run these yourself before you adopt.** The checks that most often bite, and
+how to run them by hand:
 
 ```bash
 # ADLS Gen2 must have HNS. This is create-time-only and cannot be turned on later.
@@ -418,7 +497,7 @@ bash scripts/csa-loom/grant-navigator-rbac.sh
 > `grant-navigator-rbac.sh` covers AI Search, APIM, AOAI, Cosmos, Event Hubs,
 > Synapse and Data Factory. It does **not** grant ADX/Kusto, Databricks, Stream
 > Analytics or Maps on an adopted resource — grant those manually (the role per
-> service is in [Discovery and adoption](discovery-and-adoption.md#what-loom-changes-about-an-adopted-resource)).
+> service is in [Discovery and adoption](discovery-and-adoption.md#9-what-loom-changes-about-an-adopted-resource)).
 
 ---
 
@@ -484,55 +563,71 @@ here rather than implied working.
 
 ---
 
-## Status: what the wizard does and does not implement
+## Status: what is implemented, and what is not
 
-`deploy-integrity.md` R8 requires the docs and the wizard to agree. This section
-is the disagreement list, measured against `main` on **2026-08-05**. Everything
-above that is not listed here is the shipped behaviour.
+`deploy-integrity.md` R8 requires the docs and the code to agree. This section is
+the disagreement list, **measured against this branch on 2026-08-05** by reading
+the code, not by reading the design. Everything above that is not listed here is
+shipped behaviour.
 
-### The wizard collects brownfield choices that the deploy discards
+> **An earlier version of this section was self-contradicting** and is corrected
+> here. It said the adopt-object model, the catalog collapse, the fitness suite
+> and the failure engine were "in flight" and that "none of that is on `main`",
+> while §3b of the same page documented the `adopt` bag as current behaviour.
+> Four of those five have since landed; the two rows below record what actually
+> has not.
 
-The Setup Wizard's *Scan & choose* step produces a real per-service
-adopt/create/skip decision. That decision reaches the deploy on **one** path
-only — the copy-paste `az` command the Console prints when every in-product
-deploy tier is unavailable, and only for `topology=tenant`.
+### Landed — these are shipped, not aspirational
+
+| Capability | Evidence on this branch |
+|---|---|
+| One `adopt` object parameter replacing 36 `existing*` scalars | `main.bicep:504` `param adopt object = {}`; **zero** `^param existing` declarations remain; the template is at **216** params, down from 251 (cap 256) |
+| Adoption always suppresses creation | `main.bicep:567-583`, one `var provision<Svc> = <enableFlag> && adoptMode(adopt, '<key>') == 'create'` per service — the class A / class B split is gone |
+| Every emitter writes the bag, not the scalars | `byo-wizard.sh:364`, `scan-and-deploy.sh`, `app/api/setup/deploy/route.ts:971`, `lib/setup/service-choices-to-params.ts:79` |
+| One adoption catalog, guarded | `lib/deploy/adoption-catalog.ts`; `scripts/ci/check-adoption-catalog-sync.mjs` runs in `loom-guardrails.yml` |
+| `/setup` reachable on an estate that already has a hub | the redirect is removed; `scripts/ci/check-setup-entrypoints.mjs` fails the build if `redirect(` reappears |
+| Failure classification + bounded retry | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs` — **on the Commercial deploy workflows only**, see below |
+
+### Open — the deploy still discards your brownfield picks (#3016)
+
+The *Scan & choose* step produces a real per-service adopt/create/skip decision.
+`collectAdoptBag()` has **one** call site: the copy-paste `az` command builder.
 
 | Deploy tier | Carries your choices? |
 |---|---|
-| In-product ARM deployment (the default) | **No** — its parameter builder emits no `existing*` values |
-| Setup Orchestrator service | **No** — the request model does not declare the field and drops it silently |
-| GitHub workflow dispatch | **No** — the dispatch input list does not include it |
+| User-delegated ARM submit — in-code the "PREFERRED, and now ALWAYS available" tier | **No.** `buildDlzDeploymentParameters()` (`lib/setup/user-arm-deploy.ts:116`) contains zero `adopt`/`existing` references |
+| Setup Orchestrator | **No** — the request model does not declare the field |
+| GitHub workflow dispatch | **No** — not in the dispatch input list |
 | Copy-paste `az` (the HTTP-503 fallback) | **Yes**, `topology=tenant` only |
 
 **Consequence: if the in-product deploy succeeds, your adopt picks are ignored
-and Loom provisions new resources.** Until this is closed, drive brownfield from
-the CLI (§3a or §3b), not from the wizard.
+and Loom provisions new resources** — including a second Purview attempt, which
+then fails `EnterpriseTenantAlreadyExists`. The tier most likely to run is the
+one that drops the decision, silently. **Until #3016 lands, drive brownfield
+from the CLI (§3a or §3b), not from the wizard.**
 
-### Other gaps, precisely
+### Open — the rest, precisely
 
-| Gap | Effect |
-|---|---|
-| `/setup` redirects to `/admin/landing-zones` once a hub exists | Scan & choose is unreachable on any estate with an existing hub — including every retry |
-| No networking / Log Analytics / ACR / Key Vault in the scan or the parameters | You cannot bring your own VNet, subnets, DNS zones, firewall, workspace or registry (class C) |
-| `EXISTING_STORAGE` / `_POSTGRES` / `_KEYVAULT` / `_FIREWALL` / `_MAPS` have no parameter consumer | Setting them does nothing |
-| Stream Analytics and the hub firewall are absent from the wizard's parameter map; Event Hubs is mapped without its enable flag | A *skip* pick for those three is silently dropped |
-| A *use existing* pick for storage, Postgres or Maps matches no branch | Silently emits nothing |
-| The wizard reports Postgres as "ON by default" | `postgresEnabled` defaults to **`false`** in `main.bicep` |
-| No day-0 fitness validation | An unusable adopted resource fails mid-deploy, not before it |
-| No failure classification or bounded retry in the deploy path | A transient throttle and a deterministic quota denial are handled identically |
-| `subscriptionsScanned` counts only subscriptions that produced a match | *Scanned and empty* is indistinguishable from *could not read* |
+| Gap | Effect | Tracked |
+|---|---|---|
+| Day-0 fitness suite exists but nothing calls it | An unusable adopted resource fails mid-deploy, not before it. The module's own "runs before a single resource is created" comment is untrue | **#3014** |
+| The wizard's scanner is not the one with the coverage ledger | `/api/setup/scan-services` sends the no-op `options:{top:1000}`, has no `$skipToken` loop and no `allowPartialScopes`: silent truncation past 1000 rows, and an unreadable subscription is indistinguishable from an empty one | **#3015** |
+| No classified retry on any Gov deploy path | `deploy-fiab-gcch.yml` does not invoke `deploy-retry.mjs` at all; the taxonomy and bounded retry are Commercial-only | **#3017** |
+| No networking / Log Analytics / ACR / Key Vault adoption | You cannot bring your own VNet, subnets, DNS zones, firewall, workspace or registry (class C above) | — |
+| `EXISTING_STORAGE` / `_POSTGRES` / `_KEYVAULT` / `_FIREWALL` have no parameter consumer | Setting them does nothing at deploy time | — |
+| `dlz-attach` adoption is unexercised | The parameter file folds all 13 services, but that topology skips the admin plane and no adopt deploy has been run on it | — |
 
-### In flight
+### How to re-measure this section
 
-Work is under way to collapse the six divergent service catalogues into one, to
-replace the 36 `existing*` scalars with a single `adopt` object parameter (so
-adoption always suppresses creation and networking becomes adoptable without
-breaching the ARM 256-parameter cap — `main.bicep` is at **251/256** today), to
-persist the plan so every deploy tier carries it, to add the blocking fitness
-suite, and to add the failure-classification engine.
+Every row above is a command, not an opinion. Re-run these before trusting it:
 
-**None of that is on `main` as of 2026-08-05.** This page will be updated when
-each lands, and the status table above is the contract in the meantime.
+```bash
+grep -c '^param existing' platform/fiab/bicep/main.bicep        # expect 0
+grep -c '^param ' platform/fiab/bicep/main.bicep                # expect < 256
+grep -rn 'assertPlanIsDeployable' apps/fiab-console --include=*.ts | grep -v __tests__
+grep -n 'collectAdoptBag' apps/fiab-console/app/api/setup/deploy/route.ts
+grep -c 'deploy-retry' .github/workflows/deploy-fiab-gcch.yml   # expect 0 until #3017
+```
 
 ---
 

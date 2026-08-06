@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.87.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.0...csa-inabox-v0.87.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **ci:** scope the deploy guard by BEHAVIOUR; make the docs guard check workingness, not existence ([#3018](https://github.com/fgarofalo56/csa-inabox/issues/3018)) ([b625e03](https://github.com/fgarofalo56/csa-inabox/commit/b625e03caae9b2ac36ffed91c3de995354527c07))
+* **deploy:** the AOAI model matcher must not age out silently — never fail empty, and prove it ([#3021](https://github.com/fgarofalo56/csa-inabox/issues/3021)) ([15bfee1](https://github.com/fgarofalo56/csa-inabox/commit/15bfee1c3e5e0fa522f27cdb7584d445434174b6))
+
+
+### Documentation
+
+* **deploy:** make the deployment walkthroughs true — resolve the BCP259 contradiction, mark every unimplemented and unverified claim (deploy-integrity R4/R7/R8) ([#3019](https://github.com/fgarofalo56/csa-inabox/issues/3019)) ([bcde6cd](https://github.com/fgarofalo56/csa-inabox/commit/bcde6cd4f3772ffe9eeaaabf3c554c4537521465))
+
+
+### Miscellaneous
+
+* **main:** release csa-inabox 0.87.0 ([#3020](https://github.com/fgarofalo56/csa-inabox/issues/3020)) ([e2248b3](https://github.com/fgarofalo56/csa-inabox/commit/e2248b380001ba3eee475f5ccad6eed7b5e2403e))
+
 ## [0.87.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.4...csa-inabox-v0.87.0) (2026-08-06)
 
 
@@ -38,6 +56,7 @@ This file is maintained automatically by
 * **deploy:** full-app-deploy-commercial produces loom-duckdb:v0.1 and can run green (refs [#2958](https://github.com/fgarofalo56/csa-inabox/issues/2958)) ([#3001](https://github.com/fgarofalo56/csa-inabox/issues/3001)) ([4558d8c](https://github.com/fgarofalo56/csa-inabox/commit/4558d8c9a31cb7bf2513eedaef1ade6de924317d))
 * **deploy:** reconciled deploy batch — [#3006](https://github.com/fgarofalo56/csa-inabox/issues/3006) [#3007](https://github.com/fgarofalo56/csa-inabox/issues/3007) [#3008](https://github.com/fgarofalo56/csa-inabox/issues/3008) [#3009](https://github.com/fgarofalo56/csa-inabox/issues/3009) [#3010](https://github.com/fgarofalo56/csa-inabox/issues/3010) [#3011](https://github.com/fgarofalo56/csa-inabox/issues/3011) on one branch, with the BCP259 emitter break repaired ([#3013](https://github.com/fgarofalo56/csa-inabox/issues/3013)) ([c74d7fe](https://github.com/fgarofalo56/csa-inabox/commit/c74d7feaf4306d3bb06c2a9cd419b834ad2541ad))
 * **evals:** a degraded pass predicate fails the run instead of reporting +20 (fixes [#2992](https://github.com/fgarofalo56/csa-inabox/issues/2992)) ([#2994](https://github.com/fgarofalo56/csa-inabox/issues/2994)) ([d454fad](https://github.com/fgarofalo56/csa-inabox/commit/d454fad6717e75b8fdb43bf823835da4c5746166))
+* **gov,security:** make the Loom Unity authz flip verifiable on Gov — measure JWKS egress, and stop trusting a probe Gov cannot answer (refs [#2643](https://github.com/fgarofalo56/csa-inabox/issues/2643), [#2974](https://github.com/fgarofalo56/csa-inabox/issues/2974)) ([#3002](https://github.com/fgarofalo56/csa-inabox/issues/3002)) ([ca3c124](https://github.com/fgarofalo56/csa-inabox/commit/ca3c12454924b94e6c0d0d8999c71e832bd157f8))
 * **security:** databricks job + DLT pipeline families — authorize the caller and bind jobId/pipelineId/runId to the item (fixes [#2996](https://github.com/fgarofalo56/csa-inabox/issues/2996), fixes [#2997](https://github.com/fgarofalo56/csa-inabox/issues/2997)) ([#2999](https://github.com/fgarofalo56/csa-inabox/issues/2999)) ([670d333](https://github.com/fgarofalo56/csa-inabox/commit/670d333b1dabc97dc5423b584a4d69247ebb3c7d))
 
 

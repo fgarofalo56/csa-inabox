@@ -56,55 +56,256 @@ const WF_DIR = path.join(REPO_ROOT, '.github', 'workflows');
  *
  * NAME-BASED SCOPING WAS THE HOLE. The first cut of this guard scoped on the
  * FILENAME — `/(^|[-_])(deploy|build|roll|rollback)/i` — which matched 27 of
- * 114 workflows and excluded 39 that mutate Azure, 13 of them `gov-provision-*`.
+ * 114 workflows and excluded 17 that mutate Azure, 11 of them `gov-provision-*`.
  * Measured: `gov-provision-aisearch.yml` runs `az deployment group create` and
  * `gov-provision-maps.yml` runs `az acr build`, and neither was ever looked at.
  * That is the same class as the `getSession(`-literal guard that made four
  * exploitable routes invisible: a control whose reach is decided by a name is
  * defeated by a rename, and lands exactly where the guard is the only control.
  *
- * Scope is therefore decided by WHAT THE WORKFLOW DOES. A workflow is in scope
- * when any of its `run:` blocks issues an Azure-mutating command. The name
- * pattern is kept as an OR arm so the deploy/build/roll workflows stay in scope
- * even if a future refactor moves their `az` calls into a script.
+ * Scope is therefore decided by WHAT THE WORKFLOW DOES. The name pattern is
+ * kept only as an OR arm so a deploy/build/roll workflow stays in scope even
+ * when it has no inline `az` at all.
+ *
+ * The SECOND cut of the behavioural arm still had two holes, both measured:
+ *
+ *   - It classified with an ALLOW-LIST of mutating verbs
+ *     (`acr build|group create|keyvault (create|set)|…`). An allow-list of
+ *     verbs is a name-based control wearing a different hat: `ops-kv-secret-sync.yml`
+ *     runs `az keyvault SECRET set` and `copilot-quality-evals.yml` runs
+ *     `az containerapp JOB start`, and neither spelling was on the list, so both
+ *     stayed invisible. Classification is therefore inverted below: an `az`
+ *     command is treated as MUTATING unless it is provably read-only or purely
+ *     CLI-local. A verb nobody has thought of yet defaults to IN scope.
+ *   - It only looked inside `run: |` blocks, so `run: az …` on one line and
+ *     `run: >`-folded scripts were invisible, and a workflow whose `az` lives in
+ *     a repo shell script it invokes (`teardown-fiab-commercial.yml` ->
+ *     `.github/scripts/fiab-teardown.sh`, which deletes resource groups) was
+ *     invisible too. Both are closed below.
+ *
+ * The behavioural arm is also ratcheted: if it ever stops contributing anything
+ * beyond the filename arm, the driver exits 1 rather than reporting a smaller,
+ * greener scope (see `assertDiscoveryHealthy`). A scope that silently shrinks is
+ * how a guard rots back to the defect it was written for.
  */
 export const IN_SCOPE = /(^|[-_])(deploy|build|roll|rollback)/i;
 
 /**
- * An Azure command that CHANGES something (or builds an image that will be
- * deployed). Read-only verbs — `show`, `list`, `query` — are deliberately absent:
- * this guard is about deploy-path failure handling, not about every `az` call.
+ * `az` invocations that change nothing in Azure because they only touch the
+ * LOCAL CLI (profile, cloud, extensions, the bicep compiler) or are pure reads.
+ * Everything else is treated as mutating — see `isAzureMutatingCommand`.
  */
-export const AZ_MUTATING =
-  /\baz\s+(?:deployment\s+\w+\s+(?:create|validate|what-if)|acr\s+build|containerapp\s+(?:create|update|revision\s+\w+)|group\s+create|provider\s+register|role\s+assignment\s+create|webapp\s+(?:create|deployment)|functionapp\s+(?:create|deployment)|storage\s+account\s+create|keyvault\s+(?:create|set)|monitor\s+\w+\s+create)\b/;
+const AZ_CLI_LOCAL = [
+  /^az\s+(?:login|logout|version|upgrade|self-test|interactive|feedback|find|survey|configure)\b/,
+  /^az\s+account\s+(?:set|show|list|list-locations|clear|get-access-token)\b/,
+  /^az\s+cloud\s+(?:set|show|list|list-profiles|register|unregister|update)\b/,
+  /^az\s+config\s+\S+/,
+  /^az\s+extension\s+\S+/,
+  /^az\s+bicep\b/,
+  /^az\s+graph\s+query\b/,
+];
 
-export function isInScope(file, source) {
-  if (IN_SCOPE.test(file)) return true;
-  return runBlocks(source).some((b) => b.body.some((l) => !isComment(l.text) && AZ_MUTATING.test(l.text)));
+/**
+ * Verb prefixes that only READ. Prefix-matched on purpose so `show-tags`,
+ * `list-locations`, `check-health` and `get-access-token` are covered without
+ * enumerating them — the opposite policy to the verb allow-list this replaced.
+ */
+const AZ_READ_VERB = /^(?:show|list|get|query|exists|check|download|export|describe|wait|search|history|is-|login|logout)/;
+
+/**
+ * `az deployment … validate|what-if` reads rather than writes, but it is a
+ * DEPLOY-PATH call and its failure handling is exactly what R6/R7 govern, so it
+ * is deliberately in scope.
+ */
+const AZ_DEPLOY_PATH = /^az\s+deployment\s+\S+\s+(?:validate|what-if)\b/;
+
+/**
+ * Is the text before an `az` token a place a COMMAND can start?
+ *
+ * Without this, prose wins: `echo "::warning::az identity show failed (not a
+ * divergence …)"` and `echo "az reported success but returned no id"` were both
+ * classified as Azure mutations, because the tail of an English sentence is not
+ * a read verb. Scoping a workflow in on its own log messages is the mirror image
+ * of scoping one out on its filename — both decide on text rather than
+ * behaviour — so the token must sit where a shell would execute it.
+ */
+function atCommandPosition(prefix) {
+  const p = prefix.replace(/\s+$/, '');
+  if (p === '') return true; // start of line
+  if (/[|;&(`{!]$/.test(p)) return true; // after a separator, subshell or negation
+  if (/(?:^|\s)(?:if|elif|then|else|do|while|until|exec|sudo|time|command|eval)$/.test(p)) return true;
+  if (/run:$/.test(p)) return true; // `run: az …` — a single-line step
+  if (/^-$/.test(p)) return true; // `- az …` in a YAML sequence
+  return false;
 }
 
-export function inScopeWorkflows(dir = WF_DIR) {
+/** Pull every `az …` INVOCATION out of one line of shell (prose is not an invocation). */
+export function azInvocations(text) {
+  const out = [];
+  const re = /\baz\s+(?=[a-z])/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (!atCommandPosition(text.slice(0, m.index))) continue;
+    // Stop at a shell separator so `az group create | tee` does not absorb the pipe.
+    const rest = text.slice(m.index).split(/[|;&)]|\s&&\s/)[0];
+    out.push(rest.trim());
+  }
+  return out;
+}
+
+/**
+ * Does this `az …` command change Azure state?
+ *
+ * DEFAULT IS YES. This is the fail-safe direction: a command the classifier has
+ * never seen lands IN scope and gets looked at, instead of slipping out of scope
+ * and being reported green.
+ */
+export function isAzureMutatingCommand(cmd) {
+  const c = cmd.trim();
+  if (!/^az\s/.test(c)) return false;
+  if (/--help\b|\s-h(?:\s|$)/.test(c)) return false;
+  if (AZ_DEPLOY_PATH.test(c)) return true;
+  if (AZ_CLI_LOCAL.some((re) => re.test(c))) return false;
+  if (/^az\s+rest\b/.test(c)) {
+    const method = /--method[\s=]+["']?([A-Za-z]+)/.exec(c);
+    return method ? !/^(?:get|head)$/i.test(method[1]) : false;
+  }
+  const words = c
+    .replace(/\\$/, '') // a trailing line-continuation is not a verb
+    .split(/\s+/)
+    .slice(1)
+    .filter(Boolean);
+  // The command PATH is everything before the first flag. Taking "the last token
+  // that is not a flag" instead reads the flag's VALUE as the verb —
+  // `az group show -n "$RG" -o none 2>/dev/null` then classifies on
+  // `2>/dev/null` and a plain read is reported as a mutation.
+  const cut = words.findIndex((w) => w.startsWith('-'));
+  const commandPath = cut === -1 ? words : words.slice(0, cut);
+  const verb = commandPath.at(-1);
+  if (!verb) return false;
+  return !AZ_READ_VERB.test(verb);
+}
+
+/**
+ * YAML keys whose value is prose, never a command. `- name: Build + push via
+ * ACR Tasks (az acr build)` is a step TITLE; treating it as an invocation would
+ * scope workflows in on their documentation.
+ */
+const PROSE_KEY = /^\s*(?:-\s*)?(?:name|description|title|summary|if|env|id):/;
+
+/** Every line of `source` that issues an Azure-mutating command. */
+export function azMutatingLines(source) {
+  return source
+    .split(/\r?\n/)
+    .map((text, i) => ({ line: i + 1, text }))
+    .filter(({ text }) => !isComment(text) && !PROSE_KEY.test(text))
+    .filter(({ text }) => azInvocations(text).some(isAzureMutatingCommand));
+}
+
+/**
+ * Repo SHELL scripts a workflow invokes. Restricted to `.sh`/`.bash` because in
+ * those an `az …` token is an invocation, whereas in a `.mjs` guard it is
+ * usually a string inside a remediation message — following those would scope in
+ * the guard workflows on their own error text.
+ */
+export function referencedShellScripts(source, root = REPO_ROOT) {
+  const out = new Set();
+  const re = /(?<![\w./-])((?:\.github\/)?scripts\/[A-Za-z0-9._/-]+\.(?:sh|bash))/g;
+  for (const m of source.matchAll(re)) {
+    if (fs.existsSync(path.join(root, m[1]))) out.add(m[1]);
+  }
+  return [...out];
+}
+
+/**
+ * @returns {{inScope: boolean, reason: string}} the reason is reported by
+ * `--list` so a scoping decision is never a black box.
+ */
+export function scopeOf(file, source, root = REPO_ROOT) {
+  const direct = azMutatingLines(source);
+  if (direct.length > 0) {
+    return { inScope: true, reason: `runs \`${azInvocations(direct[0].text).find(isAzureMutatingCommand).slice(0, 60)}\`` };
+  }
+  for (const rel of referencedShellScripts(source, root)) {
+    const hits = azMutatingLines(fs.readFileSync(path.join(root, rel), 'utf8'));
+    if (hits.length > 0) return { inScope: true, reason: `invokes ${rel}, which mutates Azure` };
+  }
+  if (IN_SCOPE.test(file)) return { inScope: true, reason: 'deploy/build/roll workflow (name arm)' };
+  return { inScope: false, reason: 'no Azure-mutating command, directly or via a repo shell script' };
+}
+
+export function isInScope(file, source, root = REPO_ROOT) {
+  return scopeOf(file, source, root).inScope;
+}
+
+/** `.yaml` is accepted as well as `.yml`; an extension rename must not un-scope a workflow. */
+const IS_WORKFLOW = /\.ya?ml$/;
+
+export function inScopeWorkflows(dir = WF_DIR, root = REPO_ROOT) {
   return fs
     .readdirSync(dir)
-    .filter((f) => f.endsWith('.yml'))
-    .filter((f) => isInScope(f, fs.readFileSync(path.join(dir, f), 'utf8')))
+    .filter((f) => IS_WORKFLOW.test(f))
+    .filter((f) => isInScope(f, fs.readFileSync(path.join(dir, f), 'utf8'), root))
     .sort();
 }
 
 /**
- * Split a workflow into its `run: |` script blocks, keeping the 1-based line
+ * The anti-collapse ratchet.
+ *
+ * A guard whose discovery quietly shrinks reports green having looked at less.
+ * Two independent conditions must hold, and both are about DISCOVERY, not about
+ * findings — neither can be satisfied by tolerating a violation:
+ *
+ *   1. scope is non-empty;
+ *   2. the BEHAVIOURAL arm contributes at least one workflow the filename arm
+ *      does not. If a future edit breaks `isAzureMutatingCommand`, scope
+ *      collapses back to the 27 name-matched files and this fails loudly instead
+ *      of shrinking in silence.
+ *
+ * @returns {string[]} problems; empty means healthy.
+ */
+export function assertDiscoveryHealthy(dir = WF_DIR, root = REPO_ROOT) {
+  const scoped = inScopeWorkflows(dir, root);
+  const problems = [];
+  if (scoped.length === 0) problems.push('matched ZERO workflows — discovery is broken.');
+  const behavioural = scoped.filter((f) => !IN_SCOPE.test(f));
+  if (behavioural.length === 0) {
+    problems.push(
+      'the BEHAVIOURAL arm matched nothing — scope has collapsed back to filenames, which is the ' +
+        'exact hole this guard was rewritten to close (gov-provision-*.yml mutate Azure and are not ' +
+        'named deploy/build/roll). Fix isAzureMutatingCommand rather than accepting the smaller scope.',
+    );
+  }
+  return problems;
+}
+
+/**
+ * Split a workflow into its `run:` script blocks, keeping the 1-based line
  * number each starts on so a finding can be pointed at.
+ *
+ * All three spellings are captured. An earlier cut handled only `run: |`, which
+ * meant `run: az …` on a single line and `run: >`-folded scripts were invisible
+ * to C1..C3 — a workflow could dodge the whole guard by not using a literal
+ * block scalar.
  */
 export function runBlocks(source) {
   const lines = source.split(/\r?\n/);
   const blocks = [];
   let i = 0;
   while (i < lines.length) {
-    if (!/run:\s*\|/.test(lines[i])) {
+    const m = /^(\s*)-?\s*run:\s*(.*)$/.exec(lines[i]);
+    if (!m) {
       i += 1;
       continue;
     }
-    const indent = (lines[i].match(/^\s*/) ?? [''])[0].length;
+    const [, lead, value] = m;
+    if (!/^[|>][-+]?\s*$/.test(value.trim())) {
+      // Single-line `run: <command>` — a block of exactly one line.
+      if (value.trim() !== '') blocks.push({ startLine: i + 1, body: [{ line: i + 1, text: value }] });
+      i += 1;
+      continue;
+    }
+    const indent = lead.length;
     const body = [];
     let j = i + 1;
     while (j < lines.length && (lines[j].trim() === '' || (lines[j].match(/^\s*/) ?? [''])[0].length > indent)) {
@@ -346,24 +547,33 @@ const isMain =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
-  const findings = scan();
-  const wfCount = inScopeWorkflows().length;
-  if (wfCount === 0) {
-    // Discovery matching nothing would report green having checked nothing.
-    process.stderr.write('check-deploy-failure-handling: matched ZERO workflows — discovery is broken.\n');
+  const problems = assertDiscoveryHealthy();
+  if (problems.length > 0) {
+    for (const p of problems) process.stderr.write(`check-deploy-failure-handling: ${p}\n`);
     process.exit(1);
+  }
+  const scoped = inScopeWorkflows();
+  const findings = scan();
+  if (process.argv.includes('--list')) {
+    const dir = path.join(REPO_ROOT, '.github', 'workflows');
+    for (const f of scoped) {
+      const { reason } = scopeOf(f, fs.readFileSync(path.join(dir, f), 'utf8'));
+      process.stdout.write(`${IN_SCOPE.test(f) ? 'name  ' : 'BEHAVE'}  ${f}  — ${reason}\n`);
+    }
   }
   for (const f of findings) {
     process.stdout.write(`${f.check}  ${f.file}:${f.line}\n      ${f.detail}\n\n`);
   }
   if (findings.length > 0) {
     process.stderr.write(
-      `check-deploy-failure-handling: ${findings.length} finding(s) across ${wfCount} workflow(s). ` +
+      `check-deploy-failure-handling: ${findings.length} finding(s) across ${scoped.length} workflow(s). ` +
         'See deploy-integrity.md R6/R7.\n',
     );
     process.exit(1);
   }
+  const behavioural = scoped.filter((f) => !IN_SCOPE.test(f)).length;
   process.stdout.write(
-    `check-deploy-failure-handling: OK — ${wfCount} deploy/build/roll workflow(s) clean (C1..C4).\n`,
+    `check-deploy-failure-handling: OK — ${scoped.length} Azure-mutating workflow(s) clean (C1..C4); ` +
+      `${scoped.length - behavioural} by name, ${behavioural} by behaviour.\n`,
   );
 }

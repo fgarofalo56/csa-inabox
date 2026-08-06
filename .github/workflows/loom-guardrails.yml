@@ -229,6 +229,15 @@ jobs:
         run: node scripts/ci/check-parity-doc-freshness.mjs
       - name: acr-firewall-lease (ownership + fail-closed semantics — #2603)
         run: bash scripts/ci/test-acr-firewall-lease.sh
+      # The AOAI deployment picker both BYO scanners source. Its predecessor was a
+      # hard-coded model allowlist (`gpt-4o|gpt-4.1|gpt-4|gpt-35`) that matched
+      # NOTHING on a real 2026 account and therefore bound an EMPTY
+      # LOOM_AOAI_CHAT_DEPLOYMENT on a reuse pick, silently. The suite runs it
+      # against four REAL captured deployment lists plus an account of entirely
+      # unrecognised families — that last case goes red the moment anyone turns
+      # the ranked preference order back into an allowlist, of any vintage.
+      - name: aoai-deployment-pick (the model matcher must not age out silently)
+        run: bash scripts/ci/test-aoai-deployment-pick.sh
       # The lease test above covers the lease SCRIPT. This one covers the
       # sweeper's DISCOVERY, which decides which registries get swept at all and
       # used to read an `az` failure as "nothing to sweep" and exit 0 (#2836).

@@ -57,6 +57,17 @@ aoai_chat_pool_main() {
 }
 
 # Default / standard tier — newest general chat model first.
+#
+# NEVER FAILS EMPTY. The ranked list is a preference order, not an allowlist: a
+# hard-coded allowlist ages into a SILENT failure the moment Azure ships a family
+# it does not name, and it fails EMPTY rather than loudly. Measured 2026-08-06:
+# an account whose deployments are all from an unrecognised family resolved
+# chat='' under a pure-allowlist matcher, which is exactly how
+# LOOM_AOAI_CHAT_DEPLOYMENT shipped blank on a reuse pick. So when nothing in the
+# ranked list matches, fall through to the FIRST deployment that is not an
+# image/audio/embedding slot. The operator can always override with
+# BYO_FOUNDRY_CHAT; what must not happen is a blank binding presented as a fact.
+# `scripts/ci/test-aoai-deployment-pick.sh` fails if this fallback is removed.
 aoai_pick_chat() {
   local pool_main pool hit
   pool_main="$(aoai_chat_pool_main "$1")"
@@ -65,6 +76,9 @@ aoai_pick_chat() {
               'gpt-chat-latest' 'gpt-4[.]1' 'gpt-4o' 'gpt-4' 'gpt-35|gpt-3[.]5' 'model-router' 'gpt-')
   hit="$(aoai_pick_by_rank "$pool_main" "${rank[@]}")"
   [[ -z "$hit" ]] && hit="$(aoai_pick_by_rank "$pool" "${rank[@]}")"
+  # Age-out fallback: any chat-capable deployment beats none at all.
+  [[ -z "$hit" ]] && hit="$(awk -F'\t' 'NF>=2 && $1!="" {print $1; exit}' <<<"$pool_main")"
+  [[ -z "$hit" ]] && hit="$(awk -F'\t' 'NF>=2 && $1!="" {print $1; exit}' <<<"$pool")"
   printf '%s' "$hit"
 }
 
