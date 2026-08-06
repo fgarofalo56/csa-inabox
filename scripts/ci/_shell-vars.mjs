@@ -244,38 +244,111 @@ export function assignedNames(script) {
 }
 
 /**
- * Names an `env:`-producing step writes to `$GITHUB_ENV`. Recognises the three
- * forms this repo actually uses:
+ * Mask `${{ … }}` and `${ … }` with same-length filler so that brace COUNTING
+ * is not corrupted by parameter expansions. Length and newlines are preserved
+ * exactly, so an offset into the masked text indexes the original text too.
+ */
+function maskExpansions(s) {
+  let out = s.replace(/\$\{\{[\s\S]*?\}\}/g, (m) => m.replace(/[^\n]/g, 'x'));
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(/\$\{[^{}\n]*\}/g, (m) => m.replace(/[^\n]/g, 'x'));
+  } while (out !== prev);
+  return out;
+}
+
+/** Given a closing `}`/`)` at index `k`, find its opener. -1 when unbalanced. */
+function matchBackwards(masked, k) {
+  const close = masked[k];
+  const open = close === '}' ? '{' : '(';
+  let depth = 0;
+  for (let i = k; i >= 0; i--) {
+    if (masked[i] === close) depth++;
+    else if (masked[i] === open && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Names an `env:`-producing step writes to `$GITHUB_ENV`. Recognises the forms
+ * this repo actually uses:
  *   echo "NAME=…" >> "$GITHUB_ENV"
  *   cat <<EOF >> "$GITHUB_ENV" … EOF
- *   { echo "A=1"; echo "B=2"; } >> "$GITHUB_ENV"        <-- group redirect
- * The group form matters: gov-provision-dataplane-images.yml publishes NINE
- * variables that way, and a per-line scan reports every one of them as an
- * unassigned read in the steps that consume them.
+ *   { echo "A=1"; echo "B=2"; } >> "$GITHUB_ENV"        group redirect
+ *   { echo "A=1";                                       …spanning lines, with
+ *     echo "B=2"; } >> "$GITHUB_ENV"                    the CLOSER INLINE
+ *
+ * THE BUG THIS SHAPE CAUSED (#3040, P0 — it turned `main` red)
+ * -----------------------------------------------------------
+ * The first implementation decided "is this a group?" with a line-shape test:
+ *     /^\s*[})]\s*(\|[^>]*)?>>/          // "the line STARTS with the closer"
+ * gov-provision-trino.yml closes its group on the same line as the last echo —
+ *     echo "CONSOLE_IMAGE=$CONSOLE_IMAGE"; } >> "$GITHUB_ENV"
+ * — so the backward walk never ran. Only that final line was collected, which
+ * is exactly why CONSOLE_IMAGE resolved while the six names on the four EARLIER
+ * lines were reported as never assigned, in a DEPLOY-CRITICAL file, on code
+ * that was correct.
+ *
+ * The lesson is the shape of the bug, not the regex: a heuristic that infers
+ * structure from how a line happens to be WRAPPED fails silently and in the
+ * unsafe direction. This now locates the redirect, locates the closer before
+ * it, and BRACE-MATCHES back to the opener, so wrapping is irrelevant.
  *
  * Over-collecting here is the safe direction: it can only suppress a finding,
- * never invent one.
+ * never invent one. Hence the bounded fallback when brace matching fails.
  */
 export function githubEnvWrites(script) {
   const out = new Set();
+  const masked = maskExpansions(script);
   const lines = script.split('\n');
+  const maskedLines = masked.split('\n');
+  const offsets = [];
+  let acc = 0;
+  for (const l of maskedLines) {
+    offsets.push(acc);
+    acc += l.length + 1;
+  }
+
   const collect = (text) => {
     for (const m of text.matchAll(/([A-Za-z_][A-Za-z0-9_]*)=/g)) out.add(m[1]);
   };
-  for (let i = 0; i < lines.length; i++) {
-    if (!/GITHUB_ENV/.test(lines[i])) continue;
 
-    // `} >> "$GITHUB_ENV"` / `) >> $GITHUB_ENV` — walk back to the opener and
-    // take every assignment in the group.
-    if (/^\s*[})]\s*(\|[^>]*)?>>/.test(lines[i])) {
-      for (let j = i - 1; j >= 0 && i - j <= 60; j--) {
-        const t = lines[j].trim();
-        if (t === '{' || t === '(' || /(^|\s)[{(]$/.test(t)) break;
-        collect(lines[j]);
-      }
-    }
+  for (let i = 0; i < lines.length; i++) {
+    const at = lines[i].indexOf('GITHUB_ENV');
+    if (at < 0) continue;
+
+    // (a) assignments on the redirect line itself
     collect(lines[i]);
 
+    // (b) a GROUP whose closer sits anywhere before the redirect operator
+    const before = maskedLines[i].slice(0, at);
+    // `>>` must be preferred over `>`: taking the LAST `>` lands on the second
+    // character of `>>`, leaving a stray `>` between the closer and the
+    // redirect, which fails the adjacency test and silently disables group
+    // detection for the `}`-at-line-start form (caught by the
+    // gov-provision-dataplane-images fixture while fixing #3040).
+    let redir = before.lastIndexOf('>>');
+    if (redir < 0) redir = before.lastIndexOf('>');
+    const tee = before.search(/\|\s*tee\b/);
+    if (tee >= 0 && tee > redir) redir = tee;
+    if (redir > 0) {
+      const head = before.slice(0, redir);
+      const closeIdx = Math.max(head.lastIndexOf('}'), head.lastIndexOf(')'));
+      // only whitespace / a pipe may sit between the closer and the redirect
+      if (closeIdx >= 0 && /^[\s|]*$/.test(head.slice(closeIdx + 1))) {
+        const open = matchBackwards(masked, offsets[i] + closeIdx);
+        if (open >= 0) {
+          collect(script.slice(open, offsets[i] + closeIdx));
+        } else {
+          // Unbalanced (e.g. a stray brace inside an awk program). Degrade to
+          // bounded over-collection rather than back to a false positive.
+          for (let j = Math.max(0, i - 60); j <= i; j++) collect(lines[j]);
+        }
+      }
+    }
+
+    // (c) heredoc body redirected into $GITHUB_ENV
     const hd = lines[i].match(/<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/);
     if (!hd) continue;
     for (let j = i + 1; j < lines.length; j++) {
