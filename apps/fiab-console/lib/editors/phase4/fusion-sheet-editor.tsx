@@ -83,7 +83,10 @@ export function FusionSheetEditor({ id }: { item: FabricItemType; id: string }) 
       <div className={s.gridWrap}>
         <table className={s.grid} aria-label="Fusion sheet grid">
           <thead>
-            <tr><th className={s.th} /> {Array.from({ length: COLS }, (_, c) => <th key={c} className={s.th}>{indexToCol(c)}</th>)}</tr>
+            {/* No whitespace between <th/> and the map: a text node directly
+                inside <tr> is invalid HTML and React reports it as a hydration
+                error (found by the C14 editor spec). */}
+            <tr><th className={s.th} />{Array.from({ length: COLS }, (_, c) => <th key={c} className={s.th}>{indexToCol(c)}</th>)}</tr>
           </thead>
           <tbody>
             {Array.from({ length: ROWS }, (_, r) => (
