@@ -168,7 +168,7 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'env-picker' },
     autoResolveNote:
-      'Opt-in Preview lab. Unset → the surface documents that the N1 Iceberg REST Catalog + native ADLS/abfss path already give external engines governed access, so most deployments need no gateway. Set LOOM_S3_GATEWAY_URL only when you deploy an Apache-2.0 s3proxy for s3://-exclusive clients (the AGPL MinIO path is not used).',
+      'DEFAULT-ON (#2682 / D16): the Apache-2.0 s3proxy Container App is deployed by the pass that owns the lake — admin-plane/main.bicep when a lake is bound at admin-plane time, otherwise the dlz-attach pass, which also patches LOOM_S3_GATEWAY_URL onto the running Console. The image is pulled from the deployment\'s OWN ACR (digest-pinned mirror, platform/fiab/images/upstream-images.json); the module has no public-registry branch. Unset means the gateway did not deploy — most often the s3proxy image is not yet in this ACR (run the cloud\'s image lane) or a dlz-attach run carried no hub ACR / Container Apps environment coordinate. Nothing else degrades: the N1 Iceberg REST Catalog + native ADLS/abfss path still give external engines governed access; only s3://-exclusive clients need this face. (The AGPL MinIO gateway path is not used.)',
     legacyCodes: ['s3_gateway_not_configured'],
   },
   // ── M1 — estate assessment reader (inbound-migration on-ramp) ──

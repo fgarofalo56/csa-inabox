@@ -1,0 +1,75 @@
+{
+  "$comment": [
+    "UPSTREAM IMAGE MIRROR MANIFEST — the SINGLE source of truth for every",
+    "third-party container image a Loom DEPLOY PATH pulls (issue #2682, FINISHLINE D14).",
+    "",
+    "WHY THIS FILE EXISTS. The mirror used to live as a hard-coded bash array in",
+    "TWO workflows (full-app-deploy-commercial.yml and gov-provision-dataplane-images.yml)",
+    "with the bicep refs written a third time in the modules. Three copies of the same",
+    "fact drift: bump `airflowImage` in bicep and the ACR never receives that tag, so the",
+    "Container App points at an image that does not exist and cannot activate a revision.",
+    "Nothing observed that. Now the workflows READ this file (scripts/ci/mirror-upstream-images.sh)",
+    "and scripts/ci/check-upstream-image-mirror.mjs FAILS the build when a bicep-pinned ref",
+    "has no entry here, when an entry has no digest, or when a workflow stops using the",
+    "shared script.",
+    "",
+    "DIGEST PINNING (never float a tag). `az acr import` copies whatever the upstream tag",
+    "points at TODAY. A Docker Hub tag is mutable, so a tag-sourced mirror can silently",
+    "change the bits under a reviewed licence and a passed CVE scan. Every entry therefore",
+    "carries the resolved multi-arch manifest digest and the import runs against",
+    "`<registry>/<repo>@<digest>`, tagging the result in ACR as `<acrRepo>:<tag>` so the",
+    "bicep ref stays human-readable and stable. To move to a new upstream version: bump",
+    "`tag` AND `digest` together (resolve with scripts/ci/resolve-upstream-digest.sh), bump",
+    "the bicep ref, re-review the licence in check-license-inventory.mjs.",
+    "",
+    "The `acrRepo:tag` MUST be byte-identical to the repo:tag written in the consuming",
+    "bicep module, because the module composes the effective ref as",
+    "`${acrLoginServer}/${repo}:${tag}`.",
+    "",
+    "BUILD-TIME vs DEPLOY-TIME. This manifest covers DEPLOY-time pulls only — images a",
+    "running Container App / Container Apps Job pulls from a registry. Images an",
+    "apps/*/Dockerfile builds FROM are pulled server-side by `az acr build` inside Azure",
+    "during the image build, are baked into a Loom-owned image, and are covered by LIC0",
+    "(REVIEWED_IMAGES) + the base-image CVE gate. They are inventoried in",
+    "docs/fiab/deployment/upstream-image-mirror.md and tracked separately."
+  ],
+  "schemaVersion": 1,
+  "images": [
+    {
+      "acrRepo": "apache/airflow",
+      "tag": "2.10.5-python3.12",
+      "sourceRegistry": "docker.io",
+      "sourceRepo": "apache/airflow",
+      "digest": "sha256:6499a680a93463846d3a6be980e85d601dc97b0d81e82eed9ef5e5cb9da31b79",
+      "spdx": "Apache-2.0",
+      "notice": "github.com/apache/airflow LICENSE = Apache License, Version 2.0",
+      "consumers": [
+        "platform/fiab/bicep/modules/admin-plane/airflow.bicep (airflowImage) — OSS Airflow host, default-ON wherever postgresQuotaAvailable is true"
+      ]
+    },
+    {
+      "acrRepo": "s3proxy",
+      "tag": "3.3.0",
+      "sourceRegistry": "docker.io",
+      "sourceRepo": "andrewgaul/s3proxy",
+      "digest": "sha256:6a01dbb173ffe9cad962f8c44bc9817cc3c4b0ed3e2c3957d9ec79f8c38caf27",
+      "spdx": "Apache-2.0",
+      "notice": "github.com/gaul/s3proxy LICENSE = Apache License, Version 2.0 (the AGPL MinIO gateway path is NOT used)",
+      "consumers": [
+        "platform/fiab/bicep/modules/data-plane/s3-gateway-aca.bicep (s3ProxyImage) — S3-compatible ADLS gateway, DEFAULT-ON (restored in D16 now the image is ACR-mirrored)"
+      ]
+    },
+    {
+      "acrRepo": "curlimages/curl",
+      "tag": "8.10.1",
+      "sourceRegistry": "docker.io",
+      "sourceRepo": "curlimages/curl",
+      "digest": "sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b",
+      "spdx": "curl",
+      "notice": "curl.se/docs/copyright.html = curl licence (MIT/X11 derivative)",
+      "consumers": [
+        "platform/fiab/bicep/modules/compute/loom-memory-consolidate-job.bicep (jobImage) — scheduled memory-consolidation job"
+      ]
+    }
+  ]
+}

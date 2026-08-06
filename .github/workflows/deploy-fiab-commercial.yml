@@ -326,6 +326,15 @@ jobs:
             HUB_UAMI_CLIENT=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiAppId',''))" 2>/dev/null || true)
             HUB_UAMI_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiResourceId',''))" 2>/dev/null || true)
             HUB_UAMI_NAME=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiName',''))" 2>/dev/null || true)
+            # #2682 — hub ACR / Container Apps env / Key Vault. Needed by any
+            # dlz-attach workload that runs a container ON THE HUB (today the
+            # S3-compatible ADLS gateway). main.bicep records all three in
+            # topologyManifest.hub; before this they were recorded and read by
+            # nobody, so the gateway's image resolved to an anonymous docker.io
+            # pull on every shipped lane (PR #2640 round 4).
+            HUB_ACR_LOGIN=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('acrLoginServer',''))" 2>/dev/null || true)
+            HUB_CAE_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('caeId',''))" 2>/dev/null || true)
+            HUB_KV_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('keyVaultId',''))" 2>/dev/null || true)
           fi
           # (2) Live-query fallback for anything the manifest didn't supply.
           if [ -z "${HUB_VNET_ID:-}" ] || [ "$HUB_VNET_ID" = "null" ]; then
@@ -352,7 +361,30 @@ jobs:
           echo "hub_uami_client=$HUB_UAMI_CLIENT"       >> "$GITHUB_OUTPUT"
           echo "hub_uami_id=$HUB_UAMI_ID"        >> "$GITHUB_OUTPUT"
           echo "hub_uami_name=$HUB_UAMI_NAME"    >> "$GITHUB_OUTPUT"
+          # #2682 — live-query fallback for the three hub-side workload coordinates
+          # when the manifest predates them. These are NOT part of the hard-fail
+          # check above on purpose: a hub whose manifest predates #2682 must still
+          # be attachable. Empty simply means the hub-side S3 gateway is skipped
+          # and its surface honest-gates — never a silent public-registry pull,
+          # because s3-gateway-aca.bicep REQUIRES an acrLoginServer.
+          if [ -z "${HUB_ACR_LOGIN:-}" ] || [ "$HUB_ACR_LOGIN" = "null" ]; then
+            HUB_ACR_LOGIN=$(az acr list -g "$HUB_RG" --query "[0].loginServer" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${HUB_CAE_ID:-}" ] || [ "$HUB_CAE_ID" = "null" ]; then
+            HUB_CAE_ID=$(az containerapp env list -g "$HUB_RG" --query "[0].id" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${HUB_KV_ID:-}" ] || [ "$HUB_KV_ID" = "null" ]; then
+            HUB_KV_ID=$(az keyvault list -g "$HUB_RG" --query "[0].id" -o tsv 2>/dev/null || true)
+          fi
+          echo "hub_acr_login=${HUB_ACR_LOGIN:-}" >> "$GITHUB_OUTPUT"
+          echo "hub_cae_id=${HUB_CAE_ID:-}"       >> "$GITHUB_OUTPUT"
+          echo "hub_kv_id=${HUB_KV_ID:-}"         >> "$GITHUB_OUTPUT"
           echo "::notice::Hub coords — sub=$HUB_SUB vnet=$HUB_VNET_ID uami=$HUB_UAMI_NAME ($HUB_UAMI_PRINCIPAL)"
+          if [ -n "${HUB_ACR_LOGIN:-}" ] && [ -n "${HUB_CAE_ID:-}" ]; then
+            echo "::notice::Hub workload coords present — the hub-side S3 gateway (#2682) will deploy from $HUB_ACR_LOGIN."
+          else
+            echo "::warning::Hub ACR/CAE coordinate not discovered (acr='${HUB_ACR_LOGIN:-}', cae='${HUB_CAE_ID:-}'). The hub-side S3 gateway will be SKIPPED and svc-s3-gateway will honest-gate. This is not a public-registry fallback — the module has none."
+          fi
 
       # ── BROWNFIELD RECONCILE DISCOVERY (D4, run 31100384405 — deploy-integrity R5) ──
       # Azure permits exactly ONE Vpn-type gateway per VNet and ONE private-DNS
@@ -418,6 +450,11 @@ jobs:
           HUB_PARAMS=""
           if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
             HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
+            # #2682 — only appended when discovered, so a pre-#2682 hub still attaches.
+            [ -n "${{ steps.hubcoords.outputs.hub_acr_login }}" ] && HUB_PARAMS="$HUB_PARAMS hubAcrLoginServer=${{ steps.hubcoords.outputs.hub_acr_login }}"
+            [ -n "${{ steps.hubcoords.outputs.hub_cae_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubCaeId=${{ steps.hubcoords.outputs.hub_cae_id }}"
+            [ -n "${{ steps.hubcoords.outputs.hub_kv_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubKeyVaultId=${{ steps.hubcoords.outputs.hub_kv_id }}"
+            true
           fi
           az deployment sub what-if \
             --name csa-loom-ci-${{ github.run_id }} \
@@ -589,6 +626,11 @@ jobs:
           HUB_PARAMS=""
           if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
             HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
+            # #2682 — only appended when discovered, so a pre-#2682 hub still attaches.
+            [ -n "${{ steps.hubcoords.outputs.hub_acr_login }}" ] && HUB_PARAMS="$HUB_PARAMS hubAcrLoginServer=${{ steps.hubcoords.outputs.hub_acr_login }}"
+            [ -n "${{ steps.hubcoords.outputs.hub_cae_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubCaeId=${{ steps.hubcoords.outputs.hub_cae_id }}"
+            [ -n "${{ steps.hubcoords.outputs.hub_kv_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubKeyVaultId=${{ steps.hubcoords.outputs.hub_kv_id }}"
+            true
           fi
           # RETRY WITH CLASSIFICATION + PLATFORM REMEDIATION (deploy-integrity R6).
           #

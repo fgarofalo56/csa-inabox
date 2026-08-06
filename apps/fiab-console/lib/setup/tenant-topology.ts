@@ -76,6 +76,16 @@ export const HUB_COORDINATE_KEYS = [
   'hubConsoleUamiAppId',
   'hubConsoleUamiId',
   'hubActivatorPrincipalId',
+  // #2682 — the hub ACR / Container Apps environment / Key Vault coordinates. A
+  // dlz-attach pass needs all three to stand up a hub-side workload (today the
+  // S3-compatible ADLS gateway) that pulls from the estate's OWN registry rather
+  // than a public one, and writes the Key Vault secrets its documentation tells
+  // operators to read. Their absence from this list was one of the five layers
+  // that made `hubCoordinates.acrLoginServer` permanently empty, so the gateway's
+  // image silently resolved to docker.io (PR #2640 round 4).
+  'hubAcrLoginServer',
+  'hubCaeId',
+  'hubKeyVaultId',
 ] as const;
 
 /**

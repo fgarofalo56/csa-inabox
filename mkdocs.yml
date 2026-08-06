@@ -1475,6 +1475,7 @@ nav:
           - Brownfield (adopt existing infrastructure): fiab/deployment/brownfield.md
           - Discovery and Adoption Reference: fiab/deployment/discovery-and-adoption.md
           - Failure Recovery: fiab/deployment/failure-recovery.md
+          - Upstream Image Mirror (ACR): fiab/deployment/upstream-image-mirror.md
           - Bring-Your-Own Services: fiab/bring-your-own-services.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
           - From azd CLI: fiab/deployment/azd-cli.md

@@ -109,6 +109,15 @@ const HUB_COORD_PARAM: Record<string, string> = {
   hubCatalogEndpoint: 'hubCatalogEndpoint',
   hubConsolePrincipalId: 'hubConsolePrincipalId',
   hubPrivateDnsZoneIds: 'hubPrivateDnsZoneIdsAttach',
+  // #2682 — the hub ACR / CAE / Key Vault coordinates for a hub-side dlz-attach
+  // workload (today the S3-compatible ADLS gateway). Without these three the
+  // module cannot pull its image from the estate registry AT ALL — by design, it
+  // has no public-registry branch — so it is skipped and the surface honest-gates
+  // rather than silently egressing to Docker Hub, which is what happened before
+  // (PR #2640 round 4).
+  hubAcrLoginServer: 'hubAcrLoginServer',
+  hubCaeId: 'hubCaeId',
+  hubKeyVaultId: 'hubKeyVaultId',
 };
 
 /** ARM deployment `parameters` map entry shape: `{ paramName: { value } }`. */
