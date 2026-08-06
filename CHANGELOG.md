@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.87.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.1...csa-inabox-v0.87.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* **deploy:** restore ADMIN_SUB assignment — [#3013](https://github.com/fgarofalo56/csa-inabox/issues/3013) left it read-but-never-assigned, killing the entire app-image path (deploy-integrity R1/R7) ([#3030](https://github.com/fgarofalo56/csa-inabox/issues/3030)) ([7230913](https://github.com/fgarofalo56/csa-inabox/commit/7230913b32d2c8864c1a67096e2700061a3f5758))
+
 ## [0.87.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.0...csa-inabox-v0.87.1) (2026-08-06)
 
 
