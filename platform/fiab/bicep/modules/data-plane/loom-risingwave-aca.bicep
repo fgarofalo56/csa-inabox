@@ -191,12 +191,17 @@ Optional keys:
                          the code-execution apps — and ingress rules only govern the ingress path,
                          not a direct pod-IP connect. Empty (default) => internal ingress plus the
                          image's own single-listener seal are the network controls.
-  livenessInitialDelay   Seconds before the first liveness probe (default 150). The engine boots
-                         TWICE — once with every listener on loopback to install the credential
-                         and assert zero routable ports, once serving — so the routable port does
-                         not exist for the first ~15s (measured; see the probe comment). A short
-                         delay would kill the container mid-bootstrap.
-  readinessInitialDelay  Seconds before the first readiness probe (default 30).''')
+  livenessInitialDelay   Seconds before the first liveness probe (default 10; CLAMPED to the ACA
+                         cap of 60 — ARM preflight rejects anything higher with
+                         ContainerAppProbeInitialDelaySecondsOutOfRange, which is why the previous
+                         150s default made this module UNDEPLOYABLE). The long sealed bootstrap
+                         (the engine boots TWICE — once with every listener on loopback to install
+                         the credential and assert zero routable ports, once serving, so the
+                         routable port does not exist for the first ~15s measured) is absorbed by
+                         the dedicated STARTUP probe below, which suppresses liveness/readiness
+                         until it succeeds — so this delay no longer needs to cover the boot.
+  readinessInitialDelay  Seconds before the first readiness probe (default 10; clamped to 60 the
+                         same way).''')
 param risingwaveConfig object
 
 @description('''Postgres-wire root password, INLINE alternative to risingwaveConfig.rootPasswordSecretUri. @secure() so ARM redacts it from deployment history and outputs; rendered as a Container Apps SECRET (never an env literal). Prefer the Key Vault URI — this exists for out-of-band / incremental provisioning where the vault reference is not available. Exactly one of the two must be supplied: with neither, the container fails closed at boot rather than serving an unauthenticated database.''')
@@ -251,9 +256,16 @@ var rootAuthConfigured = rootPasswordFromKeyVault || rootPasswordInline
 var allowedCidrs = risingwaveConfig.?allowedCidrs ?? []
 
 // The engine boots twice (sealed → serving), so the routable port is absent for
-// the first ~30-60s. Probe delays are generous by default for that reason.
-var livenessInitialDelay = int(risingwaveConfig.?livenessInitialDelay ?? 150)
-var readinessInitialDelay = int(risingwaveConfig.?readinessInitialDelay ?? 30)
+// the first ~15s (measured; ~10x headroom budgeted). That grace now lives in the
+// STARTUP probe (see the probes array) because ACA hard-caps every probe's
+// initialDelaySeconds at 60 — the previous 150s liveness default failed ARM
+// preflight with ContainerAppProbeInitialDelaySecondsOutOfRange on EVERY deploy,
+// so this module could never reach the estate. Liveness/readiness only begin
+// after the startup probe succeeds, so their delays stay small; max(1, min(60, x))
+// clamps any legacy config-bag value into ACA's documented 1-60 range so a stale
+// operator bag can never re-break preflight.
+var livenessInitialDelay = max(1, min(60, int(risingwaveConfig.?livenessInitialDelay ?? 10)))
+var readinessInitialDelay = max(1, min(60, int(risingwaveConfig.?readinessInitialDelay ?? 10)))
 
 var tags = union(complianceTags, { 'loom-next-level': 'true' })
 
@@ -378,19 +390,35 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
           }
           probes: [
             {
-              // The frontend has no HTTP health on the SQL port; a TCP connect to
-              // the Postgres-wire port is the honest liveness/readiness signal.
-              // The delay must clear the SEALED bootstrap: during phase 1 every
-              // listener including the frontend is bound to 127.0.0.1, so a probe
-              // from the pod IP correctly fails. A 20s delay would have killed the
-              // container mid-credential-install and crash-looped forever.
+              // STARTUP — absorbs the SEALED bootstrap. The frontend has no HTTP
+              // health on the SQL port; a TCP connect to the Postgres-wire port
+              // is the honest signal. During phase 1 every listener including the
+              // frontend is bound to 127.0.0.1, so a probe from the pod IP
+              // correctly fails until the serving engine binds the routable port.
               //
               // MEASURED on the built image (2 vCPU / 6 GiB, docker, 2026-07-30):
               // sealed engine answering SQL at +8.4s, port assertion + ALTER USER
               // + verification done at +8.8s, serving engine's routable port up
-              // and re-asserted at +14.7s. The 150s default is ~10x headroom for a
-              // cold pull on a busier node; readiness at 30s / 10s / x30 gives a
-              // further 300s of grace before the revision is failed.
+              // and re-asserted at +14.7s. Grace here = 10s initial + 15s x 10
+              // attempts = 160s (~10x headroom for a cold pull on a busier node)
+              // — the same budget the old 150s liveness delay carried before ACA's
+              // preflight cap (initialDelaySeconds <= 60,
+              // ContainerAppProbeInitialDelaySecondsOutOfRange) made that shape
+              // undeployable. failureThreshold 10 and periodSeconds 240 are the
+              // ACA documented maxima; raise periodSeconds first if a heavier
+              // image ever needs more grace.
+              // Liveness and readiness are SUPPRESSED until this succeeds, so
+              // neither can kill the container mid-credential-install.
+              type: 'Startup'
+              tcpSocket: { port: frontendPort }
+              initialDelaySeconds: 10
+              periodSeconds: 15
+              timeoutSeconds: 5
+              failureThreshold: 10
+            }
+            {
+              // Runs only after the startup probe has proven the routable port,
+              // so the small (ACA-capped <= 60s) delay is safe.
               type: 'Liveness'
               tcpSocket: { port: frontendPort }
               initialDelaySeconds: livenessInitialDelay
@@ -398,11 +426,15 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
               failureThreshold: 3
             }
             {
+              // failureThreshold 10 is the ACA documented maximum (the previous
+              // 30 was out of range — a second latent preflight failure hiding
+              // behind the liveness one). 10s delay + 10s x 10 still gives 100s
+              // of post-startup grace before the revision is failed.
               type: 'Readiness'
               tcpSocket: { port: frontendPort }
               initialDelaySeconds: readinessInitialDelay
               periodSeconds: 10
-              failureThreshold: 30
+              failureThreshold: 10
             }
           ]
         }
