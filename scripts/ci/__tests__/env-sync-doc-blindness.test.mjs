@@ -43,6 +43,9 @@ import {
   collectEmitted,
   computeMissing,
   stripBicepDocs,
+  collectConsoleDelivered,
+  computeUndelivered,
+  KNOWN_UNDELIVERED,
 } from '../check-env-sync.mjs';
 
 const names = (src) => [...new Set(stripBicepDocs(src).match(/LOOM_[A-Z0-9_]+/g) || [])];
@@ -136,4 +139,61 @@ test('stripping is load-bearing: the raw-text scan really was more permissive', 
   assert.ok(emitted.size > 400, `sanity: expected a populated emitted set, got ${emitted.size}`);
   assert.equal(emitted.has('LOOM_CAPACITY_BROKER_URL'), false,
     'LOOM_CAPACITY_BROKER_URL is named only in loom-capacity-broker-app.bicep prose; no bicep emits it (LOOM_BROKER_URL is the emitted name)');
+});
+
+/**
+ * #3012 — PER-APP DELIVERY.
+ *
+ * `collectEmitted()` is name-anywhere-in-the-tree: it flattens every LOOM_* token
+ * from every bicep file into one set, so a name counts as emitted when ANY file
+ * mentions it — including one wiring a completely DIFFERENT container app. Proven
+ * on 2026-08-05: deleting every `LOOM_ICEBERG_CATALOG_URL` occurrence from
+ * admin-plane/main.bicep (5 -> 0) left the guard exiting 0, because sibling bicep
+ * files mention the name. With the delivery check in place the same deletion
+ * exits 1 and names the variable.
+ *
+ * `collectConsoleDelivered()` answers the real question — does the loom-console
+ * container app RECEIVE this value — by reading the env of its own apps[] entry
+ * plus the env app-deployments.bicep applies to every app.
+ */
+test('per-app delivery is NARROWER than name-anywhere emission', () => {
+  const emitted = collectEmitted();
+  const delivered = collectConsoleDelivered();
+  assert.ok(delivered.size > 100, `sanity: expected a populated console env, got ${delivered.size}`);
+  assert.ok(
+    delivered.size < emitted.size,
+    `delivery (${delivered.size}) must be strictly narrower than name-anywhere emission ` +
+      `(${emitted.size}); if these converge, the attribution has stopped attributing`,
+  );
+});
+
+test('vars emitted onto ANOTHER app are not counted as delivered to the console', () => {
+  const emitted = collectEmitted();
+  const delivered = collectConsoleDelivered();
+  // Each IS referenced in bicep (so the flat check passes) but is set on
+  // loom-duckdb / loom-iceberg-catalog / loom-sharing — never on the console.
+  for (const v of ['LOOM_LAKE_ACCOUNT', 'LOOM_SHARING_ENDPOINT', 'LOOM_SHARING_BEARER']) {
+    assert.equal(emitted.has(v), true, `${v} should still satisfy the flat emitted check`);
+    assert.equal(delivered.has(v), false, `${v} is set on a DIFFERENT app; not delivered`);
+    assert.equal(KNOWN_UNDELIVERED.has(v), true, `${v} must be fenced as known debt`);
+  }
+});
+
+test('the Trino session user reaches the CONSOLE, not just the Trino app', () => {
+  // The console opens the Trino session (trino-client.ts sessionUser()). Before
+  // #3012 this var was set only on loom-trino-aca, so the console silently used
+  // its hardcoded fallback and would diverge from a customised engine sessionUser.
+  assert.equal(collectConsoleDelivered().has('LOOM_TRINO_SESSION_USER'), true);
+});
+
+test('the repository has no unfenced per-app delivery gaps', () => {
+  const { undelivered } = computeUndelivered();
+  assert.deepEqual(undelivered, [], `read-but-not-delivered-to-console: ${undelivered.join(', ')}`);
+});
+
+test('KNOWN_UNDELIVERED is a shrinking ratchet, not a growing allowlist', () => {
+  assert.ok(
+    KNOWN_UNDELIVERED.size <= 5,
+    `KNOWN_UNDELIVERED grew to ${KNOWN_UNDELIVERED.size}; fence entries are debt, not a fix`,
+  );
 });

@@ -4057,6 +4057,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // caller; external federation catalogs are deny-by-default and need a
             // grant here. Empty on a fresh install (no external catalog yet).
             { name: 'LOOM_TRINO_CATALOG_POLICY', value: trinoEngineActive ? trinoCatalogPolicy : '' }
+            // #3012: the ONE Trino user every Loom principal is mapped onto
+            // (trino-client.ts `sessionUser()`). The trino app already receives this
+            // via loom-trino-aca.bicep, but the CONSOLE — which is what actually opens
+            // the Trino session — never did, so it silently fell back to its hardcoded
+            // 'loom-console' default and would diverge the moment an operator set a
+            // different sessionUser on the engine. Caught by check-env-sync's new
+            // per-app delivery assertion, which is the whole point of that check:
+            // the name WAS present in bicep, just on the wrong app.
+            { name: 'LOOM_TRINO_SESSION_USER', value: trinoEngineActive ? trinoEngine!.outputs.mappedSessionUser : '' }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF

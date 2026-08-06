@@ -191,6 +191,104 @@ test('finding ZERO console builders FAILS (a guard cannot pass on nothing)', () 
   }
 });
 
+/**
+ * #3012 — A MENTION OF THE CONTEXT IS NOT A CONSOLE BUILD.
+ *
+ * `gov-provision-trino.yml` builds only `loom-trino` and `loom-uat`; it never
+ * produces a console image (it READS the running console's image and updates an
+ * env var). Its `apps/fiab-console` mentions are the UAT build plus three
+ * `.dockerignore` file operations. The original predicate scored every one of
+ * those as a console build, so the guard demanded a corpus-staging step in a
+ * Playwright test image that has no `COPY … copilot-corpus` line at all — a step
+ * that would have gone green while doing nothing.
+ */
+const UAT_ONLY_TRINO_SHAPE = `
+env:
+  APP: loom-console
+jobs:
+  provision:
+    steps:
+      - run: |
+          az acr build --registry acr --image "loom-trino:$SHA" ./apps/loom-trino
+          cp apps/fiab-console/.dockerignore /tmp/di.bak
+          grep -vxE 'e2e|tests' /tmp/di.bak > apps/fiab-console/.dockerignore
+          az acr build --registry acr --image "loom-uat:$SHA" \\
+            --file apps/fiab-console/Dockerfile.uat apps/fiab-console
+          cp /tmp/di.bak apps/fiab-console/.dockerignore
+`;
+
+test('a UAT-only workflow that never builds the console image is NOT a console builder', () => {
+  // It must not be flagged AND must not be counted — but the run still needs a
+  // real builder present, or the zero-builders self-check fires for its own reason.
+  const root = fixture({ 'ok.yml': BUILD_WITH_STAGING, 'trino.yml': UAT_ONLY_TRINO_SHAPE });
+  try {
+    const { builders, missing } = scanConsoleCorpusStaging(root);
+    assert.deepEqual(missing, []);
+    assert.deepEqual(builders, ['ok.yml']);
+    const res = spawnSync(process.execPath, [SCRIPT, '--root', root], { encoding: 'utf8' });
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a bare path mention with no build declaration is NOT a console build', () => {
+  const root = fixture({
+    'ok.yml': BUILD_WITH_STAGING,
+    'mention.yml': `
+jobs:
+  x:
+    steps:
+      - run: docker build -t other ./apps/other
+      - run: cp apps/fiab-console/.dockerignore /tmp/di.bak
+`,
+  });
+  try {
+    assert.deepEqual(scanConsoleCorpusStaging(root).builders, ['ok.yml']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the three real build-declaration forms are each still detected', () => {
+  const forms = {
+    'ctxkey.yml': `
+jobs:
+  b:
+    strategy:
+      matrix:
+        include:
+          - { name: loom-console, ctx: ./apps/fiab-console }
+    steps:
+      - uses: docker/build-push-action@v6
+`,
+    'jsonmatrix.yml': `
+jobs:
+  b:
+    steps:
+      - run: |
+          APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"}]'
+          az acr build --registry acr --image "$APP:$SHA" "$CTX"
+`,
+    'dockerfile.yml': `
+jobs:
+  b:
+    steps:
+      - run: az acr build --registry acr --file apps/fiab-console/Dockerfile apps/fiab-console
+`,
+  };
+  for (const [name, body] of Object.entries(forms)) {
+    const root = fixture({ [name]: body });
+    try {
+      const { builders, missing } = scanConsoleCorpusStaging(root);
+      assert.deepEqual(builders, [name], `${name} must be detected as a console builder`);
+      assert.deepEqual(missing, [name], `${name} stages nothing, so it must be reported`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 /** The real repo must satisfy its own guard. */
 test('the actual repository passes', () => {
   const res = spawnSync(process.execPath, [SCRIPT, '--root', REPO], { encoding: 'utf8' });
