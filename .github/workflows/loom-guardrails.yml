@@ -330,3 +330,58 @@ jobs:
       # it proves this one changed no existing behaviour. The overlap is ~5s.
       - name: 'node:test suites (every suite in the tree — #2856)'
         run: node scripts/ci/check-node-test-suites.mjs
+      # ── the workflow files themselves (refs #3030) ─────────────────────────
+      # Every guard above judges the repo. These two judge the WORKFLOWS THAT RUN
+      # THE GUARDS. On 2026-08-05 full-app-deploy-commercial.yml — the only
+      # producer of the app images and the only path that rolls the Container
+      # Apps — died on three consecutive runs because of ONE line:
+      #     echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
+      # ADMIN_SUB was read and never assigned; the step runs under
+      # `set -uo pipefail`, so it aborted there and took every image build and
+      # app roll with it. The class is entirely mechanical and nothing checked it.
+      #
+      # There are TWO guards because one of them cannot see that bug. actionlint
+      # does pipe `run:` blocks through shellcheck, but it hard-codes
+      #   --norc … -e SC1091,SC2194,SC2050,SC2153,SC2154,SC2157,SC2043
+      # so SC2154 ("referenced but not assigned") is excluded BY DESIGN — and
+      # stock shellcheck exempts ALL-CAPS names from it in any case. Run against
+      # the pre-#3030 file, actionlint reports SC2086/SC2129 and says nothing
+      # about ADMIN_SUB. check-workflow-unset-vars.mjs does that analysis with
+      # the workflow/job/step `env:` + $GITHUB_ENV context shellcheck lacks —
+      # which is exactly why actionlint is right to exclude it and we are right
+      # to re-implement it. Neither guard substitutes for the other.
+      - name: 'Install pinned actionlint + shellcheck (workflow lint toolchain)'
+        run: |
+          set -euo pipefail
+          AL_VER=1.7.12
+          AL_SHA=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          SC_VER=0.11.0
+          SC_SHA=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          curl -sSfL -o /tmp/actionlint.tgz "https://github.com/rhysd/actionlint/releases/download/v${AL_VER}/actionlint_${AL_VER}_linux_amd64.tar.gz"
+          echo "${AL_SHA}  /tmp/actionlint.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/actionlint.tgz -C /usr/local/bin actionlint
+          # NOTE: a comment must not begin with "# shellcheck " — shellcheck
+          # reads that as a directive and errors (SC1072/SC1073). The pinned
+          # binary below is deliberate: shellcheck's VERSION decides which
+          # findings exist, so inheriting the runner image's copy would move
+          # the ratchet baseline underneath us on the next image bump.
+          # ubuntu-latest ships one; this overrides it.
+          curl -sSfL -o /tmp/shellcheck.txz "https://github.com/koalaman/shellcheck/releases/download/v${SC_VER}/shellcheck-v${SC_VER}.linux.x86_64.tar.xz"
+          echo "${SC_SHA}  /tmp/shellcheck.txz" | sha256sum -c -
+          tar -xJf /tmp/shellcheck.txz -C /tmp
+          sudo install -m755 "/tmp/shellcheck-v${SC_VER}/shellcheck" /usr/local/bin/shellcheck
+          actionlint --version | head -1
+          shellcheck --version | grep version:
+      # The self-test runs FIRST and separately: it drives the analyser over the
+      # real #3030 defect and fails if ADMIN_SUB is not reported. A guard nobody
+      # has watched fail is not a guard, and this repo has shipped several.
+      - name: 'workflow-unset-vars self-test (must detect the #3030 ADMIN_SUB defect)'
+        run: node scripts/ci/check-workflow-unset-vars.mjs --self-test
+      - name: 'workflow-unset-vars (a `run:` step must not read a variable it never assigns — #3030)'
+        run: node scripts/ci/check-workflow-unset-vars.mjs
+      # Its own first act is a liveness probe: actionlint silently skips EVERY
+      # shellcheck rule when shellcheck is absent from PATH (measured: 5 findings
+      # with it, 0 without, on the same file) — so the guard lints a fixture with
+      # a planted SC2086 and fails if it does not come back.
+      - name: 'workflow-actionlint (pinned actionlint + shellcheck, ratcheted; probe proves shellcheck is live)'
+        run: node scripts/ci/check-workflow-actionlint.mjs

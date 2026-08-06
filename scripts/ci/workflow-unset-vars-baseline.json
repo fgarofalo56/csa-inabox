@@ -1,0 +1,8 @@
+{
+  "_owner": "CSA Loom platform / deploy-integrity",
+  "_why": "A `run:` step that reads a never-assigned variable aborts under `set -u`. This killed full-app-deploy-commercial.yml for three runs (#3030). actionlint cannot catch it: it excludes SC2154 by design.",
+  "_unblock": "Assign the variable, add it to an `env:` block, or mark a genuinely external read with `# unset-var-ok: NAME`. Deploy-critical workflows are held at ZERO and cannot be baselined. Otherwise: node scripts/ci/check-workflow-unset-vars.mjs --update-baseline (in the blocked PR, with a one-line justification).",
+  "entries": {
+    "dr-drill.yml": 3
+  }
+}
