@@ -68,6 +68,15 @@
  *                 ORIGINAL failure. An unreadable drill-down leaves the run
  *                 exactly as red as it was.
  *
+ *                 PER-LEAF (D6, run 31100384405): when leaves ARE found, each
+ *                 is classified SEPARATELY (classifyLeaves) and the retry
+ *                 decision is made from the set (decideRetryForLeaves) — on
+ *                 that run a whole-input classify let an unrelated
+ *                 InvalidTemplate leaf class the failure `defect`, so the
+ *                 retryable CapacityNotAvailable leaf was never retried and
+ *                 the artifact never said it was retryable. The headline stays
+ *                 the worst leaf; the artifact carries every leaf's own class.
+ *
  * Tests: node --test scripts/ci/__tests__/deploy-retry.test.mjs
  */
 
@@ -77,7 +86,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { classify, render, classExitCode } from './deploy-classify.mjs';
+import {
+  classify,
+  classifyLeaves,
+  worstLeafDiagnosis,
+  render,
+  classExitCode,
+} from './deploy-classify.mjs';
 import { collectArmLeafErrors, renderLeaves, STATUS as ARM_STATUS } from './deploy-arm-errors.mjs';
 import { redact } from './_azure-redact.mjs';
 
@@ -153,6 +168,100 @@ export function decideRetry({
     };
   }
   return { retry: true, reason: '' };
+}
+
+/**
+ * THE PER-LEAF DECISION (D6, run 31100384405).
+ *
+ * classify() over the concatenated leaf text returns ONE class by precedence,
+ * and on that run an unrelated InvalidTemplate leaf classed the whole failure
+ * `defect` — so the retryable CapacityNotAvailable leaf (DuckLake Postgres,
+ * centralus zone) was never retried. This decides from the SET instead:
+ *
+ *   - retry ONLY when EVERY leaf is retryable AND in --class-allow. An ARM
+ *     re-deploy re-runs every failed leaf, so a set containing a
+ *     deterministic leaf (defect/config/quota/permission) cannot be turned
+ *     green by retrying — the deterministic leaf fails identically and the
+ *     budget is burnt asserting nothing (the exact C2 shape).
+ *   - an `unknown` leaf fails closed, exactly as in decideRetry.
+ *   - the refusal REASON names every blocking leaf with its class AND names
+ *     the leaves that ARE retryable, so a capacity leaf is never again
+ *     invisible inside a defect verdict — the operator sees "fix the defect;
+ *     the capacity leaf will retry on the next run".
+ *
+ * Pure, like decideRetry, so the fail-closed behaviour is testable without
+ * Azure.
+ */
+export function decideRetryForLeaves({
+  leafDiagnoses,
+  attempt,
+  maxAttempts,
+  classAllow,
+  elapsedMs,
+  wallClockMs,
+  nextDelayMs = 0,
+}) {
+  const list = Array.isArray(leafDiagnoses) ? leafDiagnoses : [];
+  if (list.length === 0) {
+    return { retry: false, reason: 'not retrying: no ARM leaves were classified (nothing to decide from).' };
+  }
+  const name = (l) =>
+    `${l.leaf?.code ?? 'NoCode'}${l.leaf?.resourceName ? ` on '${l.leaf.resourceName}'` : ''} → ${l.diagnosis.class}`;
+
+  const unknowns = list.filter((l) => l.diagnosis.class === 'unknown');
+  if (unknowns.length > 0) {
+    return {
+      retry: false,
+      reason:
+        `not retrying: ${unknowns.length} ARM leaf(s) could not be classified (${unknowns.map(name).join('; ')}), ` +
+        'so nothing is known about whether retrying could help. Unknown fails closed (deploy-integrity.md R7).',
+    };
+  }
+
+  const blocking = list.filter((l) => !l.diagnosis.retryable || !classAllow.includes(l.diagnosis.class));
+  const retryables = list.filter((l) => l.diagnosis.retryable && classAllow.includes(l.diagnosis.class));
+  if (blocking.length > 0) {
+    const also =
+      retryables.length > 0
+        ? ` NOTE: ${retryables.length} other leaf(s) ARE retryable (${retryables.map(name).join('; ')}) — ` +
+          'they are not being abandoned, they are blocked by the leaves above; fix those and the next run retries these.'
+        : '';
+    return {
+      retry: false,
+      reason:
+        `not retrying: ${blocking.length} of ${list.length} ARM leaf(s) are non-retryable or outside --class-allow ` +
+        `(${blocking.map(name).join('; ')}). An ARM re-deploy re-runs every failed leaf, so retrying cannot go green ` +
+        `while a deterministic leaf remains.${also}`,
+    };
+  }
+
+  if (attempt >= maxAttempts) {
+    return { retry: false, reason: `retry budget exhausted after ${attempt} attempt(s) (--max-attempts ${maxAttempts}).` };
+  }
+  if (wallClockMs > 0 && elapsedMs + nextDelayMs >= wallClockMs) {
+    return {
+      retry: false,
+      reason:
+        `wall-clock budget exhausted: ${Math.round(elapsedMs / 1000)}s elapsed of ` +
+        `${Math.round(wallClockMs / 1000)}s, and the next backoff would exceed it.`,
+    };
+  }
+  return { retry: true, reason: '' };
+}
+
+/**
+ * The backoff BASE for a leaf-driven retry: the larger of the CLI base and the
+ * longest defaultBackoffSeconds among the leaf classes being retried. A
+ * capacity leaf (taxonomy default 300s) must not be retried on a 45s cadence
+ * sized for throttles — Azure said "after some time", and hammering it burns
+ * the budget before capacity can return.
+ */
+export function effectiveBackoffBase(baseSeconds, leafDiagnoses) {
+  const base = Math.max(0, Number(baseSeconds) || 0);
+  const longest = (Array.isArray(leafDiagnoses) ? leafDiagnoses : [])
+    .filter((l) => l?.diagnosis?.retryable)
+    .reduce((m, l) => Math.max(m, Number(l.diagnosis.defaultBackoffSeconds) || 0), 0);
+  return Math.max(base, longest);
 }
 
 /** Constant base with upward-only jitter, matching the proven roll() shape. */
@@ -356,8 +465,30 @@ function main() {
     }
     const classifyInput = drill?.classifyText ? `${lastStderr}\n${drill.classifyText}` : lastStderr;
 
-    const diagnosis = classify(classifyInput);
-    history.push({ attempt, exitCode: lastStatus, class: diagnosis.class, signalId: diagnosis.signalId });
+    // PER-LEAF classification when the drill found leaves (D6). The headline
+    // diagnosis stays the WORST leaf (fail-fast precedence, same rank a
+    // concatenated classify would use), but the retry decision below is made
+    // from the SET, so one deterministic leaf no longer hides a retryable one.
+    const leafDiagnoses = drill?.result.status === ARM_STATUS.FOUND ? classifyLeaves(drill.result.leaves) : [];
+    const diagnosis = leafDiagnoses.length > 0 ? worstLeafDiagnosis(leafDiagnoses) : classify(classifyInput);
+    if (leafDiagnoses.length > 0) {
+      process.stderr.write('deploy-retry: per-leaf classification:\n');
+      for (const l of leafDiagnoses) {
+        process.stderr.write(
+          `  ${l.leaf.code ?? 'NoCode'}${l.leaf.resourceName ? ` on '${l.leaf.resourceName}'` : ''} → ` +
+            `${l.diagnosis.class}${l.diagnosis.retryable ? ' (retryable)' : ''} [${l.diagnosis.signalId ?? 'no signal'}]\n`,
+        );
+      }
+    }
+    history.push({
+      attempt,
+      exitCode: lastStatus,
+      class: diagnosis.class,
+      signalId: diagnosis.signalId,
+      ...(leafDiagnoses.length > 0
+        ? { leafClasses: leafDiagnoses.map((l) => ({ code: l.leaf.code ?? null, class: l.diagnosis.class })) }
+        : {}),
+    });
     if (args.remediate && !remediated) {
       const plan = planRemediation(diagnosis, lastStderr);
       if (plan?.argv) {
@@ -382,16 +513,29 @@ function main() {
       }
     }
 
-    const delay = backoffMs(args.backoffSeconds, args.jitter);
-    const decision = decideRetry({
-      diagnosis,
-      attempt,
-      maxAttempts: args.maxAttempts,
-      classAllow: args.classAllow,
-      elapsedMs: Date.now() - started,
-      wallClockMs,
-      nextDelayMs: delay,
-    });
+    // Leaf-driven retries use the longest taxonomy backoff among the classes
+    // being retried (a capacity leaf waits its 300s, not a throttle's 45s).
+    const delay = backoffMs(effectiveBackoffBase(args.backoffSeconds, leafDiagnoses), args.jitter);
+    const decision =
+      leafDiagnoses.length > 0
+        ? decideRetryForLeaves({
+            leafDiagnoses,
+            attempt,
+            maxAttempts: args.maxAttempts,
+            classAllow: args.classAllow,
+            elapsedMs: Date.now() - started,
+            wallClockMs,
+            nextDelayMs: delay,
+          })
+        : decideRetry({
+            diagnosis,
+            attempt,
+            maxAttempts: args.maxAttempts,
+            classAllow: args.classAllow,
+            elapsedMs: Date.now() - started,
+            wallClockMs,
+            nextDelayMs: delay,
+          });
 
     if (!decision.retry) {
       fs.writeFileSync(errFile, lastStderr, 'utf8');
@@ -413,6 +557,21 @@ function main() {
         elapsedSeconds: Math.round((Date.now() - started) / 1000),
         childExitCode: lastStatus,
         stderrPath: errFile,
+        // D6: every leaf keeps ITS OWN class in the artifact, so a retryable
+        // leaf is visible even when the headline class is a deterministic one.
+        ...(leafDiagnoses.length > 0
+          ? {
+              leafClasses: leafDiagnoses.map((l) => ({
+                code: l.leaf.code ?? null,
+                resourceType: l.leaf.resourceType ?? null,
+                resourceName: l.leaf.resourceName ?? null,
+                class: l.diagnosis.class,
+                signalId: l.diagnosis.signalId,
+                retryable: l.diagnosis.retryable,
+                remediation: l.diagnosis.remediation,
+              })),
+            }
+          : {}),
         ...(drill
           ? {
               armDrilldown: {
@@ -440,10 +599,18 @@ function main() {
       // than one reason at once (run 31069329802 failed for two) and the
       // classifier names only the winner.
       const leafBlock =
-        drill?.result.status === ARM_STATUS.FOUND
-          ? ` ${drill.result.leaves.length} ARM leaf failure(s): ` +
-            drill.result.leaves.map((l) => `${l.code}: ${redact(l.message)}`).join(' | ')
-          : '';
+        leafDiagnoses.length > 0
+          ? ` ${leafDiagnoses.length} ARM leaf failure(s), EACH WITH ITS OWN CLASS: ` +
+            leafDiagnoses
+              .map(
+                (l) =>
+                  `${l.leaf.code}→${l.diagnosis.class}${l.diagnosis.retryable ? ' (retryable)' : ''}: ${redact(l.leaf.message)}`,
+              )
+              .join(' | ')
+          : drill?.result.status === ARM_STATUS.FOUND
+            ? ` ${drill.result.leaves.length} ARM leaf failure(s): ` +
+              drill.result.leaves.map((l) => `${l.code}: ${redact(l.message)}`).join(' | ')
+            : '';
       ghAnnotate('error', `${message} ${decision.reason}${leafBlock}`);
       process.exit(classExitCode(diagnosis.class));
     }

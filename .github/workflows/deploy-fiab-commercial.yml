@@ -612,8 +612,14 @@ jobs:
           # is FAIL-CLOSED: only a leaf it actually read is fed to the
           # classifier, so an unreadable drill-down leaves the run exactly as
           # red and exactly as honest as it was.
+          # --class-allow includes `capacity` (D6, run 31100384405): ARM's own
+          # CapacityNotAvailable text says "Please retry after some time", and
+          # the taxonomy gives that class a 300s backoff which deploy-retry
+          # honors over the 45s base. Classification is PER ARM LEAF — a
+          # deterministic leaf still fails fast, and its refusal names any
+          # retryable leaves it is blocking.
           node scripts/ci/deploy-retry.mjs \
-            --class-allow transient,eventual-consistency \
+            --class-allow transient,eventual-consistency,capacity \
             --max-attempts 4 --backoff 45 --jitter 0.3 --wall-clock 120m \
             --step "az deployment sub create ($CSA_LOOM_TOPOLOGY)" \
             --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \

@@ -24,6 +24,8 @@ import { spawnSync } from 'node:child_process';
 
 import {
   decideRetry,
+  decideRetryForLeaves,
+  effectiveBackoffBase,
   backoffMs,
   parseDuration,
   planRemediation,
@@ -32,7 +34,7 @@ import {
   armDrilldown,
   USAGE_EXIT,
 } from '../deploy-retry.mjs';
-import { classify, TAXONOMY } from '../deploy-classify.mjs';
+import { classify, classifyLeaves, TAXONOMY } from '../deploy-classify.mjs';
 
 const SCRIPT = path.resolve(import.meta.dirname, '..', 'deploy-retry.mjs');
 
@@ -391,4 +393,81 @@ test('the drill-down flags parse, and an unknown arm flag is still rejected', ()
   assert.equal(a.armResourceGroup, 'rg');
   assert.equal(a.armSubscription, 's');
   assert.throws(() => parseArgs(['--arm-nope', 'x']), /unknown argument/);
+});
+
+// ── D6: the per-leaf decision (run 31100384405) ──────────────────────────────
+// THE MUTATION PROOF the task demands. The two leaves below are the REAL
+// drilled leaves of that run: one capacity (retryable), one defect
+// (deterministic). The old whole-input classify collapsed them to `defect` and
+// the capacity leaf was never retried NOR reported retryable. These tests go
+// red if per-leaf classification is broken back to the concatenated form
+// (verified by mutation: routing decideRetryForLeaves through
+// worstLeafDiagnosis alone flips 'capacity-only set is retried' red).
+
+const LEAF_CAPACITY = {
+  code: 'CapacityNotAvailable',
+  message: 'Capacity is not available in this region/zone. Please retry after some time.',
+  resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers',
+  resourceName: 'psql-loom-ducklake-k6mvh5sm6z7do',
+};
+const LEAF_DEFECT = {
+  code: 'InvalidTemplate',
+  message:
+    "Unable to process template language expressions for resource '…/azure-api.net/A/apim-csa-loom-centralus'. 'The language expression property '0' can't be evaluated.'",
+  resourceType: 'Microsoft.Network/privateDnsZones/A',
+  resourceName: 'azure-api.net/apim-csa-loom-centralus',
+};
+
+const CLASS_ALLOW = ['transient', 'eventual-consistency', 'capacity'];
+const leafBudget = { attempt: 1, maxAttempts: 4, classAllow: CLASS_ALLOW, elapsedMs: 0, wallClockMs: 0 };
+
+test('D6: a capacity-only leaf set IS retried (the leaf run 31100384405 never retried)', () => {
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves([LEAF_CAPACITY]) });
+  assert.equal(d.retry, true, 'a lone retryable capacity leaf must be retried');
+});
+
+test('D6: capacity + defect => NOT retried, the defect is named, AND the capacity leaf is still reported retryable', () => {
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves([LEAF_CAPACITY, LEAF_DEFECT]) });
+  assert.equal(d.retry, false, 'a deterministic leaf makes the whole re-deploy futile');
+  assert.match(d.reason, /InvalidTemplate.*defect/, 'the refusal must name the blocking leaf and its class');
+  assert.match(d.reason, /CapacityNotAvailable.*capacity/, 'the retryable leaf must stay VISIBLE in the refusal');
+  assert.match(d.reason, /ARE retryable/, 'the refusal must say the capacity leaf is retryable, not bury it');
+});
+
+test('D6: an unknown leaf fails the whole set closed', () => {
+  const junk = { code: 'Gibberish', message: 'nothing matches this', resourceType: null, resourceName: null };
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: classifyLeaves([LEAF_CAPACITY, junk]) });
+  assert.equal(d.retry, false);
+  assert.match(d.reason, /could not be classified/);
+});
+
+test('D6: leaf retries still exhaust their budget — the retry CAN fail (R6)', () => {
+  const dx = classifyLeaves([LEAF_CAPACITY]);
+  const exhausted = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: dx, attempt: 4 });
+  assert.equal(exhausted.retry, false);
+  assert.match(exhausted.reason, /budget exhausted/);
+  const wallClocked = decideRetryForLeaves({
+    ...leafBudget,
+    leafDiagnoses: dx,
+    elapsedMs: 60_000,
+    wallClockMs: 61_000,
+    nextDelayMs: 5_000,
+  });
+  assert.equal(wallClocked.retry, false);
+  assert.match(wallClocked.reason, /wall-clock/);
+});
+
+test('D6: an empty leaf set refuses to decide rather than inventing a verdict', () => {
+  const d = decideRetryForLeaves({ ...leafBudget, leafDiagnoses: [] });
+  assert.equal(d.retry, false);
+  assert.match(d.reason, /no ARM leaves/);
+});
+
+test('D6: a capacity leaf elevates the backoff base to the taxonomy 300s; non-retryable leaves do not', () => {
+  const cap = classifyLeaves([LEAF_CAPACITY]);
+  assert.equal(effectiveBackoffBase(45, cap), TAXONOMY.classes.capacity.defaultBackoffSeconds);
+  assert.ok(effectiveBackoffBase(45, cap) >= 300, 'Azure said "after some time" — a 45s cadence is not that');
+  const defect = classifyLeaves([LEAF_DEFECT]);
+  assert.equal(effectiveBackoffBase(45, defect), 45, 'a non-retryable leaf must not inflate the backoff');
+  assert.equal(effectiveBackoffBase(600, cap), 600, 'an operator-widened base is never shrunk');
 });

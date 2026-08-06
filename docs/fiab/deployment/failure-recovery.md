@@ -17,12 +17,13 @@ reading a log.
 
 ---
 
-## The eight classes
+## The nine classes
 
 | Class | Meaning | Retry helps? | Platform can fix it? |
 |---|---|---|---|
 | **transient** | Azure was momentarily unable to serve the request | **Yes** — bounded, with backoff | n/a |
 | **eventual-consistency** | The request was correct but a principal or resource has not replicated yet | **Yes** — longer backoff | n/a |
+| **capacity** | Azure is temporarily out of capacity for the SKU in this region/zone (`CapacityNotAvailable`) — the subscription's limits are fine | **Yes** — bounded, LONG backoff (300 s) | **Yes** — retried; on exhaustion the SKU/zone/region must change |
 | **registration** | A resource provider is not registered in the subscription | After remediation | **Yes** — register, then retry once |
 | **permission** | The deploy identity lacks a role | **No** | **Partly** — see below |
 | **quota** | A limit was hit: cores, SKU availability, streaming units, index count | **No** — deterministic | **Partly** — SKU fallback |
@@ -142,6 +143,36 @@ attempts" without the word *quota* in it — see
 ```bash
 az vm list-usage -l <region> -o table | grep -iE "DDSv5|Dv5|Standard"
 ```
+
+---
+
+## capacity
+
+**Signals:** `CapacityNotAvailable` — observed verbatim on run 31100384405
+(PostgreSQL Flexible Server `Standard_B1ms`, centralus): *"Capacity is not
+available in this region/zone. Please retry after some time."*
+
+**Distinct from quota, deliberately.** Nothing about the subscription's limits
+is wrong and the SKU **is** offered in the region — a zone was momentarily
+full, and ARM itself says to retry. The retry harness retries this class with
+the taxonomy's **300-second** backoff (a capacity shortage does not clear on a
+throttle-sized 45 s cadence), bounded, and **fails closed** on exhaustion.
+
+**On exhaustion** the ask has to change: a different SKU
+(`data-plane/ducklake-catalog-postgres.bicep` `skuName` for the DuckLake
+catalog server — `Standard_B1ms` is the smallest sold, so the fallback
+direction is up), or a different region for that server. The DuckLake server
+pins **no availability zone**, so a retry may land in any zone with capacity.
+
+> **Per-leaf classification (D6).** A deployment can fail for several
+> independent reasons at once — run 31100384405 failed for nine. The classifier
+> now classes **each ARM leaf separately**: a deterministic leaf (defect /
+> config / quota) still fails the run fast, but its refusal names every
+> retryable leaf it is blocking ("fix the defect; the capacity leaf retries on
+> the next run") instead of silently classing the whole run by the worst leaf —
+> which is exactly how this run's capacity leaf went un-retried and unreported.
+> The `deploy-failure.json` artifact carries `leafClasses[]`, one class per
+> leaf.
 
 ---
 
@@ -273,7 +304,7 @@ Two exceptions:
 
 ```bash
 node scripts/ci/deploy-retry.mjs \
-  --class-allow transient,eventual-consistency \
+  --class-allow transient,eventual-consistency,capacity \
   --max-attempts 6 --backoff 30 --jitter 0.3 --wall-clock 20m \
   --step "provision" --artifact deploy-failure.json --remediate \
   -- az deployment sub create -f main.bicep …
@@ -283,6 +314,12 @@ node scripts/ci/deploy-retry.mjs \
   taxonomy marks that class retryable. A quota denial is attempted once.
 - **Fails closed** on budget exhaustion, wall-clock expiry, and `unknown`. The
   exit code carries the class.
+- With `--arm-deployment`, ARM leaves are classified **per leaf**: the run is
+  retried only when *every* leaf is retryable and allowed (an ARM re-deploy
+  re-runs every failed leaf, so retrying around a deterministic leaf cannot go
+  green), the refusal names each blocking leaf **and** each retryable leaf it
+  blocks, and a retried set waits the *longest* taxonomy backoff among its leaf
+  classes (capacity: 300 s).
 - The **happy path costs nothing**: one invocation, no sleeps, immediate exit 0,
   and no failure artifact written.
 - Nothing is discarded. There is no `2>/dev/null`, no `|| true`, no
