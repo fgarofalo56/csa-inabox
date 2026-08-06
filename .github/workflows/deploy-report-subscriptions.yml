@@ -24,8 +24,12 @@ run-name: >-
 # The failure mode this guards is quiet: subscriptions keep SAVING to Cosmos and
 # the editor keeps listing them as enabled while nothing is delivered. That is
 # exactly how the retired Y1 Function failed — measured 2026-08-06,
-# `az functionapp function list` returned `[]` for func-rptsub-* (the host had
-# indexed zero functions), so the timer had never fired at all.
+# FunctionExecutionCount (2026-07-25→08-06, P1D Total) sums to ZERO for all seven
+# Function Apps in the admin RG (errorCode=Success, 13/13 datapoints with an
+# explicit total of 0.0, none absent), and func-rptsub-* indexes no functions at
+# all, so its timer had never fired. Note `function list` alone does NOT
+# generalise here — two other hosts hold enabled timers and a third errors — so
+# the execution metric is the evidence, and no root cause is asserted.
 #
 # ── WHAT IT DOES ───────────────────────────────────────────────────────────
 # It is a WRAPPER. It does not reimplement the script, which owns the ACR

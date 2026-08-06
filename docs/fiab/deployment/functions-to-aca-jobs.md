@@ -8,32 +8,84 @@ pass; the ordered plan for the remainder is in §4.
 
 ## 1. Why this migration exists
 
-Y1 Linux Consumption Functions are **structurally broken on this estate**. Azure
-Policy seals the Functions host storage data-plane (`publicNetworkAccess=Disabled`,
-AAD-only, no private endpoint) and the multitenant Y1 runtime is not a trusted
-service, so host keys and timer leases cannot be established.
+**The Function-hosted runtime on this estate executes nothing.** That is the
+claim, and the evidence for it is an execution metric — *not* `function list`,
+which does not generalise here and will mislead you if you rely on it.
 
-This is measured, not inferred. On **2026-08-06**, against
-`rg-csa-loom-admin-centralus`:
+### The load-bearing evidence: FunctionExecutionCount
 
-```
-$ for f in <all seven function apps>; do az functionapp function list -g <rg> -n "$f" -o json; done
-[]      # every one, exit code 0 — a real empty list, not an error
-```
+`FunctionExecutionCount`, 2026-07-25 → 2026-08-06, `--interval P1D
+--aggregation Total`, per app:
 
 ```
-$ curl -s -o /dev/null -w '%{http_code}' https://func-csa-loom-mcp.azurewebsites.net/api/health
-404     # an ANONYMOUS route, so this is not an auth artifact
+func-cpeval-k6mvh5sm6z7do                  errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
+func-secexp-k6mvh5sm6z7do                  errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
+func-rptsub-k6mvh5sm6z7do                  errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
+func-loom-posture-refresh-k6mvh5sm6z7do    errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
+func-lblprop-k6mvh5sm6z7do                 errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
+func-csa-loom-mcp                          errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
+func-loom-prpt-renderer-k6mvh5sm6z7do      errorCode=Success  datapoints_with_total=13  absent=0  SUM=0
 ```
 
-**Every Function App on the estate has indexed zero functions.** Their timers
-have never fired and their HTTP routes serve nothing. Any capability whose only
-runtime was a Function App has been silently dead — while the Function App
-itself reports `state: Running`, which is why this went unnoticed.
+`absent=0` matters: every one of the 13 daily datapoints carries an **explicit
+`total: 0.0`**, so these are measured zeros, not missing telemetry. Thirteen
+days, seven apps, zero executions — including the apps that hold enabled timers.
+
+### What `function list` actually returns (and why it is NOT the evidence)
+
+Run per app with **stderr visible** — suppressing it is what produced the
+earlier, wrong "every app returns `[]`" claim:
+
+| App | `function list` result |
+|---|---|
+| `func-csa-loom-mcp` | `[]`, exit 0 |
+| `func-loom-posture-refresh-k6mvh5sm6z7do` | `[]`, exit 0 |
+| `func-rptsub-k6mvh5sm6z7do` | `[]`, exit 0 |
+| `func-lblprop-k6mvh5sm6z7do` | `[]`, exit 0 |
+| `func-secexp-k6mvh5sm6z7do` | **1 function, `isDisabled: false`** — `secretExpiryMonitor`, `timerTrigger`, schedule `0 0 6 * * *` |
+| `func-cpeval-k6mvh5sm6z7do` | **2 functions, both `isDisabled: false`** — `copilotEvaluatorHttp` (httpTrigger) and `copilotEvaluatorTimer` (`0 0 7 * * *`) |
+| `func-loom-prpt-renderer-k6mvh5sm6z7do` | **exit 1** — `ERROR: Operation returned an invalid status 'Bad Request'` (`ServiceUnavailable` from the host runtime). **UNKNOWN, not empty.** |
+
+Two consequences:
+
+1. **Do not use this command as the diagnostic.** Two apps report perfectly
+   healthy, enabled functions. An engineer who re-runs it on `func-cpeval` and
+   sees two live functions will reasonably conclude this document is wrong.
+2. **`2>/dev/null` turns the Bad Request into a false negative.** The 400
+   produces empty stdout, which reads as `[]` — the UNKNOWN-as-NEGATIVE trap and
+   a `deploy-integrity.md` R7 violation (asserting a cause you did not
+   establish). That is exactly how the original version of this document came to
+   claim a universal that was false in 3 of 7 cases.
+
+The 400 is also the **control that rescues the other readings**: an unreachable
+host returns an error rather than an empty list, so the four genuine `[]`
+responses are real empties, not silent failures.
+
+### No root cause is asserted
+
+An earlier draft explained this as "Azure Policy seals the AAD-only storage
+data-plane, so host keys and timer leases cannot be established." **That
+explanation is dropped.** `func-secexp` and `func-cpeval` index fine under the
+same policy regime, so the mechanism does not account for its own variance. What
+is established is the **outcome** — zero executions over 13 days — not the cause.
 
 The estate standard is therefore an **in-VNet `Microsoft.App/jobs`** (for
 scheduled work) or a **Container App** (for HTTP services), running as the
 **Console UAMI**.
+
+### Two live hazards this uncovered
+
+* **Double-execution risk on recovery.** `func-secexp`'s enabled timer
+  `0 0 6 * * *` is *identical* to job `loom-secret-expiry-monitor`'s
+  `0 6 * * *`, and `func-cpeval`'s `0 0 7 * * *` matches
+  `loom-copilot-evaluator`'s `0 7 * * *`. Both function definitions are
+  **enabled**. If those hosts ever start executing, the work runs **twice** —
+  concurrently, on the same schedule. This is an argument for removing the
+  retired hosts sooner rather than later (§5).
+* **Two silently dead capabilities.** `func-loom-posture-refresh` and
+  `func-lblprop` are still the **intended** runtime for posture-refresh and
+  scc-labels — they index zero functions *and* execute zero. Those capabilities
+  are not degraded; they are not running at all, and nothing says so.
 
 ---
 
@@ -92,10 +144,12 @@ with `RoleAssignmentExists`. Pass empty instead — see `digestPrincipalId` in
 ## 3. Inventory — measured 2026-08-06
 
 `az containerapp job list` / `az containerapp list` / `az functionapp list` on
-`rg-csa-loom-admin-centralus`. **Every Function App below indexes zero functions
-and is therefore inert**, regardless of its `Running` state.
+`rg-csa-loom-admin-centralus`. **Every Function App below has executed nothing
+for 13 days** (§1) regardless of its `Running` state. Note that "executes
+nothing" is not the same as "indexes nothing" — two of them still hold enabled
+function definitions; see the per-app table in §1.
 
-| # | Source dir | Runtime | Trigger(s) | Function App (inert) | ACA equivalent | Migrated |
+| # | Source dir | Runtime | Trigger(s) | Function App (0 executions) | ACA equivalent | Migrated |
 |---|---|---|---|---|---|---|
 | 1 | `copilot-evaluator` | Node | timer → schedule | `func-cpeval-*` | **job** `loom-copilot-evaluator` `0 7 * * *` | ✅ done (pre-C3) |
 | 2 | `lineage-extractor` | Node | timer → schedule | — | **job** `loom-lineage-extractor` `*/15 * * * *` | ✅ done (pre-C3) |
@@ -121,10 +175,11 @@ remaining** — and of the 5 remaining, only 2 are purely job-shaped.
   `func-rptsub-*` was `azure-functions/report-subscriptions` (per the publish
   step in `csa-loom-post-deploy-bootstrap.yml`). Belongs to the C2 "B-N19d
   scheduled insight digests" residue.
-* **The stale Function Apps are still deployed.** `func-cpeval-*`,
+* **The superseded Function Apps are still deployed.** `func-cpeval-*`,
   `func-secexp-*`, `func-loom-prpt-renderer-*`, `func-csa-loom-mcp`,
-  `func-rptsub-*` all have live ACA replacements and are pure cost + confusion.
-  Removal is deliberately **not** paired with this PR (see §5).
+  `func-rptsub-*` all have live ACA replacements and are cost + confusion — and
+  for the first two, a **double-execution hazard** (§1). Removal is deliberately
+  **not** paired with this PR (see §5).
 
 ---
 
@@ -133,10 +188,11 @@ remaining** — and of the 5 remaining, only 2 are purely job-shaped.
 Ordered by *risk removed per unit of work*. Each step is one PR.
 
 1. **`posture-refresh` (timer half) → job `loom-posture-refresh`.**
-   Highest value: it is the only remaining item with a **live but inert**
-   Function App backing a security-posture surface, so the console is currently
-   reading posture that nothing refreshes. The `*/5` timer is a clean port of
-   the pattern above. Its 3 HTTP routes (`health`, `posture-refresh-admin`,
+   Highest value: `func-loom-posture-refresh-*` is still the **intended** runtime
+   for a security-posture surface, and it indexes zero functions *and* has
+   executed zero times in 13 days — so the console is reading posture that
+   nothing refreshes, silently. The `*/5` timer is a clean port of the pattern
+   above. Its 3 HTTP routes (`health`, `posture-refresh-admin`,
    `posture-refresh` POST) must move with it — fold them into the console BFF
    (they are admin-only and the console already authenticates), or split a small
    Container App. **Do not migrate the timer and leave the HTTP callers pointing
@@ -159,8 +215,8 @@ Ordered by *risk removed per unit of work*. Each step is one PR.
 4. **`scc-labels` → Container App (not a job).** PowerShell, 2× HTTP. Needs a
    PowerShell base image and a rewrite of `run.ps1` into a small HTTP server, or
    a port to Node. Confirm who calls `/labels` and `/dlp` **before** migrating —
-   `func-lblprop-*` is inert, so today's callers are already failing and the
-   answer may be "nobody, delete it".
+   `func-lblprop-*` indexes zero functions and has executed zero times, so
+   today's callers are already failing and the answer may be "nobody, delete it".
 
 5. **`copilot-chat` → confirm target first.** 5× HTTP, and it is *not* in the
    admin RG, so its deployment target must be established before any migration.
@@ -179,8 +235,17 @@ only after its replacement is **proven live on the estate**. This PR deletes
 `report-subscriptions-function.bicep` (the module) because
 `report-subscriptions-job.bicep` is proven live — but the **already-provisioned**
 `func-rptsub-*` resource is left standing for a follow-up removal commit,
-together with the other four stale hosts, so that a single reviewable change
+together with the other four superseded hosts, so that a single reviewable change
 removes them all with their receipts attached.
+
+**That follow-up is more urgent than "cleanup" implies.** `func-secexp` and
+`func-cpeval` still hold **enabled** timer definitions on schedules identical to
+their ACA replacements (`0 0 6 * * *` vs `0 6 * * *`; `0 0 7 * * *` vs
+`0 7 * * *`). They execute nothing today, but nothing in the platform *prevents*
+them from resuming — and if they do, credential-expiry monitoring and the Copilot
+evaluator each run **twice, concurrently, on the same schedule**. Disabling those
+function definitions (or deleting the hosts) is the cheap mitigation and should
+not wait for the full removal PR.
 
 ---
 

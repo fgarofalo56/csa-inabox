@@ -6960,10 +6960,15 @@ module reportSubscriptionLogicApp '../integration/report-subscription-logicapp.b
 // 0 having done nothing) without a Cosmos account.
 //
 // B-FN C3 (2026-08-06): an in-VNet scheduled Container App Job, NOT a Y1
-// Function. Y1 is structurally broken on this estate and this was MEASURED, not
-// assumed: `az functionapp function list` returned `[]` for all seven Function
-// Apps in the admin RG (func-rptsub-… included, so this timer had never fired)
-// and the anonymous health route on func-csa-loom-mcp returned HTTP 404.
+// Function. The Function-hosted runtime executes nothing, and this was MEASURED:
+// FunctionExecutionCount (2026-07-25→08-06, P1D Total) sums to ZERO for all
+// seven Function Apps in the admin RG — errorCode=Success, 13/13 datapoints with
+// an explicit total of 0.0, none absent. func-rptsub-… additionally indexes no
+// functions at all (`function list` → [], exit 0), so this timer never fired.
+// The estate is not uniform — func-secexp/func-cpeval DO hold enabled timers and
+// func-loom-prpt-renderer's list call returns Bad Request (unknown, not empty) —
+// so the execution metric, not `function list`, is the evidence. No root cause is
+// asserted: two hosts index fine under the same policy regime.
 //
 // Running as the CONSOLE UAMI removes the entire post-deploy RBAC step the
 // Function needed: grant-navigator-rbac.sh had to grant the Function's own

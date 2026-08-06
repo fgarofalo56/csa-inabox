@@ -4,14 +4,22 @@
 #
 # WHY a CA Job (NOT a Y1 Function) — B-FN C3, operator decision 2026-07-23,
 # re-measured 2026-08-06:
-#   Y1 Linux Consumption Functions are structurally broken on this estate —
-#   Azure Policy seals the storage data-plane (publicNetworkAccess=Disabled,
-#   AAD-only, no private endpoint) and the multitenant Y1 runtime is not a
-#   trusted service, so host keys / timer leases fail. This is measured, not
-#   assumed: on 2026-08-06 `az functionapp function list` returned `[]` (exit 0)
-#   for ALL SEVEN Function Apps in rg-csa-loom-admin-centralus — including
-#   func-rptsub-*, so this timer had NEVER fired — and the ANONYMOUS health route
-#   on func-csa-loom-mcp returned HTTP 404.
+#   The Function-hosted runtime on this estate executes nothing.
+#
+#   LOAD-BEARING: FunctionExecutionCount (2026-07-25→08-06, P1D, Total) sums to
+#   ZERO for ALL SEVEN Function Apps in rg-csa-loom-admin-centralus —
+#   errorCode=Success, 13 of 13 datapoints carrying an EXPLICIT `total: 0.0`,
+#   none absent. Real measured zeros, not missing data. func-rptsub-*
+#   additionally indexes no functions (`az functionapp function list` -> [],
+#   exit 0), so this timer had never fired once.
+#
+#   Do NOT re-derive this from `function list`: func-secexp-* and func-cpeval-*
+#   hold indexed, ENABLED timers, and func-loom-prpt-renderer-*'s list call
+#   fails with "Bad Request" (unknown, not empty). Only the metric covers all
+#   seven. No root cause is asserted — two hosts index fine under the same
+#   Azure Policy regime, so a "sealed storage data-plane" story would not
+#   explain its own variance.
+#
 #   The in-VNet ACA-job pattern (this script mirrors deploy-secret-expiry-job.sh)
 #   reuses the console UAMI — already AcrPull + Cosmos Built-in Data Contributor
 #   + Storage Blob Data Contributor + Logic App Contributor on the delivery

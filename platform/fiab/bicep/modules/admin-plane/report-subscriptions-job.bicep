@@ -12,18 +12,30 @@
 // and appends a ReportDeliveryLog row the [subId]/logs route surfaces.
 //
 // ── WHY AN ACA JOB, NOT A Y1 FUNCTION (B-FN C3, operator decision 2026-07-23) ──
-// Y1 Linux Consumption Functions are structurally broken on this estate: Azure
-// Policy seals the storage data-plane (publicNetworkAccess=Disabled, AAD-only,
-// no private endpoint) and the multitenant Y1 runtime is not a trusted service,
-// so host keys / timer leases fail. This is not theoretical — measured on
+// The Function-hosted runtime on this estate executes nothing. Measured
 // 2026-08-06 against rg-csa-loom-admin-centralus:
 //
-//   • `az functionapp function list` returned `[]` (exit 0, a real empty list)
-//     for ALL SEVEN Function Apps, including func-rptsub-… — the host had
-//     indexed ZERO functions, so this timer had NEVER fired;
-//   • the ANONYMOUS health route on func-csa-loom-mcp returned HTTP 404,
-//     confirming the hosts serve nothing rather than the read being an RBAC
-//     artifact.
+//   • LOAD-BEARING — FunctionExecutionCount (2026-07-25→08-06, P1D, Total) sums
+//     to ZERO for ALL SEVEN Function Apps. errorCode=Success, 13 of 13
+//     datapoints carrying an EXPLICIT `total: 0.0`, none absent — real measured
+//     zeros, not missing data. Nothing has executed in 13 days.
+//   • func-rptsub-… additionally indexes no functions at all
+//     (`az functionapp function list` → `[]`, exit 0), so this timer had never
+//     fired even once.
+//
+// The estate is NOT uniform, and `function list` alone would MISLEAD anyone who
+// re-ran it: func-secexp-… and func-cpeval-… hold indexed, ENABLED functions
+// (timers `0 0 6 * * *` and `0 0 7 * * *`), and func-loom-prpt-renderer-…'s
+// list call FAILS outright — exit 1, `Operation returned an invalid status
+// 'Bad Request'` (ServiceUnavailable from the host runtime), which is UNKNOWN,
+// not empty. Only the execution metric covers all seven. Note the 400 is also
+// the control that validates the empties: an unreachable host errors rather
+// than returning `[]`.
+//
+// NO ROOT CAUSE IS ASSERTED HERE. Two hosts index fine under the same Azure
+// Policy regime, so a "policy seals the storage data-plane, therefore the host
+// cannot index" explanation would not account for its own variance. What is
+// established is the outcome — zero executions — not the mechanism.
 //
 // ALL scheduled/background compute uses the in-VNet ACA-job pattern (this module
 // mirrors secret-expiry-monitor-job.bicep and lineage-extractor-job.bicep, proven

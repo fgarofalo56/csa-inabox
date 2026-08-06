@@ -2,13 +2,13 @@
  * Minimal structured logger for the one-shot Container App Job entrypoint.
  *
  * B-FN migration (C3, 2026-08-06): report-subscriptions used to run as a Y1
- * Consumption Function and logged through `InvocationContext`. Y1 is
- * structurally broken on this estate (Azure Policy seals the storage data-plane
- * — publicNetworkAccess Disabled, AAD-only, no private endpoint — and the
- * multitenant Y1 runtime is not a trusted service, so host keys / timer leases
- * fail; measured 2026-08-06: `az functionapp function list` returns [] for
- * EVERY Function App on this estate and the anonymous health routes 404). The
- * delivery runtime is now an in-VNet `Microsoft.App/jobs` execution.
+ * Consumption Function and logged through `InvocationContext`. The
+ * Function-hosted runtime on this estate executes nothing — measured
+ * 2026-08-06, FunctionExecutionCount (2026-07-25→08-06, P1D Total) sums to ZERO
+ * for all seven Function Apps in rg-csa-loom-admin-centralus (errorCode=Success,
+ * 13/13 datapoints with an explicit total of 0.0, none absent), and func-rptsub-…
+ * indexes no functions at all. The delivery runtime is now an in-VNet
+ * `Microsoft.App/jobs` execution.
  *
  * This interface is the exact log/error subset the handler used, so the body
  * ported unchanged. Mirrors azure-functions/secret-expiry-monitor/src/run-logger.ts.

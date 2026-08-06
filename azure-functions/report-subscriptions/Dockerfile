@@ -4,11 +4,12 @@
 # only (the console UAMI) — no storage keys, no Functions host.
 #
 # B-FN migration (C3, 2026-08-06): replaces the Y1 Consumption Function
-# packaging. Y1 is structurally broken on this estate (sealed storage
-# data-plane, AAD-only, no private endpoint, Y1 is not a trusted service), so
-# all scheduled compute runs as an in-VNet ACA job. Measured 2026-08-06:
-# `az functionapp function list` returned [] for every Function App in
-# rg-csa-loom-admin-centralus, so the retired timer had never fired.
+# packaging. The Function-hosted runtime on this estate executes nothing —
+# measured 2026-08-06, FunctionExecutionCount (2026-07-25→08-06, P1D Total) sums
+# to ZERO for all seven Function Apps in rg-csa-loom-admin-centralus
+# (errorCode=Success, 13/13 datapoints with an explicit total of 0.0, none
+# absent), and func-rptsub-… indexes no functions at all, so the retired timer
+# had never fired. All scheduled compute runs as an in-VNet ACA job.
 # Mirrors azure-functions/secret-expiry-monitor.
 #
 # Build context: azure-functions/report-subscriptions (self-contained).

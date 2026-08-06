@@ -2034,34 +2034,38 @@ jobs:
           # used to `func azure functionapp publish` into func-rptsub-* and then
           # overwrite LOOM_REPORT_SUBSCRIPTIONS_FUNCTION on loom-console with
           # https://<that host>. Both halves were harmful:
-          #   • the Function host on this estate indexes ZERO functions (Azure
-          #     Policy seals its AAD-only storage data-plane), measured
-          #     2026-08-06 — so the published code never ran;
+          #   • the Function-hosted runtime executes nothing — measured
+          #     2026-08-06, FunctionExecutionCount (2026-07-25→08-06, P1D Total)
+          #     sums to ZERO across all seven Function Apps in the admin RG
+          #     (errorCode=Success, 13/13 datapoints with an explicit total of
+          #     0.0, none absent), and func-rptsub-* indexes no functions at all
+          #     — so the published code never ran;
           #   • the overwrite replaced the value bicep sets with a URL pointing
-          #     at that inert host, so the console's delivery gate read "wired"
+          #     at that host, so the console's delivery gate read "wired"
           #     while nothing could deliver.
           # bicep now sets the env var to the JOB NAME. The image is built by
           # .github/workflows/deploy-report-subscriptions.yml. This step only
-          # VERIFIES and reports — it does not write.
+          # VERIFIES — it does not write — and it FAILS when the job is absent:
+          # a missing delivery runtime means scheduled report delivery is dead,
+          # which is precisely the silent condition this replaced.
           az extension add --name containerapp --only-show-errors || true
-          JOB=$(az containerapp job show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
-                  -n loom-report-subscriptions --query name -o tsv || true)
-          if [ -z "$JOB" ]; then
-            echo "::warning::loom-report-subscriptions job not found in $ADMIN_RG. Scheduled report delivery is NOT running. Deploy admin-plane/main.bicep with reportSubscriptionsEnabled=true, then dispatch deploy-report-subscriptions.yml to build the image."
-          else
-            IMAGE=$(az containerapp job show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
-                      -n "$JOB" --query "properties.template.containers[0].image" -o tsv || true)
-            CRON=$(az containerapp job show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
-                     -n "$JOB" --query "properties.configuration.scheduleTriggerConfig.cronExpression" -o tsv || true)
-            echo "  report-subscriptions delivery job: $JOB  image=$IMAGE  cron=$CRON"
-            WIRED=$(az containerapp show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
-                      --query "properties.template.containers[0].env[?name=='LOOM_REPORT_SUBSCRIPTIONS_FUNCTION'].value | [0]" -o tsv || true)
-            if [ -z "$WIRED" ] || [ "$WIRED" = "None" ]; then
-              echo "::warning::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION is empty on loom-console, so the subscriptions editor shows an honest delivery gate even though the job exists. Re-run the admin-plane deploy (bicep sets it from the job name)."
-            else
-              echo "  loom-console delivery gate reads: $WIRED"
-            fi
+          if ! JOB=$(az containerapp job show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+                       -n loom-report-subscriptions --query name -o tsv); then
+            echo "::error::loom-report-subscriptions job not found in $ADMIN_RG (or unreadable). Scheduled report delivery is NOT running: subscriptions will keep saving to Cosmos and the editor will keep listing them as enabled while nothing is delivered. Deploy admin-plane/main.bicep with reportSubscriptionsEnabled=true, then dispatch deploy-report-subscriptions.yml to build the image."
+            exit 1
           fi
+          IMAGE=$(az containerapp job show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+                    -n "$JOB" --query "properties.template.containers[0].image" -o tsv || true)
+          CRON=$(az containerapp job show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+                   -n "$JOB" --query "properties.configuration.scheduleTriggerConfig.cronExpression" -o tsv || true)
+          echo "  report-subscriptions delivery job: $JOB  image=$IMAGE  cron=$CRON"
+          WIRED=$(az containerapp show -g "$ADMIN_RG" --subscription "$ADMIN_SUB" -n loom-console \
+                    --query "properties.template.containers[0].env[?name=='LOOM_REPORT_SUBSCRIPTIONS_FUNCTION'].value | [0]" -o tsv || true)
+          if [ -z "$WIRED" ] || [ "$WIRED" = "None" ]; then
+            echo "::error::LOOM_REPORT_SUBSCRIPTIONS_FUNCTION is empty on loom-console, so the subscriptions editor shows an honest delivery gate even though the job exists. Re-run the admin-plane deploy (bicep sets it from the job name)."
+            exit 1
+          fi
+          echo "  loom-console delivery gate reads: $WIRED"
 
       - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
         run: |
