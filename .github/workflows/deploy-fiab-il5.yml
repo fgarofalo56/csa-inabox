@@ -250,12 +250,24 @@ jobs:
           LOOM_MSAL_CLIENT_SECRET: ${{ secrets.LOOM_GOV_MSAL_CLIENT_SECRET }}
         run: |
           set -e
+          # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6): same harness
+          # as Commercial — bounded retry of transient/eventual-consistency only,
+          # fail-closed on exhaustion, classified deploy-failure.json artifact,
+          # ARM leaf drill-down on the direct deployment.
           if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
             # dlz-attach adds ONE DLZ to an existing hub — it must NOT teardown the
             # hub (redeploy-gov.sh is teardown->redeploy and would wipe it). Deploy
             # the DLZ directly INTO the new target sub so subscription() resolves to
             # it (per main.bicep's dlz-attach scope), mirroring Commercial.
-            az deployment sub create \
+            node scripts/ci/deploy-retry.mjs \
+              --class-allow transient,eventual-consistency \
+              --max-attempts 4 --backoff 45 --jitter 0.3 --wall-clock 110m \
+              --step "az deployment sub create (il5 $CSA_LOOM_TOPOLOGY)" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              --remediate \
+              --arm-deployment "csa-loom-il5-ci-${{ github.run_id }}" --arm-scope sub \
+              --arm-subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
+              -- az deployment sub create \
               --name csa-loom-il5-ci-${{ github.run_id }} \
               --location "$AZURE_LOCATION" \
               --subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
@@ -265,7 +277,16 @@ jobs:
               --parameters topology="$CSA_LOOM_TOPOLOGY" \
               --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
           else
-            bash scripts/csa-loom/redeploy-gov.sh --boundary il5 --yes
+            # redeploy-gov.sh is a full teardown->redeploy: idempotent but not
+            # cheap, so 2 attempts — the value here is the CLASSIFIED artifact
+            # and the honest final message, not the second try.
+            node scripts/ci/deploy-retry.mjs \
+              --class-allow transient,eventual-consistency \
+              --max-attempts 2 --backoff 60 --jitter 0.3 --wall-clock 110m \
+              --step "redeploy-gov.sh (il5 teardown->redeploy)" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              --remediate \
+              -- bash scripts/csa-loom/redeploy-gov.sh --boundary il5 --yes
           fi
 
       - name: Export bootstrap coordinates (for the chained Gov bootstrap)

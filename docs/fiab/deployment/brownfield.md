@@ -647,7 +647,7 @@ shipped behaviour.
 | Every emitter writes the bag, not the scalars | `byo-wizard.sh:364`, `scan-and-deploy.sh`, `lib/setup/adopt-bag.ts` (`deriveAdoptBag`, consumed by every tier of `app/api/setup/deploy/route.ts`), `lib/setup/service-choices-to-params.ts:79` |
 | One adoption catalog, guarded | `lib/deploy/adoption-catalog.ts`; `scripts/ci/check-adoption-catalog-sync.mjs` runs in `loom-guardrails.yml` |
 | `/setup` reachable on an estate that already has a hub | the redirect is removed; `scripts/ci/check-setup-entrypoints.mjs` fails the build if `redirect(` reappears |
-| Failure classification + bounded retry | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs` — **on the Commercial deploy workflows only**, see below |
+| Failure classification + bounded retry | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs` — on the Commercial AND Gov deploy workflows (#3017; the Gov wiring is merged, not deployed — first Gov run owed on Actions). Guard: `scripts/ci/__tests__/gov-deploy-retry-wiring.test.mjs` |
 
 ### Fixed on this branch — the deploy no longer discards your brownfield picks (#3016 — merged, not deployed until the next roll)
 
