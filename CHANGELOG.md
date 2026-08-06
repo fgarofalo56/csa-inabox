@@ -25,6 +25,23 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.88.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.2...csa-inabox-v0.88.0) (2026-08-06)
+
+
+### Features
+
+* **fedlake:** make federated lake access actually work - Iceberg REST Catalog + Trino default-ON, wired to each other (closes [#2678](https://github.com/fgarofalo56/csa-inabox/issues/2678)) ([#3012](https://github.com/fgarofalo56/csa-inabox/issues/3012)) ([2d6785c](https://github.com/fgarofalo56/csa-inabox/commit/2d6785cd2114aa71f9420fedd9047aac5b0db1f3))
+
+
+### Bug Fixes
+
+* **ci:** brace-match the $GITHUB_ENV group instead of guessing from line shape (fixes [#3040](https://github.com/fgarofalo56/csa-inabox/issues/3040), P0 — main is red) ([#3041](https://github.com/fgarofalo56/csa-inabox/issues/3041)) ([eba7cfb](https://github.com/fgarofalo56/csa-inabox/commit/eba7cfbd16e4b456d56b9a368ff359baea75d7a2))
+
+
+### Continuous Integration
+
+* **guardrails:** mechanical guard for the read-but-never-assigned class that killed the app-image path (refs [#3030](https://github.com/fgarofalo56/csa-inabox/issues/3030)) ([#3032](https://github.com/fgarofalo56/csa-inabox/issues/3032)) ([5038ea4](https://github.com/fgarofalo56/csa-inabox/commit/5038ea43f989fa2345300f05ba2dcce0eaee6814))
+
 ## [0.87.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.1...csa-inabox-v0.87.2) (2026-08-06)
 
 
