@@ -1,5 +1,34 @@
 # OPEN REGISTER — everything not completed / not fully baked (audit 2026-07-12)
 
+> ## ⚠ SUPERSEDED 2026-08-06 — the live register is now FINISHLINE
+>
+> **`PRPs/active/finishline/AUDIT-2026-08-06.md`** is the current source of truth
+> for open work, and `PRPs/active/finishline/PRP.md` is the execution contract
+> (the PIV loop + the six validate levels). That audit swept all 33 open issues,
+> every PRP in the authority chain, the live Commercial estate, Gov workflow
+> history and eval-run truth, and **discarded ~200 stale checkbox items with
+> evidence** — including many below.
+>
+> This file is retained for its P0/P2/P3 framing and its 07-14 / 07-20 re-baseline
+> history. **Do not plan from it.** Where the two disagree, FINISHLINE wins.
+>
+> ### The operator-P1 verdict table this register promised (2026-07-20)
+>
+> The 07-20 header opened a standing operator P1 — *catalog-wide functional E2E:
+> every item type and app proven create→configure→publish→RUN→USE against its
+> real Azure backend* — and said "verdict table to land in this register."
+> **It never landed.** Recording that honestly, with the measured state as of
+> 2026-08-06, rather than leaving the promise dangling:
+>
+> | | |
+> |---|---|
+> | **Status of the goal** | **NOT MET, and not measured.** No catalog-wide functional-E2E verdict table exists anywhere in the repo. |
+> | **Why no table is published here** | A verdict per item type requires the live click-walk receipts (`ux-baseline.md` G1). Those runs have not happened. Publishing a table filled from code-reading would be exactly the doc-truth failure this register exists to prevent — a green table over an unmeasured estate. |
+> | **Where it is now tracked** | FINISHLINE **`C1`** — "loom-apex Phase E: full G1 click-walk re-grade of the catalog, ADVERSARIAL-REVIEW.md (absent), FRESH0 + ledger close — the program's exit criteria." |
+> | **What partial evidence does exist** | Per-surface receipts in `docs/fiab/parity/*.md` (the parity-doc corpus), and `PRPs/active/foundry-parity/AUDIT.md`'s live-pass section. Both are per-surface and incomplete — neither is the catalog-wide sweep. |
+> | **What would close it** | The C1 sweep runs, one row per item type, each carrying a `loom-ui-verify` run URL or Playwright receipt. The table lands with the sweep, in the FINISHLINE ledger — not here. |
+> | **Tasks referenced by the 07-20 header** | #12 (apps) / #13 (data items) — folded into C1. |
+
 > **RE-BASELINE 2026-07-20.** Shipped since 07-14 (all merged + rolled, receipts
 > in `PRPs/active/foundry-parity/AUDIT.md` + memory): loom-apps-parity PRP
 > COMPLETE (APP-W3–W6: weave-native apps, Copilot-authored, visual↔code eject,

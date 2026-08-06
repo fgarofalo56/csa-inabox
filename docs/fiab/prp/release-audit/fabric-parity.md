@@ -1,5 +1,33 @@
 # Release audit — dimension: fabric-parity
 
+> ## ⚠ RE-BASELINE 2026-08-06 — the four headline findings below have all CLOSED
+>
+> This audit is dated **2026-07-02**. Every one of its named findings was re-run
+> against the tree on 2026-08-06 — the same command it published, so the drift is
+> checkable, not asserted. **F1–F4 have shipped since.** The findings are left in
+> place below (an audit is a record of a moment); read this table first.
+>
+> | # | 07-02 finding | 08-06 measured truth | Evidence / re-run |
+> |---|---|---|---|
+> | **F1** | scorecard "has no Cosmos/Azure-native fallback path"; route is Power BI REST, a `no-fabric-dependency.md` violation | **CLOSED.** The route is **Azure-native by default** (rel-T03/B11): with no `workspaceId` it lists the tenant's **Cosmos-backed** scorecards with zero Power BI calls; a Power BI `groupId` adds the opt-in Fabric-family leg — exactly the dashboard-editor treatment the finding prescribed | `app/api/items/scorecard/route.ts:1-9` (header states the default), `:14` `listContentBackedItems` / `scorecardListEntry` from `../_lib/pbi-content-fallback`. The `powerbi-client` import at `:13` is now the **opt-in** leg, not the default path |
+> | **F2** | "no unified job scheduler… exactly two schedule surfaces" | **CLOSED.** A single cross-item scheduler shipped (rel-T81): any schedulable item registers a schedule; a server-side tick evaluator fires the **real** backend (ADF / Synapse Livy / AML Spark / ADX) and records the run | `lib/azure/scheduler-store.ts:1-20` (Cosmos `schedules` PK `/tenantId` + `schedule-runs` PK `/scheduleId`, 90-day TTL, `createIfNotExists` so no extra ARM step), `lib/scheduler/{run-adapters,schedule-dialog,schedule-input}`, routes `app/api/scheduler/{,[id]}` and `app/api/internal/scheduler/tick`. Re-run of the finding's own command (`find app/api -type d -name "*schedule*"`) now returns **five** surfaces, not two |
+> | **F3** | warehouse `[id]/` has "only cancel, iqy, model, query, query-acceleration, schema, script-out — none of the Phase-3 routes" | **CLOSED.** Re-running the same directory listing returns `cancel, clone, copy-into, iqy, model, query, query-acceleration, restore-points, schema, script-out, snapshots, time-travel` — **clone, copy-into, restore-points, snapshots and time-travel all now exist** | `app/api/items/warehouse/[id]/` |
+> | **F4** | "`grep -riE "wrangler"` over `apps/fiab-console/{lib,app}` returns **zero files**" | **CLOSED.** The same grep now returns 12+ files, and Data Wrangler additionally has its own container app (`loom-wrangler-host`, referenced by readiness + env-checks) | `lib/components/notebook/data-wrangler-panel.tsx`, `lib/components/notebook/wrangler-ai-tab.tsx`, `lib/editors/components/data-wrangler-ai-panel.tsx`, wired into `lib/editors/{notebook-editor,synapse-notebook-editor}.tsx`; host referenced in `lib/admin/readiness.ts`, `lib/admin/env-checks/core.ts`, `lib/admin/deploy-status.ts` |
+>
+> **F5 was right, and is still right — for this file too.** F5's own finding was
+> that "the parity ledger is stale in BOTH directions"; this re-baseline is the
+> fourth independent confirmation of that in six weeks. The lesson recorded, so it
+> is acted on rather than re-discovered: **a parity ledger with no staleness gate
+> decays faster than it is read.** A guard now exists —
+> `scripts/ci/check-parity-doc-freshness.mjs` — and is the right place to enforce
+> this.
+>
+> **Caveat on this re-baseline.** These are **code-truth** corrections (grep +
+> read the module and its call site). Per `ux-baseline.md` G1 none of them is a
+> live-browser receipt; those remain owed under FINISHLINE `C1`.
+>
+> Current open work lives in `PRPs/active/finishline/AUDIT-2026-08-06.md`.
+
 **Date:** 2026-07-02 · **Auditor:** release-audit subagent (fabric-parity dimension)
 **Scope:** completeness of CSA Loom's Microsoft-Fabric parity vs Fabric's CURRENT
 (mid-2026) experience list, verified against code in `apps/fiab-console` (not
