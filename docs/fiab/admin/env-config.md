@@ -14,6 +14,26 @@ BFF reads at runtime.
 
 - **View desired state** — every `LOOM_*` the console reads, its current value
   (or "unset"), and whether it's secret-typed.
+
+## Status semantics & the coverage score (honest scoring)
+
+Every editable variable carries one server-computed status
+(`lib/admin/env-config.ts:envVarStatus` — unit-tested, shared by the BFF route):
+
+| Status | Meaning | Counts configured? |
+|---|---|---|
+| `set` | The value is present in the running deployment. | ✅ |
+| `satisfied` | Unset, but an `anyOf` sibling/alias IS set — the either/or requirement is met (e.g. `LOOM_TENANT_ADMIN_GROUP_ID` while `_OID` is set, or the Power BI embed vars while the Grafana embed path is active). | ✅ |
+| `default` | Unset, and the unset state is the fully-functional built-in default (`optionalDefault` — an H-band silent-fallback substrate). The feature is ON via the fallback. | ✅ |
+| `opt-in` | Unset, and the owning check is **opt-in by design** (`spec.optIn` — a policy-accepted carve-out such as the Postgres Flexible Server cost carve-out, the Power BI Fabric-family backend, or the s3proxy gateway). **Neither configured nor a gap**: excluded from BOTH sides of the coverage ratio and rendered with a neutral badge. Once a value is set it scores like any other key. | ➖ excluded |
+| `derived` | Unset, and bicep is supposed to auto-derive the value on a push-button deploy — **but the value is NOT present**, which means the derivation has not happened (the deploy failed, was skipped, or predates the module). This is a **gap**, never counted configured. | ❌ |
+| `unset` | A plain unmet requirement. | ❌ |
+
+The "N of M configured" badge and the progress bar score only the non-opt-in
+catalog: `configured = set + satisfied + default`, `M = catalog − opt-in`.
+A separate "K opt-in (not scored)" badge names the excluded carve-outs. This is
+what makes 100% **honest**: a policy opt-in can never drag the score down
+forever, and a derived variable a deploy failed to fill can never prop it up.
 - **Set / change a value** — writes the desired value to the Cosmos `env-config`
   doc and projects it onto the `loom-console` Container App as a **new ACA
   revision**, so the change is durable (survives a restart) and audited.

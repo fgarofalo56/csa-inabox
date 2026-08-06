@@ -7,6 +7,8 @@ import {
   buildSyncArtifacts,
   ENV_ALIAS_GROUPS,
   aliasSatisfiedKeys,
+  envVarStatus,
+  isConfiguredStatus,
 } from '../env-config';
 
 describe('admin/env-config registry', () => {
@@ -484,5 +486,61 @@ describe('admin/env-config registry', () => {
       // pair counts as configured day-one.
       'SYNTHETIC_LOGIN_SECRET', 'SYNTHETIC_LOGIN_UPN',
     ]);
+  });
+
+  // ── D15 honest scoring — opt-in carried + derived-unset not configured ─────
+
+  it('carries optIn from the spec so policy opt-ins score neutral, not "unconfigured forever" (D15)', () => {
+    // The opt-in-by-design carve-outs (spec.optIn): the Postgres Flexible
+    // Server cost carve-out, the Power BI Fabric-family backend, and the
+    // s3proxy gateway Preview lab. Before this fix add() dropped the flag, so
+    // these keys read as a permanent "not set" gap on /admin/env-config.
+    for (const k of ['LOOM_POSTGRES_HOST', 'LOOM_BI_BACKEND', 'LOOM_S3_GATEWAY_URL']) {
+      expect(getEditableEnv(k)?.optIn, k).toBe(true);
+    }
+    // LOOM_PGVECTOR_HOST is deliberately NOT optIn: first-spec-wins dedupe —
+    // svc-pgvector (a plain optional backend row) registers it before
+    // svc-postgres's anyOf references it.
+    expect(getEditableEnv('LOOM_PGVECTOR_HOST')?.optIn).toBeUndefined();
+    // Normal operator/day-one vars are NOT opt-in.
+    expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.optIn).toBeUndefined();
+    expect(getEditableEnv('LOOM_SYNAPSE_WORKSPACE')?.optIn).toBeUndefined();
+  });
+
+  it("an unset opt-in key reads 'opt-in' — neither configured nor a gap (D15)", () => {
+    const e = getEditableEnv('LOOM_POSTGRES_HOST')!;
+    expect(envVarStatus(e, false, false)).toBe('opt-in');
+    expect(isConfiguredStatus('opt-in')).toBe(false); // never counted configured…
+    // …and the pane excludes it from the coverage DENOMINATOR too (neutral).
+    // Once the operator actually opts in (value present) it scores like any key.
+    expect(envVarStatus(e, true, false)).toBe('set');
+    expect(isConfiguredStatus('set')).toBe(true);
+    // An alias sibling satisfying the group outranks the opt-in state.
+    expect(envVarStatus(e, false, true)).toBe('satisfied');
+  });
+
+  it("a derived key with NO value present reads 'derived' and does NOT count configured (D15)", () => {
+    // Before this fix the pane counted status 'derived' as satisfied — a var
+    // bicep SHOULD have filled but did not (failed/skipped deploy) scored
+    // "configured", hiding exactly the state the surface exists to show.
+    const e = getEditableEnv('LOOM_ORG_VISUALS_URL')!;
+    expect(e.derived).toBe(true);
+    expect(envVarStatus(e, false, false)).toBe('derived');
+    expect(isConfiguredStatus('derived')).toBe(false);
+    // With the value actually present it is simply 'set'.
+    expect(envVarStatus(e, true, false)).toBe('set');
+  });
+
+  it("optionalDefault unset stays configured ('default'); satisfied + unset keep their meaning", () => {
+    // The fully-functional built-in fallback (H-band substrates) is still
+    // honestly counted configured — the FEATURE is on via the fallback.
+    const d = getEditableEnv('LOOM_ONELAKE_URL')!;
+    expect(envVarStatus(d, false, false)).toBe('default');
+    expect(isConfiguredStatus('default')).toBe(true);
+    // Alias-satisfied counts; plain unset does not.
+    expect(isConfiguredStatus('satisfied')).toBe(true);
+    expect(isConfiguredStatus('unset')).toBe(false);
+    const plain = getEditableEnv('LOOM_COSMOS_ENDPOINT')!;
+    expect(envVarStatus(plain, false, false)).toBe('unset');
   });
 });

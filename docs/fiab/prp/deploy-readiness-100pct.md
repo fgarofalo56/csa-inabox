@@ -12,6 +12,23 @@
 > var) rather than missing infra — see the "Gate = misconfig not missing infra" pattern.
 > The acceptance run below (clean-sub `scan-and-deploy.sh --defaults` + quarterly teardown,
 > Commercial AND Gov) remains an operator prereq per `OPEN-REGISTER-2026-07-12.md` §P0.
+>
+> **Honest-scoring amendment (2026-08-06, FINISHLINE D15).** The day-one score is
+> now honest in BOTH directions:
+> 1. `/admin/env-config` has a first-class **`opt-in` status** — a policy-accepted
+>    opt-in (`spec.optIn`: the Postgres cost carve-out, the Power BI Fabric-family
+>    backend, the s3proxy gateway) is neither configured nor unconfigured; it is
+>    excluded from both sides of the coverage ratio instead of scoring
+>    "unconfigured forever".
+> 2. A **`derived` variable with no value present no longer counts configured** —
+>    derived-but-unset means the deploy did not fill it, which is a gap the
+>    surface must show, not hide.
+> 3. `/admin/readiness` no longer promotes `blocked + canAutoResolve → ready`
+>    without consulting the gate's live probe: when a probe exists its real
+>    result decides (pass → ready/live-probe, warn → partial, fail → blocked);
+>    only probe-less auto-resolvable gates keep the disclosed config-only
+>    promotion.
+> Status semantics table: `docs/fiab/admin/env-config.md`.
 
 ## Vision (verbatim intent)
 A **single push-button deploy** produces a CSA Loom where **everything works on first login** — no missing configs, no unconfigured services, no manual troubleshooting. Where a backend choice exists, the deploy **scans every subscription first**, shows what already exists, and **asks the user**: use an existing service, provision a new one, or disable it — **with a recommendation**. Default posture is **everything ON (opt-out)** — the user disables what they don't want; nothing is left unconfigured by default. Customers must never have to figure out missing configs, options, or settings.

@@ -39,9 +39,9 @@ type Category = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | '
 interface EditableEnvVar {
   key: string; category: Category; severity: 'critical' | 'recommended' | 'optional';
   label: string; valueHint: string; secret: boolean; required: boolean; il5Restricted?: boolean;
-  provisionedBy?: string; role?: string; derived?: boolean;
+  provisionedBy?: string; role?: string; derived?: boolean; optIn?: boolean;
 }
-interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'satisfied' | 'default' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }
+interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'satisfied' | 'default' | 'opt-in' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }
 interface EnvConfigGet {
   ok: boolean; error?: string;
   editable: EditableEnvVar[];
@@ -114,30 +114,51 @@ export function EnvConfigPane() {
 
   const dirtyKeys = useMemo(() => Object.keys(edits).filter((k) => edits[k]?.trim()), [edits]);
 
-  // A key's requirement is met when it's directly set, bicep-derived, OR an
-  // `anyOf` sibling/alias is set (satisfiedByAlias). Only a truly unmet key
-  // counts as a gap — this is what stops the false "critical not set" for the
-  // either/or vars (e.g. GROUP_ID when OID is set).
+  // A key's requirement is met when it's directly set, an `anyOf` sibling/alias
+  // is set (satisfiedByAlias), OR the unset state is the fully-functional
+  // built-in default ('default'). Only a truly unmet key counts as a gap — this
+  // is what stops the false "critical not set" for the either/or vars (e.g.
+  // GROUP_ID when OID is set). Deliberately NOT satisfied (D15 honest-scoring):
+  //   - 'derived' — bicep derives the value on deploy, but the value is NOT
+  //     present here, so the derivation has not happened. Counting it configured
+  //     hid exactly the failed-deploy state this surface exists to show.
+  //   - 'opt-in' — a policy-accepted opt-in is neither configured nor a gap; it
+  //     is excluded from the coverage denominator below instead.
   const isSatisfied = useCallback((key: string) => {
     const c = data?.current[key];
-    return !!c && (c.set || c.status === 'derived' || c.status === 'satisfied' || c.status === 'default' || !!c.satisfiedByAlias);
+    return !!c && (c.set || c.status === 'satisfied' || c.status === 'default' || !!c.satisfiedByAlias);
   }, [data]);
 
+  // Policy opt-in (spec.optIn): neutral third state — never "configured", never
+  // "unconfigured". The status is server-computed; e.optIn is the fallback for
+  // a stale payload.
+  const isOptIn = useCallback((key: string) => {
+    const c = data?.current[key];
+    if (!c) return false;
+    return c.status === 'opt-in' || (!isSatisfied(key) && !!data?.editable.find((e) => e.key === key)?.optIn);
+  }, [data, isSatisfied]);
+
   const coverage = useMemo(() => {
-    if (!data) return { set: 0, total: 0, missingCritical: 0 };
-    // "Configured" = a requirement that is met: directly set, bicep-derived, OR
-    // satisfied by an `anyOf` sibling/alias. The last case is what makes the
-    // mutually-exclusive report backends honest: when the Grafana embed path is
-    // active (LOOM_*_REPORT_KIND=grafana + the dashboard UID set), the four
-    // Power BI embed vars are the UNUSED alternative backend and report
-    // "satisfied (alias set)" — so they count toward coverage rather than
-    // showing as a false "not set" (per no-vaporware.md / no-fabric-dependency.md).
-    const set = data.editable.filter((e) => isSatisfied(e.key)).length;
-    const missingCritical = data.editable.filter(
+    if (!data) return { set: 0, total: 0, missingCritical: 0, optIn: 0 };
+    // "Configured" = a requirement that is met: directly set, satisfied by an
+    // `anyOf` sibling/alias, or a fully-functional built-in default. The alias
+    // case is what makes the mutually-exclusive report backends honest: when the
+    // Grafana embed path is active (LOOM_*_REPORT_KIND=grafana + the dashboard
+    // UID set), the four Power BI embed vars are the UNUSED alternative backend
+    // and report "satisfied (alias set)" — so they count toward coverage rather
+    // than showing as a false "not set" (no-vaporware.md / no-fabric-dependency.md).
+    // Policy opt-ins are excluded from BOTH sides of the ratio (a deliberately
+    // undeployed carve-out is not a gap, and pretending it is configured would
+    // be the cosmetic-100% lie the other way). Derived-but-unset counts as a
+    // GAP — the deploy that should have filled it did not.
+    const optIn = data.editable.filter((e) => !isSatisfied(e.key) && isOptIn(e.key)).length;
+    const scored = data.editable.filter((e) => isSatisfied(e.key) || !isOptIn(e.key));
+    const set = scored.filter((e) => isSatisfied(e.key)).length;
+    const missingCritical = scored.filter(
       (e) => e.severity === 'critical' && !isSatisfied(e.key),
     ).length;
-    return { set, total: data.editable.length, missingCritical };
-  }, [data, isSatisfied]);
+    return { set, total: scored.length, missingCritical, optIn };
+  }, [data, isSatisfied, isOptIn]);
 
   const save = useCallback(async () => {
     if (dirtyKeys.length === 0) return;
@@ -181,7 +202,10 @@ export function EnvConfigPane() {
   const filtersActive = q.length > 0 || unsetOnly || criticalOnly;
   const matches = (e: EditableEnvVar) => {
     if (criticalOnly && e.severity !== 'critical') return false;
-    if (unsetOnly && isSatisfied(e.key)) return false;
+    // "Unset only" shows GAPS. A policy opt-in is not a gap (neither configured
+    // nor unconfigured), so it stays out of this scope; derived-but-unset IS a
+    // gap (the deploy did not fill it) and shows here.
+    if (unsetOnly && (isSatisfied(e.key) || isOptIn(e.key))) return false;
     if (q && !(e.key.toLowerCase().includes(q) || e.label.toLowerCase().includes(q))) return false;
     return true;
   };
@@ -221,6 +245,11 @@ export function EnvConfigPane() {
                 icon={<CheckmarkCircle24Filled />}>
                 {coverage.set} of {coverage.total} configured
               </Badge>
+              {coverage.optIn > 0 && (
+                <Badge appearance="tint" size="medium" color="informative" icon={<Info16Regular />}>
+                  {coverage.optIn} opt-in (not scored)
+                </Badge>
+              )}
               {coverage.missingCritical > 0 && (
                 <Badge appearance="tint" size="medium" color="danger" icon={<Warning24Filled />}>
                   {coverage.missingCritical} critical not set
@@ -242,11 +271,13 @@ export function EnvConfigPane() {
               <ProgressBar
                 value={coveragePct} thickness="large"
                 color={coverage.missingCritical > 0 ? 'warning' : coverage.set === coverage.total ? 'success' : 'brand'}
-                aria-label={`${coverage.set} of ${coverage.total} runtime variables configured (set, derived, or satisfied)`}
+                aria-label={`${coverage.set} of ${coverage.total} runtime variables configured (set, satisfied by an alias, or a built-in default); ${coverage.optIn} policy opt-in excluded from the score`}
               />
               <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS }}>
-                {Math.round(coveragePct * 100)}% of editable runtime variables are configured
-                (set, bicep-derived, or satisfied by an alternative backend)
+                {Math.round(coveragePct * 100)}% of scored runtime variables are configured
+                (set, satisfied by an alternative backend, or a fully-functional built-in default).
+                Policy opt-ins are excluded from the score; a bicep-derived variable counts only
+                when its value is actually present.
               </Caption1>
             </div>
           </div>
@@ -426,9 +457,15 @@ export function EnvConfigPane() {
                           ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>satisfied (alias set)</Badge>
                           : cur?.status === 'default'
                             ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>default (built-in fallback)</Badge>
-                            : (e.derived
-                              ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>derived</Badge>
-                              : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
+                            : (cur?.status === 'opt-in' || e.optIn)
+                              // Policy opt-in — neutral by design: neither configured
+                              // nor a gap, excluded from the coverage ratio.
+                              ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>opt-in (not scored)</Badge>
+                              : (e.derived
+                                // Derived-but-unset — bicep should have filled this on
+                                // deploy and did NOT; an honest gap, not "configured".
+                                ? <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>derived — not filled</Badge>
+                                : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
                       {modified && <Badge appearance="filled" size="small" color="brand" icon={<Edit16Filled />}>modified</Badge>}
                       {disabledIl5 && <Badge appearance="tint" size="small" color="danger">restricted in {data.cloud}</Badge>}
                     </div>

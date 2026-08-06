@@ -338,8 +338,22 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
       else { state = 'opt-in'; }
     } else if (gateStatus === 'blocked') {
       // Missing required configuration is a hard blocker — unless the gate is a
-      // fully-functional default when unset (canAutoResolve): those are ready.
-      state = g.canAutoResolve ? 'ready' : 'blocked';
+      // fully-functional default when unset (canAutoResolve). Even then the
+      // promotion is NOT unconditional: when a live probe exists its REAL result
+      // decides (D15 honest-scoring — 'blocked + canAutoResolve' used to map
+      // straight to 'ready' without consulting the probe, so a derived var the
+      // deploy never filled scored ready while the backend answered 'fail').
+      // Only a probe-less canAutoResolve gate keeps the config-only promotion.
+      if (!g.canAutoResolve) {
+        state = 'blocked';
+      } else if (probe) {
+        if (probe.status === 'pass') { state = 'ready'; verified = 'live-probe'; }
+        else if (probe.status === 'warn') { state = 'partial'; verified = 'live-probe'; }
+        else { state = 'blocked'; verified = 'live-probe'; }
+      } else {
+        state = 'ready';
+        verified = 'config-only';
+      }
     } else if (probe) {
       if (probe.status === 'pass') { state = 'ready'; verified = 'live-probe'; }
       else if (probe.status === 'warn') { state = 'partial'; verified = 'live-probe'; }
