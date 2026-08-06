@@ -1,0 +1,11 @@
+# actionlint configuration — see scripts/ci/check-workflow-actionlint.mjs
+#
+# `loom-aca` is this repo's in-VNet self-hosted runner (KEDA-scaled GitHub
+# runner on Azure Container Apps). actionlint validates `runs-on:` against the
+# list of GitHub-hosted labels it knows, so without this declaration it reports
+# every one of the seven workflows that target the ACA runner as using an
+# "unknown" label. Declaring it here is the correct fix; baselining seven real
+# workflows to hide a configuration gap is not.
+self-hosted-runner:
+  labels:
+    - loom-aca

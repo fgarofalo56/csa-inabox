@@ -58,13 +58,13 @@ jobs:
 
       # The MCP package's file: dependency resolves to the SDK's built dist/,
       # so build the SDK first.
-      - name: Build @csa-loom/sdk (file: dependency)
+      - name: 'Build @csa-loom/sdk (file: dependency)'
         working-directory: apps/loom-sdk
         run: |
           npm install --no-audit --no-fund
           npm run build
 
-      - name: Install (materialize the file: SDK dep as real files)
+      - name: 'Install (materialize the file: SDK dep as real files)'
         working-directory: apps/loom-mcp
         run: npm install --no-audit --no-fund --install-links
 
