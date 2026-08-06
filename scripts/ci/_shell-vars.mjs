@@ -164,10 +164,6 @@ const ASSIGN_PATTERNS = [
   /(?:^|[\s;&|(){}])for\s+\(?\(?\s*([A-Za-z_][A-Za-z0-9_]*)\b/g,
   // select NAME in …
   /(?:^|[\s;&|(){}])select\s+([A-Za-z_][A-Za-z0-9_]*)\b/g,
-  // printf -v NAME
-  /printf\s+(?:-\w+\s+)*-v\s+([A-Za-z_][A-Za-z0-9_]*)/g,
-  // mapfile/readarray [-opts] NAME
-  /(?:mapfile|readarray)\s+(?:-\w+(?:\s+\S+)?\s+)*([A-Za-z_][A-Za-z0-9_]*)/g,
   // getopts "spec" NAME
   /getopts\s+\S+\s+([A-Za-z_][A-Za-z0-9_]*)/g,
   // let NAME=…  /  (( NAME=… ))  /  (( NAME++ ))
@@ -177,16 +173,60 @@ const ASSIGN_PATTERNS = [
   /(?:^|[\s;&|(){}])(?:declare|local|typeset|readonly)\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*(?:$|[\s;&|)])/gm,
 ];
 
-/** `read [-opts] NAME1 NAME2 …` — every trailing word is assigned. */
-function readTargets(script, out) {
-  const re = /(?:^|[\s;&|(){}])read\s+([^\n;&|<>]*)/g;
+/**
+ * Options that consume a FOLLOWING argument, per command. These differ, and
+ * getting it wrong is not cosmetic: `-t` takes a timeout for `read` but takes
+ * nothing for `mapfile`, so a shared table swallows the target in
+ * `mapfile -t RELEASE_PRS` (release-please.yml) and reports every later use of
+ * it as an unassigned read.
+ */
+const OPTS_WITH_ARG = {
+  read: /^-[dinNptu]$/, // -a is handled separately: its argument IS the target
+  mapfile: /^-[dnOsuCc]$/, // -t takes no argument
+  readarray: /^-[dnOsuCc]$/,
+};
+
+/**
+ * Commands that assign into names given as ARGUMENTS:
+ *   read [-opts] NAME…            mapfile/readarray [-opts] NAME
+ *   printf [-opts] -v NAME …
+ *
+ * Tokenised in JS rather than matched with a regex. The natural pattern for
+ * "skip any options" — `(?:-\w+(?:\s+\S+)?\s+)*` — has nested quantifiers and
+ * is exponential-backtracking bait: CodeQL's js/redos flagged exactly that
+ * shape on the `mapfile` rule in this file during review of this PR
+ * ("may cause exponential backtracking on strings starting with 'mapfile\\t-0'").
+ * The outer match below is linear, and the option walk is a plain loop.
+ */
+function commandAssignTargets(script, out) {
+  const re = /(?:^|[\s;&|(){}])(read|mapfile|readarray|printf)\b([^\n;&|<>]*)/g;
   let m;
   while ((m = re.exec(script)) !== null) {
-    for (const tok of m[1].trim().split(/\s+/)) {
-      if (/^-/.test(tok)) continue;
-      // skip an option's argument (e.g. `-d ''`, `-t 5`, `-a arr` handled below)
+    const cmd = m[1];
+    const withArg = OPTS_WITH_ARG[cmd];
+    const toks = m[2].trim().split(/\s+/).filter(Boolean);
+    let sawDashV = false;
+    for (let i = 0; i < toks.length; i++) {
+      const tok = toks[i];
+      if (tok.startsWith('-')) {
+        if (cmd === 'printf') {
+          if (tok === '-v') sawDashV = true;
+          continue;
+        }
+        if (cmd === 'read' && tok === '-a') continue; // next token is the array
+        if (withArg?.test(tok)) i++;
+        continue;
+      }
       if (/^['"]/.test(tok)) continue;
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(tok)) out.add(tok);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tok)) continue;
+      if (cmd === 'printf') {
+        if (!sawDashV) continue;
+        out.add(tok);
+        break;
+      }
+      out.add(tok);
+      // mapfile/readarray assign exactly one array
+      if (cmd !== 'read') break;
     }
   }
 }
@@ -199,7 +239,7 @@ export function assignedNames(script) {
     let m;
     while ((m = re.exec(script)) !== null) out.add(m[1]);
   }
-  readTargets(script, out);
+  commandAssignTargets(script, out);
   return out;
 }
 

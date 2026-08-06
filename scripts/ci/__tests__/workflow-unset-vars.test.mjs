@@ -216,6 +216,31 @@ test('runner and shell built-ins are never reported', () => {
   assert.equal(unassignedReferences(script, new Set()).length, 0);
 });
 
+test('`-t` is an option for mapfile but takes an ARGUMENT for read (release-please.yml shape)', () => {
+  // Regression: a shared "options with an argument" table made `-t` swallow
+  // RELEASE_PRS in `mapfile -t RELEASE_PRS`, so every later `${RELEASE_PRS[@]}`
+  // was reported as an unassigned read.
+  assert.equal(assignedNames('mapfile -t RELEASE_PRS < <(gh pr list)').has('RELEASE_PRS'), true);
+  assert.equal(assignedNames('readarray -t ITEMS < f').has('ITEMS'), true);
+  assert.equal(assignedNames('read -t 5 ANSWER').has('ANSWER'), true);
+  assert.equal(assignedNames('read -t 5 ANSWER').has('5'), false);
+  assert.equal(assignedNames('read -r -a ARR <<< "a b"').has('ARR'), true);
+  assert.equal(assignedNames('printf -v OUT "%s" x').has('OUT'), true);
+  // printf without -v assigns nothing
+  assert.equal(assignedNames('printf "%s" HELLO').has('HELLO'), false);
+});
+
+test('assignment scanning is linear on the CodeQL js/redos witness inputs', () => {
+  // The option-skipping regex `(?:-\w+(?:\s+\S+)?\s+)*` was flagged high-severity
+  // on this file. It is now a plain loop; these must return promptly rather than
+  // hang. A generous bound — the point is exponential vs not.
+  for (const evil of ['mapfile\t-0' + '\t-0'.repeat(400), 'read -t ' + '-0 '.repeat(400)]) {
+    const t = Date.now();
+    assignedNames(evil);
+    assert.ok(Date.now() - t < 2000, 'assignedNames must not backtrack exponentially');
+  }
+});
+
 // ── shell selection ─────────────────────────────────────────────────────────
 test('non-POSIX shells are skipped; bash-family shells are scanned', () => {
   assert.equal(isPosixShell('pwsh'), false);
