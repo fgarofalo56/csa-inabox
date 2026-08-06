@@ -645,6 +645,8 @@ jobs:
         if: ${{ !inputs.skip_supply_chain }}
         uses: sigstore/cosign-installer@v3.7.0
       - name: Verify every image the roll ships is signed by a trusted workflow
+        env:
+          CONTRACT_REFS: ${{ needs.resolve.outputs.contract_refs }}
         run: |
           set -uo pipefail
           if [[ "${{ inputs.skip_supply_chain }}" == "true" ]]; then
@@ -659,12 +661,40 @@ jobs:
             exit 1
           fi
           IDENTITY_RE="^https://github\\.com/${{ github.repository }}/\\.github/workflows/(build-fiab-images-acr-tasks\\.yml|full-app-deploy-commercial\\.yml|gov-console-roll\\.yml)@"
-          # MUST stay in sync with the build matrix above — enforced by
-          # scripts/ci/check-full-app-deploy-contract.mjs (loom-guardrails), so
-          # a matrix entry can no longer be added without being verified here.
-          # Verify the :TAG refs — that is exactly what the redeploy-with-apps
-          # job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-script-runner loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave loom-trino)
+          # ── WHAT THIS GATE COVERS — DERIVED, NOT HAND-COPIED (refs #3035) ──
+          # This used to be a hand-maintained 17-name array under the claim
+          # "that is exactly what the redeploy-with-apps job rolls". That claim
+          # was FALSE (deploy-integrity.md R7): the roll ships SIX Container
+          # Apps. Ten of the other eleven are still roll-blocking for a real
+          # reason — the apps-enabled deploy PULLS them (they have appImageTags
+          # keys) — but `loom-uat` is neither rolled nor pulled by tag, and on
+          # 2026-08-05 run 31066164706 a Trivy CRITICAL in that Playwright test
+          # image left it unsigned, failed this gate, and SKIPPED the roll of
+          # all six Container Apps. A finding in a test image stopped the
+          # console deploying.
+          #
+          # The set is now derived as ROLL_APPS ∪ the deploy contract, from
+          # scripts/ci/deploy-image-roles.mjs — so adding a Container App to
+          # the roll, or an appImageTags key to the paramfile, extends this gate
+          # automatically. Exclusions are declared in that module WITH a reason,
+          # printed on every run (stderr, below), and
+          # scripts/ci/check-full-app-deploy-contract.mjs fails if a declaration
+          # ever tries to exempt an image that IS rolled or IS in the contract.
+          #
+          # Nothing here excuses an image from being scanned or signed: every
+          # matrix entry still runs the Trivy CRITICAL gate + cosign sign in its
+          # own build job, and a failure there still fails that job and this run.
+          if [[ -z "${CONTRACT_REFS// /}" ]]; then
+            echo "::error::the resolve job produced no deploy contract, so the roll-blocking verify set cannot be derived. Refusing to verify a narrowed set — that is a gate silently measuring less."
+            exit 1
+          fi
+          VERIFY_APPS=$(node scripts/ci/deploy-image-roles.mjs --print verify-set --contract-refs "$CONTRACT_REFS")
+          if [[ -z "${VERIFY_APPS// /}" ]]; then
+            echo "::error::scripts/ci/deploy-image-roles.mjs produced an EMPTY verify set. Refusing to roll images whose signatures nothing checked."
+            exit 1
+          fi
+          read -ra APPS <<< "$VERIFY_APPS"
+          echo "::notice::SC1 verify set (${#APPS[@]} images): ${APPS[*]}"
           FAILED=()
           UNPROVEN=()
           for APP in "${APPS[@]}"; do
@@ -851,6 +881,12 @@ jobs:
           # loom-uat is deliberately NOT here: it is a Container App JOB image
           # (loom-synthetic-monitor), not a Container App, so each scheduled
           # execution pulls :latest on its own — there is no revision to roll.
+          #
+          # THIS ARRAY IS THE ROLL SET, and the SC1 verify-before-roll gate is
+          # derived from it: scripts/ci/check-full-app-deploy-contract.mjs
+          # asserts it matches ROLL_APPS in scripts/ci/deploy-image-roles.mjs
+          # exactly, both directions. Add an app here and you MUST add it there
+          # — otherwise the roll would ship an image no signature gate covered.
           APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
           # RETRY WITH CLASSIFICATION + AN HONEST EXISTENCE PROBE.
           #
