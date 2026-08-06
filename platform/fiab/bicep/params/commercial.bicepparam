@@ -258,6 +258,18 @@ param appImageTags = {
   // prerequisite of the apps phase — and declaring it HERE is what puts it in
   // the Commercial lane resolve-image-preflight-refs.mjs assertion set.
   unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
+  // loom-trino (#2678) — the N7e Federated SQL engine behind SQL Lab.
+  // admin-plane/main.bicep deploys data-plane/loom-trino-aca.bicep DEFAULT-ON
+  // and passes `appImageTags.?trino ?? 'v0.1'`, so an apps-enabled deploy PULLS
+  // `loom-trino:v0.1` — but this block did not declare the key, so the optional
+  // chain silently took the fallback and NOTHING preflighted or signature-
+  // verified that image. Exactly the loom-duckdb / loom-unity shape: a new
+  // DEFAULT-ON image whose paramfile key was never added, so the guard set
+  // could not see it. Declaring it HERE is what puts it in the Commercial lane
+  // resolve-image-preflight-refs.mjs assertion set AND in the SC1 verify set
+  // derived from that contract (refs #3035). Caught by
+  // check-full-app-deploy-contract.mjs when loom-trino joined the build matrix.
+  trino: readEnvironmentVariable('LOOM_TRINO_TAG', 'v0.1')
 }
 
 // SIGN-IN + LOOM-UNITY-AUDIENCE DURABILITY (#2681). An Entra app registration is

@@ -229,18 +229,27 @@ test('commercial.bicepparam + the live running set => exactly the five unpinned 
   // both APP_IMAGE_TAGS and commercial.bicepparam, so a deploy that could not
   // pull the image would have failed the Container App PUT with no preflight
   // warning at all. This row growing is the guard extending to cover it.
+  // loom-trino joined this set with the paramfile key added in #3035, and for
+  // the identical reason: admin-plane/main.bicep deploys
+  // data-plane/loom-trino-aca.bicep DEFAULT-ON and passes
+  // `appImageTags.?trino ?? 'v0.1'`, but commercial.bicepparam never declared
+  // the key — so the optional chain silently took the fallback and nothing
+  // preflighted (or signature-verified) `loom-trino:v0.1`. Caught by
+  // check-full-app-deploy-contract.mjs the moment loom-trino joined the build
+  // matrix. Same shape as loom-duckdb and loom-unity before it.
   assert.deepEqual(r.unpinned, [
     'loom-copilot-maf:v0.1',
     'loom-duckdb:v0.1',
     'loom-risingwave:v0.1',
     'loom-unity:v0.1',
+    'loom-trino:v0.1',
   ]);
   assert.deepEqual(
     r.skipped.map((s) => s.ref),
     ['loom-orchestrator:v0.1', 'loom-maps-tileserver:v1'],
   );
   assert.equal(r.pinned.length, 12);
-  assert.equal(r.refs.length, 16);
+  assert.equal(r.refs.length, 17);
 });
 
 test('on GCC-High the SAME inputs additionally assert the maps tile server', () => {
