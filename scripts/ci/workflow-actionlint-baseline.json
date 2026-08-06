@@ -34,6 +34,7 @@
     "gov-provision-maps.yml": 2,
     "gov-provision-mongo.yml": 1,
     "gov-provision-streaming-migrate.yml": 2,
+    "gov-provision-trino.yml": 1,
     "gov-provision-wrangler.yml": 2,
     "gov-purview-verify.yml": 1,
     "gov-uc-purview-wire.yml": 4,
