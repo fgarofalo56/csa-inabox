@@ -1,0 +1,38 @@
+{
+  "program": "FINISHLINE",
+  "read_first": [
+    "PRPs/active/finishline/PRP.md",
+    "PRPs/active/finishline/AUDIT-2026-08-06.md",
+    ".harness/state.json",
+    ".claude/rules/deploy-integrity.md",
+    ".claude/rules/no-vaporware.md",
+    ".claude/rules/ux-baseline.md",
+    ".claude/rules/auto-bind-by-default.md"
+  ],
+  "estate": {
+    "commercial": {
+      "rg": "rg-csa-loom-admin-centralus",
+      "region": "centralus",
+      "acr": "acrloomk6mvh5sm6z7do",
+      "acr_note": "data plane firewalled — use lease scripts in scripts/csa-loom",
+      "console": "https://csa-loom.limitlessdata.ai",
+      "build_marker": "https://csa-loom.limitlessdata.ai/build-marker.txt",
+      "deploy_identity": "limitlessdata_deploy SP",
+      "purview_note": "account name is eastus2-suffixed but LIVES in the centralus RG",
+      "sub_note": "resolve subscription via az at runtime — never hardcode"
+    },
+    "gov": {
+      "access": "GitHub Actions workflows ONLY — never local az",
+      "never": "print full ARM ids"
+    }
+  },
+  "deploy_protocol": {
+    "slot": "ONE estate deploy at a time; L-DEPLOY lane owns the slot",
+    "whatif_first": true,
+    "deploy_fiab_inputs": "region=centralus keep_resources=true allow_existing_hub=true",
+    "deploy_fiab_commercial": "stays DISABLED between attended dispatches until D7 lands"
+  },
+  "merge_protocol": "Small PRs per task; required checks green; --admin only to drain strict-mode staleness, then WATCH main's next run; never report a merge as a fix (R2)",
+  "worktree_protocol": "Every agent in its OWN worktree; NEVER git stash; NEVER pnpm install at repo root; junction node_modules from main checkout (read-only) or use a fully isolated store; agents never write the main checkout or .harness/",
+  "review_protocol": "Implementing agent stops at status=review with V1-V6 evidence; harness-reviewer verifies evidence is real (links resolve, receipts match) and flips to done; any gap → doing with the gap named"
+}
