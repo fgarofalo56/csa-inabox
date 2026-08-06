@@ -332,7 +332,15 @@ jobs:
           fi
           if [ -n "$RECEIPT" ] && printf "%s" "$RECEIPT" | jq -e . >/dev/null 2>&1; then
             printf "%s" "$RECEIPT" > eval-run.json
-            node -e "const r=require('./eval-run.json');for(const s of r.surfaces||[])console.log(`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, grounding \${s.groundingAvg ?? 'deferred'}, pass-rate \${s.passRate}`)"
+            # jq, NOT `node -e "...\`template\`..."`. The previous form wrapped a
+            # JS template literal in a DOUBLE-QUOTED bash string, so bash read the
+            # backticks as COMMAND SUBSTITUTION and tried to execute
+            # `${s.surface}: ...` as a command:
+            #   line 335: ${s.surface}:: bad substitution
+            # `set -uo pipefail` (no -e) meant the step carried on, the line
+            # printed NOTHING, and the exit code stayed 0 — a per-surface receipt
+            # that had silently shown nothing for the life of the workflow.
+            jq -r '.surfaces[]? | "  \(.surface): \(.questions) Q, hit-rate \(.retrievalHitRate), grounding \(.groundingAvg // "deferred"), pass-rate \(.passRate // "not computed")"' eval-run.json
           else
             echo "::warning::no ::eval-run:: receipt in Log Analytics for execution $EXEC (status $STATUS) - the run may have honest-gated on config, or ingestion has not caught up. Gating on an empty artifact."
           fi
@@ -363,8 +371,29 @@ jobs:
           set -euo pipefail
           ARGS=(--artifact eval-run.json --summary eval-summary.md)
           [ -f prev/eval-run.json ] && ARGS+=(--previous prev/eval-run.json)
-          # nightly = full run: a floored surface with no scores is a failure
-          [ '${{ github.event_name }}' = 'schedule' ] && ARGS+=(--strict-missing)
+          # --strict-missing: a floored surface with NO scores is a failure, not
+          # a warning.
+          #
+          # This used to be scoped to `schedule` only, on the reasoning that a
+          # push/PR run may legitimately be partial. Run 31115406603 showed what
+          # that costs: EVERY surface came back `401` from the eval-probe, all
+          # ten rolled up `questions: 0`, the gate emitted ten "NOT measured"
+          # warnings — and CONCLUDED SUCCESS. A run that measured nothing at all
+          # is not a partial run, it is a broken pipeline, and a quality gate
+          # that goes green on it is a gate that cannot fail.
+          #
+          # So: strict on the nightly full run as before, AND strict whenever the
+          # run measured NOTHING. A genuinely partial run (some surfaces scored)
+          # still warns.
+          MEASURED=$(jq '[.surfaces[]? | select((.questions // 0) > 0)] | length' eval-run.json)
+          TOTAL=$(jq '.surfaces | length' eval-run.json)
+          echo "surfaces present: $TOTAL, surfaces actually measured: $MEASURED"
+          if [ "${{ github.event_name }}" = 'schedule' ]; then
+            ARGS+=(--strict-missing)
+          elif [ "$MEASURED" -eq 0 ]; then
+            echo "::error::the eval run scored ZERO questions across all $TOTAL surface(s) — nothing was measured, so this gate has no result to report. Failing rather than passing on an empty measurement."
+            ARGS+=(--strict-missing)
+          fi
           node scripts/csa-loom/check-eval-regression.mjs "${ARGS[@]}"
 
       - name: Upload the run artifact (next run's delta baseline)

@@ -564,8 +564,8 @@ describe('ratchetFloors — raise-only', () => {
   });
 });
 
-describe('eval-floors.json (the committed seed)', () => {
-  it('carries the ratchet-header contract (owner / why / unblock) and provisional floors for all 10 E1 surfaces', async () => {
+describe('eval-floors.json (the committed floors)', () => {
+  it('carries the ratchet-header contract (owner / why / unblock) and floors for all 10 E1 surfaces', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const doc = JSON.parse(
@@ -583,7 +583,33 @@ describe('eval-floors.json (the committed seed)', () => {
       expect(f.retrievalHitRate).toBeGreaterThan(0);
       expect(f.groundingAvg).toBeGreaterThanOrEqual(1);
       expect(f.passRate).toBeGreaterThan(0);
-      expect(f.provisional).toBe(true); // pre-first-run seed; the ratchet flips this
+      expect(typeof f.provisional).toBe('boolean');
+    }
+  });
+
+  it('records the basis of every ratchet, so a floor can never be a number with no provenance', async () => {
+    // 2026-08-06: the first real ratchet. `provisional` was seeded true before
+    // any run data existed; a floor that has since moved from MEASURED runs must
+    // say which runs, under which rule — otherwise the next session cannot tell
+    // a measured floor from a guessed one, which is how the seed sat unmoved
+    // (lastRatchet: null) for two weeks while six measured runs accumulated.
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const doc = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, '../../../content/evals/eval-floors.json'), 'utf-8'),
+    );
+    const ratcheted = Object.values(doc.floors).some((f: any) => f.provisional === false);
+    if (!ratcheted) {
+      expect(doc._meta.lastRatchet).toBeNull();
+      return;
+    }
+    expect(doc._meta.lastRatchet).toBeTruthy();
+    expect(doc._meta.ratchetBasis).toBeTruthy();
+    for (const [when, basis] of Object.entries<any>(doc._meta.ratchetBasis)) {
+      expect(when).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(Array.isArray(basis.runs) && basis.runs.length >= 3).toBe(true);
+      expect(basis.metric).toBeTruthy();
+      expect(basis.rule).toBeTruthy();
     }
   });
 });
