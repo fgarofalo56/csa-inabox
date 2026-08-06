@@ -1,13 +1,22 @@
 # End of Session Protocol
 
-Before ending any session, complete these steps:
+Wrap-up is lightweight and native — no external task server, no ritual file
+updates for their own sake.
 
-1. Update `.claude/SESSION_KNOWLEDGE.md` with current state
-2. Update `.claude/DEVELOPMENT_LOG.md` with work done
-3. Update `.claude/FAILED_ATTEMPTS.md` if any failures occurred
-4. Update `.claude/TOOL_REGISTRY.md` if tools were created/modified
-5. Update Archon task statuses (mark completed work as done)
-6. Update Archon "Session Context & Memory" document
-7. Update `config.yaml` `updated_at` timestamp
-8. Commit uncommitted work
-9. Output session summary to user
+Before ending a significant session:
+
+1. **Commit or PR all work.** Nothing durable lives only in the working tree.
+2. **Report estate truth, not merge truth.** Anything merged but not rolled or
+   deployed is reported in exactly those words — "merged, not deployed"
+   (`deploy-integrity.md` R2).
+3. **Persist what the next session needs:** durable facts and gotchas →
+   auto-memory; decisions and architecture changes → `docs/`; anything
+   mid-flight → a GitHub issue with enough context to resume cold.
+4. **Hand off in-flight machinery:** name any running agents, workflows, CI
+   runs, or deploys and where their results will land.
+5. **Summarize to the operator:** what landed (merged vs deployed vs verified
+   live), what's in flight, what's blocked and on whom.
+
+`.claude/SESSION_KNOWLEDGE.md` and `.claude/DEVELOPMENT_LOG.md` are optional
+program-level overviews for long multi-session initiatives — update them when
+running one, not per session.
