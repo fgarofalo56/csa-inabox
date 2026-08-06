@@ -91,19 +91,26 @@ describe('both clouds — the loom-uat runner image has a producer', () => {
     // ./apps/loom-uat directory.
     expect(full).toMatch(/- app: loom-uat/);
     expect(full).toMatch(/file: \.\/apps\/fiab-console\/Dockerfile\.uat/);
-    // ...and its tag is verified before the roll, like every sibling image.
+    // ...and it is deliberately OUTSIDE the roll set.
     //
-    // MEMBERSHIP, not position. The original spelling was
-    //   /APPS=\(loom-console[^)]*loom-uat\)/
-    // which pins loom-uat as the LAST element, because `loom-uat\)` requires the
-    // closing paren right after it. That is not the property under test — the
-    // tag-verification loop iterates the array, so order is irrelevant — and it
-    // fails any PR that appends a NEW app, which is what every gate PR does by
-    // construction. It broke #2638 (appending loom-unity) and would next have
-    // broken #2639 (loom-migrate, loom-risingwave) and #2678/#2681 after that.
-    const appsLine = full.match(/APPS=\(([^)]*)\)/)?.[1] ?? '';
-    expect(appsLine.split(/\s+/)).toContain('loom-uat');
-    expect(appsLine.split(/\s+/)).toContain('loom-console');
+    // This assertion previously read `APPS=(…)` and required it to contain
+    // loom-uat. #3037 (cbed42ad) removed the 18-name build-list array, so the
+    // only remaining `APPS=(…)` in that workflow is the ROLL SET — six Container
+    // Apps — and loom-uat is correctly absent from it: it is a Container App JOB
+    // image (loom-synthetic-monitor), so there is no revision to roll and each
+    // scheduled execution pulls :latest itself. Main went red on that mismatch;
+    // the WORKFLOW was right and this test was stale.
+    //
+    // The producer property the suite is named for is already established above
+    // (`- app: loom-uat` in the build matrix + its Dockerfile.uat context). What
+    // is added here instead is the property that actually needs teeth now: the
+    // roll set must NOT silently acquire loom-uat, and it must still carry the
+    // console. Deleting the assertion outright would have left the roll set
+    // unwatched from this suite.
+    const rollSet = full.match(/APPS=\(([^)]*)\)/)?.[1]?.split(/\s+/) ?? [];
+    expect(rollSet.length).toBeGreaterThan(0);
+    expect(rollSet).toContain('loom-console');
+    expect(rollSet).not.toContain('loom-uat');
   });
 
   it('un-ignores e2e/ + tests/ for that build, or the image ships without the journeys', () => {
