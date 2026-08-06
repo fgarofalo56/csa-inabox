@@ -3,11 +3,16 @@
  *
  *   lib/setup/scan-services         — recommendation engine (pure)
  *   lib/setup/service-choices-to-params — choice → bicep params + EXISTING_* env
- *   GET /api/setup/scan-services    — Resource Graph scan + bucketing
  *   ui-parity                       — the wizard catalog covers byo-wizard.sh's
  *                                     flagged services (no CLI/Wizard drift)
+ *
+ * GET /api/setup/scan-services is GONE (#3015): it was a weaker parallel
+ * scanner (no `$top`, no `$skipToken` loop, no `allowPartialScopes`, no
+ * coverage ledger) with ZERO UI callers. The wizard's scan endpoints are
+ * /api/setup/estate-scan (scoped) and /api/setup/discover-services (all
+ * visible), both on the shared honest scan modules.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -190,95 +195,3 @@ describe('ui-parity: SETUP_SCAN_SERVICES vs byo-wizard.sh SERVICES', () => {
   });
 });
 
-// ── GET /api/setup/scan-services ────────────────────────────────────────────
-const getSessionMock = vi.fn(
-  () => ({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 }) as any,
-);
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
-vi.mock('@azure/identity', () => {
-  class Cred {
-    async getToken() {
-      return { token: 'tk', expiresOnTimestamp: Date.now() + 3600_000 };
-    }
-  }
-  return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
-});
-
-function stubGraph(rows: any[]) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string) => {
-      expect(String(url)).toContain('providers/Microsoft.ResourceGraph/resources');
-      return new Response(JSON.stringify({ data: rows }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }),
-  );
-}
-
-function req(qs = '') {
-  return { nextUrl: { searchParams: new URLSearchParams(qs) } } as any;
-}
-
-describe('GET /api/setup/scan-services', () => {
-  beforeEach(() => {
-    delete process.env.LOOM_UAMI_CLIENT_ID;
-    delete process.env.LOOM_SUBSCRIPTION_ID;
-    getSessionMock.mockReturnValue({ claims: { oid: 'oid-test' }, exp: Date.now() / 1000 + 3600 } as any);
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.resetModules();
-  });
-
-  it('401 when unauthenticated', async () => {
-    getSessionMock.mockReturnValue(null as any);
-    const { GET } = await import('@/app/api/setup/scan-services/route');
-    const r = await GET(req());
-    expect(r.status).toBe(401);
-  });
-
-  it('buckets discovered resources by service and recommends use-existing', async () => {
-    stubGraph([
-      { svcType: 'microsoft.search/searchservices', name: 'srch1', resourceGroup: 'rg1', subscriptionId: DEPLOY_SUB, location: 'eastus' },
-      { svcType: 'microsoft.kusto/clusters', name: 'kusto1', resourceGroup: 'rg2', subscriptionId: OTHER_SUB, location: 'eastus2' },
-    ]);
-    const { GET } = await import('@/app/api/setup/scan-services/route');
-    const r = await GET(req(`deploySub=${DEPLOY_SUB}`));
-    const j = await r.json();
-    expect(r.status).toBe(200);
-    expect(j.ok).toBe(true);
-    const search = j.services.find((s: any) => s.key === 'aisearch');
-    expect(search.candidates).toHaveLength(1);
-    expect(search.recommendation).toBe('use-existing');
-    expect(search.recommendedCandidate.name).toBe('srch1');
-    const apim = j.services.find((s: any) => s.key === 'apim');
-    expect(apim.candidates).toHaveLength(0);
-    expect(apim.recommendation).toBe('new');
-  });
-
-  it('only counts AIServices-kind accounts as AI Foundry candidates', async () => {
-    stubGraph([
-      { svcType: 'microsoft.cognitiveservices/accounts', name: 'aoai1', resourceGroup: 'rg', subscriptionId: DEPLOY_SUB, kind: 'AIServices' },
-      { svcType: 'microsoft.cognitiveservices/accounts', name: 'speech1', resourceGroup: 'rg', subscriptionId: DEPLOY_SUB, kind: 'SpeechServices' },
-    ]);
-    const { GET } = await import('@/app/api/setup/scan-services/route');
-    const r = await GET(req());
-    const j = await r.json();
-    const foundry = j.services.find((s: any) => s.key === 'foundry');
-    expect(foundry.candidates).toHaveLength(1);
-    expect(foundry.candidates[0].name).toBe('aoai1');
-  });
-
-  it('502 when Resource Graph errors', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response('boom', { status: 403, headers: { 'content-type': 'text/plain' } })),
-    );
-    const { GET } = await import('@/app/api/setup/scan-services/route');
-    const r = await GET(req());
-    expect(r.status).toBe(502);
-  });
-});
