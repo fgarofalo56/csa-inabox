@@ -81,10 +81,14 @@
   ],
   "meta": {
     "merge_queue": {
-      "state_at_2026-08-06T21:00Z": "GitHub Actions major_outage since ~16:55Z. Runs from the 17:04Z pushes are STILL QUEUED (~4h backlog); pushes made during the outage created NO check runs at all.",
-      "do_not": "Do NOT --admin-merge the CODE PRs while they show zero/pending checks — that is merging untested code (gates-that-cannot-fail class). #3059 (ledger) WAS admin-merged legitimately: docs-only, path-filtered, zero REQUIRED checks by design.",
+      "state_at_2026-08-06T21:25Z": "GitHub incident 'Incident with Actions' OPEN since 15:22Z. GitHub's own 20:34Z update: WEBHOOKS THROTTLED TO ~15% — 'many events such as pushes and PRs' never trigger runs. Actions API surface is being LOAD-SHED (actions/runs 403s, run cancel 502s) while PR/GraphQL APIs work normally. Core rate limit is HEALTHY (4868/5000) — the 403s are service-side shedding, not our quota.",
+      "CORRECTION": "Earlier assumption that the backlog 'will drain on its own' is WRONG for the re-pushed PRs. Runs created at 17:04Z are queued and will drain. But pushes made during the throttle window (the D1/D2/D3 template regens) had their webhooks DROPPED — those check runs were never created and never will be. Those PRs MUST be explicitly re-triggered (empty commit, or close+reopen) once Actions recovers. Do not mistake 'zero checks' for 'checks passed'.",
+      "blockers_removed_2026-08-06T21:20Z": [
+        "DISABLED 3 permanently-failing workflows (copilot-auto-fix.yml, csa-loom-spark-livy-probe.yml, csa-loom-spark-probe2.yml) — invalid YAML, cannot succeed, fired 24x today burning throttled webhook budget. RE-ENABLE (gh workflow enable <file>) once D13's PR #3061 lands and fixes them.",
+        "CANCELLED 4 non-essential queued runs (Copilot Auto-merge x2, CodeQL scan liveness, acr-firewall-sweeper) to free constrained capacity for PR checks; 3 more cancels returned 502 (service degraded) and were left."
+      ],
+      "do_not": "Do NOT --admin-merge the CODE PRs while they show zero/pending checks — that is merging untested code (gates-that-cannot-fail class). #3059 (ledger) WAS admin-merged legitimately: docs-only, path-filtered, zero REQUIRED checks by design. Do NOT poll the Actions API while it is shedding — it adds load and returns misleading 403s.",
       "order": ["#3054 D1 (update-branch, BEHIND)", "#3051 D15", "#3052 D3", "#3055 D9", "#3053 E1", "#3057 D2", "#3058 D4-D6", "#3062 D10 (AFTER #3058 — shared docs, rebase doc hunks)", "#3061 D13"],
-      "on_recovery": "If a PR shows zero check runs after recovery, re-trigger with an empty commit or close/reopen — the outage swallowed run creation.",
       "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must now check it explicitly."
     },
     "created_at": "2026-08-06T00:00:00Z",
