@@ -60,6 +60,27 @@ const STAGE_SCRIPT = 'stage-copilot-corpus.sh';
 /** A workflow that runs one of these actually produces an image. */
 const BUILD_INVOCATION = /(az\s+acr\s+build|docker\s+build|docker\/build-push-action)/;
 
+/**
+ * The UAT image (`loom-uat`) is built FROM the same `apps/fiab-console` context but
+ * with `Dockerfile.uat`, which is a `mcr.microsoft.com/playwright` test-runner and
+ * carries NO `COPY … copilot-corpus` line. Staging the corpus for it would ship a
+ * few hundred markdown files into a throwaway test image that never reads them —
+ * a step that satisfies a guard while doing nothing, which is the failure mode this
+ * repo keeps hitting. So a build that names Dockerfile.uat is never a console build.
+ */
+const UAT_DOCKERFILE = /Dockerfile\.uat/;
+
+/**
+ * A build-context DECLARATION, in the three forms the real workflows use:
+ *   `ctx: ./apps/fiab-console` | `context: ./apps/fiab-console` | `CTX="./apps/fiab-console"`
+ * (bare YAML key, docker/build-push-action key, and the shell form), plus the JSON
+ * matrix entry `{"name":"loom-console","ctx":"./apps/fiab-console"}`.
+ */
+const CTX_DECLARATION = /(^|[^A-Za-z])(ctx|context|CTX)\s*"?\s*[:=]/;
+
+/** The CONSOLE Dockerfile specifically — the one whose COPY ships the corpus. */
+const CONSOLE_DOCKERFILE = /apps[/]fiab-console[/]Dockerfile(?![.]uat)/;
+
 /** Workflow-command markers. A line carrying one of these is OUTPUT, not a build. */
 const ANNOTATION = /::(?:warning|notice|error|debug)::/;
 
@@ -82,6 +103,35 @@ function isRealMention(line, needle) {
   if (ANNOTATION.test(line)) return false;
   if (/\becho\b/.test(line)) return false;
   return true;
+}
+
+/**
+ * True when `line` DECLARES A BUILD of the loom-console image.
+ *
+ * WHY THIS IS NARROWER THAN `isRealMention(line, 'apps/fiab-console')` (#3012).
+ * The original predicate scored ANY real line containing the context path as a
+ * console build. That is a proxy, not the subject, and it produced a false
+ * positive with teeth: `gov-provision-trino.yml` builds only `loom-trino` and
+ * `loom-uat` and never produces a console image at all — it READS the running
+ * console's image (`az containerapp show … properties.template.containers[].image`)
+ * and only updates an env var. Its four `apps/fiab-console` mentions are the UAT
+ * build plus three `.dockerignore` file operations (`cp`, `grep -v`), none of which
+ * is a build context. Flagging it would have forced a staging step into a Playwright
+ * test image that cannot use the corpus — green guard, zero effect.
+ *
+ * So a mention counts only when the line also does one of:
+ *   - carry a real build invocation (`az acr build … apps/fiab-console`),
+ *   - declare a build context (`ctx:` / `context:` / `CTX=`), or
+ *   - name the CONSOLE Dockerfile (never `Dockerfile.uat`).
+ *
+ * This is the same correction as `check-env-sync`'s: assert the THING
+ * (which image is produced / which app receives the variable), not that a
+ * string appears somewhere in the file.
+ */
+function declaresConsoleBuild(line) {
+  if (!isRealMention(line, CONSOLE_CTX)) return false;
+  if (UAT_DOCKERFILE.test(line)) return false;
+  return BUILD_INVOCATION.test(line) || CTX_DECLARATION.test(line) || CONSOLE_DOCKERFILE.test(line);
 }
 
 /** Workflow files under `<root>/.github/workflows`. */
@@ -111,7 +161,7 @@ export function scanConsoleCorpusStaging(root = ROOT) {
     }
     if (!BUILD_INVOCATION.test(text)) continue;
     const lines = text.split(/\r?\n/);
-    const buildsConsole = lines.some((l) => isRealMention(l, CONSOLE_CTX));
+    const buildsConsole = lines.some((l) => declaresConsoleBuild(l));
     if (!buildsConsole) continue;
 
     const name = file.split(/[\\/]/).pop();
@@ -122,11 +172,49 @@ export function scanConsoleCorpusStaging(root = ROOT) {
   return { builders, missing };
 }
 
+/**
+ * REGRESSION FENCE. Every workflow here genuinely produces the loom-console image
+ * today. The detection predicate is deliberately narrow (see `declaresConsoleBuild`),
+ * and the specific way a narrow predicate fails is by silently dropping a real
+ * builder — the exact shape of the four guard-blindness incidents this program has
+ * already had (a guard matching a deleted symbol in prose; one skipping any file
+ * without a literal `getSession(`; one scoped by filename that excluded 11
+ * `gov-provision-*` workflows; one matching an env-var name anywhere in the tree).
+ * If a workflow here is renamed or retired, update this list in the same PR — the
+ * guard fails loudly rather than quietly measuring less.
+ */
+const EXPECTED_CONSOLE_BUILDERS = [
+  'build-fiab-images-acr-tasks.yml',
+  'build-fiab-images.yml',
+  'console-bluegreen-roll.yml',
+  'full-app-deploy-commercial.yml',
+  'gov-build-images.yml',
+  'gov-console-roll.yml',
+  'publish-ghcr-images.yml',
+  'trivy.yml',
+];
+
 function main() {
   const { builders, missing } = scanConsoleCorpusStaging(ROOT);
 
   // SELF-CHECK: a run that finds no console builders is measuring nothing —
   // a moved workflow dir, a renamed context, or a bad --root. Fail, never pass.
+  // The fence only applies to a real-repo scan; fixture trees (--root) legitimately
+  // contain none of these. CI never passes --root.
+  if (rootFlag < 0) {
+    const undetected = EXPECTED_CONSOLE_BUILDERS.filter((w) => !builders.includes(w));
+    if (undetected.length > 0) {
+      console.error(
+        '::error::check-console-corpus-staged no longer DETECTS known loom-console ' +
+          `builders: ${undetected.join(', ')}. The detection predicate has been narrowed ` +
+          'too far, so these workflows could drop their corpus staging without this guard ' +
+          'noticing. Fix declaresConsoleBuild(), or update EXPECTED_CONSOLE_BUILDERS if the ' +
+          'workflow was genuinely renamed/retired.',
+      );
+      process.exit(1);
+    }
+  }
+
   if (builders.length === 0) {
     console.error(
       '::error::check-console-corpus-staged found ZERO workflows that build the loom-console ' +

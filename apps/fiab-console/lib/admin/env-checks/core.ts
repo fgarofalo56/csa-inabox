@@ -16,6 +16,10 @@
  * Split out of self-audit.ts for the G2 gate registry; self-audit re-exports
  * everything here so existing imports keep working.
  */
+// Pure, zero-import leaf (safe in a client bundle) — the SAME predicate the
+// runtime clients use to decide whether a *_URL is a real endpoint.
+import { isUnreachableServiceUrl } from '@/lib/azure/unreachable-url';
+
 export type AuditStatus = 'pass' | 'warn' | 'fail';
 export type AuditSeverity = 'critical' | 'recommended' | 'optional';
 export type AuditCategory =
@@ -471,6 +475,23 @@ export interface EnvSpec {
    *
    * Values are compared case-insensitively against the trimmed env value. */
   rejectValues?: Record<string, string[]>;
+  /** Vars whose value must be a REACHABLE-shaped service URL, not merely present.
+   *
+   * WHY THIS EXISTS (measured, not hypothetical). `svc-iceberg-catalog` requires
+   * `LOOM_ICEBERG_CATALOG_URL`. The live Commercial Console carried the value
+   * `https://0.0.0.0:3000/api/catalog/iceberg` — a bind-all listen address that
+   * also points circularly back at Loom's OWN BFF proxy. Every request against
+   * the capability returned the honest 503 not-configured gate, because
+   * `iceberg-catalog-client.ts` rejects exactly that shape... and the env-check
+   * scored the same estate **Ready**, because `has()` only asks whether the
+   * string is non-empty. The health surface and the runtime disagreed about the
+   * same variable.
+   *
+   * `rejectValues` cannot express this: the defect is a SHAPE (any unspecified
+   * host), not a fixed literal. Listed vars are therefore run through the shared
+   * {@link isUnreachableServiceUrl} predicate — the SAME function the runtime
+   * clients use, so the two can no longer diverge. */
+  rejectUnreachableUrls?: string[];
   /** Names the env var whose PRESENCE means the component this spec guards is
    * actually deployed in this estate.
    *
@@ -493,6 +514,11 @@ export interface EnvSpec {
 /** True when `k` is set AND its value is not one this spec explicitly rejects. */
 function hasSatisfying(spec: EnvSpec, k: string): boolean {
   if (!has(k)) return false;
+  // A var that must hold a reachable-shaped service URL is NOT satisfied by a
+  // bind-all / unparseable placeholder — the runtime clients reject exactly
+  // those values, so the gate has to as well or the two disagree. See
+  // EnvSpec.rejectUnreachableUrls.
+  if (spec.rejectUnreachableUrls?.includes(k) && isUnreachableServiceUrl(env(k))) return false;
   const rejected = spec.rejectValues?.[k];
   if (!rejected?.length) return true;
   const v = env(k).toLowerCase();
@@ -536,13 +562,23 @@ export function evalEnv(spec: EnvSpec): CheckResult {
   }
   const failStatus: AuditStatus = spec.warnOnMiss || spec.severity !== 'critical' ? 'warn' : 'fail';
   const fix = ok ? null : envVarFix(varsToSet(missing));
+  // Distinguish "never set" from "set to something unusable" so the operator is
+  // not sent to configure a var that is already configured — wrongly.
+  const unusable = ok ? [] : missing.filter(
+    (k) => has(k) && spec.rejectUnreachableUrls?.includes(k) && isUnreachableServiceUrl(env(k)),
+  );
+  const detail = ok
+    ? 'Configured.'
+    : unusable.length
+      ? `${unusable.join(', ')} is SET but is not a reachable endpoint (a bind-all address like 0.0.0.0, or an unparseable value) — the runtime treats it exactly like unset. Missing: ${missing.join(', ')}.`
+      : `Missing: ${missing.join(', ')}.`;
   return {
     id: spec.id,
     category: spec.category,
     title: spec.title,
     severity: spec.severity,
     status: ok ? 'pass' : failStatus,
-    detail: ok ? 'Configured.' : `Missing: ${missing.join(', ')}.`,
+    detail,
     remediation: ok ? undefined : spec.remediation,
     redeploy: ok ? undefined : true,
     docs: spec.docs,

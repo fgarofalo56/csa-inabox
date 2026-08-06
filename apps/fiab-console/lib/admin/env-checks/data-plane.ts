@@ -47,6 +47,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-loom-duckdb', category: 'data-plane', title: 'SQL Lab serving tier (embedded DuckDB Container App)', severity: 'optional',
     required: ['LOOM_DUCKDB_URL'], warnOnMiss: true, optionalDefault: true,
+    rejectUnreachableUrls: ['LOOM_DUCKDB_URL'],
     optionalDefaultDetail:
       'SQL Lab is fully functional unset: the identical statement executes on Synapse Serverless and the status bar names the engine that answered. Deploying the DuckDB tier changes latency (sub-second cold start instead of a Serverless round-trip) and unlocks the Arrow transport that the in-browser Local analysis tab reuses — it never changes results.',
     remediation:
@@ -63,6 +64,7 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-flight-sql', category: 'data-plane', title: 'Arrow Flight SQL wire (ADBC / JDBC serving)', severity: 'optional',
     required: ['LOOM_FLIGHTSQL_URL'], warnOnMiss: true, optionalDefault: true,
+    rejectUnreachableUrls: ['LOOM_FLIGHTSQL_URL'],
     optionalDefaultDetail:
       'The Connect tab renders fully unset: Loom still streams the identical Arrow RecordBatches over the audited HTTP tier once a result crosses the Arrow threshold, and the tab explains the endpoint state honestly instead of printing an unreachable address. Wiring the Flight wire removes one hop for external ADBC / JDBC clients.',
     remediation:
@@ -76,41 +78,97 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     },
   },
   // ── N1 — Iceberg REST Catalog (the zero-copy external-engine bridge) ──
+  //    DEFAULT-ON since the catalog moved into the orchestrator: admin-plane/
+  //    main.bicep deploys data-plane/iceberg-catalog-aca.bicep and emits
+  //    LOOM_ICEBERG_CATALOG_URL, so a fresh push-button install arrives wired
+  //    (.claude/rules/auto-bind-by-default.md §5 — the value is produced by the
+  //    deploy, never asked of the operator).
+  //
+  //    NOT optionalDefault any more, and that is the point. It used to claim
+  //    "Delta↔Iceberg dual metadata still works unset", which is true but is NOT
+  //    federated lake access: handing an engine a raw metadata path is not
+  //    catalog-based discovery or credential vending. Combined with presence-only
+  //    `has()`, that made this gate incapable of reporting anything but Ready —
+  //    the live Commercial Console scored it green while carrying the placeholder
+  //    `https://0.0.0.0:3000/api/catalog/iceberg` and 503-ing every request. A
+  //    gate that cannot go red measures nothing.
   {
     id: 'svc-iceberg-catalog', category: 'data-plane', title: 'Iceberg REST Catalog (Unity Catalog OSS container)', severity: 'optional',
-    required: ['LOOM_ICEBERG_CATALOG_URL'], warnOnMiss: true, optionalDefault: true,
-    optionalDefaultDetail:
-      'Delta↔Iceberg dual metadata still works unset: the lakehouse Interop tab writes real Iceberg V2 metadata into your own ADLS Gen2 beside the Delta log, and any engine can be pointed straight at that metadata folder. Setting LOOM_ICEBERG_CATALOG_URL adds CATALOG-based discovery (namespaces, table listing, credential vending) so Trino/Spark/DuckDB/Snowflake can browse instead of being handed paths.',
+    required: ['LOOM_ICEBERG_CATALOG_URL'], warnOnMiss: true,
+    rejectUnreachableUrls: ['LOOM_ICEBERG_CATALOG_URL'],
     remediation:
-      'Set LOOM_ICEBERG_CATALOG_URL to the internal-ingress FQDN of the iceberg-catalog Container App (Unity Catalog OSS serving the standard Apache Iceberg REST Catalog surface). Deploy platform/fiab/bicep/modules/data-plane/iceberg-catalog-aca.bicep, then set the var on the Console app. Optional overrides: LOOM_ICEBERG_CATALOG_WAREHOUSE (default "loom"), LOOM_ICEBERG_CATALOG_PREFIX (default /api/2.1/unity-catalog/iceberg), LOOM_ICEBERG_CATALOG_AUDIENCE (default api://<LOOM_MSAL_CLIENT_ID>). The catalog is NEVER public — external engines reach it through the audited Loom proxy at /api/catalog/iceberg with a scoped Loom API token.',
+      'LOOM_ICEBERG_CATALOG_URL is emitted by the deploy — admin-plane/main.bicep deploys data-plane/iceberg-catalog-aca.bicep (internal-ingress Unity Catalog OSS serving the standard Apache Iceberg REST Catalog surface) by DEFAULT and binds the var on the Console app. Unset or holding an unreachable placeholder therefore means the orchestrator has not been re-run since this shipped, the loom-unity image is not in this ACR, or an operator set loomBackends.icebergCatalog=\'disabled\'. Re-run the admin-plane deployment. Optional overrides: LOOM_ICEBERG_CATALOG_WAREHOUSE (default "loom"), LOOM_ICEBERG_CATALOG_PREFIX (default /api/2.1/unity-catalog/iceberg), LOOM_ICEBERG_CATALOG_AUDIENCE (default api://<LOOM_MSAL_CLIENT_ID>). Until it is wired the lakehouse Interop tab still writes real Iceberg V2 metadata into your own ADLS Gen2 beside the Delta log and an engine can be pointed straight at that folder — but catalog DISCOVERY and credential vending, i.e. the actual federation surface, are absent. The catalog is NEVER public — external engines reach it through the audited Loom proxy at /api/catalog/iceberg with a scoped Loom API token.',
     docs: 'https://iceberg.apache.org/docs/latest/rest-catalog-spec/',
-    provisionedBy: 'modules/data-plane/iceberg-catalog-aca.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_ICEBERG_CATALOG_URL on the Console app',
+    provisionedBy: 'modules/admin-plane/main.bicep → modules/data-plane/iceberg-catalog-aca.bicep (default-ON, loomBackends.icebergCatalog) → LOOM_ICEBERG_CATALOG_URL on the Console app',
     role: 'Storage Blob Data Reader (uami-loom-iceberg-catalog) on the DLZ lake — declared in the module; the Console UAMI needs no new role (the BFF proxies).',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
       fallbackNote: 'Self-hosted OSS container on the deployment\'s own Container Apps environment reading the deployment\'s own ADLS Gen2 — no SaaS catalog (no Tabular, no Snowflake Open Catalog, no Databricks-hosted Unity Catalog) is in the path, so the full capability runs disconnected in an IL5 / air-gapped enclave.',
     },
   },
-  // ── N7e — Trino / Starburst Federated SQL (THE single opt-in carve-out) ──
-  //    OPT-IN by design (heavy AKS infra): unset → SQL Lab's "Federated SQL
-  //    (Trino)" engine option honest-gates with a Fix-it that discloses the AKS
-  //    cost, while the DEFAULT engine (DuckDB N2b) keeps SQL Lab fully
-  //    functional — so this opt-in posture gates NO feature and does not breach
-  //    loom_default_on_opt_out (round-3 operator decision). NOT optionalDefault:
-  //    the /api/sql/trino route is honestly gated when the cluster is absent, so
-  //    it must not count as configured.
+  // ── N7e — Trino Federated SQL. DEFAULT-ON (the AKS carve-out is retired) ──
+  //    admin-plane/main.bicep deploys data-plane/loom-trino-aca.bicep — a
+  //    single-node Trino OSS Container App, INTERNAL ingress, minReplicas 0, so
+  //    idle cost is nothing — and emits LOOM_TRINO_URL. The old opt-in posture
+  //    existed only because the AKS shape forced an always-on node pool.
+  //
+  //    #2678 §3 — THE GATE MUST OBSERVE THE PROPERTY THAT MATTERS. This spec
+  //    used to require LOOM_TRINO_URL alone, so a deploy with
+  //    loomBackends.trinoAuthMode='disabled' — an engine any workload on the CAE
+  //    network could query as any user with an arbitrary X-Trino-User, bypassing
+  //    the BFF session check AND the audit row — reported GREEN. The auth mode is
+  //    now a REQUIRED var with 'disabled'/'none' rejected, so the anonymous
+  //    posture reads as a configuration defect (the same rejectValues mechanism
+  //    #2643 introduced for LOOM_UNITY_AUTH_MODE).
   {
-    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine — Trino on AKS (opt-in)', severity: 'optional',
-    required: ['LOOM_TRINO_URL'], warnOnMiss: true, optIn: true,
+    id: 'svc-loom-trino', category: 'data-plane', title: 'Federated SQL engine (Trino Container App)', severity: 'optional',
+    required: ['LOOM_TRINO_URL'], warnOnMiss: true,
+    rejectUnreachableUrls: ['LOOM_TRINO_URL'],
     remediation:
-      'Set LOOM_TRINO_URL to the INTERNAL-ingress coordinator URL of the opt-in loom-trino AKS cluster (Trino OSS, Apache-2.0, registered against the N1 Iceberg REST Catalog + external connectors). Deploy platform/fiab/bicep/modules/data-plane/loom-trino-aks.bicep, then set the var on the Console app. This is the ONE opt-in engine in the program: it stands up a full private AKS cluster (real, disclosed cost ~AKS node pool/mo) so it is NOT default-ON — SQL Lab keeps working on DuckDB / Synapse Serverless meanwhile, and Trino only ADDS the "Federated SQL (Trino)" engine choice that can join a Loom Iceberg table with an external Postgres table in one statement. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), LOOM_TRINO_AUDIENCE (Entra audience), LOOM_TRINO_TOKEN (Key-Vault secretRef bearer). The cluster is NEVER public — every query goes through the audited BFF at /api/sql/trino.',
+      'LOOM_TRINO_URL and LOOM_TRINO_AUTH_MODE are emitted by the deploy — admin-plane/main.bicep deploys data-plane/loom-trino-aca.bicep by DEFAULT (single-node Trino OSS, Apache-2.0, internal ingress, minReplicas 0 so it bills nothing at idle) and binds both vars. Unset means the orchestrator has not been re-run since this shipped, the loom-trino image is not in this ACR, a non-Container-Apps boundary, or an explicit loomBackends.trino=\'disabled\' opt-out; SQL Lab then keeps executing on the DEFAULT DuckDB tier with the identical result surface. LOOM_TRINO_AUTH_MODE=disabled is a SECURITY defect, not a missing value: it restores the anonymous posture in which anything already on the CAE network can query the lake as any user, bypassing the BFF session check and the audit row — remove the loomBackends.trinoAuthMode override to return to Entra bearer authorization. The value \'sealed\' is expected on a from-scratch install (authorization enforced against a sentinel audience nothing can mint, because ARM cannot create the Entra app registration); run .github/workflows/csa-loom-post-deploy-bootstrap.yml and redeploy to un-seal it. Optional knobs: LOOM_TRINO_ICEBERG_CATALOG (Trino catalog name fronting the Loom lake, default "iceberg"), loomBackends.trinoCatalogs / trinoCatalogSecrets (declarative external sources), loomBackends.trinoCatalogPolicy (per-catalog grant table). The engine is NEVER public — every query goes through the audited BFF at /api/sql/trino.',
     docs: 'https://trino.io/docs/current/connector/iceberg.html',
-    provisionedBy: 'modules/data-plane/loom-trino-aks.bicep (out-of-band standalone entrypoint; admin-plane/main.bicep is at the 256-param ceiling) → LOOM_TRINO_URL on the Console app',
-    role: 'Storage Blob Data Reader (uami-loom-trino) on the DLZ lake — declared in the module; the Trino workload identity reads Iceberg/Delta data files in place. The Console UAMI needs no new role (the BFF proxies).',
+    provisionedBy: 'modules/admin-plane/main.bicep → modules/data-plane/loom-trino-aca.bicep (default-ON, loomBackends.trino) → LOOM_TRINO_URL + LOOM_TRINO_AUTH_MODE on the Console app. The multi-node private-AKS module (data-plane/loom-trino-aks.bicep) remains the opt-in scale-out path.',
+    role: 'Storage Blob Data Reader on the DLZ lake for the identity the engine runs as (granted at the lake\'s resource-group scope by data-plane/loom-trino-lake-rbac.bicep) — it reads Iceberg/Delta data files in place, read-only by construction. The Console UAMI needs no new role (the BFF proxies).',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
-      fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own AKS cluster inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. SaaS-only external connectors stay honestly gated in IL5. As the opt-in carve-out, its absence removes NO capability — the default DuckDB engine (svc-loom-duckdb) serves SQL Lab in every cloud.',
+      fallbackNote: 'Trino is self-hosted OSS (Apache-2.0) on the deployment\'s own Container Apps environment inside the VNet, reading the deployment\'s own ADLS Gen2 via the N1 Iceberg catalog and in-boundary external sources — no SaaS query federation (no Starburst Galaxy, no Athena) is in the path, so the whole capability runs disconnected in an IL5 / air-gapped enclave. SaaS-only external connectors stay honestly gated in IL5. If the engine is absent the default DuckDB tier (svc-loom-duckdb) still serves SQL Lab in every cloud.',
     },
+  },
+  // ── N7e — the Trino ENGINE-LEVEL AUTHORIZATION posture (#2678 §3) ──
+  //
+  // A SEPARATE spec, exactly like svc-loom-unity-authz next door, and for the
+  // same reason. The hole #2678 named is that a deploy with
+  // loomBackends.trinoAuthMode='disabled' — an engine anything on the CAE
+  // network can query as any user via an arbitrary X-Trino-User, bypassing both
+  // the BFF session check and the audit row — reported GREEN, because
+  // LOOM_TRINO_AUTH_MODE appeared only in PROSE and never in a required/anyOf
+  // array. A gate satisfied by its own failure mode measures nothing.
+  //
+  // WHY NOT simply add the var to svc-loom-trino's `required`: /api/sql/trino
+  // hard-gates on that spec via backendGateResponse, so a var added there would
+  // 503 the engine on every estate that has not redeployed yet. An honest health
+  // finding must not become an outage. This spec observes the posture; the
+  // sibling spec keeps owning "is the engine reachable".
+  //
+  // 'sealed' is deliberately NOT rejected: it means authorization is ENFORCED
+  // against a sentinel audience nothing can mint — the correct from-scratch
+  // state until the sign-in bootstrap runs. Enforced-but-unusable, not open.
+  {
+    id: 'svc-loom-trino-authz', category: 'data-plane',
+    title: 'Federated SQL engine — authorization posture (Entra bearer)', severity: 'recommended',
+    required: ['LOOM_TRINO_AUTH_MODE'],
+    rejectValues: { LOOM_TRINO_AUTH_MODE: ['disabled', 'none', 'off', 'anonymous'] },
+    appliesWhenPresent: {
+      envVar: 'LOOM_TRINO_URL',
+      notDeployedDetail:
+        'the Federated SQL (Trino) engine is not stood up in this estate, so there is no query surface to authorize and no anonymous endpoint to expose. SQL Lab runs on the DuckDB tier (svc-loom-duckdb). Deploy the engine and this check applies in full.',
+    },
+    warnOnMiss: true,
+    remediation:
+      'LOOM_TRINO_AUTH_MODE is emitted by admin-plane/main.bicep alongside LOOM_TRINO_URL and reports the posture the deploy actually chose: "entra" (enforced, audience pinned - queries run), "sealed" (enforced against a sentinel audience nothing can mint - the expected from-scratch state until the sign-in bootstrap has run) or "disabled". A value of disabled/none/off/anonymous is a SECURITY defect, not a missing setting: it restores the posture in which anything already on the CAE network can query the lake as any user with an arbitrary X-Trino-User header, bypassing the BFF session check and the audit row - internal ingress alone is not an authorization control. Remove the loomBackends.trinoAuthMode override and redeploy. If the var is simply absent while LOOM_TRINO_URL is set, the estate is running a revision that predates the authorization work - re-run the admin-plane deployment.',
+    docs: 'https://trino.io/docs/current/security/jwt.html',
+    provisionedBy: 'modules/admin-plane/main.bicep -> LOOM_TRINO_AUTH_MODE on the Console app (derived from loomBackends.trinoAuthMode + whether an Entra audience could be pinned)',
+    role: 'No Azure role. The engine validates an Entra bearer against the active cloud JWKS with the audience pinned by data-plane/loom-trino-aca.bicep.',
   },
   {
     id: 'svc-cosmos-control', category: 'data-plane', title: 'Cosmos DB control plane (versions / scaling / CMK)', severity: 'optional',

@@ -124,7 +124,12 @@ const ALLOWLIST = new Set([
   'LOOM_ADT_ENDPOINT',
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)
   'LOOM_SPARK_POOL_REAP_GRACE',      // opt-in tune: grace seconds before an untracked Livy session is reaped (default 600)              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
-  'LOOM_ICEBERG_CATALOG_URL',        // N1 opt-in Iceberg REST Catalog service URL (internal-ingress Unity Catalog OSS container). Deployed out-of-band via data-plane/iceberg-catalog-aca.bicep (admin-plane/main.bicep at the 256-param ceiling), then set on the console app. Unset => the lakehouse Interop tab still writes real Delta<->Iceberg dual metadata into the customer's own ADLS Gen2 and every surface renders with an honest Fix-it gate; only catalog DISCOVERY is absent. (LOOM_ICEBERG_CATALOG_TOKEN auto-allowed by /_TOKEN$/.)
+  // LOOM_ICEBERG_CATALOG_URL is NO LONGER allowlisted: the N1 Iceberg REST
+  // Catalog is DEFAULT-ON. admin-plane/main.bicep deploys
+  // data-plane/iceberg-catalog-aca.bicep and emits the var, so this guard now
+  // ENFORCES that wiring instead of excusing its absence — which is exactly how
+  // the live estate ended up carrying a hand-set 0.0.0.0 placeholder.
+  // (LOOM_ICEBERG_CATALOG_TOKEN auto-allowed by /_TOKEN$/.)
   // LOOM_RISINGWAVE_URL and LOOM_DUCKDB_URL were allowlisted here as "opt-in …
   // deployed out-of-band via data-plane/*.bicep (admin-plane/main.bicep at the
   // 256-param ceiling), then set on the console app". BOTH reasons are stale —
@@ -168,8 +173,16 @@ const ALLOWLIST = new Set([
   'LOOM_ICEBERG_CATALOG_PREFIX',     // N1 opt-in IRC path prefix override (code default /api/2.1/unity-catalog/iceberg) — runtime-only knob, never a deploy dependency
   'LOOM_ICEBERG_CATALOG_WAREHOUSE',  // N1 opt-in IRC warehouse override (code default 'loom') — runtime-only knob, never a deploy dependency
   'LOOM_ICEBERG_CATALOG_AUDIENCE',   // N1 opt-in Entra audience for the upstream catalog hop (defaults to api://<LOOM_MSAL_CLIENT_ID>) — runtime-only knob
-  'LOOM_TRINO_URL',                  // N7e THE single opt-in carve-out: internal-ingress Trino/Starburst Federated-SQL coordinator on a PRIVATE AKS cluster (Apache-2.0), registered against the N1 Iceberg REST Catalog + external connectors. Deployed out-of-band via data-plane/loom-trino-aks.bicep (admin-plane/main.bicep at the 256-param ceiling) + a separate Helm-install phase, then set on the console app. Unset (the DEFAULT) => the "Federated SQL (Trino)" engine option honest-gates with a Fix-it that discloses the AKS cost and SQL Lab keeps working on the DEFAULT DuckDB tier — gates NO feature (loom_default_on_opt_out carve-out). (LOOM_TRINO_TOKEN auto-allowed by /_TOKEN$/.)
-  'LOOM_TRINO_AUDIENCE',             // N7e opt-in Entra audience for the Trino coordinator hop (defaults to api://<LOOM_MSAL_CLIENT_ID>); unset => the BFF reaches the internal-ingress cluster on in-VNet trust — runtime-only knob
+  // LOOM_TRINO_URL is NO LONGER allowlisted: N7e is DEFAULT-ON. The push-button
+  // deploy stands up the scale-to-zero single-node Trino Container App
+  // (data-plane/loom-trino-aca.bicep) and admin-plane/main.bicep emits the var,
+  // so this guard now enforces that wiring instead of excusing its absence.
+  // (LOOM_TRINO_TOKEN auto-allowed by /_TOKEN$/; LOOM_TRINO_FETCH_TIMEOUT_MS by /_MS$/.)
+  // LOOM_TRINO_AUDIENCE is NO LONGER allowlisted either. Its old note said
+  // "unset => the BFF reaches the internal-ingress cluster on in-VNet trust",
+  // which stopped being true the moment the engine started ENFORCING Entra bearer
+  // authorization (#2678 §3) — in-VNet trust is precisely the posture that was
+  // removed. admin-plane/main.bicep emits it alongside LOOM_TRINO_AUTH_MODE.
   'LOOM_TRINO_ICEBERG_CATALOG',      // N7e opt-in Trino catalog name that fronts the Loom Iceberg REST Catalog (code default 'iceberg') — runtime-only knob, never a deploy dependency
   'LOOM_SHARING_AUDIENCE',          // LU-9 the Entra AUDIENCE an external Delta Sharing RECIPIENT's token must carry: a DEDICATED app registration (App ID URI) for the sharing API. When set it REPLACES the fallback (api://<LOOM_MSAL_CLIENT_ID>) rather than adding to it, so the Console's own API stops being a data-export credential. One of this or LOOM_SHARING_SCOPE is REQUIRED once LOOM_SHARING_URL is set (env-check svc-loom-sharing anyOf) — /api/delta-sharing/* fails CLOSED with 503 otherwise. Runtime-only (an Entra app registration, not an ARM resource), never a deploy dependency.
   'LOOM_SHARING_SCOPE',             // LU-9 the alternative half of the same pin: a scope or app role (comma/space separated) that a recipient token must carry in scp/roles. Lets an estate keep the Console's own registration as the audience while still separating recipient tokens from ordinary Console API tokens — expose the scope on the Console app registration and consent it ONLY to recipient apps. Runtime-only. See lib/sharing/store.sharingAudiencePinned + docs/fiab/delta-sharing-gov.md.
@@ -640,6 +653,132 @@ export function stripBicepDocs(src) {
   return out;
 }
 
+// ── Per-APP delivery (#3012) ────────────────────────────────────────────────
+//
+// WHY `collectEmitted()` IS NOT ENOUGH. It flattens every LOOM_* token from every
+// file under platform/fiab/bicep into ONE set, so a name counts as "emitted"
+// when ANY bicep file anywhere references it — including a file that wires a
+// COMPLETELY DIFFERENT container app. It cannot tell emission from mention, and
+// it cannot tell WHICH app receives the value. Verified concretely on 2026-08-05:
+// deleting every `LOOM_ICEBERG_CATALOG_URL` occurrence from admin-plane/main.bicep
+// (count -> 0) left this guard exiting 0, because sibling bicep files mention the
+// name.
+//
+// That is the same class as the other guard-blindness incidents in this program:
+// a route guard matching a DELETED symbol in prose (#2985); a guard skipping any
+// file without a literal `getSession(` (#2995); a deploy guard scoped by FILENAME
+// that excluded 11 gov-provision-* workflows. In each case the guard measured a
+// proxy instead of the subject.
+//
+// The subject here is: DOES THE CONSOLE CONTAINER APP ACTUALLY RECEIVE THIS VALUE?
+// A var the console reads but the deploy sets on loom-trino / loom-sharing /
+// loom-duckdb is UNSET in the console's process — the exact silent config drift
+// the guard's own header says it exists to catch.
+
+const ADMIN_PLANE = path.join(BICEP_ROOT, 'modules', 'admin-plane');
+/** The apps[] orchestrator that declares the console container app. */
+const CONSOLE_APP_FILE = path.join(ADMIN_PLANE, 'main.bicep');
+/** The module that materialises apps[] and adds env applied to EVERY app. */
+const APP_DEPLOYMENTS_FILE = path.join(ADMIN_PLANE, 'app-deployments.bicep');
+
+const ENV_NAME_RE = /name:\s*'(LOOM_[A-Z0-9_]+)'/g;
+
+/** The balanced `open`..close slice of `text` beginning at index `start`. */
+function balancedSlice(text, start, openChar, closeChar) {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (c === openChar) depth++;
+    else if (c === closeChar) {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return '';
+}
+
+/**
+ * The set of LOOM_* names the loom-console container app actually RECEIVES:
+ * the `env` of its own `apps[]` entry, plus the env `app-deployments.bicep`
+ * applies to every app it deploys.
+ *
+ * `secretRef` entries count — they still carry `name: 'LOOM_X'`, and a value
+ * injected from Key Vault is delivered just as much as a literal.
+ */
+export function collectConsoleDelivered() {
+  const delivered = new Set();
+
+  const main = fs.readFileSync(CONSOLE_APP_FILE, 'utf8');
+  const marker = main.indexOf("name: 'loom-console'");
+  if (marker < 0) {
+    throw new Error(
+      "check-env-sync: no `name: 'loom-console'` app entry in admin-plane/main.bicep — " +
+        'the console app declaration moved. Fix collectConsoleDelivered(); do not ' +
+        'let this guard silently measure nothing.',
+    );
+  }
+  const appObj = balancedSlice(main, main.lastIndexOf('{', marker), '{', '}');
+  const envIdx = appObj.indexOf('env:');
+  if (envIdx < 0) throw new Error('check-env-sync: loom-console app entry has no env: block.');
+  const afterEnv = appObj.slice(envIdx);
+  // `env:` is either `concat( … )` or a bare `[ … ]`.
+  const paren = afterEnv.indexOf('(');
+  const brack = afterEnv.indexOf('[');
+  const envBlock =
+    paren >= 0 && (brack < 0 || paren < brack)
+      ? balancedSlice(afterEnv, paren, '(', ')')
+      : balancedSlice(afterEnv, brack, '[', ']');
+  let m;
+  ENV_NAME_RE.lastIndex = 0;
+  while ((m = ENV_NAME_RE.exec(envBlock)) !== null) delivered.add(m[1]);
+
+  const shared = fs.readFileSync(APP_DEPLOYMENTS_FILE, 'utf8');
+  ENV_NAME_RE.lastIndex = 0;
+  while ((m = ENV_NAME_RE.exec(shared)) !== null) delivered.add(m[1]);
+
+  return delivered;
+}
+
+/**
+ * KNOWN GAPS — read by the console, but the deploy sets them on a DIFFERENT app.
+ * This is a RATCHET, not an allowlist: it is the pre-existing debt this stricter
+ * check surfaced on the day it was written. It must only ever SHRINK. Adding a
+ * name here is not a fix — the fix is an entry in the loom-console `env` array.
+ *
+ * Each is genuinely mis-delivered today:
+ *   LOOM_LAKE_ACCOUNT      -> set on duckdb-aca + iceberg-catalog-aca, not the console
+ *   LOOM_SHARING_ENDPOINT  -> set on loom-sharing-app itself
+ *   LOOM_SHARING_BEARER    -> set on loom-sharing-app; its own comment says it should
+ *                             also be a secretRef ON THE CONSOLE, which was never done
+ *   LOOM_DLZ_SUBSCRIPTION_ID -> named only in an @description + a shell comment in
+ *                             landing-zone/hub-console-dlz-env.bicep
+ *   LOOM_CONSOLE_PRINCIPAL_ID -> not set by any .bicep at all
+ */
+export const KNOWN_UNDELIVERED = new Set([
+  'LOOM_CONSOLE_PRINCIPAL_ID',
+  'LOOM_DLZ_SUBSCRIPTION_ID',
+  'LOOM_LAKE_ACCOUNT',
+  'LOOM_SHARING_BEARER',
+  'LOOM_SHARING_ENDPOINT',
+]);
+
+/**
+ * Vars that are READ by the console and pass the flat `emitted` check, but are
+ * NOT delivered to the console app and are NOT allowlisted / fenced.
+ */
+export function computeUndelivered() {
+  const reads = collectReads();
+  const delivered = collectConsoleDelivered();
+  const out = [];
+  for (const name of [...reads].sort()) {
+    if (delivered.has(name)) continue;
+    if (isAllowlisted(name)) continue;
+    if (KNOWN_UNDELIVERED.has(name)) continue;
+    out.push(name);
+  }
+  return { delivered, undelivered: out };
+}
+
 /** Every LOOM_* name referenced in the platform bicep OUTSIDE of documentation. */
 export function collectEmitted() {
   const emitted = new Set();
@@ -675,6 +814,23 @@ function main() {
   console.log(`[env-sync] LOOM_* read by console:   ${reads.size}`);
   console.log(`[env-sync] LOOM_* emitted by bicep:   ${emitted.size}`);
   console.log(`[env-sync] read-but-not-emitted (unallowlisted): ${missing.length}`);
+
+  // #3012 — PER-APP DELIVERY. `emitted` above only proves the NAME appears in
+  // bicep somewhere; this proves the CONSOLE APP receives it.
+  const { delivered, undelivered } = computeUndelivered();
+  console.log(`[env-sync] LOOM_* delivered to loom-console: ${delivered.size}`);
+  // SELF-CHECK: the console app carries hundreds of env entries. A tiny set means
+  // the extraction broke (renamed app, restructured env) and this check is
+  // measuring nothing — the failure mode every guard in this repo has had.
+  if (delivered.size < 100) {
+    console.error(
+      `::error::check-env-sync resolved only ${delivered.size} env vars on the ` +
+        'loom-console app. That is far too few — the apps[] entry or its env block ' +
+        'has been restructured and collectConsoleDelivered() is no longer reading it. ' +
+        'Fix the extraction; do not let this check pass on nothing.',
+    );
+    process.exit(1);
+  }
   if (missing.length) {
     console.error('\n[env-sync] FAIL — these LOOM_* vars are read by the console but neither');
     console.error('emitted by platform/fiab/bicep nor allowlisted in scripts/ci/check-env-sync.mjs:');
@@ -685,6 +841,19 @@ function main() {
     console.error('ALLOWLIST in scripts/ci/check-env-sync.mjs with a one-line reason.');
     process.exit(1);
   }
+  if (undelivered.length) {
+    console.error('\n[env-sync] FAIL — these LOOM_* vars are READ by the console but the');
+    console.error('deploy never sets them ON THE loom-console APP. They may be referenced in');
+    console.error('bicep (so the older name-anywhere check passes) while being delivered to a');
+    console.error('DIFFERENT container app — which leaves them UNSET in the console process:');
+    for (const n of undelivered) console.error(`  - ${n}`);
+    console.error('\nFix: add the var to the loom-console `env` array in');
+    console.error('platform/fiab/bicep/modules/admin-plane/main.bicep (or to the shared env in');
+    console.error('app-deployments.bicep if every app needs it). Adding it to KNOWN_UNDELIVERED');
+    console.error('is NOT a fix — that set is a shrinking ratchet of pre-existing debt.');
+    process.exit(1);
+  }
+
   console.log('[env-sync] OK — every read LOOM_* var is emitted or allowlisted.');
   process.exit(0);
 }

@@ -135,6 +135,10 @@ const REVIEWED_IMAGES = {
   // = "deltaio"), so it is the same Apache-2.0 codebase, not a third-party
   // redistribution under different terms.
   'deltaio/delta-sharing-server': 'Apache-2.0',
+  // github.com/trinodb/trino — Apache-2.0 (N7e Federated SQL engine). The image is
+  // published by the Trino project itself, so it is the same Apache-2.0 codebase,
+  // not a third-party redistribution under different terms.
+  'trinodb/trino': 'Apache-2.0',
 };
 
 /**

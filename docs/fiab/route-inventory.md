@@ -16,8 +16,8 @@ same classic + WS-D1 toolkit export styles).
 | Total routes | 1671 |
 | Public (no session) | 100 |
 | Session-only | 562 |
-| Owner-scoped | 715 |
-| Admin | 294 |
+| Owner-scoped | 714 |
+| Admin | 295 |
 | Gated (backend config) | 530 |
 | Areas | 121 |
 
@@ -2133,7 +2133,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `sql/trino/route.ts` | POST | owner-scoped | ● | — |
+| `sql/trino/route.ts` | POST | admin | ● | — |
 
 ## sqldb
 

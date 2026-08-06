@@ -2,10 +2,10 @@
  * N7e — BFF contract tests for the Federated SQL (Trino) execution edge.
  *
  *   1. AUTH — an anonymous caller 401s before anything else.
- *   2. OPT-IN GATE — with LOOM_TRINO_URL unset the route returns the honest 503
- *      gate envelope (gated:true, gate.id=svc-loom-trino) so the surface renders
- *      the Fix-it that discloses the AKS cost. This is the DEFAULT state; SQL Lab
- *      still works on DuckDB.
+ *   2. HONEST GATE — with LOOM_TRINO_URL unset the route returns the 503 gate
+ *      envelope (gated:true, gate.id=svc-loom-trino) so the surface renders the
+ *      Fix-it. The engine is default-ON, so this is the opted-out / image-missing
+ *      state, not the normal one; SQL Lab still works on DuckDB.
  *   3. REAL federated query — when wired, the client REST protocol runs and the
  *      response names the trino engine; the execution is audited.
  */
@@ -50,11 +50,13 @@ beforeEach(() => {
   auditRows.length = 0;
   sessionValue = { claims: { oid: 'oid-1', upn: 'analyst@contoso.com', tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 };
   delete process.env.LOOM_TRINO_URL;
+  delete process.env.LOOM_TRINO_CATALOG_POLICY;
   respond = () => new Response('{}', { status: 200 });
 });
 
 afterEach(() => {
   delete process.env.LOOM_TRINO_URL;
+  delete process.env.LOOM_TRINO_CATALOG_POLICY;
   vi.resetModules();
 });
 
@@ -72,7 +74,7 @@ describe('POST /api/sql/trino — auth', () => {
   });
 });
 
-describe('POST /api/sql/trino — opt-in gate (DEFAULT state)', () => {
+describe('POST /api/sql/trino — honest gate (LOOM_TRINO_URL unset)', () => {
   it('returns the honest 503 gate envelope with a Fix-it when LOOM_TRINO_URL is unset', async () => {
     const { POST } = await import('../route');
     const res = await POST(req('https://loom.test/api/sql/trino', {
@@ -91,6 +93,9 @@ describe('POST /api/sql/trino — opt-in gate (DEFAULT state)', () => {
 describe('POST /api/sql/trino — configured cluster', () => {
   it('runs the federated statement and reports the trino engine, audited', async () => {
     process.env.LOOM_TRINO_URL = BASE;
+    // #2678 — an external federation catalog is deny-by-default; grant `postgres`
+    // to signed-in callers so the cross-source join is authorized.
+    process.env.LOOM_TRINO_CATALOG_POLICY = JSON.stringify({ postgres: 'signed-in' });
     respond = (url: string) => {
       if (url.endsWith('/v1/statement')) {
         return new Response(JSON.stringify({
@@ -121,6 +126,7 @@ describe('POST /api/sql/trino — configured cluster', () => {
 
   it('assembles a structured cross-source join server-side (quoting-safe) and audits it', async () => {
     process.env.LOOM_TRINO_URL = BASE;
+    process.env.LOOM_TRINO_CATALOG_POLICY = JSON.stringify({ postgres: 'signed-in' });
     respond = () => new Response(JSON.stringify({ columns: [{ name: 'n', type: 'bigint' }], data: [[1]] }), { status: 200 });
 
     const { POST } = await import('../route');
@@ -159,5 +165,40 @@ describe('POST /api/sql/trino — configured cluster', () => {
     expect((await res.json()).error).toContain('cannot be resolved');
     expect(auditRows).toHaveLength(1);
     expect(auditRows[0].outcome).toBe('failure');
+  });
+});
+
+describe('POST /api/sql/trino — catalog authorization (#2678, deny-by-default)', () => {
+  it('REFUSES a query against a catalog the caller is not granted — 403, no coordinator hop, audited', async () => {
+    process.env.LOOM_TRINO_URL = BASE;
+    // `hr` is wired but restricted to a group the analyst is NOT in.
+    process.env.LOOM_TRINO_CATALOG_POLICY = JSON.stringify({ hr: { groups: ['grp-hr'] } });
+    // The analyst session carries no matching group (claims.groups absent).
+    const { POST } = await import('../route');
+    const res = await POST(req('https://loom.test/api/sql/trino', {
+      method: 'POST', body: JSON.stringify({ sql: 'SELECT * FROM hr.public.salaries' }),
+    }), {} as any);
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('catalog_forbidden');
+    expect(body.catalog).toBe('hr');
+    // Deny-by-default proof: NOTHING was sent to the coordinator.
+    expect(upstream).toHaveLength(0);
+    // The denied access is a security event — one audited failure row.
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0].outcome).toBe('failure');
+    expect(auditRows[0].summary).toContain('FAILED');
+  });
+
+  it('ALLOWS the built-in Loom lake catalog to a plain signed-in caller (no grant needed)', async () => {
+    process.env.LOOM_TRINO_URL = BASE;
+    respond = () => new Response(JSON.stringify({ columns: [{ name: 'n', type: 'bigint' }], data: [[1]] }), { status: 200 });
+    const { POST } = await import('../route');
+    const res = await POST(req('https://loom.test/api/sql/trino', {
+      method: 'POST', body: JSON.stringify({ sql: 'SELECT * FROM iceberg.gold.orders' }),
+    }), {} as any);
+    expect(res.status).toBe(200);
+    expect(upstream[0].url).toBe(`${BASE}/v1/statement`);
   });
 });

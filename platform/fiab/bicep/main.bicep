@@ -1477,6 +1477,21 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // LU (#2681) — Loom Unity, the sovereign OSS metastore. DEFAULT-ON; set
       // observabilityConfig.backendOverrides = { unity: 'disabled' } to opt out.
       unity: 'enabled'
+      // N7e Federated SQL (Trino) — DEFAULT-ON. Deploys the scale-to-zero
+      // single-node Trino Container App (data-plane/loom-trino-aca.bicep) and
+      // wires LOOM_TRINO_URL, so SQL Lab's "Federated SQL (Trino)" engine works
+      // on a fresh push-button install in BOTH clouds with no operator step.
+      // Idle cost is nothing (minReplicas 0). Runtime kill switch for admins:
+      // the `n7e-trino-federation` FLAG0 flag (no redeploy). Set 'disabled'
+      // here to skip the Container App entirely.
+      trino: 'enabled'
+      // N1 Iceberg REST Catalog — DEFAULT-ON. Deploys the internal-ingress
+      // Unity Catalog OSS container that serves the standard Apache Iceberg
+      // REST Catalog surface (data-plane/iceberg-catalog-aca.bicep) and wires
+      // LOOM_ICEBERG_CATALOG_URL — on the Console AND into the Trino engine
+      // above, which is what makes federated lake access actually federate the
+      // lake. minReplicas 0, so idle cost is nothing.
+      icebergCatalog: 'enabled'
     }, observabilityConfig.?backendOverrides ?? {})
   }
 }

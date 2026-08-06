@@ -413,6 +413,13 @@ jobs:
           # the image MUST be in ACR before the admin-plane deploy runs.
           - app: loom-unity
             ctx: ./apps/loom-unity
+          # N7e — the DEFAULT-ON Federated SQL engine. Single-node Trino OSS as a
+          # scale-to-zero internal-ingress Container App
+          # (data-plane/loom-trino-aca.bicep, wired from admin-plane/main.bicep).
+          # The image MUST be in ACR before that app can start, otherwise
+          # LOOM_TRINO_URL would be wired to an endpoint that never serves.
+          - app: loom-trino
+            ctx: ./apps/loom-trino
           # M1 — estate-assessment reader (inbound-migration on-ramp). DEFAULT-ON:
           # admin-plane/main.bicep deploys data-plane/loom-migrate-aca.bicep on
           # every apps-enabled deploy and wires LOOM_MIGRATE_URL, so this image is
@@ -657,7 +664,7 @@ jobs:
           # a matrix entry can no longer be added without being verified here.
           # Verify the :TAG refs — that is exactly what the redeploy-with-apps
           # job rolls.
-          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-script-runner loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave)
+          APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-script-runner loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave loom-trino)
           FAILED=()
           UNPROVEN=()
           for APP in "${APPS[@]}"; do
