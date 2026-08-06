@@ -170,6 +170,10 @@ param complianceTags object = {}
 // all along. Map ONLY the Commercial special case; every sovereign suffix
 // passes through unchanged.
 var sqlHostSuffix = environment().suffixes.sqlServerHostname // '.database.windows.net' | '.database.usgovcloudapi.net'
+// The '.database.windows.net' literal below is a COMPARISON key (detecting the
+// Commercial/GCC SQL suffix), not a hardcoded endpoint — the emitted value
+// still derives from environment().suffixes. Linter can't tell the difference.
+#disable-next-line no-hardcoded-env-urls
 var pgHostSuffix = sqlHostSuffix == '.database.windows.net' ? '.database.azure.com' : sqlHostSuffix
 var privateDnsZoneName = 'privatelink.postgres${pgHostSuffix}'
 

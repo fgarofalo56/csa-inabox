@@ -185,6 +185,10 @@ param complianceTags object = {}
 // wrong name here breaks Loom Unity's DB resolution too.
 // (Identical derivation to data-plane/loom-unity-postgres.bicep.)
 var sqlHostSuffix = environment().suffixes.sqlServerHostname
+// The '.database.windows.net' literal below is a COMPARISON key (detecting the
+// Commercial/GCC SQL suffix), not a hardcoded endpoint — the emitted value
+// still derives from environment().suffixes. Linter can't tell the difference.
+#disable-next-line no-hardcoded-env-urls
 var pgHostSuffix = sqlHostSuffix == '.database.windows.net' ? '.database.azure.com' : sqlHostSuffix
 var privateDnsZoneName = 'privatelink.postgres${pgHostSuffix}'
 
