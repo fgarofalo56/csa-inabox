@@ -265,64 +265,29 @@ jobs:
         if: ${{ inputs.apply == 'true' && !inputs.skip_supply_chain }}
         run: |
           set -euo pipefail
-          az acr login -n "$ACR" >/dev/null
-          sign_one() {
-            local img="$1" digest ref
-            digest=$(az acr repository show --name "$ACR" --image "${img}:${SHA}" --query digest -o tsv | tr -d '\r')
-            [ -n "$digest" ] || { echo "::error::no digest for ${img}:${SHA}"; return 1; }
-            ref="${ACR_LOGIN}/${img}@${digest}"
-            cosign sign --yes "$ref"
-            cosign verify \
-              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/gov-provision-trino\.yml@" \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-              "$ref" > /dev/null
-            echo "::notice::signed + verified $ref"
-          }
-          sign_one loom-trino
-          if [ "${{ inputs.build_uat }}" = "true" ]; then sign_one loom-uat; fi
-
-      - name: Release the ACR firewall lease (always)
-        if: always()
-        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
-
-      # ── LIVE-ESTATE IMAGE PREFLIGHT (round-3, BLOCKING) ────────────────────
-      # This workflow ADOPTS a live Gov estate: wiring LOOM_TRINO_URL creates a
-      # NEW REVISION of the RUNNING loom-console. Two ways that goes wrong, both
-      # checked here, both fatal, neither silent:
-      #   1. loom-trino:<deploy tag> is not in the registry — ARM would create a
-      #      Container App that can never pull. (gov-provision-dataplane-images.yml has never
-      #      been run anywhere, so "the lane exists" is not evidence it does.)
-      #   2. The image the LIVE console is running no longer resolves — the new
-      #      revision could not start and the Gov console would go down over an
-      #      env-var change.
-      # Read-only: `az acr repository show` + `az containerapp show`.
-      - name: PREFLIGHT — every referenced image tag must exist in the Gov ACR
-        if: ${{ inputs.apply == 'true' }}
-        run: |
-          set -euo pipefail
-          az acr login -n "$ACR" >/dev/null
-          fail=0
-          need_tag() {
-            local repo="$1" tag="$2" d
-            d=$(az acr repository show --name "$ACR" --image "${repo}:${tag}" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
-            if [ -z "$d" ]; then
-              echo "::error::${repo}:${tag} is NOT present in $ACR. Refusing to deploy/adopt — this would point a Container App at an image that does not exist. Build it first (this workflow with apply=true, or gov-provision-dataplane-images.yml)."
-              fail=1
-            else
-              echo "::notice::${repo}:${tag} -> $d"
-            fi
-          }
-          need_tag loom-trino "$DEPLOY_TAG"
-          if [ "${{ inputs.build_uat }}" = "true" ]; then need_tag loom-uat "$DEPLOY_TAG"; fi
+          # #3012 (deploy-integrity R7): the hand-rolled probe here used
+          #   d=$(az acr repository show … 2>/dev/null || echo "")
+          # then reported an empty $d as "the tag is NOT present". A denial, a
+          # throttle, a network failure and a genuine 404 all produce "" — so it
+          # asserted a cause it never established, and an UNPROVABLE image read as
+          # a MISSING one. scripts/ci/assert-acr-image-tags.sh is the purpose-built
+          # helper the other three deploy lanes already use, and it makes all three
+          # outcomes explicit: present -> OK, reachable+absent -> FAIL with the
+          # producer workflow, registry unreachable -> FAIL (an unverified image is
+          # never a pass). Adopting it instead of re-implementing it also closes the
+          # guard-adoption gap this repo keeps re-opening.
+          REFS=("loom-trino:$DEPLOY_TAG")
+          if [ "${{ inputs.build_uat }}" = "true" ]; then REFS+=("loom-uat:$DEPLOY_TAG"); fi
           # The live console's CURRENT image, exactly as ARM will re-pull it.
           CONSOLE_REPO=$(printf '%s' "$CONSOLE_IMAGE" | sed 's|^[^/]*/||' | cut -d: -f1)
           CONSOLE_TAG=$(printf '%s' "$CONSOLE_IMAGE" | awk -F: '{print $NF}')
           if [ -n "$CONSOLE_REPO" ] && [ -n "$CONSOLE_TAG" ] && [ "$CONSOLE_REPO" != "$CONSOLE_TAG" ]; then
-            need_tag "$CONSOLE_REPO" "$CONSOLE_TAG"
+            REFS+=("${CONSOLE_REPO}:${CONSOLE_TAG}")
           else
-            echo "::warning::could not parse the live console image reference ('$CONSOLE_IMAGE') — cannot preflight the revision it will re-pull."
+            echo "::error::could not parse the live console image reference ('$CONSOLE_IMAGE') — refusing to roll a revision whose re-pull cannot be preflighted."
+            exit 1
           fi
-          [ "$fail" = "0" ] || { echo "::error::IMAGE PREFLIGHT FAILED — nothing was deployed and the live console was NOT touched."; exit 1; }
+          bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease "${REFS[@]}"
 
       - name: What-if loom-trino deployment
         run: |

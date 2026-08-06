@@ -2,7 +2,7 @@
      Source of truth: pyproject.toml, .github/workflows/test.yml,
      apps/fiab-console/vitest.config.ts.
      Regenerate: `node scripts/ci/generate-coverage-summary.mjs`.
-     Generated-on: 2026-08-05 -->
+     Generated-on: 2026-08-06 -->
 
 # CSA Loom — Coverage Summary
 

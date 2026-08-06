@@ -113,6 +113,13 @@ export const APP_IMAGE_TAGS = Object.freeze([
   // preflight covered it; now the Commercial lane's resolver picks it up
   // automatically from this table.
   { key: 'unity', repo: 'loom-unity', envVar: 'LOOM_UNITY_TAG' },
+  // loom-trino (#2678). The N7e Federated SQL engine is now DEFAULT-ON as a
+  // scale-to-zero Container App (data-plane/loom-trino-aca.bicep) wired straight
+  // from admin-plane/main.bicep, so `appImageTags.trino` is read on every
+  // boundary and its image is a prerequisite of the apps phase. Without an entry
+  // here a scheduled reconcile would redeploy it at the BICEP DEFAULT rather than
+  // the tag actually running — the exact drift this table exists to prevent.
+  { key: 'trino', repo: 'loom-trino', envVar: 'LOOM_TRINO_TAG' },
 ]);
 
 /** key -> entry, for callers that have a key in hand. */
