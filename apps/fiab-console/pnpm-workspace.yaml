@@ -116,21 +116,43 @@ overrides:
   # patched floors only at 6.4.3 / 7.3.5 / 8.0.16 — so the resolved 5.4.21
   # cannot be fixed in place. An override is the only route.
   #
-  # WHY A CARET AND NOT `>=6.4.3`. pnpm resolves an override to the HIGHEST
-  # matching version. `>=6.4.3` resolves to vite 8.2.0 today, and vitest@3.2.7
+  # WHY A CARET AND NOT `>=7.3.6`. pnpm resolves an override to the HIGHEST
+  # matching version. `>=` resolves to vite 8.x today, and vitest@3.2.7
   # declares vite as a DEPENDENCY with range '^5.0.0 || ^6.0.0 || ^7.0.0-0' —
   # 8.x is outside it, so the "floor" would break the test runner rather than
-  # patch it. The bound is load-bearing; do not relax it to `>=`.
+  # patch it. (vite 8 also swaps esbuild for rolldown + lightningcss native
+  # binaries — a brand-new supply-chain scan surface.) The bound is
+  # load-bearing; do not relax it to `>=`.
   #
-  # WHY 6.x AND NOT 7.x. vite 7.3.6 also closes all four, but its engines are
-  # '^20.19.0 || >=22.12.0' against the plain '20' used by 14 workflow files,
-  # and it pulls esbuild ^0.27 — a larger jump on a vitest setup with documented
-  # fragility, for zero extra CVE coverage. 6.4.3 is the newest 6.x, is patched
-  # for all three vite advisories, and its engines '^18 || ^20 || >=22' are safe
-  # on both node 20 (CI) and node 22 (the image).
+  # WHY 7.x AND NOT 6.x (raised 2026-08-06, D9 / #3036 / #3005 / #3024).
+  # CVE-2025-68121 (CRITICAL, Go stdlib crypto/tls) rides in the prebuilt
+  # `@esbuild/linux-x64` binary: every 0.25.x esbuild is compiled with go1.23.x,
+  # below every fixed floor (1.24.13 / 1.25.7 / 1.26.0-rc.3). The loom-uat
+  # image installs the full dev tree, so that gobinary lands in its layer and
+  # fails the SC1 Trivy CRITICAL gate (full-app-deploy-commercial run
+  # 31066164706). vite@6.4.3 caps esbuild at ^0.25.0, so no 6.x resolution can
+  # ever clear it; vite@7.3.6 declares esbuild '^0.27.0 || ^0.28.0', which
+  # resolves 0.28.1 — compiled with go1.26.4, above the fix (verified by
+  # reading the Go toolchain string out of the published binary, the method
+  # validated in #3036 against Trivy's own report). This is the ROOT fix — the
+  # previous "zero extra CVE coverage" argument for staying on 6.x inverted.
   #
-  # NO esbuild ENTRY ON PURPOSE. vite@6.4.3 declares esbuild '^0.25.0', which
-  # resolves 0.25.x and closes the esbuild advisory by itself. An explicit
-  # 'esbuild: >=0.25.0' would resolve 0.27.x into a vite that asked for ^0.25.0
-  # — widening a fix into a break.
-  vite: '^6.4.3'
+  # NO vitest BUMP NEEDED. vitest@3.2.7 / vite-node@3.2.4 declare
+  # '^5.0.0 || ^6.0.0 || ^7.0.0-0' (7.3.6 satisfies '^7.0.0-0') and
+  # @vitejs/plugin-react@4.7.0 peers '... || ^7.0.0' — all read from the npm
+  # registry 2026-08-06, not assumed. The vitest 3 runner (with its documented
+  # RPC fragility and roll-gate status) is deliberately NOT touched here.
+  #
+  # ENGINES. vite@7.3.6 wants node '^20.19.0 || >=22.12.0'. CI's
+  # `node-version: '20'` resolves the latest 20.x (>= 20.19) via setup-node,
+  # and vite never EXECUTES inside the loom-uat image anyway (entrypoint is
+  # node -> `pnpm exec playwright test`; Playwright transpiles with its own
+  # babel pipeline) — the binary is install-time cargo there, now non-vulnerable
+  # install-time cargo.
+  #
+  # NO esbuild ENTRY ON PURPOSE. vite@7.3.6 declares esbuild
+  # '^0.27.0 || ^0.28.0', which resolves 0.28.x and closes both the dev-server
+  # advisory and CVE-2025-68121 by itself. An explicit 'esbuild: >=0.28.1'
+  # override would pin a resolution vite already makes — and would silently
+  # widen into a break the day vite's declared range and the override disagree.
+  vite: '^7.3.6'
