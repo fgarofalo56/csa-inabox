@@ -124,6 +124,56 @@ test('githubEnvWrites collects both the one-line and the group form', () => {
   );
 });
 
+test('#3040: a group whose CLOSER is inline with the last echo (gov-provision-trino.yml, verbatim)', () => {
+  // P0 regression. The first implementation decided "is this a group?" from
+  // whether the line STARTED with `}`. gov-provision-trino.yml closes on the
+  // same line as its last echo, so the group went unparsed, only that final
+  // line was collected — CONSOLE_IMAGE resolved, the six names on the earlier
+  // lines were reported as never assigned — and a DEPLOY-CRITICAL file went
+  // red on correct code. Block copied verbatim from lines 188-196.
+  const r = scanWorkflow(
+    wf(`      - name: Discover CAE + UAMI + lake account
+        run: |
+          if [ -n "\${LAKE:-}" ]; then
+            LAKE_RG=$(az storage account show -n "$LAKE" --query resourceGroup -o tsv 2>/dev/null | tr -d '\\r' || echo "")
+            [ -n "$LAKE_RG" ] || echo "::warning::lake account '$LAKE' not resolvable by name."
+          fi
+          { echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT=$UAMI_CLIENT";
+            echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE";
+            echo "LAKE_RG=$LAKE_RG"; echo "MSAL_CLIENT_ID=\${MSAL_CLIENT_ID:-}";
+            echo "CONSOLE_IMAGE=$CONSOLE_IMAGE"; } >> "$GITHUB_ENV"
+      - name: Deploy
+        run: |
+          az containerapp create --environment "$CAE_ID" --user-assigned "$UAMI_ID" \\
+            --client-id "$UAMI_CLIENT" --location "$LOCATION" --lake "$LAKE" \\
+            --principal "$UAMI_PRINCIPAL" --image "$CONSOLE_IMAGE"`),
+  );
+  assert.deepEqual(r.findings.map((f) => f.name), []);
+  // and the names really were resolved via $GITHUB_ENV, not by some other route
+  for (const n of ['CAE_ID', 'UAMI_ID', 'UAMI_CLIENT', 'UAMI_PRINCIPAL', 'LOCATION', 'LAKE']) {
+    assert.equal(
+      githubEnvWrites(
+        '{ echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT=$UAMI_CLIENT";\n' +
+          '  echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"; echo "LOCATION=$LOCATION"; echo "LAKE=$LAKE";\n' +
+          '  echo "CONSOLE_IMAGE=$CONSOLE_IMAGE"; } >> "$GITHUB_ENV"',
+      ).has(n),
+      true,
+      `${n} must be recognised as published to $GITHUB_ENV`,
+    );
+  }
+});
+
+test('#3040: group detection survives both wrappings and a tee redirect', () => {
+  const inline = '{ echo "A=1"; echo "B=2"; } >> "$GITHUB_ENV"';
+  const wrapped = '{\n  echo "A=1"\n  echo "B=2"\n} >> "$GITHUB_ENV"';
+  const teed = '{\n  echo "A=1"\n  echo "B=2"\n} | tee -a "$GITHUB_ENV"';
+  for (const [label, src] of [['inline', inline], ['wrapped', wrapped], ['tee', teed]]) {
+    const got = githubEnvWrites(src);
+    assert.equal(got.has('A'), true, `${label}: A`);
+    assert.equal(got.has('B'), true, `${label}: B`);
+  }
+});
+
 // ── expansions that are SAFE under set -u ───────────────────────────────────
 test('${V:-d} and friends are not violations', () => {
   const f = scanWorkflow(
