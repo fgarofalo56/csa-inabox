@@ -80,6 +80,13 @@
     { "id": "OP-16", "task": "D13", "ask": "Three D13 decisions: (1) retire csa-loom-spark-probe2.yml (byte-identical duplicate of the livy probe, kept dispatchable for now)? (2) #3025 context: accumulated unexpired Entra credentials on the MSAL app (07-19/07-23/08-03, all --append) need a deliberate keep-or-clean decision. (3) #3034 item 5 (zero-jobs symptom-level check) not built — parse-level hard-fail covers the known cause; want the symptom-level watcher as its own item?" }
   ],
   "meta": {
+    "merge_queue": {
+      "state_at_2026-08-06T21:00Z": "GitHub Actions major_outage since ~16:55Z. Runs from the 17:04Z pushes are STILL QUEUED (~4h backlog); pushes made during the outage created NO check runs at all.",
+      "do_not": "Do NOT --admin-merge the CODE PRs while they show zero/pending checks — that is merging untested code (gates-that-cannot-fail class). #3059 (ledger) WAS admin-merged legitimately: docs-only, path-filtered, zero REQUIRED checks by design.",
+      "order": ["#3054 D1 (update-branch, BEHIND)", "#3051 D15", "#3052 D3", "#3055 D9", "#3053 E1", "#3057 D2", "#3058 D4-D6", "#3062 D10 (AFTER #3058 — shared docs, rebase doc hunks)", "#3061 D13"],
+      "on_recovery": "If a PR shows zero check runs after recovery, re-trigger with an empty commit or close/reopen — the outage swallowed run creation.",
+      "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must now check it explicitly."
+    },
     "created_at": "2026-08-06T00:00:00Z",
     "last_updated": "2026-08-06T00:00:00Z",
     "last_agent": "harness-initializer",
