@@ -32,6 +32,10 @@ jobs:
           node-version: "20"
       - name: env-sync (LOOM_* read-but-not-emitted)
         run: node scripts/ci/check-env-sync.mjs
+      - name: adoption-catalog-sync (adopt-or-create catalog must match the bicep that honours it)
+        run: node scripts/ci/check-adoption-catalog-sync.mjs
+      - name: fitness-messages (every adoption check records what it OBSERVED; unknown never claims non-existence)
+        run: node scripts/ci/check-fitness-messages.mjs
       - name: route-guards (cross-tenant BFF authorization)
         run: node scripts/ci/check-route-guards.mjs
       - name: credential-route-authz (routes returning keys must authorize, not just authenticate)
@@ -88,6 +92,16 @@ jobs:
         run: node scripts/ci/check-bicep-sync.mjs
       - name: deploy-script-reachability (every deploy-*-job.sh runs from CI — #2816)
         run: node scripts/ci/check-deploy-script-reachability.mjs
+      # The deployment planner is the ONLY surface with multi-subscription
+      # discovery, per-service adopt-or-deploy-new, and a reviewable plan. It
+      # used to redirect away the moment a hub existed — i.e. it was unreachable
+      # on exactly the estate brownfield planning applies to, so brownfield was
+      # in effect not shipped (deploy-integrity.md R4/R5). The second-hub
+      # invariant is enforced in POST /api/setup/deploy, not by a redirect.
+      - name: setup-entrypoints (the deployment planner stays reachable — deploy-integrity R4/R5)
+        run: |
+          node scripts/ci/check-setup-entrypoints.mjs --self-test
+          node scripts/ci/check-setup-entrypoints.mjs
       # Reachability says the deploy script RUNS. This says the staleness
       # watchdog can SEE it: every source a watched workflow executes or applies
       # must be in that entry's `paths`, or a commit touching it can never
@@ -103,6 +117,14 @@ jobs:
       # were violated by scripts that reachability passed (#2816 residual).
       - name: deploy-job-scripts (the job create can actually succeed — #2816 residual)
         run: node scripts/ci/check-deploy-job-scripts.mjs
+      # The three above say the deploy path RUNS, is WATCHED, and can SUCCEED.
+      # This one says that when it FAILS, the failure is classified, retried only
+      # if retrying can help, reported to somebody who is listening, and never
+      # asserts a cause the code did not establish (deploy-integrity.md R6/R7).
+      # Four workflows notified failure on issue #279 — CLOSED, 289 comments —
+      # which is how 47 days of daily deploy failure stayed invisible.
+      - name: deploy-failure-handling (classified retries + true error messages — deploy-integrity R6/R7)
+        run: node scripts/ci/check-deploy-failure-handling.mjs
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         run: node scripts/ci/check-image-producer-coverage.mjs
       # image-producer-coverage says the image gets BUILT. This says the build can
@@ -128,6 +150,15 @@ jobs:
         run: node scripts/ci/check-afd-endpoint-discovery.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
+      # The adoption catalog (brownfield discovery) names bicep enable flags and
+      # ARM types. Six earlier "service catalogs" disagreed on those names in
+      # ways nothing caught: `maps` carried loomMapsEnabled in the CLI and
+      # azureMapsEnabled in TypeScript, and `foundry` pointed at two DIFFERENT
+      # Azure accounts. The vitest that was meant to prevent it asserted only
+      # `expect(def.enabledFlag).toBeTruthy()` — it compared no names at all.
+      # This compares names against platform/fiab/bicep/main.bicep on disk.
+      - name: adoption-catalog-sync (brownfield catalog names match main.bicep)
+        run: node scripts/ci/check-adoption-catalog-sync.mjs
       # bicep-sync above judges the SOURCE. This judges the COMPILED OUTPUT that
       # actually deploys: apps/fiab-console/deploy-templates/main.json is COPY'd
       # into the console image and submitted INLINE to ARM, and until #2945
@@ -186,6 +217,12 @@ jobs:
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)
         run: node scripts/ci/check-docs-hygiene.mjs
+      # deploy-integrity.md R8 — a deployment doc that tells a customer to run a
+      # script or dispatch a workflow that does not exist is drift with teeth.
+      # A 2026-08 survey found EIGHT such references across docs/fiab/deployment
+      # and docs/fiab/runbooks.
+      - name: docs-deploy-refs (every script/workflow/bicep path a deploy doc names exists)
+        run: node scripts/ci/check-docs-deploy-refs.mjs
       - name: health-coverage (every Azure client + item family has a health check mapping)
         run: node scripts/ci/check-health-coverage.mjs
       - name: parity-doc-freshness (parity docs vs their source files; warn-first)

@@ -76,9 +76,28 @@ jobs:
             case "$val" in
               @action-group:*)
                 ag="${val#@action-group:}"
-                id=$(az monitor action-group show -n "$ag" -g "$RG" --query id -o tsv 2>/dev/null | tr -d '\r')
+                # R7: capture stderr and CLASSIFY it. `2>/dev/null` collapsed an
+                # RBAC denial, a throttle, a network failure and a genuine 404 into
+                # one empty string, and the message below then stated the 404 as
+                # fact. Absence is claimed ONLY when ARM answered ResourceNotFound.
+                set +e
+                AG_OUT=$(az monitor action-group show -n "$ag" -g "$RG" --query id -o tsv 2>&1)
+                AG_RC=$?
+                set -e
+                if [ $AG_RC -eq 0 ]; then
+                  id=$(printf '%s' "$AG_OUT" | tr -d '\r')
+                else
+                  id=""
+                  if node scripts/ci/deploy-classify.mjs --text "$AG_OUT" \
+                       --assert-signal config.resource-not-found >/dev/null 2>&1; then
+                    echo "::error::ARM answered ResourceNotFound for @action-group:$ag in $RG — refusing to stamp $key with an unresolvable pointer"
+                  else
+                    echo "::error::Could not establish whether @action-group:$ag exists in $RG. $(node scripts/ci/deploy-classify.mjs --text "$AG_OUT" --query) — refusing to stamp $key on an UNPROVEN lookup"
+                  fi
+                  exit 1
+                fi
                 if [ -z "$id" ]; then
-                  echo "::error::@action-group:$ag does not exist in $RG — refusing to stamp $key with an unresolvable pointer"
+                  echo "::error::az reported success but returned no id for @action-group:$ag in $RG — refusing to stamp $key with an empty pointer"
                   exit 1
                 fi
                 echo "resolved $key <- action group '$ag' (id withheld from log)"

@@ -89,50 +89,67 @@ jobs:
             }
       - id: acr
         run: |
-          # GitHub invokes this with `bash -e`, so a non-zero `az` ABORTS THE
-          # STEP. `set -u -o pipefail` does not clear -e (it only adds flags),
-          # so the discovery fallback below has to be reached explicitly:
-          # `set +e` plus `|| true` on the probe. Proven the hard way — run
-          # 31028909702 died on ResourceGroupNotFound (exit 3) at the FIRST az
-          # call, never reaching the `if [[ -z "$ACR" ]]` branch.
-          set +e -u -o pipefail
-          probe_acr() {
-            # stderr is deliberately NOT merged, so a real az error still
-            # appears in the job log; only stdout is filtered.
-            az acr list --resource-group "$1" \
-              --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv \
-              | tr -d '\r' | grep -E '^acrloom' || true
-          }
-          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
-          REGION="$AZURE_LOCATION"
-          ACR=$(probe_acr "$RG")
+          # DISCOVER the admin RG + ACR; never CONSTRUCT them from a region
+          # default (auto-bind-by-default.md 5 - the platform figures it out).
+          #
+          # On run 31028909702 (2026-08-05) a DEFAULT dispatch resolved
+          # rg-csa-loom-admin-eastus2 because `region` still defaults to eastus2
+          # while the live Commercial estate is centralus. That RG does not
+          # exist, `az acr list -g` exited 3, and the step died right there.
+          # The run headline error then became an unrelated "Registry names may
+          # contain only alpha numeric characters" from the cleanup step running
+          # with an EMPTY registry name - a message about the wrong thing.
+          #
+          # NOTE on -e: GitHub runs `run:` under `bash -e`, and `set -uo
+          # pipefail` does NOT clear it. A previous fallback in this repo was
+          # unreachable for exactly that reason. Every capture below therefore
+          # uses the `if ! VAR=$(...)` form, which -e does not abort on.
+          set -uo pipefail
+          PREFERRED_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR=""; RG=""; SERVER=""; REGION="$AZURE_LOCATION"
+          if ACR=$(az acr list --resource-group "$PREFERRED_RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv 2>/dev/null); then
+            ACR=$(echo "$ACR" | tr -d '\r')
+            [[ "$ACR" == "None" ]] && ACR=""
+            [[ -n "$ACR" ]] && RG="$PREFERRED_RG"
+          fi
           if [[ -z "$ACR" ]]; then
-            # The `region` input still defaults to eastus2 while the live
-            # Commercial estate is centralus, so a DEFAULT dispatch resolved
-            # rg-csa-loom-admin-eastus2 — which does not exist — and died right
-            # here. Per auto-bind-by-default.md the platform discovers this
-            # rather than making the operator know it. Ambiguity (more than one
-            # Admin Plane RG) still fails loudly; guessing would be worse.
-            echo "::warning::No ACR in $RG. Discovering the Admin Plane RG in this subscription instead."
-            mapfile -t CANDIDATES < <(az group list --query "[?starts_with(name,'rg-csa-loom-admin-')].name" -o tsv | tr -d '\r')
-            if [[ ${#CANDIDATES[@]} -eq 1 ]]; then
-              RG="${CANDIDATES[0]}"
-              REGION="${RG#rg-csa-loom-admin-}"
-              ACR=$(probe_acr "$RG")
-              echo "::notice::Adopted $RG (region $REGION) — the only Admin Plane RG in this subscription."
-            elif [[ ${#CANDIDATES[@]} -gt 1 ]]; then
-              echo "::error::Multiple Admin Plane resource groups found (${CANDIDATES[*]}). Ambiguous — re-dispatch with the 'region' input set to the one you mean."
+            echo "::notice::No acrloom* registry in $PREFERRED_RG. Discovering the Loom admin plane across the subscription with Resource Graph rather than assuming the region."
+            az extension add --name resource-graph --upgrade --only-show-errors
+            Q="Resources | where type =~ 'microsoft.containerregistry/registries' | where name startswith 'acrloom' | where resourceGroup startswith 'rg-csa-loom-admin' | project name, resourceGroup, location, loginServer = properties.loginServer | order by resourceGroup asc"
+            if ! ROWS=$(az graph query -q "$Q" --first 50 -o json 2>&1); then
+              echo "::error::Could NOT query Azure Resource Graph, so nothing is known about whether a Loom admin registry exists in this subscription. This is NOT evidence that the estate is missing. Raw error follows."
+              echo "$ROWS" >&2
               exit 1
             fi
+            COUNT=$(printf "%s" "$ROWS" | jq -r ".data | length")
+            if [[ "$COUNT" == "0" ]]; then
+              echo "::error::Resource Graph ANSWERED and this subscription contains no rg-csa-loom-admin-*/acrloom* registry. Provision the admin plane first: deploy-fiab-commercial with deployAppsEnabled=false (phase 1 of the two-phase image path)."
+              exit 1
+            fi
+            # Ambiguity is an ERROR, not a coin flip (carried over from #3001).
+            # Picking .data[0] out of several Admin Plane RGs would silently
+            # build into whichever one sorted first.
+            if [[ "$COUNT" != "1" ]]; then
+              NAMES=$(printf "%s" "$ROWS" | jq -r '[.data[].resourceGroup] | join(", ")')
+              echo "::error::Multiple Loom admin planes found ($NAMES). Ambiguous — re-dispatch with the 'region' input set to the one you mean."
+              exit 1
+            fi
+            SEL=".data[0]"
+            ACR=$(printf "%s" "$ROWS" | jq -r "$SEL.name")
+            RG=$(printf "%s" "$ROWS" | jq -r "$SEL.resourceGroup")
+            SERVER=$(printf "%s" "$ROWS" | jq -r "$SEL.loginServer")
+            REGION=$(printf "%s" "$ROWS" | jq -r "$SEL.location")
+            echo "::warning::The requested region ($AZURE_LOCATION) has no Loom admin plane. Discovered the estate in $RG ($REGION) and targeting that."
           fi
-          if [[ -z "$ACR" ]]; then
-            echo "::error::ACR not found in $RG (and no unambiguous Admin Plane RG in this subscription) — run deploy-fiab-commercial first."
-            exit 1
+          if [[ -z "$SERVER" ]]; then
+            if ! SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv 2>&1); then
+              echo "::error::Resolved registry $ACR but could not read its login server. Refusing to continue with an empty value - that is what produces the misleading \"Registry names may contain only alpha numeric characters\" error downstream. Raw error: $SERVER"
+              exit 1
+            fi
+            SERVER=$(echo "$SERVER" | tr -d '\r')
           fi
-          SERVER=$(az acr show --name "$ACR" --query "loginServer" -o tsv | tr -d '\r')
-          ADMIN_SUB=$(az account show --query id -o tsv | tr -d '\r')
-          if [[ -z "$SERVER" || -z "$ADMIN_SUB" ]]; then
-            echo "::error::could not read the login server / subscription for $ACR — refusing to continue on half-resolved coordinates."
+          if [[ -z "$ACR" || "$ACR" == "null" || -z "$RG" || "$RG" == "null" || -z "$SERVER" ]]; then
+            echo "::error::Registry coordinates came back empty or null (acr=$ACR rg=$RG server=$SERVER). Not proceeding blind."
             exit 1
           fi
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
@@ -478,21 +495,39 @@ jobs:
             q=$(az acr agentpool show -r "$ACR_NAME" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
             [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR_NAME" -n loombuild --count 0 --no-wait -o none || true
           }
-          build() {
-            az acr build --registry "$ACR_NAME" $POOL_ARGS \
-              --image "$APP:$TAG" --image "$APP:${{ github.sha }}" --image "$APP:latest" \
-              $CONTRACT_ARGS \
-              --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
-              --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
-              --file "$FILE" "$CTX"
-          }
-          for attempt in 1 2 3; do
-            if build; then echo "✓ $APP built+pushed by ACR Tasks on attempt $attempt"; scale_down_pool; exit 0; fi
-            echo "::warning::$APP ACR build attempt $attempt failed — retrying"
-            sleep 30
-          done
+          # RETRY WITH CLASSIFICATION (deploy-integrity.md R6).
+          #
+          # This used to be `for attempt in 1 2 3; do build; sleep 30; done`
+          # with no classification. On run 31022950740 that retried a
+          # deterministic `QuotaExceeded: standardDDSv5Family Cores, Location:
+          # centralus, Current Limit: 200, Current Usage: 196, Additional
+          # Required: 8` three times over 90 seconds and then emitted
+          # "$APP ACR build failed after 3 attempts" — a sentence with no cause
+          # in it. Retrying a quota denial cannot succeed; those 90 seconds
+          # bought nothing but a less accurate error.
+          #
+          # deploy-retry.mjs retries ONLY the classes named here, fails closed
+          # on exhaustion / wall-clock / an unclassifiable failure, and writes
+          # deploy-failure.json for the failure notifier to render. The harness is
+          # handed the argv directly (spawn, no shell), so $POOL_ARGS is
+          # word-split by THIS shell and arrives as real arguments.
+          set +e
+          node scripts/ci/deploy-retry.mjs \
+            --class-allow transient,eventual-consistency \
+            --max-attempts 3 --backoff 30 --jitter 0.3 --wall-clock 90m \
+            --step "az acr build ($APP)" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            -- az acr build --registry "$ACR_NAME" $POOL_ARGS \
+                 --image "$APP:$TAG" --image "$APP:${{ github.sha }}" --image "$APP:latest" \
+                 $CONTRACT_ARGS \
+                 --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
+                 --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
+                 --file "$FILE" "$CTX"
+          STATUS=$?
+          set -e
           scale_down_pool
-          echo "::error::$APP ACR build failed after 3 attempts"; exit 1
+          if [[ $STATUS -eq 0 ]]; then echo "✓ $APP built+pushed by ACR Tasks"; fi
+          exit $STATUS
 
       # ── SC1: supply-chain gate — Trivy CRITICAL scan + keyless cosign sign ──
       # Runs while the ACR is still OPEN (open-acr ran; close-acr runs after
@@ -566,7 +601,10 @@ jobs:
     if: ${{ always() && !inputs.skip_build && needs.resolve.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      # Needed for scripts/ci/assert-acr-image-tags.sh (the contract gate below).
+      # Needed for scripts/ci/deploy-classify.mjs and
+      # scripts/ci/assert-acr-image-tags.sh — the gates below distinguish
+      # "the registry answered: absent" from "I could not read the registry",
+      # and must never skip an image on the strength of the second.
       - uses: actions/checkout@v4
       - name: Azure login
         uses: Azure/login@v2
@@ -603,10 +641,42 @@ jobs:
           # job rolls.
           APPS=(loom-console loom-setup-orchestrator loom-mcp loom-mcp-bridge loom-activator loom-mirroring loom-direct-lake-shim loom-copilot-maf loom-wrangler-host loom-script-runner loom-dbt-runner loom-transform-runner loom-duckdb loom-uat loom-unity loom-migrate loom-risingwave)
           FAILED=()
+          UNPROVEN=()
           for APP in "${APPS[@]}"; do
-            DIGEST=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            # R7: capture stderr and CLASSIFY it. This used to be
+            #     DIGEST=$(az … 2>/dev/null || echo "")
+            #     if [[ -z "$DIGEST" ]]; then "…not found… Skipping its verification."
+            # which collapsed an RBAC denial, a throttle, a network failure and
+            # a genuine 404 into one empty string and then stated the 404 as
+            # fact — and, worse, SKIPPED the SC1 supply-chain gate for that
+            # image on the strength of a claim it had not established.
+            #
+            # Absence is now claimed ONLY when the registry actually answered
+            # ManifestUnknown/TagNotFound. Anything else is UNPROVEN and FAILS
+            # the gate: an unverifiable image must never ship.
+            set +e
+            SHOW_OUT=$(az acr repository show --name "$ACR_NAME" --image "$APP:$TAG" --query digest -o tsv 2>&1)
+            SHOW_RC=$?
+            set -e
+            if [[ $SHOW_RC -eq 0 ]]; then
+              DIGEST=$(printf '%s' "$SHOW_OUT" | tr -d '\r')
+            else
+              DIGEST=""
+              # --query always exits 0: this is a QUERY for the human-readable
+              # diagnosis, not a gate. The gate is the --assert-signal below.
+              WHY=$(node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" --query)
+              if node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" \
+                   --assert-signal config.image-tag-absent >/dev/null 2>&1; then
+                echo "::warning::$APP:$TAG — the registry ANSWERED and the tag is absent (its build leg produced nothing). The roll skips apps with no image; nothing to verify."
+                continue
+              fi
+              echo "::error::$APP:$TAG — could NOT read $ACR_NAME, so the image's existence and signature are UNPROVEN (not disproven). Failing the SC1 gate rather than skipping it. $WHY"
+              UNPROVEN+=("$APP")
+              continue
+            fi
             if [[ -z "$DIGEST" ]]; then
-              echo "::warning::$APP:$TAG not found in $ACR_NAME (its build may have failed — fail-fast is off, and the roll step skips apps that are not deployed). Skipping its verification."
+              echo "::error::$APP:$TAG — az exited 0 but returned an EMPTY digest. That is not an answer; the image is UNPROVEN."
+              UNPROVEN+=("$APP")
               continue
             fi
             REF="$ACR_LOGIN/$APP@$DIGEST"
@@ -620,6 +690,10 @@ jobs:
               FAILED+=("$APP")
             fi
           done
+          if (( ${#UNPROVEN[@]} > 0 )); then
+            echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — could not READ the registry for: ${UNPROVEN[*]}. Their signatures are UNPROVEN, not disproven (deploy-integrity.md R7). A gate that skips what it cannot read is not a gate. Re-run once the ACR data plane is reachable (scripts/csa-loom/acr-firewall-lease.sh), or (emergency only) re-dispatch with skip_supply_chain=true."
+            exit 1
+          fi
           if (( ${#FAILED[@]} > 0 )); then
             echo "::error::SC1 SUPPLY-CHAIN GATE FAILED — unsigned image(s): ${FAILED[*]}. The roll job is BLOCKED. These :$TAG images were not produced by the gated CI path (or predate SC1, e.g. a failed build leg left a stale pre-SC1 :$TAG behind). Fix: re-run this workflow so the build job scans+signs them (check the per-app 'Cosign sign' step logs), or (emergency only) re-dispatch with skip_supply_chain=true."
             exit 1
@@ -753,32 +827,43 @@ jobs:
           # (loom-synthetic-monitor), not a Container App, so each scheduled
           # execution pulls :latest on its own — there is no revision to roll.
           APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
-          # Retry the update on the transient ContainerAppOperationInProgress
-          # error (a prior provisioning op on the app is still settling). Up to
-          # 6 attempts, 30s apart (~3 min), per app.
-          roll() {
-            local app="$1" attempt
-            for attempt in 1 2 3 4 5 6; do
-              if az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" --revision-suffix "$SUFFIX" -o none 2>/tmp/roll.err; then
-                return 0
-              fi
-              if grep -qi "OperationInProgress\|active provisioning operation" /tmp/roll.err; then
-                echo "::warning::$app busy (attempt $attempt/6) — waiting 30s for the in-progress op to finish"
-                sleep 30
+          # RETRY WITH CLASSIFICATION + AN HONEST EXISTENCE PROBE.
+          #
+          # This block used to hand-roll its own retry (`for attempt in 1 2 3 4
+          # 5 6` + `grep -qi OperationInProgress`) - which was the ONE correct,
+          # classified retry in the repo, and is exactly what
+          # scripts/ci/deploy-retry.mjs generalises. It now uses the shared
+          # harness so every deploy path gets the same fail-closed budget, the
+          # same taxonomy, and the same deploy-failure.json for the notifier.
+          #
+          # The existence probe was `az containerapp show ... 2>/dev/null`, so an
+          # auth failure, a throttle or a network error all produced
+          # "container app $app not found in $RG - skipping", and the roll could
+          # report success having rolled a SUBSET (deploy-integrity.md R7).
+          # Absence is now claimed only when ARM answered ResourceNotFound.
+          for app in "${APPS[@]}"; do
+            set +e
+            SHOW_OUT=$(az containerapp show -g "$RG" -n "$app" -o none 2>&1)
+            SHOW_RC=$?
+            set -e
+            if [[ $SHOW_RC -ne 0 ]]; then
+              if node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" \
+                   --assert-signal config.resource-not-found >/dev/null 2>&1; then
+                echo "::warning::ARM answered ResourceNotFound for container app $app in $RG - this estate does not carry it. Skipping."
                 continue
               fi
-              cat /tmp/roll.err >&2; return 1
-            done
-            echo "::error::$app still busy after retries"; return 1
-          }
-          for app in "${APPS[@]}"; do
-            if az containerapp show -g "$RG" -n "$app" -o none 2>/dev/null; then
-              echo "::group::roll $app -> $ACR/$app:$TAG"
-              roll "$app"
-              echo "::endgroup::"
-            else
-              echo "::warning::container app $app not found in $RG — skipping"
+              echo "::error::Could not establish whether container app $app exists in $RG. $(node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" --query)"
+              echo "::error::Refusing to skip it: a roll that silently omits an app reports success having deployed only a subset."
+              exit 1
             fi
+            echo "::group::roll $app -> $ACR/$app:$TAG"
+            node scripts/ci/deploy-retry.mjs \
+              --class-allow transient,eventual-consistency \
+              --max-attempts 6 --backoff 30 --jitter 0.3 --wall-clock 15m \
+              --step "az containerapp update ($app)" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              -- az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" --revision-suffix "$SUFFIX" -o none
+            echo "::endgroup::"
           done
           CONSOLE_FQDN=$(az containerapp show -g "$RG" -n loom-console --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
           echo "::notice::Apps rolled to :$TAG. Console: https://$CONSOLE_FQDN"
@@ -936,14 +1021,20 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            const conclusion = '${{ needs.redeploy-with-apps.result }}';
-            const emoji = conclusion === 'success' ? '🎉' : '⚠️';
-            github.rest.issues.createComment({
-              issue_number: 279,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `${emoji} full-app-deploy-commercial run ${context.runId}: build=${'${{ needs.build.result }}'}, close-acr=${'${{ needs.close-acr.result }}'}, redeploy=${conclusion}`
-            });
+      - uses: actions/checkout@v4
+      # Was: a comment on `issue_number: 279` - a CLOSED roadmap issue with 289
+      # comments. Every run, success or failure, was appended there, which is
+      # why nobody noticed this workflow had been failing for weeks
+      # (deploy-integrity.md). A SUCCESS now writes a job-summary line and
+      # opens nothing; a FAILURE opens/updates one dedicated OPEN issue.
+      - name: Summarise
+        run: |
+          echo "full-app-deploy-commercial run ${{ github.run_id }}: build=${{ needs.build.result }}, close-acr=${{ needs.close-acr.result }}, redeploy=${{ needs.redeploy-with-apps.result }}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Notify on failure (dedicated, OPEN issue)
+        if: ${{ needs.redeploy-with-apps.result != 'success' || needs.build.result == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node .github/scripts/deploy-notify-failure.mjs \
+            --workflow full-app-deploy-commercial \
+            --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"

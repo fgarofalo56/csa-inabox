@@ -196,6 +196,7 @@ jobs:
         if: inputs.run_mode == 'full'
         env:
           LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+          LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
         run: |
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -204,9 +205,17 @@ jobs:
             echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
             exit 0
           fi
+          # loom-unity joined this list in #2681: admin-plane/main.bicep now
+          # deploys the Unity-Catalog-compatible OSS metastore DEFAULT-ON on
+          # every boundary, so an IL5 deploy pulls `loom-unity:$LOOM_UNITY_TAG`
+          # and — on an estate that already runs one — ADOPTS the live catalog.
+          # Databricks Unity Catalog has no Gov endpoint, so that app is the only
+          # catalog IL5 has; repointing it at an absent tag is an outage. The
+          # producer is .github/workflows/gov-build-images.yml (apps=loom-unity).
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
-            "loom-duckdb:${LOOM_DUCKDB_TAG}"
+            "loom-duckdb:${LOOM_DUCKDB_TAG}" \
+            "loom-unity:${LOOM_UNITY_TAG}"
 
       # svc-loom-unity-authz (round 2) — DURABILITY. IL5 already passes
       # LOOM_GOV_MSAL_CLIENT_ID, but that secret can be unset/stale while the

@@ -152,41 +152,54 @@ interface SetupConfig {
 }
 
 /**
- * Maps a scan-and-choose service key → its main.bicep params. `existing` is the
- * [name, rg, sub] param-name triple (null when main.bicep has no existing*
- * surface — those services are reused post-deploy via EXISTING_* env only).
- * `flag` is the `loom<Svc>Enabled`-style toggle (null for DLZ-provisioned
- * services with no provisioning toggle). Mirrors the CLI SERVICES table.
+ * Maps a scan-and-choose service key → the bicep enable flag that governs
+ * provisioning. The per-service `existing*` NAME/RG/SUB params are gone:
+ * `main.bicep` declares ONE `adopt` object bag instead (ARM caps a template at
+ * 256 parameters and main.bicep was at 251/256, so the 36 scalars had to go).
+ * A reuse choice therefore contributes an entry to the adopt bag, keyed by the
+ * SAME service key as `lib/deploy/adoption-catalog.ts`, rather than three `-p`
+ * assignments that the template no longer declares (which is a hard BCP259).
+ *
+ * `flag` is null for DLZ-provisioned services with no provisioning toggle.
  */
-const SERVICE_PARAM_MAP: Record<string, { existing: [string, string, string] | null; flag: string | null }> = {
-  aisearch: { existing: ['existingAiSearchService', 'existingAiSearchRg', 'existingAiSearchSub'], flag: 'aiSearchEnabled' },
-  apim: { existing: ['existingApimName', 'existingApimRg', 'existingApimSub'], flag: 'apimEnabled' },
-  adx: { existing: ['existingAdxClusterName', 'existingAdxClusterRg', 'existingAdxClusterSub'], flag: 'adxEnabled' },
-  foundry: { existing: ['existingFoundryAccountName', 'existingFoundryRg', 'existingFoundrySub'], flag: 'aiFoundryEnabled' },
-  purview: { existing: ['existingPurviewAccount', 'existingPurviewRg', 'existingPurviewSub'], flag: 'purviewEnabled' },
-  maps: { existing: null, flag: 'azureMapsEnabled' },
-  synapse: { existing: ['existingSynapseWorkspace', 'existingSynapseRg', 'existingSynapseSub'], flag: null },
-  cosmos: { existing: ['existingCosmosAccount', 'existingCosmosRg', 'existingCosmosSub'], flag: null },
-  adf: { existing: ['existingAdfFactory', 'existingAdfRg', 'existingAdfSub'], flag: null },
-  eventhubs: { existing: ['existingEventHubNamespace', 'existingEventHubRg', 'existingEventHubSub'], flag: null },
-  databricks: { existing: ['existingDatabricksWorkspace', 'existingDatabricksRg', 'existingDatabricksSub'], flag: null },
-  postgres: { existing: null, flag: 'postgresEnabled' },
-  storage: { existing: null, flag: null },
-  keyvault: { existing: null, flag: null },
+const SERVICE_PARAM_MAP: Record<string, { adoptable: boolean; flag: string | null }> = {
+  aisearch: { adoptable: true, flag: 'aiSearchEnabled' },
+  apim: { adoptable: true, flag: 'apimEnabled' },
+  adx: { adoptable: true, flag: 'adxEnabled' },
+  foundry: { adoptable: true, flag: 'aiFoundryEnabled' },
+  purview: { adoptable: true, flag: 'purviewEnabled' },
+  maps: { adoptable: true, flag: 'azureMapsEnabled' },
+  synapse: { adoptable: true, flag: null },
+  cosmos: { adoptable: true, flag: null },
+  adf: { adoptable: true, flag: null },
+  eventhubs: { adoptable: true, flag: null },
+  databricks: { adoptable: true, flag: null },
+  postgres: { adoptable: false, flag: 'postgresEnabled' },
+  storage: { adoptable: false, flag: null },
+  keyvault: { adoptable: false, flag: null },
 };
 
-/** Build the extra `-p` bicep param assignments for the chosen service wiring. */
+/** One entry of the `adopt` bag, in the shape `main.bicep`'s `adoptMode()` reads. */
+type AdoptBagEntry = {
+  mode: 'adopt';
+  target: { name: string; rg: string; sub: string };
+  extra?: Record<string, string>;
+};
+
+/**
+ * Build the extra `-p` bicep param assignments for the chosen service wiring.
+ *
+ * Only the enable FLAGS are emitted here; the reuse coordinates go into the
+ * adopt bag (see `collectAdoptBag`) so there is exactly one place that decides
+ * the shape of an adoption, shared with byo-wizard.sh and scan-and-deploy.sh.
+ */
 function serviceChoiceParamLines(choices: SetupConfig['serviceChoices']): string[] {
   if (!choices) return [];
   const lines: string[] = [];
   for (const [svc, choice] of Object.entries(choices)) {
     const map = SERVICE_PARAM_MAP[svc];
     if (!map) continue;
-    if (choice.mode === 'use-existing' && choice.existing && map.existing) {
-      const [nameP, rgP, subP] = map.existing;
-      lines.push(
-        `  -p ${nameP}='${choice.existing.name}' ${rgP}='${choice.existing.rg}' ${subP}='${choice.existing.sub}' \\`,
-      );
+    if (choice.mode === 'use-existing' && choice.existing && map.adoptable) {
       if (map.flag) lines.push(`  -p ${map.flag}=true \\`);
     } else if (choice.mode === 'disable' && map.flag) {
       lines.push(`  -p ${map.flag}=false \\`);
@@ -196,6 +209,43 @@ function serviceChoiceParamLines(choices: SetupConfig['serviceChoices']): string
     }
   }
   return lines;
+}
+
+/**
+ * Collect every reuse coordinate in this request into ONE adopt bag.
+ *
+ * An ABSENT key means create-new — `adoptMode()` in main.bicep defaults to
+ * 'create' — so a pure-greenfield request produces an EMPTY bag and no `-p
+ * adopt=…` assignment is emitted at all. This is deliberate: the previous
+ * generator emitted per-service `existing*` assignments unconditionally, which
+ * broke greenfield as well as brownfield once the scalars were removed.
+ */
+function collectAdoptBag(body: SetupConfig): Record<string, AdoptBagEntry> {
+  const bag: Record<string, AdoptBagEntry> = {};
+  const put = (key: string, name?: string, rg?: string, sub?: string, extra?: Record<string, string>) => {
+    if (!name) return;
+    bag[key] = {
+      mode: 'adopt',
+      target: { name, rg: rg ?? '', sub: sub ?? '' },
+      ...(extra && Object.keys(extra).length ? { extra } : {}),
+    };
+  };
+
+  for (const [svc, choice] of Object.entries(body.serviceChoices ?? {})) {
+    const map = SERVICE_PARAM_MAP[svc];
+    if (!map?.adoptable) continue;
+    if (choice.mode !== 'use-existing' || !choice.existing) continue;
+    put(svc, choice.existing.name, choice.existing.rg, choice.existing.sub);
+  }
+
+  // The dedicated top-level fields the wizard still posts for the Console Cosmos
+  // and the RTI backends. They are the same decision, so they land in the same
+  // bag rather than in a second parallel mechanism.
+  put('cosmos', body.existingCosmosAccount, body.existingCosmosRg, body.existingCosmosSub);
+  put('adx', body.existingAdxClusterName);
+  put('eventhubs', body.existingEventHubNamespace);
+  put('streamanalytics', body.existingAsaJob);
+  return bag;
 }
 
 const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
@@ -899,34 +949,29 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
       `dlzDomainNames="[${domainNames.map((d) => `'${d}'`).join(',')}]" capacitySku=${body.capacitySku}`
     : `  -p dlzDomainNames="['${body.domainName}']" capacitySku=${body.capacitySku}`;
 
-  // Console metadata Cosmos scan-and-choose → named bicep params (no free-form).
-  // Default (provision-new serverless) emits nothing — main.bicep's
-  // loomConsoleCosmosEnabled defaults true. Reuse/disable emit the existing*
-  // coordinates so the hub provision auto-skips and the Console binds to it.
-  const consoleCosmosParam = (() => {
-    if (body.existingCosmosAccount) {
-      const parts = [
-        `loomConsoleCosmosEnabled=${body.loomConsoleCosmosEnabled === false ? 'false' : 'true'}`,
-        `existingCosmosAccount=${body.existingCosmosAccount}`,
-      ];
-      if (body.existingCosmosRg) parts.push(`existingCosmosRg=${body.existingCosmosRg}`);
-      if (body.existingCosmosSub) parts.push(`existingCosmosSub=${body.existingCosmosSub}`);
-      return `  -p ${parts.join(' ')} \\`;
-    }
-    return '';
-  })();
+  // Console metadata Cosmos scan-and-choose → the `adopt` bag (below). Only the
+  // enable FLAG is emitted here; the coordinates ride in `adoptParamLine` so a
+  // reuse decision has exactly one representation.
+  const consoleCosmosParam =
+    body.existingCosmosAccount
+      ? `  -p loomConsoleCosmosEnabled=${body.loomConsoleCosmosEnabled === false ? 'false' : 'true'} \\`
+      : '';
   // RTI (Real-Time Intelligence) named overrides — only emitted when the user
-  // deviated from the all-on default (disabled a backend, or chose to reuse an
-  // existing one), so the default command stays clean. Maps each choice to the
-  // SAME main.bicep param the CLI (byo-wizard.sh) writes (no free-form).
+  // deviated from the all-on default (disabled a backend). A REUSE choice is
+  // carried by the adopt bag, not by an `existing*` param: main.bicep no longer
+  // declares those, and assigning one is a hard BCP259.
   const rtiParts: string[] = [];
   if (body.adxEnabled === false) rtiParts.push('adxEnabled=false');
-  if (body.existingAdxClusterName) rtiParts.push(`existingAdxClusterName='${body.existingAdxClusterName}'`);
   if (body.loomEventHubEnabled === false) rtiParts.push('loomEventHubEnabled=false');
-  if (body.existingEventHubNamespace) rtiParts.push(`existingEventHubNamespace='${body.existingEventHubNamespace}'`);
   if (body.loomStreamAnalyticsEnabled === false) rtiParts.push('loomStreamAnalyticsEnabled=false');
-  if (body.existingAsaJob) rtiParts.push(`existingAsaJob='${body.existingAsaJob}'`);
   const rtiParamLine = rtiParts.length ? `  -p ${rtiParts.join(' ')} \\` : '';
+
+  // The ONE adopt assignment. Emitted only when something is actually adopted —
+  // a greenfield install emits nothing and every service resolves to 'create'.
+  const adoptBag = collectAdoptBag(body);
+  const adoptParamLine = Object.keys(adoptBag).length
+    ? `  -p adopt='${JSON.stringify(adoptBag)}' \\`
+    : '';
 
   // dlz-attach: the manual command threads topology + the hub coordinates the
   // tenant-topology doc recorded (so no Azure id is free-typed). The orchestrator
@@ -968,6 +1013,7 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
           `  -p boundary=${body.boundary} capacitySku=${body.capacitySku} \\`,
           ...orgVisualsParamLines,
           ...(rtiParamLine ? [rtiParamLine] : []),
+          ...(adoptParamLine ? [adoptParamLine] : []),
           ...hubParamLines,
           `  # hubPrivateDnsZoneIds is an object — pass it from the tenant-topology doc`,
         ]
@@ -984,6 +1030,7 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
           ...(consoleCosmosParam ? [consoleCosmosParam] : []),
           ...orgVisualsParamLines,
           ...(rtiParamLine ? [rtiParamLine] : []),
+          ...(adoptParamLine ? [adoptParamLine] : []),
           ...serviceChoiceParamLines(body.serviceChoices),
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,

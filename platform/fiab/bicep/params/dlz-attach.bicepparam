@@ -119,3 +119,44 @@ param loomSynapseEnabled = true
 param loomDatabricksEnabled = true
 param loomDataFactoryEnabled = true
 param loomSelfHostedIrEnabled = true
+
+// ---------- ADOPT-OR-CREATE plan (replaces the per-service EXISTING_* params) ----------
+// main.bicep no longer declares 36 `existing*` scalars; it declares ONE `adopt`
+// object keyed by the service key in apps/fiab-console/lib/deploy/adoption-catalog.ts.
+// That is what freed the ARM parameter budget (251 -> 216 of 256) so networking,
+// storage, Log Analytics and ACR adoption become possible at all.
+//
+// TWO input paths, and the explicit plan always wins:
+//
+//   1. LOOM_ADOPT_JSON - the whole plan as one JSON document, emitted by
+//      `planToArmParameters()` (apps/fiab-console/lib/deploy/plan-to-arm.ts).
+//      This is the first-class path every deploy tier uses.
+//   2. The legacy per-service EXISTING_* environment variables below, kept
+//      working verbatim so byo-wizard.sh / scan-and-deploy.sh / a hand-exported
+//      shell keep behaving exactly as before.
+//
+// `union(legacy, plan)` means a service present in BOTH resolves to the plan's
+// decision. A service in NEITHER is absent from the object, and main.bicep's
+// `adoptMode()` defaults an absent key to 'create' - so an empty environment
+// still produces a complete greenfield deployment.
+//
+// NOTE: setting an EXISTING_* name now also SUPPRESSES the matching new resource
+// (main.bicep's provision<Service> vars). Previously several services - Purview,
+// Maps, Foundry, Synapse, Databricks, ADF - rebound the Console env to the
+// existing resource while STILL deploying a duplicate beside it.
+var legacyAdoptFromEnv = union(
+  empty(readEnvironmentVariable('EXISTING_AI_SEARCH_SERVICE', '')) ? {} : { aisearch: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AI_SEARCH_SERVICE', ''), rg: readEnvironmentVariable('EXISTING_AI_SEARCH_RG', ''), sub: readEnvironmentVariable('EXISTING_AI_SEARCH_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_APIM', '')) ? {} : { apim: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_APIM', ''), rg: readEnvironmentVariable('EXISTING_APIM_RG', ''), sub: readEnvironmentVariable('EXISTING_APIM_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_KUSTO_CLUSTER', '')) ? {} : { adx: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_KUSTO_CLUSTER', ''), rg: readEnvironmentVariable('EXISTING_KUSTO_RG', ''), sub: readEnvironmentVariable('EXISTING_KUSTO_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_AOAI', '')) ? {} : { foundry: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AOAI', ''), rg: readEnvironmentVariable('EXISTING_AOAI_RG', ''), sub: readEnvironmentVariable('EXISTING_AOAI_SUB', '') }, extra: { chatDeployment: readEnvironmentVariable('EXISTING_AOAI_CHAT_DEPLOYMENT', ''), embedDeployment: readEnvironmentVariable('EXISTING_AOAI_EMBED_DEPLOYMENT', ''), miniDeployment: readEnvironmentVariable('EXISTING_AOAI_MINI_DEPLOYMENT', ''), strongDeployment: readEnvironmentVariable('EXISTING_AOAI_STRONG_DEPLOYMENT', '') } } },
+  empty(readEnvironmentVariable('EXISTING_PURVIEW', '')) ? {} : { purview: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_PURVIEW', ''), rg: readEnvironmentVariable('EXISTING_PURVIEW_RG', ''), sub: readEnvironmentVariable('EXISTING_PURVIEW_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_SYNAPSE', '')) ? {} : { synapse: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_SYNAPSE', ''), rg: readEnvironmentVariable('EXISTING_SYNAPSE_RG', ''), sub: readEnvironmentVariable('EXISTING_SYNAPSE_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_COSMOS_ACCOUNT', '')) ? {} : { cosmos: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_COSMOS_ACCOUNT', ''), rg: readEnvironmentVariable('EXISTING_COSMOS_ACCOUNT_RG', ''), sub: readEnvironmentVariable('EXISTING_COSMOS_ACCOUNT_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', '')) ? {} : { eventhubs: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_EVENTHUB_NAMESPACE', ''), rg: readEnvironmentVariable('EXISTING_EVENTHUB_RG', ''), sub: readEnvironmentVariable('EXISTING_EVENTHUB_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_ASA_JOB', '')) ? {} : { streamanalytics: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_ASA_JOB', ''), rg: readEnvironmentVariable('EXISTING_ASA_RG', ''), sub: readEnvironmentVariable('EXISTING_ASA_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_DATABRICKS', '')) ? {} : { databricks: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_DATABRICKS', ''), rg: readEnvironmentVariable('EXISTING_DATABRICKS_RG', ''), sub: readEnvironmentVariable('EXISTING_DATABRICKS_SUB', '') }, extra: { hostname: readEnvironmentVariable('EXISTING_DATABRICKS_HOSTNAME', '') } } },
+  empty(readEnvironmentVariable('EXISTING_ADF', '')) ? {} : { adf: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_ADF', ''), rg: readEnvironmentVariable('EXISTING_ADF_RG', ''), sub: readEnvironmentVariable('EXISTING_ADF_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', '')) ? {} : { maps: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AZURE_MAPS_ACCOUNT', ''), rg: readEnvironmentVariable('EXISTING_AZURE_MAPS_RG', ''), sub: readEnvironmentVariable('EXISTING_AZURE_MAPS_SUB', '') } } },
+  empty(readEnvironmentVariable('EXISTING_AML_WORKSPACE', '')) ? {} : { aml: { mode: 'adopt', target: { name: readEnvironmentVariable('EXISTING_AML_WORKSPACE', ''), rg: readEnvironmentVariable('EXISTING_AML_RG', ''), sub: readEnvironmentVariable('EXISTING_AML_SUB', '') } } }
+)
+param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')))

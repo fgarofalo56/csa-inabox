@@ -350,6 +350,9 @@ var loomContainers = [
   // zone with zero Azure provisioning. createIfNotExists in cosmos-client.ts
   // ensure() remains the hotfix fallback.
   { name: 'landing-zones',       partitionKey: '/tenantId' }
+  // Adopt-or-create deployment plans (deploy-integrity R5) — immutable,
+  // append-only; a plan edit writes a NEW document that supersedes the old.
+  { name: 'deployment-plans',    partitionKey: '/tenantId' }
   // CTS-07 — Copilot skills registry. `copilot-skills` holds one doc per skill,
   // PK /scope ('builtin' for the seeded MS + Power BI descriptors, or
   // 'tenant:<tid>' for tenant-authored custom skills) so each per-scope

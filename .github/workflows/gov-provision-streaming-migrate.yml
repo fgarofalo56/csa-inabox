@@ -369,7 +369,25 @@ jobs:
           bash scripts/csa-loom/acr-firewall-lease.sh acquire --acr "$ACR"
           RC=0
           for IMG in loom-migrate loom-risingwave; do
-            D=$(az acr repository show -n "$ACR" --image "$IMG:$IMAGE_TAG" --query digest -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            # R7: capture stderr and CLASSIFY it. `2>/dev/null || echo ""` made a
+            # registry that could not be READ indistinguishable from a tag that
+            # genuinely is not there, and the message below asserted the second.
+            # Absence is claimed only when the registry ANSWERED.
+            set +e
+            SHOW_OUT=$(az acr repository show -n "$ACR" --image "$IMG:$IMAGE_TAG" --query digest -o tsv 2>&1)
+            SHOW_RC=$?
+            set -e
+            if [ $SHOW_RC -eq 0 ]; then
+              D=$(printf '%s' "$SHOW_OUT" | tr -d '\r')
+            else
+              D=""
+              if ! node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" \
+                     --assert-signal config.image-tag-absent >/dev/null 2>&1; then
+                echo "::error::Could not READ $ACR_LOGIN/$IMG:$IMAGE_TAG. $(node scripts/ci/deploy-classify.mjs --text "$SHOW_OUT" --query) This is NOT proof the tag is missing — refusing to deploy on an UNPROVEN preflight."
+                RC=1
+                continue
+              fi
+            fi
             if [ -z "$D" ]; then
               echo "::error::PREFLIGHT FAILED — $ACR_LOGIN/$IMG:$IMAGE_TAG has no manifest. Refusing to deploy: the Container App PUT would fail with MANIFEST_UNKNOWN, and where the app already exists this run ADOPTS it, so it would point a live Gov service at an image that does not exist. Run this workflow with mode=build-only first."
               RC=1

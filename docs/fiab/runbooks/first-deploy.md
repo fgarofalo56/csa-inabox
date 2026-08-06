@@ -34,11 +34,22 @@ Walk these checklists BEFORE any real provisioning:
 ### Purview
 
 See [Purview tenant-existing-account reuse](purview-tenant-reuse.md).
-Default is `purviewEnabled = false`. Decide:
+The default is **per boundary**, not global: `true` in
+`commercial.bicepparam`, `commercial-full.bicepparam` (via
+`LOOM_PURVIEW_ENABLED`), `gcc.bicepparam` and `tenant-dmlz.bicepparam`;
+`false` in `gcc-high.bicepparam` (reuse the tenant Enterprise Purview) and
+`il5.bicepparam` (Atlas on AKS instead). Decide:
 
-- [ ] Greenfield tenant → flip to `true`
-- [ ] Existing Purview → register Loom lakehouse storage as a source
-      on the existing account (post-deploy step)
+- [ ] Greenfield tenant → leave `true` (or flip it on for GCC-High)
+- [ ] Existing Purview → **adopt it**: set `EXISTING_PURVIEW` (+ `_RG`, `_SUB`).
+      That is the whole step — `provisionPurview` is derived as
+      `purviewEnabled && adoptMode(adopt,'purview') == 'create'`, so an adopt
+      decision suppresses creation on its own and no enable-flag override is
+      needed. (It used to: `EXISTING_PURVIEW` alone bound the Console and still
+      deployed a second account, failing `EnterpriseTenantAlreadyExists`.) See
+      [Brownfield deployment](../deployment/brownfield.md)
+- [ ] Region has no Purview (e.g. `centralus`) → `purviewEnabled=false`; the
+      Loom catalog falls back to its Azure-native backend
 
 ### AI Foundry Hub
 
@@ -80,15 +91,38 @@ scripts/csa-loom/bootstrap-dlz-rgs.sh eastus2 \
 
 ## Phase 3 — full provision (30-60 min)
 
+> **This workflow is a CI validation lane by default, not the customer install
+> path.** `keep_resources` defaults to **false**, and in `run_mode=full` the
+> teardown step then fires on success — it enumerates `rg-csa-loom-*` across the
+> subscription and deletes every match, purging Key Vaults and Cognitive
+> Services accounts. `deploy_apps_enabled` also defaults to **false**, so
+> without it no Container Apps are created and there is no Console to open.
+>
+> **For a real install, follow [Greenfield deployment](../deployment/greenfield.md)**
+> — the three-phase `az deployment sub create` path. Use the dispatch below only
+> when you want the workflow to drive it, and only with both overrides set.
+
 Once decisions are locked, dispatch the full deploy:
 
 ```bash
-gh workflow run deploy-fiab-commercial -f run_mode=full
+gh workflow run deploy-fiab-commercial \
+  -f run_mode=full \
+  -f keep_resources=true \
+  -f deploy_apps_enabled=true
 
 # Watch — provisioning takes ~25-45 minutes for first run
 RUN_ID=$(gh run list --workflow deploy-fiab-commercial --limit 1 --json databaseId --jq '.[0].databaseId')
 gh run watch $RUN_ID --exit-status
 ```
+
+> `deploy_apps_enabled=true` only works when the app images already exist in the
+> deployment's ACR. On a from-scratch subscription the ACR is created empty —
+> run the image phase first
+> ([Greenfield, phase 2](../deployment/greenfield.md#phase-2-build-the-images-and-bring-the-apps-up-1525-min)).
+>
+> If the target subscription already holds a Loom hub, add
+> `-f allow_existing_hub=true` to reconcile it rather than being rejected by the
+> topology guard.
 
 What this provisions:
 - Admin Plane RG with all 12 sub-modules (network, identity, KV,
@@ -96,9 +130,9 @@ What this provisions:
   APIM, catalog, AI defense, app deployments)
 - Single-sub DLZ RG with all 7 sub-modules (network, storage,
   Databricks, Synapse, Event Hubs, ADX database, Cosmos)
-- All apps deployed via Container Apps with standardized env vars
+- Container Apps for every app — **only when `deploy_apps_enabled=true`**
 - Smoke test executes against the live apps
-- Teardown runs automatically on success (configurable per workflow)
+- Teardown on success — **unless `keep_resources=true`**
 
 ## Phase 4 — verification (15 min)
 

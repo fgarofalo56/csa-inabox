@@ -28,12 +28,32 @@ All wired in `platform/fiab/bicep/modules/admin-plane/main.bicep` (Console
 Container App env list). Precedence: dedicated **agentFoundry** account (default)
 → shared Foundry **hub** → **reused existing** account.
 
+### CREATE vs BIND — two decisions, two flags
+
+`agentFoundryEnabled` is the **BIND mirror**: it answers "is AOAI part of this
+deployment?" and stays **true** when the operator ADOPTS an existing account,
+because the Console still has to bind `LOOM_AOAI_*` to it. The CREATE decision
+travels separately as `provisionAgentFoundry`
+(`= agentFoundryEnabled && adoptMode(adopt, 'foundry') == 'create'`), and
+admin-plane ANDs the two into `var agentFoundryCreate`. Only
+`agentFoundryCreate` may gate `module agentFoundry` or a read of its outputs — a
+module output cannot be read when the module did not deploy.
+
+Passing the CREATE decision down *as* `agentFoundryEnabled` collapses "the
+operator brought their own AOAI" into "AOAI is switched off". That is what
+emptied `LOOM_AOAI_MINI_DEPLOYMENT` / `LOOM_AOAI_STRONG_DEPLOYMENT` on an adopt
+pick; the shape above is the fix, and it mirrors what `aiFoundry` / `aiSearch` /
+`adxCluster` already do (`<enabled> && empty(existing…)`), generalised to the
+adopt bag's `skip` mode.
+
 | Env var | Source (default agentFoundry path) | Existing-account path (Gap A) |
 |---|---|---|
 | `LOOM_AOAI_ENDPOINT` | `agentFoundry.outputs.aoaiEndpoint` | `byoFoundryEndpoint` (derived from `existingFoundryAccountName`) |
 | `LOOM_AOAI_DEPLOYMENT` | `agentFoundry.outputs.chatDeployment` (`chat` = gpt-4o) | `byoFoundryChatDeployment` (`EXISTING_AOAI_CHAT_DEPLOYMENT`) |
 | `LOOM_AOAI_CHAT_DEPLOYMENT` | `agentFoundry.outputs.chatDeployment` | `byoFoundryChatDeployment` |
 | `LOOM_AOAI_EMBED_DEPLOYMENT` | `agentFoundry.outputs.embedDeployment` | `byoFoundryEmbedDeployment` (`EXISTING_AOAI_EMBED_DEPLOYMENT`) |
+| `LOOM_AOAI_MINI_DEPLOYMENT` | `agentFoundry.outputs.miniDeployment` | `effByoMiniDeployment` = `EXISTING_AOAI_MINI_DEPLOYMENT`, else the reused account's chat deployment |
+| `LOOM_AOAI_STRONG_DEPLOYMENT` | `agentFoundry.outputs.strongDeployment` | `effByoStrongDeployment` = `EXISTING_AOAI_STRONG_DEPLOYMENT`, else the reused account's chat deployment |
 | `LOOM_AOAI_COMPLETION_DEPLOYMENT` | `loomAoaiCompletionDeployment` or module output | — (falls back to chat) |
 | `LOOM_AZURE_OPENAI_ENDPOINT` | `agentFoundry.outputs.aoaiEndpoint` | `byoFoundryEndpoint` |
 | `LOOM_FOUNDRY_PROJECT_ENDPOINT` | `agentFoundry.outputs.projectEndpoint` | (hub fallback) |
@@ -73,8 +93,15 @@ access on and passes no subnet, so day-one works without VNet plumbing.
   + `EXISTING_AOAI_CHAT_DEPLOYMENT` / `EXISTING_AOAI_EMBED_DEPLOYMENT`.
 - **CLI wizard** (`scripts/csa-loom/byo-wizard.sh`): the foundry row's enabled
   flag is now `agentFoundryEnabled`; non-interactive default is **provision-new**
-  (everything-ON opt-out); reuse discovers the chat/embed deployment names; gate
-  prints the exact `agentFoundryEnabled = false` opt-out line.
+  (everything-ON opt-out); reuse discovers the chat/embed **and mini/strong**
+  deployment names; gate prints the exact `agentFoundryEnabled = false` opt-out
+  line. Deployment selection is **ranked by MODEL name, newest first**, not
+  first-line-wins: the pre-2026 matcher (`gpt-4o|gpt-4.1|gpt-4|gpt-35`) resolved
+  NOTHING on a modern account (measured 2026-08-05 against a real account whose
+  only chat slots were `gpt-5.4-mini` / `gpt-5.4-nano` / `o3-deep-research`), so
+  a reuse pick emitted `chatDeployment: ''`. `BYO_FOUNDRY_CHAT` /
+  `BYO_FOUNDRY_EMBED` / `BYO_FOUNDRY_MINI` / `BYO_FOUNDRY_STRONG` override
+  discovery and are the supported path when the wizard cannot read the account.
 - **Setup Wizard** (`app/api/setup/existing-aoai/route.ts`): session-gated
   Resource-Graph + ARM scan of AIServices accounts + deployments, returns
   `recommendation` (reuse/new) + per-account chat/embed classification. This is

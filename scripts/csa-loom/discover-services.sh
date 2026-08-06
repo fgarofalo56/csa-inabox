@@ -16,10 +16,28 @@
 #   bash scripts/csa-loom/discover-services.sh > temp/loom-service-inventory.txt
 set -uo pipefail
 
+# The AOAI deployment picker is SHARED with byo-wizard.sh — one matcher, not two
+# copies that drift. Both copies used to carry the pre-2026 model list, which
+# resolves NOTHING on a modern account; see the sourced file's header.
+DISCOVER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/csa-loom/aoai-deployment-pick.sh
+. "$DISCOVER_SCRIPT_DIR/aoai-deployment-pick.sh"
+
 SUBS="${SUBS:-$(az account list --query "[].id" -o tsv 2>/dev/null)}"
 [[ -z "$SUBS" ]] && { echo "No subscriptions visible. Run 'az login' first." >&2; exit 1; }
 
-q() { az "$@" 2>/dev/null || true; }
+# `</dev/null` is load-bearing, not tidiness. `scan_aoai` calls this from inside a
+# `while IFS=… read -r … <<<"$rows"` loop; without it `az` inherits — and drains —
+# the loop's stdin, so the loop stopped after the FIRST account and every
+# deployment list came back empty. Measured 2026-08-05 against a real account with
+# six deployments: it printed `chat='none' embed='none'` and listed one of the two
+# accounts in the subscription. Pre-existing; found while wiring the model tiers.
+# `tr -d '\r'` (delete CR) is the second half of the same story: `az -o tsv` emits CRLF on
+# Windows, so the LAST tab-separated field (always the subscription id here)
+# carried a trailing CR. `--subscription '<guid>'` is rejected, the failure
+# was swallowed, and every account reported `chat='none'`. It also corrupted the
+# `export EXISTING_*_SUB=` lines this script tells the operator to paste.
+q() { az "$@" </dev/null 2>/dev/null | tr -d '\r' || true; }
 first() { q "$@" --query "[0].{name:name,rg:resourceGroup,sub:id}" -o json; }
 
 echo "# CSA Loom — service discovery ($(echo "$SUBS" | wc -w) subscription(s))"
@@ -86,18 +104,24 @@ scan_aoai() {
     found=1
     local dargs=(cognitiveservices account deployment list -n "$name" -g "$rg")
     [[ -n "$sub" ]] && dargs+=(--subscription "$sub")
-    local deploys chat embed
+    local deploys chat embed mini strong
     deploys="$(q "${dargs[@]}" --query "[].{name:name,model:properties.model.name}" -o tsv 2>/dev/null || true)"
-    chat="$(awk -F'\t' 'tolower($2) ~ /gpt-4o|gpt-4\.1|gpt-4|gpt-35|gpt-3.5/ {print $1; exit}' <<<"$deploys")"
-    embed="$(awk -F'\t' 'tolower($2) ~ /embedding/ {print $1; exit}' <<<"$deploys")"
-    echo "  • $name   (rg=$rg sub=$sub)   chat='${chat:-none}' embed='${embed:-none}'"
+    chat="$(aoai_pick_chat "$deploys")"
+    embed="$(aoai_pick_embed "$deploys")"
+    mini="$(aoai_pick_mini "$deploys")"
+    strong="$(aoai_pick_strong "$deploys")"
+    echo "  • $name   (rg=$rg sub=$sub)   chat='${chat:-none}' embed='${embed:-none}' mini='${mini:-none}' strong='${strong:-none}'"
     if [[ -n "$chat" && -n "$embed" ]]; then
-      echo "    # RECOMMEND: reuse (gpt-4o-class chat + embeddings already present)"
+      echo "    # RECOMMEND: reuse (a chat + an embeddings deployment already exist)"
     else
-      echo "    # RECOMMEND: provision-new (no complete gpt-4o-class chat+embed pair)"
+      echo "    # RECOMMEND: provision-new (no complete chat+embed pair)"
     fi
     echo "    export EXISTING_AOAI=$name EXISTING_AOAI_RG=$rg EXISTING_AOAI_SUB=$sub"
     echo "    export EXISTING_AOAI_CHAT_DEPLOYMENT='${chat}' EXISTING_AOAI_EMBED_DEPLOYMENT='${embed}'"
+    # Model-tier slots (LOOM_AOAI_MINI/STRONG_DEPLOYMENT). Every boundary
+    # bicepparam reads these into the adopt bag; empty is safe because
+    # admin-plane falls each tier back to the account's chat deployment.
+    echo "    export EXISTING_AOAI_MINI_DEPLOYMENT='${mini}' EXISTING_AOAI_STRONG_DEPLOYMENT='${strong}'"
   done <<<"$rows"
   if [[ "$found" == "0" ]]; then
     echo "  (none found — Loom provisions a NEW aifndry-loom-<region> account + gpt-4o + embeddings by default)"

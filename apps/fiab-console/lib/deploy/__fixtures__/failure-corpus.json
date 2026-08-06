@@ -1,0 +1,161 @@
+{
+  "$comment": [
+    "THE SHARED CONFORMANCE CORPUS for the deployment failure taxonomy.",
+    "",
+    "The matching algorithm exists twice — apps/fiab-console/lib/deploy/failure-taxonomy.ts",
+    "(the console imports it) and scripts/ci/deploy-classify.mjs (CI imports it) — because a",
+    ".mjs cannot import a .ts and the console cannot import from scripts/ (its image build",
+    "context is apps/fiab-console). Duplicating an algorithm is exactly as dangerous as",
+    "duplicating a table, so both implementations are pinned to THIS file:",
+    "",
+    "  apps/fiab-console/lib/deploy/__tests__/failure-taxonomy.test.ts   runs the TS one",
+    "  scripts/ci/__tests__/deploy-classify.test.mjs                     runs the MJS one",
+    "",
+    "Either drifting turns its own suite red. A byte-compare of two tables would not have",
+    "caught an algorithm drift; this does.",
+    "",
+    "EVERY `input` here is a string Azure/az was OBSERVED to emit — the `source` field says",
+    "where. Do not add a guessed input: a wrong expectation is worse than no expectation,",
+    "because it makes a misclassification look tested."
+  ],
+  "cases": [
+    {
+      "name": "quota — ACR Tasks agent pool cores, verbatim",
+      "source": "build-fiab-images-acr-tasks run 31022950740, 2026-08-05",
+      "input": "ERROR: Failed to schedule the task: QuotaExceeded: standardDDSv5Family Cores, Location: centralus, Current Limit: 200, Current Usage: 196, Additional Required: 8",
+      "expect": { "class": "quota", "signalId": "quota.exceeded", "retryable": false }
+    },
+    {
+      "name": "quota — retrying it must NOT be allowed even though the text also says 'operation'",
+      "source": "synthesised from the same run; guards the precedence rule",
+      "input": "ERROR: OperationNotAllowed: QuotaExceeded — Operation could not be completed as it results in exceeding approved standardDDSv5Family Cores quota",
+      "expect": { "class": "quota", "signalId": "quota.exceeded", "retryable": false }
+    },
+    {
+      "name": "config — resource group constructed from a region default",
+      "source": "full-app-deploy-commercial run 31028909702, 2026-08-05",
+      "input": "ERROR: (ResourceGroupNotFound) Resource group 'rg-csa-loom-admin-eastus2' could not be found.\nCode: ResourceGroupNotFound",
+      "expect": { "class": "config", "signalId": "config.resource-group-not-found", "retryable": false }
+    },
+    {
+      "name": "defect — empty ACR name passed to az (the cascade error, not the cause)",
+      "source": "full-app-deploy-commercial run 31028909702 cleanup step, 2026-08-05",
+      "input": "ERROR: Registry names may contain only alpha numeric characters and must be between 5 and 50 characters",
+      "expect": { "class": "defect", "signalId": "defect.acr-name-constructed", "retryable": false }
+    },
+    {
+      "name": "permission — ARM RBAC denial",
+      "source": "ARM standard; docs/fiab/runbooks/deploy-failure.md",
+      "input": "ERROR: (AuthorizationFailed) The client 'x' with object id 'y' does not have authorization to perform action 'Microsoft.Resources/deployments/write' over scope '/subscriptions/…'",
+      "expect": { "class": "permission", "signalId": "permission.authorization-failed", "retryable": false }
+    },
+    {
+      "name": "permission — registry denied (NOT absence)",
+      "source": "az acr build / cosign against a locked ACR",
+      "input": "denied: requested access to the resource is denied",
+      "expect": { "class": "permission", "signalId": "permission.acr-denied", "retryable": false }
+    },
+    {
+      "name": "config — registry network-locked; nothing is known about any tag",
+      "source": "ACR publicNetworkAccess=Disabled between builds (#2603)",
+      "input": "ERROR: Failed to connect: client with IP 20.1.2.3 is not allowed access. Refer to https://aka.ms/acr/firewall",
+      "expect": { "class": "config", "signalId": "config.acr-unreachable", "retryable": false }
+    },
+    {
+      "name": "config — the registry ANSWERED and the tag is genuinely absent",
+      "source": "az acr repository show on a missing tag; the wording scripts/ci/assert-acr-image-tags.sh splits on",
+      "input": "ERROR: The specified tag does not exist in the repository loom-console. ManifestUnknown",
+      "expect": { "class": "config", "signalId": "config.image-tag-absent", "retryable": false }
+    },
+    {
+      "name": "config — Purview tenant singleton",
+      "source": "platform/fiab/bicep/main.bicep:100 documents this code",
+      "input": "ERROR: (EnterpriseTenantAlreadyExists) An account already exists for this tenant.",
+      "expect": { "class": "config", "signalId": "config.already-exists-purview", "retryable": false }
+    },
+    {
+      "name": "config — the classic brownfield re-deploy failure",
+      "source": "docs/fiab/runbooks/deploy-failure.md",
+      "input": "ERROR: (PrivateDnsZoneAlreadyExists) The private DNS zone privatelink.blob.core.windows.net already exists in resource group rg-csa-loom-admin-centralus.",
+      "expect": { "class": "config", "signalId": "config.private-dns-zone-exists", "retryable": false }
+    },
+    {
+      "name": "config — hub CIDR collides with a customer VNet",
+      "source": "docs/fiab/runbooks/deploy-failure.md",
+      "input": "ERROR: (VnetAddressRangeInUse) Subnet 10.100.0.0/16 overlaps with an existing subnet in virtual network.",
+      "expect": { "class": "config", "signalId": "config.vnet-range-in-use", "retryable": false }
+    },
+    {
+      "name": "registration — provider not registered; the platform can fix this itself",
+      "source": "ARM standard; apps/fiab-console/lib/setup/deploy-preflight.ts already emits the command",
+      "input": "ERROR: (MissingSubscriptionRegistration) The subscription is not registered to use namespace 'Microsoft.Kusto'.",
+      "expect": { "class": "registration", "signalId": "registration.provider", "retryable": false }
+    },
+    {
+      "name": "eventual-consistency — Entra replication lag on a just-created UAMI",
+      "source": "ARM RBAC on a principal created earlier in the same deployment",
+      "input": "ERROR: (PrincipalNotFound) Principal 3f2b… does not exist in the directory 9c1e….",
+      "expect": { "class": "eventual-consistency", "signalId": "eventual.principal-not-found", "retryable": true }
+    },
+    {
+      "name": "transient — ARM throttling",
+      "source": "ARM rate limiting",
+      "input": "ERROR: (TooManyRequests) The request is being throttled. Retry after 12 seconds.",
+      "expect": { "class": "transient", "signalId": "transient.throttled", "retryable": true }
+    },
+    {
+      "name": "transient — Container Apps op already running (the one retry that already existed)",
+      "source": "full-app-deploy-commercial.yml roll(), the model this taxonomy generalises",
+      "input": "ERROR: (ContainerAppOperationInProgress) There is an active provisioning operation on container app loom-console.",
+      "expect": { "class": "transient", "signalId": "transient.operation-in-progress", "retryable": true }
+    },
+    {
+      "name": "transient — Azure 5xx",
+      "source": "ARM server-side error",
+      "input": "ERROR: (ServiceUnavailable) The service is temporarily unavailable. Please retry.",
+      "expect": { "class": "transient", "signalId": "transient.service-unavailable", "retryable": true }
+    },
+    {
+      "name": "config — ARM answered: this container app genuinely does not exist",
+      "source": "az containerapp show on an app the estate does not carry",
+      "input": "ERROR: (ResourceNotFound) The Resource 'Microsoft.App/containerApps/loom-mirroring' under resource group 'rg-csa-loom-admin-centralus' was not found.",
+      "expect": { "class": "config", "signalId": "config.resource-not-found", "retryable": false }
+    },
+    {
+      "name": "a DENIED containerapp show is permission, NOT 'the app does not exist'",
+      "source": "the R7 shape: az show failing for a reason other than 404 establishes nothing about existence",
+      "input": "ERROR: (AuthorizationFailed) The client does not have authorization to perform action 'Microsoft.App/containerApps/read'.",
+      "expect": { "class": "permission", "signalId": "permission.authorization-failed", "retryable": false }
+    },
+    {
+      "name": "an image-tag 404 keeps its OWN signal and is not swallowed by ResourceNotFound",
+      "source": "guards the `not` exclusions on config.resource-not-found",
+      "input": "ERROR: loom-console:v0.1 was not found in the registry acrloomxyz. ManifestUnknown",
+      "expect": { "class": "config", "signalId": "config.image-tag-absent", "retryable": false }
+    },
+    {
+      "name": "unknown — an ARM code the taxonomy has never seen asserts NOTHING",
+      "source": "synthesised: the fail-closed path must be exercised, not assumed",
+      "input": "ERROR: (SomeCodeNobodyHasEverSeen) The widget frobnicator declined.",
+      "expect": { "class": "unknown", "signalId": null, "retryable": false }
+    },
+    {
+      "name": "unknown — empty output classifies as unknown, never as success",
+      "source": "a step that died before writing stderr",
+      "input": "",
+      "expect": { "class": "unknown", "signalId": null, "retryable": false }
+    },
+    {
+      "name": "precedence — a permission denial that ALSO mentions a retryable word stays permission",
+      "source": "synthesised; ties must resolve toward FAIL FAST",
+      "input": "ERROR: (AuthorizationFailed) … the service is temporarily unavailable to this principal",
+      "expect": { "class": "permission", "signalId": "permission.authorization-failed", "retryable": false }
+    },
+    {
+      "name": "case-insensitivity — az varies casing between surfaces",
+      "source": "az emits both 'QuotaExceeded' and 'quotaExceeded' depending on surface",
+      "input": "error: quotaexceeded on the subscription",
+      "expect": { "class": "quota", "signalId": "quota.exceeded", "retryable": false }
+    }
+  ]
+}

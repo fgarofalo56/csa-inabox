@@ -18,7 +18,7 @@ in this repo. Copy-paste into your fork or downstream repo.
 | Optional: `LOOM_ADMIN_GROUP_OBJECT_ID` | Pre-existing Entra group for Loom Admins role assignment |
 
 The SP needs **Contributor + User Access Administrator** on the target
-subscription. See [scripts/csa-loom/setup-deploy-sp.sh](../../../../scripts/csa-loom/setup-deploy-sp.sh)
+subscription. See the [Azure deployment service principal runbook](../../../runbooks/azure-deployment-principal.md)
 for the federated-credential setup.
 
 ## Workflow
@@ -89,25 +89,33 @@ jobs:
             --location eastus2 \
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/${{ inputs.boundary }}.bicepparam \
-            --parameters loomAdminGroupObjectId=${{ secrets.LOOM_ADMIN_GROUP_OBJECT_ID }}
+            --parameters adminEntraGroupId=${{ secrets.LOOM_ADMIN_GROUP_OBJECT_ID }}
 
       - name: Post-deploy bootstrap
         if: inputs.run_mode == 'deploy'
         run: |
           # Power BI tenant SP grant, Databricks SCIM, Dataverse AppUser
-          bash scripts/csa-loom/bootstrap-all.sh \
-            --boundary ${{ inputs.boundary }} \
-            --environment ${{ inputs.environment }}
+          # The canonical, tested bootstrap is the reusable
+          # .github/workflows/csa-loom-post-deploy-bootstrap.yml workflow —
+          # call it with `uses:` rather than re-implementing it. These are
+          # the same steps, for pipelines outside this repo.
+          bash scripts/csa-loom/bootstrap-msal-app-reg.sh
+          bash scripts/csa-loom/grant-navigator-rbac.sh
+          bash scripts/csa-loom/grant-powerplatform-sp.sh
 
       - name: Smoke test live URL
         if: inputs.run_mode == 'deploy'
         run: |
-          node apps/fiab-console/tests/build-marker-probe.mjs \
-            --url https://loom-console-${{ inputs.environment }}.azurewebsites.net
+          # Loom runs on Container Apps behind Front Door — not App Service.
+          # Resolve the real ingress FQDN from the deployment output.
+          CONSOLE_URL=$(az deployment sub show --name "$DEPLOYMENT_NAME" \
+            --query "properties.outputs.consoleUrl.value" -o tsv)
+          curl -sf "$CONSOLE_URL/api/health"
+          curl -sf "$CONSOLE_URL/build-marker.txt"
 
       - name: Teardown (destructive — requires approval)
         if: inputs.run_mode == 'teardown'
-        run: bash scripts/csa-loom/teardown-loom.sh --confirm
+        run: bash .github/scripts/fiab-teardown.sh
 ```
 
 ## What happens

@@ -178,17 +178,17 @@ discover() {
 #   instance exists (one Enterprise Purview per tenant: "EnterpriseTenantAlreadyExists").
 # ---------------------------------------------------------------------------
 SERVICES=(
-  "aisearch|AI Search|Microsoft.Search/searchServices||existingAiSearchService|existingAiSearchRg|existingAiSearchSub|EXISTING_AI_SEARCH_SERVICE|EXISTING_AI_SEARCH_RG|EXISTING_AI_SEARCH_SUB|aiSearchEnabled|"
-  "apim|API Management|Microsoft.ApiManagement/service||existingApimName|existingApimRg|existingApimSub|EXISTING_APIM|EXISTING_APIM_RG|EXISTING_APIM_SUB|apimEnabled|"
-  "adx|ADX / Kusto|Microsoft.Kusto/clusters||existingAdxClusterName|existingAdxClusterRg|existingAdxClusterSub|EXISTING_KUSTO_CLUSTER|EXISTING_KUSTO_RG|EXISTING_KUSTO_SUB|adxEnabled|"
-  "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'|existingFoundryAccountName|existingFoundryRg|existingFoundrySub|EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|aiFoundryEnabled|"
-  "purview|Microsoft Purview|Microsoft.Purview/accounts||existingPurviewAccount|existingPurviewRg|existingPurviewSub|EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled|purview-singleton"
+  "aisearch|AI Search|Microsoft.Search/searchServices|||||EXISTING_AI_SEARCH_SERVICE|EXISTING_AI_SEARCH_RG|EXISTING_AI_SEARCH_SUB|aiSearchEnabled|"
+  "apim|API Management|Microsoft.ApiManagement/service|||||EXISTING_APIM|EXISTING_APIM_RG|EXISTING_APIM_SUB|apimEnabled|"
+  "adx|ADX / Kusto|Microsoft.Kusto/clusters|||||EXISTING_KUSTO_CLUSTER|EXISTING_KUSTO_RG|EXISTING_KUSTO_SUB|adxEnabled|"
+  "foundry|AI Foundry / AOAI|Microsoft.CognitiveServices/accounts|kind =~ 'AIServices'||||EXISTING_AOAI|EXISTING_AOAI_RG|EXISTING_AOAI_SUB|aiFoundryEnabled|"
+  "purview|Microsoft Purview|Microsoft.Purview/accounts|||||EXISTING_PURVIEW|EXISTING_PURVIEW_RG|EXISTING_PURVIEW_SUB|purviewEnabled|purview-singleton"
   "maps|Azure Maps|Microsoft.Maps/accounts|||||EXISTING_MAPS|EXISTING_MAPS_RG|EXISTING_MAPS_SUB|azureMapsEnabled|"
-  "synapse|Synapse|Microsoft.Synapse/workspaces||existingSynapseWorkspace|existingSynapseRg|existingSynapseSub|EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB||"
-  "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts||existingCosmosAccount|existingCosmosRg|existingCosmosSub|EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB||"
-  "adf|Data Factory|Microsoft.DataFactory/factories||existingAdfFactory|existingAdfRg|existingAdfSub|EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB||"
-  "eventhubs|Event Hubs|Microsoft.EventHub/namespaces||existingEventHubNamespace|existingEventHubRg|existingEventHubSub|EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB||"
-  "databricks|Databricks|Microsoft.Databricks/workspaces||existingDatabricksWorkspace|existingDatabricksRg|existingDatabricksSub|EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB||"
+  "synapse|Synapse|Microsoft.Synapse/workspaces|||||EXISTING_SYNAPSE|EXISTING_SYNAPSE_RG|EXISTING_SYNAPSE_SUB||"
+  "cosmos|Cosmos DB|Microsoft.DocumentDB/databaseAccounts|||||EXISTING_COSMOS_ACCOUNT|EXISTING_COSMOS_ACCOUNT_RG|EXISTING_COSMOS_ACCOUNT_SUB||"
+  "adf|Data Factory|Microsoft.DataFactory/factories|||||EXISTING_ADF|EXISTING_ADF_RG|EXISTING_ADF_SUB||"
+  "eventhubs|Event Hubs|Microsoft.EventHub/namespaces|||||EXISTING_EVENTHUB_NAMESPACE|EXISTING_EVENTHUB_RG|EXISTING_EVENTHUB_SUB||"
+  "databricks|Databricks|Microsoft.Databricks/workspaces|||||EXISTING_DATABRICKS|EXISTING_DATABRICKS_RG|EXISTING_DATABRICKS_SUB||"
   "storage|Storage / ADLS Gen2|Microsoft.Storage/storageAccounts|||||EXISTING_STORAGE|EXISTING_STORAGE_RG|EXISTING_STORAGE_SUB||"
   "postgres|PostgreSQL Flexible|Microsoft.DBforPostgreSQL/flexibleServers|||||EXISTING_POSTGRES|EXISTING_POSTGRES_RG|EXISTING_POSTGRES_SUB|postgresEnabled|"
   "keyvault|Key Vault|Microsoft.KeyVault/vaults|||||EXISTING_KEYVAULT|EXISTING_KEYVAULT_RG|EXISTING_KEYVAULT_SUB||"
@@ -196,6 +196,10 @@ SERVICES=(
 
 # Accumulators
 declare -a BLOCK_LINES ENV_LINES SUMMARY FLAG_NAMES FLAG_VALUES
+# `set -u` + `${#arr[@]}` on a DECLARED-BUT-EMPTY array is fatal in bash, so the
+# adopt accumulator is initialised as a real empty array and counted separately.
+declare -a ADOPT_ENTRIES=()
+ADOPT_COUNT=0
 declare -A HOST
 
 upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
@@ -275,11 +279,26 @@ for row in "${SERVICES[@]}"; do
     [[ -z "${HOST[$key]:-}" ]] && echo "  (could not resolve workspaceUrl for $n — set EXISTING_DATABRICKS_HOSTNAME manually)"
   fi
 
-  # bicepparam literal lines — only for services main.bicep has existing* params for.
-  if [[ -n "$nameP" ]]; then
-    BLOCK_LINES+=("param $nameP = '${n}'")
-    BLOCK_LINES+=("param $rgP = '${r}'")
-    BLOCK_LINES+=("param $subP = '${s}'")
+  # ADOPT-OR-CREATE bag entry. main.bicep NO LONGER DECLARES the 36 `existing*`
+  # scalars — it declares ONE `adopt` object keyed by the same service key as
+  # apps/fiab-console/lib/deploy/adoption-catalog.ts. Emitting
+  # `param existingPurviewAccount = '…'` against the current template is a hard
+  # BCP259 ("assigned in the params file without being declared in the Bicep
+  # file"), and THIS script executes the deploy at the end — so that emission
+  # did not merely produce a bad file, it failed the run.
+  #
+  # A `new` or `disable` choice contributes NOTHING: `adoptMode()` resolves an
+  # absent key to 'create'. The old code appended an unconditional
+  # `param existingDatabricksHostname = ''` even for a pure-greenfield run,
+  # which is why greenfield broke too.
+  if [[ -n "$n" ]]; then
+    entry="  ${key}: { mode: 'adopt', target: { name: '${n}', rg: '${r}', sub: '${s}' }"
+    if [[ "$key" == "databricks" && -n "${HOST[$key]:-}" ]]; then
+      entry+=", extra: { hostname: '${HOST[$key]}' }"
+    fi
+    entry+=" }"
+    ADOPT_ENTRIES+=("$entry")
+    ADOPT_COUNT=$((ADOPT_COUNT + 1))
   fi
 
   # Canonical EXISTING_* env triples for every service (post-deploy RBAC/env).
@@ -302,9 +321,10 @@ for row in "${SERVICES[@]}"; do
   echo
 done
 
-# Databricks hostname (separate param + env).
+# Databricks hostname travels inside the adopt bag's `extra` (above), not as its
+# own param — `existingDatabricksHostname` no longer exists in main.bicep. The
+# env line stays so the boundary bicepparams can still fold it in.
 DBX_HOST="${HOST[databricks]:-}"
-BLOCK_LINES+=("param existingDatabricksHostname = '${DBX_HOST}'")
 ENV_LINES+=("export EXISTING_DATABRICKS_HOSTNAME='${DBX_HOST}'")
 
 # Fabric mode (no-fabric-dependency.md: default false; gov hard-false).
@@ -336,8 +356,24 @@ fi
 # Emit the generated bicepparam: copy the template, replacing the marked block.
 # ---------------------------------------------------------------------------
 BLOCK_FILE="$(mktemp)"
+# Carry the template's own `var legacyAdoptFromEnv = union(...)` block through
+# VERBATIM — regenerating the marked region must not silently drop the
+# EXISTING_* env fallback. Only the `param adopt =` assignment is rewritten.
+ADOPT_VAR_BLOCK="$(awk '/^var legacyAdoptFromEnv = union\(/{p=1} p{print} /^\)$/{if(p) exit}' "$TEMPLATE")"
 {
   echo "// >>> BYO-WIZARD START (generated by scripts/csa-loom/scan-and-deploy.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+  if [[ -n "$ADOPT_VAR_BLOCK" ]]; then
+    echo "$ADOPT_VAR_BLOCK"
+  else
+    echo "var legacyAdoptFromEnv = {}"
+  fi
+  if [[ "$ADOPT_COUNT" -gt 0 ]]; then
+    echo "param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')), {"
+    for e in ${ADOPT_ENTRIES[@]+"${ADOPT_ENTRIES[@]}"}; do echo "$e"; done
+    echo "})"
+  else
+    echo "param adopt = union(legacyAdoptFromEnv, json(readEnvironmentVariable('LOOM_ADOPT_JSON', '{}')))"
+  fi
   for l in "${BLOCK_LINES[@]}"; do echo "$l"; done
   echo "// <<< BYO-WIZARD END"
 } > "$BLOCK_FILE"

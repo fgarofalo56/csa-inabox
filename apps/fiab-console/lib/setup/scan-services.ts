@@ -39,12 +39,11 @@ export interface ScanServiceDef {
    * AIServices-kind Cognitive Services account). Lowercased operands.
    */
   kindFilter?: string;
-  /** Bicep `existing<Svc>Name` param (when the service supports deploy-time reuse). */
-  existingNameParam?: string;
-  /** Bicep `existing<Svc>Rg` param. */
-  existingRgParam?: string;
-  /** Bicep `existing<Svc>Sub` param. */
-  existingSubParam?: string;
+  // NOTE: there are deliberately no `existing<Svc>{Name,Rg,Sub}` fields here.
+  // main.bicep declares ONE `adopt` object bag keyed by `key` (ARM's 256-param
+  // cap forced the 36 scalars out), so a reuse pick becomes an adopt-bag entry —
+  // see lib/setup/service-choices-to-params.ts. Assigning one of the old scalar
+  // names now fails the build with BCP259 before the deploy even starts.
   /** Canonical EXISTING_*  env name (post-deploy patch-navigator-env.sh / readEnvironmentVariable). */
   envName: string;
   /** Canonical EXISTING_*_RG env name. */
@@ -85,9 +84,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'aisearch',
     label: 'AI Search',
     armType: 'microsoft.search/searchservices',
-    existingNameParam: 'existingAiSearchService',
-    existingRgParam: 'existingAiSearchRg',
-    existingSubParam: 'existingAiSearchSub',
     envName: 'EXISTING_AI_SEARCH_SERVICE',
     envRg: 'EXISTING_AI_SEARCH_RG',
     envSub: 'EXISTING_AI_SEARCH_SUB',
@@ -98,9 +94,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'apim',
     label: 'API Management',
     armType: 'microsoft.apimanagement/service',
-    existingNameParam: 'existingApimName',
-    existingRgParam: 'existingApimRg',
-    existingSubParam: 'existingApimSub',
     envName: 'EXISTING_APIM',
     envRg: 'EXISTING_APIM_RG',
     envSub: 'EXISTING_APIM_SUB',
@@ -111,9 +104,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'adx',
     label: 'ADX / Kusto',
     armType: 'microsoft.kusto/clusters',
-    existingNameParam: 'existingAdxClusterName',
-    existingRgParam: 'existingAdxClusterRg',
-    existingSubParam: 'existingAdxClusterSub',
     envName: 'EXISTING_KUSTO_CLUSTER',
     envRg: 'EXISTING_KUSTO_RG',
     envSub: 'EXISTING_KUSTO_SUB',
@@ -125,9 +115,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     label: 'AI Foundry / AOAI',
     armType: 'microsoft.cognitiveservices/accounts',
     kindFilter: "kind =~ 'AIServices'",
-    existingNameParam: 'existingFoundryAccountName',
-    existingRgParam: 'existingFoundryRg',
-    existingSubParam: 'existingFoundrySub',
     envName: 'EXISTING_AOAI',
     envRg: 'EXISTING_AOAI_RG',
     envSub: 'EXISTING_AOAI_SUB',
@@ -138,9 +125,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'purview',
     label: 'Microsoft Purview',
     armType: 'microsoft.purview/accounts',
-    existingNameParam: 'existingPurviewAccount',
-    existingRgParam: 'existingPurviewRg',
-    existingSubParam: 'existingPurviewSub',
     envName: 'EXISTING_PURVIEW',
     envRg: 'EXISTING_PURVIEW_RG',
     envSub: 'EXISTING_PURVIEW_SUB',
@@ -152,9 +136,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'synapse',
     label: 'Synapse Analytics',
     armType: 'microsoft.synapse/workspaces',
-    existingNameParam: 'existingSynapseWorkspace',
-    existingRgParam: 'existingSynapseRg',
-    existingSubParam: 'existingSynapseSub',
     envName: 'EXISTING_SYNAPSE',
     envRg: 'EXISTING_SYNAPSE_RG',
     envSub: 'EXISTING_SYNAPSE_SUB',
@@ -165,9 +146,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'cosmos',
     label: 'Cosmos DB',
     armType: 'microsoft.documentdb/databaseaccounts',
-    existingNameParam: 'existingCosmosAccount',
-    existingRgParam: 'existingCosmosRg',
-    existingSubParam: 'existingCosmosSub',
     envName: 'EXISTING_COSMOS_ACCOUNT',
     envRg: 'EXISTING_COSMOS_ACCOUNT_RG',
     envSub: 'EXISTING_COSMOS_ACCOUNT_SUB',
@@ -177,9 +155,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'adf',
     label: 'Data Factory',
     armType: 'microsoft.datafactory/factories',
-    existingNameParam: 'existingAdfFactory',
-    existingRgParam: 'existingAdfRg',
-    existingSubParam: 'existingAdfSub',
     envName: 'EXISTING_ADF',
     envRg: 'EXISTING_ADF_RG',
     envSub: 'EXISTING_ADF_SUB',
@@ -189,9 +164,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'eventhubs',
     label: 'Event Hubs',
     armType: 'microsoft.eventhub/namespaces',
-    existingNameParam: 'existingEventHubNamespace',
-    existingRgParam: 'existingEventHubRg',
-    existingSubParam: 'existingEventHubSub',
     envName: 'EXISTING_EVENTHUB_NAMESPACE',
     envRg: 'EXISTING_EVENTHUB_RG',
     envSub: 'EXISTING_EVENTHUB_SUB',
@@ -205,9 +177,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'streamanalytics',
     label: 'Stream Analytics',
     armType: 'microsoft.streamanalytics/streamingjobs',
-    existingNameParam: 'existingAsaJob',
-    existingRgParam: 'existingAsaRg',
-    existingSubParam: 'existingAsaSub',
     envName: 'EXISTING_ASA_JOB',
     envRg: 'EXISTING_ASA_RG',
     envSub: 'EXISTING_ASA_SUB',
@@ -222,9 +191,6 @@ export const SETUP_SCAN_SERVICES: ScanServiceDef[] = [
     key: 'databricks',
     label: 'Azure Databricks',
     armType: 'microsoft.databricks/workspaces',
-    existingNameParam: 'existingDatabricksWorkspace',
-    existingRgParam: 'existingDatabricksRg',
-    existingSubParam: 'existingDatabricksSub',
     envName: 'EXISTING_DATABRICKS',
     envRg: 'EXISTING_DATABRICKS_RG',
     envSub: 'EXISTING_DATABRICKS_SUB',

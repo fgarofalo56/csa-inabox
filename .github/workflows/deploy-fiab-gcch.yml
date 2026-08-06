@@ -192,10 +192,15 @@ jobs:
       # Greenfield (no such Container App yet) passes: a missing tag is the
       # expected state of the documented two-phase image path.
       #
-      # `loom-unity` is deliberately NOT in the require list: admin-plane/main.bicep
-      # does not deploy it (loom-unity-app.bicep is still a standalone entrypoint),
-      # so this deploy adopts nothing there and requiring its tag would be a false
-      # stop. Add it in the SAME change that makes the orchestrator deploy it.
+      # `loom-unity` IS in the require list as of #2681: admin-plane/main.bicep
+      # now deploys the Unity-Catalog-compatible OSS metastore DEFAULT-ON on
+      # every boundary, so this deploy ADOPTS the live GCC-High `loom-unity`
+      # Container App and rewrites its image reference. That app is the sovereign
+      # catalog — Databricks Unity Catalog has no Gov endpoint — so repointing it
+      # at a tag the Gov ACR does not hold takes the catalog down. The producer
+      # is .github/workflows/gov-build-images.yml (apps=loom-unity), which pushes
+      # `:v0.1` by default; export LOOM_UNITY_TAG to pin something else and this
+      # check follows it.
       - name: Image preflight — never adopt a live app onto a missing tag
         run: |
           set -euo pipefail
@@ -208,7 +213,8 @@ jobs:
           fi
           bash scripts/csa-loom/preflight-image-tags.sh \
             --rg "rg-csa-loom-admin-${AZURE_LOCATION}" \
-            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}"
+            --require "loom-console:${LOOM_CONSOLE_TAG:-v0.1}" \
+            --require "loom-unity:${LOOM_UNITY_TAG:-v0.1}"
 
       - name: Bicep what-if
         run: |
@@ -258,6 +264,7 @@ jobs:
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         env:
           LOOM_DUCKDB_TAG: ${{ vars.LOOM_DUCKDB_TAG || 'v0.1' }}
+          LOOM_UNITY_TAG: ${{ vars.LOOM_UNITY_TAG || 'v0.1' }}
         run: |
           set -uo pipefail
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
@@ -266,9 +273,17 @@ jobs:
             echo "::notice::image-preflight: no ACR in $RG yet — from-scratch deploy, nothing live to adopt. Skipping."
             exit 0
           fi
+          # loom-unity joined this list in #2681 — admin-plane/main.bicep deploys
+          # the sovereign catalog DEFAULT-ON, and on GCC-High this deploy ADOPTS
+          # the one that is already running. NOTE what this proves and what it
+          # does not: it proves the TAG EXISTS, not that the image behind it is
+          # current. An adopted image built before the unitycatalog-server 0.5.1
+          # overlay (#2974) enforces authorization and then 500s on
+          # GET /permissions. Run gov-build-images.yml (apps=loom-unity) first.
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent \
-            "loom-duckdb:${LOOM_DUCKDB_TAG}"
+            "loom-duckdb:${LOOM_DUCKDB_TAG}" \
+            "loom-unity:${LOOM_UNITY_TAG}"
 
       - name: Provision (with full Gov dispatch)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
@@ -364,17 +379,20 @@ jobs:
         run: |
           echo "✅ whatif-only run complete. Bicep + auth validated; no resources provisioned."
 
-      - name: Notify on failure
+      - name: Notify on failure (dedicated, OPEN issue - never a closed one)
         if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: 279,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `❌ Nightly deploy-fiab-gcch failed in run ${context.runId}. Federal CSU should investigate.`
-            })
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Was: a comment on `issue_number: 279` - "CSA Loom - v1 build roadmap",
+        # state CLOSED, 289 comments - with the body "Check workflow logs". That
+        # is the literal mechanism by which 47 days of daily deploy failure
+        # stayed invisible (deploy-integrity.md). The notifier now opens/updates
+        # ONE dedicated OPEN issue per failing workflow, renders the classified
+        # failure from deploy-failure.json, and FAILS if it cannot notify.
+        run: |
+          node .github/scripts/deploy-notify-failure.mjs \
+            --workflow deploy-fiab-gcch \
+            --failure-json "$GITHUB_WORKSPACE/deploy-failure.json"
 
   # rel-T32 (B8): Gov post-deploy bootstrap. The SAME reusable bootstrap the
   # Commercial workflow calls, but with boundary=GCC-High so it runs

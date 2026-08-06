@@ -452,11 +452,30 @@ module synapseAutoPause 'synapse-auto-pause.bicep' = if (loomSynapseEnabled) {
 //    existing name (or honest-gates when fully disabled), per no-vaporware.md.
 // =====================================================================
 
+// ---------- ADOPT-OR-CREATE plan (spoke scope) ----------
+// The same `adopt` object the top-level orchestrator carries, keyed by the
+// service key in apps/fiab-console/lib/deploy/adoption-catalog.ts. The root
+// main.bicep passes each spoke decision EXPLICITLY (provisionCosmos,
+// existingEventHubNamespaceName, ...), so for the tenant / single-sub / multi-sub
+// topologies this param is unused and the caller's value wins.
+//
+// It exists because params/dlz-attach.bicepparam targets THIS module directly,
+// not the root - which is why the attach topology had zero adoption surface
+// (0 EXISTING_* reads, against 30-36 in every other boundary param file). The
+// params below default OUT of this object, so an attach deployment adopts from
+// the same plan the hub deployment used.
+@description('Adopt-or-create plan keyed by adoption-catalog service key. Per key: { mode: "adopt"|"create"|"skip", target: { name, rg, sub }, extra: {} }. Absent key = create new. Supplied directly only on the dlz-attach path; the root orchestrator passes each decision explicitly instead.')
+param adopt object = {}
+
+func adoptMode(a object, k string) string => a[?k].?mode ?? 'create'
+// Gated on mode - see the note on the same accessors in the root main.bicep.
+func adoptName(a object, k string) string => adoptMode(a, k) == 'adopt' ? (a[?k].?target.?name ?? '') : ''
+
 @description('Provision a NEW Event Hubs namespace in this DLZ. Default true (opt-out). Set false to skip it, OR set existingEventHubNamespaceName to reuse an existing namespace instead of provisioning a new one. When skipped, the Eventstream / Data Explorer navigators honest-gate (or bind to the reused namespace) per no-vaporware.md.')
 param loomEventHubEnabled bool = true
 
 @description('Reuse an existing Event Hubs namespace (name) instead of provisioning a new one in this DLZ. When set, the new namespace is skipped; the Console env binds to this name. Empty + loomEventHubEnabled=true provisions new (the default).')
-param existingEventHubNamespaceName string = ''
+param existingEventHubNamespaceName string = adoptName(adopt, 'eventhubs')
 
 // Provision a new namespace only when enabled AND not reusing an existing one.
 var provisionEventHub = loomEventHubEnabled && empty(existingEventHubNamespaceName)
@@ -594,7 +613,10 @@ module adx 'adx.bicep' = if (adxEnabled) {
 // 7. Cosmos DB for application state
 // =====================================================================
 
-module cosmos 'cosmos.bicep' = {
+@description('Provision a NEW Cosmos DB account for Loom application state in this DLZ. Default true (opt-out). The top-level orchestrator passes `provisionConsoleCosmos` here, which is false when the operator adopted an existing Cosmos account in the deployment plan (adopt.cosmos.mode == "adopt"). Previously this module was UNCONDITIONAL in the single-sub topology, so "reuse my existing Cosmos" was honoured in tenant/dlz-attach and silently ignored in single-sub - a second account was created next to the customer\'s.')
+param provisionCosmos bool = adoptMode(adopt, 'cosmos') == 'create'
+
+module cosmos 'cosmos.bicep' = if (provisionCosmos) {
   name: 'dlz-cosmos'
   // DLZ SPOKE subnet-writer serialization (see databricks header).
   dependsOn: [ storage, databricks, synapse ]
@@ -907,7 +929,7 @@ output eventHubsNamespaceFqdn string = provisionEventHub ? eventhubs!.outputs.na
 // EH is disabled the output is empty (the console then honest-gates, the correct
 // behavior).
 output eventHubsNamespaceName string = provisionEventHub ? eventhubs!.outputs.namespaceName : existingEventHubNamespaceName
-output cosmosEndpoint string = cosmos.outputs.endpoint
+output cosmosEndpoint string = provisionCosmos ? cosmos!.outputs.endpoint : ''
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
 
 // Service Bus namespace NAME (short) — threaded to the hub console env

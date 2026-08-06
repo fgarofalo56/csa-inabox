@@ -133,6 +133,9 @@ export const WATCHED = [
       'scripts/csa-loom/grant-purview-datamap-role.sh',
       'scripts/csa-loom/grant-purview-uc-role.sh',
       'scripts/csa-loom/grant-shortcut-graph-approles.sh',
+      // #2681 — the bootstrap resolves the estate's Entra app registration
+      // through this script when unsealing the DEFAULT-ON loom-unity catalog.
+      'scripts/csa-loom/resolve-msal-client-id.sh',
       'scripts/csa-loom/grant-synapse-rbac-invnet-job.sh',
       'scripts/csa-loom/grant-uami-graph-roles.sh',
       'scripts/csa-loom/patch-navigator-env.sh',
@@ -287,6 +290,13 @@ export const WATCHED = [
       // that touches them without a subsequent successful run IS drift.
       'scripts/ci/assert-acr-image-tags.sh',
       'scripts/ci/resolve-image-preflight-refs.mjs',
+      // #2681 — this lane now resolves the estate's existing Entra app
+      // registration into LOOM_MSAL_CLIENT_ID before applying, because that id is
+      // both the sign-in client AND the audience admin-plane/main.bicep pins on
+      // the DEFAULT-ON loom-unity catalog. If this script starts returning
+      // nothing, the apply blanks sign-in and RE-SEALS a working catalog — so a
+      // commit touching it without a subsequent successful run is drift.
+      'scripts/csa-loom/resolve-msal-client-id.sh',
     ],
     maxDays: 7,
   },

@@ -142,8 +142,11 @@ param aiFoundryEnabled bool = false
 @description('Deploy Azure AI Content Safety (Microsoft.CognitiveServices/accounts kind=ContentSafety, S0) in the admin-plane RG and wire LOOM_CONTENT_SAFETY_ENDPOINT so every copilot persona routes prompts + completions through Prompt Shields + harm moderation. ON BY DEFAULT (opt-out, per default-on/opt-out). Available in Commercial, GCC (Commercial Azure endpoints), and GCC-High (USGovArizona / USGovVirginia). Set false at DoD (US DoD Central/East) — those regions do not offer a dedicated Content Safety account; the Console then falls back to the multi-service AIServices /contentsafety data plane (LOOM_CONTENT_SAFETY_ENDPOINT derives from the Foundry AIServices endpoint) and only honest-gates when no Foundry account is deployed either.')
 param contentSafetyEnabled bool = true
 
-@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. ON BY DEFAULT (opt-out). Independent of aiFoundryEnabled.')
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. ON BY DEFAULT (opt-out). Independent of aiFoundryEnabled. This is the CAPABILITY / BIND flag: it stays TRUE when the operator ADOPTS an existing AOAI/Foundry account, so the Console env still binds to AOAI. Creation of a NEW account is governed separately by provisionAgentFoundry.')
 param agentFoundryEnabled bool = true
+
+@description('CREATE half of adopt-or-create for the Foundry Agent Service account. Passed from main.bicep as `provisionAgentFoundry` (= agentFoundryEnabled && adoptMode(adopt, "foundry") == "create"), so an "adopt" or "skip" pick suppresses the NEW account WITHOUT collapsing "the operator brought their own AOAI" into "AOAI is off". Default true: a caller that does not pass it provisions exactly as before. See `var agentFoundryCreate` below — every read of agentFoundry!.outputs is gated on that var, never on agentFoundryEnabled, because a module output can only be read when the module actually deployed.')
+param provisionAgentFoundry bool = true
 
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
 param loomAoaiCompletionDeployment string = ''
@@ -866,6 +869,40 @@ var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 // default-ON is ~$0 at idle (see the block there).
 var duckdbTierEnabled = true
 var duckdbTierActive = duckdbTierEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── LU (#2681) — Loom Unity, the Unity-Catalog-compatible OSS metastore ───────
+// DEFAULT-ON in EVERY boundary. Previously `compute/loom-unity-app.bicep` was a
+// standalone out-of-band entrypoint invoked ONLY by `gov-uc-purview-wire.yml`,
+// so a from-scratch deploy stood up NO catalog on Commercial at all and, on Gov,
+// the catalog existed only because a human had dispatched that workflow once.
+// `LOOM_UNITY_URL` was therefore emitted by NO bicep — which is precisely the
+// shape `.claude/rules/auto-bind-by-default.md` §5 forbids ("the value must be
+// produced by the deploy"), and it is what let the `svc-loom-unity-authz` gate
+// read PASS forever: `appliesWhenPresent` scopes that check to estates where
+// LOOM_UNITY_URL is set, so an ABSENT catalog reported ready. Deploying it here
+// is what makes that gate MEAN something.
+//
+// AUTHORIZATION IS NOT OPTIONAL ON THIS PATH. The module's own default is
+// `authMode: 'entra'`, and when no audience can be pinned it deploys SEALED
+// (minReplicas 0, an unroutable audience) rather than silently downgrading to an
+// anonymous catalog — that downgrade WAS #2643. #2974 then closed the other half
+// (the Console principal is auto-bound as an ENABLED Unity user over SCIM at
+// container boot, because an Entra app-only token carries no `email` claim and
+// upstream `AuthService` resolves the caller as `sub` = the object id). Both
+// halves are wired below; neither is skippable from here.
+var loomUnityEnabled = (loomBackends.?unity ?? 'enabled') != 'disabled'
+var loomUnityActive = loomUnityEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+// PERSISTENCE. The durable store is an Entra-only, private-endpoint-only
+// Postgres Flexible Server (data-plane/loom-unity-postgres.bicep). Where the
+// sovereign Postgres quota gate trips (gcc-high/il5 .bicepparam default
+// `postgresQuotaAvailable=false`) we deploy the catalog ANYWAY on an EmptyDir H2
+// store — `dbEphemeral: true`, byte-identical to what gov-uc-purview-wire.yml
+// has been deploying on Gov since 2026-07-15. That is a FUNCTIONAL catalog whose
+// metadata does not survive a restart; it is NOT the H2-on-Azure-Files variant,
+// which CrashLoopBackOffs on Gov because the CIFS mount blocks container start.
+// Skipping the catalog entirely on the one cloud that has no Databricks Unity
+// Catalog endpoint would have been the worse trade.
+var loomUnityPostgresActive = loomUnityActive && postgresQuotaAvailable
 // loom-risingwave Postgres-wire root password. Same construction and the same
 // reasoning as airflowAdminPassword above: UNPREDICTABLE, derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
@@ -1339,14 +1376,40 @@ var byoFoundryEndpoint = !empty(existingFoundryAccountName) ? 'https://${existin
 var aoaiApimGatewayEnabled = (loomBackends.?aoaiGateway ?? '') == 'apim'
 var aoaiViaApim = toLower(loomBackends.?aoaiViaApim ?? '') == 'true'
 
+// ---------- agentFoundry: CREATE decision vs BIND decision ----------
+// These are two different questions and conflating them is a live defect class.
+//   agentFoundryEnabled  = "is AOAI part of this deployment?" — the BIND mirror.
+//                          TRUE on an adopt pick, because the Console still has
+//                          to bind LOOM_AOAI_* to the operator's account.
+//   agentFoundryCreate   = "does THIS deployment stand up a NEW account?" — the
+//                          only thing that may gate `module agentFoundry` and
+//                          the only thing that may gate a read of its outputs.
+// Passing the CREATE decision down as agentFoundryEnabled (what the caller used
+// to do) makes "adopted" indistinguishable from "disabled", which is how an
+// adopt pick silently emptied LOOM_AOAI_MINI_DEPLOYMENT / _STRONG_DEPLOYMENT.
+// This mirrors the shape aiFoundry / aiSearch / adxCluster already use
+// (`<enabled> && empty(existing…)`), generalised to the adopt bag's 'skip' mode.
+var agentFoundryCreate = agentFoundryEnabled && provisionAgentFoundry
+
 // The resolved AOAI/Foundry inference endpoint (same expression the
 // LOOM_AOAI_ENDPOINT env uses), reused to build the APIM AI-gateway backend pool.
 // The pool is populated ONLY when the AI-gateway is opted in on a Loom-provisioned
 // APIM and a real endpoint exists — an empty pool is never authored (no-vaporware).
-var loomAoaiEndpointValue = agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : ''))
+var loomAoaiEndpointValue = agentFoundryCreate ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : ''))
 var aoaiApimBackendEndpoints = (apimEnabled && empty(existingApimName) && aoaiApimGatewayEnabled && !empty(loomAoaiEndpointValue)) ? [ loomAoaiEndpointValue ] : []
 var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
 var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
+// Model-tier deployments on an ADOPTED AOAI account. The wizard/plan resolves
+// them from the account's real deployment list; when the account carries no
+// distinct mini / reasoning slot these fall back to its chat deployment rather
+// than to '' — an empty tier var is a day-one gate the platform could have
+// filled (auto-bind-by-default), and mini==strong==chat reproduces exactly the
+// documented "router rides the single resolved default" behaviour while leaving
+// the binding inspectable instead of blank.
+var byoFoundryMiniDeployment = string(byoExisting.?foundryMiniDeployment ?? '')
+var byoFoundryStrongDeployment = string(byoExisting.?foundryStrongDeployment ?? '')
+var effByoMiniDeployment = !empty(byoFoundryMiniDeployment) ? byoFoundryMiniDeployment : byoFoundryChatDeployment
+var effByoStrongDeployment = !empty(byoFoundryStrongDeployment) ? byoFoundryStrongDeployment : byoFoundryChatDeployment
 // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG. The
 // publish BFF routes (app/api/items/{slate-app,workshop-app}/[id]/publish)
 // PUT Microsoft.Web/staticSites + POST listSecrets here. Threaded via
@@ -1693,6 +1756,15 @@ param loomBackends object = {
   domains: 'cosmos'
   dataproducts: ''
   orgVisuals: 'enabled'
+  // LU (#2681) — Loom Unity, the Unity-Catalog-compatible OSS metastore. Rides
+  // this bag rather than a new top-level param for the same 256-param-ceiling
+  // reason as `loomMigrate` / `risingwave`, and is an opt-OUT per
+  // loom_default_on_opt_out.md: unset ⇒ enabled. Set 'disabled' ONLY when the
+  // estate deliberately runs no sovereign catalog (Commercial estates with a
+  // bound Databricks workspace still auto-select Databricks UC at runtime —
+  // resolveUcBackend() only picks 'oss' when NO workspace is bound — so leaving
+  // this on costs a scale-capable ACA app, not a behaviour change).
+  unity: 'enabled'
   // Folded out of standalone params (data-eng deploy-readiness sweep) to stay
   // under the ARM 256-parameter ceiling; consumed via same-named vars above so
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
@@ -2650,7 +2722,7 @@ module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSa
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.
 // =====================================================================
 
-module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
+module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryCreate) {
   name: 'agent-foundry'
   // HUB PE-writer serialization chain (see consoleCosmos header). On non-
   // Commercial boundaries this module PUTs a PE into the hub PE subnet (the Gov
@@ -2740,7 +2812,7 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
 // day-one with NO dedicated single-kind accounts (avoids the 256-param ceiling +
 // extra cost). Falls back to the aiFoundry AIServices account, else empty (BYO
 // Foundry → honest infra gate). Mirrors the LOOM_FOUNDRY_ENDPOINT derivation.
-var loomAiEnrichEndpoint = agentFoundryEnabled
+var loomAiEnrichEndpoint = agentFoundryCreate
   ? agentFoundry!.outputs.aiServicesEndpoint
   : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : '')
 
@@ -3863,6 +3935,47 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // `*.<env-id>` record in the CAE private DNS zone resolves the
             // `.internal.` form to the same environment IP.
             { name: 'LOOM_RISINGWAVE_URL', value: risingwaveActive ? 'loom-risingwave.internal.${containerPlatformModule.outputs.caeDefaultDomain}:4566' : '' }
+            // ── LU (#2681) — Loom Unity, the Unity-Catalog-compatible OSS metastore ──
+            // Deployed DEFAULT-ON by this template (compute/loom-unity-app.bicep +
+            // its Entra-only Postgres store). Before this change LOOM_UNITY_URL was
+            // emitted by NO bicep at all: the module was an out-of-band entrypoint
+            // that only a manual gov-uc-purview-wire.yml dispatch ever invoked, so
+            // a from-scratch estate had no catalog AND `svc-loom-unity-authz` —
+            // scoped `appliesWhenPresent(LOOM_UNITY_URL)` — reported PASS for the
+            // catalog that was not there.
+            //
+            // CONSTRUCTED, not read from `loomUnity!.outputs.fqdn`, for the same
+            // blast-radius reason as LOOM_MIGRATE_URL / LOOM_RISINGWAVE_URL above:
+            // reading the output makes ARM emit `appDeployments dependsOn
+            // [... loom-unity ...]`, so a loom-unity image missing from a
+            // boundary's ACR would stop loom-console from deploying at all —
+            // turning a degraded catalog into a Console outage. ACA's documented
+            // internal-ingress FQDN is `<app>.internal.<env-default-domain>`.
+            { name: 'LOOM_UNITY_URL', value: loomUnityActive ? 'https://loom-unity.internal.${containerPlatformModule.outputs.caeDefaultDomain}' : '' }
+            // The Entra app registration the Console mints its bearer against —
+            // the SAME confidential client as sign-in, so there is no second app
+            // to register. Empty until an app registration exists (day-one
+            // bicep-only deploy): the catalog then deploys SEALED rather than
+            // anonymous, and csa-loom-post-deploy-bootstrap.yml re-runs this
+            // module with the resolved id + wires these three vars.
+            { name: 'LOOM_UNITY_CLIENT_ID', value: loomUnityActive ? effectiveMsalClientId : '' }
+            { name: 'LOOM_UNITY_AUDIENCE', value: loomUnityActive && !empty(effectiveMsalClientId) ? 'api://${effectiveMsalClientId}/.default' : '' }
+            // The posture DECLARATION the Console acts on. 'entra' matches the
+            // server half pinned at the module call. It is a hard literal — the
+            // values `anonymous` / `disabled` / `none` / `off` are in the
+            // svc-loom-unity-authz `rejectValues` set precisely because #2643 was
+            // an anonymous catalog whose gate was satisfied BY being anonymous,
+            // so no code path here may emit one.
+            { name: 'LOOM_UNITY_AUTH_MODE', value: loomUnityActive ? 'entra' : '' }
+            // Backend selector. resolveUcBackend() auto-selects 'oss' whenever no
+            // Databricks workspace is bound and LOOM_UNITY_URL is set, so
+            // Commercial estates with Databricks keep using Databricks UC with no
+            // pin at all. GCC-High / IL5 are pinned EXPLICITLY: Azure Databricks
+            // exists on those boundaries but Unity Catalog does not, so a bound
+            // workspace there would auto-select a backend with no endpoint. The
+            // uc-backend.ts header has claimed this pin since LU-2; until now no
+            // bicep actually emitted it.
+            { name: 'LOOM_UC_BACKEND', value: loomUnityActive && (boundary == 'GCC-High' || boundary == 'IL5') ? 'oss' : '' }
             // ── Hyperscale band (HYP-16 cross-cutting platform) ──
             // The three H-band substrate services (Loom OneLake / Loom Direct Lake
             // / Loom Capacity Broker) are STANDALONE ACA apps deployed out-of-band
@@ -4899,15 +5012,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;
             // otherwise fall back to the shared Hub's project (ai-foundry.bicep).
             // Empty when neither is deployed.
-            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryEnabled ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
+            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryCreate ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
             // Foundry ACCOUNT-level endpoint (alias of the project endpoint for
             // self-audit's anyOf: LOOM_AOAI_ENDPOINT | LOOM_FOUNDRY_PROJECT_ENDPOINT
             // | LOOM_FOUNDRY_ENDPOINT). Sourced from the dedicated Agent Service
             // account (aoaiEndpoint) when present, else the shared Foundry hub's
             // AI Services account endpoint. Empty when neither is deployed.
-            { name: 'LOOM_FOUNDRY_ENDPOINT',         value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : '')) }
-            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryEnabled ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
-            { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
+            { name: 'LOOM_FOUNDRY_ENDPOINT',         value: agentFoundryCreate ? agentFoundry!.outputs.aoaiEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : '')) }
+            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryCreate ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
+            { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryCreate ? agentFoundry!.outputs.projectNameOut : '' }
             // AOAI inference endpoint + model deployment names for the Agent
             // Service account. Consumed by the AOAI clients (chat + embeddings).
             // AOAI inference endpoint + model deployment names. Sourced from the
@@ -4915,7 +5028,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Foundry hub (so the AI Functions Gov/AOAI path works on a hub-only
             // deploy — the deployment is then discovered from the hub connections
             // by resolveAoaiTarget()).
-            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')) }
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryCreate ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')) }
             // Deployment-name resolution order: dedicated Agent Service account
             // (agentFoundry, default on) → an explicit BYO deployment → the shared
             // Foundry hub's default model (ai-foundry.bicep now deploys gpt-4o-mini
@@ -4924,12 +5037,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // below) actually resolve a model on a hub-only / partial deploy — the
             // exact gap that left the live estate's aoai-csa-loom account with NO
             // deployment and the self-audit warning "No AOAI model deployment resolved".
-            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryCreate ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
             // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
             // the _CHAT_ variant) to resolve the model — keep both in sync so the
             // Copilot/data-agent chat works out of the box (the "no AOAI model"
             // gap was exactly this name mismatch on the live deploy).
-            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryCreate ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : '')) }
             // AOAI Chat Completions API version. resolveAoaiTarget() reads
             // process.env.LOOM_AOAI_API_VERSION (default 2024-10-21). Exposing it
             // here lets operators advance the version (e.g. for o-series reasoning
@@ -4948,7 +5061,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // built-in so no new parameter is needed. Read by the NL2KQL + Notebook
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
-            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : byoFoundryEmbedDeployment }
+            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryCreate ? agentFoundry!.outputs.embedDeployment : byoFoundryEmbedDeployment }
             // OPT-IN multimodal AI columns (G2). Empty unless the operator sets a
             // vision-capable deployment; the table AI-functions route honest-gates
             // image/document inputs with the exact env var when unset.
@@ -4957,10 +5070,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // (reasoning) tier deployments the Loom-native model tier router routes
             // to DAY-ONE (lib/foundry/model-tier-router.ts reads these as the env
             // fallback for modelTiers.{mini,strong}; tenant Copilot config still
-            // overrides). Empty on a BYO-Foundry path → the router gracefully falls
-            // back to the standard (chat) deployment for every task class.
-            { name: 'LOOM_AOAI_MINI_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : '' }
-            { name: 'LOOM_AOAI_STRONG_DEPLOYMENT', value: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : '' }
+            // overrides). On an ADOPTED AOAI account there is no agentFoundry module
+            // to read, so these bind to the adopted account's own mini / reasoning
+            // deployments (resolved by the wizard / plan into adopt.foundry.extra),
+            // falling back to its chat deployment. They are only '' when AOAI is
+            // genuinely absent — NOT merely because the operator brought their own.
+            { name: 'LOOM_AOAI_MINI_DEPLOYMENT',   value: agentFoundryCreate ? agentFoundry!.outputs.miniDeployment : effByoMiniDeployment }
+            { name: 'LOOM_AOAI_STRONG_DEPLOYMENT', value: agentFoundryCreate ? agentFoundry!.outputs.strongDeployment : effByoStrongDeployment }
             // N11 / N12 tuning knobs — emitted EMPTY on purpose. Both features are
             // DEFAULT-ON with code defaults (GraphRAG traversal depth 2; bounded
             // NL2SQL self-healing repair attempts 2) and are 100% functional
@@ -4983,13 +5099,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
             // output (empty unless a dedicated slot was deployed). When empty the
             // /api/copilot/complete route falls back to LOOM_AOAI_DEPLOYMENT.
-            { name: 'LOOM_AOAI_COMPLETION_DEPLOYMENT', value: !empty(loomAoaiCompletionDeployment) ? loomAoaiCompletionDeployment : (agentFoundryEnabled ? agentFoundry!.outputs.completionDeployment : '') }
+            { name: 'LOOM_AOAI_COMPLETION_DEPLOYMENT', value: !empty(loomAoaiCompletionDeployment) ? loomAoaiCompletionDeployment : (agentFoundryCreate ? agentFoundry!.outputs.completionDeployment : '') }
             // SQL editor Copilot (Fix / Explain / NL→T-SQL + inline ghost text).
             // Explicit loomAzureOpenAiEndpoint wins; otherwise reuse the Foundry
             // Agent Service AOAI endpoint. When both are empty the copilot route
             // returns an honest 503 gate naming this var + the Cognitive Services
             // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
-            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : byoFoundryEndpoint) }
+            { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryCreate ? agentFoundry!.outputs.aoaiEndpoint : byoFoundryEndpoint) }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
             // E2 copilot-evaluator — the eval-harness JOB's ARM resource id so
             // the admin "Run now" (E5) + gate surface can start an execution.
@@ -5343,10 +5459,10 @@ module copilotMaf '../copilot/maf.bicep' = if (copilotMafActive) {
     uamiClientId: identity.outputs.uamiMafClientId
     // Gov AOAI endpoint — prefer the dedicated Agent Service account, then the
     // shared hub. Empty → the MAF app shows an honest runtime gate.
-    aoaiEndpoint: agentFoundryEnabled
+    aoaiEndpoint: agentFoundryCreate
       ? agentFoundry!.outputs.aoaiEndpoint
       : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : '')
-    aoaiDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : ''
+    aoaiDeployment: agentFoundryCreate ? agentFoundry!.outputs.chatDeployment : ''
     aoaiApiVersion: '2024-10-21'
     consoleInternalEndpoint: 'http://loom-console'
     internalToken: loomInternalToken
@@ -5809,6 +5925,125 @@ module loomMigrate '../data-plane/loom-migrate-aca.bicep' = if (loomMigrateActiv
 }
 
 // =====================================================================
+// LU (#2681) — Loom Unity: the Unity-Catalog-compatible OSS metastore.
+// Backs LOOM_UNITY_URL for lib/azure/uc-backend.ts when the OSS backend is
+// selected — which is ALWAYS the case in Azure Government, where Databricks
+// Unity Catalog has no endpoint at all.
+//
+// WHY THIS BLOCK EXISTS. `compute/loom-unity-app.bicep` shipped as a standalone
+// out-of-band entrypoint, invoked by exactly one thing: a manual dispatch of
+// `.github/workflows/gov-uc-purview-wire.yml`. So a from-scratch deploy produced
+// NO catalog on any boundary, and the live Gov catalog existed only because a
+// human ran that workflow once, on 2026-07-15. `.claude/rules/auto-bind-by-default.md`
+// §5 is explicit that a prerequisite the platform can deploy must be DEPLOYED,
+// not requested — and the second-order damage was worse than the missing
+// feature: `svc-loom-unity-authz` is scoped `appliesWhenPresent(LOOM_UNITY_URL)`,
+// so on every estate where no bicep set that var the authorization gate reported
+// PASS for a catalog that did not exist, and `/admin/readiness` scored it ready.
+//
+// LEAST-PRIVILEGE IDENTITY. A dedicated `uami-loom-unity-<region>` holding
+// AcrPull on the admin-plane ACR and Entra administrator on its OWN Postgres
+// server — never the Console UAMI, which holds lake and control-plane rights the
+// catalog process has no business inheriting.
+// =====================================================================
+resource loomUnityUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (loomUnityActive) {
+  name: 'uami-loom-unity-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) — the identity's only
+// admin-plane role. Same existing-ref convention as scriptRunnerAcrPull /
+// loomMigrateAcrPull (the registry name must be calculable at deployment START,
+// so it is recomputed rather than read from a module output → BCP120).
+resource loomUnityAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (loomUnityActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, loomUnityUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: loomUnityUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+// LU-1 — durable metastore. Entra-ONLY (there is no database credential to
+// rotate or leak), publicNetworkAccess Disabled, reachable only over an in-module
+// private endpoint. Skipped where the sovereign Postgres quota gate trips; the
+// app then runs the EmptyDir H2 store (see loomUnityPostgresActive above).
+module loomUnityPostgres '../data-plane/loom-unity-postgres.bicep' = if (loomUnityPostgresActive) {
+  name: 'loom-unity-postgres'
+  params: {
+    location: location
+    privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
+    // ZONE-COLLISION CONTRACT (see ducklakeCatalog above). Azure rejects a second
+    // virtualNetworkLink to a DIFFERENT privatelink.postgres.<suffix> zone on the
+    // same VNet, and the DuckLake store already created + linked one on the hub.
+    // CONSUME it. `loomUnityPostgresActive` is a strict subset of
+    // `ducklakeCatalogActive` (both require containerApps + deployAppsEnabled +
+    // postgresQuotaAvailable, and ducklakeCatalogEnabled is an unconditional
+    // true), so whenever this module deploys, that output exists.
+    privateDnsZoneId: ducklakeCatalogActive ? ducklakeCatalog!.outputs.privateDnsZoneId : ''
+    unityPrincipalId: loomUnityUami!.properties.principalId
+    unityPrincipalName: loomUnityUami!.name
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+module loomUnity '../compute/loom-unity-app.bicep' = if (loomUnityActive) {
+  name: 'loom-unity'
+  params: {
+    name: 'loom-unity'
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    unityUamiId: loomUnityUami!.id
+    unityUamiClientId: loomUnityUami!.properties.clientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-unity:${appImageTags.?unity ?? 'v0.1'}'
+    // Postgres when the quota gate allows it; otherwise an EmptyDir H2 store.
+    // dbEphemeral is what keeps Gov BOOTABLE — the alternative fallback
+    // (H2 on an Azure Files SMB mount) blocks container start on that boundary.
+    unityPostgresFqdn: loomUnityPostgresActive ? loomUnityPostgres!.outputs.fqdn : ''
+    unityDbAadUser: loomUnityPostgresActive ? loomUnityPostgres!.outputs.aadUser : ''
+    dbEphemeral: !loomUnityPostgresActive
+    // AUTHORIZATION. `entra` is the module default and is NOT overridable from
+    // here on purpose: #2643 was an anonymous catalog that anything on the CAE
+    // VNet could read AND mutate, and the way it survived review was a caller
+    // passing authMode=disabled. There is no such parameter on this path.
+    // With no pinnable audience the module deploys SEALED (minReplicas 0,
+    // unroutable audience) rather than open — fail-closed, by construction.
+    authMode: 'entra'
+    entraClientId: effectiveMsalClientId
+    // #2974 — the Console principal's OBJECT ID. An Entra app-only token carries
+    // no `email` claim, and upstream AuthService resolves the caller as
+    // claims.getOrDefault(EMAIL, claim(SUBJECT)), i.e. the object id. The
+    // entrypoint registers exactly this id as an ENABLED Unity user over SCIM at
+    // boot, so an ENFORCING catalog is also a USABLE one. Without it the catalog
+    // comes up authenticated-and-refusing-everyone.
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Pin ingress to the Container Apps infrastructure subnet — the only source
+    // range an in-environment caller (the Console) can present. Read from the
+    // network module so it cannot drift from the actual subnet layout.
+    consoleAllowedCidrs: [
+      network.outputs.containerPlatformSubnetPrefix
+    ]
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+  // The app pulls from ACR as loomUnityUami, so the AcrPull grant must land
+  // before the first revision is created, otherwise a from-scratch deploy races
+  // role propagation and the revision fails its image pull. (A dependsOn on a
+  // false-condition resource is a no-op in ARM, so this is safe under
+  // skipRoleGrants.)
+  dependsOn: [
+    loomUnityAcrPull
+  ]
+}
+
+// =====================================================================
 // N7a — loom-risingwave stateful streaming-SQL tier.
 // Backs LOOM_RISINGWAVE_URL for the streaming-sql item + /api/streaming-sql/*.
 // DEFAULT-ON in EVERY boundary (loom_default_on_opt_out.md); previously an
@@ -6189,9 +6424,9 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
     // endpoint + chat deployment the Console uses). Empty in a deployment
     // without Foundry → digests deliver the deterministic summary instead.
     aoaiEndpoint: loomAoaiEndpointValue
-    aoaiDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
+    aoaiDeployment: agentFoundryCreate ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
     aoaiApiVersion: loomAoaiApiVersion
-    aoaiAccountName: agentFoundryEnabled ? agentFoundry!.outputs.accountNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : '')
+    aoaiAccountName: agentFoundryCreate ? agentFoundry!.outputs.accountNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : '')
     skipRoleGrants: skipRoleGrants
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
@@ -6233,9 +6468,9 @@ module copilotEvaluator 'copilot-evaluator-job.bicep' = if (copilotEvaluatorActi
     internalToken: loomInternalToken
     aoaiEndpoint: loomAoaiEndpointValue
     judgeDeployment: copilotEvalJudgeDeployment
-    strongDeployment: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : ''
-    miniDeployment: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : ''
-    defaultDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
+    strongDeployment: agentFoundryCreate ? agentFoundry!.outputs.strongDeployment : effByoStrongDeployment
+    miniDeployment: agentFoundryCreate ? agentFoundry!.outputs.miniDeployment : effByoMiniDeployment
+    defaultDeployment: agentFoundryCreate ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
     judgeDailyCap: copilotEvalJudgeDailyCap
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
@@ -6618,7 +6853,7 @@ output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 // module's `existing` ref is scoped to the admin RG, so it can't grant on an
 // out-of-RG account — the operator grants that one manually, matching the
 // module's documented note). Empty when AOAI is fully disabled → module no-ops.
-output aiServicesAccountName string = agentFoundryEnabled
+output aiServicesAccountName string = agentFoundryCreate
   ? agentFoundry!.outputs.accountNameOut
   : ((aiFoundryEnabled && empty(existingFoundryAccountName))
       ? aiFoundry!.outputs.aiServicesAccountName
