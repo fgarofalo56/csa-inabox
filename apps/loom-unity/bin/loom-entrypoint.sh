@@ -127,10 +127,20 @@ render_hibernate() {
         die "LOOM_UNITY_DB_AUTH=password but LOOM_UNITY_DB_PASSWORD is empty. Wire dbPasswordSecretUri (a Key Vault secret URI) on loom-unity-app.bicep, or use the default LOOM_UNITY_DB_AUTH=entra with an Entra-only server."
       fi
       echo "[loom-unity] NOTICE: Postgres is using PASSWORD authentication (LOOM_UNITY_DB_AUTH=password). The Loom-provisioned server is Entra-only (passwordAuth=Disabled) and needs no credential; this path exists for a BYO server only." >&2
+      # BOTH `username` AND `user` are rendered, deliberately (finishline D2,
+      # root-caused live): Hibernate reads `hibernate.connection.username`, but
+      # upstream JCasbinAuthorizer reads `hibernate.connection.user` verbatim
+      # (JCasbinAuthorizer.java: properties.getProperty("hibernate.connection.user"))
+      # to build its casbin JDBCAdapter. With only `username` rendered the
+      # authorizer connected as user=null -> the OS user, which is no role on
+      # the server, and the boot died with upstream's cause-swallowed
+      # "Problem initializing authorizer." Unknown extra keys are ignored by
+      # Hibernate, so the duplicate is harmless there.
       cat <<EOF
 hibernate.connection.driver_class=org.postgresql.Driver
 hibernate.connection.url=${db_url}${db_params}
 hibernate.connection.username=${db_user}
+hibernate.connection.user=${db_user}
 hibernate.connection.password=${LOOM_UNITY_DB_PASSWORD}
 hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
 hibernate.hbm2ddl.auto=${LOOM_UNITY_DB_DDL:-update}
@@ -144,11 +154,24 @@ EOF
       db_params="${db_params}${db_sep}authenticationPluginClassName=ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin"
       # NOTE: no hibernate.connection.password line at all — the driver plugin
       # supplies the token. Rendering an empty password here would make pgjdbc
-      # skip the plugin and send an empty cleartext password.
+      # skip the plugin and send an empty cleartext password. (JCasbinAuthorizer
+      # reads the absent key as null and passes it to its JDBCAdapter, whose
+      # connection then also authenticates via the plugin named on the URL.)
+      #
+      # BOTH `username` AND `user` are rendered, deliberately (finishline D2,
+      # root-caused live): Hibernate reads `hibernate.connection.username`, but
+      # upstream JCasbinAuthorizer reads `hibernate.connection.user` verbatim
+      # (JCasbinAuthorizer.java: properties.getProperty("hibernate.connection.user"))
+      # to build its casbin JDBCAdapter. With only `username` rendered the
+      # authorizer connected as user=null -> the OS user, which is no role on
+      # the Entra-only server, and the boot died with upstream's cause-swallowed
+      # "Problem initializing authorizer." Unknown extra keys are ignored by
+      # Hibernate, so the duplicate is harmless there.
       cat <<EOF
 hibernate.connection.driver_class=org.postgresql.Driver
 hibernate.connection.url=${db_url}${db_params}
 hibernate.connection.username=${db_user}
+hibernate.connection.user=${db_user}
 hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
 hibernate.hbm2ddl.auto=${LOOM_UNITY_DB_DDL:-update}
 hibernate.show_sql=false
