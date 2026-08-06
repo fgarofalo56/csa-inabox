@@ -10,12 +10,40 @@
 
 ## 1. Executive summary
 
+> ## ⚠ RE-BASELINE 2026-08-06 — six P0 rows below have CLOSED on `main`
+>
+> This report was written 2026-07-20. A code-truth re-measurement on 2026-08-06
+> (grep + read the module and its call site, not the plan) found the following
+> P0 gaps **shipped**. The rows are left in place for the record; read this table
+> first.
+>
+> | Row | 07-20 claim | 08-06 measured truth | Evidence |
+> |---|---|---|---|
+> | **P0-1** tier-router | "a safe no-op … caps every AI surface" | **WIRED and default-ON** | `lib/azure/aoai-chat-client.ts:53` imports `routeTurnTier`; `routeTurn()` (~line 259) calls it on the **shared** client path, so every copilot / agent / data-agent turn is tier-aware. Escalate-only (a light turn is never downshifted), traced `[tier-router]`, and it warns loudly when the tiers collapse onto one deployment. |
+> | **P0-2** Feature Store | "**D**" | **shipped** as a first-class item | `lib/editors/feature-table-editor.tsx` |
+> | **P0-3** Model Serving | "**C+**, CRUD-only" | **shipped** as a first-class item | `lib/editors/model-serving-endpoint-editor.tsx` |
+> | **P0-4** LLM fine-tuning | "**F**" | **shipped** as a first-class item | `lib/editors/fine-tuning-job-editor.tsx` |
+> | **P0-8** Object views | "**F** … no *object experience*" | **shipped** (WS-4.1) | `lib/foundry/object-view.ts` + `lib/editors/phase4/object-view-panel.tsx` + `/objects/[vertexId]/view` |
+> | A2A interop (§frontier gaps) | "**F**" | **shipped** | `lib/copilot/a2a-client.ts`, `a2a-agent-card.ts`, `lib/azure/a2a-{task-store,egress-guard,audit}.ts`, routes under `app/api/a2a`, `app/api/mesh/a2a`, `items/{agent-flow,data-agent}/[id]/a2a` |
+>
+> Also re-verified as **shipped** in the same pass: ontology **derived
+> properties** (WS-4.2, `phase4/ontology-derived-panel.tsx`) and **object-level
+> security** (WS-4.3, `phase4/ontology-security-panel.tsx` enforced in the BFF
+> routes) — both listed as Foundry-moat holes in §1 below.
+>
+> Still open and correctly stated: **P0-5** OneLake zero-copy shortcuts,
+> **P0-6** Direct Lake substitute, **P0-7** report-designer Format-pane cards,
+> ontology **proposals / branching**, and the Workshop depth gap.
+>
+> These are **code-truth** corrections. Per `ux-baseline.md` G1 none of them is a
+> live-browser receipt; those are owed under FINISHLINE `C1`.
+
 **Where Loom stands today.** Against each competitor *individually*, Loom is a genuine **B+ / A−**: near-parity on Fabric's seven workloads and Power BI (all Azure-native, no hard Fabric dependency), the widest Palantir-Foundry clone on Azure, near-complete Unity Catalog + the full Azure-AI-Foundry gen-AI surface, and at/near parity on the frontier-agent primitives (MCP-native both directions, multi-agent, data agents, memory, evals, guardrails). No competitor is close to Loom's **breadth**: 132 item types, 132 registered editors, 1,473 BFF routes, 370 Azure clients, 148 bicep modules, sovereign from commercial to IL5.
 
 **The thesis.** Every competitor makes the customer the integration layer between their products — Fabric is a suite of separate experiences sharing a capacity; Databricks is lakehouse + ML + bolted-on BI; Palantir is ontology + pipelines without RTI/BI/warehouse at parity; the frontier labs reach data through connectors from *outside* the tenant. **Loom IS the integration layer** — and the seams are one-click Weaves, one copilot, one compute currency (LCU), one governance plane, one sovereign push-button deploy. That integration, plus sovereignty, is the un-copyable moat: nine A+ rows in the parity matrix that a single-product vendor structurally cannot ship.
 
 **What's holding the grade at B+ instead of A.** The gaps are concentrated and closable, not systemic:
-- **Model quality is capped** because the tier-router (`model-tier-router.ts`) is a **safe no-op** without tier deployments — every turn rides one default AOAI deployment regardless of orchestration.
+- ~~**Model quality is capped** because the tier-router (`model-tier-router.ts`) is a **safe no-op** without tier deployments — every turn rides one default AOAI deployment regardless of orchestration.~~ **CLOSED — see the re-baseline above.** The router is wired into the shared `aoai-chat-client` path and is default-ON.
 - **Three classic-ML-platform holes:** Feature Store (**D**), Model Serving (**C+**, CRUD-only), LLM fine-tuning (**F**).
 - **Two Fabric/PBI parity holes:** Direct Lake (**D**, no Azure 1:1) and OneLake zero-copy shortcuts (**C**, engine unbuilt); plus report-designer Wave-6 Format-pane (built-but-unwired).
 - **Foundry moat depth:** object views (**F**), derived properties (**F**), AIP-Logic studio (backend strong, studio thin), Workshop depth.
@@ -34,7 +62,7 @@ Ranking: **P0** = blocks "as-good-or-better" on a headline surface or caps whole
 
 | # | Gap | Closes | Loom surface | Grade→target | Effort | Impact |
 |---|---|---|---|---|---|---|
-| P0-1 | **Wire the model tier-router for real** (default 3-tier mini/standard/**reasoning**, route hard analytical/agentic turns to the strong tier). Today a no-op → caps *every* agent, copilot, and data-agent turn. Appears in §03 and §04. | Frontier labs, Foundry Model Router | `model-tier-router.ts`, `aoai-chat-client.ts` (`resolveTierForTurn`) | no-op → **A** | S | **Highest** — single biggest quality lever, lifts every AI surface at once |
+| P0-1 | ~~**Wire the model tier-router for real**~~ **✅ CLOSED 2026-08-06** (default 3-tier mini/standard/**reasoning**, hard turns escalate to the strong tier). | Frontier labs, Foundry Model Router | `model-tier-router.ts`, `aoai-chat-client.ts` (`routeTurn` → `routeTurnTier`, shared path) | no-op → **A** ✅ | S | **Highest** — single biggest quality lever, lifts every AI surface at once |
 | P0-2 | **Feature Store** (feature-table authoring, PIT joins, feature-lookup-at-serving) over UC feature tables + `online-tables` + Lakebase/pgvector | Databricks Feature Engineering | `unity-catalog/online-tables/route.ts` | **D → A** | L | High — biggest ML-platform gap |
 | P0-3 | **Model Serving as a first-class item** (traffic-split, autoscale, provisioned-throughput, invocation console, latency/error monitoring) over Databricks serving *and* Foundry managed online endpoints | Databricks Mosaic Serving, Foundry endpoints | `serving-endpoints/route.ts`, `foundry-client.ts` | **C+ → A** | M | High |
 | P0-4 | **LLM fine-tuning item** over AOAI/Foundry serverless + managed FT, with data-eval + model-safety-eval gates (RAI) | Databricks Mosaic FT, Foundry FT | — (AutoML only) | **F → B+** | M | High |

@@ -26,10 +26,14 @@ Competitors make you the integration layer between their products; **Loom is the
 
 ## Top P0 gaps
 
-1. Wire the model tier-router (no-op today — caps every AI surface).
-2. Feature Store (D), Model Serving (C+), LLM fine-tuning (F).
-3. OneLake zero-copy shortcuts engine; Direct Lake substitute; report Format-pane cards.
-4. Ontology object views + instance viewer (the Foundry moat surface).
+> **⚠ RE-BASELINE 2026-08-06.** Measured against the tree, **items 1, 2 and 4 have
+> CLOSED**. Details, with file:line evidence, in the re-baseline table at the top
+> of [`FINDINGS-REPORT.md`](./FINDINGS-REPORT.md).
+
+1. ~~Wire the model tier-router (no-op today — caps every AI surface).~~ **✅ CLOSED** — wired into the shared `aoai-chat-client` path (`routeTurn` → `routeTurnTier`), default-ON, escalate-only.
+2. ~~Feature Store (D), Model Serving (C+), LLM fine-tuning (F).~~ **✅ CLOSED** — all three ship as first-class items (`feature-table-editor.tsx`, `model-serving-endpoint-editor.tsx`, `fine-tuning-job-editor.tsx`).
+3. OneLake zero-copy shortcuts engine; Direct Lake substitute; report Format-pane cards. **STILL OPEN.**
+4. ~~Ontology object views + instance viewer (the Foundry moat surface).~~ **✅ CLOSED** (WS-4.1) — `lib/foundry/object-view.ts` + `phase4/object-view-panel.tsx`. Derived properties (WS-4.2) and object-level security (WS-4.3) closed with it. **Ontology proposals / branching remains open.**
 
 ## Flagship burn-the-box bets
 

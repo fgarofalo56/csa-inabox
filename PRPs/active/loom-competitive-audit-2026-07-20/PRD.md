@@ -17,11 +17,17 @@
 
 ## 2. Problem statement
 
+> **⚠ RE-BASELINE 2026-08-06.** Problem 1 below is **solved**, and much of problem
+> 2 has shipped. Measured against the tree — see the re-baseline table at the top
+> of [`FINDINGS-REPORT.md`](./FINDINGS-REPORT.md) for file:line evidence. This
+> section is kept as the original problem framing; do not plan from it without
+> reading that table.
+
 Loom is a genuine **B+ / A−** against each competitor individually, but three problem classes cap it below "unambiguously #1":
 
-1. **Whole-platform quality cap.** The model tier-router is a safe no-op without tier deployments, so every AI surface rides one default model regardless of orchestration.
-2. **Concentrated parity holes.** Feature Store (D), Model Serving (C+), LLM fine-tuning (F), Direct Lake (D), OneLake shortcuts (C), report Format-pane (partial), ontology object views/derived-props (F), AIP-Logic studio depth, a frontier-grade agent-builder, A2A interop (F).
-3. **UX + trust debt at scale.** 5 monolith editors + 8 aggregate modules, canvas-standard coverage on only ~11 surfaces, IA redirect-shims, and parity-doc drift under a 112-page × 132-editor × 1,473-route surface.
+1. ~~**Whole-platform quality cap.** The model tier-router is a safe no-op without tier deployments, so every AI surface rides one default model regardless of orchestration.~~ **✅ CLOSED** — the router is wired into the shared `aoai-chat-client` path and is default-ON.
+2. **Concentrated parity holes.** ~~Feature Store (D), Model Serving (C+), LLM fine-tuning (F)~~ **✅ CLOSED (three first-class items)**; Direct Lake (D), OneLake shortcuts (C), report Format-pane (partial) **still open**; ~~ontology object views/derived-props (F)~~ **✅ CLOSED (WS-4.1/4.2)**; AIP-Logic studio depth and a frontier-grade agent-builder **still open**; ~~A2A interop (F)~~ **✅ CLOSED**.
+3. **UX + trust debt at scale.** 5 monolith editors + 8 aggregate modules, canvas-standard coverage on only ~11 surfaces, IA redirect-shims, and parity-doc drift under a 112-page × 132-editor × 1,473-route surface. **Still open** — monolith decomposition is tracked as FINISHLINE `C4`.
 
 ## 3. Goals and non-goals
 
@@ -75,10 +81,11 @@ Every acceptance criterion below implies the WS-level definition of done in §8 
 
 ### WS-1 — Model Fabric Foundation
 
-**1.1 Wire the model tier-router for real** *(P0-1, effort S, highest leverage)*
-- **Problem:** `model-tier-router.ts` is a safe no-op without tier deployments; every copilot/agent/data-agent turn rides one default AOAI deployment, capping quality regardless of orchestration.
-- **Deliverables:** default 3-tier config (mini / standard / **reasoning**) bound to the best AOAI reasoning deployment available per cloud (Commercial + Gov); `resolveTierForTurn` routes hard analytical/agentic turns to the strong tier; admin-tunable in `env-config`; gate-registry entry when no reasoning deployment exists (with Fix-it to deploy one).
-- **Acceptance:** a hard analytical turn demonstrably routes to the reasoning tier (trace shows tier selection); no-op only when the admin opts out; browser-E2E on a copilot turn shows tier attribution; works in Gov with `*.openai.azure.us`.
+**1.1 Wire the model tier-router for real** *(P0-1, effort S, highest leverage)* — **✅ DELIVERED, re-verified 2026-08-06**
+- **Problem:** ~~`model-tier-router.ts` is a safe no-op without tier deployments; every copilot/agent/data-agent turn rides one default AOAI deployment, capping quality regardless of orchestration.~~ Solved.
+- **Deliverables:** default 3-tier config (mini / standard / **reasoning**) bound to the best AOAI reasoning deployment available per cloud (Commercial + Gov); routes hard analytical/agentic turns to the strong tier; admin-tunable in `env-config`; gate-registry entry when no reasoning deployment exists (with Fix-it to deploy one).
+- **As shipped:** `lib/azure/aoai-chat-client.ts` — `routeTurn()` calls `routeTurnTier()` on the **shared** client path, so all ~18 callers are tier-aware, not just the streaming orchestrator. Escalate-only: a light turn is never downshifted to mini, so existing callers are byte-identical unless a strong deployment is wired **and** the turn classifies hard. Traced `[tier-router]`; `logTierPosture()` warns explicitly when the tiers collapse onto one deployment (the classic chronic-429 shape) and names `LOOM_AOAI_MINI_DEPLOYMENT` / `LOOM_AOAI_STRONG_DEPLOYMENT` + gate `svc-model-reasoning-tier` as the fix. Admin surface: **Copilot & Agents → Model tiers**.
+- **Acceptance:** a hard analytical turn demonstrably routes to the reasoning tier (trace shows tier selection); no-op only when the admin opts out; browser-E2E on a copilot turn shows tier attribution; works in Gov with `*.openai.azure.us`. **The browser-E2E leg of this acceptance is still owed** (`ux-baseline.md` G1) — code truth only.
 
 **1.2 Model Serving as a first-class item** *(P0-3, effort M)*
 - **Problem:** `serving-endpoints/route.ts` is CRUD-only — no serving editor, traffic-split, or monitoring.
