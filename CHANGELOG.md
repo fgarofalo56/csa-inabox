@@ -25,6 +25,26 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.87.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.4...csa-inabox-v0.87.0) (2026-08-06)
+
+
+### Features
+
+* **ci,admin:** make deploy failure impossible to miss — live estate drift + failing/disabled deploy paths ([#3000](https://github.com/fgarofalo56/csa-inabox/issues/3000)) ([cd7835d](https://github.com/fgarofalo56/csa-inabox/commit/cd7835de76c415aee6f7420da48b8fe9e81e9c4c))
+
+
+### Bug Fixes
+
+* **deploy:** full-app-deploy-commercial produces loom-duckdb:v0.1 and can run green (refs [#2958](https://github.com/fgarofalo56/csa-inabox/issues/2958)) ([#3001](https://github.com/fgarofalo56/csa-inabox/issues/3001)) ([4558d8c](https://github.com/fgarofalo56/csa-inabox/commit/4558d8c9a31cb7bf2513eedaef1ade6de924317d))
+* **deploy:** reconciled deploy batch — [#3006](https://github.com/fgarofalo56/csa-inabox/issues/3006) [#3007](https://github.com/fgarofalo56/csa-inabox/issues/3007) [#3008](https://github.com/fgarofalo56/csa-inabox/issues/3008) [#3009](https://github.com/fgarofalo56/csa-inabox/issues/3009) [#3010](https://github.com/fgarofalo56/csa-inabox/issues/3010) [#3011](https://github.com/fgarofalo56/csa-inabox/issues/3011) on one branch, with the BCP259 emitter break repaired ([#3013](https://github.com/fgarofalo56/csa-inabox/issues/3013)) ([c74d7fe](https://github.com/fgarofalo56/csa-inabox/commit/c74d7feaf4306d3bb06c2a9cd419b834ad2541ad))
+* **evals:** a degraded pass predicate fails the run instead of reporting +20 (fixes [#2992](https://github.com/fgarofalo56/csa-inabox/issues/2992)) ([#2994](https://github.com/fgarofalo56/csa-inabox/issues/2994)) ([d454fad](https://github.com/fgarofalo56/csa-inabox/commit/d454fad6717e75b8fdb43bf823835da4c5746166))
+* **security:** databricks job + DLT pipeline families — authorize the caller and bind jobId/pipelineId/runId to the item (fixes [#2996](https://github.com/fgarofalo56/csa-inabox/issues/2996), fixes [#2997](https://github.com/fgarofalo56/csa-inabox/issues/2997)) ([#2999](https://github.com/fgarofalo56/csa-inabox/issues/2999)) ([670d333](https://github.com/fgarofalo56/csa-inabox/commit/670d333b1dabc97dc5423b584a4d69247ebb3c7d))
+
+
+### Documentation
+
+* **rules:** DEPLOY INTEGRITY — merged is not done, a broken deploy is P0 ([#3004](https://github.com/fgarofalo56/csa-inabox/issues/3004)) ([aefd7e0](https://github.com/fgarofalo56/csa-inabox/commit/aefd7e096ad7aebe1b292a61a419253bfbd91612))
+
 ## [0.86.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.3...csa-inabox-v0.86.4) (2026-08-05)
 
 
