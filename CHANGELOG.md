@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.87.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.0...csa-inabox-v0.87.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **ci:** scope the deploy guard by BEHAVIOUR; make the docs guard check workingness, not existence ([#3018](https://github.com/fgarofalo56/csa-inabox/issues/3018)) ([b625e03](https://github.com/fgarofalo56/csa-inabox/commit/b625e03caae9b2ac36ffed91c3de995354527c07))
+* **deploy:** the AOAI model matcher must not age out silently — never fail empty, and prove it ([#3021](https://github.com/fgarofalo56/csa-inabox/issues/3021)) ([15bfee1](https://github.com/fgarofalo56/csa-inabox/commit/15bfee1c3e5e0fa522f27cdb7584d445434174b6))
+
+
+### Documentation
+
+* **deploy:** make the deployment walkthroughs true — resolve the BCP259 contradiction, mark every unimplemented and unverified claim (deploy-integrity R4/R7/R8) ([#3019](https://github.com/fgarofalo56/csa-inabox/issues/3019)) ([bcde6cd](https://github.com/fgarofalo56/csa-inabox/commit/bcde6cd4f3772ffe9eeaaabf3c554c4537521465))
+
+
+### Miscellaneous
+
+* **main:** release csa-inabox 0.87.0 ([#3020](https://github.com/fgarofalo56/csa-inabox/issues/3020)) ([e2248b3](https://github.com/fgarofalo56/csa-inabox/commit/e2248b380001ba3eee475f5ccad6eed7b5e2403e))
+
 ## [0.87.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.86.4...csa-inabox-v0.87.0) (2026-08-06)
 
 
