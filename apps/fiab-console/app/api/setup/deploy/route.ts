@@ -23,6 +23,12 @@ import {
 } from '@/lib/setup/user-arm-deploy';
 import { fetchWithTimeout, withDeadline } from '@/lib/azure/fetch-with-timeout';
 import { deployWorkflowForBoundary } from '@/lib/setup/deploy-workflows';
+import {
+  deriveAdoptBag,
+  adoptBagHasDecisions,
+  adoptCliParam,
+  SERVICE_PARAM_MAP,
+} from '@/lib/setup/adopt-bag';
 import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
@@ -149,42 +155,16 @@ interface SetupConfig {
    * EXISTING_* env contract (grant-navigator-rbac.sh / patch-navigator-env.sh).
    */
   serviceChoices?: Record<string, { mode: 'new' | 'use-existing' | 'disable'; existing?: { name: string; rg: string; sub: string } }>;
+  /**
+   * The wizard's reviewable adopt-or-create plan (deploy-integrity R5). The
+   * wizard has posted this since the planner landed; the route DISCARDED it on
+   * every tier (#3016). It is now the PREFERRED source of the adopt bag
+   * (`lib/setup/adopt-bag.deriveAdoptBag`), and its per-service fitness results
+   * feed the blocking `assertPlanIsDeployable` gate (#3014). Typed `unknown`
+   * because it arrives from the client and is sanitized before any use.
+   */
+  plan?: unknown;
 }
-
-/**
- * Maps a scan-and-choose service key → the bicep enable flag that governs
- * provisioning. The per-service `existing*` NAME/RG/SUB params are gone:
- * `main.bicep` declares ONE `adopt` object bag instead (ARM caps a template at
- * 256 parameters and main.bicep was at 251/256, so the 36 scalars had to go).
- * A reuse choice therefore contributes an entry to the adopt bag, keyed by the
- * SAME service key as `lib/deploy/adoption-catalog.ts`, rather than three `-p`
- * assignments that the template no longer declares (which is a hard BCP259).
- *
- * `flag` is null for DLZ-provisioned services with no provisioning toggle.
- */
-const SERVICE_PARAM_MAP: Record<string, { adoptable: boolean; flag: string | null }> = {
-  aisearch: { adoptable: true, flag: 'aiSearchEnabled' },
-  apim: { adoptable: true, flag: 'apimEnabled' },
-  adx: { adoptable: true, flag: 'adxEnabled' },
-  foundry: { adoptable: true, flag: 'aiFoundryEnabled' },
-  purview: { adoptable: true, flag: 'purviewEnabled' },
-  maps: { adoptable: true, flag: 'azureMapsEnabled' },
-  synapse: { adoptable: true, flag: null },
-  cosmos: { adoptable: true, flag: null },
-  adf: { adoptable: true, flag: null },
-  eventhubs: { adoptable: true, flag: null },
-  databricks: { adoptable: true, flag: null },
-  postgres: { adoptable: false, flag: 'postgresEnabled' },
-  storage: { adoptable: false, flag: null },
-  keyvault: { adoptable: false, flag: null },
-};
-
-/** One entry of the `adopt` bag, in the shape `main.bicep`'s `adoptMode()` reads. */
-type AdoptBagEntry = {
-  mode: 'adopt';
-  target: { name: string; rg: string; sub: string };
-  extra?: Record<string, string>;
-};
 
 /**
  * Build the extra `-p` bicep param assignments for the chosen service wiring.
@@ -209,43 +189,6 @@ function serviceChoiceParamLines(choices: SetupConfig['serviceChoices']): string
     }
   }
   return lines;
-}
-
-/**
- * Collect every reuse coordinate in this request into ONE adopt bag.
- *
- * An ABSENT key means create-new — `adoptMode()` in main.bicep defaults to
- * 'create' — so a pure-greenfield request produces an EMPTY bag and no `-p
- * adopt=…` assignment is emitted at all. This is deliberate: the previous
- * generator emitted per-service `existing*` assignments unconditionally, which
- * broke greenfield as well as brownfield once the scalars were removed.
- */
-function collectAdoptBag(body: SetupConfig): Record<string, AdoptBagEntry> {
-  const bag: Record<string, AdoptBagEntry> = {};
-  const put = (key: string, name?: string, rg?: string, sub?: string, extra?: Record<string, string>) => {
-    if (!name) return;
-    bag[key] = {
-      mode: 'adopt',
-      target: { name, rg: rg ?? '', sub: sub ?? '' },
-      ...(extra && Object.keys(extra).length ? { extra } : {}),
-    };
-  };
-
-  for (const [svc, choice] of Object.entries(body.serviceChoices ?? {})) {
-    const map = SERVICE_PARAM_MAP[svc];
-    if (!map?.adoptable) continue;
-    if (choice.mode !== 'use-existing' || !choice.existing) continue;
-    put(svc, choice.existing.name, choice.existing.rg, choice.existing.sub);
-  }
-
-  // The dedicated top-level fields the wizard still posts for the Console Cosmos
-  // and the RTI backends. They are the same decision, so they land in the same
-  // bag rather than in a second parallel mechanism.
-  put('cosmos', body.existingCosmosAccount, body.existingCosmosRg, body.existingCosmosSub);
-  put('adx', body.existingAdxClusterName);
-  put('eventhubs', body.existingEventHubNamespace);
-  put('streamanalytics', body.existingAsaJob);
-  return bag;
 }
 
 const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
@@ -465,6 +408,26 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
       { status: 400 },
     );
   }
+
+  // ── The adopt bag — derived ONCE, consumed by EVERY tier (#3016) ─────────
+  // Before this, the operator's reuse decisions reached exactly one transport:
+  // the HTTP-503 copy-paste fallback. Every tier that actually deployed
+  // discarded them and provisioned duplicates (a second Purview then fails the
+  // whole run with EnterpriseTenantAlreadyExists). FAIL CLOSED on a malformed
+  // pick: deploying something other than what the operator chose is the defect.
+  const derivedAdopt = deriveAdoptBag(body);
+  if (derivedAdopt.problems.length > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `The adopt selections in this request could not be honoured: ${derivedAdopt.problems.join('; ')}`,
+        problems: derivedAdopt.problems,
+      },
+      { status: 400 },
+    );
+  }
+  const adoptBag = derivedAdopt.bag;
+  const adoptMeaningful = adoptBagHasDecisions(adoptBag);
 
   const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
   const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
@@ -695,6 +658,10 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
       // it, and carry the cost center onto the deployment tags.
       adminEntraGroupId: body.adminGroupId,
       costCenter: body.costCenter,
+      // #3016 — the SAME adopt bag the copy-paste tier emits, on the tier that
+      // actually runs. Only when it carries an adopt/skip decision, so a
+      // greenfield submit's parameters are byte-identical to before.
+      adopt: adoptMeaningful ? (adoptBag as Record<string, unknown>) : undefined,
     });
     const submitted = await submitDlzDeployment({
       subscriptionId: body.subscriptionId!,
@@ -792,7 +759,17 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
         {
           method: 'POST',
           headers,
-          body: JSON.stringify({ ...body, ...topologyPayload, region }),
+          // #3016 — `adopt` is an EXPLICIT field, not a hope that the raw body
+          // survives: the orchestrator's pydantic model is `extra="ignore"`, so
+          // anything not declared on DeployRequest is silently dropped. The
+          // orchestrator declares (and threads) `adopt`; sending it explicitly
+          // is what makes that contract testable at both ends.
+          body: JSON.stringify({
+            ...body,
+            ...topologyPayload,
+            region,
+            ...(adoptMeaningful ? { adopt: adoptBag } : {}),
+          }),
         },
         ORCH_SUBMIT_TIMEOUT_MS,
       );
@@ -861,7 +838,21 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
     'GCC-High': 'platform/fiab/bicep/params/gcc-high.bicepparam',
     IL5: 'platform/fiab/bicep/params/il5.bicepparam',
   };
-  if (shouldDispatchWorkflow()) {
+  if (shouldDispatchWorkflow() && adoptMeaningful) {
+    // #3016 — this tier CANNOT carry the adopt bag: the deploy workflows declare
+    // no input for it, the workflow_dispatch API 422s any undeclared input, and
+    // inputs are capped at 10 (see plan-to-arm's GITHUB_DISPATCH_INPUT_CAP).
+    // Dispatching anyway would silently discard the operator's adopt/skip
+    // decisions and provision duplicates — the exact defect the other tiers
+    // just stopped committing. Skip the tier and fall through to the copy-paste
+    // gate, which carries the bag verbatim. Declaring a `plan_json` input on the
+    // deploy workflows (after PR #3058's changes to them land) re-enables this
+    // tier for brownfield.
+    console.error(
+      '[setup/deploy] skipping GitHub-dispatch tier: the deploy workflows cannot carry the adopt bag; ' +
+        'falling through to the copy-paste gate rather than discarding the adopt decisions (refs #3016).',
+    );
+  } else if (shouldDispatchWorkflow()) {
     // #2652 — the map moved to lib/setup/deploy-workflows so the status route can
     // allow-list against the SAME source of truth. Two copies would let that
     // route drift back open the moment a boundary is added here.
@@ -966,12 +957,10 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
   if (body.loomStreamAnalyticsEnabled === false) rtiParts.push('loomStreamAnalyticsEnabled=false');
   const rtiParamLine = rtiParts.length ? `  -p ${rtiParts.join(' ')} \\` : '';
 
-  // The ONE adopt assignment. Emitted only when something is actually adopted —
-  // a greenfield install emits nothing and every service resolves to 'create'.
-  const adoptBag = collectAdoptBag(body);
-  const adoptParamLine = Object.keys(adoptBag).length
-    ? `  -p adopt='${JSON.stringify(adoptBag)}' \\`
-    : '';
+  // The ONE adopt assignment — the SAME bag every other tier consumed (#3016).
+  // Emitted only when a decision must be honoured; a greenfield install emits
+  // nothing and every service resolves to 'create'.
+  const adoptParamLine = adoptMeaningful ? `  -p ${adoptCliParam(adoptBag)} \\` : '';
 
   // dlz-attach: the manual command threads topology + the hub coordinates the
   // tenant-topology doc recorded (so no Azure id is free-typed). The orchestrator

@@ -524,3 +524,102 @@ def test_role_assignment_remediation_gov_prefixes_cloud_set():
     cmd = role_assignment_remediation(principal_id=None, subscription_id="sub-gov", is_gov=True)
     assert cmd.splitlines()[0] == "az cloud set --name AzureUSGovernment"
     assert "<orchestrator-principal-object-id>" in cmd  # honest placeholder when unknown
+
+
+# ----- adopt bag transport (#3016) --------------------------------------
+# The orchestrator tier previously DISCARDED the operator's adopt-or-create
+# decisions: `extra="ignore"` dropped the undeclared field, so every deploy on
+# this tier provisioned duplicates beside the resources chosen for reuse.
+# These tests go RED if the field or its parameter threading is removed.
+
+
+ADOPT_BAG = {
+    "purview": {
+        "mode": "adopt",
+        "target": {"name": "pv-existing", "rg": "rg-data", "sub": "22222222-2222-2222-2222-222222222222"},
+    },
+    "aisearch": {"mode": "create"},
+}
+
+
+def test_deploy_parameters_tenant_carries_adopt_bag():
+    from loom_setup_orchestrator.orchestrator import _deploy_parameters
+
+    req = {
+        "boundary": "Commercial",
+        "mode": "single-sub",
+        "domain_name": "salesops",
+        "capacity_sku": "F8",
+        "adopt": ADOPT_BAG,
+    }
+    params = _deploy_parameters(req)
+    assert params["adopt"]["value"] == ADOPT_BAG
+
+
+def test_deploy_parameters_attach_carries_adopt_bag():
+    from loom_setup_orchestrator.orchestrator import _deploy_parameters
+
+    req = {
+        "boundary": "Commercial",
+        "mode": "multi-sub",
+        "topology": "dlz-attach",
+        "domain_name": "finance",
+        "capacity_sku": "F8",
+        "target_subscription_id": "11111111-1111-1111-1111-111111111111",
+        "adopt": ADOPT_BAG,
+    }
+    params = _deploy_parameters(req)
+    assert params["adopt"]["value"] == ADOPT_BAG
+
+
+def test_deploy_parameters_omit_adopt_when_absent():
+    from loom_setup_orchestrator.orchestrator import _deploy_parameters
+
+    req = {
+        "boundary": "Commercial",
+        "mode": "single-sub",
+        "domain_name": "salesops",
+        "capacity_sku": "F8",
+    }
+    assert "adopt" not in _deploy_parameters(req)
+
+
+def test_deploy_request_declares_adopt_field():
+    from loom_setup_orchestrator.main import DeployRequest
+
+    req = DeployRequest(
+        boundary="Commercial",
+        mode="single-sub",
+        domainName="salesops",
+        capacitySku="F8",
+        adopt=ADOPT_BAG,
+    )
+    # extra="ignore" must NOT eat it — the field is declared.
+    assert req.adopt == ADOPT_BAG
+    assert req.model_dump()["adopt"] == ADOPT_BAG
+
+
+def test_deploy_request_rejects_malformed_adopt_mode():
+    from loom_setup_orchestrator.main import DeployRequest
+
+    with pytest.raises(Exception):  # pydantic ValidationError — fail closed
+        DeployRequest(
+            boundary="Commercial",
+            mode="single-sub",
+            domainName="salesops",
+            capacitySku="F8",
+            adopt={"purview": {"mode": "reuse-maybe"}},
+        )
+
+
+def test_deploy_request_rejects_adopt_without_a_named_resource():
+    from loom_setup_orchestrator.main import DeployRequest
+
+    with pytest.raises(Exception):
+        DeployRequest(
+            boundary="Commercial",
+            mode="single-sub",
+            domainName="salesops",
+            capacitySku="F8",
+            adopt={"purview": {"mode": "adopt", "target": {"name": ""}}},
+        )
