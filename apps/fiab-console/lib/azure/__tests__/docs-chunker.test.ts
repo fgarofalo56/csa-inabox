@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import {
   chunkMarkdown,
   breadcrumbHeading,
+  ancestryHeading,
   documentTitle,
   MAX_CHUNK,
   BREADCRUMB_SEP,
@@ -105,6 +106,74 @@ describe('chunkMarkdown — D2: document identity survives into every chunk', ()
   it('does not duplicate the title when the section IS the title', () => {
     const [first] = chunkMarkdown('# Only Heading\n\nbody');
     expect(first.heading).toBe('Only Heading');
+  });
+});
+
+describe('chunkMarkdown — D3: the H2 ancestor survives into an H3 chunk (#2979 follow-up)', () => {
+  // The measured failure (run 31064239486): `data-agent` retrieved its gold
+  // document on 90% of questions and still scored productFidelityAvg 1.889/5,
+  // because every fact in that document lives in an H3 under
+  // `## Real feature inventory` — Microsoft Fabric's inventory — and the chunk
+  // was labelled with only the H3, which names no product at all.
+  const parityDoc = [
+    '# data-agent — parity with Microsoft Fabric Data Agent',
+    '',
+    'preamble',
+    '',
+    '## Real feature inventory (every capability, grounded in Learn)',
+    '',
+    '### A. Data sources (left "explorer" rail)',
+    '',
+    'Add up to 5 data sources in any combination.',
+    '',
+    '## Loom coverage (built / honest-gate / MISSING)',
+    '',
+    '### Sources',
+    '',
+    'addSource caps at 5.',
+  ].join('\n');
+
+  it('labels an inventory H3 with its H2 ancestor', () => {
+    const chunk = chunkMarkdown(parityDoc).find((c) => c.content.includes('Add up to 5 data sources'));
+    expect(chunk).toBeDefined();
+    expect(chunk!.heading).toBe(
+      `data-agent — parity with Microsoft Fabric Data Agent${BREADCRUMB_SEP}`
+      + `Real feature inventory (every capability, grounded in Learn)${BREADCRUMB_SEP}`
+      + 'A. Data sources (left "explorer" rail)',
+    );
+    // The whole point: the label now names the section that owns the claim.
+    expect(chunk!.heading).toContain('Real feature inventory');
+  });
+
+  it('closes a deeper heading when a shallower one opens', () => {
+    // An H2 after an H3 must NOT keep that H3 as an ancestor — otherwise the
+    // Loom-coverage section would inherit the inventory's last subsection.
+    const chunk = chunkMarkdown(parityDoc).find((c) => c.content.includes('addSource caps at 5'));
+    expect(chunk).toBeDefined();
+    expect(chunk!.heading).toContain('Loom coverage');
+    expect(chunk!.heading).not.toContain('Real feature inventory');
+    expect(chunk!.heading).not.toContain('A. Data sources');
+  });
+
+  it('labels pre-heading content with the document title', () => {
+    const [first] = chunkMarkdown(parityDoc);
+    expect(first.content).toContain('preamble');
+    expect(first.heading).toBe('data-agent — parity with Microsoft Fabric Data Agent');
+  });
+});
+
+describe('ancestryHeading', () => {
+  it('joins title and ancestors with the breadcrumb separator', () => {
+    expect(ancestryHeading('Doc', ['H2', 'H3'])).toBe(`Doc${BREADCRUMB_SEP}H2${BREADCRUMB_SEP}H3`);
+  });
+
+  it('collapses a repeated segment (an H1 identical to the title)', () => {
+    expect(ancestryHeading('Doc', ['Doc', 'H2'])).toBe(`Doc${BREADCRUMB_SEP}H2`);
+  });
+
+  it('drops empty segments and returns undefined when nothing is left', () => {
+    expect(ancestryHeading(undefined, ['', '  '])).toBeUndefined();
+    expect(ancestryHeading(undefined, ['H2'])).toBe('H2');
   });
 });
 

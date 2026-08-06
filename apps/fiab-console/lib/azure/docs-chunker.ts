@@ -141,6 +141,63 @@ export function breadcrumbHeading(title?: string, heading?: string): string | un
 }
 
 /**
+ * `"<title> › <H2> › <H3>"` — the FULL heading ancestry of a chunk.
+ *
+ * ── Why the innermost heading alone was not enough (#2979 follow-up) ─────────
+ *
+ * `breadcrumbHeading` labels a chunk with its document title and its innermost
+ * heading. In a `docs/fiab/parity/*.md` — which by `.claude/rules/ui-parity.md`
+ * describes TWO products — the innermost heading is frequently an H3 whose
+ * product allegiance is stated only by its H2 ancestor. `data-agent.md` is the
+ * measured case:
+ *
+ *     # data-agent — parity with Microsoft Fabric Data Agent
+ *     ## Real feature inventory (every capability, grounded in Learn)   <- FABRIC
+ *     ### A. Data sources (left "explorer" rail)                        <- chunk
+ *     ...
+ *     ## Loom coverage (built ✅ / honest-gate ⚠️ / MISSING ❌)          <- LOOM
+ *
+ * A chunk of `### A. Data sources` was labelled `data-agent — parity … › A. Data
+ * sources`, which says NOTHING about which product it describes. Both the answer
+ * prompt (`docs-grounding.renderDocExcerpts`) and the judge
+ * (`evaluator-core.renderJudgeExcerpt`) render that label and were therefore
+ * asked to distinguish two products while holding evidence stripped of the only
+ * thing that distinguishes them. `evaluator-core.classifyExcerptProvenance`
+ * classified such chunks `'unlabelled'` and told the judge to treat them as
+ * possibly-either — for a surface whose ENTIRE gold document is that one parity
+ * file.
+ *
+ * Measured consequence (run 31064239486): `data-agent` retrieved its gold
+ * document on 90% of questions and still scored `productFidelityAvg` **1.889**
+ * of 5 — a pass rate of 0.10 against a 0.40 floor, while `groundingAvg` was a
+ * healthy 4.33. The answers WERE grounded; they were grounded in Fabric's
+ * inventory and reported as CSA Loom's capabilities, which is exactly the
+ * inversion `productFidelity` exists to catch.
+ *
+ * Carrying the ancestry costs nothing at retrieval time (the ancestor text is
+ * already indexed on the H2's own chunks) and gives every downstream consumer —
+ * answer prompt, judge, and the deterministic provenance classifier — the label
+ * the document actually carries.
+ */
+export function ancestryHeading(
+  title: string | undefined,
+  ancestors: readonly string[],
+): string | undefined {
+  const parts: string[] = [];
+  for (const a of [title, ...ancestors]) {
+    const t = (a || '').trim();
+    if (!t) continue;
+    // Skip a repeat of the previous segment (an H1 identical to the title, or a
+    // heading repeated at two levels) so the breadcrumb never says the same
+    // thing twice.
+    if (parts.length > 0 && parts[parts.length - 1] === t) continue;
+    parts.push(t);
+  }
+  if (parts.length === 0) return undefined;
+  return parts.join(BREADCRUMB_SEP);
+}
+
+/**
  * The document's title: its first H1, or — for a document that never uses one
  * — its first heading of any level.
  *
@@ -166,14 +223,17 @@ export function documentTitle(lines: readonly string[]): string | undefined {
  * Chunk a markdown document for the retrieval corpus.
  *
  * Sections break on H1-H3. A section over `MAX_CHUNK` is split along line
- * boundaries. Every chunk is labelled with a `title › section` breadcrumb,
- * where the title is the document's first H1 (or, for a document that never
- * uses one, its first heading of any level).
+ * boundaries. Every chunk is labelled with its FULL heading ancestry —
+ * `title › H2 › H3` — where the title is the document's first H1 (or, for a
+ * document that never uses one, its first heading of any level). See
+ * {@link ancestryHeading} for why the innermost heading alone was not enough.
  */
 export function chunkMarkdown(text: string, max: number = MAX_CHUNK): MarkdownChunk[] {
   const lines = text.split(/\r?\n/);
   const title = documentTitle(lines);
   const blocks: MarkdownChunk[] = [];
+  /** Open heading ancestors by level: [H1, H2, H3]. */
+  const stack: (string | undefined)[] = [undefined, undefined, undefined];
   let curHeading: string | undefined;
   let buf: string[] = [];
   const flush = () => {
@@ -185,7 +245,13 @@ export function chunkMarkdown(text: string, max: number = MAX_CHUNK): MarkdownCh
     const m = line.match(/^(#{1,3})\s+(.*)$/);
     if (m) {
       flush();
-      curHeading = m[2].trim();
+      const level = m[1].length; // 1..3
+      const text_ = m[2].trim();
+      stack[level - 1] = text_;
+      // Opening a heading closes every deeper one — an H2 after an H3 must not
+      // keep that H3 as an ancestor.
+      for (let d = level; d < stack.length; d++) stack[d] = undefined;
+      curHeading = ancestryHeading(title, stack.filter((s): s is string => !!s));
     } else {
       buf.push(line);
     }
@@ -194,7 +260,8 @@ export function chunkMarkdown(text: string, max: number = MAX_CHUNK): MarkdownCh
 
   const out: MarkdownChunk[] = [];
   for (const b of blocks) {
-    const heading = breadcrumbHeading(title, b.heading);
+    // Content before the first heading has no ancestry — label it with the title.
+    const heading = b.heading ?? (title || undefined);
     if (b.content.length <= max) { out.push({ heading, content: b.content }); continue; }
     for (const piece of splitOnLines(b.content, max)) out.push({ heading, content: piece });
   }

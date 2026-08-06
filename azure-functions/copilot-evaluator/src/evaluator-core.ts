@@ -323,22 +323,29 @@ export function deterministicGuards(
 // ANSWER prompt (`lib/copilot/docs-grounding.renderDocExcerpts`) has always
 // rendered `path — heading`; only the JUDGE was blind.
 //
-// LIMIT OF THE DETERMINISTIC LAYER — stated, not papered over
-// -----------------------------------------------------------
-// The breadcrumb is `title › innermost-heading`; the chunker (docs-chunker.ts)
-// breaks on H1–H3 and keeps only the innermost. So an H3 UNDER an inventory H2
-// (e.g. `### A. Data sources` under `## Real feature inventory` — exactly the
-// data-agent-013 chunk) carries no inventory label. Measured over the corpus:
-// 459 H3 sections across 469 parity docs, of which ~75 sit under a "real
-// feature inventory" H2 but ~76 sit under Loom-side H2s (`Loom coverage`,
-// `Backend per control`, `Build plan`, `Waves`). Guessing "unlabelled H3 in a
-// parity doc ⇒ other product" would therefore mislabel roughly one in six —
-// far too coarse to hard-fail on. So `unlabelled` is its OWN class: it is
-// disclosed to the judge (which can read the prose and compare against the
-// sibling Loom-coverage rows) and it NEVER triggers the deterministic verdict.
-// Carrying the full ancestor path as a non-searchable chunk field would close
-// that gap without touching ranking; it is a follow-up, deliberately not folded
-// in here so this PR cannot move retrieval numbers.
+// THE H3-UNDER-H2 GAP — CLOSED (2026-08-06, #2970/E2 lane)
+// ---------------------------------------------------------
+// This section used to record a known blind spot: the chunker kept only the
+// INNERMOST heading, so an H3 under an inventory H2 (`### A. Data sources`
+// under `## Real feature inventory` — exactly the data-agent-013 chunk) carried
+// no inventory label, `unlabelled` had to be its own non-failing class, and the
+// note said "carrying the full ancestor path ... is a follow-up".
+//
+// It was not a cosmetic follow-up. Measured on run 31064239486, `data-agent`
+// retrieved its gold document on 90% of questions and scored
+// `productFidelityAvg` 1.889/5 — pass rate 0.10 against a 0.40 floor — while
+// `groundingAvg` sat at a healthy 4.33. Every one of that surface's golden rows
+// resolves to ONE parity document, and the whole of that document's feature
+// material lives in H3s under `## Real feature inventory`. So the judge was
+// being shown Fabric's inventory labelled "role unlabelled, may describe either
+// product", for every question, and the answer prompt was shown the same.
+//
+// `docs-chunker.ancestryHeading` now emits `title › H2 › H3` and
+// `classifyExcerptProvenance` walks that ancestry innermost-first, stopping at
+// the nearest labelled ancestor. `unlabelled` remains a real, non-failing class
+// for chunks whose ENTIRE ancestry matches no known vocabulary — it is simply no
+// longer the default for the most common shape in the corpus.
+
 
 /** Breadcrumb separator emitted by the corpus chunker (lib/azure/docs-chunker.ts). */
 export const BREADCRUMB_SEP = ' › ';
@@ -349,9 +356,27 @@ const COMPARISON_DOC_RE = /(?:^|\/)docs\/fiab\/parity\/[^/]+\.md$|-parity-spec\.
 /** Section headings that state what the OTHER product does. */
 const OTHER_PRODUCT_SECTION_RE = /\binventor(?:y|ies)\b|\bsource ui\b/i;
 
-/** Section headings that state what CSA Loom SHIPS today. */
+/**
+ * Headings that name CSA Loom's side of the comparison UNAMBIGUOUSLY.
+ *
+ * Kept separate from the looser vocabulary below because the two are used
+ * differently: a STRONG marker anywhere in a chunk's ancestry can overrule an
+ * inventory ancestor (that is what a `## Feature inventory + Loom coverage`
+ * heading means), whereas a loose one must not.
+ */
+const LOOM_STRONG_SECTION_RE = /\bloom coverage\b|\bbackend per control\b|\bloom-side\b/i;
+
+/**
+ * Section headings that state what CSA Loom SHIPS today.
+ *
+ * DELIBERATELY LOOSE, and therefore only consulted when no ancestor names the
+ * other product's inventory. `\btests?\b` alone matches the Fabric-inventory H3
+ * `### C. Build / test loop`, and `\bfiles\b` / `\bgrade\b` / `\bcoverage\b` are
+ * similarly generic — read innermost-first without the inventory check below,
+ * they let a topic name outvote the structural section that owns it.
+ */
 const LOOM_SECTION_RE =
-  /\bloom coverage\b|\bcoverage\b|\bbackend per control\b|\bverification\b|\bbicep\b|\bper-cloud\b|\btests?\b|\bgrade\b|\bfiles\b/i;
+  /\bloom coverage\b|\bcoverage\b|\bbackend per control\b|\bverification\b|\bbicep\b|\bper-cloud\b|\btests?\b|\bgrade\b|\bfiles\b|\bazure-native\b|\bno fabric\b/i;
 
 /** Section headings that state what CSA Loom PLANS to build (not shipped). */
 const LOOM_PLAN_SECTION_RE = /\bbuild plan\b|\bwaves?\b|\bgaps? to build\b|\broadmap\b|\bbacklog\b/i;
@@ -397,22 +422,64 @@ export function excerptSection(heading?: string | null): string {
 }
 
 /**
+ * Every section segment of a breadcrumb, INNERMOST FIRST, excluding the leading
+ * document title.
+ *
+ * The chunker now emits the full heading ancestry (`title › H2 › H3`, see
+ * `docs-chunker.ancestryHeading`), because in a two-product parity doc the H3 is
+ * frequently mute about which product it describes and its H2 is not:
+ *
+ *     data-agent — parity … › Real feature inventory … › A. Data sources
+ *                             ^^^^^^^^^^^^^^^^^^^^^^ the only product label
+ *
+ * Innermost-first is the ordering that matters: the NEAREST labelled ancestor
+ * governs. A `### Loom coverage` nested under `## Feature inventory` describes
+ * Loom, not the other product, and reading outward-in would get that backwards.
+ */
+export function excerptSections(heading?: string | null): string[] {
+  const h = (heading || '').trim();
+  if (!h) return [];
+  const parts = h.split(BREADCRUMB_SEP).map((s) => s.trim()).filter(Boolean);
+  // parts[0] is the document title; a single-segment breadcrumb IS the section.
+  const sections = parts.length > 1 ? parts.slice(1) : parts;
+  return sections.reverse();
+}
+
+/**
  * Classify which product an excerpt's claims are about.
  *
- * Deliberately conservative: a comparison-doc section that does not match a
- * known heading vocabulary is `'unlabelled'`, never guessed into
- * `'other-product'` (see the section header for the measured mislabel rate).
+ * Two rules, in order:
+ *
+ * 1. **A feature-inventory / source-UI ancestor governs the whole subtree.**
+ *    `## Real feature inventory` owns every H3 beneath it, whatever those H3s
+ *    are called. This has to take precedence over an innermost-first walk
+ *    because inventory H3s are TOPIC names (`### C. Build / test loop`,
+ *    `### D. Evaluation`) that collide with the loose Loom vocabulary — reading
+ *    innermost-first alone classified that exact chunk `'loom'`, which is the
+ *    inversion this function exists to prevent, merely relocated. A heading that
+ *    names BOTH sides (`## Feature inventory + Loom coverage (W4)`) is `'mixed'`,
+ *    detected via the STRONG Loom markers only.
+ *
+ * 2. Otherwise, walk innermost-first and stop at the nearest labelled ancestor:
+ *    a `### Loom coverage` nested under a neutral H2 describes Loom.
+ *
+ * Still deliberately conservative: a comparison-doc chunk whose ENTIRE ancestry
+ * matches no known vocabulary is `'unlabelled'` — disclosed to the judge as
+ * possibly-either, never guessed and never a deterministic verdict.
  */
 export function classifyExcerptProvenance(e: Pick<RetrievedExcerpt, 'path' | 'heading'>): ExcerptProvenance {
   if (!COMPARISON_DOC_RE.test(String(e.path || ''))) return 'general';
-  const section = excerptSection(e.heading);
-  if (!section) return 'unlabelled';
-  const other = OTHER_PRODUCT_SECTION_RE.test(section);
-  const loom = LOOM_SECTION_RE.test(section) || LOOM_PLAN_SECTION_RE.test(section);
-  if (other && loom) return 'mixed';
-  if (other) return 'other-product';
-  if (LOOM_PLAN_SECTION_RE.test(section)) return 'loom-plan';
-  if (loom) return 'loom';
+  const sections = excerptSections(e.heading);
+  if (sections.length === 0) return 'unlabelled';
+  // Rule 1 — an inventory ancestor owns its subtree.
+  if (sections.some((s) => OTHER_PRODUCT_SECTION_RE.test(s))) {
+    return sections.some((s) => LOOM_STRONG_SECTION_RE.test(s)) ? 'mixed' : 'other-product';
+  }
+  // Rule 2 — nearest labelled ancestor.
+  for (const section of sections) {
+    if (LOOM_PLAN_SECTION_RE.test(section)) return 'loom-plan';
+    if (LOOM_SECTION_RE.test(section)) return 'loom';
+  }
   return 'unlabelled';
 }
 

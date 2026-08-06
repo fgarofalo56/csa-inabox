@@ -14,6 +14,7 @@ import {
   scoreRetrieval,
   deterministicGuards,
   classifyExcerptProvenance,
+  excerptSections,
   detectParityInversion,
   buildJudgeMessages,
   parseJudge,
@@ -230,21 +231,78 @@ describe('parity-doc provenance (#2979)', () => {
     expect(classifyExcerptProvenance({ path: 'docs/fiab/copilot-quality-triage.md', heading: 'x › §2.5' })).toBe('general');
   });
 
-  it('DOES NOT guess a role for an unlabelled H3 inside a comparison doc', () => {
-    // The measured limit (see evaluator-core's section header): the breadcrumb
-    // is `title › INNERMOST heading`, so `### A. Data sources` under
-    // `## Real feature inventory` — the actual data-agent-013 chunk — carries no
-    // inventory label. ~459 such H3s exist and they split roughly evenly
-    // between inventory-side and Loom-side parents, so guessing would mislabel
-    // about one in six. It must stay 'unlabelled' (disclosed to the judge,
-    // never deterministically hard-failed).
+  it('DOES NOT guess a role for a comparison-doc section with no recognisable label', () => {
+    // `unlabelled` is still a real class — it is simply no longer the DEFAULT
+    // for the commonest shape in the corpus. A breadcrumb whose whole ancestry
+    // names neither product must stay unlabelled (disclosed to the judge as
+    // possibly-either, never deterministically hard-failed).
+    expect(
+      classifyExcerptProvenance({
+        path: 'docs/fiab/parity/data-agent.md',
+        heading: 'data-agent — parity with Microsoft Fabric Data Agent › Appendix B',
+      }),
+    ).toBe('unlabelled');
+  });
+
+  it('an inventory H2 ancestor governs its H3 subtree (#2979 follow-up — the data-agent collapse)', () => {
+    // THE MEASURED DEFECT (run 31064239486): `data-agent` retrieved its gold
+    // document on 90% of questions and still scored productFidelityAvg 1.889/5
+    // — pass rate 0.10 against a 0.40 floor — while groundingAvg sat at 4.33.
+    // Every fact in that document lives in an H3 under `## Real feature
+    // inventory`, i.e. Microsoft Fabric's inventory, and the chunk used to be
+    // labelled with only the H3, which names no product. The judge was told
+    // "role unlabelled, may describe either product" about Fabric's inventory,
+    // for every question on the surface.
     expect(
       classifyExcerptProvenance({
         path: 'docs/fiab/parity/data-agent.md',
         heading:
-          'data-agent — parity with Microsoft Fabric Data Agent (NL-to-query AI data agent) › A. Data sources (left "explorer" rail)',
+          'data-agent — parity with Microsoft Fabric Data Agent (NL-to-query AI data agent)'
+          + ' › Real feature inventory (every capability, grounded in Learn)'
+          + ' › A. Data sources (left "explorer" rail)',
       }),
-    ).toBe('unlabelled');
+    ).toBe('other-product');
+  });
+
+  it('an inventory ancestor beats a LOOSE Loom keyword in a nearer H3', () => {
+    // `### C. Build / test loop` is an INVENTORY subsection, but `\btests?\b` is
+    // in the loose Loom vocabulary. A naive innermost-first walk classifies it
+    // 'loom' — the same inversion, merely relocated. The inventory ancestor has
+    // to win. (data-agent-004 / -012 / -014 all resolve to this chunk.)
+    expect(
+      classifyExcerptProvenance({
+        path: 'docs/fiab/parity/data-agent.md',
+        heading: 'data-agent — parity … › Real feature inventory › C. Build / test loop',
+      }),
+    ).toBe('other-product');
+  });
+
+  it('a STRONG Loom marker alongside an inventory ancestor is mixed, not other-product', () => {
+    // `## Feature inventory + Loom coverage (W4)` (docs/fiab/parity/access-governance.md)
+    // genuinely names both halves; only the strong markers may overrule.
+    expect(
+      classifyExcerptProvenance({
+        path: 'docs/fiab/parity/access-governance.md',
+        heading: 'access-governance — parity › Feature inventory + Loom coverage (W4)',
+      }),
+    ).toBe('mixed');
+  });
+
+  it('a nested Loom-coverage H3 under a neutral H2 still reads as Loom', () => {
+    expect(
+      classifyExcerptProvenance({
+        path: 'docs/fiab/parity/eventstream.md',
+        heading: 'eventstream — parity › Status › Loom coverage',
+      }),
+    ).toBe('loom');
+  });
+
+  it('excerptSections yields the ancestry innermost-first, without the document title', () => {
+    expect(excerptSections('Title › H2 › H3')).toEqual(['H3', 'H2']);
+    // A single-segment breadcrumb IS the section — there is no title to strip.
+    expect(excerptSections('Loom coverage')).toEqual(['Loom coverage']);
+    expect(excerptSections('')).toEqual([]);
+    expect(excerptSections(null)).toEqual([]);
   });
 
   it('the breadcrumbs these fixtures assert are the ones the shipped corpus actually produces', () => {

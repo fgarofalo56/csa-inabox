@@ -89,7 +89,7 @@ strictly opt-in.
 
 | # | Capability | Status | Notes / backend |
 |---|------------|--------|-----------------|
-| 1 | Up to 5 typed sources | ✅ | `addSource` caps at 5; sources are real Loom items via `GET /api/items/by-type` |
+| 1 | Up to 5 typed sources | ✅ | a Loom data agent accepts up to **5 data sources**; `addSource` caps at 5; sources are real Loom items via `GET /api/items/by-type` |
 | 2 | Source types | ⚠️ | warehouse / lakehouse / kql / semantic-model / ai-search / ontology / graph built; **Microsoft Graph ❌** |
 | 3 | Schema selection | ❌ | only a **comma-separated `tables` text Input** + type-aware label — no schema tree picker (violates `no-freeform-config`) |
 | 4 | Data source description | ✅ | per-source `description`, fed into the grounded prompt |
@@ -97,7 +97,7 @@ strictly opt-in.
 | 6 | Example queries (few-shot) | ⚠️ | authored + Config-Copilot-generated; gated correctly per type; **no schema validation of examples** |
 | 7 | AI Search unstructured config | ❌ | ai-search treated as a generic source; no search-type / doc-count / citations |
 | 8 | Semantic-model Prep-for-AI | ⚠️ | honest MessageBar points at Power BI Prep for AI |
-| 9 | Agent instructions (15k) | ✅ | `maxLength=15000` + live counter + template |
+| 9 | Agent instructions (15k) | ✅ | Loom's agent-instructions field accepts up to **15,000** characters (`maxLength=15000`) + live counter + template |
 | 10 | Agent name / description | ✅ | `alias` + `description` |
 | 11 | NL chat test pane | ✅ | `/chat` → live AOAI grounded turn, composer pinned |
 | 12 | Generated-query transparency | ✅ | tools-used trace + executed rows (`DataAgentResultViz` KPI/chart/table toggle) |
