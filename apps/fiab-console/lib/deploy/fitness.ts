@@ -2,8 +2,13 @@
  * fitness — is an ADOPTED Azure resource actually usable by Loom?
  *
  * Discovery answers *does it exist*. This answers *can Loom drive it*, and it is
- * BLOCKING: `assertPlanIsDeployable()` runs before a single resource is created,
- * so an unusable adoption costs ~20 seconds instead of a half-built estate.
+ * BLOCKING: `assertPlanIsDeployable()` runs before a single resource is created
+ * — called by POST /api/setup/deploy at the submit choke point, ahead of every
+ * deploy tier (#3014) — so an unusable adoption costs ~20 seconds instead of a
+ * half-built estate. The guard test
+ * `app/api/setup/__tests__/deploy-fitness-gate.test.ts` goes red if that caller
+ * is removed; this suite being a well-tested library nothing calls is the
+ * measured defect it recovers from.
  *
  * THREE RULES THIS MODULE ENFORCES
  * -------------------------------
@@ -931,7 +936,8 @@ export class AdoptionNotDeployableError extends Error {
 }
 
 /**
- * The BLOCKING gate. Called by preflight before any resource is created.
+ * The BLOCKING gate. Called by POST /api/setup/deploy — the submit choke
+ * point — before ANY deploy tier fires (#3014).
  *
  * `unusable` blocks, and so does `unknown` — Loom does not deploy against a
  * resource it could not verify. `usable-with-changes` proceeds, because those

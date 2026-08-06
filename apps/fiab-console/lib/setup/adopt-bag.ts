@@ -165,12 +165,31 @@ export function sanitizeSubmittedPlan(raw: unknown): { plan: DeploymentPlan | nu
     for (const [ek, ev] of Object.entries(extraIn ?? {})) {
       if (/^[A-Za-z0-9_-]{1,60}$/.test(ek) && typeof ev === 'string' && SAFE_VALUE.test(ev)) extra[ek] = ev;
     }
+    // `source` survives when it is a known value — validatePlan's singleton
+    // protection ('create-not-permitted') keys on source==='discovered', so
+    // flattening it to 'manual' would disarm that check server-side.
+    const sourceIn = (d as ServiceDecision | null)?.source;
+    const source: ServiceDecision['source'] =
+      sourceIn === 'discovered' || sourceIn === 'default' || sourceIn === 'reconciled' || sourceIn === 'manual'
+        ? sourceIn
+        : 'manual';
+    // A target on a create/skip decision is kept when SAFE (it is what makes a
+    // discovered-candidate create recognisable to the singleton check) and
+    // silently dropped when not — the decision itself is not coordinate-bearing.
+    const rawTarget = d?.target;
+    const targetSafe =
+      rawTarget &&
+      SAFE_VALUE.test(str(rawTarget.name)) &&
+      SAFE_VALUE.test(str(rawTarget.rg)) &&
+      (!str(rawTarget.sub) || GUID_RE.test(str(rawTarget.sub)));
     clean[key] = {
       mode,
-      source: 'manual',
+      source,
       ...(mode === 'adopt'
         ? { target: { name: str(d?.target?.name), rg: str(d?.target?.rg), sub: str(d?.target?.sub) } }
-        : {}),
+        : targetSafe && str(rawTarget?.name)
+          ? { target: { name: str(rawTarget?.name), rg: str(rawTarget?.rg), sub: str(rawTarget?.sub) } }
+          : {}),
       ...(Object.keys(extra).length ? { extra } : {}),
       // Carried through UNTRUSTED-as-submitted; the fitness gate re-reads it.
       ...(d && (d as ServiceDecision).fitness ? { fitness: (d as ServiceDecision).fitness } : {}),
@@ -181,9 +200,21 @@ export function sanitizeSubmittedPlan(raw: unknown): { plan: DeploymentPlan | nu
 
   if (problems.length > 0) return { plan: null, problems };
   const src = raw as Partial<DeploymentPlan>;
+  // validatePlan dereferences scanScope/scanResults — guarantee their shape so
+  // a client that omits them yields an empty ledger, not a 500.
+  const scanScope = {
+    subscriptions: Array.isArray(src.scanScope?.subscriptions)
+      ? src.scanScope.subscriptions.filter((s): s is string => typeof s === 'string')
+      : [],
+    managementGroups: Array.isArray(src.scanScope?.managementGroups)
+      ? src.scanScope.managementGroups.filter((s): s is string => typeof s === 'string')
+      : [],
+  };
   const plan = {
     ...src,
     services: clean,
+    scanScope,
+    scanResults: Array.isArray(src.scanResults) ? src.scanResults : [],
   } as DeploymentPlan;
   return { plan, problems };
 }

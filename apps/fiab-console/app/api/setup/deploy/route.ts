@@ -29,6 +29,8 @@ import {
   adoptCliParam,
   SERVICE_PARAM_MAP,
 } from '@/lib/setup/adopt-bag';
+import { validatePlan } from '@/lib/deploy/plan-model';
+import { assertPlanIsDeployable, AdoptionNotDeployableError } from '@/lib/deploy/fitness';
 import { logSafe, logSafeError } from '@/lib/util/log-safe';
 
 export const runtime = 'nodejs';
@@ -428,6 +430,55 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
   }
   const adoptBag = derivedAdopt.bag;
   const adoptMeaningful = adoptBagHasDecisions(adoptBag);
+
+  // ── #3014 — the BLOCKING adoption gate, at the real choke point ──────────
+  // `fitness.ts` has promised since it was written that "assertPlanIsDeployable()
+  // runs before a single resource is created". Measured 2026-08-05: it had ZERO
+  // production callers — an unusable adoption (Free-tier AI Search, ADLS without
+  // HNS, a foreign-metastore Databricks) still failed MID-deploy as an ARM
+  // error, leaving a half-built estate. This call is what makes that header
+  // true: it runs here, before ANY tier submits anything.
+  if (derivedAdopt.plan) {
+    const plan = derivedAdopt.plan;
+    // Structural coherence first. An adopt of a create-only service, a create
+    // of an existing tenant singleton, or an adopt without a full coordinate
+    // can never deploy — refuse now, not three minutes into an ARM run.
+    // 'fitness-not-evaluated' and 'scan-coverage-missing' are deliberately NOT
+    // enforced yet: no production path evaluates fitness (`evaluateFitness`
+    // still has no producer — the follow-up recorded on #3014), so refusing
+    // every un-evaluated adoption here would dead-end brownfield entirely.
+    // An adoption that HAS a verdict is enforced below, unknown included.
+    const ENFORCED = new Set(['unknown-service', 'adopt-not-permitted', 'create-not-permitted', 'missing-target']);
+    const issues = validatePlan(plan).filter((i) => ENFORCED.has(i.code));
+    if (issues.length > 0) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: `The submitted plan cannot deploy: ${issues.map((i) => i.message).join(' ')}`,
+          issues,
+        },
+        { status: 400 },
+      );
+    }
+    try {
+      assertPlanIsDeployable(
+        Object.entries(plan.services)
+          .filter(([, d]) => d.mode === 'adopt' && d.fitness)
+          .map(([serviceKey, d]) => ({ serviceKey, fitness: d.fitness! })),
+      );
+    } catch (e) {
+      if (e instanceof AdoptionNotDeployableError) {
+        // 422: the request is well-formed; the ESTATE cannot honour it. The
+        // blocking checks carry what was OBSERVED (R7) — "could not verify X"
+        // and "X is unusable" stay distinct all the way to the wizard.
+        return NextResponse.json(
+          { ok: false, error: 'adoption-not-deployable', message: e.message, blocking: e.blocking },
+          { status: 422 },
+        );
+      }
+      throw e;
+    }
+  }
 
   const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
   const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
