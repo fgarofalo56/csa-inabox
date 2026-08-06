@@ -6135,6 +6135,17 @@ module scriptRunner 'script-runner-app.bicep' = if (scriptRunnerActive) {
       ? []
       : [ containerPlatformModule.outputs.infrastructureSubnetPrefix ]
   }
+  // The app pulls from ACR as scriptRunnerUami, so the AcrPull grant must land
+  // before the first revision is created — otherwise a from-scratch deploy races
+  // role propagation and the revision fails its image pull ("Operation
+  // expired"; measured live 2026-08-06 on the Commercial estate, where the
+  // grant was absent and the app sat provisioningState=Failed). loomMigrate /
+  // loomUnity / risingwave below already carry this dependsOn for exactly that
+  // reason. (A dependsOn on a false-condition resource is a no-op in ARM, so
+  // this is safe when skipRoleGrants is set.)
+  dependsOn: [
+    scriptRunnerAcrPull
+  ]
 }
 
 // =====================================================================
@@ -6193,6 +6204,18 @@ module wrangler '../integration/wrangler.bicep' = if (wranglerActive) {
     targetPort: 8080
     complianceTags: complianceTags
   }
+  // The app pulls from ACR as wranglerUami, so the AcrPull grant must land
+  // before the first revision is created — otherwise a from-scratch deploy
+  // races role propagation and the revision fails its image pull. Measured
+  // live 2026-08-06 on the Commercial estate: uami-loom-wrangler-centralus had
+  // NO AcrPull and loom-wrangler-host sat provisioningState=Failed with ZERO
+  // revisions ever created. loomMigrate / loomUnity / risingwave below already
+  // carry this dependsOn for exactly that reason. (A dependsOn on a
+  // false-condition resource is a no-op in ARM, so this is safe when
+  // skipRoleGrants is set.)
+  dependsOn: [
+    wranglerAcrPull
+  ]
 }
 
 // =====================================================================
