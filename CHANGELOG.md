@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.88.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.88.0...csa-inabox-v0.88.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **deploy:** feed the classifier the ARM leaf error, and stop the brownfield reconcile colliding on a stale privatelink zone (refs [#3039](https://github.com/fgarofalo56/csa-inabox/issues/3039)) ([#3043](https://github.com/fgarofalo56/csa-inabox/issues/3043)) ([7e9289c](https://github.com/fgarofalo56/csa-inabox/commit/7e9289cc0a5106b8a860d716c50acb8d921af2fb))
+
+
+### Miscellaneous
+
+* **rules:** modernize session-end + replace archon-workflow with task-tracking (de-Archon, Fable/Opus 5 tuning) ([#3047](https://github.com/fgarofalo56/csa-inabox/issues/3047)) ([7f608dd](https://github.com/fgarofalo56/csa-inabox/commit/7f608dd6c66e0303d803415161d39a95ea5eeca6))
+
 ## [0.88.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.87.2...csa-inabox-v0.88.0) (2026-08-06)
 
 
