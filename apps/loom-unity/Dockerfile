@@ -228,28 +228,55 @@ RUN cp -a /home/unitycatalog/etc/db /home/unitycatalog/etc/db.seed 2>/dev/null |
 # rewrite does not take, or the v0.5.1 override is not FIRST on the path — a
 # shadowed override would silently ship the v0.5.0 500-on-permission-GET bug while
 # claiming to fix it, which is exactly the failure this assertion exists to catch.
+#
+# ── WHY *EVERY* CLASSPATH FILE, AND WHY THE ASSERTION NAMES THE EXACT FILE ─────
+# (finishline D2, root-caused LIVE on Commercial 2026-08-06.) The upstream image
+# carries EIGHT `classpath` files (server, controlmodels, models, clients/java,
+# clients/python, examples/cli, target, target/control). The previous version of
+# this block patched `find ... -path '*server/target*' | head -n 1`, and find's
+# traversal order returned `server/target/controlmodels/target/classpath` —
+# NOT `server/target/classpath`, the file bin/start-uc-server actually reads
+# (`SERVER_CLASSPATH_FILE="$SERVER_TARGET_DIR/classpath"`). Every build-time
+# assertion then passed against the WRONG file, and the shipped image had:
+#   * NO Postgres driver/Entra plugin on the RUNNING classpath — the first live
+#     Entra-Postgres boot died with "Unable to load Authentication Plugin"
+#     (ClassNotFoundException, reproduced in-image via
+#     `java -cp "$(cat server/target/classpath)" ai.limitlessdata...`), and
+#   * the v0.5.1 #1603 override INERT — the server was running v0.5.0 classes
+#     while the image claimed the permission-GET fix.
+# Rewriting every classpath file is idempotent-shaped (skip if already present),
+# robust to upstream layout changes, and harmless for the aux files (their tools
+# just gain two jars). The assertions then check the ONE file the start script
+# names, not whichever file find happened to return first.
 COPY --from=jdbcplugin /build/lib/ /home/unitycatalog/lib-loom/
 COPY --from=jdbcplugin /build/override/ /home/unitycatalog/lib-loom-override/
 RUN set -eu; \
-    CP_FILE="$(find /home/unitycatalog -type f -name classpath -path '*server/target*' | head -n 1)"; \
-    if [ -z "${CP_FILE}" ]; then \
-      echo "FATAL: upstream classpath file not found under /home/unitycatalog/server/target — cannot install the #1603 server override or the Postgres driver" >&2; \
+    SERVER_CP_FILE=/home/unitycatalog/server/target/classpath; \
+    if [ ! -f "${SERVER_CP_FILE}" ]; then \
+      echo "FATAL: ${SERVER_CP_FILE} not found — bin/start-uc-server reads exactly this file, so the #1603 override and the Postgres driver cannot be installed" >&2; \
       exit 1; \
     fi; \
     OVERRIDE="$(find /home/unitycatalog/lib-loom-override -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
     EXTRA="$(find /home/unitycatalog/lib-loom -name '*.jar' | sort | tr '\n' ':' | sed 's/:$//')"; \
     if [ -z "${OVERRIDE}" ]; then echo "FATAL: v0.5.1 unitycatalog-server override jar not found in lib-loom-override" >&2; exit 1; fi; \
-    printf '%s:%s:%s' "${OVERRIDE}" "$(cat "${CP_FILE}")" "${EXTRA}" > /tmp/loom-classpath; \
-    cat /tmp/loom-classpath > "${CP_FILE}"; \
-    rm -f /tmp/loom-classpath; \
+    for CP_FILE in $(find /home/unitycatalog -type f -name classpath); do \
+      if ! grep -q 'loom-unity-entra-auth.jar' "${CP_FILE}"; then \
+        printf '%s:%s:%s' "${OVERRIDE}" "$(cat "${CP_FILE}")" "${EXTRA}" > /tmp/loom-classpath; \
+        cat /tmp/loom-classpath > "${CP_FILE}"; \
+        rm -f /tmp/loom-classpath; \
+      fi; \
+    done; \
     chmod 0555 /home/unitycatalog/lib-loom /home/unitycatalog/lib-loom-override; \
     chmod 0444 /home/unitycatalog/lib-loom/*.jar /home/unitycatalog/lib-loom-override/*.jar; \
     chown -R unitycatalog:unitycatalog /home/unitycatalog/lib-loom /home/unitycatalog/lib-loom-override; \
-    grep -q 'loom-unity-entra-auth.jar' "${CP_FILE}" || { echo "FATAL: classpath rewrite did not take (Postgres/Entra jars missing)" >&2; exit 1; }; \
-    case "$(cat "${CP_FILE}")" in \
+    grep -q 'loom-unity-entra-auth.jar' "${SERVER_CP_FILE}" || { echo "FATAL: classpath rewrite did not take on ${SERVER_CP_FILE} (Postgres/Entra jars missing from the file the server boots from)" >&2; exit 1; }; \
+    case "$(cat "${SERVER_CP_FILE}")" in \
       "${OVERRIDE}:"*) : ;; \
-      *) echo "FATAL: the v0.5.1 unitycatalog-server override is not FIRST on the classpath — the v0.5.0 #1603 permission-GET-500 bug would still ship" >&2; exit 1 ;; \
-    esac
+      *) echo "FATAL: the v0.5.1 unitycatalog-server override is not FIRST on ${SERVER_CP_FILE} — the v0.5.0 #1603 permission-GET-500 bug would still ship" >&2; exit 1 ;; \
+    esac; \
+    java -cp "$(cat "${SERVER_CP_FILE}")" ai.limitlessdata.loom.unity.EntraPostgresAuthPlugin 2>&1 | grep -q 'Main method not found' || { \
+      echo "FATAL: EntraPostgresAuthPlugin does NOT load from the server's real classpath (expected 'Main method not found' = class resolvable; got ClassNotFoundException?) — the Entra-Postgres boot would die with 'Unable to load Authentication Plugin'" >&2; \
+      exit 1; }
 
 # ── SC1 supply-chain gate — Java layer ────────────────────────────────────────
 # The upstream image bakes its whole sbt/coursier build cache (864 jars, 1.3 GB)
