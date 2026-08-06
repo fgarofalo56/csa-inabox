@@ -107,6 +107,27 @@ var purviewSupportedRegions = [
 @description('Fallback region for the Purview account when the hub `location` is not a Purview-supported region and no explicit `purviewLocation` is given. Defaults to eastus2 (nearest supported region to centralus). Must be a region in the Purview supported set.')
 param purviewFallbackLocation string = 'eastus2'
 
+@description('''Public network access on the MANAGED resources the Purview RP
+creates in its managed resource group (the managed storage account + event hub).
+DEFAULT Disabled — policy-compliant by default (D5, run 31100384405): the
+Purview RP PREFLIGHT simulates its managed storage against Azure Policy, and a
+tenant policy requiring `Microsoft.Storage/storageAccounts/publicNetworkAccess =
+Disabled` (observed live: `StorageAccount_PublicNetwork_Modify` in the
+MCAPSGovDeployPolicies management-group assignment) rejects the whole account
+PUT with `RequestDisallowedByPolicy` / error 21010 when the managed resources
+would be publicly reachable — including UPDATES to an account whose live value
+is `NotSpecified`, which is what broke the estate reconcile. Disabled also
+matches the account posture (publicNetworkAccess=Disabled + private endpoints
+above). Data-plane consequence, disclosed: with the managed storage sealed,
+scans that stage through it need the Managed VNet IR / ingestion private
+endpoints rather than the public Azure IR path — Loom's default MI-first
+UC/collection catalog path does not stage through it and is unaffected. NO DNS
+zone is added here for the managed resources (an empty privatelink zone can
+shadow public resolution — the Gov Purview incident; the managed RG's own PEs
+carry their zone wiring when ingestion PEs are configured).''')
+@allowed(['Enabled', 'Disabled', 'NotSpecified'])
+param purviewManagedResourcesPublicNetworkAccess string = 'Disabled'
+
 // Resolution order: explicit purviewLocation (BYO) > hub location if supported >
 // documented fallback. Never emits an unsupported region to the account resource.
 var effPurviewLocation = !empty(purviewLocation)
@@ -126,6 +147,8 @@ resource purview 'Microsoft.Purview/accounts@2024-04-01-preview' = if (purviewEn
   properties: {
     managedResourceGroupName: 'rg-mng-purview-csa-loom-${effPurviewLocation}'
     publicNetworkAccess: 'Disabled'
+    // D5 (run 31100384405): policy-compliant BY DEFAULT — see the param header.
+    managedResourcesPublicNetworkAccess: purviewManagedResourcesPublicNetworkAccess
     // managedEventHubState: the classic managed Event Hub namespace (the Atlas
     // Kafka notification feed) can no longer be ENABLED on newly-created accounts
     // — the service rejects `Enabled` ("The managed event hub namespace cannot be

@@ -176,7 +176,7 @@ adopt your resource and then un-wire Loom from it.
 | Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+ `_RG`, `_SUB`) | `provisionEventHubs` | |
 | Stream Analytics | `EXISTING_ASA_JOB` (+ `_RG`, `_SUB`) | `provisionStreamAnalytics` | |
 | Cosmos (Console metadata) | `EXISTING_COSMOS_ACCOUNT` (+ `_RG`, `_SUB`) | `provisionConsoleCosmos` | |
-| Purview | `EXISTING_PURVIEW` (+ `_RG`, `_SUB`) | `provisionPurview` | Tenant singleton — the wizard DISABLES "create new" when one exists rather than offering it and failing `EnterpriseTenantAlreadyExists` |
+| Purview | `EXISTING_PURVIEW` (+ `_RG`, `_SUB`) | `provisionPurview` | Tenant singleton — the wizard DISABLES "create new" when one exists rather than offering it and failing `EnterpriseTenantAlreadyExists`. A Loom-provisioned (or re-reconciled) account creates its **managed storage sealed** (`purviewManagedResourcesPublicNetworkAccess=Disabled`) so tenant policies requiring storage `publicNetworkAccess=Disabled` pass RP preflight — see [Failure recovery](failure-recovery.md#config) |
 | Azure Maps | `EXISTING_AZURE_MAPS_ACCOUNT` (+ `_RG`, `_SUB`) | `provisionMaps` | |
 | Synapse | `EXISTING_SYNAPSE` (+ `_RG`, `_SUB`) | `provisionSynapse` | |
 | Databricks | `EXISTING_DATABRICKS` (+ `_RG`, `_SUB`, `_HOSTNAME`) | `provisionDatabricks` | |

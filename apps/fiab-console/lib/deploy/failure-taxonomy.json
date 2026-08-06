@@ -182,6 +182,14 @@
       "remediation": "This tenant already has a Purview account and only one is permitted. Loom must ADOPT it rather than create a second: set the Purview entry of the deployment plan to mode 'adopt' with the existing account's coordinates and re-run. Never attempt the create twice."
     },
     {
+      "id": "config.disallowed-by-policy",
+      "class": "config",
+      "anyOf": ["requestdisallowedbypolicy"],
+      "observed": "Verified verbatim from deploy run 31100384405 (2026-08-06), drilled from the failed 'catalog' nested deployment: the Microsoft.Purview/accounts RP preflight (error 21010) simulated its MANAGED storage account against Azure Policy, and the MCAPSGovDeployPolicies management-group assignment (definition StorageAccount_PublicNetwork_Modify) required Microsoft.Storage/storageAccounts/publicNetworkAccess=Disabled — rejecting even an UPDATE of an account whose live managedResourcesPublicNetworkAccess was NotSpecified. The leaf message is a JSON blob carrying the restricted field, the required values, and the policyAssignmentId. This signal is declared BEFORE config.acr-unreachable on purpose: the blob contains the literal 'publicnetworkaccess', which that signal also matches, and within one class file order breaks the tie.",
+      "remediationKind": "operator-action",
+      "remediation": "Azure Policy denied the request — the evidence line carries the policy JSON: the restricted field, the required values, and the exact policyAssignmentId. This is deterministic; retrying cannot help. First check whether the template already carries a compliance default for the named field (Purview managed storage: catalog.bicep purviewManagedResourcesPublicNetworkAccess defaults to Disabled — a run pinned to an older template predates it). scripts/csa-loom/preflight-policy-restrictions.mjs surfaces the restriction BEFORE a deploy is submitted. If the deployment genuinely cannot comply, the assignment named in the message must be exempted at the deployment scope by whoever owns that policy — quote the assignment id from this evidence."
+    },
+    {
       "id": "config.private-dns-zone-exists",
       "class": "config",
       "anyOf": ["privatednszonealreadyexists"],
@@ -269,6 +277,7 @@
         "client with ip",
         "is not allowed access"
       ],
+      "not": ["requestdisallowedbypolicy"],
       "observed": "ACR keeps publicNetworkAccess=Disabled between builds by design (#2603). Deterministic, not transient — retrying without taking the firewall lease will fail identically. CRITICAL: this outcome must NEVER be rendered as 'the tag does not exist'. The registry did not answer, so nothing is known about the tag (deploy-integrity.md R7 — the message that sent two investigations down the wrong path).",
       "remediationKind": "platform-will-fix",
       "remediation": "The registry data plane is network-locked. Take the shared ACR firewall lease before the call (scripts/csa-loom/acr-firewall-lease.sh acquire) and release it after. Note the data plane lags the control plane by 30-90s in BOTH directions — poll `az acr login` after opening, and never trust a control-plane read to mean the data plane is already open."

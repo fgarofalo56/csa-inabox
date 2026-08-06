@@ -388,6 +388,29 @@ jobs:
             echo "::notice::brownfield-adopt: no existing VPN gateway or azure-api.net link on the hub VNet — create-new defaults apply."
           fi
 
+      # ── POLICY-RESTRICTION DISCOVERY (D5, run 31100384405 — deploy-integrity R5) ──
+      # Names the Azure Policy restrictions the deploy is subject to BEFORE
+      # anything is submitted (the D5 leaf: the Purview RP preflight denied by
+      # the MG-scoped MCAPSGovDeployPolicies assignment requiring storage
+      # publicNetworkAccess=Disabled — the template now complies by default via
+      # catalog.bicep purviewManagedResourcesPublicNetworkAccess=Disabled).
+      # ADVISORY by design: this is R5 discovery, not a gate — the ENFORCING
+      # policy control is the RP preflight inside the what-if/validate step
+      # below, which cannot be bypassed. An unreadable policy engine is
+      # reported as UNKNOWN (loud ::warning), never as "no restrictions", and
+      # an empty answer carries the measured caveat that MG-scoped assignments
+      # outside the caller's read scope are invisible to the probe (R7).
+      - name: Policy-restriction discovery (advisory — R5)
+        run: |
+          set -euo pipefail
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          SUB="${DEPLOY_SUB:-$(az account show --query id -o tsv | tr -d '\r')}"
+          node scripts/csa-loom/preflight-policy-restrictions.mjs \
+            --subscription "$SUB" \
+            --location "$AZURE_LOCATION" \
+            --resource-group "rg-csa-loom-admin-${AZURE_LOCATION}" \
+            --advisory
+
       - name: Bicep what-if (preview)
         id: whatif
         run: |
