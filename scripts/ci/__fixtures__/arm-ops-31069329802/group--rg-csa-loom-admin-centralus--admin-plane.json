@@ -1,0 +1,882 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/EECC6349B46D4C24",
+  "operationId": "EECC6349B46D4C24",
+  "properties": {
+   "duration": "PT1M10.5020444S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "DeploymentFailed",
+     "details": [
+      {
+       "additionalInfo": null,
+       "code": "ResourceDeploymentFailure",
+       "details": [
+        {
+         "additionalInfo": null,
+         "code": "BadRequest",
+         "details": null,
+         "message": "A virtual network cannot be linked to multiple zones with overlapping namespaces. You tried to link virtual network with 'privatelink.azuredatabricks.net' and 'privatelink.azuredatabricks.net' zones.",
+         "target": null
+        }
+       ],
+       "message": "The resource write operation failed to complete successfully, because it reached terminal provisioning state 'Failed'.",
+       "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azuredatabricks.net/virtualNetworkLinks/link-hub"
+      }
+     ],
+     "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+     "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network"
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "network",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:51.740427+00:00",
+   "trackingId": "f1352679-daa8-4a98-bbb6-9fbc3a26859b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/8B63BFFEA2F88015",
+  "operationId": "8B63BFFEA2F88015",
+  "properties": {
+   "duration": "PT7.2917639S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/label-propagation-function",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "label-propagation-function",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:51.740427+00:00",
+   "trackingId": "67c3eeed-d679-4868-a337-67c237699482"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/5923CEE079898CB4",
+  "operationId": "5923CEE079898CB4",
+  "properties": {
+   "duration": "PT5.238528S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/adx-cluster",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "adx-cluster",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:51.740427+00:00",
+   "trackingId": "47431d43-013b-4644-beff-a9de19efd738"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/37455D98FAE6E50A",
+  "operationId": "37455D98FAE6E50A",
+  "properties": {
+   "duration": "PT35.0587827S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/aas-server",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "aas-server",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "0a3742e8-3598-4743-9fbb-a21d91924685"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/8D17A829784BA60E",
+  "operationId": "8D17A829784BA60E",
+  "properties": {
+   "duration": "PT30.5093858S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/audit-stream",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "audit-stream",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:51.740427+00:00",
+   "trackingId": "cfd32f03-d04a-497c-8e25-dee22fe10d3b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/D2C6DFFAB25911CF",
+  "operationId": "D2C6DFFAB25911CF",
+  "properties": {
+   "duration": "PT6.8335026S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/monitoring-default-alerts",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "monitoring-default-alerts",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:51.740427+00:00",
+   "trackingId": "17ad2bac-98b5-4c1a-b7ee-77e159588974"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/53945874DA372D8C",
+  "operationId": "53945874DA372D8C",
+  "properties": {
+   "duration": "PT20.2711186S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/console-azure-connections-law-rbac",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "console-azure-connections-law-rbac",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:51.740427+00:00",
+   "trackingId": "6dfe5377-cc9d-416e-a24a-3438e8292527"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/DFF87732C2EE8A8A",
+  "operationId": "DFF87732C2EE8A8A",
+  "properties": {
+   "duration": "PT7.1559519S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/content-safety",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "content-safety",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "a0181fb6-9d13-4423-b8b2-9368faacb4bd"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/FB5C06F2A3F287F8",
+  "operationId": "FB5C06F2A3F287F8",
+  "properties": {
+   "duration": "PT6.4945257S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/console-workspace-rbac",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "console-workspace-rbac",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "ff00cbcf-4a8a-4ce6-a0a3-3073732a7179"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/AB8DAB2FF8FB9E26",
+  "operationId": "AB8DAB2FF8FB9E26",
+  "properties": {
+   "duration": "PT27.5955427S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/monitoring",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "monitoring",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "f9d1fd44-40a7-48aa-a509-7056cedbc4a8"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/3C0BC387C744C73C",
+  "operationId": "3C0BC387C744C73C",
+  "properties": {
+   "duration": "PT5.839848S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/console-scaling-rbac",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "console-scaling-rbac",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "90b3586f-8f3b-42ad-b874-a9813166be70"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/4EDE38A82BD5316C",
+  "operationId": "4EDE38A82BD5316C",
+  "properties": {
+   "duration": "PT8.7804079S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/report-subscription-logicapp",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "report-subscription-logicapp",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "97dbf32e-8360-4cce-a7b7-586b41fdb004"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/974274F8447C1AD5",
+  "operationId": "974274F8447C1AD5",
+  "properties": {
+   "duration": "PT6.8599499S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/console-mcp-catalog-rbac",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "console-mcp-catalog-rbac",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "a800e35b-33d0-4866-8287-b8e6f3244b4b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/C0E96B4D13D7011D",
+  "operationId": "C0E96B4D13D7011D",
+  "properties": {
+   "duration": "PT6.361026S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/console-grafana-viewer",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "console-grafana-viewer",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "e9112e3f-5580-4fa0-b0cd-2d328a08c182"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/D83CCACBAC385614",
+  "operationId": "D83CCACBAC385614",
+  "properties": {
+   "duration": "PT3.5950623S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "DeploymentFailed",
+     "details": [
+      {
+       "additionalInfo": null,
+       "code": "RoleAssignmentExists",
+       "details": null,
+       "message": "The role assignment already exists. The ID of the existing role assignment is 2f9290b01a8244fea959b441c49c84cb.",
+       "target": null
+      }
+     ],
+     "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+     "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/swa-publish-rbac"
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/swa-publish-rbac",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "swa-publish-rbac",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "14e4aa49-85c3-48d7-9d98-677904799f81"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/A651D7181C293D1F",
+  "operationId": "A651D7181C293D1F",
+  "properties": {
+   "duration": "PT2.2982152S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/console-azure-connections-rbac",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "console-azure-connections-rbac",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:24.041532+00:00",
+   "trackingId": "d631fdae-a8ac-4432-ae08-691222fbb0e6"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/086D753AA4C850EE",
+  "operationId": "086D753AA4C850EE",
+  "properties": {
+   "duration": "PT2.5182131S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Created",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-wrangler-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "uami-loom-wrangler-centralus",
+    "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "92a75459-5ad4-4a54-b34c-51d9bc3a762a"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/E7DE3A24383250C3",
+  "operationId": "E7DE3A24383250C3",
+  "properties": {
+   "duration": "PT2.3619617S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Created",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-unity-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "uami-loom-unity-centralus",
+    "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "a183c8f8-0989-402a-b64e-ab1d0e7d95ae"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/A3CF1A1755465442",
+  "operationId": "A3CF1A1755465442",
+  "properties": {
+   "duration": "PT2.1744698S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Created",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-risingwave-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "uami-loom-risingwave-centralus",
+    "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "cace4ce6-7cb8-466f-8699-64cd9d134d29"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/0A283ADFC105CD2C",
+  "operationId": "0A283ADFC105CD2C",
+  "properties": {
+   "duration": "PT2.1432083S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Created",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-migrate-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "uami-loom-migrate-centralus",
+    "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "47acda27-6fef-4a88-b344-5146597954a2"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/C22F15060FDB9738",
+  "operationId": "C22F15060FDB9738",
+  "properties": {
+   "duration": "PT2.0807095S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Created",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-loom-script-runner-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "uami-loom-script-runner-centralus",
+    "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "162a7755-2154-4907-ba29-3bfdb4b25d95"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/8093883832071BD3",
+  "operationId": "8093883832071BD3",
+  "properties": {
+   "duration": "PT3.8221838S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/identity",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "identity",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "076b8cd4-8459-4508-907d-92e3f8e3905a"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/2C039FC971335725",
+  "operationId": "2C039FC971335725",
+  "properties": {
+   "duration": "PT2.7815055S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/spark-session-pool",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "spark-session-pool",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "b51271a0-b24a-450a-8e0e-727ac2d28822"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/30345887F5ED16BE",
+  "operationId": "30345887F5ED16BE",
+  "properties": {
+   "duration": "PT0.6982345S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Storage/storageAccounts/samcpk6mvh5sm6z7do/fileServices/default/shares/mcp-data",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "samcpk6mvh5sm6z7do/default/mcp-data",
+    "resourceType": "Microsoft.Storage/storageAccounts/fileServices/shares",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:21.056075+00:00",
+   "trackingId": "95b01a55-5254-43d2-a0ea-b047622b00fc"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/671E3C6EDFB152FA",
+  "operationId": "671E3C6EDFB152FA",
+  "properties": {
+   "duration": "PT3.3429759S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/notebook-compute-pool",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "notebook-compute-pool",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "4e9f2bd9-1634-48d0-bd5e-eb2e170645e1"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/07506530D5AFCCF9",
+  "operationId": "07506530D5AFCCF9",
+  "properties": {
+   "duration": "PT1.6119594S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Dashboard/grafana/grafana-csa-loom-centra",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "grafana-csa-loom-centra",
+    "resourceType": "Microsoft.Dashboard/grafana",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "3530a28a-ac9c-40b9-a1fe-df361cf21c16"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/3E87F5D5D4C3994E",
+  "operationId": "3E87F5D5D4C3994E",
+  "properties": {
+   "duration": "PT0.1513551S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Storage/storageAccounts/samcpk6mvh5sm6z7do/fileServices/default",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "samcpk6mvh5sm6z7do/default",
+    "resourceType": "Microsoft.Storage/storageAccounts/fileServices",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:21.056075+00:00",
+   "trackingId": "db929bb6-e594-4354-b479-658aab35f31d"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/6837F689116ADAAE",
+  "operationId": "6837F689116ADAAE",
+  "properties": {
+   "duration": "PT0.0888536S",
+   "provisioningOperation": "Action",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "actionName": "listKeys",
+    "apiVersion": "2024-01-01",
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Storage/storageAccounts/samcpk6mvh5sm6z7do",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "samcpk6mvh5sm6z7do",
+    "resourceType": "Microsoft.Storage/storageAccounts",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:21.056075+00:00",
+   "trackingId": "44835157-8c4a-4dc8-955d-d80f35fabd92"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/844F589E9B6AA026",
+  "operationId": "844F589E9B6AA026",
+  "properties": {
+   "duration": "PT0.8776573S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Storage/storageAccounts/samcpk6mvh5sm6z7do",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "samcpk6mvh5sm6z7do",
+    "resourceType": "Microsoft.Storage/storageAccounts",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "8e9aed91-71ea-4fed-8d7d-660b5c3993b8"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/C57D9DAB0F7E6968",
+  "operationId": "C57D9DAB0F7E6968",
+  "properties": {
+   "duration": "PT0.830704S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Storage/storageAccounts/safoundryhubk6mvh5sm6z7d",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "safoundryhubk6mvh5sm6z7d",
+    "resourceType": "Microsoft.Storage/storageAccounts",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "d5d2d645-170a-4ad5-b864-046e3dbf36ae"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane/operations/06FB18E20A783A0E",
+  "operationId": "06FB18E20A783A0E",
+  "properties": {
+   "duration": "PT0.830704S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Storage/storageAccounts/sasrchdbgk6mvh5sm6z7do",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "sasrchdbgk6mvh5sm6z7do",
+    "resourceType": "Microsoft.Storage/storageAccounts",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:20.126727+00:00",
+   "trackingId": "7310bcb4-6aae-4df7-a4c3-24254b17e2d3"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ }
+]

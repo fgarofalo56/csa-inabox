@@ -466,6 +466,53 @@ jobs:
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
             --skip-if-registry-absent $REFS
 
+      # BROWNFIELD: ADOPT OR FAIL CLEARLY, never collide (refs #3039,
+      # deploy-integrity.md R5/R6).
+      #
+      # Azure permits a VNet at most ONE Private DNS zone link per namespace. On
+      # run 31069329802 the hub VNet was already linked to a `privatelink.
+      # azuredatabricks.net` zone left in the DLZ resource group by a superseded
+      # design, so admin-plane/network.bicep's own link could never be created
+      # and the whole subscription deploy died on a raw ARM BadRequest 20+
+      # minutes in. A raw ARM error reaching the operator is an R6 violation.
+      #
+      # This names the owning zone BEFORE the deploy starts, and points at the
+      # ordered, idempotent migration that adopts the namespace without taking
+      # DNS resolution down. It has three outcomes and only one of them is a
+      # pass: an estate it could not READ exits 3 and fails the job, because a
+      # failed read establishes nothing about whether a conflict exists.
+      #
+      # Greenfield is unaffected: a hub VNet that does not exist yet has no
+      # links, so `az network vnet show` returns nothing and the step reports
+      # that there is nothing to check rather than inventing a conflict.
+      - name: Private DNS link preflight (adopt or fail clearly — deploy-integrity R5)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          # R7: the read's failure is CAPTURED, not discarded. An empty id from a
+          # denied read and an empty id from a genuinely absent VNet are
+          # different facts and are reported as different facts.
+          set +e
+          HUB_OUT=$(az network vnet show -g "$RG" -n "vnet-csa-loom-hub-${AZURE_LOCATION}" \
+                      ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} --query id -o tsv 2>&1)
+          HUB_RC=$?
+          set -e
+          if [ $HUB_RC -ne 0 ]; then
+            if node scripts/ci/deploy-classify.mjs --text "$HUB_OUT" --assert-signal config.resource-not-found >/dev/null; then
+              echo "::notice::dns-preflight: ARM answered ResourceNotFound for the hub VNet — this is a from-scratch deploy, so there are no links to conflict with. Nothing to check."
+              exit 0
+            fi
+            echo "::error::dns-preflight: the hub VNet could not be READ, so it is NOT known whether a conflicting private DNS link exists. $(node scripts/ci/deploy-classify.mjs --text "$HUB_OUT" --query)"
+            exit 1
+          fi
+          HUB_ID=$(echo "$HUB_OUT" | tr -d '\r')
+          node scripts/csa-loom/preflight-private-dns-links.mjs \
+            --hub-vnet-id "$HUB_ID" \
+            --zone-rg "$RG" \
+            ${DEPLOY_SUB:+--zone-subscription "$DEPLOY_SUB"}
+
       - name: Provision (idempotent)
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
@@ -494,12 +541,27 @@ jobs:
           # those classes, fails closed on exhaustion, and --remediate lets the
           # platform register a missing resource provider itself and try once
           # more (auto-bind-by-default.md 5) rather than printing an instruction.
+          #
+          # --arm-deployment: DRILL INTO the failed deployment operations on
+          # failure (refs #3039). On run 31069329802 this step failed and the
+          # classifier reported, correctly, that it could not classify the
+          # failure — because `az deployment sub create` writes the bicep
+          # linter's ~200 warnings to stderr and the ARM error itself is
+          # content-free ("At least one resource deployment operation failed").
+          # The two real causes (an overlapping-namespace private DNS link and a
+          # RoleAssignmentExists) were two levels below that, reachable only by
+          # listing the operations, which had to be done by hand. The drill-down
+          # is FAIL-CLOSED: only a leaf it actually read is fed to the
+          # classifier, so an unreadable drill-down leaves the run exactly as
+          # red and exactly as honest as it was.
           node scripts/ci/deploy-retry.mjs \
             --class-allow transient,eventual-consistency \
             --max-attempts 4 --backoff 45 --jitter 0.3 --wall-clock 120m \
             --step "az deployment sub create ($CSA_LOOM_TOPOLOGY)" \
             --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
             --remediate \
+            --arm-deployment "$DEPLOY_NAME" --arm-scope sub \
+            ${DEPLOY_SUB:+--arm-subscription "$DEPLOY_SUB"} \
             -- az deployment sub create \
             --name "$DEPLOY_NAME" \
             --location "$AZURE_LOCATION" \

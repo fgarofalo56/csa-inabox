@@ -125,6 +125,15 @@ jobs:
       # which is how 47 days of daily deploy failure stayed invisible.
       - name: deploy-failure-handling (classified retries + true error messages — deploy-integrity R6/R7)
         run: node scripts/ci/check-deploy-failure-handling.mjs
+      # ARM enforces role-assignment uniqueness on the (scope, principalId,
+      # roleDefinitionId) TRIPLE, not on the assignment NAME — so two names for
+      # one triple is `RoleAssignmentExists` on every future reconcile of an
+      # estate that already carries the first. That is what killed
+      # deploy-fiab-commercial run 31069329802's swa-publish-rbac child
+      # deployment: the template asked for one GUID, the estate held another,
+      # and the grant was already in place. #3039.
+      - name: role-assignment-determinism (a re-run is a real no-op — #3039)
+        run: node scripts/ci/check-role-assignment-determinism.mjs
       - name: image-producer-coverage (every apps/*/Dockerfile is built by a workflow — #2619)
         run: node scripts/ci/check-image-producer-coverage.mjs
       # image-producer-coverage says the image gets BUILT. This says the build can

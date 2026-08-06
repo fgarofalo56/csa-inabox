@@ -1,0 +1,117 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Resources/deployments/csa-loom-ci-31069329802/operations/825114D28B9B9D45",
+  "operationId": "825114D28B9B9D45",
+  "properties": {
+   "duration": "PT1M49.6138124S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "DeploymentFailed",
+     "details": [
+      {
+       "additionalInfo": null,
+       "code": "ResourceDeploymentFailure",
+       "details": [
+        {
+         "additionalInfo": null,
+         "code": "DeploymentFailed",
+         "details": [
+          {
+           "additionalInfo": null,
+           "code": "ResourceDeploymentFailure",
+           "details": [
+            {
+             "additionalInfo": null,
+             "code": "BadRequest",
+             "details": null,
+             "message": "A virtual network cannot be linked to multiple zones with overlapping namespaces. You tried to link virtual network with 'privatelink.azuredatabricks.net' and 'privatelink.azuredatabricks.net' zones.",
+             "target": null
+            }
+           ],
+           "message": "The resource write operation failed to complete successfully, because it reached terminal provisioning state 'Failed'.",
+           "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azuredatabricks.net/virtualNetworkLinks/link-hub"
+          }
+         ],
+         "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+         "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network"
+        }
+       ],
+       "message": "The resource write operation failed to complete successfully, because it reached terminal provisioning state 'Failed'.",
+       "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network"
+      },
+      {
+       "additionalInfo": null,
+       "code": "ResourceDeploymentFailure",
+       "details": [
+        {
+         "additionalInfo": null,
+         "code": "DeploymentFailed",
+         "details": [
+          {
+           "additionalInfo": null,
+           "code": "RoleAssignmentExists",
+           "details": null,
+           "message": "The role assignment already exists. The ID of the existing role assignment is 2f9290b01a8244fea959b441c49c84cb.",
+           "target": null
+          }
+         ],
+         "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+         "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/swa-publish-rbac"
+        }
+       ],
+       "message": "The resource write operation failed to complete successfully, because it reached terminal provisioning state 'Failed'.",
+       "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/swa-publish-rbac"
+      }
+     ],
+     "message": "At least one resource deployment operation failed. Please list deployment operations for details. Please see https://aka.ms/arm-deployment-operations for usage details.",
+     "target": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane"
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/admin-plane",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "admin-plane",
+    "resourceType": "Microsoft.Resources/deployments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:14.340220+00:00",
+   "trackingId": "0ec036eb-0ea5-4c7d-8cf4-d47031be7259"
+  }
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Resources/deployments/csa-loom-ci-31069329802/operations/EC6948F47599E023",
+  "operationId": "EC6948F47599E023",
+  "properties": {
+   "duration": "PT1.9301438S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus",
+    "identifiers": null,
+    "resourceName": "rg-csa-loom-admin-centralus",
+    "resourceType": "Microsoft.Resources/resourceGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:14.340220+00:00",
+   "trackingId": "ebb73a2e-b521-488d-ba52-3520c12b0ae5"
+  }
+ }
+]

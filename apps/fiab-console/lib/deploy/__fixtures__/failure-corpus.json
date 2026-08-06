@@ -156,6 +156,24 @@
       "source": "az emits both 'QuotaExceeded' and 'quotaExceeded' depending on surface",
       "input": "error: quotaexceeded on the subscription",
       "expect": { "class": "quota", "signalId": "quota.exceeded", "retryable": false }
+    },
+    {
+      "name": "config — the stale privatelink zone that blocks every brownfield reconcile (#3039)",
+      "source": "deploy-fiab-commercial run 31069329802, 2026-08-06; drilled out of `az deployment operation group list -g rg-csa-loom-admin-centralus --name network`",
+      "input": "BadRequest: A virtual network cannot be linked to multiple zones with overlapping namespaces. You tried to link virtual network with 'privatelink.azuredatabricks.net' and 'privatelink.azuredatabricks.net' zones.",
+      "expect": { "class": "config", "signalId": "config.private-dns-namespace-overlap", "retryable": false }
+    },
+    {
+      "name": "config — RoleAssignmentExists on an idempotent reconcile (#3039)",
+      "source": "deploy-fiab-commercial run 31069329802, 2026-08-06; drilled out of `az deployment operation group list -g rg-csa-loom-admin-centralus --name swa-publish-rbac`",
+      "input": "RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is 2f9290b01a8244fea959b441c49c84cb.",
+      "expect": { "class": "config", "signalId": "config.role-assignment-exists", "retryable": false }
+    },
+    {
+      "name": "unknown — the stderr the classifier was ACTUALLY handed on that run is still unclassifiable (#3039)",
+      "source": "deploy-fiab-commercial run 31069329802, 2026-08-06; the bicep linter warnings plus the content-free ARM summary az wrote to stderr. This case is the REASON the drill-down exists: no signal can match a cause that is not in the input.",
+      "input": "WARNING: platform/fiab/bicep/main.bicep(14,7) : Warning no-unused-params: Parameter \"environment\" is declared but never used.\nERROR: At least one resource deployment operation failed. Please list deployment operations for details.",
+      "expect": { "class": "unknown", "signalId": null, "retryable": false }
     }
   ]
 }

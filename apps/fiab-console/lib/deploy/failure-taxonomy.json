@@ -190,6 +190,23 @@
       "remediation": "A Private DNS zone of this name already exists. Loom must adopt it — flip that zone to mode 'adopt' in the plan's network decision and add the hub VNet link — rather than re-create it. There is no `existingPrivateDnsZones` parameter; any doc that says otherwise is wrong."
     },
     {
+      "id": "config.private-dns-namespace-overlap",
+      "class": "config",
+      "anyOf": ["cannot be linked to multiple zones with overlapping namespaces"],
+      "observed": "Verified verbatim from deploy-fiab-commercial run 31069329802 (2026-08-06), drilled out of the failed deployment operations of admin-plane/network: 'A virtual network cannot be linked to multiple zones with overlapping namespaces. You tried to link virtual network with privatelink.azuredatabricks.net and privatelink.azuredatabricks.net zones.' Azure permits a VNet at most ONE Private DNS zone link per namespace, so a hub VNet already linked to a DIFFERENT zone of that name can never take the admin plane's link.",
+      "remediationKind": "platform-will-fix",
+      "remediation": "This VNet is already linked to a DIFFERENT Private DNS zone of the same namespace, so the link this deploy wants can never be created. DO NOT delete the existing link first — the A records live in that zone and removing it takes the service dark. Run `node scripts/csa-loom/migrate-private-dns-zone-owner.mjs --namespace <zone> --keep-zone-rg <intended rg> --keep-zone-subscription <sub> --stale-zone-rg <owning rg> --stale-zone-subscription <sub>` (dry-run by default, --apply to execute): it dual-registers the record on both zones, moves the VNet links, VERIFIES the record and links landed, and only then removes the stale zone. `node scripts/csa-loom/preflight-private-dns-links.mjs` detects the condition before the deploy runs, and deploy-fiab-commercial.yml runs it as a preflight step."
+    },
+    {
+      "id": "config.role-assignment-exists",
+      "class": "config",
+      "anyOf": ["roleassignmentexists", "the role assignment already exists"],
+      "observed": "Verified verbatim from deploy-fiab-commercial run 31069329802 (2026-08-06), drilled out of the failed deployment operations of admin-plane/swa-publish-rbac: 'RoleAssignmentExists: The role assignment already exists. The ID of the existing role assignment is 2f9290b01a8244fea959b441c49c84cb.'",
+      "remediationKind": "operator-action",
+      "remediation": "The grant is ALREADY IN PLACE — this is not a missing permission. ARM enforces uniqueness on the (scope, principalId, roleDefinitionId) TRIPLE, not on the assignment NAME, so an assignment created under a different name blocks the template's create forever. It happens when the name seed changed (the swa-publish-rbac role definition id was corrected from …706ee to …84772 on 2026-08-03, which changed guid(scope, principalId, roleId)) or when the grant was created out-of-band by `az role assignment create`, which mints a random GUID. To converge, delete the stray and let the template recreate it under its deterministic name: `az role assignment delete --ids <the id printed in this message>` then re-run. `skipRoleGrants=true` suppresses the symptom and leaves the estate un-reconciled — it is a workaround, not a fix.",
+      "grantHint": "az role assignment delete --ids /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Authorization/roleAssignments/<existing-guid-from-the-message>"
+    },
+    {
       "id": "config.vnet-range-in-use",
       "class": "config",
       "anyOf": ["vnetaddressrangeinuse", "address space", "overlaps with"],

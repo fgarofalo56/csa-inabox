@@ -29,6 +29,7 @@ import {
   planRemediation,
   parseArgs,
   redact,
+  armDrilldown,
   USAGE_EXIT,
 } from '../deploy-retry.mjs';
 import { classify, TAXONOMY } from '../deploy-classify.mjs';
@@ -325,4 +326,69 @@ test('redact strips subscription ids and bare GUIDs from anything committed or a
   );
   assert.doesNotMatch(out, /11111111-2222/);
   assert.match(out, /rg-csa-loom-admin-centralus/, 'the useful last segment survives');
+});
+
+// ── ARM DRILL-DOWN WIRING (issue #3039) ──────────────────────────────────────
+//
+// deploy-arm-errors.test.mjs proves the walk itself. These prove the WIRING:
+// that a found leaf reaches the classifier, and — the part that matters — that
+// a drill-down which reads nothing cannot upgrade an unclassified failure into
+// anything at all.
+
+const ARM_FIXTURES = path.resolve(import.meta.dirname, '..', '__fixtures__', 'arm-ops-31069329802');
+
+function armFixtureRunner(args) {
+  const isGroup = args[2] === 'group';
+  const name = args[args.indexOf('--name') + 1];
+  const rg = isGroup ? args[args.indexOf('-g') + 1] : null;
+  const p = path.join(ARM_FIXTURES, isGroup ? `group--${rg}--${name}.json` : `sub--${name}.json`);
+  if (!fs.existsSync(p)) return { status: 1, stdout: '', stderr: `ERROR: (DeploymentNotFound) Deployment '${name}' could not be found.` };
+  return { status: 0, stdout: fs.readFileSync(p, 'utf8'), stderr: '' };
+}
+
+test('armDrilldown is inert unless --arm-deployment is given', () => {
+  assert.equal(armDrilldown(parseArgs(['--', 'az', 'x'])), null);
+});
+
+test('a FOUND drill-down is the text that reaches the classifier', () => {
+  const args = parseArgs(['--arm-deployment', 'csa-loom-ci-31069329802', '--arm-scope', 'sub', '--', 'az']);
+  const d = armDrilldown(args, armFixtureRunner);
+  assert.equal(d.result.status, 'found');
+  assert.ok(d.classifyText.length > 0);
+  assert.equal(classify(`${MYSTERY}\n${d.classifyText}`).class, 'config');
+});
+
+test('MUTATION PROOF — a drill-down that reads NOTHING contributes nothing, and unknown stays unknown', () => {
+  const args = parseArgs(['--arm-deployment', 'no-such-deployment', '--arm-scope', 'sub', '--', 'az']);
+  const d = armDrilldown(args, armFixtureRunner); // fixture miss -> az DeploymentNotFound
+  assert.equal(d.result.status, 'unreadable');
+  assert.equal(d.classifyText, '', 'an unreadable drill-down must not reach the classifier');
+  // The R7 trap this guards: az's OWN failure text matches a taxonomy signal.
+  assert.equal(
+    classify(d.rendered).signalId,
+    'config.resource-group-not-found',
+    "az's not-found text does match a signal — which is exactly why it must never be fed in",
+  );
+  // …and because classifyText is empty, the real verdict is untouched.
+  assert.equal(classify(`${MYSTERY}${d.classifyText}`).class, 'unknown');
+});
+
+test('MUTATION PROOF — an EMPTY operation list also contributes nothing', () => {
+  const args = parseArgs(['--arm-deployment', 'd', '--arm-scope', 'sub', '--', 'az']);
+  const d = armDrilldown(args, () => ({ status: 0, stdout: '[]', stderr: '' }));
+  assert.equal(d.result.status, 'none');
+  assert.equal(d.classifyText, '');
+  assert.equal(classify(`${MYSTERY}${d.classifyText}`).class, 'unknown');
+});
+
+test('the drill-down flags parse, and an unknown arm flag is still rejected', () => {
+  const a = parseArgs([
+    '--arm-deployment', 'd', '--arm-scope', 'group', '--arm-resource-group', 'rg',
+    '--arm-subscription', 's', '--', 'az',
+  ]);
+  assert.equal(a.armDeployment, 'd');
+  assert.equal(a.armScope, 'group');
+  assert.equal(a.armResourceGroup, 'rg');
+  assert.equal(a.armSubscription, 's');
+  assert.throws(() => parseArgs(['--arm-nope', 'x']), /unknown argument/);
 });
