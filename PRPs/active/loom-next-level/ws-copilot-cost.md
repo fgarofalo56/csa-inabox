@@ -160,10 +160,14 @@ TTL 180d on results (keep run summaries indefinitely). Container created via cos
   fires a run on EVERY roll plus nightly). E2 already gates the deterministic
   forbidden-phrase guards BEFORE the judge (auto-fail = no judge spend) —
   extend that thinking to a **per-day judge-call budget**:
-  `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` (default e.g. 500 judged Q/day; rides
-  the existing env-adding PR). When the cap is hit, further runs that day
-  score retrieval-only (deterministic, free) and mark judge scores `deferred`
-  — the E3 gate treats deferred as no-change, never as a regression. The
+  `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` (seeded at 500 judged Q/day; **re-sized
+  to 5000 on 2026-08-06** — the merge-train measured 27–31 full 153-Q passes/
+  day, so 500 was exhausted by ~05:50 UTC and every gated run judged ZERO rows,
+  which the #2994 honest predicate rightly fails; 5000 covers the heaviest
+  measured day and stays a hard bound). When the cap is hit, further runs that
+  day score retrieval-only (deterministic, free) and mark judge scores
+  `deferred` — the E3 gate treats deferred as no-change, never as a regression
+  (but a run whose judge scored NOTHING has no passRate and fails, #2992/#2994). The
   per-item cost note: `Cost: +token spend (judge — capped/day, per-roll +
   nightly)`; counted in COST0's program budget.
 

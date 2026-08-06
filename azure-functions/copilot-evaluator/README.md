@@ -36,7 +36,7 @@ A scheduled + on-demand job that executes the **E1 golden Q/A eval sets** (`cont
    names are bicep-bound per cloud from the Learn-grounded availability matrix
    (`bestReasoningModelFor`), which this package imports from the console as a
    shared pure module. The judge spend is capped by
-   `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` (default **500 judged Q/day**, enforced
+   `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` (default **5000 judged Q/day**, enforced
    cross-replica by a Cosmos daily ledger); over cap → runs score
    retrieval-only and judge scores are marked **`deferred`** (E3 treats
    deferred as no-change, never a regression).
@@ -75,7 +75,7 @@ trigger returned — which the CI gate lifts out of the execution logs.
 | `LOOM_AOAI_ENDPOINT` | AOAI endpoint for the judge (Gov `.azure.us` scope handled automatically). Empty → judge `deferred`. |
 | `LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT` | Optional dedicated judge deployment (isolates judge TPM). |
 | `LOOM_AOAI_STRONG/MINI/_DEPLOYMENT` | Judge fallback chain (bicep-wired per cloud). |
-| `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` | Default 500 judged Q/day. |
+| `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` | Default 5000 judged Q/day (raised from 500 on 2026-08-06 — the CI merge volume runs up to ~31 full passes/day; 500 zero-judged every gated run after ~05:50 UTC). The in-code fallback when the env var is unset stays 500 (conservative fail-safe; bicep always wires the value). |
 | `LOOM_COPILOT_EVAL_ENABLED` | Default **true** (opt-out per `loom_default_on_opt_out`). |
 | `COPILOT_EVALUATOR_CRON` | Nightly schedule (standard 5-field cron, UTC). |
 | `COPILOT_EVAL_MODE` / `COPILOT_EVAL_TRIGGER` / `COPILOT_EVAL_SURFACES` / `COPILOT_EVAL_DOMAINS` | Per-execution run knobs (see Triggers). |
@@ -123,9 +123,12 @@ each judged question costs one strong-tier chat completion of roughly
 ≤ 400 completion tokens (`max_completion_tokens: 400`) → **~0.3–0.45 M tokens
 per full judged run**, well inside a single minute-level TPM window when spread
 over the run's sequential HTTP round-trips. E4 additionally fires a run per
-corpus-changing roll. The **daily cap (default 500 judged Q)** bounds worst-case
-spend to ~1.2 M judge tokens/day regardless of roll frequency; deterministic
-guards short-circuit forbidden-phrase answers at zero judge cost.
+corpus-changing roll. The **daily cap (default 5000 judged Q)** bounds
+worst-case spend to ~12 M judge tokens/day regardless of roll frequency — a
+hard ceiling reached only if every one of ~31 measured worst-day passes runs
+fully judged; deterministic guards short-circuit forbidden-phrase answers at
+zero judge cost, and the E4 workflow stops the job execution of any cancelled
+(superseded) run so orphans no longer burn the cap.
 
 **Isolation from production Copilot.** Two mechanisms, use either or both:
 (1) the **default off-peak schedule** (07:00 UTC — outside US business hours in

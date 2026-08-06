@@ -116,8 +116,19 @@ param miniDeployment string = ''
 @description('Default chat deployment name (judge fallback chain).')
 param defaultDeployment string = ''
 
-@description('Daily LLM-judge call cap (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred.')
-param judgeDailyCap int = 500
+@description('Daily LLM-judge call cap (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred. Default sized from measured estate volume — see the comment below.')
+// E1 (FINISHLINE, 2026-08-06): 500 was sized for "two nightly passes + one
+// corpus run". Measured reality on this estate: 27–31 executions/day at the
+// program's merge velocity (every merge/PR touching docs|PRPs|content/evals
+// starts a full 153-question pass), so 500 was exhausted by ~05:50 UTC and the
+// gated runs (nightly schedule + dispatches) judged ZERO rows — which #2994's
+// honest predicate correctly fails (passRate is uncomputable without the
+// grounding conjunct). 5000 covers the heaviest measured day end-to-end
+// (31 × 153 ≈ 4743) with headroom; it remains a hard bound, never uncapped
+// spend. Worst-case full consumption ≈ 5000 judge calls/day on the `strong`
+// deployment (~4–5K tokens/call) — an operator-reviewable cost dial via
+// functionAppsConfig.copilotEvalJudgeDailyCap.
+param judgeDailyCap int = 5000
 
 @description('Max seconds one evaluation execution may take before it is terminated. 45 min — a full multi-surface judged pass is long.')
 param replicaTimeout int = 2700

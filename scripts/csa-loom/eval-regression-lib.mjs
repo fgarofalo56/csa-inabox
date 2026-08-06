@@ -278,7 +278,7 @@ export function predicatesComparable(cur, prev, opts = {}) {
 const JUDGE_REMEDIATION =
   'Resolve a judge deployment (LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT → LOOM_AOAI_STRONG_DEPLOYMENT → ' +
   'LOOM_AOAI_MINI_DEPLOYMENT → LOOM_AOAI_DEPLOYMENT) and confirm the daily cap ' +
-  '(LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 500 judged Q/day) is not already spent for this UTC day.';
+  '(LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 5000 judged Q/day) is not already spent for this UTC day.';
 
 /**
  * Split Cosmos `eval-run` docs into {latest, previous} normalized maps —

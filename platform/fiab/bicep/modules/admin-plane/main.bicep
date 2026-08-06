@@ -428,7 +428,10 @@ var secretExpiryWarnDays = functionAppsConfig.?secretExpiryWarnDays ?? 60
 var copilotEvaluatorEnabled = functionAppsConfig.?copilotEvaluatorEnabled ?? true
 var copilotEvaluatorCron = functionAppsConfig.?copilotEvaluatorCron ?? '0 7 * * *'
 var copilotEvalJudgeDeployment = functionAppsConfig.?copilotEvalJudgeDeployment ?? ''
-var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 500
+// E1 2026-08-06: 500 exhausted by ~05:50 UTC at measured merge velocity (27–31
+// full 153-Q passes/day), zero-judging every gated run — see the sizing note in
+// copilot-evaluator-job.bicep. Must match that module's default.
+var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 5000
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2

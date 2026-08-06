@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "10314781227897886999"
+      "templateHash": "6129959754131991286"
     }
   },
   "definitions": {
@@ -2518,7 +2518,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "8933456738526561586"
+              "templateHash": "3318777442563947876"
             }
           },
           "definitions": {
@@ -4860,7 +4860,7 @@
             "copilotEvaluatorEnabled": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvaluatorEnabled'), true())]",
             "copilotEvaluatorCron": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvaluatorCron'), '0 7 * * *')]",
             "copilotEvalJudgeDeployment": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDeployment'), '')]",
-            "copilotEvalJudgeDailyCap": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDailyCap'), 500)]",
+            "copilotEvalJudgeDailyCap": "[coalesce(tryGet(parameters('functionAppsConfig'), 'copilotEvalJudgeDailyCap'), 5000)]",
             "adxSkuName": "[coalesce(tryGet(parameters('adxConfig'), 'adxSkuName'), 'Dev(No SLA)_Standard_E2a_v4')]",
             "adxEnableOptimizedAutoscale": "[coalesce(tryGet(parameters('adxConfig'), 'adxEnableOptimizedAutoscale'), false())]",
             "adxAutoscaleMinimum": "[coalesce(tryGet(parameters('adxConfig'), 'adxAutoscaleMinimum'), 2)]",
@@ -25241,7 +25241,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "7362979509441360478"
+                      "templateHash": "9472601020900738784"
                     }
                   },
                   "parameters": {
@@ -25361,9 +25361,9 @@
                     },
                     "judgeDailyCap": {
                       "type": "int",
-                      "defaultValue": 500,
+                      "defaultValue": 5000,
                       "metadata": {
-                        "description": "Daily LLM-judge call cap (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred."
+                        "description": "Daily LLM-judge call cap (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred. Default sized from measured estate volume — see the comment below."
                       }
                     },
                     "replicaTimeout": {

@@ -98,13 +98,13 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     // through ARM instead of calling an HTTP trigger with a host key. The job
     // is default-ON in bicep (functionAppsConfig.copilotEvaluatorEnabled) and
     // opt-out at runtime via LOOM_COPILOT_EVAL_ENABLED=false; its judge spend
-    // is capped per day (LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 500) and
+    // is capped per day (LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 5000) and
     // its judge deployment resolves LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT →
     // strong → mini → default — never a hardcoded model name.
     id: 'svc-copilot-evaluator', category: 'ai-copilot',
     title: 'Copilot quality evaluator (eval harness job)', severity: 'optional',
     required: ['LOOM_COPILOT_EVALUATOR_JOB_ID'], warnOnMiss: true,
-    remediation: 'Deploy the copilot-evaluator Container App Job (modules/admin-plane/copilot-evaluator-job.bicep — default-ON via the functionAppsConfig bag) and build its image with scripts/csa-loom/deploy-copilot-evaluator-job.sh; LOOM_COPILOT_EVALUATOR_JOB_ID is then wired automatically so admin "Run now" + the corpus-staging workflow can start executions. The job runs as the Console UAMI, which already holds Search Index Data Reader (AI Search), Cognitive Services OpenAI User (AOAI judge) and Cosmos DB Built-in Data Contributor (loom-copilot-evals); the only grant the module adds is Contributor scoped to the job itself, which is what ARM requires to start an execution. Opt out with LOOM_COPILOT_EVAL_ENABLED=false; tune the judge with LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT + LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 500 judged Q/day).',
+    remediation: 'Deploy the copilot-evaluator Container App Job (modules/admin-plane/copilot-evaluator-job.bicep — default-ON via the functionAppsConfig bag) and build its image with scripts/csa-loom/deploy-copilot-evaluator-job.sh; LOOM_COPILOT_EVALUATOR_JOB_ID is then wired automatically so admin "Run now" + the corpus-staging workflow can start executions. The job runs as the Console UAMI, which already holds Search Index Data Reader (AI Search), Cognitive Services OpenAI User (AOAI judge) and Cosmos DB Built-in Data Contributor (loom-copilot-evals); the only grant the module adds is Contributor scoped to the job itself, which is what ARM requires to start an execution. Opt out with LOOM_COPILOT_EVAL_ENABLED=false; tune the judge with LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT + LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 5000 judged Q/day).',
     provisionedBy: 'modules/admin-plane/copilot-evaluator-job.bicep (wired in admin-plane/main.bicep via functionAppsConfig; LOOM_COPILOT_EVALUATOR_JOB_ID on the Console apps[] env)',
     role: 'Console UAMI: Search Index Data Reader (AI Search) + Cognitive Services OpenAI User (AOAI) + Cosmos DB Built-in Data Contributor + Contributor scoped to the loom-copilot-evaluator job (start-execution)',
     docs: 'docs/fiab/runbooks/copilot-evaluator.md',
