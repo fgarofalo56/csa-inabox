@@ -1,26 +1,46 @@
 name: deploy-staleness
 
-# "merged ≠ deployed" watchdog (#2775).
+# "merged ≠ deployed" watchdog (#2775), extended 2026-08-05 to cover the LIVE
+# ESTATE and FAILING/DISABLED deploy paths.
 #
-# The #2643 Gov authorization fix merged 2026-07-31 while the dispatch-only
-# workflow that APPLIES it last ran 2026-07-15 — so the exposure stayed live
-# behind an all-green wall: code on main, tests passing, guardrails passing, PR
-# closed, issue closed. Nothing asserted that a deploy workflow had actually run
-# since its own code changed.
+# #2775: the #2643 Gov authorization fix merged 2026-07-31 while the
+# dispatch-only workflow that APPLIES it last ran 2026-07-15 — so the exposure
+# stayed live behind an all-green wall: code on main, tests passing, guardrails
+# passing, PR closed, issue closed. Nothing asserted that a deploy workflow had
+# actually run since its own code changed.
 #
-# This lane asserts exactly that, weekly. It is READ-ONLY — it never dispatches
-# a deploy, because deciding to start a multi-hour Gov production deploy is an
-# operator call, not a CI side effect. It only makes the drift visible.
+# 2026-08-05, the operator: "I have been looking at unchanged gates for two
+# weeks while PRs merged green, because nothing surfaces 'the estate is N
+# commits behind' or 'the last infra deploy failed'." Both were true and
+# neither was visible:
+#   - deploy-fiab-commercial.yml (the ONLY lane that applies main.bicep to
+#     Commercial) had 8 consecutive failed nightlies AND was switched off, so
+#     every merged bicep change was inert;
+#   - full-app-deploy-commercial.yml (the app-image build + Container App roll)
+#     had failed 6 times running since its last success on 2026-06-19 and was
+#     not watched at all;
+#   - and the check never looked at what was actually serving traffic.
+# The check now compares the live /build-marker.txt sha against main, reports
+# consecutive-failure streaks, and reports a disabled workflow as disabled.
+#
+# It is READ-ONLY — it never dispatches a deploy, because deciding to start a
+# production deploy is an operator call, not a CI side effect. It only makes the
+# drift visible.
 #
 # Deliberately NOT a required PR check: staleness is a property of the ESTATE,
 # not of a pull request, and blocking unrelated PRs on it would train people to
-# ignore it (the failure mode this whole class is about).
+# ignore it (the failure mode this whole class is about). Visibility comes from
+# the DAILY schedule, the job summary below, and the /admin/readiness banner the
+# operator actually looks at (/api/admin/deploy-status).
 
 on:
   schedule:
-    # Mondays 13:47 UTC — off the hour so it does not pile onto the top-of-hour
-    # scheduler surge.
-    - cron: '47 13 * * 1'
+    # DAILY, not weekly. Weekly was the cadence while this only watched
+    # dispatch-only Gov lanes where a fortnight of lag is ordinary. It now also
+    # watches a daily reconcile and the live estate, where a week of silence is
+    # the whole problem being solved. 13:47 UTC — off the hour so it does not
+    # pile onto the top-of-hour scheduler surge.
+    - cron: '47 13 * * *'
   workflow_dispatch:
 
 permissions:
@@ -31,14 +51,57 @@ jobs:
   staleness:
     name: Deploy staleness
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout (full history — the check compares commit dates)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
         with:
           fetch-depth: 0
 
-      - name: Check that every watched deploy path has run since its code changed
+      # The verdict is written to the RUN SUMMARY as well as the log. A control
+      # whose output is buried twelve steps into a log is a control nobody
+      # reads, which is the failure mode this lane exists to prevent — so the
+      # answer renders on the run page itself.
+      #
+      # MEASURE THE EXIT CODE DIRECTLY, NOT THROUGH A PIPE. The first cut of
+      # this step was `node … | tee -a "$GITHUB_STEP_SUMMARY"` with a comment
+      # asserting "pipefail is on by default". IT IS NOT: GitHub's default
+      # non-Windows shell is `bash -e {0}`; only an explicit `shell: bash` gets
+      # `-eo pipefail`. So the pipeline's status was `tee`'s — always 0 — and
+      # this step would have reported SUCCESS while the check exited 1. That is
+      # the "gate that cannot fail" shape, inside the gate written to stop deploy
+      # failures being missed. The same trap bit a reviewer measuring this PR's
+      # exit code through a pipe and reading EXIT=0 when it was really 1.
+      #
+      # So: redirect to a file, capture `$?` from the command itself, print it,
+      # append it, and re-raise. No pipe, no `|| true`, no continue-on-error —
+      # `rc` is propagated verbatim by the final `exit`.
+      - name: Check the live estate + every watched deploy path
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/ci/check-deploy-staleness.mjs
+        run: |
+          {
+            echo '## Deploy staleness — live estate vs main'
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          node scripts/ci/check-deploy-staleness.mjs > "$RUNNER_TEMP/deploy-staleness.txt" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/deploy-staleness.txt"
+          cat "$RUNNER_TEMP/deploy-staleness.txt" >> "$GITHUB_STEP_SUMMARY"
+          echo "[deploy-staleness] exit=$rc (measured directly, not through a pipe)"
+          exit "$rc"
+
+      - name: Close the summary code fence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '```'
+            echo
+            echo 'A merged fix is not a deployed fix. See `/admin/readiness` in the Console for the'
+            echo 'same verdict in-product (`GET /api/admin/deploy-status`).'
+          } >> "$GITHUB_STEP_SUMMARY"
