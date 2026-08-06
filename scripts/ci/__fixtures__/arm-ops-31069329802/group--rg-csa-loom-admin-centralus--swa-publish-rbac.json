@@ -1,0 +1,38 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/swa-publish-rbac/operations/32F738625495EF99",
+  "operationId": "32F738625495EF99",
+  "properties": {
+   "duration": "PT1.2143918S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "RoleAssignmentExists",
+     "details": null,
+     "message": "The role assignment already exists. The ID of the existing role assignment is 2f9290b01a8244fea959b441c49c84cb.",
+     "target": null
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Authorization/roleAssignments/3d0daf64-d8f6-56d4-9157-7b4f5598839e",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "3d0daf64-d8f6-56d4-9157-7b4f5598839e",
+    "resourceType": "Microsoft.Authorization/roleAssignments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:25.363799+00:00",
+   "trackingId": "5e976d13-8a8b-42f3-874e-3c6fdba8a9c1"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ }
+]

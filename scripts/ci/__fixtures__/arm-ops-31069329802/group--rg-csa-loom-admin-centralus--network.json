@@ -1,0 +1,2117 @@
+[
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/09C87BB63CB790A9",
+  "operationId": "09C87BB63CB790A9",
+  "properties": {
+   "duration": "PT27.6871884S",
+   "provisioningOperation": "Read",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": "2022-07-01",
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/dnsResolvers/dnspr-loom-centralus/inboundEndpoints/inbound",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "dnspr-loom-centralus/inbound",
+    "resourceType": "Microsoft.Network/dnsResolvers/inboundEndpoints",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:17.094188+00:00",
+   "trackingId": "79616464-94f2-438b-970c-f90b0a32e240"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/5D72B11E2E31364C",
+  "operationId": "5D72B11E2E31364C",
+  "properties": {
+   "duration": "PT32.8281943S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.notebooks.azure.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.notebooks.azure.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:28.515512+00:00",
+   "trackingId": "3a02b845-cb1d-4d38-a9ce-a4d66f60a76a"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/A3C9F42E5134793B",
+  "operationId": "A3C9F42E5134793B",
+  "properties": {
+   "duration": "PT32.096544S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.eventgrid.azure.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.eventgrid.azure.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:28.140953+00:00",
+   "trackingId": "d5526c09-f401-4367-80fe-1b1634a89d9b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/2CCB051A0631DA06",
+  "operationId": "2CCB051A0631DA06",
+  "properties": {
+   "duration": "PT31.8688866S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Failed",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Conflict",
+   "statusMessage": {
+    "error": {
+     "additionalInfo": null,
+     "code": "BadRequest",
+     "details": null,
+     "message": "A virtual network cannot be linked to multiple zones with overlapping namespaces. You tried to link virtual network with 'privatelink.azuredatabricks.net' and 'privatelink.azuredatabricks.net' zones.",
+     "target": null
+    },
+    "status": "Failed"
+   },
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azuredatabricks.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azuredatabricks.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.978004+00:00",
+   "trackingId": "68e7f147-c6d8-4688-a732-a9eaab06bc58"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/479ADE9A74587495",
+  "operationId": "479ADE9A74587495",
+  "properties": {
+   "duration": "PT32.4255872S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.file.core.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:28.049737+00:00",
+   "trackingId": "093f004e-56ef-4c8d-b21a-0a5c3972b3c0"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/416178803D1CAF37",
+  "operationId": "416178803D1CAF37",
+  "properties": {
+   "duration": "PT31.9355247S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azconfig.io/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azconfig.io/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:28.204456+00:00",
+   "trackingId": "c39cba22-04c9-46a9-b32a-2ab90585e998"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/26644B761914F62C",
+  "operationId": "26644B761914F62C",
+  "properties": {
+   "duration": "PT32.3955828S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.api.azureml.ms/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.api.azureml.ms/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:28.097390+00:00",
+   "trackingId": "2f045a89-44d2-402a-a721-71d63eb2f424"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/56E378CD9F6FD5C4",
+  "operationId": "56E378CD9F6FD5C4",
+  "properties": {
+   "duration": "PT32.0022948S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.adf.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.adf.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.711043+00:00",
+   "trackingId": "4103ec7e-3c4b-4e9e-abb6-0e4df3ff7dc9"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/82A93C027E9B2657",
+  "operationId": "82A93C027E9B2657",
+  "properties": {
+   "duration": "PT31.7278701S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.dev.azuresynapse.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.dev.azuresynapse.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:28.137348+00:00",
+   "trackingId": "f2c58bdf-2d11-485a-84bb-bfe70b509421"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/428BDA399DCD2B6E",
+  "operationId": "428BDA399DCD2B6E",
+  "properties": {
+   "duration": "PT31.9846578S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.vaultcore.azure.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.746194+00:00",
+   "trackingId": "c19d62ae-5e7f-4202-beca-bb581a8b0e38"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/22FB0831C6707495",
+  "operationId": "22FB0831C6707495",
+  "properties": {
+   "duration": "PT32.2622507S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.servicebus.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.919227+00:00",
+   "trackingId": "ad04d299-ee77-45dc-8053-4404688b2223"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/C1875B47E5FC3076",
+  "operationId": "C1875B47E5FC3076",
+  "properties": {
+   "duration": "PT32.3754938S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.purviewstudio.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.purviewstudio.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.961994+00:00",
+   "trackingId": "850c90ba-e7d2-43dc-b571-3cf4b7e6a5a9"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/26DEC1A41137FA7E",
+  "operationId": "26DEC1A41137FA7E",
+  "properties": {
+   "duration": "PT31.6083195S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.search.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.search.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.909586+00:00",
+   "trackingId": "c7fbede6-e12c-4281-88a8-6331d8c968a1"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/41927AD8BF178A55",
+  "operationId": "41927AD8BF178A55",
+  "properties": {
+   "duration": "PT32.2980238S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.cognitiveservices.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.857736+00:00",
+   "trackingId": "afff520f-d1f2-4053-8758-c6dd77d1405f"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/CEBC9EB9AA761EB8",
+  "operationId": "CEBC9EB9AA761EB8",
+  "properties": {
+   "duration": "PT31.7640664S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.redis.azure.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.redis.azure.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.642617+00:00",
+   "trackingId": "92061304-a346-4b92-ae53-731f95b005f8"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/1E8E4BAB22626B0D",
+  "operationId": "1E8E4BAB22626B0D",
+  "properties": {
+   "duration": "PT31.8153653S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.purview.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.purview.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.645719+00:00",
+   "trackingId": "915b9251-abfc-47eb-867e-066ae7f4925d"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F19CCD71585C6ECC",
+  "operationId": "F19CCD71585C6ECC",
+  "properties": {
+   "duration": "PT32.2215343S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azurecr.io/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.774077+00:00",
+   "trackingId": "b0746a39-734d-4fee-9f3c-f1fec1673405"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/764571BFD47B27D1",
+  "operationId": "764571BFD47B27D1",
+  "properties": {
+   "duration": "PT31.7640442S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.centralus.kusto.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.centralus.kusto.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.711514+00:00",
+   "trackingId": "e33b8877-55ad-43c7-a0b5-73204be9dd75"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/1F91A0B457FEF8C2",
+  "operationId": "1F91A0B457FEF8C2",
+  "properties": {
+   "duration": "PT31.6206435S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.documents.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.documents.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.691222+00:00",
+   "trackingId": "38190082-096f-4ccb-ba23-3852a36491cc"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/995D4B07B05A12A4",
+  "operationId": "995D4B07B05A12A4",
+  "properties": {
+   "duration": "PT31.7688053S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.redis.cache.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.redis.cache.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.661231+00:00",
+   "trackingId": "4ced463c-2d0e-40f0-9695-4180bc01aee4"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/8DF26DF114DBEC26",
+  "operationId": "8DF26DF114DBEC26",
+  "properties": {
+   "duration": "PT32.0462018S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.openai.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.openai.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.560725+00:00",
+   "trackingId": "73865e9f-290f-4dd6-85e0-8c715561e38a"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/6803DED5BADE61E5",
+  "operationId": "6803DED5BADE61E5",
+  "properties": {
+   "duration": "PT31.7917426S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.gremlin.cosmos.azure.com/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.gremlin.cosmos.azure.com/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.659757+00:00",
+   "trackingId": "cbcaeea6-e738-4dbc-8c5e-8efa0896b421"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/884425002134BFCE",
+  "operationId": "884425002134BFCE",
+  "properties": {
+   "duration": "PT32.5742273S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azureml.ms/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azureml.ms/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.516644+00:00",
+   "trackingId": "cd5c7642-db2e-4f17-9453-7a80a3570a32"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/B0890E8E52474788",
+  "operationId": "B0890E8E52474788",
+  "properties": {
+   "duration": "PT32.2483129S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.centralus.azurecontainerapps.io/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.centralus.azurecontainerapps.io/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.485567+00:00",
+   "trackingId": "3a372324-5b12-491d-a639-5df34051e1c2"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/D72095630045916A",
+  "operationId": "D72095630045916A",
+  "properties": {
+   "duration": "PT31.545269S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.dfs.core.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.dfs.core.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.576241+00:00",
+   "trackingId": "54149b51-d023-49c8-9843-dd769e980c06"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F18E004880AD9A13",
+  "operationId": "F18E004880AD9A13",
+  "properties": {
+   "duration": "PT31.7426989S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azurewebsites.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azurewebsites.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.438774+00:00",
+   "trackingId": "426930b2-e381-425a-96d1-f6b1541e3cea"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/338F68732DCEB293",
+  "operationId": "338F68732DCEB293",
+  "properties": {
+   "duration": "PT31.931709S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.sql.azuresynapse.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.sql.azuresynapse.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.395894+00:00",
+   "trackingId": "b8499f70-f590-433c-8bd4-7a7827c6c0df"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/D2E65138B9E32092",
+  "operationId": "D2E65138B9E32092",
+  "properties": {
+   "duration": "PT31.9874644S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net/virtualNetworkLinks/link-hub",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.blob.core.windows.net/link-hub",
+    "resourceType": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:27.293855+00:00",
+   "trackingId": "c66eccac-f502-4929-8a0b-1f1d439ca7ab"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/2FF500762AD6B22A",
+  "operationId": "2FF500762AD6B22A",
+  "properties": {
+   "duration": "PT27.3903128S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/dnsResolvers/dnspr-loom-centralus/inboundEndpoints/inbound",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "dnspr-loom-centralus/inbound",
+    "resourceType": "Microsoft.Network/dnsResolvers/inboundEndpoints",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:17.094188+00:00",
+   "trackingId": "68f5067e-e7d1-4d75-bf7b-845080d2dde7"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/825B10553AD4D159",
+  "operationId": "825B10553AD4D159",
+  "properties": {
+   "duration": "PT2.3833204S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/bastionHosts/bastion-csa-loom-centralus/providers/Microsoft.Insights/diagnosticSettings/diag-loom-stdz",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "diag-loom-stdz",
+    "resourceType": "Microsoft.Insights/diagnosticSettings",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:17.094188+00:00",
+   "trackingId": "c656c642-c046-47a3-aca2-34aa90574a47"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/44F2FC51A538C4D8",
+  "operationId": "44F2FC51A538C4D8",
+  "properties": {
+   "duration": "PT1.97191S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/azureFirewalls/fw-csa-loom-centralus/providers/Microsoft.Insights/diagnosticSettings/diag-loom-stdz",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "diag-loom-stdz",
+    "resourceType": "Microsoft.Insights/diagnosticSettings",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:16.661836+00:00",
+   "trackingId": "e0c45f77-7a22-4590-a77f-ae2a57d3f2e4"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/D562AA78D1373A85",
+  "operationId": "D562AA78D1373A85",
+  "properties": {
+   "duration": "PT5.696507S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/dnsResolvers/dnspr-loom-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "dnspr-loom-centralus",
+    "resourceType": "Microsoft.Network/dnsResolvers",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:17.094188+00:00",
+   "trackingId": "d357bffe-0320-4e8a-8955-7fbe23fc6f05"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/8B10ACCA99100B04",
+  "operationId": "8B10ACCA99100B04",
+  "properties": {
+   "duration": "PT0.3625107S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/bastionHosts/bastion-csa-loom-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "bastion-csa-loom-centralus",
+    "resourceType": "Microsoft.Network/bastionHosts",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:16.661836+00:00",
+   "trackingId": "1aab10e4-39ce-4742-8516-2ed738466aac"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/07D865737F72740C",
+  "operationId": "07D865737F72740C",
+  "properties": {
+   "duration": "PT1.8215837S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-pp-vnet-gateway",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-pp-vnet-gateway",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:14.780879+00:00",
+   "trackingId": "6f37a366-f54c-4571-a311-5824803ddf28"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/DC0390F43C57FAB0",
+  "operationId": "DC0390F43C57FAB0",
+  "properties": {
+   "duration": "PT1.2320506S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-appgw",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-appgw",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:13.471137+00:00",
+   "trackingId": "89384b6b-97d7-46d3-be5e-eeebe689b867"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/4B6CCC66500FCE24",
+  "operationId": "4B6CCC66500FCE24",
+  "properties": {
+   "duration": "PT1.8785691S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-reserved",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-reserved",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:11.527065+00:00",
+   "trackingId": "e80af256-efef-48bb-b16c-2355399ddc78"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/7295EE64C64699B2",
+  "operationId": "7295EE64C64699B2",
+  "properties": {
+   "duration": "PT1.2139256S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-private-endpoints",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-private-endpoints",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:10.254601+00:00",
+   "trackingId": "cccf36d7-9039-4bf2-9850-fbe45a5d7540"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F3A9B757C6CF4FBD",
+  "operationId": "F3A9B757C6CF4FBD",
+  "properties": {
+   "duration": "PT1.4359528S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-apim",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-apim",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:08.659276+00:00",
+   "trackingId": "7c41bd7d-d993-4c6a-b2a3-4f2599af1334"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/8CE950AD4620E05F",
+  "operationId": "8CE950AD4620E05F",
+  "properties": {
+   "duration": "PT1.1974271S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-functions",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-functions",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:07.396404+00:00",
+   "trackingId": "6d443c4a-9b71-497a-aa39-28b7f91683c0"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/C0866D206834F659",
+  "operationId": "C0866D206834F659",
+  "properties": {
+   "duration": "PT1.3952674S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/providers/Microsoft.Insights/diagnosticSettings/diag-loom-stdz",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "diag-loom-stdz",
+    "resourceType": "Microsoft.Insights/diagnosticSettings",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:03.576692+00:00",
+   "trackingId": "816d0946-706a-445b-9b31-721aa01cf5ed"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/12C1399DAF3BE2A4",
+  "operationId": "12C1399DAF3BE2A4",
+  "properties": {
+   "duration": "PT3.7507996S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus/subnets/snet-container-platform",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus/snet-container-platform",
+    "resourceType": "Microsoft.Network/virtualNetworks/subnets",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:08:03.578280+00:00",
+   "trackingId": "867e3077-8887-453c-a8f2-429dab6fd9fa"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/CA251B47FBDE4BF2",
+  "operationId": "CA251B47FBDE4BF2",
+  "properties": {
+   "duration": "PT2.6197809S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "Created",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Authorization/roleAssignments/4830d504-4007-5381-bd73-92e5d09d5e39",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "4830d504-4007-5381-bd73-92e5d09d5e39",
+    "resourceType": "Microsoft.Authorization/roleAssignments",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475930+00:00",
+   "trackingId": "5a0db208-a205-4d94-9f72-864e81c47558"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F361931BB632DD6E",
+  "operationId": "F361931BB632DD6E",
+  "properties": {
+   "duration": "PT32.6560576S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azconfig.io",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azconfig.io",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.486429+00:00",
+   "trackingId": "b6445265-f61f-419d-a417-b721618bdfd7"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F39970D79C0C566E",
+  "operationId": "F39970D79C0C566E",
+  "properties": {
+   "duration": "PT3.946935S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-pp-vnet-gateway",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-pp-vnet-gateway",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.486429+00:00",
+   "trackingId": "778d6f86-35b8-4cf6-b47a-ee1689b4d80a"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/D43346AD44FA1D67",
+  "operationId": "D43346AD44FA1D67",
+  "properties": {
+   "duration": "PT32.5043796S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.file.core.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475930+00:00",
+   "trackingId": "18988457-41f3-4135-9865-648d7b670bd9"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/2D2DDCB1C7BC56CB",
+  "operationId": "2D2DDCB1C7BC56CB",
+  "properties": {
+   "duration": "PT32.3957936S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azuredatabricks.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azuredatabricks.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.471259+00:00",
+   "trackingId": "8a018c51-580d-4b68-937c-fc161acdd70b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/EE1C5944DEE8C235",
+  "operationId": "EE1C5944DEE8C235",
+  "properties": {
+   "duration": "PT32.2117147S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azurecr.io",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.486429+00:00",
+   "trackingId": "94e8c94a-d405-4978-8982-9c4d645d419e"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/2D2B6A2039D1C9A4",
+  "operationId": "2D2B6A2039D1C9A4",
+  "properties": {
+   "duration": "PT32.3780961S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.search.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.search.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.471259+00:00",
+   "trackingId": "8747091c-7103-43d1-a00d-877fcb88eb55"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/47298560FE06BD6C",
+  "operationId": "47298560FE06BD6C",
+  "properties": {
+   "duration": "PT32.3265794S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.cognitiveservices.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475900+00:00",
+   "trackingId": "d4af119b-3d06-4a59-8782-986eadf84db4"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/171074FF8C208282",
+  "operationId": "171074FF8C208282",
+  "properties": {
+   "duration": "PT32.1129972S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.redis.azure.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.redis.azure.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.471259+00:00",
+   "trackingId": "9e13dc52-f4cc-4534-b297-e88af03f7efe"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/73761599D84B0A0C",
+  "operationId": "73761599D84B0A0C",
+  "properties": {
+   "duration": "PT32.2114074S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.redis.cache.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.redis.cache.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "102b0817-07cd-4ab4-b60c-3034526e36df"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/E924D6A8DAEA3E7F",
+  "operationId": "E924D6A8DAEA3E7F",
+  "properties": {
+   "duration": "PT32.2662308S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.centralus.kusto.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.centralus.kusto.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "adcfbf3f-2043-49b1-b473-86a621efdecb"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/09D4182A0D844552",
+  "operationId": "09D4182A0D844552",
+  "properties": {
+   "duration": "PT32.6341512S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.api.azureml.ms",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.api.azureml.ms",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "bd372c67-a6a0-482a-9a83-ed23d91aaffb"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/DE990389D7794BA7",
+  "operationId": "DE990389D7794BA7",
+  "properties": {
+   "duration": "PT32.0292436S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.dfs.core.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.dfs.core.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475930+00:00",
+   "trackingId": "5a59d814-af00-4e49-84a7-e217677c370e"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/8D4E2C61D3AFEB1B",
+  "operationId": "8D4E2C61D3AFEB1B",
+  "properties": {
+   "duration": "PT32.1124953S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.gremlin.cosmos.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.gremlin.cosmos.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.473477+00:00",
+   "trackingId": "888b7851-a502-4505-975e-424367fdb5f8"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/3E68CF8208B7B1B9",
+  "operationId": "3E68CF8208B7B1B9",
+  "properties": {
+   "duration": "PT31.8497621S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.sql.azuresynapse.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.sql.azuresynapse.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475900+00:00",
+   "trackingId": "8448c573-d83a-4cd5-8a38-54b27269b60b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/B3694CEEDC46C833",
+  "operationId": "B3694CEEDC46C833",
+  "properties": {
+   "duration": "PT32.2333145S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.documents.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.documents.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "55d3371e-95f9-4eee-9714-367d744b471f"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/83243AB7DF00E6D5",
+  "operationId": "83243AB7DF00E6D5",
+  "properties": {
+   "duration": "PT32.4227532S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.purviewstudio.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.purviewstudio.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.473477+00:00",
+   "trackingId": "f4cbf9f2-1d0c-47f1-a454-1de6a2369274"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/2617FA40973D8357",
+  "operationId": "2617FA40973D8357",
+  "properties": {
+   "duration": "PT31.8932863S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azurewebsites.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azurewebsites.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.471259+00:00",
+   "trackingId": "45d39a4e-f34c-49a2-aaad-bd6cedca594a"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F85A03F7F458E4EB",
+  "operationId": "F85A03F7F458E4EB",
+  "properties": {
+   "duration": "PT32.2907503S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.vaultcore.azure.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "7be252d7-150c-4ef8-8ea9-73a54d35bc1e"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/889136A78B41865B",
+  "operationId": "889136A78B41865B",
+  "properties": {
+   "duration": "PT32.3731544S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.servicebus.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.473477+00:00",
+   "trackingId": "c2593188-621b-46cc-a5e3-bf151946e1a6"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/4F2724FB93A86858",
+  "operationId": "4F2724FB93A86858",
+  "properties": {
+   "duration": "PT32.681082S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.eventgrid.azure.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.eventgrid.azure.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "5e74cab8-5405-4d61-9fdc-0507725b6b14"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/49820E3E67FB4DA1",
+  "operationId": "49820E3E67FB4DA1",
+  "properties": {
+   "duration": "PT31.979078S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.azureml.ms",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.azureml.ms",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475900+00:00",
+   "trackingId": "33de5b6b-8f8a-4afe-a6dc-c448a7c888d6"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/A2FBC6AC72C39EBD",
+  "operationId": "A2FBC6AC72C39EBD",
+  "properties": {
+   "duration": "PT32.0160758S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.openai.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.openai.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.473477+00:00",
+   "trackingId": "aab9f69c-77bd-4d89-9567-9fe7d0982192"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/668280FED68C85FA",
+  "operationId": "668280FED68C85FA",
+  "properties": {
+   "duration": "PT32.59807S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.dev.azuresynapse.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.dev.azuresynapse.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475935+00:00",
+   "trackingId": "1d0ea653-c490-4003-8c07-efdd05879ecb"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/1530B9E31FDF8850",
+  "operationId": "1530B9E31FDF8850",
+  "properties": {
+   "duration": "PT32.0852944S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.purview.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.purview.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.471259+00:00",
+   "trackingId": "ae98e274-c45f-4d81-b5e6-d0074c3a0a22"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/CB2D9216CC195BD8",
+  "operationId": "CB2D9216CC195BD8",
+  "properties": {
+   "duration": "PT32.7813402S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.notebooks.azure.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.notebooks.azure.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475930+00:00",
+   "trackingId": "00afd0fe-0795-41e5-8106-5a4ee0f835a8"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/64CEC0FF2AEAA18A",
+  "operationId": "64CEC0FF2AEAA18A",
+  "properties": {
+   "duration": "PT32.1753249S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.adf.azure.com",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.adf.azure.com",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475935+00:00",
+   "trackingId": "8a71d2e6-ce36-483b-8f65-5747424fda56"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/A085A86DAF852058",
+  "operationId": "A085A86DAF852058",
+  "properties": {
+   "duration": "PT31.948367S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.centralus.azurecontainerapps.io",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.centralus.azurecontainerapps.io",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.473477+00:00",
+   "trackingId": "4299bc21-c1cc-4543-ba46-7ab0d0fe19c0"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/CBCAD3FD43B1DDBA",
+  "operationId": "CBCAD3FD43B1DDBA",
+  "properties": {
+   "duration": "PT31.7584132S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "privatelink.blob.core.windows.net",
+    "resourceType": "Microsoft.Network/privateDnsZones",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475930+00:00",
+   "trackingId": "85c704af-4a43-4d6c-b5f6-b09668b49f58"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/312660CE69F0AA19",
+  "operationId": "312660CE69F0AA19",
+  "properties": {
+   "duration": "PT8.0477351S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "vnet-csa-loom-hub-centralus",
+    "resourceType": "Microsoft.Network/virtualNetworks",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.392977+00:00",
+   "trackingId": "6b3889eb-51ad-442f-b42f-8c8bb29bde15"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F2906956DD545EAA",
+  "operationId": "F2906956DD545EAA",
+  "properties": {
+   "duration": "PT1.9976658S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-appgw",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-appgw",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.486429+00:00",
+   "trackingId": "4fdc7157-c39c-4713-a75a-02ec08e7343d"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/F22789388E9C0490",
+  "operationId": "F22789388E9C0490",
+  "properties": {
+   "duration": "PT1.7009683S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-apim",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-apim",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.486429+00:00",
+   "trackingId": "734a311f-5568-4fcc-8f50-3ddc007694bd"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/6605EAA3539254CB",
+  "operationId": "6605EAA3539254CB",
+  "properties": {
+   "duration": "PT0.8072459S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-container-platform",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-container-platform",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475935+00:00",
+   "trackingId": "7d697708-9b11-4a72-ab71-a15d554cd847"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/6F05AF73887A896F",
+  "operationId": "6F05AF73887A896F",
+  "properties": {
+   "duration": "PT0.3697387S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-private-endpoints",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-private-endpoints",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475935+00:00",
+   "trackingId": "6be8c47e-a0bc-401f-80a4-4c421c610d23"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/43651BFA054C5D75",
+  "operationId": "43651BFA054C5D75",
+  "properties": {
+   "duration": "PT0.354149S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-functions",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-functions",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475900+00:00",
+   "trackingId": "5cf7c227-0d3d-4044-b3fd-042dd4f66fe8"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/6CCF49F780C6784A",
+  "operationId": "6CCF49F780C6784A",
+  "properties": {
+   "duration": "PT0.3541133S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/networkSecurityGroups/nsg-snet-reserved",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "nsg-snet-reserved",
+    "resourceType": "Microsoft.Network/networkSecurityGroups",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475935+00:00",
+   "trackingId": "3c94e0c5-defe-4a44-a17f-f492bb1d793b"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ },
+ {
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Resources/deployments/network/operations/48FD2DFCBEC4D423",
+  "operationId": "48FD2DFCBEC4D423",
+  "properties": {
+   "duration": "PT0.3385277S",
+   "provisioningOperation": "Create",
+   "provisioningState": "Succeeded",
+   "request": null,
+   "response": null,
+   "serviceRequestId": null,
+   "statusCode": "OK",
+   "statusMessage": null,
+   "targetResource": {
+    "apiVersion": null,
+    "extension": null,
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.Network/publicIPAddresses/pip-bastion-csa-loom-centralus",
+    "identifiers": null,
+    "resourceGroup": "rg-csa-loom-admin-centralus",
+    "resourceName": "pip-bastion-csa-loom-centralus",
+    "resourceType": "Microsoft.Network/publicIPAddresses",
+    "symbolicName": null
+   },
+   "timestamp": "2026-08-06T04:07:55.475900+00:00",
+   "trackingId": "cb020e25-ec03-4bed-be66-5701062547c9"
+  },
+  "resourceGroup": "rg-csa-loom-admin-centralus"
+ }
+]

@@ -20,18 +20,40 @@ ARM deployment state. Console URL doesn't return 200.
 
 ## Diagnosis
 
+**Start here.** The top-level ARM error on a failed subscription deploy is
+content-free — it is always `DeploymentFailed: At least one resource deployment
+operation failed` — and `az deployment sub create` writes ~200 lines of bicep
+linter warnings to stderr, so the real cause is in neither place. It sits two or
+more levels down, inside the failed deployment *operations*. Drill to it:
+
+```bash
+node scripts/ci/deploy-arm-errors.mjs --name <deployment-name> --scope sub [--subscription <sub>]
+```
+
+It walks the failed operations recursively (following nested
+`Microsoft.Resources/deployments` targets) and prints every leaf `code: message`
+with the resource it belongs to. It has three outcomes and only one is a pass:
+`found`, `none` (ARM answered and nothing failed), and `unreadable` (ARM did not
+answer — nothing is asserted). `deploy-fiab-commercial.yml` now runs it
+automatically on failure and feeds the leaves to the classifier, so a live run's
+annotation names the cause instead of reporting "could not classify" (#3039).
+
+By hand, the same walk is:
+
 ```bash
 # List recent sub-scoped deployments
 az deployment sub list \
   --query "[?starts_with(name, 'csa-loom')] | [?properties.provisioningState != 'Succeeded'] | [].{name:name,state:properties.provisioningState,error:properties.error.message}" \
   -o table
 
-# Drill into specific failed deployment
+# The top-level error — expect it to say nothing useful
 az deployment sub show --name <deployment-name> --query "properties.error"
 
-# Find inner-module errors
-az deployment operation sub list --name <deployment-name> --query "[?properties.statusCode != '200']" -o table
+# The operations. Repeat at group scope for every nested deployment that failed:
+az deployment operation sub   list --name <deployment-name> -o json
+az deployment operation group list -g <rg> --name <nested-deployment-name> -o json
 ```
+
 
 Common failure modes:
 
@@ -39,7 +61,8 @@ Common failure modes:
 |---|---|---|---|
 | `Quota exceeded` for Databricks Premium | quota | Region quota | Request quota via Azure portal → Subscriptions → Usage + quotas; or pick a different region. **Do not retry — it is deterministic** |
 | `QuotaExceeded: standardDDSv5Family Cores` during an image build | quota | The ACR-task agent pool has no cores | Raise the VM-family quota for that region, or build without the dedicated pool |
-| `RoleAssignmentExists` | config | Pre-existing assignment | Re-run with `skip_role_grants=true`, or `az role assignment delete` the conflict |
+| `RoleAssignmentExists` | config | The grant is **already in place** under a different assignment NAME. ARM enforces uniqueness on the `(scope, principalId, roleDefinitionId)` triple, not on the name, so a name-seed change (e.g. the Website Contributor role id correction …706ee → …84772) or a grant created out-of-band by `az role assignment create` (random GUID) blocks the template's create forever | Converge the name: `az role assignment delete --ids <the id printed in the error message>`, then re-run — the template recreates it under its deterministic name. `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled; it is a workaround, not a fix |
+| `BadRequest: A virtual network cannot be linked to multiple zones with overlapping namespaces` | config | The hub VNet is already linked to a **different** Private DNS zone of the same namespace — usually a leftover zone from a superseded design in another resource group or subscription. Azure permits one link per namespace per VNet, so the admin plane's own link can never be created | **Do not delete the existing link first** — the A records live in that zone and unlinking takes the service dark. Run `node scripts/csa-loom/migrate-private-dns-zone-owner.mjs …` (dry-run by default; `--apply` to execute). `node scripts/csa-loom/preflight-private-dns-links.mjs` detects it before the deploy, and `deploy-fiab-commercial.yml` runs that preflight automatically |
 | `InvalidTemplateDeployment` on Container Apps in IL4 | config | Container Apps not at IL4 | Set `containerPlatform = 'aks'` in `.bicepparam` |
 | `Forbidden` on Key Vault Premium HSM | permission | Lacks `Microsoft.KeyVault/managedHsms/write` | Request elevated role |
 | `VnetAddressRangeInUse` | config | CIDR conflict | Pick a different CIDR; update `hubVnetCidr`. The DLZ spoke CIDR (`10.100.0.0/16`) is not settable from the root template today |

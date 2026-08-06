@@ -50,6 +50,24 @@
  *                 ONCE. auto-bind-by-default.md §5: a remediation the platform
  *                 could have executed is a defect, not a helpful message.
  *
+ *   --arm-deployment <name> [--arm-scope sub|group --arm-resource-group <rg>]
+ *                 On failure, DRILL INTO the failed ARM deployment operations
+ *                 and feed the LEAF errors to the classifier (issue #3039).
+ *                 `az deployment sub create` puts the bicep linter's warnings on
+ *                 stderr and the ARM failure itself is content-free — "At least
+ *                 one resource deployment operation failed" — so on run
+ *                 31069329802 the classifier was handed 200 lines of BCP318 and
+ *                 correctly reported that it could not classify them. The two
+ *                 real causes were two levels down. See deploy-arm-errors.mjs.
+ *
+ *                 FAIL-CLOSED: only a status of `found` is appended to the text
+ *                 handed to the classifier. `none` and `unreadable` are printed
+ *                 for the operator but deliberately NOT classified — az's own
+ *                 error text ("Deployment 'x' could not be found") would
+ *                 otherwise match a taxonomy signal and misclassify the
+ *                 ORIGINAL failure. An unreadable drill-down leaves the run
+ *                 exactly as red as it was.
+ *
  * Tests: node --test scripts/ci/__tests__/deploy-retry.test.mjs
  */
 
@@ -60,25 +78,15 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { classify, render, classExitCode } from './deploy-classify.mjs';
+import { collectArmLeafErrors, renderLeaves, STATUS as ARM_STATUS } from './deploy-arm-errors.mjs';
+import { redact } from './_azure-redact.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 
 /** Exit code for a usage error — distinct from every class exit code (10..17). */
 export const USAGE_EXIT = 2;
 
-/**
- * Redact subscription / tenant GUIDs and long ARM ids down to their last path
- * segment before they reach a summary line or a committed artifact. The raw
- * stderr file is untouched — this only stops full resource ids leaking into
- * annotations and PR bodies.
- */
-export function redact(text) {
-  if (typeof text !== 'string') return '';
-  return text
-    .replace(/\/subscriptions\/[0-9a-fA-F-]{36}/g, '/subscriptions/<redacted>')
-    .replace(/\/tenants?\/[0-9a-fA-F-]{36}/g, '/tenant/<redacted>')
-    .replace(/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g, '<guid>');
-}
+export { redact };
 
 /** `20m` / `90s` / `2h` / bare seconds → milliseconds. Throws on nonsense. */
 export function parseDuration(raw) {
@@ -206,6 +214,10 @@ export function parseArgs(argv) {
     step: null,
     artifact: null,
     remediate: false,
+    armDeployment: null,
+    armScope: 'sub',
+    armResourceGroup: null,
+    armSubscription: null,
     cmd: [],
   };
   let i = 0;
@@ -223,9 +235,41 @@ export function parseArgs(argv) {
     else if (a === '--step') out.step = argv[++i];
     else if (a === '--artifact') out.artifact = argv[++i];
     else if (a === '--remediate') out.remediate = true;
+    else if (a === '--arm-deployment') out.armDeployment = argv[++i];
+    else if (a === '--arm-scope') out.armScope = argv[++i];
+    else if (a === '--arm-resource-group') out.armResourceGroup = argv[++i];
+    else if (a === '--arm-subscription') out.armSubscription = argv[++i];
     else throw new Error(`unknown argument: ${a}`);
   }
   return out;
+}
+
+/**
+ * The ARM drill-down, and the rule for what may reach the classifier.
+ *
+ * `classifyText` is ONLY non-empty for status `found`. That asymmetry is the
+ * whole safety property: az's failure text on an unreadable drill-down
+ * ("(DeploymentNotFound) Deployment 'x' could not be found") matches
+ * `config.resource-group-not-found`, so feeding it in would replace an honest
+ * `unknown` with a confident, wrong diagnosis of the original failure — the
+ * exact R7 error this change exists to remove.
+ *
+ * Exported so the test can drive every branch without Azure.
+ */
+export function armDrilldown(args, run) {
+  if (!args.armDeployment) return null;
+  const result = collectArmLeafErrors({
+    name: args.armDeployment,
+    scope: args.armScope,
+    resourceGroup: args.armResourceGroup,
+    subscription: args.armSubscription,
+    ...(run ? { run } : {}),
+  });
+  return {
+    result,
+    rendered: renderLeaves(result),
+    classifyText: result.status === ARM_STATUS.FOUND ? renderLeaves(result) : '',
+  };
 }
 
 function ghAnnotate(level, message) {
@@ -295,11 +339,25 @@ function main() {
       process.exit(0);
     }
 
-    const diagnosis = classify(lastStderr);
-    history.push({ attempt, exitCode: lastStatus, class: diagnosis.class, signalId: diagnosis.signalId });
+    // THE ARM DRILL-DOWN (issue #3039). Runs BEFORE classification so the
+    // classifier sees the leaf cause rather than the bicep linter's warnings.
+    // Only `found` reaches classify() — see armDrilldown()'s header.
+    const drill = armDrilldown(args);
+    if (drill) {
+      process.stderr.write(`\n───── deploy-retry: ARM drill-down ─────\n${drill.rendered}\n`);
+      process.stderr.write('────────────────────────────────────────\n');
+      if (drill.result.status !== ARM_STATUS.FOUND) {
+        ghAnnotate(
+          'warning',
+          `deploy-retry: the ARM drill-down did not produce a leaf error, so classification ` +
+            `proceeds on the command's own stderr and nothing extra is asserted. ${drill.rendered}`,
+        );
+      }
+    }
+    const classifyInput = drill?.classifyText ? `${lastStderr}\n${drill.classifyText}` : lastStderr;
 
-    // Platform-performed remediation, once, for the classes that carry one it
-    // can execute unattended.
+    const diagnosis = classify(classifyInput);
+    history.push({ attempt, exitCode: lastStatus, class: diagnosis.class, signalId: diagnosis.signalId });
     if (args.remediate && !remediated) {
       const plan = planRemediation(diagnosis, lastStderr);
       if (plan?.argv) {
@@ -355,6 +413,22 @@ function main() {
         elapsedSeconds: Math.round((Date.now() - started) / 1000),
         childExitCode: lastStatus,
         stderrPath: errFile,
+        ...(drill
+          ? {
+              armDrilldown: {
+                status: drill.result.status,
+                reason: drill.result.reason,
+                warnings: drill.result.warnings.map(redact),
+                operationsSeen: drill.result.operationsSeen,
+                leaves: drill.result.leaves.map((l) => ({
+                  code: l.code,
+                  message: redact(l.message),
+                  resourceType: l.resourceType,
+                  resourceName: l.resourceName,
+                })),
+              },
+            }
+          : {}),
       };
       if (args.artifact) fs.writeFileSync(args.artifact, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
 
@@ -362,7 +436,15 @@ function main() {
       process.stderr.write('\n───── deploy-retry: full captured stderr ─────\n');
       process.stderr.write(lastStderr.endsWith('\n') ? lastStderr : `${lastStderr}\n`);
       process.stderr.write('─────────────────────────────────────────────\n');
-      ghAnnotate('error', `${message} ${decision.reason}`);
+      // Every leaf is repeated in the annotation: a deployment can fail for more
+      // than one reason at once (run 31069329802 failed for two) and the
+      // classifier names only the winner.
+      const leafBlock =
+        drill?.result.status === ARM_STATUS.FOUND
+          ? ` ${drill.result.leaves.length} ARM leaf failure(s): ` +
+            drill.result.leaves.map((l) => `${l.code}: ${redact(l.message)}`).join(' | ')
+          : '';
+      ghAnnotate('error', `${message} ${decision.reason}${leafBlock}`);
       process.exit(classExitCode(diagnosis.class));
     }
 
