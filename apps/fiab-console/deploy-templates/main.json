@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "12349423357272646043"
+      "templateHash": "5115184503731555067"
     }
   },
   "definitions": {
@@ -1891,6 +1891,20 @@
         "description": "user-data-function invoke base URL — a BYO Azure Functions host, e.g. https://my-udf.azurewebsites.net (LOOM_UDF_FUNCTION_BASE). Empty → the UDF invoke route serves its honest 503 gate naming this var. Folded into byoExisting.udfFunctionBase (256-param ceiling). TODO udf-runtime.bicep: a Loom-managed Functions host on the dab-runtime.bicep pattern will default this."
       }
     },
+    "existingVpnGatewayName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "BROWNFIELD RECONCILE (deploy-integrity.md R5; run 31100384405): name of the EXISTING Vpn-type virtual network gateway on the hub VNet. Azure permits exactly ONE VPN gateway per VNet, so a create-new PUT against an estate that already has one (e.g. the live vpngw-loom-centralus, created under an earlier naming scheme) always fails with MultipleGatewaysOfTypeVpnUseSameVnet. The deploy workflow discovers this name via scripts/csa-loom/preflight-brownfield-adopt.mjs and the gateway is ADOPTED (referenced, left unchanged). Empty → vpn-gateway.bicep creates vgw-loom-<location> (greenfield, byte-identical to prior behavior). Folded into byoExisting.vpnGatewayName (admin-plane 256-param ceiling)."
+      }
+    },
+    "apimGatewayDnsLinkName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "BROWNFIELD RECONCILE (deploy-integrity.md R5; run 31100384405): name of the EXISTING azure-api.net private-DNS zone virtual-network link for the hub VNet. Azure permits ONE link per (zone, VNet) pair and 409s a second link under a new name (the live estate carries link-apim-console, which blocked the module's link-<vnetName>). Discovered by scripts/csa-loom/preflight-brownfield-adopt.mjs so the PUT targets the SAME link. Empty → apim.bicep uses link-<vnetName> (greenfield, byte-identical). Folded into byoExisting.apimDnsLinkName (256-param ceiling)."
+      }
+    },
     "shirAdminPassword": {
       "type": "securestring",
       "defaultValue": "",
@@ -2265,7 +2279,9 @@
               "swaResourceGroup": "[parameters('loomSwaResourceGroup')]",
               "udfFunctionBase": "[parameters('loomUdfFunctionBase')]",
               "udfRuntimeEnabled": "[parameters('udfRuntimeEnabled')]",
-              "sparkPoolEnabled": "[parameters('sparkPoolEnabled')]"
+              "sparkPoolEnabled": "[parameters('sparkPoolEnabled')]",
+              "vpnGatewayName": "[parameters('existingVpnGatewayName')]",
+              "apimDnsLinkName": "[parameters('apimGatewayDnsLinkName')]"
             }
           },
           "amlWorkspaceName": "[if(not(empty(__bicep.adoptName(parameters('adopt'), 'aml'))), createObject('value', __bicep.adoptName(parameters('adopt'), 'aml')), if(and(variables('useSingleDlz'), variables('provisionAml')), createObject('value', take(format('aml-loom-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', format('rg-csa-loom-dlz-single-{0}', parameters('location'))))), 33)), createObject('value', '')))]",
@@ -2476,7 +2492,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6692036302390658833"
+              "templateHash": "10373027056456753093"
             }
           },
           "definitions": {
@@ -4948,6 +4964,8 @@
             "loomUdfFunctionBase": "[string(coalesce(tryGet(parameters('byoExisting'), 'udfFunctionBase'), ''))]",
             "udfRuntimeEnabled": "[bool(coalesce(tryGet(parameters('byoExisting'), 'udfRuntimeEnabled'), true()))]",
             "sparkPoolEnabled": "[bool(coalesce(tryGet(parameters('byoExisting'), 'sparkPoolEnabled'), false()))]",
+            "existingVpnGatewayName": "[string(coalesce(tryGet(parameters('byoExisting'), 'vpnGatewayName'), ''))]",
+            "apimDnsZoneLinkName": "[string(coalesce(tryGet(parameters('byoExisting'), 'apimDnsLinkName'), ''))]",
             "existingPurviewAccount": "[coalesce(tryGet(parameters('byoExisting'), 'purviewAccount'), '')]",
             "effPurviewAccount": "[if(not(empty(variables('existingPurviewAccount'))), variables('existingPurviewAccount'), parameters('loomPurviewAccount'))]",
             "effPurviewLocation": "[coalesce(tryGet(parameters('byoExisting'), 'purviewLocation'), '')]",
@@ -12378,7 +12396,10 @@
                   "aoaiApimGatewayEnabled": {
                     "value": "[variables('aoaiApimGatewayEnabled')]"
                   },
-                  "aoaiBackendEndpoints": "[if(and(and(and(parameters('apimEnabled'), empty(parameters('existingApimName'))), variables('aoaiApimGatewayEnabled')), not(empty(if(variables('agentFoundryCreate'), reference('agentFoundry').outputs.aoaiEndpoint.value, if(not(empty(parameters('existingFoundryAccountName'))), variables('byoFoundryEndpoint'), if(and(parameters('aiFoundryEnabled'), empty(parameters('existingFoundryAccountName'))), reference('aiFoundry').outputs.aoaiInferenceEndpoint.value, '')))))), createObject('value', createArray(if(variables('agentFoundryCreate'), reference('agentFoundry').outputs.aoaiEndpoint.value, if(not(empty(parameters('existingFoundryAccountName'))), variables('byoFoundryEndpoint'), if(and(parameters('aiFoundryEnabled'), empty(parameters('existingFoundryAccountName'))), reference('aiFoundry').outputs.aoaiInferenceEndpoint.value, ''))))), createObject('value', createArray()))]"
+                  "aoaiBackendEndpoints": "[if(and(and(and(parameters('apimEnabled'), empty(parameters('existingApimName'))), variables('aoaiApimGatewayEnabled')), not(empty(if(variables('agentFoundryCreate'), reference('agentFoundry').outputs.aoaiEndpoint.value, if(not(empty(parameters('existingFoundryAccountName'))), variables('byoFoundryEndpoint'), if(and(parameters('aiFoundryEnabled'), empty(parameters('existingFoundryAccountName'))), reference('aiFoundry').outputs.aoaiInferenceEndpoint.value, '')))))), createObject('value', createArray(if(variables('agentFoundryCreate'), reference('agentFoundry').outputs.aoaiEndpoint.value, if(not(empty(parameters('existingFoundryAccountName'))), variables('byoFoundryEndpoint'), if(and(parameters('aiFoundryEnabled'), empty(parameters('existingFoundryAccountName'))), reference('aiFoundry').outputs.aoaiInferenceEndpoint.value, ''))))), createObject('value', createArray()))]",
+                  "dnsZoneLinkName": {
+                    "value": "[variables('apimDnsZoneLinkName')]"
+                  }
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -12387,7 +12408,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "4323235197704583137"
+                      "templateHash": "3091829191372040221"
                     }
                   },
                   "parameters": {
@@ -12521,11 +12542,19 @@
                       "metadata": {
                         "description": "OPT-IN (default OFF): author the llm-semantic-cache-lookup/store policies. Requires an external Redis cache configured on the APIM instance + an embeddings backend — enable only once those are provisioned. Not authored in sovereign boundaries."
                       }
+                    },
+                    "dnsZoneLinkName": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "BROWNFIELD RECONCILE (deploy-integrity.md R5): name of the EXISTING\nazure-api.net private-DNS zone virtual-network link for the APIM VNet. Azure permits\nexactly ONE link per (zone, VNet) pair and 409s a second link created under a NEW\nname — observed live on run 31100384405, where the estate's hand-created\n`link-apim-console` blocked this module's `link-<vnetName>` with `Conflict: Private\nzone 'azure-api.net' is already linked to the virtual network …`. The deploy workflow\npreflight (scripts/csa-loom/preflight-brownfield-adopt.mjs) DISCOVERS the existing\nlink name and passes it here so the PUT targets the SAME link (a no-op update)\ninstead of colliding. Empty (default) => `link-<vnetName>`, byte-identical to the\nprior behavior for greenfield deploys and callers without the discovery step."
+                      }
                     }
                   },
                   "variables": {
                     "isSovereign": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
                     "apimVnetName": "[split(parameters('apimSubnetId'), '/')[8]]",
+                    "effDnsZoneLinkName": "[if(not(empty(parameters('dnsZoneLinkName'))), parameters('dnsZoneLinkName'), format('link-{0}', variables('apimVnetName')))]",
                     "aoaiGatewayActive": "[and(parameters('aoaiApimGatewayEnabled'), not(empty(parameters('aoaiBackendEndpoints'))))]",
                     "aoaiLlmPoliciesSupported": "[not(variables('isSovereign'))]",
                     "aoaiCognitiveResource": "[if(variables('isSovereign'), 'https://cognitiveservices.azure.us', 'https://cognitiveservices.azure.com')]",
@@ -12750,26 +12779,9 @@
                       "tags": "[parameters('complianceTags')]"
                     },
                     {
-                      "type": "Microsoft.Network/privateDnsZones/A",
-                      "apiVersion": "2020-06-01",
-                      "name": "[format('{0}/{1}', 'azure-api.net', format('apim-csa-loom-{0}', parameters('location')))]",
-                      "properties": {
-                        "ttl": 3600,
-                        "aRecords": [
-                          {
-                            "ipv4Address": "[reference(resourceId('Microsoft.ApiManagement/service', format('apim-csa-loom-{0}', parameters('location'))), '2024-06-01-preview').privateIPAddresses[0]]"
-                          }
-                        ]
-                      },
-                      "dependsOn": [
-                        "[resourceId('Microsoft.ApiManagement/service', format('apim-csa-loom-{0}', parameters('location')))]",
-                        "[resourceId('Microsoft.Network/privateDnsZones', 'azure-api.net')]"
-                      ]
-                    },
-                    {
                       "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
                       "apiVersion": "2020-06-01",
-                      "name": "[format('{0}/{1}', 'azure-api.net', format('link-{0}', variables('apimVnetName')))]",
+                      "name": "[format('{0}/{1}', 'azure-api.net', variables('effDnsZoneLinkName'))]",
                       "location": "global",
                       "properties": {
                         "registrationEnabled": false,
@@ -12944,6 +12956,95 @@
                       "dependsOn": [
                         "[resourceId('Microsoft.ApiManagement/service/apis', format('apim-csa-loom-{0}', parameters('location')), 'loom-aoai')]"
                       ]
+                    },
+                    {
+                      "type": "Microsoft.Resources/deployments",
+                      "apiVersion": "2025-04-01",
+                      "name": "apim-gateway-dns-a",
+                      "properties": {
+                        "expressionEvaluationOptions": {
+                          "scope": "inner"
+                        },
+                        "mode": "Incremental",
+                        "parameters": {
+                          "zoneName": {
+                            "value": "azure-api.net"
+                          },
+                          "recordName": {
+                            "value": "[format('apim-csa-loom-{0}', parameters('location'))]"
+                          },
+                          "ipv4Address": {
+                            "value": "[coalesce(first(coalesce(tryGet(reference(resourceId('Microsoft.ApiManagement/service', format('apim-csa-loom-{0}', parameters('location'))), '2024-06-01-preview'), 'privateIPAddresses'), createArray())), '')]"
+                          }
+                        },
+                        "template": {
+                          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                          "contentVersion": "1.0.0.0",
+                          "metadata": {
+                            "_generator": {
+                              "name": "bicep",
+                              "version": "0.45.15.27210",
+                              "templateHash": "8350510517542183209"
+                            }
+                          },
+                          "parameters": {
+                            "zoneName": {
+                              "type": "string",
+                              "metadata": {
+                                "description": "Private DNS zone name (azure-api.net)."
+                              }
+                            },
+                            "recordName": {
+                              "type": "string",
+                              "metadata": {
+                                "description": "A-record name — the APIM service name, so <name>.azure-api.net resolves to the internal gateway."
+                              }
+                            },
+                            "ipv4Address": {
+                              "type": "string",
+                              "metadata": {
+                                "description": "The gateway private IPv4 address. EMPTY => the record is NOT touched this pass (see header); any existing record survives and the next reconcile authors it once the service reports an IP."
+                              }
+                            },
+                            "ttl": {
+                              "type": "int",
+                              "defaultValue": 3600,
+                              "metadata": {
+                                "description": "Record TTL in seconds."
+                              }
+                            }
+                          },
+                          "resources": [
+                            {
+                              "condition": "[not(empty(parameters('ipv4Address')))]",
+                              "type": "Microsoft.Network/privateDnsZones/A",
+                              "apiVersion": "2020-06-01",
+                              "name": "[format('{0}/{1}', parameters('zoneName'), parameters('recordName'))]",
+                              "properties": {
+                                "ttl": "[parameters('ttl')]",
+                                "aRecords": [
+                                  {
+                                    "ipv4Address": "[parameters('ipv4Address')]"
+                                  }
+                                ]
+                              }
+                            }
+                          ],
+                          "outputs": {
+                            "recordAuthored": {
+                              "type": "bool",
+                              "metadata": {
+                                "description": "TRUE when the record was authored this pass; FALSE means the service reported no private IP and the record was deliberately left untouched (not an error — see header)."
+                              },
+                              "value": "[not(empty(parameters('ipv4Address')))]"
+                            }
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ApiManagement/service', format('apim-csa-loom-{0}', parameters('location')))]",
+                        "[resourceId('Microsoft.Network/privateDnsZones', 'azure-api.net')]"
+                      ]
                     }
                   ],
                   "outputs": {
@@ -12965,7 +13066,10 @@
                     },
                     "apimPrivateIp": {
                       "type": "string",
-                      "value": "[reference(resourceId('Microsoft.ApiManagement/service', format('apim-csa-loom-{0}', parameters('location'))), '2024-06-01-preview').privateIPAddresses[0]]"
+                      "metadata": {
+                        "description": "The internal gateway private IP, or EMPTY when the service does not report one (v2-tier VNet injection can report none — see apimPrivateIpOrEmpty). Empty is a true statement, not a default: the DNS A record is skipped for that pass and authored on the next reconcile once the IP is reported."
+                      },
+                      "value": "[coalesce(first(coalesce(tryGet(reference(resourceId('Microsoft.ApiManagement/service', format('apim-csa-loom-{0}', parameters('location'))), '2024-06-01-preview'), 'privateIPAddresses'), createArray())), '')]"
                     },
                     "aoaiGatewayActive": {
                       "type": "bool",
@@ -14440,7 +14544,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "12400362580630377242"
+                      "templateHash": "14956825661627461027"
                     }
                   },
                   "parameters": {
@@ -14552,6 +14656,18 @@
                         "description": "Fallback region for the Purview account when the hub `location` is not a Purview-supported region and no explicit `purviewLocation` is given. Defaults to eastus2 (nearest supported region to centralus). Must be a region in the Purview supported set."
                       }
                     },
+                    "purviewManagedResourcesPublicNetworkAccess": {
+                      "type": "string",
+                      "defaultValue": "Disabled",
+                      "allowedValues": [
+                        "Enabled",
+                        "Disabled",
+                        "NotSpecified"
+                      ],
+                      "metadata": {
+                        "description": "Public network access on the MANAGED resources the Purview RP\ncreates in its managed resource group (the managed storage account + event hub).\nDEFAULT Disabled — policy-compliant by default (D5, run 31100384405): the\nPurview RP PREFLIGHT simulates its managed storage against Azure Policy, and a\ntenant policy requiring `Microsoft.Storage/storageAccounts/publicNetworkAccess =\nDisabled` (observed live: `StorageAccount_PublicNetwork_Modify` in the\nMCAPSGovDeployPolicies management-group assignment) rejects the whole account\nPUT with `RequestDisallowedByPolicy` / error 21010 when the managed resources\nwould be publicly reachable — including UPDATES to an account whose live value\nis `NotSpecified`, which is what broke the estate reconcile. Disabled also\nmatches the account posture (publicNetworkAccess=Disabled + private endpoints\nabove). Data-plane consequence, disclosed: with the managed storage sealed,\nscans that stage through it need the Managed VNet IR / ingestion private\nendpoints rather than the public Azure IR path — Loom's default MI-first\nUC/collection catalog path does not stage through it and is unaffected. NO DNS\nzone is added here for the managed resources (an empty privatelink zone can\nshadow public resolution — the Gov Purview incident; the managed RG's own PEs\ncarry their zone wiring when ingestion PEs are configured)."
+                      }
+                    },
                     "databricksScanKeyVaultEnabled": {
                       "type": "bool",
                       "defaultValue": false,
@@ -14627,6 +14743,7 @@
                       "properties": {
                         "managedResourceGroupName": "[format('rg-mng-purview-csa-loom-{0}', variables('effPurviewLocation'))]",
                         "publicNetworkAccess": "Disabled",
+                        "managedResourcesPublicNetworkAccess": "[parameters('purviewManagedResourcesPublicNetworkAccess')]",
                         "managedEventHubState": "NotSpecified"
                       }
                     },
@@ -25036,6 +25153,9 @@
                   },
                   "boundary": {
                     "value": "[parameters('boundary')]"
+                  },
+                  "existingGatewayName": {
+                    "value": "[variables('existingVpnGatewayName')]"
                   }
                 },
                 "template": {
@@ -25045,7 +25165,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "16585043682739973428"
+                      "templateHash": "5322654343173381753"
                     }
                   },
                   "parameters": {
@@ -25105,15 +25225,24 @@
                       "metadata": {
                         "description": "Compliance tags"
                       }
+                    },
+                    "existingGatewayName": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "BROWNFIELD RECONCILE (deploy-integrity.md R5): name of an EXISTING\nVpn-type virtual network gateway already deployed on this VNet. Azure permits\nexactly ONE VPN gateway per virtual network, so when one exists the module's\ncreate-new PUT can NEVER succeed — observed live on run 31100384405, where the\nestate's `vpngw-loom-centralus` (created under an earlier naming scheme) blocked\nthis module's `vgw-loom-centralus` with `MultipleGatewaysOfTypeVpnUseSameVnet:\nThe VPN gateway … already exists in the virtual network. Delete it and retry.`\nDeleting a working gateway to satisfy a name is destructive (30-45 min recreate +\na VPN outage), so the existing gateway is ADOPTED: referenced as-is, its id/name\nsurfaced through the outputs, and NOTHING about it is changed. The deploy\nworkflow preflight (scripts/csa-loom/preflight-brownfield-adopt.mjs) discovers\nthe name by scope query and passes it here. Empty (default) => create\n`vgw-loom-<location>`, byte-identical to the prior greenfield behavior."
+                      }
                     }
                   },
                   "variables": {
+                    "adoptExistingGateway": "[not(empty(parameters('existingGatewayName')))]",
                     "azureVpnClientAppId": "[if(or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5')), 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8', '41b23e61-6c1e-4545-b367-cd054e0ed4b4')]",
                     "loginEndpointRaw": "[environment().authentication.loginEndpoint]",
                     "aadTenantUrl": "[format('{0}{1}{2}', variables('loginEndpointRaw'), if(endsWith(variables('loginEndpointRaw'), '/'), '', '/'), parameters('tenantId'))]"
                   },
                   "resources": [
                     {
+                      "condition": "[not(variables('adoptExistingGateway'))]",
                       "type": "Microsoft.Network/publicIPAddresses",
                       "apiVersion": "2024-05-01",
                       "name": "[format('pip-vpn-loom-{0}', parameters('location'))]",
@@ -25133,6 +25262,7 @@
                       }
                     },
                     {
+                      "condition": "[not(variables('adoptExistingGateway'))]",
                       "type": "Microsoft.Network/virtualNetworkGateways",
                       "apiVersion": "2024-05-01",
                       "name": "[format('vgw-loom-{0}', parameters('location'))]",
@@ -25186,15 +25316,18 @@
                   "outputs": {
                     "vpnGatewayId": {
                       "type": "string",
-                      "value": "[resourceId('Microsoft.Network/virtualNetworkGateways', format('vgw-loom-{0}', parameters('location')))]"
+                      "value": "[if(variables('adoptExistingGateway'), resourceId('Microsoft.Network/virtualNetworkGateways', parameters('existingGatewayName')), resourceId('Microsoft.Network/virtualNetworkGateways', format('vgw-loom-{0}', parameters('location'))))]"
                     },
                     "vpnGatewayName": {
                       "type": "string",
-                      "value": "[format('vgw-loom-{0}', parameters('location'))]"
+                      "value": "[if(variables('adoptExistingGateway'), parameters('existingGatewayName'), format('vgw-loom-{0}', parameters('location')))]"
                     },
                     "vpnPublicIp": {
                       "type": "string",
-                      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', format('pip-vpn-loom-{0}', parameters('location'))), '2024-05-01').ipAddress]"
+                      "metadata": {
+                        "description": "The P2S public IP for a gateway CREATED by this module. EMPTY on the adopt path — the adopted gateway keeps its own PIP untouched, and this module does not reach into it."
+                      },
+                      "value": "[if(variables('adoptExistingGateway'), '', reference(resourceId('Microsoft.Network/publicIPAddresses', format('pip-vpn-loom-{0}', parameters('location'))), '2024-05-01').ipAddress)]"
                     }
                   }
                 }
