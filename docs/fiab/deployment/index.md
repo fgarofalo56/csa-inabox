@@ -52,6 +52,48 @@ Two supporting references, used by both paths:
 > proves nothing about brownfield and vice versa — the two are verified
 > independently.
 
+## The in-Console setup wizard, step by step
+
+`deploy-integrity.md` **R8** requires the wizard and the docs to agree — a wizard
+step with no doc is drift, and a defect. This is the missing walkthrough: the
+`/setup` rail, in the order it runs, measured against
+`apps/fiab-console/lib/panes/setup-wizard.tsx` (`RAIL_STEPS`, `:191-201`) on
+2026-08-06.
+
+| # | Step (rail label) | What you decide | Notes |
+|---|---|---|---|
+| 1 | **Cloud boundary** | Commercial · GCC · GCC-High / IL4 · IL5 | Selects the boundary parameter file. GCC is M365 GCC identity over Azure Public; GCC-High and IL5 are Azure Government |
+| 2 | **Deployment mode** | single-sub or multi-sub | Single-sub puts the Admin Plane and one Data Landing Zone in the same subscription |
+| 2b | **Deploy new, or wire existing?** | *only when mode = multi-sub* — deploy a new DLZ, or wire already-deployed DLZs into this Admin Plane (RBAC + env, no re-deploy) | A **dynamic** sub-step inserted after *Deployment mode*; it is not in the static rail, which is why it is easy to miss when reading the code |
+| 3 | **Subscription & region** | The deploy target | Region choice is load-bearing — see the region-caveat table in [Greenfield](greenfield.md#phase-1--infrastructure-4090-min) |
+| 4 | **Domain name** | The landing-zone name | Becomes `rg-csa-loom-dlz-<domain>-<location>` — see [resource-group layout](greenfield.md#resource-group-layout-and-naming) |
+| 5 | **Capacity sizing** | Compute equivalence (F-SKU class) | Presented as an equivalence panel, not raw SKUs |
+| 6 | **Analysis scope** | Which subscriptions Loom may **read** | Read-only. The step's own words: *"Before deploying anything, Loom can look at what you already have and offer to use it instead of deploying a duplicate."* This is the R5 multi-subscription analysis |
+| 7 | **Reuse or deploy** ("Scan & choose") | **adopt / create / skip, per service** | The brownfield decision step — full reference in [Brownfield](brownfield.md#step-2--choose-adopt-or-create-per-service) |
+| 8 | **Review & deploy** | Confirm the plan and launch | Produces the reviewable adopt-or-create plan |
+
+Three transient steps (`intro`, `deploying`, `done`) bracket the rail and carry
+no decisions.
+
+> ### Two things the wizard does that the steps above do not tell you
+>
+> 1. **Its scanner is not the good scanner (#3015).** Step 6/7 call
+>    `POST /api/setup/scan-services`, which truncates silently past 1000 resources
+>    and cannot distinguish "no Reader on that subscription" from "that
+>    subscription is empty". The honest scanner — coverage probe, per-subscription
+>    `scanned` / `no-access` / `truncated` ledger, real paging — is
+>    `POST /api/deploy/discovery`. Details and the workaround:
+>    [Brownfield → step 1](brownfield.md#step-1--the-multi-subscription-analysis).
+> 2. **Your step-7 decisions may not reach the deploy (#3016).** Of the four
+>    deploy tiers, only the copy-paste `az` fallback carries the adopt bag today.
+>    **Until that lands, drive a brownfield install from the CLI, not the wizard**
+>    — [Brownfield → open](brownfield.md#open--the-deploy-still-discards-your-brownfield-picks-3016).
+>
+> Fixes for both are **in flight in PR #3062, which is OPEN — not merged, not
+> deployed** (checked 2026-08-06). Re-check with
+> `gh pr view 3062 --json state,mergedAt` before assuming either is resolved;
+> per `deploy-integrity.md` R2 a merge is not a fix.
+
 ## Deployment paths
 
 <div class="grid cards" markdown>
