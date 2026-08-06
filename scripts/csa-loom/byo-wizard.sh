@@ -98,7 +98,11 @@ fi
 HAVE_GRAPH=0
 [[ -n "$SUBS" ]] && az graph query -q "Resources | limit 1" -o none 2>/dev/null && HAVE_GRAPH=1
 
-q() { az "$@" 2>/dev/null || true; }
+# `</dev/null` stops `az` draining the stdin of a `while read` caller, and
+# `tr -d '\r'` (delete CR) strips the CRLF that `az -o tsv` emits on Windows — without it
+# the last field of every discovered row (the subscription id) carries a
+# trailing CR, which makes the follow-up `--subscription` call fail silently.
+q() { az "$@" </dev/null 2>/dev/null | tr -d '\r' || true; }
 
 # discover <arm-type> [<extra-jmespath-filter>] -> prints "name|rg|sub" per candidate
 discover() {
@@ -163,20 +167,11 @@ FOUNDRY_CHAT=""; FOUNDRY_EMBED=""; FOUNDRY_MINI=""; FOUNDRY_STRONG=""; FOUNDRY_C
 
 upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
 
-# pick_by_rank <name\tmodel TSV> <model-regex>... -> the deployment NAME whose
-# MODEL matches the EARLIEST-listed regex (case-insensitive), else empty.
-# Ranked rather than first-match-wins because an account's deployment order is
-# arbitrary: `dml-ai-eastus-sandbox` lists grok-3 and DeepSeek-R1 before gpt-5,
-# so "first line matching /gpt/" is not the best chat model, it is a coin flip.
-pick_by_rank() {
-  local tsv="$1"; shift
-  local re hit
-  for re in "$@"; do
-    hit="$(awk -F'\t' -v re="$re" 'NF>=2 && tolower($2) ~ re {print $1; exit}' <<<"$tsv")"
-    if [[ -n "$hit" ]]; then printf '%s' "$hit"; return 0; fi
-  done
-  return 0
-}
+# The AOAI deployment picker is SHARED with discover-services.sh — one matcher,
+# not two copies that drift. See the header of the sourced file for the measured
+# failure that made a shared copy necessary.
+# shellcheck source=scripts/csa-loom/aoai-deployment-pick.sh
+. "$SCRIPT_DIR/aoai-deployment-pick.sh"
 
 resolve_databricks_host() {  # name rg sub -> workspaceUrl
   local n="$1" r="$2" s="$3"
@@ -260,25 +255,10 @@ for row in "${SERVICES[@]}"; do
       echo "  ! could not read the deployment list on $n (not signed in, no Cognitive Services Reader, or the account is empty)."
       echo "    Set BYO_FOUNDRY_CHAT / BYO_FOUNDRY_EMBED / BYO_FOUNDRY_MINI / BYO_FOUNDRY_STRONG to name them explicitly."
     fi
-    # Never guess a chat deployment out of an image/audio/embedding slot.
-    CHAT_POOL="$(awk -F'\t' 'NF>=2 && tolower($2) !~ /image|dall-e|sora|whisper|tts|embedding|flux|video|speech|moderation|rerank/ {print}' <<<"$deploys")"
-    # Chat/default tier: newest general chat model first; mini/nano only as a last
-    # resort. The pre-2026 list ('gpt-4o|gpt-4.1|gpt-4|gpt-35') matched NOTHING on
-    # a modern account (measured 2026-08-05 against alz-ai-services-westus, whose
-    # only chat slots are gpt-5.4-mini / gpt-5.4-nano / o3-deep-research), which is
-    # how a reuse pick emitted chatDeployment:'' and blanked LOOM_AOAI_*.
-    CHAT_MAIN="$(awk -F'\t' 'tolower($2) !~ /mini|nano/ {print}' <<<"$CHAT_POOL")"
-    CHAT_RANK=('gpt-5[.]6' 'gpt-5[.]5' 'gpt-5[.]4' 'gpt-5[.]3' 'gpt-5[.]2' 'gpt-5[.]1' 'gpt-5' 'gpt-chat-latest' 'gpt-4[.]1' 'gpt-4o' 'gpt-4' 'gpt-35|gpt-3[.]5' 'model-router' 'gpt-')
-    FOUNDRY_CHAT="$(pick_by_rank "$CHAT_MAIN" "${CHAT_RANK[@]}")"
-    [[ -z "$FOUNDRY_CHAT" ]] && FOUNDRY_CHAT="$(pick_by_rank "$CHAT_POOL" "${CHAT_RANK[@]}")"
-    # Mini tier: an explicitly small model. Empty is fine — admin-plane falls the
-    # tier back to the chat deployment rather than to ''.
-    FOUNDRY_MINI="$(pick_by_rank "$CHAT_POOL" 'gpt-5[.]6-mini' 'gpt-5[.]4-mini' 'gpt-5-mini' 'gpt-4[.]1-mini' 'gpt-4o-mini' 'mini' 'nano' 'gpt-35-turbo')"
-    # Strong tier: a reasoning-capable model. The o-series and the gpt-5 flagship
-    # outrank a generic *reasoning* substring — otherwise a small Phi-4-reasoning
-    # slot beats o1 on an account that has both (measured on dml-ai-eastus-sandbox).
-    FOUNDRY_STRONG="$(pick_by_rank "$CHAT_MAIN" '(^|[^a-z0-9])o3([^a-z0-9]|$)' '(^|[^a-z0-9])o1([^a-z0-9]|$)' '(^|[^a-z0-9])o4([^a-z0-9]|$)' 'gpt-5[.]6' 'gpt-5[.]5' 'gpt-5[.]4' 'gpt-5[.]2' 'gpt-5[.]1' 'gpt-5' 'deepseek-r1' 'reasoning' 'deep-research' 'gpt-4[.]1' 'gpt-4o')"
-    FOUNDRY_EMBED="$(pick_by_rank "$deploys" 'text-embedding-3-large' 'text-embedding-3-small' 'text-embedding-ada' 'embedding')"
+    FOUNDRY_CHAT="$(aoai_pick_chat "$deploys")"
+    FOUNDRY_MINI="$(aoai_pick_mini "$deploys")"
+    FOUNDRY_STRONG="$(aoai_pick_strong "$deploys")"
+    FOUNDRY_EMBED="$(aoai_pick_embed "$deploys")"
     # Explicit operator input always wins over discovery (and is the supported
     # path when the wizard cannot read the account, e.g. an unattended CI run).
     FOUNDRY_CHAT="${BYO_FOUNDRY_CHAT:-$FOUNDRY_CHAT}"
