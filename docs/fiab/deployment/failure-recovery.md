@@ -364,17 +364,19 @@ turns its own suite red.
 
 ## Preflight — check before you spend
 
-Two preflights exist and produce concrete remediations:
+These preflights exist and produce concrete remediations:
 
-| Preflight | Checks | Emits |
-|---|---|---|
-| Deploy preflight | `Microsoft.Resources/deployments/write` on the target subscription; registration of the six resource providers | The exact `az role assignment create` and `az provider register` commands |
-| Quota preflight | Regional vCPU by VM family against what the deploy needs | The quota-increase portal link with family + region prefilled |
+| Preflight | Where it runs | Checks | Emits |
+|---|---|---|---|
+| Deploy preflight | Console wizard | `Microsoft.Resources/deployments/write` on the target subscription; registration of the six resource providers | The exact `az role assignment create` and `az provider register` commands |
+| Quota preflight | Console wizard | Regional vCPU by VM family against what the deploy needs | The quota-increase portal link with family + region prefilled |
+| Private-DNS link preflight | `deploy-fiab-commercial.yml` (full mode) | Whether the hub VNet is already linked to a **different** zone of a namespace the deploy will link (`scripts/csa-loom/preflight-private-dns-links.mjs`) | The owning zone's coordinates + the ordered migration command; fails the run before the deploy would die 20 minutes in |
+| Brownfield reconcile discovery | `deploy-fiab-commercial.yml` (both modes, before what-if) | Whether the hub VNet already has a Vpn-type gateway and/or an `azure-api.net` zone link — Azure singletons a create-new PUT can never beat (`scripts/csa-loom/preflight-brownfield-adopt.mjs`) | `existingVpnGatewayName` / `apimGatewayDnsLinkName` template parameters so the deploy ADOPTS the existing names; **fails** the step when the estate cannot be read (a failed read is not an absence) |
 
-They run inside the Console wizard. **They are not currently invoked from the
-CI/workflow deploy paths** — so a workflow-driven deploy can still hit a quota
-failure that a preflight would have caught in seconds. Wiring the shared
-preflight into every tier is in flight.
+The wizard preflights are **not currently invoked from the CI/workflow deploy
+paths** — so a workflow-driven deploy can still hit a quota failure that a
+preflight would have caught in seconds. Wiring the shared preflight into every
+tier is in flight.
 
 To run the equivalent checks by hand before a deploy:
 

@@ -1570,6 +1570,18 @@ var loomUdfFunctionBase = string(byoExisting.?udfFunctionBase ?? '')
 // under the 256-param ceiling.
 var udfRuntimeEnabled = bool(byoExisting.?udfRuntimeEnabled ?? true)
 var sparkPoolEnabled = bool(byoExisting.?sparkPoolEnabled ?? false)
+// D4 brownfield reconcile (run 31100384405; deploy-integrity R5). Estate-owned
+// SINGLETONS that Azure allows exactly one of — the Vpn-type gateway on the hub
+// VNet, and the azure-api.net zone link for the hub VNet — must be ADOPTED by
+// their EXISTING names or every reconcile deploy 409s
+// (MultipleGatewaysOfTypeVpnUseSameVnet / zone-link Conflict). Names are
+// discovered by the deploy workflow preflight
+// (scripts/csa-loom/preflight-brownfield-adopt.mjs) and threaded via
+// byoExisting (root params existingVpnGatewayName / apimGatewayDnsLinkName) —
+// NOT new scalar params; admin-plane sits at the ARM 256-param ceiling. Empty
+// keeps the create-new defaults, byte-identical for greenfield.
+var existingVpnGatewayName = string(byoExisting.?vpnGatewayName ?? '')
+var apimDnsZoneLinkName = string(byoExisting.?apimDnsLinkName ?? '')
 // user-data-function invoke base: a BYO Functions host (loomUdfFunctionBase)
 // wins; otherwise default to the Loom-managed udf-runtime Container App host
 // (mirrors how LOOM_DAB_PREVIEW_URL defaults to the dab-runtime output). Empty
@@ -3086,6 +3098,9 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     // opted in AND a real AOAI endpoint exists; else the console uses direct-with-MI.
     aoaiApimGatewayEnabled: aoaiApimGatewayEnabled
     aoaiBackendEndpoints: aoaiApimBackendEndpoints
+    // D4a — adopt the EXISTING azure-api.net zone link name (discovered by the
+    // workflow preflight; empty = link-<vnetName>, the prior greenfield name).
+    dnsZoneLinkName: apimDnsZoneLinkName
   }
 }
 // =====================================================================
@@ -6833,6 +6848,10 @@ module vpnGateway 'vpn-gateway.bicep' = if (vpnGatewayEnabled) {
     complianceTags: complianceTags
     // Selects the sovereign Azure VPN Client audience app ID (Gov ≠ Commercial).
     boundary: boundary
+    // D4c — a VNet holds exactly ONE Vpn-type gateway; when the estate already
+    // has one (discovered by the workflow preflight) it is ADOPTED by name
+    // instead of colliding with MultipleGatewaysOfTypeVpnUseSameVnet.
+    existingGatewayName: existingVpnGatewayName
   }
 }
 

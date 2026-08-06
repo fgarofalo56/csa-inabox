@@ -87,6 +87,18 @@ param aoaiTokensPerMinute int = 100000
 @description('OPT-IN (default OFF): author the llm-semantic-cache-lookup/store policies. Requires an external Redis cache configured on the APIM instance + an embeddings backend — enable only once those are provisioned. Not authored in sovereign boundaries.')
 param aoaiSemanticCacheEnabled bool = false
 
+@description('''BROWNFIELD RECONCILE (deploy-integrity.md R5): name of the EXISTING
+azure-api.net private-DNS zone virtual-network link for the APIM VNet. Azure permits
+exactly ONE link per (zone, VNet) pair and 409s a second link created under a NEW
+name — observed live on run 31100384405, where the estate's hand-created
+`link-apim-console` blocked this module's `link-<vnetName>` with `Conflict: Private
+zone 'azure-api.net' is already linked to the virtual network …`. The deploy workflow
+preflight (scripts/csa-loom/preflight-brownfield-adopt.mjs) DISCOVERS the existing
+link name and passes it here so the PUT targets the SAME link (a no-op update)
+instead of colliding. Empty (default) => `link-<vnetName>`, byte-identical to the
+prior behavior for greenfield deploys and callers without the discovery step.''')
+param dnsZoneLinkName string = ''
+
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
   name: 'apim-csa-loom-${location}'
   location: location
@@ -347,18 +359,39 @@ resource apimGatewayDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
   tags: complianceTags
 }
 
-resource apimGatewayDnsA 'Microsoft.Network/privateDnsZones/A@2020-06-01' = {
-  parent: apimGatewayDnsZone
-  name: apim.name // <name>.azure-api.net -> the internal gateway IP
-  properties: {
-    ttl: 3600
-    aRecords: [ { ipv4Address: apim.properties.privateIPAddresses[0] } ]
+// The gateway private IP, GUARDED (D4b, run 31100384405). `privateIPAddresses`
+// is NOT guaranteed non-empty even on a Succeeded Internal-VNet service — the
+// live centralus APIM (PremiumV2, Internal, provisioningState=Succeeded)
+// reports privateIPAddresses = null, so indexing `[0]` here failed the deploy
+// at RUNTIME with `InvalidTemplate: … The language expression property '0'
+// can't be evaluated` on azure-api.net/A/apim-csa-loom-centralus.
+var apimPrivateIpOrEmpty = first(apim.properties.?privateIPAddresses ?? []) ?? ''
+
+// The A record lives in a CHILD module because an ARM resource condition cannot
+// contain reference(): the runtime-resolved IP is passed as a plain PARAMETER,
+// which the child's condition CAN read. When no private IP is reported the
+// record is SKIPPED ENTIRELY — never PUT with an empty aRecords array, which
+// would WIPE a record that already exists in the zone (the live centralus zone
+// carries a hand-created 10.0.4.4 record that must survive a reconcile pass).
+module apimGatewayDnsA 'apim-gateway-dns-a.bicep' = {
+  name: 'apim-gateway-dns-a'
+  params: {
+    zoneName: apimGatewayDnsZone.name
+    recordName: apim.name // <name>.azure-api.net -> the internal gateway IP
+    ipv4Address: apimPrivateIpOrEmpty
   }
 }
 
+// v-D4a: the link NAME must match whatever already links this (zone, VNet)
+// pair — ARM rejects a second link to the same pair with 409 Conflict (see the
+// dnsZoneLinkName param). Same idempotency class as network.bicep's v3.27
+// constant-'link-hub' fix; here the live name predates the module, so it is
+// discovered and passed in rather than assumed.
+var effDnsZoneLinkName = !empty(dnsZoneLinkName) ? dnsZoneLinkName : 'link-${apimVnetName}'
+
 resource apimGatewayDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
   parent: apimGatewayDnsZone
-  name: 'link-${apimVnetName}'
+  name: effDnsZoneLinkName
   location: 'global'
   properties: {
     registrationEnabled: false
@@ -370,7 +403,8 @@ output apimId string = apim.id
 output apimName string = apim.name
 output apimGatewayUrl string = apim.properties.gatewayUrl
 output apimManagedIdentityPrincipalId string = apim.identity.principalId
-output apimPrivateIp string = apim.properties.privateIPAddresses[0]
+@description('The internal gateway private IP, or EMPTY when the service does not report one (v2-tier VNet injection can report none — see apimPrivateIpOrEmpty). Empty is a true statement, not a default: the DNS A record is skipped for that pass and authored on the next reconcile once the IP is reported.')
+output apimPrivateIp string = apimPrivateIpOrEmpty
 
 // ───────────────────────────────────────────────────────────────────────────
 // AI-gateway resources (authored only when opted-in + endpoints supplied).

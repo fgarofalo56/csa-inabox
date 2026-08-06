@@ -33,7 +33,32 @@ param sku string = 'VpnGw1AZ'
 @description('Compliance tags')
 param complianceTags object
 
-resource vpnPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+@description('''BROWNFIELD RECONCILE (deploy-integrity.md R5): name of an EXISTING
+Vpn-type virtual network gateway already deployed on this VNet. Azure permits
+exactly ONE VPN gateway per virtual network, so when one exists the module's
+create-new PUT can NEVER succeed — observed live on run 31100384405, where the
+estate's `vpngw-loom-centralus` (created under an earlier naming scheme) blocked
+this module's `vgw-loom-centralus` with `MultipleGatewaysOfTypeVpnUseSameVnet:
+The VPN gateway … already exists in the virtual network. Delete it and retry.`
+Deleting a working gateway to satisfy a name is destructive (30-45 min recreate +
+a VPN outage), so the existing gateway is ADOPTED: referenced as-is, its id/name
+surfaced through the outputs, and NOTHING about it is changed. The deploy
+workflow preflight (scripts/csa-loom/preflight-brownfield-adopt.mjs) discovers
+the name by scope query and passes it here. Empty (default) => create
+`vgw-loom-<location>`, byte-identical to the prior greenfield behavior.''')
+param existingGatewayName string = ''
+
+var adoptExistingGateway = !empty(existingGatewayName)
+
+// The adopted gateway. Left EXACTLY as found — adoption is reuse, not
+// reconfiguration (R5: never silently change a resource the estate already
+// depends on; config drift on an adopted gateway is surfaced by drift checks,
+// not silently overwritten here).
+resource existingVpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' existing = if (adoptExistingGateway) {
+  name: existingGatewayName
+}
+
+resource vpnPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (!adoptExistingGateway) {
   name: 'pip-vpn-loom-${location}'
   location: location
   tags: complianceTags
@@ -81,7 +106,7 @@ var azureVpnClientAppId = (boundary == 'GCC-High' || boundary == 'IL5') ? 'c632b
 var loginEndpointRaw = environment().authentication.loginEndpoint
 var aadTenantUrl = '${loginEndpointRaw}${endsWith(loginEndpointRaw, '/') ? '' : '/'}${tenantId}'
 
-resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {
+resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = if (!adoptExistingGateway) {
   name: 'vgw-loom-${location}'
   location: location
   tags: complianceTags
@@ -117,6 +142,7 @@ resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {
   }
 }
 
-output vpnGatewayId string = vpnGateway.id
-output vpnGatewayName string = vpnGateway.name
-output vpnPublicIp string = vpnPip.properties.ipAddress
+output vpnGatewayId string = adoptExistingGateway ? existingVpnGateway!.id : vpnGateway!.id
+output vpnGatewayName string = adoptExistingGateway ? existingGatewayName : vpnGateway!.name
+@description('The P2S public IP for a gateway CREATED by this module. EMPTY on the adopt path — the adopted gateway keeps its own PIP untouched, and this module does not reach into it.')
+output vpnPublicIp string = adoptExistingGateway ? '' : vpnPip!.properties.ipAddress

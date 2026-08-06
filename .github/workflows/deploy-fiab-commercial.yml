@@ -354,6 +354,40 @@ jobs:
           echo "hub_uami_name=$HUB_UAMI_NAME"    >> "$GITHUB_OUTPUT"
           echo "::notice::Hub coords — sub=$HUB_SUB vnet=$HUB_VNET_ID uami=$HUB_UAMI_NAME ($HUB_UAMI_PRINCIPAL)"
 
+      # ── BROWNFIELD RECONCILE DISCOVERY (D4, run 31100384405 — deploy-integrity R5) ──
+      # Azure permits exactly ONE Vpn-type gateway per VNet and ONE private-DNS
+      # zone link per (zone, VNet) pair. The live estate carries both under
+      # names that predate the current templates (vpngw-loom-centralus;
+      # link-apim-console), so a create-new PUT can NEVER succeed — run
+      # 31100384405 died on MultipleGatewaysOfTypeVpnUseSameVnet and the
+      # azure-api.net link 409 Conflict. The deploy must ADOPT those names.
+      # Bicep cannot query a scope, so the discovery runs here and feeds the
+      # template params. It runs in BOTH modes so what-if previews the SAME
+      # template inputs the apply uses. Three-state (R7): found → adopt name;
+      # ARM-answered-absent → create-new defaults; unreadable → this step FAILS
+      # (a failed read establishes nothing, and asserting "nothing exists" from
+      # one is exactly how the estate got a second-gateway PUT).
+      - name: Brownfield reconcile discovery (adopt estate-owned singletons — R5)
+        id: reconcile_adopt
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
+          OUT=$(node scripts/csa-loom/preflight-brownfield-adopt.mjs \
+            --resource-group "$RG" \
+            --hub-vnet-name "vnet-csa-loom-hub-${AZURE_LOCATION}" \
+            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} --json)
+          echo "$OUT"
+          VPN_NAME=$(echo "$OUT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["vpnGatewayName"])')
+          LINK_NAME=$(echo "$OUT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["apimDnsLinkName"])')
+          echo "vpn_gateway_name=$VPN_NAME"    >> "$GITHUB_OUTPUT"
+          echo "apim_dns_link_name=$LINK_NAME" >> "$GITHUB_OUTPUT"
+          if [ -n "$VPN_NAME" ] || [ -n "$LINK_NAME" ]; then
+            echo "::notice::brownfield-adopt: existing singletons will be ADOPTED — vpnGateway='${VPN_NAME:-<create-new>}', azure-api.net link='${LINK_NAME:-<create-new>}'."
+          else
+            echo "::notice::brownfield-adopt: no existing VPN gateway or azure-api.net link on the hub VNet — create-new defaults apply."
+          fi
+
       - name: Bicep what-if (preview)
         id: whatif
         run: |
@@ -370,6 +404,7 @@ jobs:
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
             --parameters purviewEnabled=${{ steps.topology_guard.outputs.purview_enabled }} azureMapsEnabled=${{ steps.topology_guard.outputs.azure_maps_enabled }} hubFirewallEnabled=${{ steps.topology_guard.outputs.firewall_enabled }} deployAppsEnabled=${{ steps.reconcile.outputs.deploy_apps_enabled }} skipRoleGrants=${{ steps.topology_guard.outputs.skip_role_grants }} frontDoorEnabled=${{ steps.topology_guard.outputs.front_door_enabled }} \
+            --parameters existingVpnGatewayName="${{ steps.reconcile_adopt.outputs.vpn_gateway_name }}" apimGatewayDnsLinkName="${{ steps.reconcile_adopt.outputs.apim_dns_link_name }}" \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
@@ -570,6 +605,7 @@ jobs:
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters location="$AZURE_LOCATION" \
             --parameters purviewEnabled=${{ steps.topology_guard.outputs.purview_enabled }} azureMapsEnabled=${{ steps.topology_guard.outputs.azure_maps_enabled }} hubFirewallEnabled=${{ steps.topology_guard.outputs.firewall_enabled }} deployAppsEnabled=${{ steps.reconcile.outputs.deploy_apps_enabled }} skipRoleGrants=${{ steps.topology_guard.outputs.skip_role_grants }} frontDoorEnabled=${{ steps.topology_guard.outputs.front_door_enabled }} \
+            --parameters existingVpnGatewayName="${{ steps.reconcile_adopt.outputs.vpn_gateway_name }}" apimGatewayDnsLinkName="${{ steps.reconcile_adopt.outputs.apim_dns_link_name }}" \
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
             ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
             --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \

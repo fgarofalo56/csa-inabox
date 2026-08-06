@@ -979,6 +979,12 @@ param loomSwaResourceGroup string = ''
 @description('user-data-function invoke base URL — a BYO Azure Functions host, e.g. https://my-udf.azurewebsites.net (LOOM_UDF_FUNCTION_BASE). Empty → the UDF invoke route serves its honest 503 gate naming this var. Folded into byoExisting.udfFunctionBase (256-param ceiling). TODO udf-runtime.bicep: a Loom-managed Functions host on the dab-runtime.bicep pattern will default this.')
 param loomUdfFunctionBase string = ''
 
+@description('BROWNFIELD RECONCILE (deploy-integrity.md R5; run 31100384405): name of the EXISTING Vpn-type virtual network gateway on the hub VNet. Azure permits exactly ONE VPN gateway per VNet, so a create-new PUT against an estate that already has one (e.g. the live vpngw-loom-centralus, created under an earlier naming scheme) always fails with MultipleGatewaysOfTypeVpnUseSameVnet. The deploy workflow discovers this name via scripts/csa-loom/preflight-brownfield-adopt.mjs and the gateway is ADOPTED (referenced, left unchanged). Empty → vpn-gateway.bicep creates vgw-loom-<location> (greenfield, byte-identical to prior behavior). Folded into byoExisting.vpnGatewayName (admin-plane 256-param ceiling).')
+param existingVpnGatewayName string = ''
+
+@description('BROWNFIELD RECONCILE (deploy-integrity.md R5; run 31100384405): name of the EXISTING azure-api.net private-DNS zone virtual-network link for the hub VNet. Azure permits ONE link per (zone, VNet) pair and 409s a second link under a new name (the live estate carries link-apim-console, which blocked the module\'s link-<vnetName>). Discovered by scripts/csa-loom/preflight-brownfield-adopt.mjs so the PUT targets the SAME link. Empty → apim.bicep uses link-<vnetName> (greenfield, byte-identical). Folded into byoExisting.apimDnsLinkName (256-param ceiling).')
+param apimGatewayDnsLinkName string = ''
+
 @description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → a strong password is auto-generated into the deployment (effShirAdminPassword) so the SHIR provisions by default per deploy-readiness; supply a Key-Vault-backed secret to override. The VMSS stays at capacity 0 (scale-to-0) so the credential is never used interactively — nothing needs to RDP.')
 @secure()
 param shirAdminPassword string = ''
@@ -1272,6 +1278,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // bindings, so no accelerator host/gate is threaded here.)
       udfRuntimeEnabled: udfRuntimeEnabled
       sparkPoolEnabled: sparkPoolEnabled
+      // D4 brownfield reconcile (run 31100384405, deploy-integrity R5) —
+      // estate-owned SINGLETONS adopted by their existing names: the hub VNet's
+      // Vpn-type gateway (Azure allows ONE per VNet) and the azure-api.net
+      // zone link (ONE link per zone/VNet pair). Discovered by the deploy
+      // workflow preflight (scripts/csa-loom/preflight-brownfield-adopt.mjs);
+      // empty keeps create-new. Carried on the BYO object (256-param ceiling).
+      vpnGatewayName: existingVpnGatewayName
+      apimDnsLinkName: apimGatewayDnsLinkName
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
