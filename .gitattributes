@@ -72,3 +72,10 @@ apps/fiab-console/deploy-templates/main.json text eol=lf
 # every platform, which is what lets scripts/ci/check-deploy-template-sync.mjs
 # compare bytes with no normalization at all.
 platform/fiab/bicep/** text eol=lf
+
+# The AOAI deployment picker + its self-test are executed by `bash` on the Linux
+# guardrails runner (and the picker is SOURCED by the two BYO scanners, which the
+# deploy lanes run there too). A CRLF checkout makes bash choke on the trailing
+# \r ("$'\r': command not found"), so pin both to LF regardless of core.autocrlf.
+scripts/csa-loom/aoai-deployment-pick.sh text eol=lf
+scripts/ci/test-aoai-deployment-pick.sh text eol=lf
