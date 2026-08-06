@@ -1,0 +1,292 @@
+name: deploy-report-subscriptions
+
+run-name: >-
+  deploy-report-subscriptions
+  ${{ inputs.dry_run && '[DRY RUN — nothing deployed]' || format('→ {0}', inputs.region || 'centralus') }}
+
+# CSA Loom — dispatchable deploy path for the `loom-report-subscriptions`
+# Container App Job (the in-VNet, scheduled report-subscription delivery
+# runtime, WS-C2).
+#
+# ── WHY THIS EXISTS (B-FN C3) ──────────────────────────────────────────────
+# `scripts/csa-loom/deploy-report-subscriptions-job.sh` is the only thing that
+# BUILDS and rolls the delivery image. bicep
+# (modules/admin-plane/report-subscriptions-job.bicep) CREATES the job on a full
+# deploy, but bicep does not build images: the job's first scheduled execution
+# fails honestly until an image exists.
+#
+# Without a workflow this deploy path is invisible to the "merged ≠ deployed"
+# watchdog (#2775) BY CONSTRUCTION — that check compares a watched WORKFLOW's
+# last successful run against the code it deploys, and a deploy path that is not
+# a workflow can never register as stale. Registered in `WATCHED` in
+# scripts/ci/check-deploy-staleness.mjs.
+#
+# The failure mode this guards is quiet: subscriptions keep SAVING to Cosmos and
+# the editor keeps listing them as enabled while nothing is delivered. That is
+# exactly how the retired Y1 Function failed — measured 2026-08-06,
+# `az functionapp function list` returned `[]` for func-rptsub-* (the host had
+# indexed zero functions), so the timer had never fired at all.
+#
+# ── WHAT IT DOES ───────────────────────────────────────────────────────────
+# It is a WRAPPER. It does not reimplement the script, which owns the ACR
+# firewall-lease acquire/release lifecycle (#2603). Read that script's header
+# before changing anything here.
+#
+# ── AUTH ───────────────────────────────────────────────────────────────────
+# Service-principal `creds:` login, matching deploy-secret-expiry.yml (the
+# template). NOT OIDC: this repo's federated credential is scoped to
+# `repo:...:ref:refs/heads/main`, so an OIDC login would authenticate only on a
+# main-ref dispatch and fail for a branch dispatch during a fix.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region of the target Admin Plane (e.g. centralus, eastus2).'
+        type: string
+        default: centralus
+      subscription:
+        description: 'Target subscription id (defaults to the AZURE_SUBSCRIPTION_ID secret).'
+        type: string
+        required: false
+      cron:
+        description: 'Schedule cron override — STANDARD 5-FIELD UTC. Empty keeps the job''s current schedule (script default */15 * * * * on first create).'
+        type: string
+        required: false
+      dry_run:
+        description: 'Resolve + print every coordinate and STOP. Nothing is built, no ACR firewall change, no job write.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Never cancel in flight: this holds the ACR firewall lease while the image
+# builds (#2603).
+concurrency:
+  group: deploy-report-subscriptions-${{ inputs.region || 'centralus' }}
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: ${{ inputs.region || 'centralus' }}
+  JOB_NAME: loom-report-subscriptions
+
+jobs:
+  deploy:
+    name: Build image + create/refresh the report-subscriptions delivery job
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      # ── Resolve the coordinates the script hard-requires ──────────────────
+      # SUB / CONSOLE_UAMI_ID / CONSOLE_UAMI_CLIENT_ID / ACR are `${VAR:?}` in
+      # the script — it exits non-zero on the first missing one before touching
+      # anything.
+      #
+      # PUBLIC REPO: the subscription id and the UAMI ARM id (which embeds it)
+      # are masked before anything can echo them.
+      - name: Resolve deploy coordinates
+        env:
+          VAR_ADMIN_RG: ${{ vars.LOOM_ADMIN_RG }}
+          VAR_UAMI_NAME: ${{ vars.LOOM_CONSOLE_UAMI_NAME }}
+          VAR_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT }}
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --only-show-errors || true
+
+          RG="${VAR_ADMIN_RG:-}"
+          [ -n "$RG" ] || RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+
+          SUB=$(az account show --query id -o tsv | tr -d '\r')
+          echo "::add-mask::$SUB"
+
+          ACR=$(az acr list -g "$RG" --query "[?starts_with(name,'acrloom')]|[0].loginServer" -o tsv | tr -d '\r')
+          [ -n "$ACR" ] || ACR=$(az acr list -g "$RG" --query "[0].loginServer" -o tsv | tr -d '\r')
+          if [ -z "$ACR" ]; then
+            echo "::error::No container registry found in $RG. The Admin Plane must be provisioned before the delivery image can be built — run the infra deploy first."
+            exit 1
+          fi
+
+          CAE=$(az containerapp env list -g "$RG" --query "[?starts_with(name,'cae-')]|[0].name" -o tsv | tr -d '\r')
+          [ -n "$CAE" ] || CAE=$(az containerapp env list -g "$RG" --query "[0].name" -o tsv | tr -d '\r')
+          if [ -z "$CAE" ]; then
+            echo "::error::No Container Apps managed environment found in $RG. The delivery job runs inside the console's VNet-integrated CAE; it cannot be created without one."
+            exit 1
+          fi
+
+          UAMI_NAME="${VAR_UAMI_NAME:-}"
+          [ -n "$UAMI_NAME" ] || UAMI_NAME="uami-loom-console-${AZURE_LOCATION}"
+          UAMI_JSON=$(az identity show -n "$UAMI_NAME" -g "$RG" -o json || true)
+          if [ -z "$UAMI_JSON" ]; then
+            UAMI_JSON=$(az identity list -g "$RG" --query "[?starts_with(name,'uami-loom-console')]|[0]" -o json || true)
+          fi
+          UAMI_ID=$(printf '%s' "$UAMI_JSON" | jq -r '.id // empty')
+          UAMI_CLIENT="${VAR_UAMI_CLIENT:-}"
+          [ -n "$UAMI_CLIENT" ] || UAMI_CLIENT=$(printf '%s' "$UAMI_JSON" | jq -r '.clientId // empty')
+          if [ -z "$UAMI_ID" ] || [ -z "$UAMI_CLIENT" ]; then
+            echo "::error::Could not resolve the Console UAMI in $RG (looked for $UAMI_NAME, then any uami-loom-console*). The job runs AS this identity — it is the identity that holds Cosmos Built-in Data Contributor and Logic App Contributor on the delivery workflow. Set the LOOM_CONSOLE_UAMI_NAME / LOOM_CONSOLE_UAMI_CLIENT repo vars, or check the region."
+            exit 1
+          fi
+          echo "::add-mask::$UAMI_ID"
+          echo "::add-mask::$UAMI_CLIENT"
+
+          {
+            echo "ADMIN_RG=$RG"
+            echo "SUB=$SUB"
+            echo "CAE=$CAE"
+            echo "ACR=$ACR"
+            echo "CONSOLE_UAMI_ID=$UAMI_ID"
+            echo "CONSOLE_UAMI_CLIENT_ID=$UAMI_CLIENT"
+          } >> "$GITHUB_ENV"
+
+          echo "::notice::admin RG=$RG  CAE=$CAE  ACR=$ACR  UAMI=$UAMI_NAME (ids masked)"
+
+      # ── The one piece of real logic: do not blank a working job ───────────
+      # The script builds ENV_ARGS from its own environment and passes ALL of it
+      # to `az containerapp job update --set-env-vars`. Per the az CLI contract,
+      # --set-env-vars adds/updates the NAMED variables and leaves unnamed ones
+      # alone — but every name the script DOES list is written, and a name left
+      # unresolved here is written as the EMPTY STRING.
+      #
+      # Blanking is not cosmetic. Empty LOOM_COSMOS_ENDPOINT makes the pass
+      # honest-gate: it keeps running, keeps reporting Succeeded, and delivers
+      # nothing. Empty LOOM_SUBSCRIPTION_LOGIC_APP_NAME or
+      # LOOM_REPORT_RENDERER_URL means each subscription fails at render/deliver
+      # and the only trace is a delivery-log row nobody is watching. So the
+      # authoritative source is the RUNNING JOB; the console app is the fallback
+      # for a first create; and an unreadable existing job is a hard stop.
+      - name: Resolve delivery config (carry forward — never blank a live job)
+        env:
+          INPUT_CRON: ${{ inputs.cron }}
+        run: |
+          set -euo pipefail
+          CFG_VARS="LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE LOOM_REPORT_RENDERER_URL LOOM_ADLS_ACCOUNT LOOM_SUBSCRIPTION_LOGIC_APP_NAME LOOM_SUBSCRIPTION_LOGIC_APP_RG LOOM_DLZ_RG LOOM_ARM_ENDPOINT LOOM_STORAGE_SUFFIX LOOM_AOAI_ENDPOINT LOOM_AOAI_DEPLOYMENT LOOM_AOAI_API_VERSION"
+
+          pick() { printf '%s' "$1" | jq -r --arg n "$2" 'first((. // [])[] | select(.name==$n) | (.value // "")) // ""'; }
+
+          JOB_ENV='[]'
+          JOB_EXISTS=false
+          if az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" -o none; then
+            JOB_EXISTS=true
+            JOB_ENV=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.template.containers[0].env" -o json || echo 'READ_FAILED')
+            if [ "$JOB_ENV" = "READ_FAILED" ] || ! printf '%s' "$JOB_ENV" | jq -e 'type=="array"' >/dev/null; then
+              echo "::error::$JOB_NAME exists in $ADMIN_RG but its env set could not be read. REFUSING to run the deploy: the script would rewrite every listed config value to the empty string and scheduled delivery would silently stop while every execution still reported Succeeded. Fix the read (RBAC / az) and re-dispatch."
+              exit 1
+            fi
+            echo "Existing job found — carrying its config forward ($(printf '%s' "$JOB_ENV" | jq 'length') env var(s) on the job)."
+          else
+            echo "::notice::$JOB_NAME does not exist in $ADMIN_RG yet — the script will CREATE it. Config falls back to the loom-console app's env."
+          fi
+
+          APP_ENV=$(az containerapp show -g "$ADMIN_RG" -n loom-console \
+            --query "properties.template.containers[0].env" -o json || echo '[]')
+          printf '%s' "$APP_ENV" | jq -e 'type=="array"' >/dev/null || APP_ENV='[]'
+
+          MISSING=""
+          for V in $CFG_VARS; do
+            CUR=$(pick "$JOB_ENV" "$V")
+            VAL="$CUR"
+            SRC=job
+            if [ -z "$VAL" ]; then VAL=$(pick "$APP_ENV" "$V"); SRC=console; fi
+            # The console publishes the renderer base URL under its own name.
+            if [ -z "$VAL" ] && [ "$V" = "LOOM_REPORT_RENDERER_URL" ]; then
+              VAL=$(pick "$APP_ENV" LOOM_PAGINATED_RENDER_URL); SRC=console:LOOM_PAGINATED_RENDER_URL
+            fi
+            if [ -z "$VAL" ]; then SRC='(unset — script default applies)'; fi
+
+            if [ -n "$CUR" ] && [ -z "$VAL" ]; then MISSING="$MISSING $V"; fi
+
+            [ -n "$VAL" ] && echo "$V=$VAL" >> "$GITHUB_ENV"
+            echo "  $V <- $SRC"
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::REFUSING to deploy — these values are set on the live $JOB_NAME but resolved empty here, so the script would blank them:$MISSING"
+            exit 1
+          fi
+
+          # Honest gates, not hard stops: the script accepts these empty (they
+          # default to ''), and bicep is the canonical creator. But an empty one
+          # means delivery half-works while reporting success, so name it.
+          CE=$(printenv LOOM_COSMOS_ENDPOINT || true)
+          RU=$(printenv LOOM_REPORT_RENDERER_URL || true)
+          LA=$(printenv LOOM_SUBSCRIPTION_LOGIC_APP_NAME || true)
+          [ -n "$CE" ] || echo "::warning::LOOM_COSMOS_ENDPOINT is unset — every pass will honest-gate and deliver NOTHING while still reporting Succeeded. Deploy modules/admin-plane/report-subscriptions-job.bicep (reportSubscriptionsEnabled) to wire it."
+          [ -n "$RU" ] || echo "::warning::LOOM_REPORT_RENDERER_URL is unset — every subscription will fail at the render step. This variable was set NOWHERE in bicep before B-FN C3; if it is still empty, the admin-plane deploy that wires it (loomPaginatedRenderUrl) has not run."
+          [ -n "$LA" ] || echo "::warning::LOOM_SUBSCRIPTION_LOGIC_APP_NAME is unset — reports will render and then have nowhere to be delivered. Deploy integration/report-subscription-logicapp.bicep and authorize its Office 365 connection."
+
+          CRON="${INPUT_CRON:-}"
+          if [ -z "$CRON" ] && [ "$JOB_EXISTS" = true ]; then
+            CRON=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+              --query "properties.configuration.scheduleTriggerConfig.cronExpression" -o tsv | tr -d '\r')
+          fi
+          if [ -n "$CRON" ] && [ "$CRON" != "None" ]; then echo "REPORT_SUBSCRIPTIONS_CRON=$CRON" >> "$GITHUB_ENV"; fi
+          echo "  REPORT_SUBSCRIPTIONS_CRON <- ${CRON:-script default */15 * * * *}"
+
+      - name: DRY RUN — resolved plan only, nothing deployed
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "DRY RUN. No image was built. The ACR firewall was not touched. The job was not written."
+          echo
+          echo "  admin RG    : $ADMIN_RG"
+          echo "  CAE         : $CAE"
+          echo "  ACR         : $ACR"
+          echo "  image       : $ACR/loom-report-subscriptions:latest"
+          echo "  job         : $JOB_NAME"
+          echo "  cron        : ${REPORT_SUBSCRIPTIONS_CRON:-<script default */15 * * * *>}"
+          echo "  build commit: ${GITHUB_SHA}"
+          echo
+          echo "Config that WOULD be written (empty = script default applies):"
+          for V in LOOM_COSMOS_ENDPOINT LOOM_COSMOS_DATABASE LOOM_REPORT_RENDERER_URL LOOM_ADLS_ACCOUNT LOOM_SUBSCRIPTION_LOGIC_APP_NAME LOOM_SUBSCRIPTION_LOGIC_APP_RG LOOM_DLZ_RG LOOM_ARM_ENDPOINT LOOM_STORAGE_SUFFIX LOOM_AOAI_ENDPOINT LOOM_AOAI_DEPLOYMENT LOOM_AOAI_API_VERSION; do
+            printf '  %-38s %s\n' "$V" "$(printenv "$V" || echo '<unset>')"
+          done
+          echo
+          echo "::warning::DRY RUN — the report-subscriptions delivery job was NOT deployed. This run does NOT count as a deploy for the staleness watchdog. Re-dispatch with dry_run=false to actually build and roll it."
+
+      # The script owns everything from here: ACR firewall lease acquire →
+      # `az acr build` → lease release → `az containerapp job create|update`.
+      - name: Deploy — build image + create/refresh the job
+        if: ${{ !inputs.dry_run }}
+        run: bash scripts/csa-loom/deploy-report-subscriptions-job.sh
+
+      - name: Verify the job now points at the built image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -uo pipefail
+          IMAGE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].image" -o tsv | tr -d '\r')
+          CONTAINER=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].name" -o tsv | tr -d '\r')
+          STATE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.provisioningState" -o tsv | tr -d '\r')
+          CE=$(az containerapp job show -g "$ADMIN_RG" -n "$JOB_NAME" \
+            --query "properties.template.containers[0].env[?name=='LOOM_COSMOS_ENDPOINT'].value | [0]" -o tsv | tr -d '\r')
+          echo "image=$IMAGE container=$CONTAINER provisioningState=$STATE"
+          if [ -z "$IMAGE" ]; then
+            echo "::error::$JOB_NAME is not readable after the deploy — cannot confirm the image rolled."
+            exit 1
+          fi
+          # bicep names the container 'report-subscriptions' and the script
+          # header's log query keys off it. Warn: a mismatch misleads a human
+          # reading logs, but no automated gate reads this name.
+          if [ "$CONTAINER" != "report-subscriptions" ]; then
+            echo "::warning::container name is '$CONTAINER', not 'report-subscriptions'. The log query in the script header (ContainerAppConsoleLogs_CL | where ContainerName_s == 'report-subscriptions') will return NOTHING for this job. Deploy modules/admin-plane/report-subscriptions-job.bicep to get the canonical name."
+          fi
+          if [ -z "$CE" ] || [ "$CE" = "None" ]; then
+            echo "::warning::LOOM_COSMOS_ENDPOINT is empty on the deployed job — every pass will honest-gate and deliver nothing."
+          fi
+          echo "::notice::$JOB_NAME rolled to $IMAGE (built from ${GITHUB_SHA}). The next scheduled execution picks it up."

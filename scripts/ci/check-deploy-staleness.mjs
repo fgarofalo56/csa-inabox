@@ -188,6 +188,16 @@ export const WATCHED = [
     maxDays: 14,
   },
   {
+    workflow: 'deploy-report-subscriptions.yml',
+    why: 'Builds + rolls the loom-report-subscriptions image — the delivery runtime for scheduled report subscriptions (WS-C2). bicep creates the JOB but never builds the IMAGE. Stale here is invisible from the outside: subscriptions keep SAVING to Cosmos and the editor keeps showing them as enabled while nothing is delivered, which is exactly how the retired Y1 Function failed for months (its host indexed zero functions, so the timer never fired at all).',
+    paths: [
+      '.github/workflows/deploy-report-subscriptions.yml',
+      'azure-functions/report-subscriptions/**',
+      'scripts/csa-loom/deploy-report-subscriptions-job.sh',
+    ],
+    maxDays: 14,
+  },
+  {
     workflow: 'deploy-secret-expiry.yml',
     why: 'Builds + rolls the loom-secret-expiry-monitor image — the job that warns BEFORE an MSAL/Key Vault credential expires. Stale here is what the 2026-07-19 sign-in outage looked like from the inside: the credential lapsed, and the thing that should have said so was not running current code.',
     paths: [

@@ -3944,12 +3944,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // no Microsoft Fabric dependency.
             { name: 'LOOM_PLAN_BACKING_SQL_SERVER', value: loomPlanBackingSqlServer }
             { name: 'LOOM_PLAN_BACKING_SQL_DATABASE', value: loomPlanBackingSqlDatabase }
-            // Report subscriptions (scheduled report export + email). The
-            // Function name is non-empty only when reportSubscriptionsEnabled —
-            // the subscriptions BFF surfaces an honest delivery gate to the
-            // editor until BOTH the timer Function and the delivery Logic App
-            // are deployed. No Fabric / Power Automate dependency.
-            { name: 'LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', value: reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : '' }
+            // Report subscriptions (scheduled report export + email). Non-empty
+            // only when the delivery runtime is actually deployed — the
+            // subscriptions BFF surfaces an honest delivery gate to the editor
+            // until BOTH the runtime and the delivery Logic App are live.
+            // B-FN C3 (2026-08-06): the value is the Container App JOB NAME
+            // (loom-report-subscriptions), not a Function site name. The env var
+            // KEEPS its historical name because the BFF route, the
+            // svc-report-subscriptions env-check, and post-deploy bootstrap all
+            // read it; it is a presence flag, and nothing dereferences it as a
+            // hostname. No Fabric / Power Automate dependency.
+            { name: 'LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', value: reportSubscriptionsActive ? reportSubscriptions.outputs.jobName : '' }
             { name: 'LOOM_SUBSCRIPTION_LOGIC_APP_NAME', value: reportSubscriptionsEnabled ? loomSubscriptionLogicAppName : '' }
             // Copy Job (F14) — watermark control table address. When the server
             // is unset, incremental copy surfaces an honest-gate MessageBar and
@@ -6950,18 +6955,44 @@ module reportSubscriptionLogicApp '../integration/report-subscription-logicapp.b
   }
 }
 
-// Report-subscriptions timer Function — scheduled Power BI export → ADLS
-// archive → email delivery via the Logic App above. No-op without a Cosmos
-// account. The Function identity is granted Cosmos DB Built-in Data Contributor
-// + Storage Blob Data Contributor + Logic App Contributor in post-deploy
-// bootstrap (grant-navigator-rbac.sh) using the principalId output below.
-module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSubscriptionsEnabled) {
-  name: 'report-subscriptions-function'
+// Report-subscriptions delivery runtime — scheduled Azure-native report render
+// → ADLS archive → email delivery via the Logic App above. Honest-gates (exits
+// 0 having done nothing) without a Cosmos account.
+//
+// B-FN C3 (2026-08-06): an in-VNet scheduled Container App Job, NOT a Y1
+// Function. Y1 is structurally broken on this estate and this was MEASURED, not
+// assumed: `az functionapp function list` returned `[]` for all seven Function
+// Apps in the admin RG (func-rptsub-… included, so this timer had never fired)
+// and the anonymous health route on func-csa-loom-mcp returned HTTP 404.
+//
+// Running as the CONSOLE UAMI removes the entire post-deploy RBAC step the
+// Function needed: grant-navigator-rbac.sh had to grant the Function's own
+// principal Cosmos Built-in Data Contributor + Storage Blob Data Contributor +
+// Logic App Contributor after the fact (its principalId did not exist at
+// template time). The Console UAMI already holds all three — and
+// reportSubscriptionLogicApp above ALREADY grants it Logic App Contributor on
+// the delivery workflow, which is exactly what listCallbackUrl needs.
+var reportSubscriptionsActive = reportSubscriptionsEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module reportSubscriptions 'report-subscriptions-job.bicep' = if (reportSubscriptionsActive) {
+  name: 'report-subscriptions-job'
   params: {
     location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
     loomCosmosEndpoint: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
     loomCosmosDatabase: 'loom'
-    reportSubscriptionsCron: reportSubscriptionsCron
+    // 5-field UTC (Container Apps jobs). functionAppsConfig.reportSubscriptionsCron
+    // is the legacy 6-field NCRONTAB, so drop its leading seconds field when set.
+    cronExpression: length(split(trim(reportSubscriptionsCron), ' ')) == 6
+      ? join(skip(split(trim(reportSubscriptionsCron), ' '), 1), ' ')
+      : trim(reportSubscriptionsCron)
+    // C3 fix: src/clients.ts has always read LOOM_REPORT_RENDERER_URL and bicep
+    // set it NOWHERE, so every render threw before this. Wired from the same
+    // renderer URL the Console consumes as LOOM_PAGINATED_RENDER_URL.
+    reportRendererUrl: loomPaginatedRenderUrl
     adlsAccount: loomStorageAccount
     loomSubscriptionId: subscription().subscriptionId
     subscriptionLogicAppName: loomSubscriptionLogicAppName
@@ -6973,8 +7004,6 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
     aoaiEndpoint: loomAoaiEndpointValue
     aoaiDeployment: agentFoundryCreate ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
     aoaiApiVersion: loomAoaiApiVersion
-    aoaiAccountName: agentFoundryCreate ? agentFoundry!.outputs.accountNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : '')
-    skipRoleGrants: skipRoleGrants
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }
@@ -7439,11 +7468,18 @@ output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationT
 output labelPropagationFunctionName string = labelPropagationEnabled ? labelPropagation.outputs.siteName : ''
 output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropagation.outputs.principalId : ''
 
-// report-subscriptions timer Function. principalId is granted Cosmos DB
-// Built-in Data Contributor + Storage Blob Data Contributor + Logic App
-// Contributor (on the delivery workflow) in post-deploy bootstrap.
-output reportSubscriptionsFunctionName string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : ''
-output reportSubscriptionsPrincipalId string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.principalId : ''
+// report-subscriptions delivery runtime. B-FN C3 (2026-08-06): this is now a
+// scheduled Container App Job, so the value is a JOB NAME, not a site name, and
+// there is no separate principal to export — the job runs as the CONSOLE UAMI,
+// which already holds Cosmos Built-in Data Contributor + Storage Blob Data
+// Contributor + Logic App Contributor (the last granted by
+// reportSubscriptionLogicApp above). The former `reportSubscriptionsPrincipalId`
+// output is REMOVED rather than aliased to the console principal: its only
+// consumer was main.bicep's monitoring-reader-rbac `digestPrincipalId`, and that
+// module salts its guid() differently from the console grant, so passing the
+// same principal twice would attempt two role assignments for the same
+// principal+role+scope and fail the deployment with RoleAssignmentExists.
+output reportSubscriptionsJobName string = reportSubscriptionsActive ? reportSubscriptions.outputs.jobName : ''
 output reportSubscriptionLogicAppName string = reportSubscriptionsEnabled ? reportSubscriptionLogicApp.outputs.workflowName : ''
 // S1 secret-expiry monitor — an in-VNet scheduled Container App Job (B-FN,
 // 2026-07-27; it was a Y1 Function). ARM roles (hub KV Secrets User, RG

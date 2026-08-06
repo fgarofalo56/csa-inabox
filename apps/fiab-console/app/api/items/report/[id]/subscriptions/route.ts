@@ -40,8 +40,10 @@ function unauth() {
 /**
  * Honest delivery gate (no-vaporware.md). Subscriptions are stored in Cosmos
  * regardless, but actual scheduled delivery needs:
- *   - the fiab-report-subscriptions timer Function deployed
- *     (LOOM_REPORT_SUBSCRIPTIONS_FUNCTION set by bicep), and
+ *   - the report-subscriptions delivery job deployed — the
+ *     loom-report-subscriptions Container App Job, whose name bicep publishes as
+ *     LOOM_REPORT_SUBSCRIPTIONS_FUNCTION (the env var keeps its historical name;
+ *     B-FN C3 replaced the Y1 Function with an in-VNet ACA job), and
  *   - the report-subscription delivery Logic App
  *     (LOOM_SUBSCRIPTION_LOGIC_APP_NAME).
  * Returns null when delivery is fully wired, else a structured gate the editor
@@ -60,12 +62,13 @@ function deliveryGate(): {
     ready: false,
     missing,
     remediation:
-      'Scheduled delivery requires the report-subscriptions timer Function and ' +
+      'Scheduled delivery requires the report-subscriptions delivery job and ' +
       'the delivery Logic App. Deploy admin-plane/main.bicep with ' +
-      'reportSubscriptionsEnabled=true (modules report-subscriptions-function.bicep ' +
-      '+ integration/report-subscription-logicapp.bicep), then authorize the ' +
-      "Logic App's Office 365 connection in the portal. Subscriptions you save " +
-      'now are stored and will start delivering once the Function is live. No ' +
+      'reportSubscriptionsEnabled=true (modules report-subscriptions-job.bicep ' +
+      '+ integration/report-subscription-logicapp.bicep), dispatch ' +
+      'deploy-report-subscriptions.yml to build the job image, then authorize ' +
+      "the Logic App's Office 365 connection in the portal. Subscriptions you " +
+      'save now are stored and will start delivering once the job is live. No ' +
       'Microsoft Fabric required.',
   };
 }

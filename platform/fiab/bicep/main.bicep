@@ -2546,9 +2546,14 @@ module consoleMonitoringReaderRbac 'modules/admin-plane/monitoring-reader-rbac.b
   scope: subscription()
   params: {
     consolePrincipalId: hub.consolePrincipalId
-    // B-N19d — the report-subscriptions timer Function reads platform metrics +
-    // fired alerts when it processes scheduled insight digests on its tick.
-    digestPrincipalId: deployAdminPlane ? adminPlane!.outputs.reportSubscriptionsPrincipalId : ''
+    // B-N19d — the scheduled insight digests read platform metrics + fired
+    // alerts on their tick. B-FN C3 (2026-08-06): the report-subscriptions
+    // runtime is now a Container App Job running AS the Console UAMI, so it is
+    // already covered by consolePrincipalId above. Passing that same principal
+    // here would attempt a SECOND Monitoring Reader assignment at the same
+    // scope under a different guid() salt and fail with RoleAssignmentExists —
+    // hence empty, not a duplicate.
+    digestPrincipalId: ''
     skipRoleGrants: skipRoleGrants
   }
 }
