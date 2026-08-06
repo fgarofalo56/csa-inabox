@@ -41,8 +41,13 @@
 //     and exposes no flag or env var for them, so the entrypoint runs the engine
 //     in `standalone` mode with every non-wire listener pinned to 127.0.0.1 —
 //     byte-identical opts otherwise — and ASSERTS the surface at runtime: zero
-//     routable sockets while sealed, exactly one (the wire port) while serving,
-//     container dies otherwise. FIVE routable ports became ONE.
+//     ENGINE-OWNED routable sockets while sealed, exactly one (the wire port)
+//     while serving, container dies otherwise. FIVE routable ports became ONE.
+//     The assertion is scoped to sockets the engine's process tree owns
+//     (/proc/<pid>/fd inodes joined to /proc/net/tcp) because an ACA replica
+//     SHARES its network namespace with platform-injected agent listeners this
+//     container neither creates nor can remove — the original whole-netns scan
+//     crash-looped every ACA replica on those (measured 2026-08-06).
 //
 //     WHY THE SEAL IS IN THE IMAGE AND NOT A NETWORK RULE: ACA ingress
 //     publishes only `targetPort`, but ingress is not a firewall — a replica
