@@ -90,21 +90,22 @@ const FACTS = [
     id: 'param-cap',
     where: 'PRP.md ground-truth #9 / ws-ratchets.md R0',
     statement: 'admin-plane/main.bicep param declarations',
-    stated: 232, // 0→1 boundary re-baseline (R0 #2398 landed; PRP text updated same commit)
+    stated: 234, // loom-apex Phase-E boundary re-baseline (2026-08-06, was 232)
     live: countAdminPlaneParams,
   },
   {
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1643, // §P2-gaps wave re-baseline (EXP1 workspace export/import/clone + A14 collab/stream + U8 kql-dashboard depth routes)
+    stated: 1671, // loom-apex Phase-E boundary re-baseline (2026-08-06, was 1643)
     live: countRoutes,
   },
   {
     id: 'route-toolkit-gap',
     where: 'PRP.md ground-truth #4 / ws-ratchets.md §0',
     statement: 'hand-rolled session routes not on the route-toolkit',
-    stated: 1338, // 4c/4d/openness boundary re-baseline; ratchet continues to shrink (1343→1338)
+    stated: 1197, // loom-apex Phase-E boundary re-baseline (2026-08-06, was 1338).
+                  // Ratchet moves DOWN only — route-toolkit adoption keeps growing.
     live: countHandRolledRoutes,
   },
   {
