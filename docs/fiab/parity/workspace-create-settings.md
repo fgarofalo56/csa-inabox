@@ -8,12 +8,16 @@ Loom surfaces:
 - Create wizard: `apps/fiab-console/lib/wizards/workspace-create.tsx`
 - Settings flyout: `apps/fiab-console/lib/panes/workspace-settings.tsx`
 - Wired into `apps/fiab-console/app/admin/workspaces/page.tsx` (F7 = new, F8 = settings, row click = settings)
+- **Also** wired into the user-facing `apps/fiab-console/app/workspaces/page.tsx`
+  (`NewWorkspaceButton`, 2026-08-06) — the same wizard, `isAdmin` unset, posting
+  to `POST /api/workspaces`, which accepts the identical body. See
+  `workspace-create.md` for the per-step coverage table on that surface.
 
 ## Create wizard — Fabric feature inventory → Loom coverage
 
 | Fabric capability | Loom coverage | Backend per control |
 |---|---|---|
-| Name (required) | ✅ Step 1 Input | POST `/api/admin/workspaces` → Cosmos `workspaces` doc |
+| Name (required) | ✅ Step 1 Input | POST `/api/admin/workspaces` (admin) / `/api/workspaces` (user) → Cosmos `workspaces` doc |
 | Description | ✅ Step 1 Textarea | same POST |
 | Contact list (assign workspace contacts) | ✅ Step 2, Entra people picker → tag list | `GET /api/admin/permissions/principals?kind=user` (Graph); persisted as `contacts[]` |
 | License mode (Trial / Pro / Premium / PPU / Embedded) | ✅ Step 3 option cards (+ Azure-native `Org` default) | persisted as `licenseMode`; Trial hidden in Gov |

@@ -4,7 +4,8 @@
  * /workspaces — rich workspace browser, built on the shared Loom UI primitives.
  *
  * Layout (Web 3.0 standard, see docs/fiab/design/ui-web3-guide.md):
- *   - PageShell header + New-workspace action (CreateWorkspaceDialog).
+ *   - PageShell header + New-workspace action (NewWorkspaceButton →
+ *     WorkspaceCreateWizard, the same 5-step wizard /admin/workspaces uses).
  *   - Toolbar: debounced SearchBox + Sort menu + Filter menu + admin
  *     multi-select controls on the left, a Tile | List ViewToggle on the right.
  *   - Filter chips row + (admin) bulk-action bar.
@@ -38,8 +39,6 @@ import {
   DialogSurface,
   DialogTitle,
   DialogTrigger,
-  Field,
-  Input,
   MessageBar,
   MessageBarBody,
   Menu,
@@ -51,10 +50,8 @@ import {
   MenuTrigger,
   Radio,
   RadioGroup,
-  Select,
   Spinner,
   Text,
-  Textarea,
   Tooltip,
   makeStyles,
   tokens,
@@ -82,12 +79,12 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import {
   bulkDeleteWorkspaces,
-  createWorkspace,
   getWorkspaceAdminStatus,
   listWorkspacesWithCounts,
   type BulkDeleteResult,
   type Workspace,
 } from '@/lib/api/workspaces';
+import { WorkspaceCreateWizard } from '@/lib/wizards/workspace-create';
 
 // ---------------------------------------------------------------------------
 // localStorage helpers (safe SSR — return defaults until client mounts)
@@ -232,9 +229,6 @@ const useStyles = makeStyles({
     overflowWrap: 'anywhere',
     wordBreak: 'break-word',
   },
-  dialogHint: {
-    color: tokens.colorNeutralForeground3,
-  },
   formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
 });
 
@@ -303,188 +297,43 @@ function compareSort(a: Workspace, b: Workspace, mode: SortMode): number {
 }
 
 // ---------------------------------------------------------------------------
-// CreateWorkspaceDialog — preserved verbatim (real capacities/domains, with an
-// honest free-text fallback when the upstream API is unavailable)
+// NewWorkspaceButton — opens the shared 5-step WorkspaceCreateWizard (FGC-31).
+//
+// This is the SAME wizard /admin/workspaces uses; the only difference is
+// `isAdmin` (which selects POST /api/workspaces vs /api/admin/workspaces).
+// Both routes accept the identical body, so every step's input persists.
+//
+// It replaces the former single-step CreateWorkspaceDialog, which (a) offered
+// only name/description/capacity/domain — no contacts, license mode, OneLake
+// storage, or backing-RG step — and (b) fell back to FREE-TEXT inputs for
+// capacity and domain when their upstream lookups failed, which the
+// no-freeform-config rule forbids (config is dropdowns/pickers, never typed
+// identifiers). The wizard's steps are option cards, dropdowns, and an Entra
+// people picker throughout.
 // ---------------------------------------------------------------------------
 
-interface CapacityLite { id: string; displayName: string; sku: string; state?: string }
-type DomainTier = 'tenant-admin' | 'domain-admin' | 'domain-contributor' | null;
-interface DomainLite { id: string; name: string; description?: string; callerTier?: DomainTier }
-
-function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
-  const styles = useStyles();
+function NewWorkspaceButton({ onCreated, appearance = 'primary' }: {
+  onCreated?: () => void;
+  appearance?: 'primary' | 'secondary';
+}) {
   const router = useRouter();
-  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [capacity, setCapacity] = useState('');
-  const [domain, setDomain] = useState('');
-
-  // Load real Fabric capacities the UAMI can see + Loom-managed domains.
-  // Both are best-effort — if the upstream returns an error (Power BI
-  // tenant SP not granted, Cosmos not provisioned, etc.) the field falls
-  // back to a free-text Input so the user isn't blocked.
-  const capacitiesQ = useQuery({
-    queryKey: ['capacities'],
-    queryFn: async (): Promise<{ ok: boolean; capacities?: CapacityLite[]; error?: string }> => {
-      const r = await clientFetch('/api/loom/capacities');
-      const ct = r.headers.get('content-type') || '';
-      return ct.includes('application/json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
-    },
-    enabled: open,
-    retry: false,
-    staleTime: 60_000,
-  });
-  const domainsQ = useQuery({
-    queryKey: ['domains'],
-    queryFn: async (): Promise<{ ok: boolean; domains?: DomainLite[]; error?: string }> => {
-      const r = await clientFetch('/api/admin/domains');
-      const ct = r.headers.get('content-type') || '';
-      return ct.includes('application/json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
-    },
-    enabled: open,
-    retry: false,
-    staleTime: 60_000,
-  });
-  const capacities = capacitiesQ.data?.capacities || [];
-  // D2: only offer domains the caller administers (tenant-admin / domain-admin /
-  // domain-contributor). A user can only place a new workspace in a domain they
-  // have a tier on — tenant admins see all. callerTier comes from GET
-  // /api/admin/domains. When the field is absent (older API), fall back to
-  // showing all returned domains rather than hiding them.
-  const allDomains = domainsQ.data?.domains || [];
-  const domains = allDomains.some((d) => d.callerTier !== undefined)
-    ? allDomains.filter((d) => d.callerTier != null)
-    : allDomains;
-  const capacityFallback = capacitiesQ.isError || (capacitiesQ.data?.ok === false);
-  const domainFallback = domainsQ.isError || (domainsQ.data?.ok === false);
-
-  const mut = useMutation({
-    mutationFn: () =>
-      createWorkspace({
-        name,
-        description: description || undefined,
-        capacity: capacity || undefined,
-        domain: domain || undefined,
-      }),
-    onSuccess: ws => {
-      qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] });
-      setOpen(false);
-      setName('');
-      setDescription('');
-      setCapacity('');
-      setDomain('');
-      onCreated?.();
-      router.push(`/workspaces/${ws.id}`);
-    },
-  });
 
   return (
-    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary" icon={<Add24Regular />}>
-          New workspace
-        </Button>
-      </DialogTrigger>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Create workspace</DialogTitle>
-          <DialogContent>
-            <div className={styles.formCol}>
-              <Field label="Name" required>
-                <Input
-                  value={name}
-                  onChange={(_, d) => setName(d.value)}
-                  placeholder="Sales analytics"
-                />
-              </Field>
-              <Field label="Description">
-                <Textarea
-                  value={description}
-                  onChange={(_, d) => setDescription(d.value)}
-                  rows={2}
-                />
-              </Field>
-              <Field label="Capacity (optional)" hint={
-                capacityFallback
-                  ? 'Could not load Fabric capacities — falling back to free-text. Reason: ' +
-                    (capacitiesQ.data?.error || (capacitiesQ.error as Error)?.message || 'unknown')
-                  : capacities.length === 0 && !capacitiesQ.isLoading
-                    ? 'No capacities returned — UAMI may need Capacity Admin role; falling back to free-text.'
-                    : 'Picks a real Fabric / Power BI Premium capacity. Assignment is queued until the workspace gets its first PBI-backed artifact.'
-              }>
-                {capacityFallback || (capacities.length === 0 && !capacitiesQ.isLoading) ? (
-                  <Input
-                    value={capacity}
-                    onChange={(_, d) => setCapacity(d.value)}
-                    placeholder="F64"
-                  />
-                ) : (
-                  <Select value={capacity} onChange={(_, d) => setCapacity(d.value)} disabled={capacitiesQ.isLoading}>
-                    <option value="">— None —</option>
-                    {capacities.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.displayName} ({c.sku}{c.state ? ` · ${c.state}` : ''})
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
-              <Field label="Domain (optional)" hint={
-                domainFallback
-                  ? 'Could not load domains — falling back to free-text. Reason: ' +
-                    (domainsQ.data?.error || (domainsQ.error as Error)?.message || 'unknown')
-                  : domains.length === 0 && !domainsQ.isLoading
-                    ? 'No domains yet — go to Admin → Domains to create one; falling back to free-text.'
-                    : 'Picks a Loom-managed business domain. On save, the workspace auto-registers in Purview + publishes to the data marketplace.'
-              }>
-                {domainFallback || (domains.length === 0 && !domainsQ.isLoading) ? (
-                  <Input
-                    value={domain}
-                    onChange={(_, d) => setDomain(d.value)}
-                    placeholder="Sales"
-                  />
-                ) : (
-                  <Select value={domain} onChange={(_, d) => setDomain(d.value)} disabled={domainsQ.isLoading}>
-                    <option value="">— None —</option>
-                    {domains.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </Select>
-                )}
-              </Field>
-              {(capacity || domain) && (
-                <Caption1 className={styles.dialogHint}>
-                  When you save: Capacity is assigned via the Fabric REST <code>assignToCapacity</code>{' '}
-                  (queued until your first PBI-backed artifact creates the underlying Fabric group),
-                  and Domain triggers a Purview catalog register + marketplace publish. Both run as
-                  best-effort — the workspace itself is always persisted; the binding status appears
-                  on the workspace settings drawer after create.
-                </Caption1>
-              )}
-              {mut.error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{(mut.error as Error).message}</MessageBarBody>
-                </MessageBar>
-              )}
-            </div>
-          </DialogContent>
-          <DialogActions>
-            <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary">Cancel</Button>
-            </DialogTrigger>
-            <Button
-              appearance="primary"
-              disabled={!name.trim() || mut.isPending}
-              onClick={() => mut.mutate()}
-            >
-              {mut.isPending ? 'Creating…' : 'Create'}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
+    <>
+      <Button appearance={appearance} icon={<Add24Regular />} onClick={() => setOpen(true)}>
+        New workspace
+      </Button>
+      <WorkspaceCreateWizard
+        open={open}
+        onClose={() => setOpen(false)}
+        onCreated={(ws) => {
+          setOpen(false);
+          onCreated?.();
+          router.push(`/workspaces/${ws.id}`);
+        }}
+      />
+    </>
   );
 }
 
@@ -962,7 +811,7 @@ export default function WorkspacesPage() {
   // ---------------------------------------------------------------------------
 
   const headerActions = (
-    <CreateWorkspaceDialog onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })} />
+    <NewWorkspaceButton onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })} />
   );
 
   return (
@@ -1276,7 +1125,7 @@ export default function WorkspacesPage() {
             body="A workspace is a Cosmos-backed container that owns items, permissions, and SCM bindings. Create your first one to get started."
           />
           <div className={styles.emptyCta}>
-            <CreateWorkspaceDialog
+            <NewWorkspaceButton
               onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })}
             />
           </div>

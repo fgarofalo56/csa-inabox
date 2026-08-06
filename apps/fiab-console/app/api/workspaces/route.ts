@@ -5,7 +5,8 @@ import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
 import { domainExists, DEFAULT_DOMAIN_ID } from '@/lib/azure/domain-registry';
-import type { Workspace } from '@/lib/types/workspace';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -61,6 +62,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/** License modes the create wizard offers (kept in lock-step with
+ *  app/api/admin/workspaces/route.ts — the same WorkspaceCreateWizard posts to
+ *  BOTH routes, so an accepted field here must be accepted there and vice
+ *  versa, or the same form would silently drop inputs on one surface). */
+const VALID_LICENSE_MODES: WorkspaceLicenseMode[] = [
+  'Org', 'Trial', 'Pro', 'Premium', 'PremiumPerUser', 'Embedded', 'Delegated',
+];
+
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
@@ -81,6 +90,17 @@ export async function POST(req: NextRequest) {
     return err(`Unknown domain '${domainId}' — it is not registered in this tenant.`, 400, 'unknown_domain');
   }
 
+  // Wizard fields (FGC-31). These are collected by WorkspaceCreateWizard on the
+  // user-facing /workspaces surface exactly as on /admin/workspaces; parse them
+  // identically so no step's input is silently discarded (no-vaporware: a form
+  // control that doesn't persist is a defect).
+  const licenseMode: WorkspaceLicenseMode =
+    VALID_LICENSE_MODES.includes(body?.licenseMode) ? body.licenseMode : 'Org';
+  const contacts = Array.isArray(body?.contacts)
+    ? (body.contacts as unknown[]).map((c) => String(c).trim()).filter(Boolean).slice(0, 100)
+    : undefined;
+  const provisionBackingRg = body?.provisionBackingRg === true;
+
   const now = new Date().toISOString();
   const ws: Workspace = {
     id: crypto.randomUUID(),
@@ -94,6 +114,9 @@ export async function POST(req: NextRequest) {
     description: description?.trim() || undefined,
     capacity: capacity?.trim() || undefined,
     domain: domainId,
+    storageAccountId: typeof body?.storageAccountId === 'string' && body.storageAccountId.trim() ? body.storageAccountId.trim() : undefined,
+    licenseMode,
+    contacts: contacts && contacts.length ? contacts : undefined,
     createdBy: session.claims.upn || session.claims.email || session.claims.oid,
     createdAt: now,
     updatedAt: now,
@@ -105,19 +128,22 @@ export async function POST(req: NextRequest) {
       return err('Cosmos returned no resource on create', 500, 'cosmos_no_resource');
     }
     // Best-effort side-effects: assign-to-capacity + Purview register +
-    // marketplace publish + I1 per-workspace identity. Runs unconditionally so
-    // the workspaceIdentity outcome (incl. the mode-off 'skipped' regression
-    // receipt) is always recorded. Never blocks the create — outcome captured
-    // into status fields on the workspace doc and replaced.
+    // marketplace publish + I1 per-workspace identity + the optional dedicated
+    // backing resource group. Runs unconditionally so the workspaceIdentity
+    // outcome (incl. the mode-off 'skipped' regression receipt) is always
+    // recorded. Never blocks the create — outcome captured into status fields
+    // on the workspace doc and replaced.
     let merged: Workspace = resource;
     {
       try {
-        const bindings = await applyWorkspaceBindings(resource);
+        const bindings = await applyWorkspaceBindings(resource, { provisionBackingRg });
         merged = {
           ...resource,
           ...(bindings.capacityAssignment ? { capacityAssignment: bindings.capacityAssignment } : {}),
           ...(bindings.domainRegistration ? { domainRegistration: bindings.domainRegistration } : {}),
+          ...(bindings.backingRgProvision ? { backingRgProvision: bindings.backingRgProvision } : {}),
           ...(bindings.workspaceIdentity ? { workspaceIdentity: bindings.workspaceIdentity } : {}),
+          ...(bindings.backingRgProvision?.status === 'provisioned' ? { backingRgName: bindings.backingRgProvision.rgName } : {}),
           updatedAt: new Date().toISOString(),
         };
         try {
@@ -131,6 +157,17 @@ export async function POST(req: NextRequest) {
       }
     }
     void upsertLoomDoc(docForWorkspace(merged));
+    // SIEM audit stream (BR-SIEM) — workspace create is a tenant-topology
+    // change on this surface exactly as on the admin plane.
+    emitAuditEvent({
+      actorOid: session.claims.oid,
+      actorUpn: session.claims.upn || session.claims.email || session.claims.oid,
+      action: 'workspace.create',
+      targetType: 'workspace',
+      targetId: merged.id,
+      tenantId: session.claims.tid || session.claims.oid,
+      detail: { name: merged.name, domain: merged.domain, licenseMode: merged.licenseMode },
+    });
     return NextResponse.json(merged, { status: 201 });
   } catch (e: any) {
     return err(e?.message || 'Failed to create workspace', 500, 'cosmos_error');
