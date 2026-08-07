@@ -52,6 +52,13 @@ export interface EditableEnvVar {
    * console silently falls back to a built-in path — an optional scale-out
    * substrate). Counted as configured (status 'default') rather than a gap. */
   optionalDefault?: boolean;
+  /** True when the owning check is opt-in BY DESIGN (spec.optIn — a policy-
+   * accepted carve-out that stands up real extra cost or a non-default engine,
+   * e.g. the Postgres Flexible Server or the s3proxy gateway). An unset value
+   * reads as the neutral 'opt-in' status — NEITHER configured NOR a gap — so
+   * the coverage score excludes it from both numerator and denominator instead
+   * of reporting "unconfigured" forever (D15 honest-scoring). */
+  optIn?: boolean;
 }
 
 /** A value is treated as secret when its key matches the shared env-key rule.
@@ -105,6 +112,7 @@ export const EDITABLE_ENV: EditableEnvVar[] = (() => {
       role: spec.role,
       derived: spec.derived || undefined,
       optionalDefault: spec.optionalDefault || undefined,
+      optIn: spec.optIn || undefined,
     });
   };
   for (const spec of ENV_CHECKS) {
@@ -150,6 +158,41 @@ export function aliasSatisfiedKeys(isSet: (key: string) => boolean): Set<string>
     }
   }
   return satisfied;
+}
+
+/** The honest per-key status /admin/env-config reports (single source — the
+ * BFF route and the tests both consume this, so the scoring semantics cannot
+ * drift between them). */
+export type EnvVarStatus = 'set' | 'derived' | 'satisfied' | 'default' | 'opt-in' | 'unset';
+
+/**
+ * Compute the honest status for one editable key given its live presence.
+ *   'set'       — the value is present in the running deployment.
+ *   'satisfied' — unset, but an `anyOf` sibling/alias IS set (either/or met).
+ *   'opt-in'    — unset and the owning check is opt-in BY DESIGN: a policy-
+ *                 accepted carve-out, NEITHER configured NOR a gap (D15).
+ *   'default'   — unset and the unset state is the fully-functional built-in
+ *                 default (optionalDefault) — configured via the fallback.
+ *   'derived'   — unset and bicep is supposed to derive it on deploy. The value
+ *                 is NOT present, so the derivation has NOT happened — this is
+ *                 a GAP, never counted configured (D15 honest-scoring).
+ *   'unset'     — a plain unmet requirement.
+ */
+export function envVarStatus(e: EditableEnvVarLike, set: boolean, satisfiedByAlias: boolean): EnvVarStatus {
+  if (set) return 'set';
+  if (satisfiedByAlias) return 'satisfied';
+  if (e.optIn) return 'opt-in';
+  if (e.optionalDefault) return 'default';
+  return e.derived ? 'derived' : 'unset';
+}
+type EditableEnvVarLike = Pick<EditableEnvVar, 'optIn' | 'optionalDefault' | 'derived'>;
+
+/** True when a status counts as CONFIGURED toward the coverage score.
+ * 'derived' is deliberately absent (derived-but-unset = the deploy did not fill
+ * it — a gap). 'opt-in' is deliberately absent (excluded from BOTH sides of the
+ * ratio — a policy opt-in is neither configured nor a gap). */
+export function isConfiguredStatus(s: EnvVarStatus): boolean {
+  return s === 'set' || s === 'satisfied' || s === 'default';
 }
 
 /** Is `key` in the editable whitelist? */

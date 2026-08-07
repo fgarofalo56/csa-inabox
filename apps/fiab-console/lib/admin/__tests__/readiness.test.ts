@@ -110,12 +110,49 @@ describe('buildCapabilityNodes — H1', () => {
     expect(n.remediation).toContain('AllDatabasesViewer');
   });
 
-  it('an auto-resolving optional-default gate is ready even when unset', () => {
-    const autoGate = GATES.find((g) => g.canAutoResolve);
-    expect(autoGate, 'registry has at least one auto-resolvable gate').toBeTruthy();
+  it('an auto-resolving optional-default gate with NO probe is ready (config-only) when unset', () => {
+    // Only the PROBE-LESS auto-resolvable gates keep the config-only promotion
+    // (D15): with no live signal, "the deploy fills this / the fallback is the
+    // default" is the best-available truth — and it is disclosed as config-only.
+    const autoGate = GATES.find((g) => g.canAutoResolve && !GATE_PROBE_MAP[g.id]);
+    expect(autoGate, 'registry has at least one probe-less auto-resolvable gate').toBeTruthy();
     const nodes = buildCapabilityNodes({ gates: GATES, statuses: statusesWith([]), probes: [] });
     const n = nodes.find((x) => x.id === autoGate!.id)!;
     expect(n.state).toBe('ready');
+    expect(n.verified).toBe('config-only');
+  });
+
+  it('a blocked auto-resolvable gate with a FAILING probe is NOT promoted to ready (D15)', () => {
+    // Before this fix `blocked + canAutoResolve → ready` unconditionally: a
+    // derived var the deploy never filled scored ready while the live probe
+    // said fail. The probe result must decide.
+    const autoGate = GATES.find((g) => g.canAutoResolve && GATE_PROBE_MAP[g.id]);
+    expect(autoGate, 'registry has at least one probed auto-resolvable gate').toBeTruthy();
+    const probeId = GATE_PROBE_MAP[autoGate!.id];
+    const probes: ProbeLite[] = [{ id: probeId, status: 'fail', detail: 'backend unreachable', remediation: 'deploy the backing module' }];
+    const nodes = buildCapabilityNodes({ gates: GATES, statuses: statusesWith([]), probes });
+    const n = nodes.find((x) => x.id === autoGate!.id)!;
+    expect(n.state).toBe('blocked');
+    expect(n.verified).toBe('live-probe');
+    expect(n.remediation).toContain('deploy the backing module');
+  });
+
+  it('a blocked auto-resolvable gate with a WARNING probe is partial, with a PASS it is ready + live-probe (D15)', () => {
+    const autoGate = GATES.find((g) => g.canAutoResolve && GATE_PROBE_MAP[g.id]);
+    expect(autoGate, 'registry has at least one probed auto-resolvable gate').toBeTruthy();
+    const probeId = GATE_PROBE_MAP[autoGate!.id];
+    const warn = buildCapabilityNodes({
+      gates: GATES, statuses: statusesWith([]),
+      probes: [{ id: probeId, status: 'warn', detail: 'degraded', remediation: 'grant the role' }],
+    }).find((x) => x.id === autoGate!.id)!;
+    expect(warn.state).toBe('partial');
+    expect(warn.verified).toBe('live-probe');
+    const pass = buildCapabilityNodes({
+      gates: GATES, statuses: statusesWith([]),
+      probes: [{ id: probeId, status: 'pass', detail: 'live' }],
+    }).find((x) => x.id === autoGate!.id)!;
+    expect(pass.state).toBe('ready');
+    expect(pass.verified).toBe('live-probe');
   });
 
   it('an opt-in gate renders state=opt-in (not blocked) when its var is unset', () => {

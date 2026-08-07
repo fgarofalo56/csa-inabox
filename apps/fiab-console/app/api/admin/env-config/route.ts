@@ -31,6 +31,8 @@ import {
   isEditableEnvKey,
   getEditableEnv,
   aliasSatisfiedKeys,
+  envVarStatus,
+  type EnvVarStatus,
 } from '@/lib/admin/env-config';
 import {
   applyEnvChanges,
@@ -64,27 +66,24 @@ export async function GET() {
   // Current presence/values from the running container's env (this BFF runs in
   // loom-console, so process.env IS the live deployment config). Secret values
   // are NEVER returned — only their set/unset flag. `status` is an honest signal:
-  // 'set' (present), 'derived' (bicep auto-fills it from another resource on
-  // deploy — expected, not an operator action), 'satisfied' (this key is unset
-  // but an `anyOf` sibling/alias IS set, e.g. GROUP_ID unset while OID is set, so
-  // the either/or requirement is met — NOT a critical gap), or 'unset'.
+  // 'set' (present), 'satisfied' (this key is unset but an `anyOf` sibling/alias
+  // IS set, e.g. GROUP_ID unset while OID is set, so the either/or requirement
+  // is met — NOT a critical gap), 'opt-in' (the owning check is opt-in BY
+  // DESIGN — policy-accepted, neither configured nor a gap), 'default' (the
+  // unset state is the fully-functional built-in fallback), 'derived' (bicep
+  // auto-fills it on deploy but the value is NOT present here — the deploy has
+  // not filled it, so it does NOT count as configured; D15 honest-scoring), or
+  // 'unset'.
   const isSet = (key: string) => ((process.env[key] || '').trim().length > 0);
   const satisfiedKeys = aliasSatisfiedKeys(isSet);
-  const current: Record<string, { set: boolean; status: 'set' | 'derived' | 'satisfied' | 'default' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }> = {};
+  const current: Record<string, { set: boolean; status: EnvVarStatus; satisfiedByAlias?: boolean; value?: string; secret: boolean }> = {};
   for (const e of EDITABLE_ENV) {
     const raw = (process.env[e.key] || '').trim();
     const set = raw.length > 0;
     const satisfiedByAlias = !set && satisfiedKeys.has(e.key);
-    // 'default' — an optional silent-fallback substrate (H-band) whose UNSET
-    // state is the fully-functional intended default. Counted as configured (the
-    // feature is ON via the built-in fallback), not a gap (loom_default_on_opt_out).
-    const status: 'set' | 'derived' | 'satisfied' | 'default' | 'unset' = set
-      ? 'set'
-      : satisfiedByAlias
-        ? 'satisfied'
-        : e.optionalDefault
-          ? 'default'
-          : (e.derived ? 'derived' : 'unset');
+    // Status semantics live in lib/admin/env-config.ts:envVarStatus (unit-
+    // tested) so this route and the tests can never drift.
+    const status = envVarStatus(e, set, satisfiedByAlias);
     current[e.key] = e.secret
       ? { set, status, satisfiedByAlias: satisfiedByAlias || undefined, secret: true }
       : { set, status, satisfiedByAlias: satisfiedByAlias || undefined, value: raw, secret: false };
