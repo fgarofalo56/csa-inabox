@@ -321,46 +321,62 @@ export function decideDeployApps({ eventName, baseValue, resolution } = {}) {
 const ADMIN_RG_RE = /^rg-csa-loom-admin-([a-z0-9]+)$/;
 
 /**
- * Work out which region a run must target.
+ * Work out which region a run must target — ADOPT the estate, or REFUSE.
  *
- * The bug this replaces: `AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}`.
- * A schedule has no inputs, so the nightly reconcile aimed at eastus2 while the
- * estate lives in centralus — it would have built a SECOND estate rather than
- * reconciling the one that exists.
+ * The bug this replaces (refs #3029): `AZURE_LOCATION: ${{ inputs.region ||
+ * 'eastus2' }}`, plus a resolver that honoured that default on every dispatch.
+ * A schedule carries no inputs and a dispatch that leaves the blank field blank
+ * carries none either, so BOTH aimed at eastus2 while the estate lives in
+ * centralus. Run 31065425280 is the receipt: the guard printed
+ * `PROCEED -- reconciling the existing hub` and the resolver then reported all
+ * 18 apps "not deployed", because it was looking at the wrong region. A
+ * `run_mode=full` on those inputs would have stamped a complete SECOND estate
+ * and left the real one untouched.
+ *
+ * The region is not a tag: `rg-csa-loom-admin-<region>`, `vnet-csa-loom-hub-
+ * <region>` and `uami-loom-console-<region>` are all derived from it, so a wrong
+ * region does not fail — it SUCCEEDS against a different, empty estate.
+ *
+ * THERE IS THEREFORE NO DEFAULT REGION. Every outcome is one of:
+ *   - adopt   the region of the single hub that exists (loudly stated), or
+ *   - accept  an explicit input that MATCHES the estate, or
+ *   - accept  an explicit input when the subscription provably holds no hub
+ *             (a genuine first-run install), or
+ *   - REFUSE.
+ *
+ * A mismatch between an explicit `region` and the hub that exists is a hard
+ * refusal on every trigger. It cannot be overridden here: a second Console in
+ * the same subscription is already forbidden by resolveTopologyGuard, so
+ * "deploy to a different region of this sub" has no legitimate caller. A second
+ * estate goes in a different subscription.
  *
  * @param {object} a
  * @param {string} a.eventName
- * @param {string} [a.requestedRegion]  the `region` input (dispatch only)
+ * @param {string} [a.requestedRegion]  the `region` input
  * @param {string[]|null} [a.adminRgNames] rg-csa-loom-admin-* names in the sub;
  *                                         null = the query FAILED (UNKNOWN)
- * @param {string} [a.fallback]         region for a first-run install
- * @returns {{decision:'use'|'refuse', region?:string, reason:string}}
+ * @returns {{decision:'use'|'refuse', region?:string, source?:'input'|'adopted', reason:string}}
  */
 export function resolveReconcileRegion({
   eventName,
   requestedRegion = '',
   adminRgNames = null,
-  fallback = 'eastus2',
 } = {}) {
   const requested = String(requestedRegion || '').trim();
-  if (requested) {
-    return { decision: 'use', region: requested, reason: `explicit region input (${requested}).` };
-  }
-  if (eventName !== 'schedule') {
-    return {
-      decision: 'use',
-      region: fallback,
-      reason: `dispatch with no region input — using the workflow default (${fallback}).`,
-    };
-  }
+  const dispatchHint =
+    'Dispatch with an explicit `region` input naming the region you mean (the workflow declares it required).';
 
+  // UNKNOWN is not "no hub". A read that failed establishes nothing about the
+  // estate, and "I could not look" must never be spent as "there is nothing
+  // there" (deploy-integrity R7).
   if (adminRgNames === null || adminRgNames === undefined) {
     return {
       decision: 'refuse',
       reason:
-        'could not list rg-csa-loom-admin-* resource groups, so the region of the estate being ' +
-        'reconciled is UNKNOWN. Refusing rather than falling back to a default region, which is how ' +
-        'a "reconcile" ends up stamping a second estate somewhere else.',
+        'could not list rg-csa-loom-admin-* resource groups, so it is UNKNOWN which region this ' +
+        'subscription\'s estate is in — and therefore UNKNOWN whether ' +
+        `${requested ? `the requested region (${requested})` : 'any region'} would reconcile it or ` +
+        'build a second one beside it. Refusing. Re-run once `az group list` works.',
     };
   }
 
@@ -371,25 +387,78 @@ export function resolveReconcileRegion({
       .map((m) => m[1]),
   )];
 
+  // ---- no hub in this subscription: a genuine first-run install -----------
   if (regions.length === 0) {
-    return {
-      decision: 'use',
-      region: fallback,
-      reason: `no existing hub in this subscription — first-run install at the default region (${fallback}).`,
-    };
-  }
-  if (regions.length > 1) {
+    if (requested) {
+      return {
+        decision: 'use',
+        region: requested,
+        source: 'input',
+        reason:
+          `no rg-csa-loom-admin-* exists in this subscription, so this is a first-run install at the ` +
+          `region you named (${requested}). Nothing is being reconciled.`,
+      };
+    }
     return {
       decision: 'refuse',
       reason:
-        `this subscription holds hubs in ${regions.length} regions (${regions.join(', ')}). An unattended ` +
-        'reconcile cannot choose between them — dispatch with an explicit `region` input.',
+        'this subscription holds no CSA Loom hub, so there is no estate to derive a region from, and ' +
+        'no region may be assumed — assuming one is exactly how a "reconcile" became a second estate ' +
+        `in another region (#3029). ${dispatchHint}`,
+    };
+  }
+
+  // ---- hubs exist: the estate decides, or an explicit input must match ----
+  if (regions.length > 1) {
+    if (requested && regions.includes(requested)) {
+      return {
+        decision: 'use',
+        region: requested,
+        source: 'input',
+        reason:
+          `this subscription holds hubs in ${regions.length} regions (${regions.join(', ')}); the ` +
+          `explicit region input selects ${requested}, which is one of them.`,
+      };
+    }
+    return {
+      decision: 'refuse',
+      reason:
+        `this subscription holds hubs in ${regions.length} regions (${regions.join(', ')})` +
+        (requested
+          ? `, and the requested region (${requested}) is not one of them. Deploying there would build ` +
+            'a THIRD estate rather than reconciling either existing one.'
+          : ', and no region input was supplied to choose between them. ' + dispatchHint),
+    };
+  }
+
+  const [only] = regions;
+  if (!requested) {
+    return {
+      decision: 'use',
+      region: only,
+      source: 'adopted',
+      reason:
+        `no region input was supplied; ADOPTED ${only}, the region of the only CSA Loom hub in this ` +
+        `subscription (rg-csa-loom-admin-${only}). No region was assumed — this one was measured.`,
+    };
+  }
+  if (requested !== only) {
+    return {
+      decision: 'refuse',
+      reason:
+        `region=${requested} was requested, but the only CSA Loom hub in this subscription is in ` +
+        `${only} (rg-csa-loom-admin-${only}). Deploying to ${requested} would NOT reconcile that hub — ` +
+        `it would stand up a second, empty estate in ${requested} at full cost and leave the real one ` +
+        `untouched, while every log line claimed a reconcile (#3029). Re-dispatch with ` +
+        `region=${only}. If a second estate is genuinely intended it belongs in a different ` +
+        'subscription (a second Console in this one is refused by the topology guard regardless).',
     };
   }
   return {
     decision: 'use',
-    region: regions[0],
-    reason: `reconciling the existing hub in ${regions[0]} (derived from rg-csa-loom-admin-${regions[0]}).`,
+    region: only,
+    source: 'input',
+    reason: `region=${only} matches the CSA Loom hub in this subscription (rg-csa-loom-admin-${only}).`,
   };
 }
 

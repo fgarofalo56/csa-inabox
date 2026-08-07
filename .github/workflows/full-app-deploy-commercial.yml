@@ -29,9 +29,9 @@ on:
         type: boolean
         default: true
       region:
-        description: 'Azure region of the target Admin Plane (e.g. eastus2, centralus).'
+        description: 'Azure region of the target Admin Plane (e.g. centralus). LEAVE EMPTY to discover the estate — the resolve job asks Resource Graph which subscription-wide rg-csa-loom-admin-*/acrloom* exists and targets that. There is deliberately NO default: a default of eastus2 pointed run 31028909702 at a resource group that does not exist while the live estate is centralus (#3029). Supply a value only to disambiguate a subscription that holds more than one admin plane.'
         type: string
-        default: eastus2
+        required: false
       subscription:
         description: 'Target subscription id (defaults to AZURE_SUBSCRIPTION_ID secret).'
         type: string
@@ -57,12 +57,26 @@ permissions:
 # and failed the console health gate. Serialise instead of colliding.
 # cancel-in-progress is deliberately FALSE: cancelling a holder mid-push is the
 # other half of the #2603 incident this lease exists to prevent.
+#
+# The group is a CONSTANT (refs #3029). It used to be keyed on
+# `inputs.region || 'auto'`, so a run that named `centralus` and a run that left
+# the field blank landed in DIFFERENT concurrency groups — and both then raced
+# for the same ACR firewall lease on the same registry, which is precisely what
+# the group exists to serialise. There is one Loom admin plane per subscription
+# and the resolve job discovers it, so there is nothing for the region to
+# partition.
 concurrency:
-  group: full-app-deploy-commercial-${{ inputs.region || 'auto' }}
+  group: full-app-deploy-commercial
   cancel-in-progress: false
 
 env:
-  AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}
+  # NO DEFAULT REGION (refs #3029). Empty is the normal, correct value: the
+  # resolve job below DISCOVERS the admin plane rather than constructing its
+  # name from a region. A default of eastus2 is what made run 31028909702 look
+  # for rg-csa-loom-admin-eastus2, which does not exist, and then report an
+  # unrelated "Registry names may contain only alpha numeric characters" from
+  # the cleanup step running with an empty registry name.
+  AZURE_LOCATION: ${{ inputs.region }}
 
 jobs:
   resolve:
@@ -105,15 +119,23 @@ jobs:
           # unreachable for exactly that reason. Every capture below therefore
           # uses the `if ! VAR=$(...)` form, which -e does not abort on.
           set -uo pipefail
-          PREFERRED_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          # AZURE_LOCATION is now EMPTY unless the operator named a region
+          # (#3029 removed the eastus2 default). With no region there is no
+          # "preferred" RG to try, so go straight to discovery rather than
+          # querying `rg-csa-loom-admin-` and reading its 404 as a fact.
           ACR=""; RG=""; SERVER=""; REGION="$AZURE_LOCATION"
-          if ACR=$(az acr list --resource-group "$PREFERRED_RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv 2>/dev/null); then
-            ACR=$(echo "$ACR" | tr -d '\r')
-            [[ "$ACR" == "None" ]] && ACR=""
-            [[ -n "$ACR" ]] && RG="$PREFERRED_RG"
+          if [[ -n "$AZURE_LOCATION" ]]; then
+            PREFERRED_RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+            if ACR=$(az acr list --resource-group "$PREFERRED_RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv 2>/dev/null); then
+              ACR=$(echo "$ACR" | tr -d '\r')
+              [[ "$ACR" == "None" ]] && ACR=""
+              [[ -n "$ACR" ]] && RG="$PREFERRED_RG"
+            fi
+          else
+            echo "::notice::No region supplied — discovering the Loom admin plane across the subscription (this is the normal path; the workflow no longer defaults to a region)."
           fi
           if [[ -z "$ACR" ]]; then
-            echo "::notice::No acrloom* registry in $PREFERRED_RG. Discovering the Loom admin plane across the subscription with Resource Graph rather than assuming the region."
+            echo "::notice::Discovering the Loom admin plane across the subscription with Resource Graph rather than assuming the region${AZURE_LOCATION:+ (nothing matched rg-csa-loom-admin-$AZURE_LOCATION)}."
             az extension add --name resource-graph --upgrade --only-show-errors
             Q="Resources | where type =~ 'microsoft.containerregistry/registries' | where name startswith 'acrloom' | where resourceGroup startswith 'rg-csa-loom-admin' | project name, resourceGroup, location, loginServer = properties.loginServer | order by resourceGroup asc"
             if ! ROWS=$(az graph query -q "$Q" --first 50 -o json 2>&1); then
@@ -139,7 +161,11 @@ jobs:
             RG=$(printf "%s" "$ROWS" | jq -r "$SEL.resourceGroup")
             SERVER=$(printf "%s" "$ROWS" | jq -r "$SEL.loginServer")
             REGION=$(printf "%s" "$ROWS" | jq -r "$SEL.location")
-            echo "::warning::The requested region ($AZURE_LOCATION) has no Loom admin plane. Discovered the estate in $RG ($REGION) and targeting that."
+            if [[ -n "$AZURE_LOCATION" && "$REGION" != "$AZURE_LOCATION" ]]; then
+              echo "::warning::The requested region ($AZURE_LOCATION) has no Loom admin plane. Discovered the estate in $RG ($REGION) and targeting that."
+            else
+              echo "::notice::Discovered the Loom admin plane in $RG ($REGION)."
+            fi
           fi
           if [[ -z "$SERVER" ]]; then
             if ! SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv 2>&1); then

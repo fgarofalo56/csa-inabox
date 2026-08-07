@@ -268,9 +268,13 @@ Two exceptions:
 - **A partially-created Private DNS zone or a taken global name** must be
   removed first — an incremental deploy will keep hitting the same conflict.
 - **A hub that already exists** is guarded. To reconcile it via the workflow you
-  must pass `allow_existing_hub=true`, and **`keep_resources=true`** — without
-  the latter, `run_mode=full` runs a teardown step on success that deletes every
-  `rg-csa-loom-*` resource group in the subscription.
+  must pass `allow_existing_hub=true` and a `region` that **matches the estate**
+  — since #3029 the workflow refuses a region that is not the region of the hub
+  in the subscription, because deploying there would build a second, empty
+  estate rather than reconcile the one that exists. `keep_resources` now
+  defaults to `true`; passing `false` makes the run a teardown and additionally
+  requires `confirm_teardown_rg=rg-csa-loom-admin-<region>`, without which the
+  run is refused before any ARM call (#3028).
 
 ---
 

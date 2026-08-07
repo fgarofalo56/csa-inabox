@@ -256,19 +256,28 @@ test('a dispatch is never overridden in either direction', () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolveReconcileRegion — the eastus2-vs-centralus bug
+// resolveReconcileRegion — the eastus2-vs-centralus bug (#2775, then #3029)
 // ---------------------------------------------------------------------------
 
 test('schedule derives the region from the hub that actually exists', () => {
   const r = resolveReconcileRegion({
-    eventName: 'schedule', adminRgNames: ['rg-csa-loom-admin-centralus'], fallback: 'eastus2',
+    eventName: 'schedule', adminRgNames: ['rg-csa-loom-admin-centralus'],
   });
   assert.equal(r.decision, 'use');
   assert.equal(r.region, 'centralus', 'the schedule must NOT fall back to the eastus2 default');
+  assert.equal(r.source, 'adopted');
 });
 
 test('schedule + the RG query FAILED -> refuses rather than defaulting to another region', () => {
-  const r = resolveReconcileRegion({ eventName: 'schedule', adminRgNames: null, fallback: 'eastus2' });
+  const r = resolveReconcileRegion({ eventName: 'schedule', adminRgNames: null });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /UNKNOWN/);
+});
+
+test('DISPATCH + the RG query FAILED -> refuses too (#3029: UNKNOWN is not a licence to guess)', () => {
+  const r = resolveReconcileRegion({
+    eventName: 'workflow_dispatch', requestedRegion: 'centralus', adminRgNames: null,
+  });
   assert.equal(r.decision, 'refuse');
   assert.match(r.reason, /UNKNOWN/);
 });
@@ -281,25 +290,80 @@ test('schedule + hubs in two regions -> refuses (an unattended job cannot choose
   assert.equal(r.decision, 'refuse');
 });
 
-test('schedule + no hub -> the fallback region, as a first-run install', () => {
-  const r = resolveReconcileRegion({ eventName: 'schedule', adminRgNames: [], fallback: 'eastus2' });
+test('two regions + an explicit region that is one of them -> uses it', () => {
+  const r = resolveReconcileRegion({
+    eventName: 'workflow_dispatch',
+    requestedRegion: 'eastus2',
+    adminRgNames: ['rg-csa-loom-admin-centralus', 'rg-csa-loom-admin-eastus2'],
+  });
   assert.equal(r.decision, 'use');
   assert.equal(r.region, 'eastus2');
 });
 
-test('an explicit region input always wins, on any trigger', () => {
+test('two regions + an explicit region that is NEITHER -> refuses', () => {
+  const r = resolveReconcileRegion({
+    eventName: 'workflow_dispatch',
+    requestedRegion: 'westus3',
+    adminRgNames: ['rg-csa-loom-admin-centralus', 'rg-csa-loom-admin-eastus2'],
+  });
+  assert.equal(r.decision, 'refuse');
+  assert.match(r.reason, /THIRD estate/);
+});
+
+test('no hub + an explicit region -> a first-run install at that region', () => {
+  const r = resolveReconcileRegion({
+    eventName: 'workflow_dispatch', requestedRegion: 'eastus2', adminRgNames: [],
+  });
+  assert.equal(r.decision, 'use');
+  assert.equal(r.region, 'eastus2');
+  assert.equal(r.source, 'input');
+});
+
+test('no hub + NO region -> refuses; there is no default region to fall back to (#3029)', () => {
   for (const eventName of ['schedule', 'workflow_dispatch']) {
-    const r = resolveReconcileRegion({
-      eventName, requestedRegion: 'westus3', adminRgNames: ['rg-csa-loom-admin-centralus'],
-    });
-    assert.equal(r.region, 'westus3');
+    const r = resolveReconcileRegion({ eventName, adminRgNames: [] });
+    assert.equal(r.decision, 'refuse', `${eventName} must not invent a region`);
+    assert.match(r.reason, /no region may be assumed/);
   }
 });
 
-test('a dispatch with no region keeps the workflow default (unchanged behaviour)', () => {
-  const r = resolveReconcileRegion({ eventName: 'workflow_dispatch', adminRgNames: null, fallback: 'eastus2' });
+// THE #3029 CASE, both ways round.
+test('an explicit region that does NOT match the one hub -> REFUSES on every trigger', () => {
+  for (const eventName of ['schedule', 'workflow_dispatch']) {
+    const r = resolveReconcileRegion({
+      eventName, requestedRegion: 'eastus2', adminRgNames: ['rg-csa-loom-admin-centralus'],
+    });
+    assert.equal(r.decision, 'refuse', `${eventName}: eastus2 against a centralus hub must refuse`);
+    assert.match(r.reason, /second, empty estate/);
+    assert.match(r.reason, /region=centralus/, 'the refusal must name the region to re-dispatch with');
+  }
+});
+
+test('an explicit region that MATCHES the one hub -> used, and says so', () => {
+  const r = resolveReconcileRegion({
+    eventName: 'workflow_dispatch', requestedRegion: 'centralus', adminRgNames: ['rg-csa-loom-admin-centralus'],
+  });
   assert.equal(r.decision, 'use');
-  assert.equal(r.region, 'eastus2');
+  assert.equal(r.region, 'centralus');
+  assert.equal(r.source, 'input');
+});
+
+test('a dispatch with NO region adopts the estate rather than the old eastus2 default (#3029)', () => {
+  const r = resolveReconcileRegion({
+    eventName: 'workflow_dispatch', adminRgNames: ['rg-csa-loom-admin-centralus'],
+  });
+  assert.equal(r.decision, 'use');
+  assert.equal(r.region, 'centralus');
+  assert.equal(r.source, 'adopted');
+});
+
+test('resolveReconcileRegion accepts no fallback argument — a default region cannot be reintroduced by a caller', () => {
+  // The old signature took `fallback`, and reconcile-resolve.mjs passed
+  // `AZURE_LOCATION || 'eastus2'` into it. That parameter WAS the defect.
+  assert.ok(
+    !/fallback/.test(resolveReconcileRegion.toString()),
+    'resolveReconcileRegion still references a fallback region',
+  );
 });
 
 // ---------------------------------------------------------------------------

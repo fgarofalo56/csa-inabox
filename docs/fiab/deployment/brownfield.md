@@ -557,19 +557,39 @@ group, a **second Console cannot be stamped into it**. Two supported moves:
 
 | Goal | How |
 |---|---|
-| Reconcile / retry a partially-deployed hub | `gh workflow run deploy-fiab-commercial.yml -f run_mode=full -f allow_existing_hub=true -f keep_resources=true -f deploy_apps_enabled=true` |
+| Reconcile / retry a partially-deployed hub | `gh workflow run deploy-fiab-commercial.yml -f run_mode=full -f region=<the estate's region> -f allow_existing_hub=true -f keep_resources=true -f deploy_apps_enabled=true` |
 | Add another Data Landing Zone | `topology=dlz-attach` with `target_subscription=<new-sub-id>` — the DLZ lands in a **new** subscription |
 
 > `allow_existing_hub` exists because the topology guard otherwise rejects
 > `topology=tenant` when a hub is present. A `schedule`-triggered run supplies no
 > inputs and therefore cannot set it.
 >
-> **`keep_resources` defaults to `false`, and in `full` mode that runs the
-> teardown step on success** — it enumerates `rg-csa-loom-*` across the
-> subscription and deletes every match, purging Key Vaults and Cognitive
-> Services accounts. **Always pass `keep_resources=true` for a real install.**
-> `deploy_apps_enabled` also defaults `false`, so without it no Container Apps
-> are created.
+> **`region` is required and is checked against the estate (#3029).** It used to
+> be optional with an `eastus2` fallback, so omitting it aimed the deploy at a
+> region the estate is not in — and the deploy then *succeeded* against a
+> different, empty estate while every log line said "reconciling the existing
+> hub". The workflow now **refuses** when the region you name is not the region
+> of the hub in the subscription, and names the region to re-dispatch with. On a
+> `schedule` (no inputs) it **adopts** the existing hub's region and prints that
+> it did.
+>
+> **`keep_resources` now defaults to `true` (#3028).** It used to default to
+> `false`, and `keep_resources=false` in `full` mode runs the teardown step on
+> success — it enumerates `rg-csa-loom-*` across the **whole subscription** and
+> deletes every match, purging Key Vaults and Cognitive Services accounts. So
+> selecting `full` and changing nothing else destroyed the estate. Two things
+> changed: the default is now the safe value, and a teardown additionally
+> requires `confirm_teardown_rg` to **exactly** equal the resolved admin
+> resource group (`rg-csa-loom-admin-<region>`). A run whose inputs would tear
+> down without that confirmation is **refused before anything reaches ARM**, by
+> the `Deploy input safety gate` step.
+>
+> `deploy_apps_enabled` still defaults `false`, so without it no Container Apps
+> are created and **no `LOOM_*` env var reaches the Console** — that flag is the
+> only thing that makes `app-deployments.bicep` run.
+>
+> **Deliberate teardown** (a disposable validation subscription) is therefore:
+> `-f run_mode=full -f region=<region> -f keep_resources=false -f confirm_teardown_rg=rg-csa-loom-admin-<region>`.
 
 `dlz-attach` **can** carry adopt decisions in its parameter file —
 `dlz-attach.bicepparam` declares `param adopt` (`:162`) and folds the same 13

@@ -85,7 +85,10 @@ Common failure modes:
    The deployment is incremental and idempotent, so it resumes rather than
    restarts. Two exceptions: a partially-created Private DNS zone or a taken
    global name must be removed first, and reconciling an existing hub through
-   the workflow needs `allow_existing_hub=true` **and** `keep_resources=true`
+   the workflow needs `allow_existing_hub=true` **and** a `region` that matches
+   the estate (a mismatched region is refused — #3029). `keep_resources`
+   defaults to `true`; a teardown also needs
+   `confirm_teardown_rg=rg-csa-loom-admin-<region>` (#3028)
 5. **Verify** — `curl <console-url>/api/health` returns 200, then open the
    Console and confirm sign-in and `/admin/readiness`
 
