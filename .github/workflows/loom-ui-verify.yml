@@ -70,6 +70,83 @@ env:
   KV_SECRET_NAME: 'session-secret'
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # QUEUE WATCHDOG (added 2026-08-07, FINISHLINE C13).
+  #
+  # `timeout-minutes` on the verify job below only starts counting once a runner
+  # has PICKED THE JOB UP. A job that never gets a runner is not covered by it at
+  # all: run 31123017609 sat queued for 79 minutes against the scale-to-zero
+  # in-VNet gh-aca-runner and only ended because a human cancelled it. A run that
+  # can only be ended by hand produces NO verdict — and per
+  # `csa_loom_unknown_as_negative_class`, "no verdict" is routinely misread as
+  # "nothing wrong". That is a gate that cannot fail.
+  #
+  # This job converts an unbounded queue wait into a bounded, RED, self-diagnosed
+  # outcome. It polls this run's own jobs and fails closed if `verify` is still
+  # queued past MAX_QUEUE_MINUTES, naming the KEDA/ACA runner as the thing to
+  # look at. It exits 0 the moment verify leaves the queue, so it costs seconds
+  # on the happy path and never gates the suite's own result.
+  #
+  # Honest limit, stated rather than implied: this watchdog runs on a
+  # GitHub-hosted runner. During a platform-wide Actions incident (as on
+  # 2026-08-06T15:22Z–2026-08-07T02:04Z) it may itself fail to start, in which
+  # case nothing is reported — strictly better than the unbounded wait it
+  # replaces, but not a guarantee.
+  # ---------------------------------------------------------------------------
+  queue-watchdog:
+    name: 'Queue watchdog (bounded wait for the in-VNet runner)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+    steps:
+      - name: Fail closed if the in-VNet verify job never starts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          MAX_QUEUE_MINUTES: '20'
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + MAX_QUEUE_MINUTES * 60 ))
+          echo "Watching run $RUN_ID for the 'Loom UI verify (unattended)' job to leave the queue."
+          echo "Bound: ${MAX_QUEUE_MINUTES} minutes. A still-queued job past that point FAILS this check."
+          while :; do
+            # `status` is queued | in_progress | completed. Anything other than
+            # `queued` means a runner took it, which is all this watchdog cares
+            # about — the suite's own pass/fail is the verify job's business.
+            status=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+                       --jq '.jobs[] | select(.name | startswith("Loom UI verify")) | .status' \
+                     | head -n1 | tr -d '\r' || true)
+            if [ -z "$status" ]; then
+              echo "  … verify job not listed yet (run still materializing)"
+            elif [ "$status" != "queued" ]; then
+              echo "OK — verify job status='$status'; a runner picked it up. Watchdog done."
+              exit 0
+            else
+              echo "  … still queued ($(( (deadline - $(date +%s)) / 60 ))m of budget left)"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::verify job STILL QUEUED after ${MAX_QUEUE_MINUTES} minutes — no in-VNet runner picked it up."
+              cat <<'EOF'
+          [queue-watchdog] FAIL — the job never started, so this run produced NO
+          verification verdict. This is not a pass.
+
+          ESTABLISHED: the job sat in `queued` for the whole budget with labels
+          [self-hosted, loom-aca]. Nothing is known about the console.
+
+          What to check, in order:
+            1. The gh-aca-runner ACA Job (KEDA scale-to-zero) — is the scaler
+               firing? `az containerapp job execution list -n gh-aca-runner`.
+            2. githubstatus.com — a platform Actions incident stalls job
+               assignment even when runners are healthy.
+            3. Whether another loom-ui-verify run is holding the single runner.
+          EOF
+              exit 1
+            fi
+            sleep 20
+          done
+
   verify:
     name: 'Loom UI verify (unattended)'
     # Run on the in-VNet scale-to-zero self-hosted runner (gh-aca-runner) — the
@@ -85,6 +162,30 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 1b. NORMALIZE + VALIDATE `target_route` UP FRONT (FINISHLINE C13).
+      #
+      #     Every receipt in this program is dispatched from Git Bash on Windows.
+      #     MSYS POSIX path conversion rewrites `-f target_route=/admin/readiness`
+      #     into `C:/Program Files/Git/admin/readiness` BEFORE gh ever sends it,
+      #     so the workflow input arrives already corrupt. Run 31122589186 spent
+      #     6 minutes running the full verify + publish-version suite, then failed
+      #     the receipt step and printed a diagnosis blaming the VPN, private-link
+      #     and LOOM_URL — none of which were true or measured.
+      #
+      #     Validating here means a corrupt dispatch is rejected in ~1 second with
+      #     the exact remediation, and a recoverable one is REPAIRED so the run
+      #     the operator asked for still produces its receipt. The same logic
+      #     lives in scripts/csa-loom/e2e-receipt.mjs (normalizeRoute) for local
+      #     runs; this step is the CI-side guard so no compute is wasted first.
+      # -----------------------------------------------------------------------
+      - name: Normalize + validate target_route
+        id: route
+        if: ${{ inputs.target_route != '' }}
+        env:
+          RAW_ROUTE: ${{ inputs.target_route }}
+        run: bash scripts/ci/normalize-target-route.sh
 
       # -----------------------------------------------------------------------
       # 2. Azure OIDC login — no client secret on disk.
@@ -392,18 +493,30 @@ jobs:
       - name: Capture browser-E2E receipt (optional)
         id: receipt
         if: ${{ inputs.target_route != '' }}
-        run: |
-          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
-          SLUG_ARG=""
-          if [ -n "${{ inputs.target_slug }}" ]; then SLUG_ARG="--slug ${{ inputs.target_slug }}"; fi
-          node scripts/csa-loom/e2e-receipt.mjs --route "${{ inputs.target_route }}" $SLUG_ARG
         env:
+          # The NORMALIZED route from the validation step above — never the raw
+          # input. Passed through env rather than interpolated into the shell so
+          # a route containing shell metacharacters cannot alter the command.
+          RECEIPT_ROUTE: ${{ steps.route.outputs.route }}
+          RECEIPT_SLUG:  ${{ inputs.target_slug }}
           SESSION_SECRET:       ${{ env.SESSION_SECRET }}
           LOOM_URL:             ${{ env.LOOM_URL }}
           LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
           LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
           LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
           CI: 'true'
+        run: |
+          set -euo pipefail
+          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
+          if [ -z "$RECEIPT_ROUTE" ]; then
+            echo "::error::the normalize step produced no route — refusing to guess one."
+            exit 1
+          fi
+          if [ -n "$RECEIPT_SLUG" ]; then
+            node scripts/csa-loom/e2e-receipt.mjs --route "$RECEIPT_ROUTE" --slug "$RECEIPT_SLUG"
+          else
+            node scripts/csa-loom/e2e-receipt.mjs --route "$RECEIPT_ROUTE"
+          fi
 
       # -----------------------------------------------------------------------
       # 7. Upload Playwright HTML report + any receipts as artifact (always).
