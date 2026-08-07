@@ -30,15 +30,16 @@
  * operator typed).
  *
  * Emitted outputs:
- *   region                the region to deploy into (schedule: derived from the
- *                         existing hub, NOT the 'eastus2' workflow default)
+ *   region                the region to deploy into — MEASURED from the estate
+ *                         or matched against it, never defaulted (refs #3029)
+ *   region_source         'adopted' (from the estate) | 'input' (explicit, matched)
  *   deploy_apps_enabled   the FINAL value the az commands must use
  *   pinned_count / absent_count / unknown_count   for the step summary
  *
  * Emitted env (consumed by params/commercial.bicepparam at bicep-compile time):
  *   AZURE_LOCATION, LOOM_CONSOLE_TAG, LOOM_MCP_TAG, … (one per RUNNING image)
  *
- * Env in: GITHUB_EVENT_NAME, AZURE_LOCATION, INPUT_REGION,
+ * Env in: GITHUB_EVENT_NAME, INPUT_REGION,
  *         CSA_LOOM_TOPOLOGY, CSA_LOOM_TARGET_SUBSCRIPTION,
  *         DEPLOY_SUB, BASE_DEPLOY_APPS_ENABLED
  *
@@ -58,7 +59,10 @@ const env = process.env;
 const eventName = env.GITHUB_EVENT_NAME || '';
 const topology = env.CSA_LOOM_TOPOLOGY || '';
 const deploySub = env.DEPLOY_SUB || '';
-const fallbackRegion = env.AZURE_LOCATION || 'eastus2';
+// NO FALLBACK REGION (refs #3029). resolveReconcileRegion either measures the
+// region from the estate, accepts an explicit input that matches it, or
+// refuses. A default here is the whole defect: it is what let a "reconcile"
+// aim at eastus2 while the estate was in centralus.
 const requestedRegion = env.INPUT_REGION || '';
 
 /**
@@ -132,16 +136,23 @@ const regionVerdict = resolveReconcileRegion({
   eventName,
   requestedRegion,
   adminRgNames: adminRgs,
-  fallback: fallbackRegion,
 });
 
 if (regionVerdict.decision === 'refuse') {
-  console.log(`::error::${regionVerdict.reason}`);
+  console.log(`::error::REGION REFUSED — ${regionVerdict.reason}`);
   process.exit(1);
 }
 const region = regionVerdict.region;
-console.log(`[reconcile] region=${region} — ${regionVerdict.reason}`);
+// Loud, before anything is submitted (refs #3029 fix 4): the region that was
+// resolved, where it came from, and which resource group it therefore names.
+console.log(
+  `::notice::REGION = ${region} (source: ${regionVerdict.source}) — ${regionVerdict.reason} ` +
+  `Every name this deploy derives follows from it: rg-csa-loom-admin-${region}, ` +
+  `vnet-csa-loom-hub-${region}, uami-loom-console-${region}.`,
+);
+console.log(`[reconcile] region=${region} source=${regionVerdict.source} — ${regionVerdict.reason}`);
 setOutput('region', region);
+setOutput('region_source', regionVerdict.source);
 setEnv(`AZURE_LOCATION=${region}`);
 
 // ---- 2. running images ----------------------------------------------------
@@ -155,6 +166,7 @@ const containers = hubPresent ? listRunningContainers(adminRg) : [];
 const resolution = resolveRunningImageTags(containers);
 
 console.log(`[reconcile] hub RG ${adminRg} ${hubPresent ? 'present' : 'absent (first-run install)'}`);
+setOutput('hub_present', String(hubPresent));
 for (const entry of APP_IMAGE_TAGS) {
   const tag = resolution.pinned[entry.key];
   // Print repo:tag only. The registry host is a live-estate identifier and this
@@ -192,12 +204,18 @@ setOutput('deploy_apps_enabled', decision.value);
 setOutput('pinned_count', String(Object.keys(resolution.pinned).length));
 setOutput('absent_count', String(resolution.absent.length));
 setOutput('unknown_count', String(resolution.unknown.length));
+// The KEYS, not just the count. An UNKNOWN key exports no pin, so an
+// apps-enabled OPERATOR DISPATCH (which decideDeployApps deliberately does not
+// override) would deploy it at the bicepparam default over whatever is running.
+// deploy-input-safety.mjs refuses on exactly this and needs the names to say
+// which apps are at risk.
+setOutput('unknown_keys', resolution.unknown.map((u) => u.key).join(','));
 
 if (env.GITHUB_STEP_SUMMARY) {
   const rows = [
     '### Scheduled reconcile — image immutability',
     '',
-    `- region: \`${region}\` (${regionVerdict.reason})`,
+    `- region: \`${region}\` (source: ${regionVerdict.source}) — ${regionVerdict.reason}`,
     `- images pinned to their RUNNING tag: **${lines.length}**`,
     `- not deployed (would be created): ${resolution.absent.join(', ') || '(none)'}`,
     `- UNKNOWN: ${resolution.unknown.map((u) => u.key).join(', ') || '(none)'}`,

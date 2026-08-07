@@ -873,7 +873,15 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
       region: region,
       dlz_domain_name: body.domainName!,
       capacity_sku: body.capacitySku!,
-      keep_resources: 'false',
+      // #3028. This said 'false', and `keep_resources=false` + `run_mode=full`
+      // is the workflow's TEARDOWN combination: after provisioning and smoking,
+      // fiab-teardown.sh deletes every rg-csa-loom-* resource group in the
+      // subscription. So the product's own one-button install stood the estate
+      // up and then destroyed it. The Setup Wizard is never running a throwaway
+      // CI validation — it is installing the customer's estate — so the only
+      // correct value here is 'true', and the workflow now refuses the other
+      // one unless confirm_teardown_rg names the resource group exactly.
+      keep_resources: 'true',
     };
     if (topology === 'dlz-attach' && body.targetSubscriptionId) {
       dispatchInputs.target_subscription = body.targetSubscriptionId;

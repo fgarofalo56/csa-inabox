@@ -24,9 +24,14 @@ on:
           - whatif-only
           - full
       keep_resources:
-        description: 'Keep resources up after smoke test (full mode only). USE WITH CAUTION — incurs ongoing spend until manually torn down.'
+        description: 'Keep the estate up after the smoke test (full mode only). TRUE is the safe default and is what a real install wants. Setting it FALSE makes this a TEARDOWN run: fiab-teardown.sh then deletes EVERY rg-csa-loom-* resource group in the subscription — not just this one — and purges its Key Vaults and Cognitive Services accounts. A false here is refused up front unless confirm_teardown_rg names the resource group exactly.'
         type: boolean
-        default: false
+        default: true
+      confirm_teardown_rg:
+        description: 'DESTRUCTIVE — leave EMPTY unless you intend to delete the estate. To authorise the teardown that keep_resources=false performs, type the resolved admin resource group exactly (rg-csa-loom-admin-<region>). Any other value, or an empty one, REFUSES the run before anything is submitted to ARM (#3028).'
+        type: string
+        required: false
+        default: ''
       allow_existing_hub:
         description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry a partially-deployed hub (e.g. after a mid-deploy failure). Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs.'
         type: boolean
@@ -74,9 +79,9 @@ on:
         type: string
         required: false
       region:
-        description: 'Azure region (e.g. eastus2).'
+        description: 'REQUIRED. Azure region of the estate this run targets (e.g. centralus). There is no default: the region IS the identity of the estate — rg-csa-loom-admin-<region>, vnet-csa-loom-hub-<region> and uami-loom-console-<region> are all derived from it, so a wrong region does not fail, it succeeds against a different empty estate (#3029). A value that does not match the hub already in the subscription is REFUSED before anything is submitted.'
         type: string
-        required: false
+        required: true
       tenant_admin_oid:
         description: 'Bootstrap tenant admin — your Entra USER object id (az ad signed-in-user show --query id). Members bypass the feature-permission gate so the first human admin can open /admin/*. Empty → the deploying principal becomes the bootstrap admin (deployer().objectId), or set the FIAB_ADMIN_GROUP_ID secret for a group.'
         type: string
@@ -108,14 +113,19 @@ permissions:
 
 env:
   AZURE_CLOUD: AzureCloud
-  # FALLBACK ONLY. On a `schedule` there are no inputs, so this used to resolve
-  # to eastus2 unconditionally — while the live estate is in centralus. The
-  # nightly "reconcile" would therefore have stamped a SECOND estate in another
-  # region rather than reconciling the one that exists (and then, per the
-  # Teardown note below, deleted both). The `Resolve reconcile target` step
-  # overrides AZURE_LOCATION via $GITHUB_ENV with the region of the hub that is
-  # actually there. Decision logic + tests: scripts/ci/reconcile-policy.mjs.
-  AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}
+  # THERE IS NO DEFAULT REGION (refs #3029). This used to read
+  # `${{ inputs.region || 'eastus2' }}`, so a schedule (which carries no inputs)
+  # and a dispatch that left the blank field blank BOTH aimed at eastus2 while
+  # the live estate is in centralus. The nightly "reconcile" would therefore
+  # have stamped a SECOND estate in another region rather than reconciling the
+  # one that exists — and then, per the Teardown note below, deleted both.
+  #
+  # It is now seeded from the input alone and may legitimately be EMPTY here.
+  # `Resolve reconcile target` runs before any step that reads it and either
+  # ADOPTS the region of the hub that actually exists, accepts an explicit input
+  # that MATCHES it, or REFUSES the run. Nothing is ever assumed.
+  # Decision logic + tests: scripts/ci/reconcile-policy.mjs.
+  AZURE_LOCATION: ${{ inputs.region }}
   CSA_LOOM_BOUNDARY: Commercial
   CSA_LOOM_DEPLOYMENT_MODE: ${{ inputs.deployment_mode || 'single-sub' }}
   # audit-t156 — explicit topology; empty falls through to deployment_mode in bicep.
@@ -241,6 +251,44 @@ jobs:
           BASE_DEPLOY_APPS_ENABLED: ${{ steps.topology_guard.outputs.deploy_apps_enabled }}
           INPUT_REGION: ${{ inputs.region }}
         run: node scripts/ci/reconcile-resolve.mjs
+
+      # ── INPUT SAFETY GATE — REFUSES BEFORE ANY ARM WRITE (refs #3028, #3029) ──
+      #
+      # Placed here deliberately: after `Resolve reconcile target` (whose only
+      # Azure calls are the read-only `az group list` / `az containerapp list`
+      # it needs to MEASURE the region) and before the first step that changes
+      # anything — provider registration, what-if, apply, teardown.
+      #
+      # It exists because SKIPPING the teardown step is not enough. A run whose
+      # inputs asked for destruction must not quietly become a run that happens
+      # not to destroy: the operator is owed the refusal, and owed it before
+      # ninety minutes of provisioning rather than after.
+      #
+      # The two inputs it refuses on both had the DESTRUCTIVE choice as their
+      # default, and neither said so:
+      #   #3028  keep_resources defaulted FALSE, so `run_mode=full` + change
+      #          nothing else = provision, smoke, then run fiab-teardown.sh,
+      #          which deletes every rg-csa-loom-* RG in the SUBSCRIPTION. The
+      #          "USE WITH CAUTION" warning was attached to the SAFE value.
+      #   #3029  region had no default on the input and `|| 'eastus2'` in env:,
+      #          so an omitted region silently targeted the wrong estate.
+      #
+      # Decision logic + tests: scripts/ci/deploy-input-safety.mjs and
+      # scripts/ci/__tests__/deploy-input-safety.test.mjs. Workflow shape is
+      # held by scripts/ci/check-deploy-input-safety.mjs.
+      - name: Deploy input safety gate (refuses a run that would tear down or mis-target)
+        id: input_safety
+        env:
+          INPUT_RUN_MODE: ${{ inputs.run_mode }}
+          INPUT_KEEP_RESOURCES: ${{ inputs.keep_resources }}
+          INPUT_CONFIRM_TEARDOWN_RG: ${{ inputs.confirm_teardown_rg }}
+          INPUT_REGION: ${{ inputs.region }}
+          RESOLVED_REGION: ${{ steps.reconcile.outputs.region }}
+          RESOLVED_REGION_SOURCE: ${{ steps.reconcile.outputs.region_source }}
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
+          UNKNOWN_IMAGE_KEYS: ${{ steps.reconcile.outputs.unknown_keys }}
+          HUB_PRESENT: ${{ steps.reconcile.outputs.hub_present }}
+        run: node scripts/ci/deploy-input-safety.mjs
 
       - name: Register resource providers + features (deploy sub)
         run: |
@@ -411,29 +459,165 @@ jobs:
             --resource-group "rg-csa-loom-admin-${AZURE_LOCATION}" \
             --advisory
 
+      # SIGN-IN + CATALOG-AUTHORIZATION DURABILITY (#2681), AND WHY IT IS HERE
+      # RATHER THAN AFTER THE WHAT-IF (#3022).
+      #
+      # An Entra app registration is a Microsoft Graph object ARM cannot create,
+      # so commercial.bicepparam reads it from LOOM_MSAL_CLIENT_ID — and this
+      # lane passed NOTHING. An ACA template rewrite drops every env var it does
+      # not declare, so each re-run re-rendered an EMPTY client id and took
+      # sign-in dark, undoing what the post-deploy bootstrap had wired.
+      #
+      # It costs more than sign-in. admin-plane/main.bicep deploys `loom-unity`
+      # DEFAULT-ON and passes this id as the catalog's `entraClientId`; with no
+      # pinnable audience the module deploys SEALED (minReplicas 0, unroutable
+      # audience) by design — fail-closed rather than the anonymous catalog of
+      # #2643. So an unresolved client id does not merely blank sign-in, it
+      # RE-SEALS a working catalog on every reconcile.
+      #
+      # THE ORDERING BUG (#3022). This step used to run AFTER `Bicep what-if`,
+      # and only on `schedule || run_mode == full`. LOOM_MSAL_CLIENT_ID is read
+      # by commercial.bicepparam at BICEP-COMPILE time, so the what-if compiled
+      # the paramfile with the variable UNSET and the apply compiled it with the
+      # variable SET: the preview was of a different template than the one
+      # applied, for exactly the parameter family with the highest blast radius.
+      # A preview that asserts "this is what will happen" while previewing
+      # different inputs states something it did not establish (R7).
+      #
+      # It now runs on EVERY trigger, before the parameters are composed, so the
+      # what-if and the apply see identical inputs. It is read-only (a Key Vault
+      # secret READ and an `az containerapp show`) and never fails the caller —
+      # empty is the correct answer on a genuinely fresh subscription, where the
+      # catalog comes up sealed and csa-loom-post-deploy-bootstrap unseals it.
+      - name: Resolve the existing MSAL client id (sign-in + Loom Unity audience durability)
+        id: msal
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
+        run: |
+          set -euo pipefail
+          CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "rg-csa-loom-admin-${AZURE_LOCATION}" || true)"
+          echo "LOOM_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
+          if [ -n "${CID:-}" ]; then
+            echo "::notice::MSAL client id resolved for this estate — sign-in and the Loom Unity audience stay wired across this deploy, and the what-if below previews the SAME value the apply will use."
+            exit 0
+          fi
+          # UNATTENDED + APPS-ENABLED + NO CLIENT ID is the one combination that
+          # must not proceed silently. app-deployments.bicep would re-render
+          # loom-console with an EMPTY LOOM_MSAL_CLIENT_ID (sign-in dark) and
+          # re-seal loom-unity, with nobody watching. An operator dispatch may
+          # still do it deliberately — that is a first install.
+          if [ "${EVENT_NAME}" = "schedule" ] && [ "${DEPLOY_APPS_ENABLED}" = "true" ]; then
+            echo "::error::No Entra app registration could be resolved for this estate, and this is an UNATTENDED scheduled run with deployAppsEnabled=true. Applying would re-render loom-console with an empty LOOM_MSAL_CLIENT_ID (sign-in goes dark) and re-seal loom-unity. Refusing. Run csa-loom-post-deploy-bootstrap.yml so the client id is recorded in Key Vault, then let the schedule resume."
+            exit 1
+          fi
+          echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured and loom-unity deploys SEALED until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
+
+      # ── ONE PARAMETER SOURCE FOR THE WHAT-IF AND THE APPLY (refs #3022) ──
+      #
+      # These two commands used to be two hand-maintained copies of the same
+      # ~15-line argument list, and they had ALREADY drifted: the what-if passed
+      # `--subscription "$CSA_LOOM_TARGET_SUBSCRIPTION"` (set only for
+      # dlz-attach) while the apply passed `--subscription "$DEPLOY_SUB"` (the
+      # topology guard's verdict, which is the `subscription` input for a
+      # tenant/single-sub run). So on a dispatch that named an explicit hub
+      # subscription, the preview ran against the LOGIN subscription and the
+      # apply ran against a different one.
+      #
+      # Divergence is now IMPOSSIBLE rather than documented: the arguments are
+      # composed once, into a file, and both commands expand that same file.
+      # There is no second copy to drift. The file's sha256 is emitted and
+      # re-asserted at apply time, so even a rewrite between the two steps is
+      # caught. Enforced statically by scripts/ci/check-deploy-input-safety.mjs.
+      #
+      # The file lives in $RUNNER_TEMP, is never uploaded, and is printed with
+      # its values redacted — adminEntraGroupId is a secret and GitHub's log
+      # masking is not something a deploy path should be leaning on.
+      - name: Compose deployment arguments (ONE source for what-if and apply)
+        id: params
+        env:
+          ADMIN_ENTRA_GROUP_ID: ${{ secrets.FIAB_ADMIN_GROUP_ID }}
+          INPUT_TENANT_ADMIN_OID: ${{ inputs.tenant_admin_oid }}
+          DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
+          PURVIEW_ENABLED: ${{ steps.topology_guard.outputs.purview_enabled }}
+          AZURE_MAPS_ENABLED: ${{ steps.topology_guard.outputs.azure_maps_enabled }}
+          FIREWALL_ENABLED: ${{ steps.topology_guard.outputs.firewall_enabled }}
+          DEPLOY_APPS_ENABLED: ${{ steps.reconcile.outputs.deploy_apps_enabled }}
+          SKIP_ROLE_GRANTS: ${{ steps.topology_guard.outputs.skip_role_grants }}
+          FRONT_DOOR_ENABLED: ${{ steps.topology_guard.outputs.front_door_enabled }}
+          EXISTING_VPN_GATEWAY_NAME: ${{ steps.reconcile_adopt.outputs.vpn_gateway_name }}
+          APIM_DNS_LINK_NAME: ${{ steps.reconcile_adopt.outputs.apim_dns_link_name }}
+          HUB_ADMIN_SUB: ${{ steps.hubcoords.outputs.hub_admin_sub }}
+          HUB_VNET_ID: ${{ steps.hubcoords.outputs.hub_vnet_id }}
+          HUB_UAMI_PRINCIPAL: ${{ steps.hubcoords.outputs.hub_uami_principal }}
+          HUB_UAMI_NAME: ${{ steps.hubcoords.outputs.hub_uami_name }}
+          HUB_UAMI_CLIENT: ${{ steps.hubcoords.outputs.hub_uami_client }}
+          HUB_UAMI_ID: ${{ steps.hubcoords.outputs.hub_uami_id }}
+        run: |
+          set -euo pipefail
+          DEPLOY_NAME="csa-loom-ci-${{ github.run_id }}"
+          ARGS_FILE="${RUNNER_TEMP}/deploy-args.txt"
+          : > "$ARGS_FILE"
+          add() { printf '%s\n' "$@" >> "$ARGS_FILE"; }
+
+          add --name "$DEPLOY_NAME"
+          add --location "$AZURE_LOCATION"
+          if [ -n "${DEPLOY_SUB:-}" ]; then add --subscription "$DEPLOY_SUB"; fi
+          add --template-file platform/fiab/bicep/main.bicep
+          add --parameters platform/fiab/bicep/params/commercial.bicepparam
+          add --parameters "location=$AZURE_LOCATION"
+          add --parameters "purviewEnabled=$PURVIEW_ENABLED"
+          add --parameters "azureMapsEnabled=$AZURE_MAPS_ENABLED"
+          add --parameters "hubFirewallEnabled=$FIREWALL_ENABLED"
+          add --parameters "deployAppsEnabled=$DEPLOY_APPS_ENABLED"
+          add --parameters "skipRoleGrants=$SKIP_ROLE_GRANTS"
+          add --parameters "frontDoorEnabled=$FRONT_DOOR_ENABLED"
+          add --parameters "existingVpnGatewayName=$EXISTING_VPN_GATEWAY_NAME"
+          add --parameters "apimGatewayDnsLinkName=$APIM_DNS_LINK_NAME"
+          add --parameters "adminEntraGroupId=$ADMIN_ENTRA_GROUP_ID"
+          if [ -n "${INPUT_TENANT_ADMIN_OID:-}" ]; then
+            add --parameters "loomTenantAdminOid=$INPUT_TENANT_ADMIN_OID"
+          fi
+          add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
+          if [ -n "${CSA_LOOM_TOPOLOGY:-}" ]; then
+            add --parameters "topology=$CSA_LOOM_TOPOLOGY"
+          fi
+          if [ -n "${CSA_LOOM_TARGET_SUBSCRIPTION:-}" ]; then
+            add --parameters "targetSubscriptionId=$CSA_LOOM_TARGET_SUBSCRIPTION"
+            add --parameters "attachDomainName=$CSA_LOOM_DLZ_DOMAIN_NAMES"
+          fi
+          if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            add --parameters "hubAdminSubscriptionId=$HUB_ADMIN_SUB"
+            add --parameters "hubVnetId=$HUB_VNET_ID"
+            add --parameters "hubConsolePrincipalId=$HUB_UAMI_PRINCIPAL"
+            add --parameters "hubConsoleUamiName=$HUB_UAMI_NAME"
+            add --parameters "hubConsoleUamiAppId=$HUB_UAMI_CLIENT"
+            add --parameters "hubConsoleUamiId=$HUB_UAMI_ID"
+          fi
+
+          SHA=$(sha256sum "$ARGS_FILE" | cut -d' ' -f1)
+          echo "deploy_args_file=$ARGS_FILE" >> "$GITHUB_OUTPUT"
+          echo "deploy_args_sha256=$SHA"     >> "$GITHUB_OUTPUT"
+          echo "DEPLOY_NAME=$DEPLOY_NAME"    >> "$GITHUB_ENV"
+          echo "::notice::Composed $(grep -c . "$ARGS_FILE") deployment argument(s); sha256=$SHA. The what-if and the apply expand THIS file — there is no second copy to drift (#3022)."
+          echo "Bicep parameters in this deployment (values redacted — adminEntraGroupId is a secret):"
+          sed -n 's/^\([A-Za-z][A-Za-z0-9]*\)=.*/  \1=<redacted>/p' "$ARGS_FILE"
+
       - name: Bicep what-if (preview)
         id: whatif
+        env:
+          ARGS_FILE: ${{ steps.params.outputs.deploy_args_file }}
+          ARGS_SHA: ${{ steps.params.outputs.deploy_args_sha256 }}
         run: |
-          # Assemble the dlz-attach hub-coordinate params only when topology=dlz-attach.
-          HUB_PARAMS=""
-          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
-            HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
+          set -euo pipefail
+          HAVE=$(sha256sum "$ARGS_FILE" | cut -d' ' -f1)
+          if [ "$HAVE" != "$ARGS_SHA" ]; then
+            echo "::error::The composed deployment arguments changed between composition and the what-if (expected $ARGS_SHA, found $HAVE). A preview of arguments other than the ones that will be applied is worse than no preview. Refusing."
+            exit 1
           fi
-          az deployment sub what-if \
-            --name csa-loom-ci-${{ github.run_id }} \
-            --location $AZURE_LOCATION \
-            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--subscription "$CSA_LOOM_TARGET_SUBSCRIPTION"} \
-            --template-file platform/fiab/bicep/main.bicep \
-            --parameters platform/fiab/bicep/params/commercial.bicepparam \
-            --parameters location="$AZURE_LOCATION" \
-            --parameters purviewEnabled=${{ steps.topology_guard.outputs.purview_enabled }} azureMapsEnabled=${{ steps.topology_guard.outputs.azure_maps_enabled }} hubFirewallEnabled=${{ steps.topology_guard.outputs.firewall_enabled }} deployAppsEnabled=${{ steps.reconcile.outputs.deploy_apps_enabled }} skipRoleGrants=${{ steps.topology_guard.outputs.skip_role_grants }} frontDoorEnabled=${{ steps.topology_guard.outputs.front_door_enabled }} \
-            --parameters existingVpnGatewayName="${{ steps.reconcile_adopt.outputs.vpn_gateway_name }}" apimGatewayDnsLinkName="${{ steps.reconcile_adopt.outputs.apim_dns_link_name }}" \
-            --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
-            ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
-            --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
-            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
-            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"} \
-            ${HUB_PARAMS:+--parameters $HUB_PARAMS}
+          echo "::notice::what-if previewing deployment arguments sha256=$HAVE (identical to the apply)."
+          mapfile -t DEPLOY_ARGS < "$ARGS_FILE"
+          az deployment sub what-if "${DEPLOY_ARGS[@]}"
 
       # ── IMAGE PREFLIGHT (refs #2958) ──────────────────────────────────────
       # THE FOOTGUN THIS CLOSES. This deploy is subscription-scoped and ADOPTS
@@ -469,35 +653,6 @@ jobs:
       # (no-vaporware.md) builds the registry contents in the next phase. A
       # registry that EXISTS but cannot be read still fails — "I could not prove
       # it" is not a pass.
-      # SIGN-IN + CATALOG-AUTHORIZATION DURABILITY (#2681). Same defect the
-      # GCC-High and IL5 lanes already fixed, still open here: an Entra app
-      # registration is a Microsoft Graph object ARM cannot create, so
-      # commercial.bicepparam reads it from LOOM_MSAL_CLIENT_ID — and this lane
-      # passed NOTHING. An ACA template rewrite drops every env var it does not
-      # declare, so each re-run re-rendered an EMPTY client id and took sign-in
-      # dark, undoing what the post-deploy bootstrap had wired.
-      #
-      # It now costs more than sign-in. admin-plane/main.bicep deploys `loom-unity`
-      # DEFAULT-ON and passes this id as the catalog's `entraClientId`; with no
-      # pinnable audience the module deploys SEALED (minReplicas 0, unroutable
-      # audience) by design — fail-closed rather than the anonymous catalog of
-      # #2643. So an unresolved client id here does not merely blank sign-in, it
-      # RE-SEALS a working catalog on every reconcile. Resolve the estate's
-      # existing registration first: Key Vault record, then the live Console app.
-      # Empty is the correct answer on a genuinely fresh subscription — the
-      # catalog comes up sealed and csa-loom-post-deploy-bootstrap unseals it.
-      - name: Resolve the existing MSAL client id (sign-in + Loom Unity audience durability)
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
-        run: |
-          set -euo pipefail
-          CID="$(bash scripts/csa-loom/resolve-msal-client-id.sh --rg "rg-csa-loom-admin-${AZURE_LOCATION}" || true)"
-          echo "LOOM_MSAL_CLIENT_ID=${CID}" >> "$GITHUB_ENV"
-          if [ -n "${CID:-}" ]; then
-            echo "::notice::MSAL client id resolved for this estate — sign-in and the Loom Unity audience stay wired across this deploy."
-          else
-            echo "::warning::No Entra app registration for this estate yet. Sign-in stays unconfigured and loom-unity deploys SEALED until csa-loom-post-deploy-bootstrap (bootstrap-msal-app-reg.sh) runs; it records the client id in Key Vault so later deploys stay pinned."
-          fi
-
       - name: Image preflight — ACR must already hold every referenced tag
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |
@@ -574,22 +729,31 @@ jobs:
       - name: Provision (idempotent)
         id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+        env:
+          ARGS_FILE: ${{ steps.params.outputs.deploy_args_file }}
+          ARGS_SHA: ${{ steps.params.outputs.deploy_args_sha256 }}
         run: |
           set -e
-          DEPLOY_NAME="csa-loom-ci-${{ github.run_id }}"
           # az deployment sub create — directly provisions Bicep. azd up
           # would also need pre-built container images for the service
           # deploy phase, which we don't have in CI yet (PRP-16 builds
           # them). Infra-only validates the entire Bicep stack end-to-end.
-          # dlz-attach targets the NEW subscription (target_subscription).
+          #
+          # THE ARGUMENTS ARE NOT RESTATED HERE (refs #3022). They are the
+          # SAME FILE the what-if expanded — including the dlz-attach hub
+          # coordinates, the topology, and the `--subscription` the topology
+          # guard resolved. The two commands used to be two hand-maintained
+          # copies and had already drifted on `--subscription`. The sha256 is
+          # re-asserted so that even a rewrite between the preview and the
+          # apply is caught rather than assumed away.
           DEPLOY_SUB="${{ steps.topology_guard.outputs.deploy_sub }}"
-          # dlz-attach: pass the cross-sub hub coordinates discovered above so the
-          # hub-side peering + hub-console-env modules (and DLZ RBAC) target the HUB
-          # sub, not the deployment (DLZ) sub.
-          HUB_PARAMS=""
-          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
-            HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
+          HAVE=$(sha256sum "$ARGS_FILE" | cut -d' ' -f1)
+          if [ "$HAVE" != "$ARGS_SHA" ]; then
+            echo "::error::The composed deployment arguments changed after the what-if previewed them (expected $ARGS_SHA, found $HAVE). The preview no longer describes this apply. Refusing."
+            exit 1
           fi
+          echo "::notice::Applying deployment arguments sha256=$HAVE — byte-identical to the set the what-if previewed."
+          mapfile -t DEPLOY_ARGS < "$ARGS_FILE"
           # RETRY WITH CLASSIFICATION + PLATFORM REMEDIATION (deploy-integrity R6).
           #
           # This ran bare: no retry, no classification, no post-failure triage.
@@ -626,21 +790,7 @@ jobs:
             --remediate \
             --arm-deployment "$DEPLOY_NAME" --arm-scope sub \
             ${DEPLOY_SUB:+--arm-subscription "$DEPLOY_SUB"} \
-            -- az deployment sub create \
-            --name "$DEPLOY_NAME" \
-            --location "$AZURE_LOCATION" \
-            ${DEPLOY_SUB:+--subscription "$DEPLOY_SUB"} \
-            --template-file platform/fiab/bicep/main.bicep \
-            --parameters platform/fiab/bicep/params/commercial.bicepparam \
-            --parameters location="$AZURE_LOCATION" \
-            --parameters purviewEnabled=${{ steps.topology_guard.outputs.purview_enabled }} azureMapsEnabled=${{ steps.topology_guard.outputs.azure_maps_enabled }} hubFirewallEnabled=${{ steps.topology_guard.outputs.firewall_enabled }} deployAppsEnabled=${{ steps.reconcile.outputs.deploy_apps_enabled }} skipRoleGrants=${{ steps.topology_guard.outputs.skip_role_grants }} frontDoorEnabled=${{ steps.topology_guard.outputs.front_door_enabled }} \
-            --parameters existingVpnGatewayName="${{ steps.reconcile_adopt.outputs.vpn_gateway_name }}" apimGatewayDnsLinkName="${{ steps.reconcile_adopt.outputs.apim_dns_link_name }}" \
-            --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }} \
-            ${{ inputs.tenant_admin_oid && format('--parameters loomTenantAdminOid={0}', inputs.tenant_admin_oid) || '' }} \
-            --parameters loomVanityDomain="$CSA_LOOM_VANITY_DOMAIN" \
-            ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
-            ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION" attachDomainName="$CSA_LOOM_DLZ_DOMAIN_NAMES"} \
-            ${HUB_PARAMS:+--parameters $HUB_PARAMS}
+            -- az deployment sub create "${DEPLOY_ARGS[@]}"
           # R7: the console URL read used to be `2>/dev/null || echo ""`, so a
           # failed read printed "Console URL (VNet-internal): " with nothing
           # after it and the run still went green. Say which it is.
@@ -672,7 +822,7 @@ jobs:
           ADMIN_SUB=$(az account show --query id -o tsv)
           echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
           echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
-          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
+          echo "region=${{ steps.reconcile.outputs.region }}" >> "$GITHUB_OUTPUT"
 
       - name: Post-provision validation (from inside cluster)
         id: validate
@@ -684,7 +834,7 @@ jobs:
         # VNet-internal ingress and so was pinned continue-on-error = a no-op.)
         run: bash .github/scripts/fiab-post-provision-validate.sh
         env:
-          RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+          RG_NAME: rg-csa-loom-admin-${{ steps.reconcile.outputs.region }}
           BOUNDARY: ${{ env.CSA_LOOM_BOUNDARY }}
 
       - name: External smoke test (best-effort)
@@ -721,6 +871,21 @@ jobs:
       # is false there anyway. The literal is what check-reconcile-safety.mjs (I1)
       # matches, because "it evaluates to false" is precisely the reasoning that
       # let the previous condition ship.
+      #
+      # THE SECOND DEFENCE (refs #3028). `!inputs.keep_resources` used to be the
+      # ONLY thing between a default dispatch and the destruction of the admin
+      # RG, and `keep_resources` DEFAULTED TO FALSE — so selecting `full` and
+      # changing nothing else deleted the estate. The default is now `true`, and
+      # this condition additionally requires the operator to have TYPED the
+      # resource group being destroyed into `confirm_teardown_rg`. A
+      # double-negative guarding a destructive step is how this hid; a positive
+      # match against the resolved RG name cannot be produced by accident.
+      #
+      # The `Deploy input safety gate` step REFUSES this combination outright
+      # long before here, so reaching this step at all means the confirmation
+      # was supplied and matched. Both controls are kept: the gate gives the
+      # operator the refusal early, and this condition means that even if the
+      # gate were removed, teardown still cannot fire unconfirmed.
       - name: Teardown (operator dispatch only — NEVER on the scheduled reconcile)
         id: teardown
         if: |
@@ -728,15 +893,17 @@ jobs:
           && github.event_name != 'schedule'
           && steps.provision.outcome == 'success'
           && inputs.run_mode == 'full' && !inputs.keep_resources
+          && inputs.confirm_teardown_rg == format('rg-csa-loom-admin-{0}', steps.reconcile.outputs.region)
         run: bash .github/scripts/fiab-teardown.sh
         env:
-          RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+          RG_NAME: rg-csa-loom-admin-${{ steps.reconcile.outputs.region }}
 
       - name: Note resources kept (manual teardown required)
         if: steps.provision.outcome == 'success' && inputs.run_mode == 'full' && inputs.keep_resources
         run: |
-          echo "::warning::Resources KEPT per workflow input. Tear down manually when done:"
-          echo "::warning::  RG_NAME=rg-csa-loom-admin-${AZURE_LOCATION} bash .github/scripts/fiab-teardown.sh"
+          echo "::notice::Resources KEPT (keep_resources=true — the safe default, and what a real install wants)."
+          echo "::notice::To tear the estate down DELIBERATELY later, either re-dispatch with keep_resources=false AND confirm_teardown_rg=rg-csa-loom-admin-${{ steps.reconcile.outputs.region }}, or run:"
+          echo "::notice::  RG_NAME=rg-csa-loom-admin-${{ steps.reconcile.outputs.region }} bash .github/scripts/fiab-teardown.sh"
           echo "::warning::Daily spend estimate at F8 capacity SKU: \$200-500."
 
       - name: Note dry-run completion

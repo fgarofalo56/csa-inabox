@@ -381,7 +381,11 @@ export function checkParamFile(paramPath, reads) {
 export function checkWorkflowWiring(yaml) {
   const violations = [];
   const steps = parseWorkflowSteps(yaml);
-  const code = yaml.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  // The step's YAML+shell with COMMENT LINES REMOVED. Not `s.run` (it blanks
+  // quoted strings, and `echo "deploy_args_file=…"` is one) and not the raw
+  // body (a step absorbs the comment block introducing the NEXT step, so a
+  // marker MENTIONED in prose matches ahead of the step that implements it).
+  const raw = (s) => s.body.filter((l) => !/^\s*#/.test(l)).join('\n');
 
   const resolverIdx = steps.findIndex((s) => /node scripts\/ci\/reconcile-resolve\.mjs/.test(s.run));
   if (resolverIdx < 0) {
@@ -396,12 +400,55 @@ export function checkWorkflowWiring(yaml) {
   // The az invocations must consume the RESOLVER's verdict, not the upstream
   // trigger-policy one — the upstream value is deliberately the safe 'false'
   // and is only ever upgraded by the resolver.
-  const uses = code.match(/deployAppsEnabled=\$\{\{\s*steps\.reconcile\.outputs\.deploy_apps_enabled\s*\}\}/g) || [];
-  if (uses.length < 2) {
+  //
+  // The SHAPE this checks changed with #3022. The what-if and the apply used to
+  // restate the whole argument list, so the assertion was "the string
+  // `deployAppsEnabled=${{ steps.reconcile.outputs.deploy_apps_enabled }}`
+  // appears at least twice". They now expand ONE composed argument file — which
+  // is the stronger property, because there is no second copy to disagree — so
+  // the assertion becomes: exactly one step composes the arguments, it takes
+  // deployAppsEnabled from the RESOLVER, and both commands expand that file.
+  const composeSteps = steps.filter((s) => raw(s).includes('deploy_args_file='));
+  if (composeSteps.length !== 1) {
     violations.push({
       line: 0,
-      msg: `both the what-if and the provision step must pass deployAppsEnabled from steps.reconcile.outputs.deploy_apps_enabled (found ${uses.length}).`,
+      msg:
+        `expected exactly ONE step to compose the deployment arguments (emitting \`deploy_args_file=\`), ` +
+        `found ${composeSteps.length}. With more than one, the what-if and the apply can once again be ` +
+        'given different values for deployAppsEnabled — the flag that decides whether every running ' +
+        'image is rewritten.',
     });
+  } else {
+    const compose = raw(composeSteps[0]);
+    if (!/DEPLOY_APPS_ENABLED:\s*\$\{\{\s*steps\.reconcile\.outputs\.deploy_apps_enabled\s*\}\}/.test(compose)) {
+      violations.push({
+        line: composeSteps[0].startLine,
+        msg:
+          'the argument-composition step does not take DEPLOY_APPS_ENABLED from ' +
+          '`steps.reconcile.outputs.deploy_apps_enabled`. The upstream trigger-policy value is the safe ' +
+          "'false' base and is only ever upgraded once every running image has been pinned; using it " +
+          'directly would deploy the bicep default (v0.1) over a running estate.',
+      });
+    }
+    if (!/--parameters\s+"deployAppsEnabled=\$DEPLOY_APPS_ENABLED"/.test(compose)) {
+      violations.push({
+        line: composeSteps[0].startLine,
+        msg: 'the argument-composition step does not emit `--parameters "deployAppsEnabled=$DEPLOY_APPS_ENABLED"`, so the resolver\'s verdict never reaches ARM.',
+      });
+    }
+    for (const [label, re] of [['what-if', /az deployment sub what-if/], ['apply', /az deployment sub create/]]) {
+      const i = steps.findIndex((s) => re.test(s.run));
+      if (i < 0) {
+        violations.push({ line: 0, msg: `DISCOVERY FLOOR: no step runs the ${label} command; this check would otherwise pass by seeing nothing.` });
+        continue;
+      }
+      if (!raw(steps[i]).includes('"${DEPLOY_ARGS[@]}"')) {
+        violations.push({
+          line: steps[i].startLine,
+          msg: `the ${label} step does not expand the composed argument list, so its deployAppsEnabled is not the resolver's.`,
+        });
+      }
+    }
   }
   return violations;
 }

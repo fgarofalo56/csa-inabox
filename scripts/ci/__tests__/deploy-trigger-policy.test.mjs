@@ -280,8 +280,27 @@ test('the workflow no longer decides the trigger question from an input', () => 
     'raw input interpolation is back -- a scheduled run would pass purviewEnabled=',
   );
   // The resolved values must actually be consumed by the az invocations.
-  const uses = code.match(/purviewEnabled=\$\{\{\s*steps\.topology_guard\.outputs\.purview_enabled\s*\}\}/g) || [];
-  assert.equal(uses.length, 2, 'both the what-if and the provision step must use the resolved flags');
+  //
+  // The SHAPE changed with #3022. The what-if and the apply used to restate the
+  // whole argument list, so this asserted "the resolved flag appears twice".
+  // They now expand ONE composed argument file, so the flag is bound ONCE — in
+  // the composition step's `env:` — and both commands necessarily see the same
+  // value. That is the stronger property: there is no second copy to drift.
+  // check-deploy-input-safety.mjs (S5) enforces the one-composition/two-consumers
+  // half; this asserts the binding is still the RESOLVED value, not a raw input.
+  assert.match(
+    code, /PURVIEW_ENABLED:\s*\$\{\{\s*steps\.topology_guard\.outputs\.purview_enabled\s*\}\}/,
+    'the composition step must take purviewEnabled from the resolved topology-guard output',
+  );
+  assert.match(
+    code, /--parameters "purviewEnabled=\$PURVIEW_ENABLED"/,
+    'the composition step must emit purviewEnabled from that resolved value',
+  );
+  const consumers = code.match(/az deployment sub (?:what-if|create) "\$\{DEPLOY_ARGS\[@\]\}"/g) || [];
+  assert.equal(
+    consumers.length, 2,
+    'both the what-if and the provision step must expand the ONE composed argument list',
+  );
 });
 
 test('the guard step invokes the tested script rather than inline shell', () => {

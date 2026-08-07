@@ -178,7 +178,6 @@ explicitly rather than discovering it mid-deploy:
 
 ```bash
 gh workflow run full-app-deploy-commercial.yml \
-  -f region=eastus2 \
   -f enable_apps_after=true
 ```
 
@@ -187,10 +186,14 @@ only mechanism that reaches a registry with public network access disabled),
 re-locks the registry to its private endpoint, scans and signs the images, and
 rolls the Container Apps onto them.
 
-> **Set `region` explicitly.** The workflow's `region` input has a default that
-> may not match your deployment. A mismatch resolves a resource group that does
-> not exist and the run dies early — see
-> [Failure recovery → config](failure-recovery.md#config).
+> **`region` is optional here and is best left EMPTY (#3029).** The workflow's
+> `region` input no longer defaults to `eastus2` — that default pointed run
+> `31028909702` at `rg-csa-loom-admin-eastus2`, which does not exist, and the
+> run died reporting an unrelated registry-name error. With the field empty the
+> `resolve` job asks Resource Graph which `rg-csa-loom-admin-*`/`acrloom*`
+> exists in the subscription and targets that, failing loudly if there are none
+> or more than one. Supply a region only to disambiguate a subscription that
+> holds several admin planes.
 
 ### Phase 3 — post-deploy bootstrap (10–15 min) — **required to sign in**
 
@@ -265,7 +268,7 @@ proven independently. This section is that **procedure**.
 | Owner + User Access Administrator on it | The deploy writes role assignments |
 | Quota confirmed in the target region: Databricks Premium, Container Apps, the ACR-task VM family, Azure OpenAI | Quota failures are deterministic — a retry cannot fix one |
 | A Global Administrator available for phase 3 | Admin consent for the MSAL app registration |
-| An agreed teardown decision **before** you begin | `keep_resources=false` in `full` mode deletes every `rg-csa-loom-*` in the subscription |
+| An agreed teardown decision **before** you begin | `keep_resources=false` in `full` mode deletes every `rg-csa-loom-*` in the subscription. It now also requires `confirm_teardown_rg=rg-csa-loom-admin-<region>`, and a run that would tear down without it is refused before anything reaches ARM |
 
 ### The run
 
@@ -287,7 +290,9 @@ proven independently. This section is that **procedure**.
    | Container apps | All `Succeeded/Running` on current revisions |
 
 4. **Teardown**, if the subscription is disposable: re-dispatch in `full` mode
-   with `keep_resources=false`, then confirm no `rg-csa-loom-*` remains
+   with `keep_resources=false` **and** `confirm_teardown_rg=rg-csa-loom-admin-<region>`
+   (the confirmation must match exactly, or the run is refused before any ARM
+   call — #3028), then confirm no `rg-csa-loom-*` remains
    (`az group list --query "[?starts_with(name,'rg-csa-loom')].name" -o tsv`).
 5. **Publish the receipts** — run URLs, the readiness/gates/env-config screenshots,
    and the per-editor verdict — against the tracking item. Per
@@ -449,7 +454,11 @@ Commercial estate in `eastus2` has `rg-csa-loom-admin-eastus2`,
 > `full` mode with `keep_resources=false` enumerates `rg-csa-loom-*` **across the
 > subscription** and deletes every match. Anything you name with that prefix is
 > in the blast radius; anything Loom needs that you name differently is outside
-> the deploy's reach.
+> the deploy's reach. Since #3028 that path is no longer reachable by accident:
+> `keep_resources` defaults to `true`, and the teardown additionally requires
+> `confirm_teardown_rg` to equal `rg-csa-loom-admin-<region>` exactly — a run
+> that would tear down without the typed confirmation is refused before any ARM
+> call.
 
 **Tags.** Every resource group carries the `complianceTags` object
 (`main.bicep:346`, applied at `:1090`, `:1616`, `:1872` and threaded into the

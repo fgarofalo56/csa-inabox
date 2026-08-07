@@ -77,6 +77,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bff-errors.mjs
       - name: editor-read-failure-honesty (a failed read must never look like empty content — C19 data loss)
+        # Was missing its `if:` on main, so check-guardrails-observability.mjs
+        # (#3042's meta-guard) was RED on every PR — meaning the one control
+        # that keeps the other guards visible was itself failing. One line.
+        if: ${{ !cancelled() }}
         run: node scripts/ci/check-editor-read-failure-honesty.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
@@ -255,6 +259,24 @@ jobs:
       - name: reconcile-safety (a scheduled reconcile is non-destructive — #2775)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-reconcile-safety.mjs
+      # The INPUT half of the same workflow. reconcile-safety says a SCHEDULED
+      # run cannot destroy the estate; this says an operator DISPATCH cannot
+      # either — not by accident. Three defects, all found by the operator while
+      # preparing one authorised deploy, none caught by CI:
+      #   #3028 keep_resources DEFAULTED FALSE, so run_mode=full + change
+      #         nothing else provisioned the estate and then deleted every
+      #         rg-csa-loom-* RG in the subscription;
+      #   #3029 an omitted `region` silently targeted eastus2 while the estate
+      #         is in centralus — the deploy then SUCCEEDS against a different,
+      #         empty estate while every log line claims a reconcile;
+      #   #3022 the what-if previewed a different template than the apply
+      #         (LOOM_MSAL_CLIENT_ID was resolved after it), and the two
+      #         commands were separate copies of one argument list that had
+      #         already drifted on --subscription.
+      # Mutation-proved in scripts/ci/__tests__/deploy-input-safety.test.mjs.
+      - name: deploy-input-safety (a dispatch cannot tear down or mis-target the estate — #3028/#3029/#3022)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-deploy-input-safety.mjs
       - name: prp-freshness (loom-next-level FRESH0 — warn-only)
         if: ${{ !cancelled() }}
         env:
