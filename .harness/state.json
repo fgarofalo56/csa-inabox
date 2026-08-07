@@ -1455,7 +1455,14 @@
       "#3062 D10 (AFTER #3058 — shared docs, rebase doc hunks)",
       "#3061 D13"
     ],
-    "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must now check it explicitly."
+    "template_sync_lesson": "#2945 class: ANY PR touching platform/fiab/bicep/** must regenerate apps/fiab-console/deploy-templates/main.json (az bicep build, pinned 0.45.15) and pass scripts/ci/check-deploy-template-sync.mjs. CI caught this on D1/D2/D3 after their reviewers passed them — reviewers must now check it explicitly.",
+    "operator_mandate_2026-08-07": {
+      "authority": "Operator granted autonomous execution: 'keep going without me until you have everything knocked out, validated, tested and verified, iterate as many times as you need until you and a judging agent can give an A+ grade on all aspects.'",
+      "exit_bar": "A+ per no-vaporware.md's rubric AND ux-baseline.md §7: real backend per control, browser E2E receipt (G1), parity doc with ZERO ❌, tests, docs, bicep-synced, day-one default-ON — and per cloud-parity.md, Commercial-only A+ is INCOMPLETE.",
+      "judging": "Each completed lane is graded by an INDEPENDENT judging agent that did not implement it. Judges score against the rubric and must default to the LOWER grade when evidence is absent. A judge that confirms everything is a failed judge — the value is in what it refuses to grade A+.",
+      "iteration": "Any aspect graded below A+ goes back with the specific gap named. Iterate until the judge panel and the orchestrator agree on A+. Do NOT lower the bar to reach it, and do NOT mark done on an unverified claim (R2).",
+      "standing_rules": "All die-hard rules bind, especially: deploy-integrity R2 (merged ≠ done), ux-baseline G1 (browser E2E), cloud-parity (same capabilities every cloud), no-vaporware, auto-bind-by-default."
+    }
   },
   "created_at": "2026-08-06T00:00:00Z",
   "last_updated": "2026-08-06T00:00:00Z",
