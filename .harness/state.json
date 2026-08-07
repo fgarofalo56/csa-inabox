@@ -1239,6 +1239,40 @@
         "D10 fixed the three client-keyed maps it owned (extra/clean/legacy bag) with safeRecord(); this one is another lane's module and D10 said so rather than reaching across",
         "the #2657 class root cause: an identifier regex gating extra[ek] ACCEPTS __proto__ because `_` matches \\w — fix structurally with safeRecord(), not by tightening the regex"
       ]
+    },
+    {
+      "id": "F1",
+      "lane": "L-PRODUCT-A",
+      "wave": 2,
+      "task_order": 99,
+      "status": "todo",
+      "title": "FEDERATION DEEP-DIVE E2E — operator-commissioned 2026-08-07. When Iceberg/Trino federation lights up, drive it IN A REAL BROWSER via Playwright end-to-end, grade it against Databricks Unity Catalog feature-for-feature, and ITERATE until A+ (on par with UC or better). Validate exactly what the operator will see.",
+      "depends_on": [
+        "D7",
+        "D18"
+      ],
+      "trigger": "admin-plane deploy applied AND console env shows a real LOOM_ICEBERG_CATALOG_URL (not the 0.0.0.0 placeholder) + LOOM_TRINO_* present",
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "spec": [
+        "PRECONDITION CHECK FIRST (do not test a placeholder): az containerapp show -n loom-console → LOOM_ICEBERG_CATALOG_URL must be the real internal FQDN, LOOM_TRINO_* present, LOOM_UNITY_* present. If still placeholder, STOP and report — the deploy did not apply.",
+        "AUTH: the console is SSO-gated. Use the Playwright SSO recipe in memory csa_loom_live_browser_tenant_lookup_bugs_2026_08_04. Note the audience api://5c59f3f3-e26d-4122-a707-a04e21ff5255 was registered 2026-08-07 and has NEVER been exercised — a first-run token-exchange failure is EXPECTED to be the first stumble and is an Entra fix, not a code defect. Diagnose before concluding.",
+        "E2E SCOPE — click every control, do not assert from source (no_scaffold_claims): catalog browse/search; register + browse an Iceberg catalog; external-engine connection (Trino) incl. the engine picker in SQL Lab; run a federated query and read REAL rows; cross-engine read of a Loom Delta table with ZERO copy; credential/auth posture surfaces; lineage + governance surfacing of federated objects; error/empty/first-open states; narrow-width pass (badge overlap) and a fresh-item first-open pass (no red banners) per ux-baseline G1.",
+        "PARITY GRADING — ground the Databricks Unity Catalog comparison in real docs (microsoft_docs_search / Databricks docs), NOT memory. Produce docs/fiab/parity/external-engine-federation.md in the ui-parity.md format: source UI, full UC feature inventory, Loom coverage per row (built ✅ / honest-gate ⚠️ / MISSING ❌), and the backend each control calls. A doc engineered to show zero ❌ is worse than no doc — report the REAL counts.",
+        "DELIVERABLE BEYOND PASS/FAIL: what needs UPDATE / REFACTOR / OPTIMIZE, including concrete UI changes (web3-ui.md + ux-baseline.md §7 checklist). Call out slow paths with measured timings, not impressions.",
+        "ITERATE to A+: fix, re-run the browser walk, re-grade. A+ = every inventory row built-or-honest-gated, zero ❌, real backend per control, screenshots dark AND light, and a live receipt. Where Loom can EXCEED UC, say how and do it.",
+        "CLOUD PARITY BINDS (.claude/rules/cloud-parity.md): a Commercial-only A+ is INCOMPLETE. Unity Catalog does not exist in MAG, so the Gov path is the point of this feature. State per-cloud status explicitly; Gov receipts come from GitHub Actions only, never local az.",
+        "BLOCKER TO CLEAR FIRST: C13 — loom-ui-verify has been red since 2026-08-04, so the standard V3 harness is down. Either repair it or use a direct Playwright session, but do NOT skip the browser and do NOT fake a receipt."
+      ],
+      "evidence": [
+        "operator instruction 2026-08-07: 'deep dive e2e testing of it via playwright in the browser ... what needs update/refactored/optimized including any UI changes ... iterate until A+ on par with databricks Unity or better'"
+      ]
     }
   ],
   "operator_queue": [
