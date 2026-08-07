@@ -5,14 +5,15 @@
  *   GET /api/items/report/[id]/subscriptions/[subId]/logs
  *         → { ok, logs: ReportDeliveryLog[] }
  *         Append-only delivery history for one subscription (most-recent
- *         first), written by the fiab-report-subscriptions timer Function after
+ *         first), written by the report-subscriptions ACA job after
  *         each scheduled export+email. Only the subscription's owner may read.
  *
- * No Microsoft Fabric dependency — the log records real Power BI ExportTo
- * deliveries archived to ADLS + emailed via the delivery Logic App.
+ * No Microsoft Fabric dependency — the log records deliveries rendered by the
+ * Azure-native paginated-report-renderer (NOT Power BI ExportTo, which is
+ * unavailable in GCC-High) and emailed via the delivery Logic App.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   reportSubscriptionsContainer,
   reportDeliveryLogContainer,
@@ -25,14 +26,9 @@ export const dynamic = 'force-dynamic';
 
 const MAX_LOGS = 100;
 
-function unauth() {
-  return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-}
-
-export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; subId: string }> }) {
-  const s = getSession();
-  if (!s) return unauth();
-  const { id: reportId, subId } = await ctx.params;
+export const GET = withSession<{ id: string; subId: string }>(async (req: NextRequest, { session, params }) => {
+  const reportId = String(params.id || '');
+  const subId = String(params.subId || '');
 
   try {
     // Ownership check — the subscription is partitioned by reportId.
@@ -45,7 +41,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       if (e?.code !== 404) throw e;
     }
     if (!sub) return NextResponse.json({ ok: false, error: 'subscription not found' }, { status: 404 });
-    if (sub.createdBy !== s.claims.oid) {
+    if (sub.createdBy !== session.claims.oid) {
       return NextResponse.json({ ok: false, error: 'only the subscription owner may read its delivery log' }, { status: 403 });
     }
 
@@ -64,4 +60,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

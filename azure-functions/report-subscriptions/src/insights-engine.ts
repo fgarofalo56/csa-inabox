@@ -1,15 +1,16 @@
 /**
  * B-N19d — insights-engine: the scheduled insight-digest processor that runs on
- * the EXISTING C5 report-subscriptions timer tick.
+ * the EXISTING report-subscriptions pass.
  *
- * This is an EXTENSION of the report-subscriptions Function, not a second
- * scheduler: `functions/reportSubscriptions.ts` calls `runSubscriptions` and
- * then `runInsightDigests` inside the same invocation, using the same window,
- * the same Cosmos database, the same AAD credential, the same cron matcher, and
- * the same delivery Logic App.
+ * This is an EXTENSION of the report-subscriptions job, not a second scheduler:
+ * `src/main.ts` runs the delivery pass and then this one inside the SAME
+ * Container App Job execution (`loom-report-subscriptions`, Schedule trigger),
+ * using the same Cosmos database, the same console UAMI, and the same delivery
+ * Logic App.
  *
- * On each tick, for every enabled digest whose cron became due in the window
- * (or which an operator queued via `runNowRequestedAt`):
+ * On each pass, for every enabled digest whose cron became due in the window
+ * (or which an operator queued via `runNowRequestedAt` from
+ * POST /api/insights/digests/[id]/run):
  *   1. resolve the Loom resources of the digest's resource types via ARM
  *      (`/subscriptions/{sub}/resources?$filter=resourceType eq '…'`),
  *   2. read REAL Azure Monitor platform metrics over a window twice the
@@ -22,10 +23,12 @@
  *   5. deliver the HTML body through the SAME delivery Logic App, and
  *   6. append an `insight-digest-log` row and stamp lastRunAt/lastStatus.
  *
- * Auth: the Function App identity. Needs Monitoring Reader at subscription
- * scope (admin-plane/monitoring-reader-rbac.bicep, digestPrincipalId) and
- * Cognitive Services OpenAI User on the AOAI account (granted in
- * report-subscriptions-function.bicep).
+ * Auth: the job runs as the CONSOLE UAMI (report-subscriptions-job.bicep), which
+ * already holds Monitoring Reader at subscription scope via
+ * admin-plane/monitoring-reader-rbac.bicep (`consolePrincipalId`) and Cognitive
+ * Services OpenAI User on the AOAI account. `digestPrincipalId` in that module
+ * is now deliberately empty — it granted the retired Function App's
+ * system-assigned identity, which no longer exists.
  *
  * Azure-native, no Fabric: Azure Monitor + Azure OpenAI + a Consumption Logic
  * App. No Fabric/Power BI host is contacted on this path.
@@ -37,12 +40,13 @@ import {
   deliverEmail,
   deliveryConfigGate,
   loomDb,
-  type EngineLog,
-} from './subscription-engine';
+} from './clients';
+import type { RunLogger } from './run-logger';
 import {
   buildDigestPrompt,
   computeMetricDeltas,
   deterministicNarration,
+  pickInterval,
   renderDigestHtml,
   type DigestAlert,
   type DigestObservation,
@@ -184,16 +188,14 @@ async function fetchAlerts(startMs: number, endMs: number, cap: number): Promise
   return out;
 }
 
-/** Grain that keeps a two-window sample under Monitor's point budget. */
-export function pickInterval(lookbackHours: number): string {
-  if (lookbackHours <= 2) return 'PT5M';
-  if (lookbackHours <= 12) return 'PT15M';
-  if (lookbackHours <= 48) return 'PT1H';
-  return 'PT6H';
-}
+/**
+ * Metric grain re-exported from the pure model so existing importers of
+ * `insights-engine.pickInterval` keep working.
+ */
+export { pickInterval };
 
 /** Narrate the observation on the Loom AOAI deployment; falls back deterministically. */
-async function narrate(obs: DigestObservation, mode: string, log: EngineLog): Promise<string> {
+async function narrate(obs: DigestObservation, mode: string, log: RunLogger): Promise<string> {
   const fallback = deterministicNarration(obs);
   if (mode !== 'copilot') return fallback;
   const endpoint = (process.env.LOOM_AOAI_ENDPOINT || '').replace(/\/+$/, '');
@@ -219,14 +221,14 @@ async function narrate(obs: DigestObservation, mode: string, log: EngineLog): Pr
     );
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      log.warn?.(`digest narration fell back to deterministic (AOAI ${res.status}): ${t.slice(0, 200)}`);
+      log.warn(`digest narration fell back to deterministic (AOAI ${res.status}): ${t.slice(0, 200)}`);
       return fallback;
     }
     const j = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const text = (j?.choices?.[0]?.message?.content || '').trim();
     return text || fallback;
   } catch (e: any) {
-    log.warn?.(`digest narration fell back to deterministic: ${e?.message || e}`);
+    log.warn(`digest narration fell back to deterministic: ${e?.message || e}`);
     return fallback;
   }
 }
@@ -318,7 +320,7 @@ export interface DigestTickSummary {
  * report subscriptions.
  */
 export async function runInsightDigests(
-  log: EngineLog,
+  log: RunLogger,
   windowStartMs: number,
   windowEndMs: number,
 ): Promise<DigestTickSummary> {
@@ -369,7 +371,7 @@ export async function runInsightDigests(
       } catch (inner: any) {
         log.error(`insight digest ${doc.id}: failed to record the delivery gate — ${inner?.message || inner}`);
       }
-      log.warn?.(`insight digest ${doc.id}: skipped — ${gate}`);
+      log.warn(`insight digest ${doc.id}: skipped — ${gate}`);
       continue;
     }
 

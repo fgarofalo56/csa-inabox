@@ -11,10 +11,10 @@
  *
  * [id] is the Power BI report id (the partition key). [subId] is the
  * subscription id. No Microsoft Fabric dependency — the row drives the
- * Azure-native fiab-report-subscriptions timer Function.
+ * Azure-native report-subscriptions ACA job.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { reportSubscriptionsContainer, type ReportSubscription } from '@/lib/azure/cosmos-client';
 import { validateNcrontab, cronForPreset } from '@/lib/util/ncrontab';
 
@@ -24,10 +24,6 @@ export const dynamic = 'force-dynamic';
 const FORMATS = new Set(['PDF', 'PPTX', 'PNG']);
 const MAX_RECIPIENTS = 50;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function unauth() {
-  return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-}
 
 /** Read the subscription by (subId, reportId-partition); 404 when absent. */
 async function readSub(reportId: string, subId: string): Promise<ReportSubscription | null> {
@@ -41,10 +37,9 @@ async function readSub(reportId: string, subId: string): Promise<ReportSubscript
   }
 }
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string; subId: string }> }) {
-  const s = getSession();
-  if (!s) return unauth();
-  const { id: reportId, subId } = await ctx.params;
+export const PATCH = withSession<{ id: string; subId: string }>(async (req: NextRequest, { session, params }) => {
+  const reportId = String(params.id || '');
+  const subId = String(params.subId || '');
   const body = await req.json().catch(() => ({}));
 
   let sub: ReportSubscription | null;
@@ -54,7 +49,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
   if (!sub) return NextResponse.json({ ok: false, error: 'subscription not found' }, { status: 404 });
-  if (sub.createdBy !== s.claims.oid) {
+  if (sub.createdBy !== session.claims.oid) {
     return NextResponse.json({ ok: false, error: 'only the subscription owner may modify it' }, { status: 403 });
   }
 
@@ -99,12 +94,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string; subId: string }> }) {
-  const s = getSession();
-  if (!s) return unauth();
-  const { id: reportId, subId } = await ctx.params;
+export const DELETE = withSession<{ id: string; subId: string }>(async (_req: NextRequest, { session, params }) => {
+  const reportId = String(params.id || '');
+  const subId = String(params.subId || '');
 
   let sub: ReportSubscription | null;
   try {
@@ -113,7 +107,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
   if (!sub) return NextResponse.json({ ok: false, error: 'subscription not found' }, { status: 404 });
-  if (sub.createdBy !== s.claims.oid) {
+  if (sub.createdBy !== session.claims.oid) {
     return NextResponse.json({ ok: false, error: 'only the subscription owner may cancel it' }, { status: 403 });
   }
 
@@ -124,4 +118,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

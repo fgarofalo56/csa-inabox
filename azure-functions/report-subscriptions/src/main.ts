@@ -5,7 +5,8 @@
  * One-shot process: `modules/admin-plane/report-subscriptions-job.bicep`
  * schedules `loom-report-subscriptions` (Schedule trigger, default every 15
  * minutes) in the console's VNet-integrated Container Apps Environment, running
- * as the console UAMI. Each execution runs exactly one delivery pass and exits.
+ * as the console UAMI. Each execution runs exactly one delivery pass — and then
+ * one B-N19d insight-digest pass — and exits.
  *
  * WHY AN ACA JOB, NOT A Y1 FUNCTION (estate constraint, operator decision
  * 2026-07-23; re-measured 2026-08-06): the Function-hosted runtime on this
@@ -37,7 +38,19 @@
  * job history is always a real regression worth paging on.
  */
 import { runDeliveryPass } from './run-delivery';
+import { runInsightDigests } from './insights-engine';
 import { consoleLogger } from './run-logger';
+
+/**
+ * B-N19d window. The job's Schedule trigger has no `scheduleStatus.last` (that
+ * was a Functions timer concept), so the digest window is the job cadence: any
+ * digest whose cron fell in the last `LOOM_DIGEST_WINDOW_MS` is due. Default 15
+ * minutes to match the every-15-minutes cron in
+ * report-subscriptions-job.bicep. Widening it only risks a duplicate send,
+ * which `runNowRequestedAt` / `lastRunAt` already guard; narrowing it below the
+ * cadence would silently DROP digests.
+ */
+const DIGEST_WINDOW_MS = Number(process.env.LOOM_DIGEST_WINDOW_MS) || 15 * 60_000;
 
 async function main(): Promise<void> {
   const started = Date.now();
@@ -45,12 +58,32 @@ async function main(): Promise<void> {
   const ms = Date.now() - started;
   if (!summary.ran) {
     console.log(`[report-subscriptions] pass gated after ${ms}ms (missing: ${summary.gate}).`);
-    return;
+  } else {
+    console.log(
+      `[report-subscriptions] pass complete in ${ms}ms — enabled=${summary.enabled} due=${summary.due} `
+      + `delivered=${summary.delivered} failed=${summary.failed}`,
+    );
   }
-  console.log(
-    `[report-subscriptions] pass complete in ${ms}ms — enabled=${summary.enabled} due=${summary.due} `
-    + `delivered=${summary.delivered} failed=${summary.failed}`,
-  );
+
+  // B-N19d — scheduled insight digests ride the SAME execution. Isolated in its
+  // own try/catch so a digest problem (Monitor RBAC, AOAI outage) can never
+  // fail or delay the report deliveries above, and so a gated delivery pass
+  // does not skip digests. Per the exit-code contract this does NOT rethrow:
+  // a digest failure is durable telemetry on the insight-digest-log row, not a
+  // process fault, so a Failed execution stays a real regression.
+  const digestStarted = Date.now();
+  try {
+    const d = await runInsightDigests(consoleLogger, digestStarted - DIGEST_WINDOW_MS, digestStarted);
+    console.log(
+      `[insight-digests] pass complete in ${Date.now() - digestStarted}ms — scanned=${d.scanned} `
+      + `due=${d.due} delivered=${d.delivered} failed=${d.failed} gated=${d.gated}`,
+    );
+  } catch (e: unknown) {
+    console.error(
+      `[insight-digests] pass FAILED (report deliveries above are unaffected): `
+      + `${e instanceof Error ? e.stack || e.message : String(e)}`,
+    );
+  }
 }
 
 main().then(

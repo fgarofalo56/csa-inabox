@@ -156,7 +156,9 @@ const ROOTS = [
   'apps/fiab-console/lib',
   'apps/fiab-mcp-bridge/src',
   'apps/copilot-maf/src',
-  'apps/fiab-report-subscriptions/src',
+  // See check-insecure-randomness.mjs — apps/fiab-report-subscriptions was an
+  // orphaned duplicate deleted 2026-08-07; the deployed job lives here.
+  'azure-functions/report-subscriptions/src',
   'scripts/ci',
   'scripts/csa-loom',
   'scripts/dev',

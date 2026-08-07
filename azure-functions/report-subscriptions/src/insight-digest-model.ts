@@ -372,3 +372,15 @@ export function renderDigestHtml(obs: DigestObservation, narration: string): str
     '</div>',
   ].join('');
 }
+
+/**
+ * Metric grain that keeps a two-window sample under Azure Monitor's per-call
+ * datapoint budget. Pure, and it lives here (not in the engine) so the model's
+ * spec can exercise it without dragging the Azure SDK into the test graph.
+ */
+export function pickInterval(lookbackHours: number): string {
+  if (lookbackHours <= 2) return 'PT5M';
+  if (lookbackHours <= 12) return 'PT15M';
+  if (lookbackHours <= 48) return 'PT1H';
+  return 'PT6H';
+}

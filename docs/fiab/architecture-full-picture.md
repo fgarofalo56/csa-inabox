@@ -55,7 +55,7 @@ flowchart TB
         ORC["fiab-setup-orchestrator<br/>deploy backend for Setup Wizard"]
         MCP["fiab-mcp-bridge + fiab-mcp-config<br/>MCP server catalog + stdio bridge"]
         CPL["copilot + copilot-maf<br/>RAG QA + MAF agent tier"]
-        AUX["fiab-dbt-runner · fiab-wrangler-host<br/>fiab-report-subscriptions · fiab-label-propagation"]
+        AUX["fiab-dbt-runner · fiab-wrangler-host<br/>fiab-label-propagation"]
     end
 
     subgraph data["Azure data + analytics backends"]

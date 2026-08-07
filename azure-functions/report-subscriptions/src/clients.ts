@@ -6,6 +6,7 @@
  * Consumption delivery Logic App for Office 365 email.
  */
 import { DefaultAzureCredential } from '@azure/identity';
+import { deliveryPayload, FORMAT_MIME, type DeliveryMessage } from './delivery-payload';
 import { CosmosClient, type Container } from '@azure/cosmos';
 import type { ReportSubscriptionLite } from './schedule';
 
@@ -21,6 +22,9 @@ function db() {
 }
 export function subscriptionsContainer(): Container { return db().container('report-subscriptions'); }
 export function deliveryLogContainer(): Container { return db().container('report-delivery-log'); }
+
+/** The shared Loom Cosmos database handle — reused by the B-N19d insights engine. */
+export const loomDb = db;
 
 export interface ReportSubscription extends ReportSubscriptionLite {
   itemId?: string;
@@ -47,6 +51,94 @@ async function tokenFor(resource: string): Promise<string> {
 }
 
 /**
+ * Bearer token for an explicit AAD *scope* (already `/.default`-suffixed).
+ * `tokenFor` takes a resource and appends the suffix; the B-N19d insights
+ * engine works in scopes (ARM, Azure OpenAI), so it uses this one.
+ */
+export async function acquireToken(scope: string): Promise<string> {
+  const t = await cred.getToken(scope);
+  if (!t?.token) throw new Error(`Failed to acquire AAD token for ${scope}`);
+  return t.token;
+}
+
+/**
+ * The delivery infrastructure this Function needs before it can send ANYTHING
+ * (a report attachment or a B-N19d digest body). Returns a human remediation
+ * string when a required value is missing, or `''` when delivery is configured.
+ *
+ * Reported identically by both the subscription path and the digest path so an
+ * operator sees one reason, not two dialects of the same gap.
+ */
+export function deliveryConfigGate(): string {
+  if (!process.env.LOOM_SUBSCRIPTION_LOGIC_APP_NAME) {
+    return 'LOOM_SUBSCRIPTION_LOGIC_APP_NAME not set — deploy integration/report-subscription-logicapp.bicep (reportSubscriptionsEnabled=true) so deliveries have a mail path.';
+  }
+  if (!process.env.LOOM_SUBSCRIPTION_ID) {
+    return 'LOOM_SUBSCRIPTION_ID not set — the Logic App listCallbackUrl lookup needs the subscription id.';
+  }
+  if (!process.env.LOOM_SUBSCRIPTION_LOGIC_APP_RG && !process.env.LOOM_DLZ_RG) {
+    return 'LOOM_SUBSCRIPTION_LOGIC_APP_RG (or LOOM_DLZ_RG) not set — the Logic App listCallbackUrl lookup needs the resource group.';
+  }
+  return '';
+}
+
+/**
+ * Resolve the delivery Logic App's manual-trigger callback URL via ARM.
+ * Cached per process — the callback URL is stable for the workflow's lifetime
+ * and every tick would otherwise re-POST listCallbackUrl per delivery.
+ */
+let _callbackUrl: string | null = null;
+async function resolveDeliveryUrl(): Promise<string> {
+  if (_callbackUrl) return _callbackUrl;
+  const gate = deliveryConfigGate();
+  if (gate) throw new Error(gate);
+  const workflow = process.env.LOOM_SUBSCRIPTION_LOGIC_APP_NAME!;
+  const sub_ = process.env.LOOM_SUBSCRIPTION_ID!;
+  const rg = (process.env.LOOM_SUBSCRIPTION_LOGIC_APP_RG || process.env.LOOM_DLZ_RG)!;
+  const trigger = process.env.LOOM_SUBSCRIPTION_LOGIC_APP_TRIGGER || 'manual';
+  const arm = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/$/, '');
+  const armToken = await tokenFor(arm);
+  const cbUrl = `${arm}/subscriptions/${sub_}/resourceGroups/${encodeURIComponent(rg)}`
+    + `/providers/Microsoft.Logic/workflows/${encodeURIComponent(workflow)}`
+    + `/triggers/${encodeURIComponent(trigger)}/listCallbackUrl?api-version=${process.env.LOOM_LOGIC_API_VERSION || '2016-06-01'}`;
+  const cbRes = await fetch(cbUrl, { method: 'POST', headers: { authorization: `Bearer ${armToken}` } });
+  if (!cbRes.ok) throw new Error(`listCallbackUrl ${cbRes.status}: ${(await cbRes.text()).slice(0, 200)}`);
+  const invokeUrl = (await cbRes.json())?.value;
+  if (!invokeUrl) throw new Error('Logic App callback URL missing from listCallbackUrl response');
+  _callbackUrl = invokeUrl as string;
+  return _callbackUrl;
+}
+
+/** Test seam: drop the cached callback URL. */
+export function _resetDeliveryUrlCache(): void { _callbackUrl = null; }
+
+/**
+ * The Logic App body shape lives in the pure `delivery-payload` module so it can
+ * be asserted against the bicep trigger schema without the Azure SDK in the
+ * test graph. Re-exported here so callers have one import site.
+ */
+export { deliveryPayload, FORMAT_MIME, type DeliveryMessage };
+
+/**
+ * POST a message to the delivery Logic App. A report subscription supplies the
+ * rendered file (base64 attachment); a B-N19d insight digest supplies
+ * `bodyHtml` with no attachment. Both go through the SAME workflow and the SAME
+ * O365 connection — the workflow picks the shape from what is present.
+ */
+export async function deliverEmail(msg: DeliveryMessage): Promise<void> {
+  const triggerUrl = await resolveDeliveryUrl();
+  const res = await fetch(triggerUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(deliveryPayload(msg)),
+  });
+  if (!res.ok && res.status !== 202) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Logic App delivery failed (${res.status}): ${t.slice(0, 200) || res.statusText}`);
+  }
+}
+
+/**
  * Render the report to bytes via the Azure-native paginated-report-renderer
  * (LOOM_REPORT_RENDERER_URL). Returns { bytes, sizeBytes } or throws an honest
  * error naming the missing config (no-vaporware) — NEVER a Power BI ExportTo /
@@ -69,35 +161,20 @@ export async function renderReport(sub: ReportSubscription): Promise<{ base64: s
   return { base64: buf.toString('base64'), sizeBytes: buf.length };
 }
 
-/** Resolve the delivery Logic App's manual-trigger callback URL via ARM, then
- *  POST the rendered report so it emails the recipients. Returns nothing on
- *  success; throws an honest error otherwise. */
+/**
+ * Deliver a rendered report as an email attachment through the delivery Logic
+ * App. Thin wrapper over `deliverEmail` so the subscription path and the
+ * B-N19d digest path share ONE payload builder and ONE callback resolution.
+ */
 export async function deliverViaLogicApp(sub: ReportSubscription, base64: string): Promise<void> {
-  const workflow = process.env.LOOM_SUBSCRIPTION_LOGIC_APP_NAME;
-  if (!workflow) throw new Error('LOOM_SUBSCRIPTION_LOGIC_APP_NAME not set — deploy integration/report-subscription-logicapp.bicep.');
-  const sub_ = process.env.LOOM_SUBSCRIPTION_ID;
-  const rg = process.env.LOOM_SUBSCRIPTION_LOGIC_APP_RG || process.env.LOOM_DLZ_RG;
-  const arm = (process.env.LOOM_ARM_ENDPOINT || 'https://management.azure.com').replace(/\/$/, '');
-  if (!sub_ || !rg) throw new Error('LOOM_SUBSCRIPTION_ID / LOOM_SUBSCRIPTION_LOGIC_APP_RG not set for the Logic App lookup.');
-  const armToken = await tokenFor(arm);
-  const cbUrl = `${arm}/subscriptions/${sub_}/resourceGroups/${rg}`
-    + `/providers/Microsoft.Logic/workflows/${workflow}/triggers/manual/listCallbackUrl?api-version=2016-06-01`;
-  const cbRes = await fetch(cbUrl, { method: 'POST', headers: { authorization: `Bearer ${armToken}` } });
-  if (!cbRes.ok) throw new Error(`listCallbackUrl ${cbRes.status}: ${(await cbRes.text()).slice(0, 200)}`);
-  const invokeUrl = (await cbRes.json())?.value;
-  if (!invokeUrl) throw new Error('Logic App callback URL missing from listCallbackUrl response');
-  const post = await fetch(invokeUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      recipients: sub.recipients,
-      subject: sub.subject || `Scheduled report: ${sub.reportId}`,
-      format: sub.format,
-      contentBytes: base64,
-      fileName: `${sub.reportId}.${sub.format.toLowerCase()}`,
-    }),
+  await deliverEmail({
+    recipients: sub.recipients,
+    subject: sub.subject || `Scheduled report: ${sub.reportId}`,
+    reportName: sub.reportId,
+    attachmentName: `${sub.reportId}.${sub.format.toLowerCase()}`,
+    attachmentContentType: FORMAT_MIME[sub.format] || 'application/octet-stream',
+    attachmentBase64: base64,
   });
-  if (!post.ok) throw new Error(`Logic App POST ${post.status}: ${(await post.text()).slice(0, 200)}`);
 }
 
 /** Append a delivery-log row + patch the subscription's lastRun fields. */
