@@ -3,7 +3,7 @@
 **Slug:** `external-engine-federation`
 **Loom surfaces:** `/admin/catalog` ("External-engine federation (Iceberg)"), `/catalog/unity?tab=federation`, `/items/sql-lab/<id>` (engine picker), `/items/lakehouse/<id>` (Interop tab), `/admin/policy-code`, `/catalog/permissions`, `/governance/lineage`
 **Backing services:** `iceberg-catalog` (Unity Catalog OSS, Iceberg REST surface), `loom-trino` (federated query), `loom-unity` (governance plane) — all internal-ingress Azure Container Apps
-**Graded:** 2026-08-07, against the live **Commercial** estate (`csa-loom.limitlessdata.ai`, build `03bab987`)
+**Graded:** 2026-08-07, against the live **Commercial** estate (build `03bab987`)
 
 ## Source UI
 
@@ -35,7 +35,7 @@ fix requires a loom-console rebuild + roll before any A-grade claim is possible.
 
 ## Measured live behaviour (Commercial, 2026-08-07)
 
-Minted-session probe against `https://csa-loom.limitlessdata.ai`:
+Minted-session probe against the live Commercial console (`<your-console-hostname>`):
 
 | Call | Cold | Warm | Verdict |
 |---|---|---|---|
@@ -92,9 +92,9 @@ is ~200-350ms. A ~100x spread with a hard 30s ceiling above it.
 
 ### RC-4 — no human has tenant-admin, so the main federation UI 403s. **Not fixed; deploy param.**
 
-- `LOOM_TENANT_ADMIN_OID` = `b9c3cc65-…` = **`limitlessdata_deploy`**, the deployment *service principal*, which never signs into the UI.
+- `LOOM_TENANT_ADMIN_OID` = `<sp-client-id>` = the **deployment service principal** (the `*_deploy` SP), which never signs into the UI.
 - `LOOM_TENANT_ADMIN_GROUP_ID` = **empty**.
-- The Entra group **`Loom Admins`** (`716f5ec5-…`) exists and the operator **is a member** — but it is not wired into the console.
+- The Entra group **`Loom Admins`** (`<admin-group-id>`) exists and the operator **is a member** — but it is not wired into the console.
 
 Net: `/admin/catalog` — the surface literally named "External-engine federation
 (Iceberg)" — answers `403 admin_only` for the operator. The remediation text
@@ -113,8 +113,8 @@ is the open LU-7 work in ledger task C5.
 
 ### RC-6 — the audience app exposes no scopes or roles.
 
-`api://5c59f3f3-…` is the console's **own MSAL sign-in app** (`CSA Loom Console
-(kv-loom-…)`), with `appRoles: []` and `oauth2PermissionScopes: []`. The catalog
+`api://<app-client-id>` is the console's **own MSAL sign-in app** (`CSA Loom Console
+(kv-loom-<suffix>)`), with `appRoles: []` and `oauth2PermissionScopes: []`. The catalog
 derives its accepted audiences as `api://<client-id>,<client-id>`, so a **user's
 sign-in token for the console is also a valid catalog bearer**. Sign-in identity
 and API audience should not be the same app registration.
