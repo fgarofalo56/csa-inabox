@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "16785744769406173695"
+      "templateHash": "13824934603542121263"
     }
   },
   "definitions": {
@@ -2518,7 +2518,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "2108543118171371986"
+              "templateHash": "1936402120510010830"
             }
           },
           "definitions": {
@@ -26864,7 +26864,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "13090339992075723914"
+                      "templateHash": "4955432922897167650"
                     }
                   },
                   "parameters": {
@@ -26887,7 +26887,13 @@
                     "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c",
                     "readerRoleId": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
                     "sqlDbContribRoleId": "9b7fa17d-e63e-47b0-bb0a-15c516ac86ec",
-                    "rbacCondition": "[format('((!(ActionMatches{{''Microsoft.Authorization/roleAssignments/write''}})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{0}, {1}, {2}}})) AND ((!(ActionMatches{{''Microsoft.Authorization/roleAssignments/delete''}})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {{{3}, {4}, {5}}}))', variables('contributorRoleId'), variables('readerRoleId'), variables('sqlDbContribRoleId'), variables('contributorRoleId'), variables('readerRoleId'), variables('sqlDbContribRoleId'))]"
+                    "storageBlobDataContribRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+                    "eventHubsDataOwnerRoleId": "f526a384-b230-433a-b45c-95f59c4a2dec",
+                    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
+                    "searchIndexDataReaderRoleId": "1407120a-92aa-4202-b7e9-c0e197c71c8f",
+                    "cognitiveServicesOpenAiUserRoleId": "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd",
+                    "allowedRoleIds": "[format('{{{0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}}}', variables('contributorRoleId'), variables('readerRoleId'), variables('sqlDbContribRoleId'), variables('storageBlobDataContribRoleId'), variables('eventHubsDataOwnerRoleId'), variables('keyVaultSecretsUserRoleId'), variables('searchIndexDataReaderRoleId'), variables('cognitiveServicesOpenAiUserRoleId'))]",
+                    "rbacCondition": "[format('((!(ActionMatches{{''Microsoft.Authorization/roleAssignments/write''}})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {0})) AND ((!(ActionMatches{{''Microsoft.Authorization/roleAssignments/delete''}})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {1}))', variables('allowedRoleIds'), variables('allowedRoleIds'))]"
                   },
                   "resources": [
                     {
@@ -26901,7 +26907,7 @@
                         "principalType": "ServicePrincipal",
                         "condition": "[variables('rbacCondition')]",
                         "conditionVersion": "2.0",
-                        "description": "Loom Console UAMI: create/delete Contributor + Reader workspace role assignments (F5 Manage Access) and Reader/Contributor/SQL DB Contributor per-database Share assignments. Constrained to those built-in roles via ABAC."
+                        "description": "Loom Console UAMI: create/delete Contributor + Reader workspace role assignments (F5 Manage Access), Reader/Contributor/SQL DB Contributor per-database Share assignments, and the APPS-W2 Resources-tab data-plane roles (Storage Blob Data Contributor, Event Hubs Data Owner, Key Vault Secrets User, Search Index Data Reader, Cognitive Services OpenAI User). Constrained to those built-in roles via ABAC."
                       }
                     }
                   ]
@@ -46549,7 +46555,7 @@
       ]
     },
     "adminAppResourcesRbac": {
-      "condition": "[variables('deployAdminPlane')]",
+      "condition": "[and(variables('deployAdminPlane'), variables('useSingleDlz'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "admin-app-resources-rbac",
@@ -46622,7 +46628,7 @@
       ]
     },
     "singleDlzAppResourcesRbac": {
-      "condition": "[variables('useSingleDlz')]",
+      "condition": false,
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "dlz-single-app-resources-rbac",
