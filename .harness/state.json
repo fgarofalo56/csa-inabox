@@ -327,7 +327,7 @@
       "lane": "L-DEPLOY",
       "wave": 2,
       "task_order": 70,
-      "status": "todo",
+      "status": "review",
       "title": "#3028 keep_resources=false default TEARS DOWN admin RG; #3029 omitted region silently targets eastus2; #3022 what-if previews different template than apply + schedule auto-upgrades deployAppsEnabled — safe-by-default inputs + mutation-proved refusal guards; then re-enable schedules (#2775)",
       "depends_on": [
         "D4",
@@ -342,7 +342,19 @@
         "V5": "pending",
         "V6": "pending"
       },
-      "evidence": []
+      "evidence": [
+        "PR #3075, 32 checks green. JUDGE BEFORE MERGE.",
+        "#3028 WORSE THAN THE ISSUE: apps/fiab-console/app/api/setup/deploy/route.ts:876 hard-coded keep_resources:'false' next to run_mode:'full' — THE SETUP WIZARD'S ONE-BUTTON INSTALL STOOD THE CUSTOMER'S ESTATE UP AND THEN DESTROYED IT. fiab-teardown.sh deletes EVERY rg-csa-loom-* RG in the subscription, purging Key Vaults and Cognitive Services. The 'USE WITH CAUTION' text sat on the SAFE value. Fixed to 'true'.",
+        "#3029 BROADER: AZURE_LOCATION: ${{ inputs.region || 'eastus2' }} plus resolveReconcileRegion honoured that fallback on EVERY dispatch, not just an omitted one — only the schedule path derived the region. Now region is required with no default anywhere, and the resolver adopts/matches/REFUSES on all triggers; UNKNOWN refuses.",
+        "full-app-deploy-commercial SHARES the defect (region default eastus2 at :34) — AND its concurrency group was keyed on inputs.region||'auto', so a run naming centralus and a run leaving it blank landed in DIFFERENT groups and RACED FOR THE SAME ACR FIREWALL LEASE. Now a constant. *** THIS PLAUSIBLY EXPLAINS THE ACR BEING LEFT PUBLICLY OPEN after run 31143181962 while its re-lock job reported success — the orchestrator re-locked it by hand at 2026-08-07. Treat the re-lock's verify-after-write as a separate defect (C24). ***",
+        "#3022 TWO independent divergences: (1) the MSAL-resolve step ran AFTER the what-if and only on schedule||full, while commercial.bicepparam reads LOOM_MSAL_CLIENT_ID at bicep COMPILE time; (2) what-if passed --subscription $CSA_LOOM_TARGET_SUBSCRIPTION while apply passed $DEPLOY_SUB — on a dispatch naming an explicit hub sub the PREVIEW RAN AGAINST THE LOGIN SUB. Fixed: args composed ONCE into deploy-args.txt, both commands use the same array, sha256 re-asserted at apply.",
+        "FOURTH HAZARD found by the what-if, and it BLOCKS OP-13 BY DESIGN: iceberg-catalog and loom-unity are two Container Apps on the SAME repo at DIFFERENT tags (loom-unity:v0.1 and loom-unity:089fb622), both rendered from ONE key (admin-plane/main.bicep:5944 and :6365). The key resolves UNKNOWN → no pin → readEnvironmentVariable('LOOM_UNITY_TAG','v0.1') → an apps-enabled dispatch ROLLS loom-unity BACK TO v0.1 AND REPORTS SUCCESS. decideDeployApps protected only the schedule. The new gate refuses it with a one-command remediation.",
+        "BOTH PRE-EXISTING GUARDS WERE MATCHING PROSE — step bodies absorb the NEXT step's comment block, so the new guard's first draft PASSED on a workflow with its own gate deleted; check-reconcile-safety.mjs had the same blindness. Both now strip comments. (Same class as D14's MIR0 and the #2977 assertOwner case.)",
+        "SCHEDULES premise STALE: nothing to re-enable — deploy-fiab-commercial is state:active with cron '0 6 * * *', last scheduled runs 08-01/02/03 all failure. It was already ARMED; what changed is that it is now SAFE (teardown unreachable on schedule, region adopted-or-refused, deployAppsEnabled stays false while unity is UNKNOWN, unresolved MSAL refuses instead of blanking sign-in).",
+        "V1 REAL what-if against live Commercial: Succeeded, 437 changes, ZERO Delete, args sha256 b245bbe7 identical before and after; Purview NoChange/Modify only (no second account). V4 PARTIALLY OWED — guards observed refusing LOCALLY with exit codes, guardrails green in CI, but no CI run yet observed FAILING on a mutant (runner queue deep).",
+        "RESIDUAL, not fixed and NOT claimed fixed: #3022's second half — msalSecretKvBacked renders the console secret as a KV reference while the live console holds it inline (stale KV ⇒ AADSTS7000215). Verifying it means comparing a secret value; the agent correctly did not.",
+        "GREENFIELD NOT VERIFIED (refusal branch unit-tested only, declared untested). Gov untouched — deploy-fiab-gcc*.yml keep their own keep_resources:false defaults, SAME CLASS, outside D7 scope."
+      ]
     },
     {
       "id": "D8",
@@ -1286,6 +1298,27 @@
       ],
       "evidence": [
         "operator instruction 2026-08-07: 'deep dive e2e testing of it via playwright in the browser ... what needs update/refactored/optimized including any UI changes ... iterate until A+ on par with databricks Unity or better'"
+      ]
+    },
+    {
+      "id": "C24",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 93,
+      "status": "todo",
+      "title": "ACR re-lock reports SUCCESS while leaving the registry publicly OPEN. Measured 2026-08-07 after run 31143181962: the 'Re-lock ACR (private endpoint only)' job concluded success, yet az acr show read publicNetworkAccess=Enabled/defaultAction=Allow on three probes over a minute (ruling out the known 30-90s propagation lag). Orchestrator re-locked by hand. Add verify-after-write that FAILS the job if the registry is not Disabled/Deny afterwards",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "LIKELY ROOT CAUSE from D7: full-app-deploy's concurrency group was keyed on inputs.region||'auto', so two runs landed in different groups and RACED for the same ACR firewall lease — one run's re-lock could be undone by the other's open. D7 made the group a constant, which should prevent recurrence, but the re-lock step still has no verify-after-write and would still report success on a no-op.",
+        "SECURITY: this left the Commercial ACR publicly reachable for an unknown window while CI reported green."
       ]
     }
   ],
