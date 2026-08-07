@@ -24,9 +24,9 @@ stack is not a parity checkbox — it *is* the catalog and federation story
 | Explicit `DENY` that beats a grant | ✅ zero-privilege rule emitted FIRST (first-match-wins) | `compilers/trino.ts` |
 | **Row filter** (RLS) at the engine | ✅ DAX row filter → Trino predicate on the rule's `filter` field; `USERPRINCIPALNAME()` → `current_user` | `daxFilterToTrinoSql` |
 | **Column mask** (CLS) at the engine | ✅ `columns[].mask = NULL` — same semantics as the Synapse compiler's `DENY SELECT ON tbl(col)` | `compilers/trino.ts` |
-| Per-caller (not per-service) enforcement | ✅ compiled `impersonation` rule + the BFF presenting the signed-in UPN as `X-Trino-User` | `buildTrinoRulesDocument`, `trino-client.ts` |
-| Group-based rules | ✅ `group`-keyed rules + a Trino **file group provider** rendered from resolved Entra membership | `buildTrinoGroupFile`, `resolveTrinoGroupMemberships` |
-| OPA policy engine option | ✅ equivalent `package trino` rego with `allow` / `rowFilters` / `columnMask` | `buildTrinoRego` |
+| Per-caller (not per-service) enforcement | ✅ compiled `impersonation` rule bounded to policy-named users + the BFF presenting the signed-in UPN | `buildImpersonationRules`, `trino-client.ts` |
+| Group-based rules | ✅ `group`-keyed rules + a Trino **file group provider** rendered from resolved Entra membership; the provider's liveness is OBSERVED, so a group rule that cannot match is warned about | `buildTrinoGroupFile`, `resolveTrinoGroupMemberships` |
+| OPA policy engine option | ✅ equivalent `package trino` rego with `allow` / `rowFilters` / `columnMask`, **plus** the catalog floor and the same bounded `ImpersonateUser` restriction | `buildTrinoRego` |
 | Policy change takes effect without redeploy | ✅ engine PULLS on `security.refresh-period`; entrypoint refresh loop re-fetches | `docker-entrypoint.sh`, engine-rules route |
 | Drift detection / reconcile | ✅ publish + diff; **"applied" is gated on an engine FETCH receipt**, not on the write | `reconcileTrino`, `trinoEnforcementStatus` |
 | Foreign catalog inventory | ✅ read live from `system.metadata.catalogs` (never from the config bag) | `GET /api/catalog/unity/foreign-catalogs` |
@@ -86,16 +86,45 @@ this document names group ids, table names and row predicates. The entrypoint
 fetches with the token in a header (never in the URL: Trino logs the configured
 URI on failure) and writes the local file Trino then re-reads.
 
+**Why the filter and each mask are SEPARATE compiled ops.** `dedupeOps` is
+first-wins. Folding the row filter and the column masks into the grant op — and
+keying that op without the statement id — meant two statements over the same
+(principal, table, action) collided, and an unconditional grant authored FIRST
+silently destroyed the later statement's filter and mask before the document was
+ever built. No attacker required; "ordering is the control" was defeated
+upstream of ordering. Every sibling compiler (`synapse`, `adx`,
+`unity-catalog`) already carried the statement id in its key — Trino was the
+outlier. Fixed, with a two-statement regression test in both authoring orders.
+
+**Why the document then MERGES them back.** Trino's `tables` rules are
+first-match-wins and ONE rule carries privileges + `filter` + `columns`
+together, so a separate filter rule for the same selector would never be
+reached. Contributions for the same (principal, table) are merged: privileges
+UNION, filters AND, masked columns UNION. The merge is deliberately
+**restrictive** — a broader statement elsewhere in the set cannot strip a filter
+another statement wrote for that principal.
+
+**Why the version hash excludes `catalogs`.** The publisher (reconcile) has no
+engine to ask for a catalog list; the engine always reports one. Hashing the
+whole document made the two sides deterministically unequal *forever*: the
+status was permanently `stale`, reconcile could never report applied, and the
+emitted detail blamed an unreachable Console while the engine was fetching
+successfully every refresh interval — a cause the code never established
+(`deploy-integrity.md` R7). The hash now covers the policy sections only, so the
+version means "this is the policy the engine is enforcing", and a catalog
+appearing or disappearing is correctly not a policy change.
+
 **Why "published" is not "enforced".** Persisting a rules document is a write.
-The reconcile receipt reports `drift` with the honest reason until the engine has
-actually fetched the published version, and only a confirmed fetch reports
+The reconcile receipt reports `drift` with the honest reason until the engine
+has actually fetched the published version, and only a confirmed fetch reports
 converged (`deploy-integrity.md` R2 applied to a control plane).
 
-**Why a global allow tail.** Trino denies a table no rule matches. Without a
-tail, adding one governed table would deny every other table in the estate — a
-self-inflicted outage, not security. Governed tables get a per-table catch-all
-deny; ungoverned tables keep their pre-policy behaviour, with the catalog rules
-still the outer floor. Asserted by test.
+**Why a global allow tail.** Trino's documented default is that "if no rules are
+provided at all, then access is granted", and the pre-LU-7 document had no
+`tables` section at all. Without a tail, adding one governed table would deny
+every other table in the estate — a self-inflicted outage, not security.
+Governed tables get a per-table catch-all deny; ungoverned tables keep their
+pre-policy behaviour, with the catalog rules still the outer floor.
 
 **Why registration is IaC, not a UI button.** `auto-bind-by-default` requires the
 platform to do the binding — and it does: the catalog is rendered by the deploy
@@ -103,6 +132,46 @@ from `loomBackends.trinoCatalogs`, with the password on a Key Vault secretRef.
 Making the button mutate the running container with `az containerapp update`
 would produce exactly the drift the bicep header warns about (the next deploy
 silently reverts it). The tab therefore renders the exact value to commit.
+
+---
+
+## 3a. Impersonation — the threat, and why it is a net REDUCTION
+
+`X-Trino-User` is a caller-asserted header at the protocol level, and this
+change is what unlocked it. Stating the analysis rather than the conclusion:
+
+**Through the product it is not caller-asserted.** The BFF builds the header
+from `session.claims.upn` (`app/api/sql/trino/route.ts:158,211`), and that claim
+comes from an **AES-GCM authenticated-encryption cookie** the server minted at
+sign-in (`lib/auth/session.ts:98-115`). A browser can neither forge the cookie
+nor set the header — the BFF constructs it server-side. No request field reaches
+`actorUpn`.
+
+**The residual is a direct in-VNet caller** that can both reach the coordinator
+and mint a bearer for the pinned Trino audience.
+
+**That caller's reach SHRINKS, it does not grow.** Per the Trino docs, "if no
+rules are provided at all, then access is granted" — and the pre-LU-7 rendered
+document had **no `tables` section whatsoever**. So that same credential already
+had unrestricted SELECT on every table in every wired catalog, with no
+impersonation needed. After this change the un-impersonated mapped user matches
+only the global tail and is **denied every governed table** (asserted by test:
+*"an un-impersonated caller matches only the global tail"*).
+
+**And the grant is bounded.** `new_user` is the exact set of user principals the
+policy names — never `.*`. When the policy names no user principals, **no
+impersonation rule is emitted at all** (asserted by test), which leaves Trino's
+default: "if neither impersonation nor principal rules are defined, impersonation
+is not allowed."
+
+**Two independent off-switches**, both deploy-produced:
+`loomBackends.trinoImpersonation='disabled'` (BFF sends the mapped user) and
+`loomBackends.trinoAccessControl='none'`.
+
+**What would strengthen it further** — a delegated (on-behalf-of) token so the
+engine verifies the end user itself, rather than trusting a header from a
+workload it already trusts. That is a real follow-up, not something this change
+claims to have done.
 
 ---
 
@@ -132,14 +201,38 @@ until the LU-1 Postgres cutover lands there.
 ## 5. Verification
 
 - `tsc -p tsconfig.build.json --noEmit` — clean.
-- `vitest` — 70 new/affected tests green (34 compiler, 16 foreign-catalog, 6
-  LU-12 securable, plus the existing policy-code + overlay suites).
+- `vitest` — 109 tests green across the Trino surface, including the regressions
+  for the two defects an independent security review found:
+  - **dedupe destroying a narrower policy** — two statements over the same
+    (principal, table, action) in BOTH authoring orders, asserting the filter AND
+    the mask survive, that keys are unique, that multiple filters AND, that masks
+    union, and that the merge yields ONE reachable rule.
+  - **the enforcement receipt welded shut** — the publish-side and fetch-side
+    version hashes now agree, so `trinoEnforcementStatus` genuinely reads
+    `enforcing`, and its detail no longer asserts an unreachable Console.
+  - impersonation bounded to policy-named users, absent entirely when no user
+    principal exists, deploy-gated, self-healing, and not retried on a genuine
+    data denial.
+  - the OPA module carries the catalog floor and the same bounded
+    `ImpersonateUser` restriction, or says it does not.
 - `az bicep build` (pinned 0.45.15) + `check-deploy-template-sync` — PASS,
   byte-identical.
-- **OWED — live browser E2E (G1).** `loom-ui-verify` has been red since
-  2026-08-04 (C13 lane repairing). The command that resolves it:
+- All loom-guardrails checks pass locally (`actionlint` binary absent locally;
+  this diff touches no workflow files).
+- **OWED — live browser E2E (G1).** C13 repaired `loom-ui-verify` (#3076), but
+  its OIDC credential is scoped to `refs/heads/main`, so the spec must merge
+  before it can run:
   `gh workflow run loom-ui-verify.yml --ref main -f target_route=/catalog/unity`
 - **OWED — live Trino receipt.** Requires the loom-trino image rebuild
-  (entrypoint change) plus a roll; until then the engine runs its start-up
+  (entrypoint change) plus a roll. Until then the engine runs its start-up
   catalog floor and the BFF continues to enforce per-caller catalog
   authorization exactly as before. **Merged is not deployed.**
+
+### What the missing live receipt cost
+
+The review's sharpest point stands: **one live run would have shown permanent
+drift.** The version-hash mismatch was not subtle in behaviour — the status
+could never read `enforcing` — and no unit test covered the publish/fetch pair
+because each side was tested alone. The regression above now closes that by
+asserting the two producers agree, which is the property a live run would have
+exposed. Absent evidence is not neutral, and it was treated as such.

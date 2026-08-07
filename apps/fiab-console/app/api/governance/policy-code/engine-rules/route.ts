@@ -137,10 +137,14 @@ async function serve(
   // Compile fresh from the stored policy set so the engine always receives the
   // CURRENT policy — a stale publication can never be served as authoritative.
   const { set } = await loadPolicySet(tenantId);
+  // OBSERVED, never asserted: group-keyed rules can only match once a group
+  // file with real members has been published, so that is what decides whether
+  // the compiler treats the group provider as live.
+  const publishedDoc = await readTrinoEngineRules(tenantId).catch(() => null);
   const docOptions = {
     trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
     trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
-    trinoGroupProvider: true,
+    trinoGroupProvider: Boolean(publishedDoc?.groupFile?.trim()),
     catalogs: parseCatalogs(req),
   };
   const artifact = compileTrino(set, docOptions);
@@ -157,8 +161,7 @@ async function serve(
     // The group file is published by the reconcile loop (it resolves Entra
     // membership); serving the LAST PUBLISHED value here keeps the engine and
     // the admin surface reading the same bytes.
-    const published = await readTrinoEngineRules(tenantId);
-    return new Response(published?.groupFile || '', {
+    return new Response(publishedDoc?.groupFile || '', {
       status: 200,
       headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
     });

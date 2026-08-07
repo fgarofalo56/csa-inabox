@@ -309,10 +309,23 @@ fetch_policy() {
     return 1
   fi
   if [ "$_fmt" = "rules" ]; then
-    # Reject anything that is not a JSON object — a proxy error page or a
-    # truncated body must never become the engine's authorization policy.
+    # SHAPE VALIDATION, not a one-byte sniff. Per the Trino docs "if no rules
+    # are provided at all, then access is granted" — so a body that parses as
+    # JSON but carries no `tables` section is ALLOW-ALL. Overwriting the local
+    # deny-by-default floor with such a body would be a silent fail-OPEN, which
+    # is the exact opposite of what this function exists to prevent. `curl -f`
+    # already rejects an HTTP error, but a proxy that returns 200 with an
+    # interstitial, or a truncated body, would both slip past a first-byte
+    # check. Require: starts with `{`, and carries BOTH the sections that make
+    # the document restrictive.
     _head=$(head -c 1 "$_tmp" 2>/dev/null || true)
     if [ "$_head" != "{" ]; then
+      log "governance: rejected a rules body that is not a JSON object (first byte '${_head}')"
+      rm -f "$_tmp"
+      return 2
+    fi
+    if ! grep -q '"tables"' "$_tmp" || ! grep -q '"catalogs"' "$_tmp"; then
+      log "governance: rejected a rules body missing the \"tables\"/\"catalogs\" sections — a rules document without them is ALLOW-ALL, so it must never replace the deny-by-default floor"
       rm -f "$_tmp"
       return 2
     fi

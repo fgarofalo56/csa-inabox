@@ -30,6 +30,7 @@ import {
   logTrinoAccess,
   runTrinoQuery,
   trinoConfigGate,
+  trinoImpersonationEnabled,
   trinoTableRef,
 } from '../trino-client';
 
@@ -101,6 +102,94 @@ describe('runTrinoQuery — client REST statement protocol', () => {
     const result = await runTrinoQuery('SELECT n FROM t', { actorUpn: 'a@b.c', maxRows: 2 });
     expect(result.rowCount).toBe(2);
     expect(result.truncated).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LU-7 — impersonation is DEPLOY-GATED and SELF-HEALING.
+//
+// The engine identity is never caller-asserted through the product: the BFF
+// builds `X-Trino-User` from `session.claims.upn`, and that claim comes from an
+// AES-GCM authenticated-encryption cookie the server minted at sign-in
+// (lib/auth/session.ts) — a client can neither forge the cookie nor set the
+// header. What these pin is the OTHER half: the BFF only presents the real
+// principal when the DEPLOY wired the governance-rules URL (so the engine is
+// being served the document that carries the bounded impersonation grant), and
+// a lag between those two never becomes a query outage.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('LU-7 impersonation gating', () => {
+  afterEach(() => {
+    delete process.env.LOOM_TRINO_POLICY_URL;
+    delete process.env.LOOM_TRINO_IMPERSONATION;
+    delete process.env.LOOM_TRINO_AUTH_MODE;
+  });
+
+  it('is OFF unless the deploy produced the policy URL', () => {
+    expect(trinoImpersonationEnabled()).toBe(false);
+    process.env.LOOM_TRINO_POLICY_URL = 'http://loom-console/api/governance/policy-code/engine-rules';
+    expect(trinoImpersonationEnabled()).toBe(true);
+  });
+
+  it('honours the audited operator opt-out', () => {
+    process.env.LOOM_TRINO_POLICY_URL = 'http://loom-console/api/governance/policy-code/engine-rules';
+    process.env.LOOM_TRINO_IMPERSONATION = 'disabled';
+    expect(trinoImpersonationEnabled()).toBe(false);
+  });
+
+  it('sends the MAPPED session user (not the caller) when the engine has no policy document', async () => {
+    process.env.LOOM_TRINO_URL = 'https://trino.internal';
+    process.env.LOOM_TRINO_AUTH_MODE = 'entra';
+    process.env.LOOM_TRINO_TOKEN = 'pre-shared';
+    responder = () => new Response(JSON.stringify({ columns: [{ name: 'n', type: 'bigint' }], data: [[1]] }), { status: 200 });
+    await runTrinoQuery('SELECT 1', { actorUpn: 'alice@contoso.com' });
+    expect(upstream[0].init.headers['x-trino-user']).toBe('loom-console');
+  });
+
+  it('presents the REAL principal once the deploy wired the policy URL', async () => {
+    process.env.LOOM_TRINO_URL = 'https://trino.internal';
+    process.env.LOOM_TRINO_AUTH_MODE = 'entra';
+    process.env.LOOM_TRINO_TOKEN = 'pre-shared';
+    process.env.LOOM_TRINO_POLICY_URL = 'http://loom-console/api/governance/policy-code/engine-rules';
+    responder = () => new Response(JSON.stringify({ columns: [{ name: 'n', type: 'bigint' }], data: [[1]] }), { status: 200 });
+    await runTrinoQuery('SELECT 1', { actorUpn: 'alice@contoso.com' });
+    expect(upstream[0].init.headers['x-trino-user']).toBe('alice@contoso.com');
+    // The signed-in principal still rides client-info for the audit row.
+    expect(upstream[0].init.headers['x-trino-client-info']).toContain('alice@contoso.com');
+  });
+
+  it('SELF-HEALS to the mapped user when the engine has not yet loaded the rules', async () => {
+    // The engine is still on its start-up catalog floor, which denies
+    // impersonation. A policy-publication lag must not be a query outage.
+    process.env.LOOM_TRINO_URL = 'https://trino.internal';
+    process.env.LOOM_TRINO_AUTH_MODE = 'entra';
+    process.env.LOOM_TRINO_TOKEN = 'pre-shared';
+    process.env.LOOM_TRINO_POLICY_URL = 'http://loom-console/api/governance/policy-code/engine-rules';
+    let call = 0;
+    responder = () => {
+      call += 1;
+      if (call === 1) {
+        return new Response(JSON.stringify({
+          error: { message: 'Access Denied: User loom-console cannot impersonate user alice@contoso.com', errorName: 'USER_CANNOT_BE_IMPERSONATED' },
+        }), { status: 403 });
+      }
+      return new Response(JSON.stringify({ columns: [{ name: 'n', type: 'bigint' }], data: [[1]] }), { status: 200 });
+    };
+    const res = await runTrinoQuery('SELECT 1', { actorUpn: 'alice@contoso.com' });
+    expect(res.rowCount).toBe(1);
+    expect(upstream[0].init.headers['x-trino-user']).toBe('alice@contoso.com');
+    expect(upstream[1].init.headers['x-trino-user']).toBe('loom-console'); // the retry
+  });
+
+  it('does NOT retry a genuine data authorization denial with a wider identity', async () => {
+    process.env.LOOM_TRINO_URL = 'https://trino.internal';
+    process.env.LOOM_TRINO_AUTH_MODE = 'entra';
+    process.env.LOOM_TRINO_TOKEN = 'pre-shared';
+    process.env.LOOM_TRINO_POLICY_URL = 'http://loom-console/api/governance/policy-code/engine-rules';
+    responder = () => new Response(JSON.stringify({
+      error: { message: 'Access Denied: Cannot select from table iceberg.sales.orders', errorName: 'PERMISSION_DENIED' },
+    }), { status: 403 });
+    await expect(runTrinoQuery('SELECT 1', { actorUpn: 'alice@contoso.com' })).rejects.toBeInstanceOf(TrinoError);
+    expect(upstream).toHaveLength(1); // one hop, no retry
   });
 });
 

@@ -48,7 +48,13 @@ export interface TrinoEngineRulesDoc {
   id: string;
   tenantId: string;
   kind: typeof TRINO_RULES_DOC_KIND;
-  /** The complete file-based access-control document the engine loads. */
+  /**
+   * The POLICY PROJECTION of the document the engine loads — `schemas`,
+   * `tables` and `impersonation` as compiled. `catalogs` is deliberately EMPTY
+   * here: the catalog section is engine state, rendered around the catalog list
+   * the coordinator reports at fetch time, so storing a placeholder would record
+   * a catalog rule the engine is never served.
+   */
   rules: TrinoRulesDocument;
   /** The equivalent OPA module, for deployments running `access-control.name=opa`. */
   rego: string;
@@ -142,13 +148,22 @@ export async function publishTrinoEngineRules(args: PublishTrinoRulesArgs): Prom
   const { set, artifact, tenantId, publishedBy, memberships, docOptions } = args;
   const prior = await readTrinoEngineRules(tenantId).catch(() => null);
   const rules = buildTrinoRulesDocument(artifact, docOptions);
+  // The STORED document is the policy projection, not a servable artifact. The
+  // engine is served a document rendered around the catalog list it reports at
+  // fetch time (the route recompiles), so persisting the placeholder catalog
+  // section here would record "deny every catalog" as though it were the policy
+  // — misleading to anyone inspecting what the engine should be running. The
+  // section is emptied and the reason is carried on the type.
+  const storedRules: TrinoRulesDocument = { ...rules, catalogs: [] };
   const doc: TrinoEngineRulesDoc = {
     id: trinoRulesDocId(tenantId),
     tenantId,
     kind: TRINO_RULES_DOC_KIND,
-    rules,
+    rules: storedRules,
     rego: buildTrinoRego(set, docOptions),
     groupFile: buildTrinoGroupFile(set, memberships),
+    // Hashed over the POLICY sections only, so the publisher and the engine —
+    // which sees a different catalog list — agree. See `rulesVersion`.
     version: rulesVersion(rules),
     policySetName: set.name,
     publishedAt: new Date().toISOString(),

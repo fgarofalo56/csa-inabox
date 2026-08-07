@@ -146,14 +146,33 @@ describe('trino compiler — ops', () => {
     expect(art.ops[0].kind).toBe('deny');
   });
 
-  it('emits the row filter AND the column mask on the grant rule', () => {
+  it('emits the row filter and each column mask as SEPARATE, distinctly-keyed ops', () => {
+    // Deliberately NOT folded into the grant op: a shared key would let
+    // first-wins dedupe discard one statement's filter/mask entirely. The
+    // document builder merges them back into one rule (Trino is
+    // first-match-wins), which the merge tests below cover.
     const art = compileTrino(setOf([FILTERED_REGIONAL]));
-    const rule = JSON.parse(art.ops[0].statement) as TrinoTableRule;
+    const byKind = (k: string) => art.ops.filter((o) => o.kind === k);
+    expect(byKind('grant')).toHaveLength(1);
+    expect(byKind('rls')).toHaveLength(1);
+    expect(byKind('mask')).toHaveLength(1);
+
+    const grant = JSON.parse(byKind('grant')[0].statement) as TrinoTableRule;
+    expect(grant.privileges).toEqual(['SELECT']);
+    // The UPN's `.` is regex-escaped, so `aliceXcontoso.com` cannot match.
+    expect(grant.user).toBe('^alice@contoso\\.com$');
+    expect(new RegExp(grant.user!).test('aliceXcontosoXcom')).toBe(false);
+
+    expect((JSON.parse(byKind('rls')[0].statement) as TrinoTableRule).filter).toBe('"Region" = current_user');
+    expect((JSON.parse(byKind('mask')[0].statement) as TrinoTableRule).columns).toEqual([{ name: 'ssn', mask: 'NULL' }]);
+  });
+
+  it('merges them onto ONE rule in the document, where Trino can enforce them', () => {
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([FILTERED_REGIONAL])), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$')!;
+    expect(rule.privileges).toEqual(['SELECT']);
     expect(rule.filter).toBe('"Region" = current_user');
     expect(rule.columns).toEqual([{ name: 'ssn', mask: 'NULL' }]);
-    // The UPN's `.` is regex-escaped, so `aliceXcontoso.com` cannot match.
-    expect(rule.user).toBe('^alice@contoso\\.com$');
-    expect(new RegExp(rule.user!).test('aliceXcontosoXcom')).toBe(false);
   });
 
   it('WARNS (does not silently claim enforcement) for a group with no group provider', () => {
@@ -218,9 +237,10 @@ describe('trino rules document — ordering IS the control', () => {
     expect(doc.catalogs[doc.catalogs.length - 1]).toEqual({ catalog: '.*', allow: 'none' });
   });
 
-  it('emits the impersonation rule that lets the BFF present the real principal', () => {
+  it('emits an impersonation rule per policy-named user, never a wildcard', () => {
+    // FILTERED_REGIONAL is the only user-principal statement in this set.
     expect(doc.impersonation).toEqual([
-      { original_user: '^loom-console$', new_user: '.*', allow: true },
+      { original_user: '^loom-console$', new_user: '^alice@contoso\\.com$', allow: true },
     ]);
   });
 
@@ -245,6 +265,178 @@ describe('trino rules document — ordering IS the control', () => {
     // Only the global allow tail — nothing is governed, so nothing is denied.
     expect(empty.tables).toHaveLength(1);
     expect(empty.tables[0].privileges).toContain('SELECT');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRESSION — dedupe must never destroy a narrower policy.
+//
+// `dedupeOps` is FIRST-WINS. The original compiler keyed every grant as
+// `trino:${action}:${target}:${p.id}` — no statement id — and folded the row
+// filter and the column masks INTO that same op. So two statements over the
+// same (principal, table, action) collided, and if the UNCONDITIONAL one was
+// authored first it silently discarded the filtered one's filter AND mask
+// before the document was ever built. The user got unfiltered, unmasked SELECT.
+// No attacker required; ordering-is-the-control was defeated upstream of
+// ordering. Every sibling compiler already carried `stmt.id` in its key.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('trino compiler — two statements over the same (principal, table, action)', () => {
+  const OPEN_FIRST = {
+    id: 'a-open',
+    principals: [{ kind: 'user', id: 'u-1', name: 'alice@contoso.com' }],
+    resources: [{ backend: 'trino', object: 'iceberg.sales.orders' }],
+    actions: ['read'],
+  };
+  const NARROWED_SECOND = {
+    id: 'b-narrowed',
+    principals: [{ kind: 'user', id: 'u-1', name: 'alice@contoso.com' }],
+    resources: [{ backend: 'trino', object: 'iceberg.sales.orders' }],
+    actions: ['read'],
+    condition: { rowFilter: '[Region] = USERPRINCIPALNAME()', maskColumns: ['ssn'] },
+  };
+
+  it('keeps BOTH statements as distinct ops (the key carries the statement id)', () => {
+    const art = compileTrino(setOf([OPEN_FIRST, NARROWED_SECOND]), { trinoGroupProvider: true });
+    const keys = art.ops.map((o) => o.key);
+    expect(keys).toContain('trino:grant:read:iceberg.sales.orders:u-1:a-open');
+    expect(keys).toContain('trino:grant:read:iceberg.sales.orders:u-1:b-narrowed');
+    expect(keys).toContain('trino:rls:iceberg.sales.orders:u-1:b-narrowed');
+    expect(keys).toContain('trino:mask:iceberg.sales.orders:ssn:u-1:b-narrowed');
+    // No two ops may share a key, or dedupe would drop one of them.
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('the FILTER survives even when the unconditional grant is authored first', () => {
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([OPEN_FIRST, NARROWED_SECOND]), { trinoGroupProvider: true }), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$');
+    expect(rule).toBeDefined();
+    expect(rule!.filter).toBe('"Region" = current_user');
+  });
+
+  it('the MASK survives even when the unconditional grant is authored first', () => {
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([OPEN_FIRST, NARROWED_SECOND]), { trinoGroupProvider: true }), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$');
+    expect(rule!.columns).toEqual([{ name: 'ssn', mask: 'NULL' }]);
+  });
+
+  it('holds in EITHER authoring order — the result must not depend on it', () => {
+    for (const stmts of [[OPEN_FIRST, NARROWED_SECOND], [NARROWED_SECOND, OPEN_FIRST]]) {
+      const doc = buildTrinoRulesDocument(compileTrino(setOf(stmts), { trinoGroupProvider: true }), {});
+      const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$');
+      expect(rule!.filter).toBe('"Region" = current_user');
+      expect(rule!.columns).toEqual([{ name: 'ssn', mask: 'NULL' }]);
+    }
+  });
+
+  it('merges into ONE rule — a second rule for the same selector is unreachable', () => {
+    // Trino is first-match-wins, so splitting the filter into its own rule
+    // would mean it never applies. The merge is what makes it enforceable.
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([OPEN_FIRST, NARROWED_SECOND]), { trinoGroupProvider: true }), {});
+    const forAlice = doc.tables.filter((r) => r.user === '^alice@contoso\\.com$');
+    expect(forAlice).toHaveLength(1);
+    expect(forAlice[0].privileges).toEqual(['SELECT']);
+  });
+
+  it('ANDs multiple row filters rather than keeping only the first', () => {
+    const second = { ...NARROWED_SECOND, id: 'c-second-filter', condition: { rowFilter: '[Tier] = "gold"' } };
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([NARROWED_SECOND, second]), { trinoGroupProvider: true }), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$');
+    expect(rule!.filter).toBe('("Region" = current_user) AND ("Tier" = \'gold\')');
+  });
+
+  it('unions masked columns from different statements', () => {
+    const second = { ...NARROWED_SECOND, id: 'c-second-mask', condition: { maskColumns: ['dob'] } };
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([NARROWED_SECOND, second]), { trinoGroupProvider: true }), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$');
+    expect(rule!.columns!.map((c) => c.name).sort()).toEqual(['dob', 'ssn']);
+  });
+
+  it('unions privileges when one statement grants read and another write', () => {
+    const writer = { ...OPEN_FIRST, id: 'd-write', actions: ['write'] };
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([OPEN_FIRST, writer]), { trinoGroupProvider: true }), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$');
+    expect(rule!.privileges.sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRESSION — the enforcement receipt must be able to read "enforcing".
+//
+// The publisher (reconcile) has NO engine catalog list; the fetch path ALWAYS
+// has one (the entrypoint sends at least `system,`). Hashing the whole document
+// therefore made the two sides deterministically unequal forever: the status
+// was permanently `stale`, reconcile could never report applied, and the detail
+// string blamed an unreachable Console while the engine fetched successfully
+// every 60s — a false cause, the deploy-integrity R7 class.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('trino rules version — publisher and fetcher must agree', () => {
+  const art = compileTrino(setOf([READ_ANALYSTS, FILTERED_REGIONAL]), { trinoGroupProvider: true });
+
+  it('is IDENTICAL with and without an engine-supplied catalog list', () => {
+    const publishSide = rulesVersion(buildTrinoRulesDocument(art, {}));
+    const fetchSide = rulesVersion(buildTrinoRulesDocument(art, {
+      catalogs: [{ name: 'system', allow: 'read-only' }, { name: 'memory', allow: 'all' }, { name: 'iceberg', allow: 'read-only' }],
+    }));
+    expect(fetchSide).toBe(publishSide);
+  });
+
+  it('is unchanged when the engine mounts or drops a catalog (not a policy change)', () => {
+    const before = rulesVersion(buildTrinoRulesDocument(art, { catalogs: [{ name: 'system', allow: 'read-only' }] }));
+    const after = rulesVersion(buildTrinoRulesDocument(art, {
+      catalogs: [{ name: 'system', allow: 'read-only' }, { name: 'sales_pg', allow: 'read-only' }],
+    }));
+    expect(after).toBe(before);
+  });
+
+  it('DOES change when the policy changes (it still means something)', () => {
+    const base = rulesVersion(buildTrinoRulesDocument(art, {}));
+    const changed = rulesVersion(buildTrinoRulesDocument(
+      compileTrino(setOf([READ_ANALYSTS, FILTERED_REGIONAL, DENY_CONTRACTORS]), { trinoGroupProvider: true }), {},
+    ));
+    expect(changed).not.toBe(base);
+  });
+
+  it('changes when a row filter is added — the control is inside the hash', () => {
+    const without = rulesVersion(buildTrinoRulesDocument(compileTrino(setOf([READ_ANALYSTS]), { trinoGroupProvider: true }), {}));
+    const withFilter = rulesVersion(buildTrinoRulesDocument(
+      compileTrino(setOf([READ_ANALYSTS, FILTERED_REGIONAL]), { trinoGroupProvider: true }), {},
+    ));
+    expect(withFilter).not.toBe(without);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Impersonation — the grant is BOUNDED, and it exists only when needed.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('trino impersonation rules', () => {
+  it('names each policy user explicitly — never a `.*` wildcard', () => {
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([FILTERED_REGIONAL])), {});
+    expect(doc.impersonation).toEqual([
+      { original_user: '^loom-console$', new_user: '^alice@contoso\\.com$', allow: true },
+    ]);
+    expect(doc.impersonation.some((r) => r.new_user === '.*')).toBe(false);
+  });
+
+  it('emits NO impersonation grant when the policy names no user principals', () => {
+    // Group-only policy: nothing needs to be impersonated, so the grant that
+    // Trino otherwise denies by default is not created at all.
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([READ_ANALYSTS]), { trinoGroupProvider: true }), {});
+    expect(doc.impersonation).toEqual([]);
+  });
+
+  it('an un-impersonated caller matches only the global tail (governed tables denied)', () => {
+    // The security claim behind the grant: post-LU-7 the mapped session user is
+    // DENIED every governed table, where pre-LU-7 (no `tables` section at all,
+    // Trino default "access is granted") it had unrestricted SELECT on all of
+    // them. The credential's reach shrinks.
+    const doc = buildTrinoRulesDocument(compileTrino(setOf([FILTERED_REGIONAL])), {});
+    const matchesLoomConsole = doc.tables.filter(
+      (r) => !r.user && !r.group && !r.table,
+    );
+    expect(matchesLoomConsole).toHaveLength(1); // only the tail
+    const governedCatchAll = doc.tables.find((r) => r.table === '^orders$' && !r.user && !r.group);
+    expect(governedCatchAll!.privileges).toEqual([]); // denied before the tail
+    expect(doc.tables.indexOf(governedCatchAll!)).toBeLessThan(doc.tables.indexOf(matchesLoomConsole[0]));
   });
 });
 
@@ -305,5 +497,39 @@ describe('trino OPA rego', () => {
 
   it('is deterministic for the same input', () => {
     expect(buildTrinoRego(setOf([READ_ANALYSTS]))).toBe(buildTrinoRego(setOf([READ_ANALYSTS])));
+  });
+
+  // The module claims equivalence with the file-rules document. Dropping the
+  // catalog floor would have made it strictly MORE permissive than the document
+  // it claims to match, and dropping the impersonation restriction would have
+  // let it authorize an identity the file document refuses.
+  it('carries the CATALOG FLOOR when the engine catalog list is supplied', () => {
+    const withCatalogs = buildTrinoRego(setOf([READ_ANALYSTS, FILTERED_REGIONAL]), {
+      catalogs: [{ name: 'iceberg', allow: 'read-only' }, { name: 'memory', allow: 'all' }],
+    });
+    expect(withCatalogs).toContain('wired_catalogs := {');
+    expect(withCatalogs).toContain('"iceberg"');
+    expect(withCatalogs).toContain('catalog_ok := false if {');
+    // Every table-path allow is gated on it.
+    expect(withCatalogs.match(/catalog_ok/g)!.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('SAYS SO when no catalog list was supplied, instead of silently omitting the floor', () => {
+    const noCatalogs = buildTrinoRego(setOf([READ_ANALYSTS]));
+    expect(noCatalogs).toContain('carries NO catalog floor');
+    expect(noCatalogs).toContain('default catalog_ok := true');
+  });
+
+  it('restricts ImpersonateUser to the policy-named users, matching the file document', () => {
+    const r = buildTrinoRego(setOf([FILTERED_REGIONAL]));
+    expect(r).toContain('input.action.operation == "ImpersonateUser"');
+    expect(r).toContain('impersonatable[input.action.resource.user.user]');
+    expect(r).toContain('"alice@contoso.com"');
+    expect(r).toContain('session_user := "loom-console"');
+  });
+
+  it('does not let a non-impersonation allow rule authorize ImpersonateUser', () => {
+    const r = buildTrinoRego(setOf([FILTERED_REGIONAL]));
+    expect(r).toContain('input.action.operation != "ImpersonateUser"');
   });
 });

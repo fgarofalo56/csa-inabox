@@ -328,12 +328,6 @@ async function reconcileTrino(
   } = await import('./trino-engine-rules');
   const { buildTrinoRulesDocument, rulesVersion } = await import('./compilers/trino');
 
-  const docOptions = {
-    trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
-    trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
-    trinoGroupProvider: true,
-  };
-
   let published: Awaited<ReturnType<typeof readTrinoEngineRules>> = null;
   try {
     published = await readTrinoEngineRules(opts.tenantId);
@@ -343,6 +337,16 @@ async function reconcileTrino(
       nowApplied: [],
     };
   }
+
+  // OBSERVED, never asserted. The engine can only resolve a caller's groups
+  // when a group file with actual members has been published; hardcoding
+  // `true` here would suppress the very warning that tells an operator their
+  // group-keyed denies and masks are inert.
+  const docOptions = {
+    trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
+    trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
+    trinoGroupProvider: Boolean(published?.groupFile?.trim()),
+  };
 
   const desiredVersion = rulesVersion(buildTrinoRulesDocument(artifact, docOptions));
   const status = trinoEnforcementStatus(published);

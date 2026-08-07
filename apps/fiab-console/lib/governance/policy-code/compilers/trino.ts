@@ -44,11 +44,14 @@
  * The JWT authenticator maps every authenticated principal onto ONE Trino user
  * (`LOOM_TRINO_SESSION_USER`, default `loom-console`) because the BFF mints a
  * workload token — the end user's identity is not in that token. Trino's
- * DEFAULT access control denies impersonation, so before LU-7 the engine could
- * not tell callers apart at all. The compiled document emits an
- * **`impersonation` rule** allowing exactly the session user to become any
- * `new_user`, which lets the BFF send the signed-in UPN as `X-Trino-User`. The
- * engine then evaluates `user`-keyed rules against the REAL caller.
+ * DEFAULT access control denies impersonation ("if neither impersonation nor
+ * principal rules are defined, impersonation is not allowed"), so before LU-7
+ * the engine could not tell callers apart at all. The compiled document emits
+ * an **`impersonation` rule per POLICY-NAMED user** — never `.*` — which lets
+ * the BFF send the signed-in UPN as `X-Trino-User`, and the engine then
+ * evaluates `user`-keyed rules against the REAL caller. The threat model for
+ * that grant, and why it is a net REDUCTION in reach, is documented on
+ * {@link buildImpersonationRules}.
  *
  * Group-keyed rules additionally need Trino to know the caller's groups, which
  * comes from a group provider — {@link buildTrinoGroupFile} renders the file
@@ -56,12 +59,14 @@
  * reconcile loop resolves. Until a group file is published, group rules are
  * inert and {@link compileTrino} says so in `warnings` rather than implying
  * enforcement (`no-vaporware.md`: never claim a control that is not running).
+ * `trinoGroupProvider` is therefore DERIVED from whether a group file has
+ * actually been published — never asserted by the caller.
  *
  * PURE module — no Azure / Cosmos / Next imports, unit-tested under the node env.
  */
 
 import { translateDax, safeIdent } from '@/lib/azure/rls-compiler';
-import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { escapeSqlLiteral, quoteIdent } from '@/lib/sql/quoting';
 import type { PolicyCodeSet, PolicyPrincipal, PolicyStatement } from '../dsl';
 import { type CompiledArtifact, type CompiledOp, dedupeOps } from './types';
 
@@ -69,9 +74,12 @@ import { type CompiledArtifact, type CompiledOp, dedupeOps } from './types';
 // Identifier / literal escapers (Trino ANSI dialect)
 // ---------------------------------------------------------------------------
 
-/** Trino delimited identifier — `"col"`, embedded `"` doubled. */
+/** Trino delimited identifier — delegated to the ONE audited quoter
+ *  (`lib/sql/quoting.ts`), which is what `trino-client.ts` already uses. A
+ *  local copy of the ANSI `""` doubling rule would be a second home for an
+ *  injection defence, and `check-sql-quoting.mjs` does not see that form. */
 export function trinoIdent(raw: string): string {
-  return `"${String(raw).replace(/"/g, '""')}"`;
+  return quoteIdent(String(raw), 'trino');
 }
 
 /** Trino string literal — `'text'`, embedded `'` doubled by the ONE audited
@@ -309,10 +317,7 @@ function statementOps(
   // compiler's `DENY SELECT ON tbl(col)` semantics (the value never leaves the
   // engine) while keeping the query shape valid.
   const maskCols = stmt.condition?.maskColumns || [];
-  const columns: TrinoColumnConstraint[] | undefined = maskCols.length
-    ? maskCols.map((c) => ({ name: c, mask: 'NULL' }))
-    : undefined;
-  if (columns) summary.push(`column mask: "${stmt.id}" → ${target} [${maskCols.join(', ')}] → NULL`);
+  if (maskCols.length) summary.push(`column mask: "${stmt.id}" → ${target} [${maskCols.join(', ')}] → NULL`);
 
   for (const action of stmt.actions) {
     for (const p of stmt.principals) {
@@ -326,26 +331,49 @@ function statementOps(
       }
       const sel = { ...principalSelector(p), ...tableSelector(ref) };
       if (action === 'deny') {
-        const rule: TrinoTableRule = { ...sel, privileges: [] };
         ops.push({
-          key: `trino:deny:${target}:${p.id}`,
+          key: `trino:deny:${target}:${p.id}:${stmt.id}`,
           kind: 'deny',
-          statement: JSON.stringify(rule),
+          statement: JSON.stringify({ ...sel, privileges: [] } satisfies TrinoTableRule),
           target,
           principals: [p.id],
           from: stmt.id,
         });
-      } else {
-        const rule: TrinoTableRule = {
-          ...sel,
-          privileges: privilegesFor(action),
-          ...(columns ? { columns } : {}),
-          ...(filter ? { filter } : {}),
-        };
+        continue;
+      }
+      // The GRANT contribution — privileges only. The row filter and the column
+      // masks are SEPARATE ops (below) with their own keys, exactly as the
+      // Synapse / ADX / Unity-Catalog compilers do.
+      //
+      // This is not cosmetic. `dedupeOps` is FIRST-WINS, so any two statements
+      // that produced the same key would silently discard the second — and when
+      // the filter/mask rode inside the grant op's key, an unconditional grant
+      // authored before a filtered one DESTROYED the filter and the mask before
+      // the document was ever built. The narrower policy lost to the broader one
+      // upstream of the ordering that was supposed to be the control.
+      ops.push({
+        key: `trino:grant:${action}:${target}:${p.id}:${stmt.id}`,
+        kind: 'grant',
+        statement: JSON.stringify({ ...sel, privileges: privilegesFor(action) } satisfies TrinoTableRule),
+        target,
+        principals: [p.id],
+        from: stmt.id,
+      });
+      if (filter) {
         ops.push({
-          key: `trino:${action}:${target}:${p.id}`,
-          kind: filter || columns ? (filter ? 'rls' : 'mask') : 'grant',
-          statement: JSON.stringify(rule),
+          key: `trino:rls:${target}:${p.id}:${stmt.id}`,
+          kind: 'rls',
+          statement: JSON.stringify({ ...sel, privileges: [], filter } satisfies TrinoTableRule),
+          target,
+          principals: [p.id],
+          from: stmt.id,
+        });
+      }
+      for (const col of maskCols) {
+        ops.push({
+          key: `trino:mask:${target}:${String(col).toLowerCase()}:${p.id}:${stmt.id}`,
+          kind: 'mask',
+          statement: JSON.stringify({ ...sel, privileges: [], columns: [{ name: col, mask: 'NULL' }] } satisfies TrinoTableRule),
           target,
           principals: [p.id],
           from: stmt.id,
@@ -400,25 +428,62 @@ export interface TrinoDocumentOptions extends TrinoCompileOptions {
    * The catalogs the ENGINE actually wired, as the entrypoint rendered them.
    * The console never guesses this — the engine reports its own catalog list
    * when it fetches the document, so `SHOW CATALOGS` and the catalog rules can
-   * never drift apart.
+   * never drift apart. Absent on the publish path (reconcile has no engine to
+   * ask), which is precisely why {@link rulesVersion} excludes this section.
    */
   catalogs?: Array<{ name: string; allow: 'all' | 'read-only' | 'none' }>;
+  /**
+   * Extra identities the mapped session user may impersonate beyond the user
+   * principals the policy names. Empty by default — the grant is bounded to
+   * what the policy actually describes.
+   */
+  additionalImpersonatedUsers?: string[];
 }
 
 /**
  * Assemble the complete file-based access-control document.
  *
- * ORDERING IS THE SECURITY CONTROL — Trino evaluates `tables` rules top-to-
- * bottom, first match wins, and DENIES a table no rule matches:
+ * ## Contributions are MERGED, because Trino gives one rule per match
+ *
+ * The compiler emits the grant, the row filter and each column mask as
+ * SEPARATE ops so that `dedupeOps` (first-wins) can never let one statement
+ * silently discard another's filter or mask. But Trino's `tables` rules are
+ * first-match-wins and ONE rule carries privileges + `filter` + `columns`
+ * together — a second rule for the same principal and table would simply never
+ * be reached. So every contribution for the same (principal, table) selector is
+ * merged back into a single rule here:
+ *
+ *   privileges → UNION      (a principal granted read by one statement and
+ *                            write by another holds both)
+ *   filter     → AND        (every filter that names this principal applies;
+ *                            see below on why this is the safe direction)
+ *   columns    → UNION      (a column masked by any statement stays masked)
+ *
+ * **The merge is deliberately RESTRICTIVE.** If statement A grants a principal
+ * unfiltered read and statement B grants the same principal read behind a row
+ * filter, the filter APPLIES. A policy author who writes a filter for a
+ * principal means to constrain them; letting a broader statement elsewhere in
+ * the set silently strip it is exactly the failure this merge exists to
+ * prevent. A selector that ends up with masks but no grant resolves to zero
+ * privileges — no grant means no access, fail-closed.
+ *
+ * ## ORDERING IS THE SECURITY CONTROL
+ *
+ * Trino evaluates `tables` rules top-to-bottom, first match wins, and DENIES a
+ * table no rule matches:
  *
  *   1. explicit denies            (a `deny` statement beats every grant)
- *   2. row-filtered / masked grants (the narrower grant must win over a plain one)
+ *   2. row-filtered / masked rules (the narrower rule must win over a plain one
+ *      when a caller matches BOTH — e.g. a user rule and a group rule)
  *   3. plain grants
  *   4. per-governed-table catch-all deny — every table the policy set names is
  *      deny-by-default for principals it did not grant
  *   5. global allow tail — every table the policy set does NOT name keeps its
- *      pre-policy behaviour. Adding one statement must never silently lock the
- *      rest of the estate (that would be a self-inflicted outage, not security).
+ *      pre-policy behaviour. Trino's documented default is that "if no rules are
+ *      provided at all, then access is granted", so before this document existed
+ *      every table was allowed; without this tail, adding one governed table
+ *      would deny the entire rest of the estate. That is a self-inflicted
+ *      outage, not security.
  *
  * The catalog floor from the entrypoint is preserved in `catalogs`, so an
  * un-wired catalog stays unreachable no matter what the table tail says.
@@ -430,19 +495,67 @@ export function buildTrinoRulesDocument(
   const sessionUser = (opts.trinoSessionUser || TRINO_SESSION_USER_DEFAULT).trim() || TRINO_SESSION_USER_DEFAULT;
 
   const denies: TrinoTableRule[] = [];
-  const narrowed: TrinoTableRule[] = [];
-  const grants: TrinoTableRule[] = [];
   const governed = new Map<string, TrinoObjectRef>();
+  /** Merged grant contributions, keyed by the rule's principal+table selector. */
+  const merged = new Map<string, {
+    sel: Pick<TrinoTableRule, 'user' | 'group' | 'catalog' | 'schema' | 'table'>;
+    privileges: Set<TrinoPrivilege>;
+    filters: string[];
+    columns: Map<string, TrinoColumnConstraint>;
+    /** Insertion order, so the emitted document is deterministic. */
+    seq: number;
+  }>();
 
   for (const op of artifact.ops) {
     const rule = opRule(op);
     if (!rule) continue;
     const parts = op.target.split('.');
     if (parts.length === 3) governed.set(op.target, { catalog: parts[0], schema: parts[1], table: parts[2] });
-    if (op.kind === 'deny') denies.push(rule);
-    else if (op.kind === 'rls' || op.kind === 'mask') narrowed.push(rule);
-    else grants.push(rule);
+    if (op.kind === 'deny') {
+      denies.push(rule);
+      continue;
+    }
+    const sel = {
+      ...(rule.user ? { user: rule.user } : {}),
+      ...(rule.group ? { group: rule.group } : {}),
+      catalog: rule.catalog,
+      schema: rule.schema,
+      table: rule.table,
+    };
+    const key = `${rule.user || ''}|${rule.group || ''}|${rule.catalog || ''}|${rule.schema || ''}|${rule.table || ''}`;
+    let entry = merged.get(key);
+    if (!entry) {
+      entry = { sel, privileges: new Set(), filters: [], columns: new Map(), seq: merged.size };
+      merged.set(key, entry);
+    }
+    for (const p of rule.privileges) entry.privileges.add(p);
+    if (rule.filter && !entry.filters.includes(rule.filter)) entry.filters.push(rule.filter);
+    for (const c of rule.columns || []) entry.columns.set(c.name.toLowerCase(), c);
   }
+
+  const narrowed: Array<{ rule: TrinoTableRule; seq: number }> = [];
+  const plain: Array<{ rule: TrinoTableRule; seq: number }> = [];
+  for (const entry of merged.values()) {
+    const privileges = ADMIN_PRIVS.filter((p) => entry.privileges.has(p));
+    const columns = [...entry.columns.values()];
+    // Multiple filters AND together — every constraint that names this
+    // principal applies, never just the first one encountered.
+    const filter = entry.filters.length === 1
+      ? entry.filters[0]
+      : entry.filters.length > 1
+        ? entry.filters.map((f) => `(${f})`).join(' AND ')
+        : undefined;
+    const rule: TrinoTableRule = {
+      ...entry.sel,
+      privileges,
+      ...(columns.length ? { columns } : {}),
+      ...(filter ? { filter } : {}),
+    };
+    (filter || columns.length ? narrowed : plain).push({ rule, seq: entry.seq });
+  }
+  const bySeq = (a: { seq: number }, b: { seq: number }) => a.seq - b.seq;
+  narrowed.sort(bySeq);
+  plain.sort(bySeq);
 
   const governedCatchAll: TrinoTableRule[] = [...governed.values()].map((ref) => ({
     ...tableSelector(ref),
@@ -451,11 +564,10 @@ export function buildTrinoRulesDocument(
 
   const tables: TrinoTableRule[] = [
     ...denies,
-    ...narrowed,
-    ...grants,
+    ...narrowed.map((n) => n.rule),
+    ...plain.map((n) => n.rule),
     ...governedCatchAll,
-    // Global tail — ungoverned tables behave exactly as they did before any
-    // policy statement existed. The catalog rules remain the outer floor.
+    // Global tail — see the ordering note above.
     { privileges: ADMIN_PRIVS },
   ];
 
@@ -464,7 +576,7 @@ export function buildTrinoRulesDocument(
     allow: c.allow,
   }));
   // Anything the deployment did not wire stays denied (belt-and-suspenders —
-  // Trino already denies an unmatched catalog).
+  // Trino already denies an unmatched catalog once ANY catalog rule exists).
   catalogs.push({ catalog: '.*', allow: 'none' });
 
   return {
@@ -472,11 +584,68 @@ export function buildTrinoRulesDocument(
     // Ownership on every wired schema keeps CREATE TABLE AS / temp joins working
     // in the writable scratch catalog; the catalog floor still gates reachability.
     schemas: [{ owner: true }],
-    // The unlock: the mapped session user may become the signed-in Loom caller,
-    // so `user`-keyed table rules evaluate against the REAL principal.
-    impersonation: [{ original_user: regexLiteral(sessionUser), new_user: '.*', allow: true }],
+    // The unlock: the mapped session user may become a policy-named Loom
+    // principal, so `user`-keyed table rules evaluate against the REAL caller.
+    // Bounded to the principals the policy actually names — see
+    // {@link buildImpersonationRules} for the threat analysis.
+    impersonation: buildImpersonationRules(sessionUser, artifact, opts),
     tables,
   };
+}
+
+/**
+ * The `impersonation` section — and the reason it is bounded.
+ *
+ * Trino's default (and the pre-LU-7 posture) is that impersonation is DENIED:
+ * "If neither impersonation nor principal rules are defined, impersonation is
+ * not allowed." Granting it is what lets the BFF present the signed-in Loom
+ * principal so per-user table rules can match at all.
+ *
+ * THREAT: `X-Trino-User` is a caller-asserted header. Anything that can mint a
+ * bearer for the pinned Trino audience and reach the coordinator directly can
+ * therefore assert an identity. That is a real property and it is stated here
+ * rather than in a footnote.
+ *
+ * WHY IT IS NOT A WIDENING: before this document existed the engine shipped a
+ * rules file with NO `tables` section at all, and Trino's documented default is
+ * that "if no rules are provided at all, then access is granted". So that same
+ * credential already had unrestricted SELECT on every table in every wired
+ * catalog, with no impersonation needed. After this change the un-impersonated
+ * mapped user matches only the global allow tail and is DENIED every governed
+ * table. The credential's reach strictly SHRINKS.
+ *
+ * WHY IT IS STILL BOUNDED: `new_user` is restricted to the exact set of user
+ * principals the policy names, rather than `.*`. A direct caller cannot invent
+ * an identity that some other system's rules key on, and cannot enumerate its
+ * way into a principal Loom has no policy for. When the policy names no user
+ * principals, NO impersonation rule is emitted — the grant does not exist
+ * until something needs it.
+ *
+ * The deployment can also turn the BFF half off entirely
+ * (`LOOM_TRINO_IMPERSONATION=disabled`), which keeps the compiled document in
+ * force while the BFF continues to present the mapped session user.
+ */
+export function buildImpersonationRules(
+  sessionUser: string,
+  artifact: CompiledArtifact,
+  opts: TrinoDocumentOptions = {},
+): TrinoImpersonationRule[] {
+  const users = new Set<string>();
+  for (const op of artifact.ops) {
+    const rule = opRule(op);
+    if (rule?.user) users.add(rule.user);
+  }
+  for (const extra of opts.additionalImpersonatedUsers || []) {
+    const v = String(extra || '').trim();
+    if (v) users.add(regexLiteral(v));
+  }
+  if (!users.size) return [];
+  // One rule per named principal — an explicit, auditable list, never `.*`.
+  return [...users].sort().map((u) => ({
+    original_user: regexLiteral(sessionUser),
+    new_user: u,
+    allow: true,
+  }));
 }
 
 /**
@@ -537,7 +706,7 @@ function regoString(raw: string): string {
  * else — identical semantics to {@link buildTrinoRulesDocument}, so a deployment
  * can switch enforcement engines without a change in behaviour.
  */
-export function buildTrinoRego(set: PolicyCodeSet, opts: TrinoCompileOptions = {}): string {
+export function buildTrinoRego(set: PolicyCodeSet, opts: TrinoDocumentOptions = {}): string {
   const defaultCatalog = (opts.trinoDefaultCatalog || TRINO_DEFAULT_CATALOG).trim() || TRINO_DEFAULT_CATALOG;
 
   interface Grant { catalog: string; schema: string; table: string; users: string[]; groups: string[]; deny: boolean }
@@ -586,6 +755,62 @@ export function buildTrinoRego(set: PolicyCodeSet, opts: TrinoCompileOptions = {
   L.push('caller_user := input.context.identity.user');
   L.push('caller_groups := object.get(input.context.identity, "groups", [])');
   L.push('');
+
+  // ── The CATALOG FLOOR — the same outer gate the file-rules document carries.
+  // Omitting it made this module strictly MORE PERMISSIVE than the document it
+  // claims equivalence with: a caller naming an un-wired catalog would fall
+  // through to the table rules and be allowed. The list is engine-reported,
+  // exactly as in the file document; with none supplied NO catalog gate is
+  // emitted and the module SAYS SO rather than silently gating on an empty set.
+  const wiredCatalogs = (opts.catalogs || []).map((c) => c.name);
+  if (wiredCatalogs.length) {
+    L.push('# Catalog floor — only the catalogs this deployment WIRED are reachable.');
+    L.push('wired_catalogs := {');
+    L.push(wiredCatalogs.map((c) => `  ${regoString(c)},`).join('\n'));
+    L.push('}');
+    L.push('');
+    L.push('# The catalog this action names, whichever resource shape carries it.');
+    L.push('catalog_names contains input.action.resource.catalog.name');
+    L.push('catalog_names contains input.action.resource.table.catalogName');
+    L.push('catalog_names contains input.action.resource.schema.catalogName');
+    L.push('');
+    L.push('default catalog_ok := true');
+    L.push('catalog_ok := false if {');
+    L.push('  some c in catalog_names');
+    L.push('  not wired_catalogs[c]');
+    L.push('}');
+    L.push('');
+  } else {
+    L.push('# NOTE: no engine catalog list was supplied when this module was');
+    L.push('# generated, so it carries NO catalog floor while the file-based');
+    L.push('# document does. Regenerate with the catalog list for equivalence.');
+    L.push('default catalog_ok := true');
+    L.push('');
+  }
+
+  // ── IMPERSONATION — bounded to the policy-named users, matching the file
+  // document's `impersonation` section. Trino asks the OPA authorizer via the
+  // `ImpersonateUser` operation; with no rule it is denied, which is both the
+  // correct default and the pre-LU-7 posture.
+  const impersonatedUsers = [...new Set(
+    set.statements.flatMap((st) => (st.resources.some((r) => r.backend === 'trino')
+      ? st.principals.filter((p) => p.kind === 'user').map(trinoUserName).filter(Boolean)
+      : [])),
+  )].sort();
+  const regoSessionUser = (opts.trinoSessionUser || TRINO_SESSION_USER_DEFAULT).trim() || TRINO_SESSION_USER_DEFAULT;
+  L.push('# Impersonation — the mapped session user may become a POLICY-NAMED');
+  L.push('# principal, never an arbitrary identity. An empty set denies it.');
+  L.push(`session_user := ${regoString(regoSessionUser)}`);
+  L.push('impersonatable := {');
+  L.push(impersonatedUsers.map((u) => `  ${regoString(u)},`).join('\n'));
+  L.push('}');
+  L.push('');
+  L.push('allow if {');
+  L.push('  input.action.operation == "ImpersonateUser"');
+  L.push('  caller_user == session_user');
+  L.push('  impersonatable[input.action.resource.user.user]');
+  L.push('}');
+  L.push('');
   L.push('# The table this action touches (absent for non-table operations).');
   L.push('tbl := input.action.resource.table');
   L.push('');
@@ -598,18 +823,24 @@ export function buildTrinoRego(set: PolicyCodeSet, opts: TrinoCompileOptions = {
   L.push('table_fqn := sprintf("%s.%s.%s", [tbl.catalogName, tbl.schemaName, tbl.tableName])');
   L.push('');
   L.push('# 1. Operations with no table resource (SHOW CATALOGS, SELECT 1, …) are');
-  L.push('#    outside the table policy; the catalog floor still applies at the engine.');
-  L.push('allow if not input.action.resource.table');
+  L.push('#    outside the TABLE policy, but still pass the catalog floor.');
+  L.push('allow if {');
+  L.push('  not input.action.resource.table');
+  L.push('  input.action.operation != "ImpersonateUser"');
+  L.push('  catalog_ok');
+  L.push('}');
   L.push('');
   L.push('# 2. A table the policy set does not govern is unchanged.');
   L.push('allow if {');
   L.push('  input.action.resource.table');
+  L.push('  catalog_ok');
   L.push('  not governed[table_fqn]');
   L.push('}');
   L.push('');
   L.push('# 3. A governed table is allowed only by an explicit, non-denied grant.');
   L.push('allow if {');
   L.push('  input.action.resource.table');
+  L.push('  catalog_ok');
   L.push('  governed[table_fqn]');
   L.push('  some g in grants');
   L.push('  g.table_fqn == table_fqn');
@@ -686,9 +917,30 @@ export function buildTrinoRego(set: PolicyCodeSet, opts: TrinoCompileOptions = {
  * Published with the document so `/admin/policy-code` can prove the ENGINE
  * fetched the version currently stored — a real receipt, not an assumption
  * that a write reached the engine.
+ *
+ * ## The hash covers the POLICY, never the engine's catalog list
+ *
+ * `catalogs` is ENGINE STATE, not policy: the coordinator reports its own
+ * mounted catalogs with each fetch and the document is rendered around them.
+ * The publisher (reconcile) has no catalog list; the fetch path always has one.
+ * Hashing the whole document therefore made the two sides deterministically
+ * unequal FOREVER — `lastFetch.version` could never equal `doc.version`, so the
+ * enforcement status was permanently `stale`, reconcile could never report
+ * `applied`, and the detail string blamed an unreachable Console while the
+ * engine was in fact fetching successfully every refresh interval. A status
+ * surface that cannot report success is worse than none, and an error message
+ * asserting a cause it did not establish is the `deploy-integrity.md` R7 class.
+ *
+ * Hashing the policy-derived sections only makes the version mean what it
+ * claims: "this is the policy the engine is enforcing". A catalog appearing or
+ * disappearing is not a policy change and must not read as drift.
  */
 export function rulesVersion(doc: TrinoRulesDocument): string {
-  const text = JSON.stringify(doc);
+  const text = JSON.stringify({
+    schemas: doc.schemas,
+    tables: doc.tables,
+    impersonation: doc.impersonation,
+  });
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
