@@ -167,6 +167,49 @@ export function classify(text, tax = TAXONOMY) {
 }
 
 /**
+ * Classify EACH ARM leaf error separately (D6, run 31100384405).
+ *
+ * classify() over a concatenated multi-leaf input returns ONE winner by class
+ * precedence — correct for a single stderr, wrong for a deployment that failed
+ * for several INDEPENDENT reasons at once. On run 31100384405 a retryable
+ * CapacityNotAvailable leaf (DuckLake Postgres, centralus zone) was never
+ * retried because an unrelated InvalidTemplate leaf classed the whole run
+ * `defect`. Per-leaf classification keeps each cause's own class, retryability
+ * and remediation; deploy-retry.mjs decides from the SET.
+ *
+ * @param {Array<{code?:string|null, message?:string, resourceType?:string|null, resourceName?:string|null}>} leaves
+ *        The `leaves` array from deploy-arm-errors.mjs collectArmLeafErrors().
+ * @returns {Array<{leaf:object, diagnosis:object}>}
+ */
+export function classifyLeaves(leaves, tax = TAXONOMY) {
+  return (Array.isArray(leaves) ? leaves : []).map((leaf) => {
+    const where = leaf?.resourceType
+      ? ` [${leaf.resourceType}${leaf.resourceName ? ` '${leaf.resourceName}'` : ''}]`
+      : '';
+    const text = `${leaf?.code ?? 'NoCode'}: ${leaf?.message ?? ''}${where}`;
+    return { leaf: leaf ?? {}, diagnosis: classify(text, tax) };
+  });
+}
+
+/**
+ * The single WORST diagnosis of a leaf set, by the same classPrecedence rule a
+ * concatenated classify() would use — so the headline the operator sees stays
+ * the fail-fast one even when the retry decision is made per leaf. `unknown`
+ * (absent from classPrecedence) deliberately sorts LAST here and wins only
+ * when every leaf is unknown — an unknown among knowns must not bury a named
+ * cause, while an all-unknown set must still fail closed as unknown.
+ */
+export function worstLeafDiagnosis(leafDiagnoses, tax = TAXONOMY) {
+  const list = Array.isArray(leafDiagnoses) ? leafDiagnoses.filter((l) => l?.diagnosis) : [];
+  if (list.length === 0) return null;
+  const rank = (cls) => {
+    const i = tax.classPrecedence.indexOf(cls);
+    return i === -1 ? tax.classPrecedence.length : i;
+  };
+  return [...list].sort((a, b) => rank(a.diagnosis.class) - rank(b.diagnosis.class))[0].diagnosis;
+}
+
+/**
  * The operator-facing message. It may state as fact ONLY what is in
  * `evidence[]`. `unknown` says it does not know and names no cause (R7).
  */

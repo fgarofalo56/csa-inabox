@@ -174,6 +174,24 @@
       "source": "deploy-fiab-commercial run 31069329802, 2026-08-06; the bicep linter warnings plus the content-free ARM summary az wrote to stderr. This case is the REASON the drill-down exists: no signal can match a cause that is not in the input.",
       "input": "WARNING: platform/fiab/bicep/main.bicep(14,7) : Warning no-unused-params: Parameter \"environment\" is declared but never used.\nERROR: At least one resource deployment operation failed. Please list deployment operations for details.",
       "expect": { "class": "unknown", "signalId": null, "retryable": false }
+    },
+    {
+      "name": "config — Azure Policy denial on the Purview RP's managed storage (D5); must NOT misclassify as acr-unreachable despite the literal 'publicNetworkAccess'",
+      "source": "deploy-fiab-commercial run 31100384405, 2026-08-06; drilled from the failed 'catalog' nested deployment (Purview RP preflight error 21010). Management-group ids redacted.",
+      "input": "RequestDisallowedByPolicy: {\"field\":\"Microsoft.Storage/storageAccounts/publicNetworkAccess\",\"restrictions\":[{\"result\":\"Required\",\"values\":[\"Disabled\"],\"defaultValue\":\"Disabled\",\"policy\":{\"policyDefinitionId\":\"/providers/Microsoft.Management/managementGroups/<mg>/providers/Microsoft.Authorization/policyDefinitions/StorageAccount_PublicNetwork_Modify\",\"policyAssignmentId\":\"/providers/Microsoft.Management/managementGroups/<mg>/providers/Microsoft.Authorization/policyAssignments/MCAPSGovDeployPolicies\"}}]} [Microsoft.Resources/deployments 'admin-plane']",
+      "expect": { "class": "config", "signalId": "config.disallowed-by-policy", "retryable": false }
+    },
+    {
+      "name": "capacity — PostgreSQL Flexible Server zone capacity, verbatim (D6); Azure itself says retry",
+      "source": "deploy-fiab-commercial run 31100384405, 2026-08-06; ARM leaf on Microsoft.DBforPostgreSQL/flexibleServers 'psql-loom-ducklake-…' (Standard_B1ms, centralus)",
+      "input": "CapacityNotAvailable: Capacity is not available in this region/zone. Please retry after some time. [Microsoft.DBforPostgreSQL/flexibleServers 'psql-loom-ducklake-k6mvh5sm6z7do']",
+      "expect": { "class": "capacity", "signalId": "capacity.not-available", "retryable": true }
+    },
+    {
+      "name": "capacity precedence — one INPUT carrying a defect and a capacity signal stays defect (fail-fast ties; per-LEAF classification is what separates them)",
+      "source": "synthesised from the two run-31100384405 leaves; guards the precedence rule for the new class",
+      "input": "InvalidTemplate: Unable to process template language expressions.\nCapacityNotAvailable: Capacity is not available in this region/zone. Please retry after some time.",
+      "expect": { "class": "defect", "signalId": "defect.invalid-template", "retryable": false }
     }
   ]
 }

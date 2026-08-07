@@ -19,6 +19,8 @@ import { spawnSync } from 'node:child_process';
 
 import {
   classify,
+  classifyLeaves,
+  worstLeafDiagnosis,
   render,
   classExitCode,
   isRetryableClass,
@@ -213,4 +215,64 @@ test('CLI on a MISSING file says the file is missing — it does not classify ""
   assert.equal(r.status, 2, 'a missing input is a usage error, not an "unknown" classification');
   assert.match(r.stderr, /does not exist/);
   assert.match(r.stderr, /no cause asserted/i);
+});
+
+// ── D6: per-ARM-leaf classification (run 31100384405) ───────────────────────
+// The defect this closes: classify() over the CONCATENATED nine leaves of that
+// run returned `defect` (the InvalidTemplate leaf wins precedence), so the
+// retryable CapacityNotAvailable leaf was never retried and never even
+// reported as retryable. The leaf shapes below are the REAL drilled leaves of
+// that run, trimmed to the read fields.
+
+const LEAF_CAPACITY = {
+  code: 'CapacityNotAvailable',
+  message: 'Capacity is not available in this region/zone. Please retry after some time.',
+  resourceType: 'Microsoft.DBforPostgreSQL/flexibleServers',
+  resourceName: 'psql-loom-ducklake-k6mvh5sm6z7do',
+};
+const LEAF_DEFECT = {
+  code: 'InvalidTemplate',
+  message:
+    "Unable to process template language expressions for resource '…/privateDnsZones/azure-api.net/A/apim-csa-loom-centralus'. 'The language expression property '0' can't be evaluated.'",
+  resourceType: 'Microsoft.Network/privateDnsZones/A',
+  resourceName: 'azure-api.net/apim-csa-loom-centralus',
+};
+
+test('D6: each leaf keeps ITS OWN class — capacity stays retryable, defect stays defect', () => {
+  const dx = classifyLeaves([LEAF_CAPACITY, LEAF_DEFECT]);
+  assert.equal(dx.length, 2);
+  assert.equal(dx[0].diagnosis.class, 'capacity');
+  assert.equal(dx[0].diagnosis.signalId, 'capacity.not-available');
+  assert.equal(dx[0].diagnosis.retryable, true, 'the capacity leaf must be flagged retryable');
+  assert.equal(dx[1].diagnosis.class, 'defect');
+  assert.equal(dx[1].diagnosis.signalId, 'defect.invalid-template');
+  assert.equal(dx[1].diagnosis.retryable, false);
+});
+
+test('D6: the CONCATENATED classify of the same two leaves is defect — the exact collapse per-leaf exists to avoid', () => {
+  const concatenated = classify(
+    `${LEAF_CAPACITY.code}: ${LEAF_CAPACITY.message}\n${LEAF_DEFECT.code}: ${LEAF_DEFECT.message}`,
+  );
+  assert.equal(concatenated.class, 'defect');
+});
+
+test('D6: worstLeafDiagnosis is the fail-fast headline (defect over capacity)', () => {
+  const dx = classifyLeaves([LEAF_CAPACITY, LEAF_DEFECT]);
+  assert.equal(worstLeafDiagnosis(dx).class, 'defect');
+  assert.equal(worstLeafDiagnosis(classifyLeaves([LEAF_CAPACITY])).class, 'capacity');
+});
+
+test('D6: an unknown leaf among known ones does not bury the named cause; all-unknown stays unknown', () => {
+  const junk = { code: 'Gibberish', message: 'no signal matches this', resourceType: null, resourceName: null };
+  const mixed = classifyLeaves([junk, LEAF_CAPACITY]);
+  assert.equal(worstLeafDiagnosis(mixed).class, 'capacity');
+  const alone = classifyLeaves([junk]);
+  assert.equal(worstLeafDiagnosis(alone).class, 'unknown');
+  assert.equal(worstLeafDiagnosis([]), null);
+});
+
+test('D6: the capacity class is retryable in the taxonomy and quota is NOT — the split the class exists for', () => {
+  assert.equal(isRetryableClass('capacity'), true);
+  assert.equal(isRetryableClass('quota'), false);
+  assert.equal(TAXONOMY.classPrecedence.includes('capacity'), true);
 });

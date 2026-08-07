@@ -17,12 +17,13 @@ reading a log.
 
 ---
 
-## The eight classes
+## The nine classes
 
 | Class | Meaning | Retry helps? | Platform can fix it? |
 |---|---|---|---|
 | **transient** | Azure was momentarily unable to serve the request | **Yes** — bounded, with backoff | n/a |
 | **eventual-consistency** | The request was correct but a principal or resource has not replicated yet | **Yes** — longer backoff | n/a |
+| **capacity** | Azure is temporarily out of capacity for the SKU in this region/zone (`CapacityNotAvailable`) — the subscription's limits are fine | **Yes** — bounded, LONG backoff (300 s) | **Yes** — retried; on exhaustion the SKU/zone/region must change |
 | **registration** | A resource provider is not registered in the subscription | After remediation | **Yes** — register, then retry once |
 | **permission** | The deploy identity lacks a role | **No** | **Partly** — see below |
 | **quota** | A limit was hit: cores, SKU availability, streaming units, index count | **No** — deterministic | **Partly** — SKU fallback |
@@ -145,6 +146,36 @@ az vm list-usage -l <region> -o table | grep -iE "DDSv5|Dv5|Standard"
 
 ---
 
+## capacity
+
+**Signals:** `CapacityNotAvailable` — observed verbatim on run 31100384405
+(PostgreSQL Flexible Server `Standard_B1ms`, centralus): *"Capacity is not
+available in this region/zone. Please retry after some time."*
+
+**Distinct from quota, deliberately.** Nothing about the subscription's limits
+is wrong and the SKU **is** offered in the region — a zone was momentarily
+full, and ARM itself says to retry. The retry harness retries this class with
+the taxonomy's **300-second** backoff (a capacity shortage does not clear on a
+throttle-sized 45 s cadence), bounded, and **fails closed** on exhaustion.
+
+**On exhaustion** the ask has to change: a different SKU
+(`data-plane/ducklake-catalog-postgres.bicep` `skuName` for the DuckLake
+catalog server — `Standard_B1ms` is the smallest sold, so the fallback
+direction is up), or a different region for that server. The DuckLake server
+pins **no availability zone**, so a retry may land in any zone with capacity.
+
+> **Per-leaf classification (D6).** A deployment can fail for several
+> independent reasons at once — run 31100384405 failed for nine. The classifier
+> now classes **each ARM leaf separately**: a deterministic leaf (defect /
+> config / quota) still fails the run fast, but its refusal names every
+> retryable leaf it is blocking ("fix the defect; the capacity leaf retries on
+> the next run") instead of silently classing the whole run by the worst leaf —
+> which is exactly how this run's capacity leaf went un-retried and unreported.
+> The `deploy-failure.json` artifact carries `leafClasses[]`, one class per
+> leaf.
+
+---
+
 ## config
 
 **Signals:** `VnetAddressRangeInUse`, `PrivateDnsZoneAlreadyExists`,
@@ -166,6 +197,7 @@ This is the **brownfield class**. Most of these mean *something already exists*
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | Phase 1 ran with `deployAppsEnabled=true` against an **empty** ACR | Re-run phase 1 with `deployAppsEnabled=false`, then run the image phase. See [Greenfield](greenfield.md#the-shape-of-a-greenfield-deploy) |
 | `ResourceGroupNotFound` early in the app-deploy workflow | The workflow's `region` input does not match the region the estate is in, so it resolved `rg-csa-loom-admin-<wrong-region>` | Pass `-f region=<your-region>` explicitly |
 | `ResourceGroupNotFound` on a multi-subscription DLZ | A sub-scoped deployment cannot create a resource group in a **remote** subscription | Pre-create the spoke resource groups: `bash scripts/csa-loom/bootstrap-dlz-rgs.sh` |
+| `RequestDisallowedByPolicy` (often wrapped in Purview RP error `21010`) | A tenant/MG Azure Policy denies a field value the deployment (or an RP's **managed** resource) would carry. The message JSON names the restricted field, the required values, and the exact `policyAssignmentId` | Deterministic — never retry. For the Purview managed-storage case specifically, the template complies by default (`catalog.bicep` `purviewManagedResourcesPublicNetworkAccess=Disabled`) — verify the run used a current template. Anything else: quote the assignment named in the message to whoever owns that policy, or supply a compliant value. `scripts/csa-loom/preflight-policy-restrictions.mjs` names visible restrictions before the deploy; the authoritative check is the what-if/validate RP preflight |
 
 ---
 
@@ -272,7 +304,7 @@ Two exceptions:
 
 ```bash
 node scripts/ci/deploy-retry.mjs \
-  --class-allow transient,eventual-consistency \
+  --class-allow transient,eventual-consistency,capacity \
   --max-attempts 6 --backoff 30 --jitter 0.3 --wall-clock 20m \
   --step "provision" --artifact deploy-failure.json --remediate \
   -- az deployment sub create -f main.bicep …
@@ -282,6 +314,12 @@ node scripts/ci/deploy-retry.mjs \
   taxonomy marks that class retryable. A quota denial is attempted once.
 - **Fails closed** on budget exhaustion, wall-clock expiry, and `unknown`. The
   exit code carries the class.
+- With `--arm-deployment`, ARM leaves are classified **per leaf**: the run is
+  retried only when *every* leaf is retryable and allowed (an ARM re-deploy
+  re-runs every failed leaf, so retrying around a deterministic leaf cannot go
+  green), the refusal names each blocking leaf **and** each retryable leaf it
+  blocks, and a retried set waits the *longest* taxonomy backoff among its leaf
+  classes (capacity: 300 s).
 - The **happy path costs nothing**: one invocation, no sleeps, immediate exit 0,
   and no failure artifact written.
 - Nothing is discarded. There is no `2>/dev/null`, no `|| true`, no
@@ -364,17 +402,20 @@ turns its own suite red.
 
 ## Preflight — check before you spend
 
-Two preflights exist and produce concrete remediations:
+These preflights exist and produce concrete remediations:
 
-| Preflight | Checks | Emits |
-|---|---|---|
-| Deploy preflight | `Microsoft.Resources/deployments/write` on the target subscription; registration of the six resource providers | The exact `az role assignment create` and `az provider register` commands |
-| Quota preflight | Regional vCPU by VM family against what the deploy needs | The quota-increase portal link with family + region prefilled |
+| Preflight | Where it runs | Checks | Emits |
+|---|---|---|---|
+| Deploy preflight | Console wizard | `Microsoft.Resources/deployments/write` on the target subscription; registration of the six resource providers | The exact `az role assignment create` and `az provider register` commands |
+| Quota preflight | Console wizard | Regional vCPU by VM family against what the deploy needs | The quota-increase portal link with family + region prefilled |
+| Private-DNS link preflight | `deploy-fiab-commercial.yml` (full mode) | Whether the hub VNet is already linked to a **different** zone of a namespace the deploy will link (`scripts/csa-loom/preflight-private-dns-links.mjs`) | The owning zone's coordinates + the ordered migration command; fails the run before the deploy would die 20 minutes in |
+| Brownfield reconcile discovery | `deploy-fiab-commercial.yml` (both modes, before what-if) | Whether the hub VNet already has a Vpn-type gateway and/or an `azure-api.net` zone link — Azure singletons a create-new PUT can never beat (`scripts/csa-loom/preflight-brownfield-adopt.mjs`) | `existingVpnGatewayName` / `apimGatewayDnsLinkName` template parameters so the deploy ADOPTS the existing names; **fails** the step when the estate cannot be read (a failed read is not an absence) |
+| Policy-restriction discovery | `deploy-fiab-commercial.yml` (both modes, advisory) | Which Azure Policy restrictions apply to fields the deploy is known to be policy-sensitive on (`scripts/csa-loom/preflight-policy-restrictions.mjs`, `checkPolicyRestrictions` API) | The restricted field, required values, and the exact policy assignment name — plus whether the template already complies by default. Advisory: the enforcing control is the RP preflight in what-if/validate; an unreadable engine is reported as UNKNOWN, never as "no restrictions" |
 
-They run inside the Console wizard. **They are not currently invoked from the
-CI/workflow deploy paths** — so a workflow-driven deploy can still hit a quota
-failure that a preflight would have caught in seconds. Wiring the shared
-preflight into every tier is in flight.
+The wizard preflights are **not currently invoked from the CI/workflow deploy
+paths** — so a workflow-driven deploy can still hit a quota failure that a
+preflight would have caught in seconds. Wiring the shared preflight into every
+tier is in flight.
 
 To run the equivalent checks by hand before a deploy:
 

@@ -106,8 +106,50 @@ describe('R6 — retryability is a property of the CLASS, never of the call site
   });
 
   it('only genuinely transient classes are retryable', () => {
+    // THE ADMISSION CRITERION, and why exactly these three meet it.
+    //
+    // A class may be retryable ONLY when the IDENTICAL request, unchanged, can
+    // succeed later without any operator action and without any edit to the
+    // template. That is the whole test: not "might eventually work if someone
+    // fixes something", but "re-send the same bytes and Azure may say yes".
+    //
+    //   transient             — Azure was momentarily unable to serve the
+    //                           request (429 / 5xx / an in-flight operation on
+    //                           the same resource). Nothing is wrong with the
+    //                           request at all.
+    //   eventual-consistency  — the request was already correct; a principal or
+    //                           resource created moments earlier has not
+    //                           replicated to the service being called yet.
+    //   capacity              — ADDED 2026-08-06 for `CapacityNotAvailable`,
+    //                           drilled from deploy run 31100384405 (DuckLake
+    //                           Postgres, Standard_B1ms, centralus). ARM's own
+    //                           remediation text IS "Please retry after some
+    //                           time": the SKU is offered in the region, the
+    //                           subscription is under its limits, and a zone
+    //                           was momentarily full. Re-sending the same
+    //                           deployment can succeed with no change to
+    //                           anything — which is precisely the criterion
+    //                           above. Contrast the two neighbours it must not
+    //                           be confused with: `quota` is a subscription
+    //                           LIMIT (retrying is deterministic waste — the
+    //                           2026-08-05 incident this file exists for), and
+    //                           `defect` is retryable NEVER because the fault
+    //                           is in Loom's own template. capacity is
+    //                           retryable WITHOUT operator intervention, which
+    //                           neither of those is.
+    //
+    // Retryable does not mean unbounded: the capacity class carries
+    // defaultMaxAttempts 4 / defaultBackoffSeconds 300 / exitCode 18, and
+    // deploy-retry.mjs FAILS CLOSED on budget or wall-clock exhaustion, so an
+    // exhausted capacity retry still goes red (R6: "a retry that cannot fail is
+    // forbidden").
+    //
+    // This assertion stays EXHAUSTIVE on purpose. Extending it is a deliberate
+    // act that must be argued for here — the same argument the reviewer of the
+    // next new class will be held to. Loosening it to `.includes()` would let a
+    // class be marked retryable by accident and this file would never notice.
     const retryable = allFailureClasses().filter((c) => isRetryableClass(c));
-    expect(retryable.sort()).toEqual(['eventual-consistency', 'transient']);
+    expect(retryable.sort()).toEqual(['capacity', 'eventual-consistency', 'transient']);
   });
 
   it('the rendered message names the cause the operator has to act on', () => {

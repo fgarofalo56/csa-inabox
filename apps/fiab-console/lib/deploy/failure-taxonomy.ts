@@ -61,6 +61,7 @@ export type FailureClass =
   | 'registration'
   | 'permission'
   | 'quota'
+  | 'capacity'
   | 'config'
   | 'defect'
   | 'unknown';

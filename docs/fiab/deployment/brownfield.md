@@ -176,7 +176,7 @@ adopt your resource and then un-wire Loom from it.
 | Event Hubs | `EXISTING_EVENTHUB_NAMESPACE` (+ `_RG`, `_SUB`) | `provisionEventHubs` | |
 | Stream Analytics | `EXISTING_ASA_JOB` (+ `_RG`, `_SUB`) | `provisionStreamAnalytics` | |
 | Cosmos (Console metadata) | `EXISTING_COSMOS_ACCOUNT` (+ `_RG`, `_SUB`) | `provisionConsoleCosmos` | |
-| Purview | `EXISTING_PURVIEW` (+ `_RG`, `_SUB`) | `provisionPurview` | Tenant singleton — the wizard DISABLES "create new" when one exists rather than offering it and failing `EnterpriseTenantAlreadyExists` |
+| Purview | `EXISTING_PURVIEW` (+ `_RG`, `_SUB`) | `provisionPurview` | Tenant singleton — the wizard DISABLES "create new" when one exists rather than offering it and failing `EnterpriseTenantAlreadyExists`. A Loom-provisioned (or re-reconciled) account creates its **managed storage sealed** (`purviewManagedResourcesPublicNetworkAccess=Disabled`) so tenant policies requiring storage `publicNetworkAccess=Disabled` pass RP preflight — see [Failure recovery](failure-recovery.md#config) |
 | Azure Maps | `EXISTING_AZURE_MAPS_ACCOUNT` (+ `_RG`, `_SUB`) | `provisionMaps` | |
 | Synapse | `EXISTING_SYNAPSE` (+ `_RG`, `_SUB`) | `provisionSynapse` | |
 | Databricks | `EXISTING_DATABRICKS` (+ `_RG`, `_SUB`, `_HOSTNAME`) | `provisionDatabricks` | |
@@ -215,6 +215,38 @@ always created new by the deploy.
 > effect through their alternate names (`existingAdfFactory` /
 > `loomAzureMapsAccount`); the others do not. This is documented here rather
 > than left for you to discover.
+
+### Estate-owned singletons — auto-adopted by the deploy, no input needed
+
+Two resources are **singletons by Azure rule**, not by Loom design: a VNet can
+hold exactly **one Vpn-type virtual network gateway**, and a private-DNS zone
+can hold exactly **one virtual-network link per VNet**. When the estate already
+has one — under *any* name — a create-new PUT can never succeed, and the "adopt
+or create?" question has only one honest answer. So the deploy answers it
+itself:
+
+| Singleton | Failure it prevents | How it is adopted |
+|---|---|---|
+| VPN gateway on the hub VNet | `MultipleGatewaysOfTypeVpnUseSameVnet` (observed live: the estate's `vpngw-loom-centralus`, created under an earlier naming scheme, blocked the template's `vgw-loom-<region>`) | The workflow preflight `scripts/csa-loom/preflight-brownfield-adopt.mjs` discovers the existing gateway **on that VNet** (type-filtered — an ExpressRoute gateway is never matched) and passes `existingVpnGatewayName`. `vpn-gateway.bicep` then references it as-is and creates nothing. **Adoption is reuse, not reconfiguration** — the gateway's P2S/SKU config is left exactly as found |
+| `azure-api.net` zone link for the hub VNet | `Conflict: Private zone 'azure-api.net' is already linked to the virtual network …` (observed live: the hand-created `link-apim-console` blocked the template's `link-<vnetName>`) | The same preflight discovers the existing link name and passes `apimGatewayDnsLinkName`; `apim.bicep` PUTs the **same** link, which is a no-op update |
+
+Both parameters are also first-class inputs (`deploy-integrity.md` R5.5): a
+hand-run `az deployment sub create` can pass
+`-p existingVpnGatewayName=<name> apimGatewayDnsLinkName=<name>` directly. Empty
+values keep the create-new defaults, so greenfield behaviour is byte-identical.
+
+The discovery is **three-state**: an existing resource is adopted, an
+ARM-answered absence falls through to create-new, and a **failed read fails the
+step** — a denied `az network vnet-gateway list` is not evidence that no gateway
+exists, and deploying on that assumption is exactly how the estate got a
+second-gateway PUT in the first place.
+
+Related, same pass: the APIM gateway A record (`<apim>.azure-api.net`) is now
+authored **only when the service reports a private IP**. A v2-tier (PremiumV2)
+Internal-VNet APIM can report none even in steady state; the record is then left
+untouched for that pass rather than failing the deploy with an
+`InvalidTemplate` index error — or worse, wiping a live record with an empty
+PUT.
 
 ### The ADX grant caveat
 
