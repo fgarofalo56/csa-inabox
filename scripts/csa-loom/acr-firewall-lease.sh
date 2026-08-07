@@ -95,6 +95,15 @@
 #   scripts/csa-loom/acr-firewall-lease.sh release --acr <name> [--subscription <sub>]
 #   scripts/csa-loom/acr-firewall-lease.sh status  --acr <name> [--subscription <sub>]
 #   scripts/csa-loom/acr-firewall-lease.sh sweep   --acr <name> [--subscription <sub>] [--force]
+#   scripts/csa-loom/acr-firewall-lease.sh verify  --acr <name> [--subscription <sub>]
+#
+# `release` and `sweep` EXIT NON-ZERO when the registry could not be VERIFIED
+# locked (C24 / #3088). Do not append `|| true` to them: that restores exactly
+# the defect — a green step over a publicly reachable registry.
+#
+# `verify` is read-only: exit 0 = locked, 1 = state unreadable, 2 = OPEN. The
+# three are distinct on purpose; "I could not check" must never be reported as
+# "it is fine" (deploy-integrity R7).
 #
 # Or source it and call acr_lease_acquire / acr_lease_release directly:
 #
@@ -107,6 +116,9 @@
 #   LOOM_ACR_LEASE_WAIT_MINUTES    25   bounded acquire wait before failing
 #   LOOM_ACR_LEASE_SETTLE_SECONDS   6   tag read-back settle between confirmations
 #   LOOM_ACR_LEASE_OPEN_SECONDS    35   firewall-rule propagation wait after open
+#   LOOM_ACR_CLOSE_ATTEMPTS         6   verified-close attempts before failing
+#   LOOM_ACR_CLOSE_RETRY_SECONDS   20   wait between close attempts (6x20 = 120s,
+#                                       past the documented 30-90s propagation)
 #   LOOM_ACR_LEASE_FALLBACK    legacy   legacy | fail — behavior when tags are unwritable
 #   LOOM_ACR_LEASE_OWNER            -   override the auto-derived holder id
 #
@@ -212,13 +224,116 @@ _lease_open_firewall() {
   sleep "${LOOM_ACR_LEASE_OPEN_SECONDS:-35}"
 }
 
+# Read the firewall state. Prints "<pna>\t<da>" on success; returns 1 when the
+# registry could not be READ, with the az error on stderr.
+#
+# Deliberately NOT `2>/dev/null` (deploy-integrity R7): swallowing stderr turns
+# an RBAC denial, a throttle and a genuine answer into the same empty string,
+# and the caller then states one of them as fact. That is the "the tag does not
+# exist" incident verbatim. Here, unreadable is its own outcome and it is never
+# reported as "locked".
+_lease_read_firewall() {
+  local out rc pna da
+  # shellcheck disable=SC2086
+  out="$(az acr show --name "$_LEASE_ACR" $_LEASE_SUB_ARG \
+    --query "[publicNetworkAccess, networkRuleSet.defaultAction]" -o tsv 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _LEASE_READ_ERROR="$(printf '%s' "$out" | tr -d '\r' | tr '\n' ' ' | cut -c1-300)"
+    return 1
+  fi
+  out="$(printf '%s' "$out" | tr -d '\r' | head -1)"
+  pna="$(printf '%s' "$out" | cut -f1)"
+  da="$(printf '%s' "$out" | cut -f2)"
+  if [ -z "$pna" ] && [ -z "$da" ]; then
+    _LEASE_READ_ERROR="az acr show returned no publicNetworkAccess / defaultAction for '$_LEASE_ACR'"
+    return 1
+  fi
+  printf '%s\t%s\n' "$pna" "$da"
+}
+
+# 0 = VERIFIED locked (Disabled + Deny); 1 = state UNREADABLE; 2 = still OPEN.
+# Never conflates 1 and 2: "I could not check" is not "it is fine", and it is
+# not "it is open" either.
+acr_lease_verify_locked() {
+  local state pna da
+  if ! state="$(_lease_read_firewall)"; then
+    _LEASE_LAST_STATE="unreadable: ${_LEASE_READ_ERROR:-unknown error}"
+    return 1
+  fi
+  pna="$(printf '%s' "$state" | cut -f1)"
+  da="$(printf '%s' "$state" | cut -f2)"
+  _LEASE_LAST_STATE="publicNetworkAccess=${pna:-<empty>}, defaultAction=${da:-<empty>}"
+  [ "$pna" = "Disabled" ] && [ "$da" = "Deny" ] && return 0
+  return 2
+}
+
+# Re-lock and PROVE it (issue #3088 / FINISHLINE C24).
+#
+# WHAT THIS FIXES. Both writes used to end in `|| true` and nothing ever read
+# the registry back, so this function returned 0 unconditionally — including
+# when neither write landed. MEASURED 2026-08-07 after run 31143181962: the
+# "Re-lock ACR (private endpoint only)" job concluded SUCCESS while
+# `az acr show` read publicNetworkAccess=Enabled / defaultAction=Allow on three
+# probes across a minute (so not the documented 30-90s propagation lag). The
+# Commercial ACR was publicly reachable for an unknown window with CI green,
+# and a human re-locked it by hand.
+#
+# The likely cause of that particular divergence — `full-app-deploy`'s
+# concurrency group keyed on `inputs.region || 'auto'`, so two runs landed in
+# different groups and raced for the same firewall lease — is fixed separately
+# (D7 made the group a constant). It is NOT what made the incident invisible.
+# A step that writes and never reads back reports success on a no-op forever,
+# whatever the cause. This is the read-back.
+#
+# Shape follows the Key Vault sibling `kv-firewall-window.sh kvw_close`, which
+# has had verified-close since #2855: write, verify, retry the retryable within
+# a bounded budget, and FAIL CLOSED with a concrete hand-remediation on
+# exhaustion (deploy-integrity R6). Returns 0 only when the locked state was
+# actually observed.
 _lease_close_firewall() {
-  _lease_note "re-locking ACR '$_LEASE_ACR' (defaultAction=Deny, publicNetworkAccess=Disabled) ..."
-  # Deny first, then disable the endpoint — same order as the pre-#2603 code.
-  # shellcheck disable=SC2086
-  az acr update --name "$_LEASE_ACR" $_LEASE_SUB_ARG --default-action Deny -o none || true
-  # shellcheck disable=SC2086
-  az acr update --name "$_LEASE_ACR" $_LEASE_SUB_ARG --public-network-enabled false -o none || true
+  local attempts retry n rc deny_out pna_out
+  attempts="${LOOM_ACR_CLOSE_ATTEMPTS:-6}"
+  retry="${LOOM_ACR_CLOSE_RETRY_SECONDS:-20}"
+  _LEASE_LAST_STATE=""
+
+  n=1
+  while [ "$n" -le "$attempts" ]; do
+    _lease_note "re-locking ACR '$_LEASE_ACR' (defaultAction=Deny, publicNetworkAccess=Disabled) — attempt ${n}/${attempts} ..."
+    # Deny first, then disable the endpoint — same order as the pre-#2603 code.
+    # A write error is CAPTURED, not discarded: it is the remediation hint when
+    # the verify below also fails. It is not itself the verdict — another
+    # process may have locked the registry already, in which case a failed
+    # write followed by a clean read is a PASS.
+    # shellcheck disable=SC2086
+    deny_out="$(az acr update --name "$_LEASE_ACR" $_LEASE_SUB_ARG --default-action Deny -o none 2>&1)" || true
+    # shellcheck disable=SC2086
+    pna_out="$(az acr update --name "$_LEASE_ACR" $_LEASE_SUB_ARG --public-network-enabled false -o none 2>&1)" || true
+
+    acr_lease_verify_locked
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      _lease_note "ACR '$_LEASE_ACR' VERIFIED locked (publicNetworkAccess=Disabled, defaultAction=Deny) after attempt ${n}."
+      return 0
+    fi
+
+    if [ "$n" -lt "$attempts" ]; then
+      if [ "$rc" -eq 1 ]; then
+        _lease_warn "attempt ${n}/${attempts}: could not READ BACK the firewall state of ACR '$_LEASE_ACR' (${_LEASE_LAST_STATE}). This is not evidence that it locked — retrying in ${retry}s."
+      else
+        _lease_warn "attempt ${n}/${attempts}: ACR '$_LEASE_ACR' is still OPEN after the write (${_LEASE_LAST_STATE}) — retrying in ${retry}s (ACR network changes propagate for ~30-90s)."
+      fi
+      sleep "$retry"
+    fi
+    n=$(( n + 1 ))
+  done
+
+  # Exhausted. Say exactly what was observed and what to run — never a bare
+  # exit code, and never a cause that was not established.
+  _lease_err "FAILED to re-lock ACR '$_LEASE_ACR' after ${attempts} attempts (last observed: ${_LEASE_LAST_STATE:-state unreadable}). The registry may be PUBLICLY REACHABLE. Re-lock it by hand NOW: az acr update --name $_LEASE_ACR --default-action Deny --public-network-enabled false ; then confirm with: az acr show --name $_LEASE_ACR --query '[publicNetworkAccess, networkRuleSet.defaultAction]' -o tsv"
+  [ -n "$deny_out" ] && _lease_err "last 'az acr update --default-action Deny' output: $(printf '%s' "$deny_out" | tr '\n' ' ' | cut -c1-300)"
+  [ -n "$pna_out" ] && _lease_err "last 'az acr update --public-network-enabled false' output: $(printf '%s' "$pna_out" | tr '\n' ' ' | cut -c1-300)"
+  return 1
 }
 
 # Parse the shared --acr / --subscription / --owner flags into _LEASE_* vars.
@@ -365,9 +480,20 @@ acr_lease_release() {
   case "$expires" in ''|*[!0-9]*) expires=0 ;; esac
 
   if [ "$owner" = "$me" ]; then
-    _lease_close_firewall
+    # C24 (#3088): the close is now VERIFIED and its failure PROPAGATES. It used
+    # to be fire-and-forget — this function returned 0 whether or not the
+    # registry actually locked, which is how a green "Re-lock ACR" job sat on
+    # top of a publicly reachable Commercial ACR on 2026-08-07.
+    if ! _lease_close_firewall; then
+      # Leave the lease tags ALONE. Clearing them would advertise the registry
+      # as unowned while it is still open, and the sweeper's stale-lease branch
+      # would then treat a live failure as tidy-up. Keeping the lease means the
+      # sweeper sees an open registry with a holder it can probe.
+      _lease_err "release FAILED on ACR '$_LEASE_ACR': the lease is held by this process but the registry could not be verified locked. Not clearing the lease tags — acr-firewall-sweeper will retry, and the lease keeps naming this run as the holder."
+      return 1
+    fi
     _lease_clear || _lease_warn "re-locked ACR '$_LEASE_ACR' but could not clear the lease tags; the sweeper will tidy them."
-    _lease_note "released the ACR firewall lease on '$_LEASE_ACR' and re-locked it."
+    _lease_note "released the ACR firewall lease on '$_LEASE_ACR' and VERIFIED it re-locked."
     ACR_LEASE_STATE="none"
     return 0
   fi
@@ -390,7 +516,10 @@ acr_lease_release() {
   else
     _lease_warn "re-locking ACR '$_LEASE_ACR' although this process ('$me') is not the recorded holder ('${owner:-none}') — no LIVE holder exists, and leaving a registry publicly reachable is never acceptable (fail closed)."
   fi
-  _lease_close_firewall
+  if ! _lease_close_firewall; then
+    _lease_err "release FAILED on ACR '$_LEASE_ACR' (no live lease holder). The registry may be PUBLICLY REACHABLE — see the remediation above."
+    return 1
+  fi
   _lease_clear >/dev/null 2>&1 || true
   ACR_LEASE_STATE="none"
   return 0
@@ -457,7 +586,7 @@ acr_lease_sweep() {
 
   if [ "$_LEASE_FORCE" = "true" ]; then
     _lease_warn "--force: re-locking ACR '$_LEASE_ACR' regardless of the recorded lease ('${owner:-none}', $holder_url)."
-    _lease_close_firewall
+    _lease_close_firewall || return 1
     _lease_clear >/dev/null 2>&1 || true
     return 0
   fi
@@ -465,7 +594,7 @@ acr_lease_sweep() {
   if _lease_is_live "$owner" "$expires"; then
     if _lease_holder_finished "$holder_url"; then
       _lease_warn "ACR '$_LEASE_ACR' is OPEN under a lease held by '$owner', but $holder_url is no longer running — the holder died without releasing. Re-locking (fail closed)."
-      _lease_close_firewall
+      _lease_close_firewall || return 1
       _lease_clear >/dev/null 2>&1 || true
       return 0
     fi
@@ -474,7 +603,11 @@ acr_lease_sweep() {
   fi
 
   _lease_err "ACR '$_LEASE_ACR' was found publicly reachable (publicNetworkAccess=${pna}, defaultAction=${da}) with NO live lease holder (recorded: '${owner:-none}', $holder_url). Re-locking now. If a build was legitimately in flight, it did not take a lease — wire that call site to scripts/csa-loom/acr-firewall-lease.sh (see docs/fiab/acr-firewall-lease.md)."
-  _lease_close_firewall
+  # C24 (#3088): the sweeper is the LAST line of defence — a janitor that
+  # reports success on a re-lock it never confirmed is worse than no janitor,
+  # because the open registry then looks swept. Propagate the failure so the
+  # scheduled run goes red and a human sees it.
+  _lease_close_firewall || return 1
   _lease_clear >/dev/null 2>&1 || true
   return 0
 }
@@ -492,7 +625,25 @@ usage:
   acr-firewall-lease.sh release --acr <name> [--subscription <sub>] [--owner <id>]
   acr-firewall-lease.sh status  --acr <name> [--subscription <sub>]
   acr-firewall-lease.sh sweep   --acr <name> [--subscription <sub>] [--force]
+  acr-firewall-lease.sh verify  --acr <name> [--subscription <sub>]
+
+exit codes:
+  release / sweep : 0 = registry VERIFIED locked (or legitimately left open for
+                    a live foreign holder); 1 = could NOT verify it locked.
+  verify          : 0 = locked, 1 = state unreadable, 2 = publicly reachable.
 EOF
+}
+
+# Read-only verdict, for a workflow that wants to assert posture without
+# touching the lease. Prints what was observed — never a bare exit code.
+_acr_lease_verify_cli() {
+  _lease_parse_args "$@" || return $?
+  acr_lease_verify_locked
+  case $? in
+    0) _lease_note "ACR '$_LEASE_ACR' is LOCKED (${_LEASE_LAST_STATE})."; return 0 ;;
+    1) _lease_err "could NOT read the firewall state of ACR '$_LEASE_ACR' (${_LEASE_LAST_STATE}). This is 'unknown', not 'locked'."; return 1 ;;
+    *) _lease_err "ACR '$_LEASE_ACR' is PUBLICLY REACHABLE (${_LEASE_LAST_STATE}). Re-lock: az acr update --name $_LEASE_ACR --default-action Deny --public-network-enabled false"; return 2 ;;
+  esac
 }
 
 if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
@@ -503,6 +654,7 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
     release) acr_lease_release "$@" ;;
     status)  acr_lease_status  "$@" ;;
     sweep)   acr_lease_sweep   "$@" ;;
+    verify)  _acr_lease_verify_cli "$@" ;;
     *) _acr_lease_usage; exit 2 ;;
   esac
 fi

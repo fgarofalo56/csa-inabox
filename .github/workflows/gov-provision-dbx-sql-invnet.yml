@@ -115,4 +115,11 @@ jobs:
         # unconditionally when nobody does (fail closed). Unlike the old
         # `--default-action Deny`, this also restores
         # publicNetworkAccess=Disabled.
-        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+        #
+        # C24 (#3088): the trailing `|| true` is GONE. `release` now VERIFIES the
+        # registry locked and exits non-zero when it could not confirm it;
+        # discarding that turns "the Gov registry is publicly reachable" into a
+        # green step, which is the defect measured on Commercial on 2026-08-07.
+        run: |
+          set -euo pipefail
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"

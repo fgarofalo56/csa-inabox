@@ -302,11 +302,19 @@ jobs:
       - name: Re-lock ACR (always)
         if: always()
         run: |
+          set -euo pipefail
           # #2603: re-locks only if this run still holds the firewall lease; if
           # another run holds it, this leaves the registry open for them (they
           # release it, and acr-firewall-sweeper re-locks if they die). If
           # nobody holds it, this re-locks anyway — fail closed.
-          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+          #
+          # C24 (#3088): the trailing `|| true` is GONE. `release` now verifies
+          # the registry actually locked and exits non-zero when it could not
+          # confirm it; discarding that result would restore the exact defect
+          # measured on 2026-08-07 — a green "Re-lock ACR" job sitting on top of
+          # a publicly reachable registry. If this step goes red, the registry
+          # may be open: read the remediation the script prints.
+          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
 
       - name: Roll loom-console + health-gate
         run: |

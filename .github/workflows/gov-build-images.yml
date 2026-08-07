@@ -432,7 +432,13 @@ jobs:
 
       - name: Release the ACR firewall lease (always)
         if: always()
-        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+        # C24 (#3088): NO `|| true`. `release` now VERIFIES the registry is
+        # publicNetworkAccess=Disabled + defaultAction=Deny before reporting
+        # success, and exits non-zero when it cannot confirm that. Discarding
+        # the result restores the measured defect: a green re-lock step over a
+        # publicly reachable registry. If this step goes red, read the exact
+        # remediation the script prints — the registry may be OPEN.
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
 
   summary:
     name: Image summary

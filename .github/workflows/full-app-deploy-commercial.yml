@@ -827,15 +827,36 @@ jobs:
             }
       - name: Disable ACR public access + admin user
         run: |
+          set -euo pipefail
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
           # The admin user is this run's to turn off either way — it is not part
-          # of the shared network toggle.
-          az acr update --name "$ACR_NAME" --admin-enabled false -o none || true
+          # of the shared network toggle. C24 (#3088): the write is VERIFIED
+          # rather than `|| true`'d. An admin user left enabled is a live
+          # username/password on the registry; reporting that as done without
+          # reading it back is the same class of lie as the unverified re-lock
+          # below.
+          if ! az acr update --name "$ACR_NAME" --admin-enabled false -o none; then
+            echo "::warning::az acr update --admin-enabled false returned non-zero for $ACR_NAME; verifying the actual state before deciding."
+          fi
+          ADMIN="$(az acr show --name "$ACR_NAME" --query adminUserEnabled -o tsv | tr -d '\r')"
+          if [ "$ADMIN" != "false" ]; then
+            echo "::error::ACR $ACR_NAME still has adminUserEnabled=${ADMIN:-<unreadable>} after the disable. That is a live username/password on the registry. Disable it by hand: az acr update --name $ACR_NAME --admin-enabled false"
+            exit 1
+          fi
+          echo "::notice::ACR $ACR_NAME adminUserEnabled=false (verified)."
+
           # #2603: `release` re-locks the network ONLY if this run still holds
           # the firewall lease. If another run holds it (a build that started
           # while this deploy was finishing), the registry is left open for
           # them and they re-lock on their own release. If NOBODY holds it, this
           # re-locks anyway — fail closed.
+          #
+          # C24 (#3088): THIS IS THE STEP FROM THE INCIDENT. After run
+          # 31143181962 this job concluded SUCCESS while `az acr show` read
+          # publicNetworkAccess=Enabled / defaultAction=Allow on three probes
+          # across a minute. `release` now reads the registry back and exits
+          # non-zero when it cannot confirm the locked state, so a no-op re-lock
+          # turns this job RED instead of green.
           bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR_NAME"
 
   redeploy-with-apps:
