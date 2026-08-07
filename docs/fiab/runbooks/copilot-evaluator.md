@@ -35,7 +35,9 @@ reads it (accuracy, confusion heatmap, per-class accuracy, cost-per-quality).
 - **Honest gates:** missing config → `honest-gate: not configured — set …`
   warn + no-op tick; no judge deployment → judge scores marked `deferred`
   (retrieval scoring — deterministic — remains authoritative); over the daily
-  judge cap (`LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP`, default 500) → `deferred`.
+  judge cap (`LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP`, default 5000 — raised from
+  500 on 2026-08-06 after the merge-train's eval volume exhausted 500 by
+  ~05:50 UTC and zero-judged every gated run) → `deferred`.
 
 ## Triage
 

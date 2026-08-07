@@ -25,9 +25,14 @@ name: copilot-quality-evals
 # (its .corpus-manifest.json 'copied' count is always the full tree here); the
 # nightly schedule runs unconditionally with --strict-missing.
 #
-# Token spend: bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 500
-# judged Q/day, Cosmos-ledgered cross-replica) — a busy docs day degrades to
-# judge-'deferred' retrieval-only scoring, never uncapped spend (round-3 F1).
+# Token spend: bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 5000
+# judged Q/day, Cosmos-ledgered cross-replica; raised from 500 on 2026-08-06 —
+# the merge-train's 27–31 full passes/day exhausted 500 by ~05:50 UTC, and a
+# zero-judged run has NO passRate, which #2994's honest predicate correctly
+# fails). The cap is a hard bound — over cap degrades to judge-'deferred'
+# retrieval-only scoring, never uncapped spend (round-3 F1). The cancellation
+# step below stops the started job execution so a superseded workflow run can
+# no longer burn a full pass of judge budget on a receipt nobody gates on.
 #
 # Per-cloud: Commercial-first (centralus estate). Gov rides the same script
 # against the .us job via the csa-loom-gov-deploy SP (tracked follow-up —
@@ -261,6 +266,19 @@ jobs:
           fi
           echo "::notice::execution $EXEC started"
           echo "started=true" >> "$GITHUB_OUTPUT"
+          # Coordinates for the cancellation-cleanup step below: when THIS
+          # workflow run is cancelled (concurrency supersede on the next
+          # merge/PR push), the job execution it started does NOT stop on its
+          # own — it runs its full multi-surface pass and spends up to 153
+          # judged questions of the daily cap on a receipt no gate will read.
+          # Measured 2026-08-06: those orphans plus the merge-train volume
+          # exhausted the (then-500) cap by 05:50 UTC and zero-judged every
+          # gated run for the rest of the UTC day.
+          {
+            echo "EVAL_EXEC=$EXEC"
+            echo "EVAL_RG=$RG"
+            echo "EVAL_JOB=$JOB"
+          } >> "$GITHUB_ENV"
 
           # Poll for completion (replicaTimeout is 45 min; cap the wait at 50).
           STATUS=Running
@@ -345,6 +363,27 @@ jobs:
             echo "::warning::no ::eval-run:: receipt in Log Analytics for execution $EXEC (status $STATUS) - the run may have honest-gated on config, or ingestion has not caught up. Gating on an empty artifact."
           fi
           echo "merged $(jq '.surfaces | length' eval-run.json) surface run(s) into eval-run.json"
+
+      # Concurrency (`cancel-in-progress: true`) cancels the superseded WORKFLOW
+      # run, but the Container App Job execution it started keeps running to
+      # completion — judging up to a full 153-question pass against the daily
+      # cap for a receipt nobody will gate on. On 2026-08-06 that orphan burn,
+      # plus the merge-train's run volume, exhausted the judge cap by 05:50 UTC
+      # and every later gated run scored ZERO judged rows (the #2994 honest
+      # predicate then rightly failed them). Stop the execution when this run is
+      # cancelled. Failing to stop is reported as an error — the run is already
+      # cancelled, so this cannot flip a verdict, but it must not be silent.
+      - name: Stop the orphaned job execution (this run was cancelled)
+        if: cancelled() && env.EVAL_EXEC != ''
+        run: |
+          set -uo pipefail
+          echo "Workflow run cancelled — stopping job execution $EVAL_EXEC so it does not spend judge budget on an ungated receipt."
+          if az containerapp job stop -g "$EVAL_RG" -n "$EVAL_JOB" --job-execution-name "$EVAL_EXEC"; then
+            echo "::notice::stopped execution $EVAL_EXEC"
+          else
+            echo "::error::could not stop execution $EVAL_EXEC — it will run to completion and spend up to a full pass of the judge daily cap."
+            exit 1
+          fi
 
       - name: Fetch the previous run artifact (delta baseline, best-effort)
         if: steps.func.outputs.found == 'true'
