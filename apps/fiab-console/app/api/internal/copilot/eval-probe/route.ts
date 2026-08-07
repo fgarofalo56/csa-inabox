@@ -51,7 +51,20 @@ function authed(req: NextRequest): boolean {
   return isValidInternalToken(bearer || null) || isValidInternalToken(header);
 }
 
-/** The staged corpus manifest (stage-copilot-corpus.sh) — image or repo checkout. */
+/**
+ * The staged corpus manifest (stage-copilot-corpus.sh) — image or repo checkout.
+ *
+ * #3085 — the field names must match what `stage-copilot-corpus.sh` actually
+ * writes: `sourceCommit` and `fileCount`. This read `commit`/`corpusCommit` and
+ * `total`, none of which the script has ever emitted, so the route returned
+ * `corpusCommit: ''` on EVERY call — and `run-evals.ts` turned that into
+ * `corpusCommit: 'unknown'` on every `eval-run` doc ever written. The corpus
+ * provenance the receipt claimed to carry was empty the whole time, which is
+ * why the divergence in #3085 was invisible. Measured against run 31197101702,
+ * where the new provenance step reported `unresolved`.
+ *
+ * The legacy keys are still accepted so an older staged tree keeps working.
+ */
 function readCorpusManifest(): { corpusCommit: string; corpusTotal?: number } | null {
   const candidates = [
     path.join(process.cwd(), 'copilot-corpus', '.corpus-manifest.json'),
@@ -61,7 +74,10 @@ function readCorpusManifest(): { corpusCommit: string; corpusTotal?: number } | 
     try {
       if (!fs.existsSync(p)) continue;
       const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      return { corpusCommit: String(j.commit || j.corpusCommit || ''), corpusTotal: Number(j.total ?? 0) || undefined };
+      return {
+        corpusCommit: String(j.sourceCommit || j.commit || j.corpusCommit || ''),
+        corpusTotal: Number(j.fileCount ?? j.total ?? 0) || undefined,
+      };
     } catch {
       /* fall through */
     }

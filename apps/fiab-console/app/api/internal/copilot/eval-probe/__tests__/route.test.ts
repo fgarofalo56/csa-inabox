@@ -14,6 +14,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
 
 const { NoAoaiDeploymentErrorMock, searchDocsMock, aoaiChatMock, resolveTargetMock } = vi.hoisted(() => {
   class NoAoaiDeploymentErrorMock extends Error {
@@ -40,6 +43,29 @@ vi.mock('@/lib/azure/copilot-orchestrator', () => ({ resolveAoaiTarget: resolveT
 import { POST, GET, EVIDENCE_CHARS } from '../route';
 
 const TOKEN = 'test-internal-token';
+
+const getReq = () =>
+  new NextRequest('http://localhost/api/internal/copilot/eval-probe', {
+    headers: { 'x-loom-internal-token': TOKEN },
+  });
+
+/**
+ * Write a real `.corpus-manifest.json` at the path the route looks in
+ * (`<cwd>/copilot-corpus/`), run `fn`, then restore. Exercises the actual
+ * fs read rather than a mocked one.
+ */
+async function withStagedManifest(manifest: unknown, fn: () => Promise<void>): Promise<void> {
+  const cwd = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'loom-corpus-'));
+  fs.mkdirSync(nodePath.join(cwd, 'copilot-corpus'), { recursive: true });
+  fs.writeFileSync(nodePath.join(cwd, 'copilot-corpus', '.corpus-manifest.json'), JSON.stringify(manifest));
+  const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+  try {
+    await fn();
+  } finally {
+    spy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
 
 function post(body: unknown, token?: string): NextRequest {
   return new NextRequest('http://localhost/api/internal/copilot/eval-probe', {
@@ -276,5 +302,38 @@ describe('GET manifest probe', () => {
     expect(j.ok).toBe(true);
     expect(j.ready).toBe(true);
     expect(typeof j.corpusCommit).toBe('string');
+  });
+
+  /**
+   * #3085 — measured on run 31197101702: the new corpus-provenance step
+   * reported `unresolved`, because this route read `commit`/`corpusCommit`/
+   * `total` while `stage-copilot-corpus.sh:78` writes **`sourceCommit`** and
+   * **`fileCount`**. The route therefore returned `corpusCommit: ''` on every
+   * call, and `run-evals.ts` wrote `corpusCommit: 'unknown'` onto every
+   * `eval-run` doc — so the corpus provenance the receipt claimed to carry was
+   * empty the whole time, which is precisely why #3085's divergence was
+   * invisible.
+   *
+   * The fixture is the REAL shape the script emits, not the shape the code
+   * wanted (csa_loom_fixtures_that_model_the_code).
+   */
+  it('reads the field names stage-copilot-corpus.sh ACTUALLY writes', async () => {
+    // A REAL manifest on a REAL disk, in the shape the script emits — not a
+    // hand-built object shaped like what the code expected
+    // (csa_loom_fixtures_that_model_the_code: run the real producer's format,
+    // compare byte-for-byte).
+    await withStagedManifest({ sourceCommit: 'abc123def456', fileCount: 2587, files: {} }, async () => {
+      const j: any = await (await GET(getReq())).json();
+      expect(j.corpusCommit).toBe('abc123def456');
+      expect(j.corpusTotal).toBe(2587);
+    });
+  });
+
+  it('still accepts a legacy manifest that used `commit` / `total`', async () => {
+    await withStagedManifest({ commit: 'legacy99', total: 7 }, async () => {
+      const j: any = await (await GET(getReq())).json();
+      expect(j.corpusCommit).toBe('legacy99');
+      expect(j.corpusTotal).toBe(7);
+    });
   });
 });
