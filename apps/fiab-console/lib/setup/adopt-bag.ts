@@ -42,6 +42,7 @@
 import { planToAdoptBag, type AdoptBag, type AdoptEntry } from '@/lib/deploy/plan-to-arm';
 import type { DeploymentPlan, ServiceDecision } from '@/lib/deploy/plan-model';
 import { getServiceDef } from '@/lib/deploy/adoption-catalog';
+import { safeRecord } from '@/lib/security/safe-object';
 
 export type { AdoptBag, AdoptEntry };
 
@@ -125,7 +126,11 @@ export function sanitizeSubmittedPlan(raw: unknown): { plan: DeploymentPlan | nu
     return { plan: null, problems: ['plan.services is not a record'] };
   }
 
-  const clean: Record<string, ServiceDecision> = {};
+  // Same structural reason as `extra` below: every key here comes from the
+  // client-posted plan. `/^[a-z0-9-]{1,40}$/` rejects `__proto__` (no
+  // underscores) but ACCEPTS `constructor` and `prototype`, so the record it
+  // lands on must not be prototype-bearing.
+  const clean: Record<string, ServiceDecision> = safeRecord<ServiceDecision>();
   for (const [key, rawDecision] of Object.entries(services as Record<string, unknown>)) {
     if (!/^[a-z0-9-]{1,40}$/.test(key)) {
       problems.push(`plan.services key "${String(key).slice(0, 40)}" is not a valid service key`);
@@ -161,7 +166,12 @@ export function sanitizeSubmittedPlan(raw: unknown): { plan: DeploymentPlan | nu
       }
     }
     const extraIn = d?.extra && typeof d.extra === 'object' && !Array.isArray(d.extra) ? d.extra : undefined;
-    const extra: Record<string, string> = {};
+    // STRUCTURAL fix, not a stricter regex (#2657 class): the key filter below
+    // is an identifier check, and `_` is `\w` — so `__proto__`, `constructor`
+    // and `prototype` all PASS it. On a prototype-bearing `{}` those land on
+    // the prototype chain instead of as own properties. `safeRecord()` is
+    // Object.create(null), so a hostile key can only ever be a plain own key.
+    const extra: Record<string, string> = safeRecord<string>();
     for (const [ek, ev] of Object.entries(extraIn ?? {})) {
       if (/^[A-Za-z0-9_-]{1,60}$/.test(ek) && typeof ev === 'string' && SAFE_VALUE.test(ev)) extra[ek] = ev;
     }
@@ -221,7 +231,9 @@ export function sanitizeSubmittedPlan(raw: unknown): { plan: DeploymentPlan | nu
 
 /** The legacy (pre-plan) collection, preserved verbatim from the deploy route. */
 export function collectLegacyAdoptBag(body: AdoptBagSource): { bag: AdoptBag; problems: string[] } {
-  const bag: AdoptBag = {};
+  // Keyed by `svc` off the client's serviceChoices — prototype-less for the
+  // same reason as the two records above.
+  const bag: AdoptBag = safeRecord<AdoptEntry>();
   const problems: string[] = [];
   const put = (key: string, name?: string, rg?: string, sub?: string) => {
     if (!name) return;

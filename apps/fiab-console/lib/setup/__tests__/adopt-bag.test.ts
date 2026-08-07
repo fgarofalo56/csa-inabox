@@ -169,3 +169,61 @@ describe('adoptCliParam', () => {
     expect(s).toContain('"adx"');
   });
 });
+
+describe('prototype pollution — hostile keys from the posted plan', () => {
+  // NOTE ON WHAT IS ACTUALLY ASSERTED. The obvious test — set `__proto__` and
+  // check `({}).polluted` — CANNOT FAIL: assigning a STRING to `__proto__` is a
+  // silent no-op in JS, so it passes on a prototype-bearing `{}` too. Measured.
+  // The real, discriminating difference is the READ of an unset inherited key:
+  // on `{}` it returns Object.prototype's member (truthy); on a null-prototype
+  // record it is `undefined`. These assertions go RED on `{}` and green on
+  // safeRecord(), which is the only reason they are worth having.
+  it('the LEGACY-path bag does not inherit Object.prototype members', () => {
+    // Scoped deliberately to the bag THIS module builds. The plan-sourced bag
+    // is produced by `planToAdoptBag` (lib/deploy/plan-to-arm.ts), which still
+    // returns a prototype-bearing `{}` — its keys are catalog-filtered
+    // (`getServiceDef`), so a hostile key cannot become a bag key there, but
+    // the record type is not this module's to change. Reported as a follow-up
+    // rather than silently claimed as fixed here.
+    const d = deriveAdoptBag({ existingAdxClusterName: 'adx1', existingEventHubNamespace: 'eh1' });
+    expect(d.problems).toEqual([]);
+    expect(d.source).toBe('legacy');
+    // On a prototype-bearing bag these are Object.prototype members, not undefined.
+    expect((d.bag as Record<string, unknown>).constructor).toBeUndefined();
+    expect((d.bag as Record<string, unknown>).toString).toBeUndefined();
+    expect((d.bag as Record<string, unknown>).valueOf).toBeUndefined();
+    // The real decisions are unaffected, and still round-trip through JSON
+    // exactly like an object literal (what every tier serializes them with).
+    expect(JSON.parse(JSON.stringify(d.bag)).adx.target.name).toBe('adx1');
+  });
+
+  it('the sanitized plan.services does not inherit Object.prototype members', () => {
+    const { plan, problems } = sanitizeSubmittedPlan(
+      planWith({
+        purview: {
+          mode: 'adopt',
+          target: { name: 'pv', rg: 'rg', sub: SUB },
+          // `__proto__` PASSES the extra-key identifier regex (`_` is `\w`);
+          // the null-prototype record is what makes that harmless.
+          extra: { __proto__: 'x', ok: 'kept' },
+        },
+      }),
+    );
+    expect(problems).toEqual([]);
+    expect((plan!.services as Record<string, unknown>).constructor).toBeUndefined();
+    expect((plan!.services.purview.extra as Record<string, unknown>).constructor).toBeUndefined();
+    expect(plan!.services.purview.extra?.ok).toBe('kept');
+  });
+
+  it('a `constructor` service key is an ordinary own key, not a shadow', () => {
+    // `constructor` passes /^[a-z0-9-]{1,40}$/ — only the record type keeps it inert.
+    const d = deriveAdoptBag({
+      plan: planWith({
+        constructor: { mode: 'create', decidedBy: 'op', decidedAt: 'now' },
+        purview: { mode: 'adopt', target: { name: 'pv', rg: 'rg', sub: SUB } },
+      }),
+    });
+    expect(d.problems).toEqual([]);
+    expect(d.bag.purview?.mode).toBe('adopt');
+  });
+});
