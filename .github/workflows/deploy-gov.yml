@@ -136,7 +136,20 @@ jobs:
 
       - name: Deploy
         run: |
-          az deployment sub create \
+          # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6): the Gov
+          # deploy previously ran bare — a throttle or replication lag failed
+          # the run outright with an unclassified stack of az output. Same
+          # harness as Commercial: bounded retry of transient classes only,
+          # fail-closed, classified deploy-failure.json + ARM leaf drill-down.
+          DEPLOY_NAME="gov-deploy-$(date +%Y%m%d-%H%M%S)"
+          node scripts/ci/deploy-retry.mjs \
+            --class-allow transient,eventual-consistency \
+            --max-attempts 4 --backoff 45 --jitter 0.3 --wall-clock 100m \
+            --step "az deployment sub create (deploy-gov ${{ github.event.inputs.environment }})" \
+            --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+            --remediate \
+            --arm-deployment "$DEPLOY_NAME" --arm-scope sub \
+            -- az deployment sub create \
             --location usgovvirginia \
             --template-file deploy/bicep/gov/main.bicep \
             --parameters deploy/bicep/gov/${{ steps.params.outputs.file }} \
@@ -145,7 +158,7 @@ jobs:
               deployStreaming=${{ github.event.inputs.deploy_streaming }} \
               deployAIServices=${{ github.event.inputs.deploy_ai }} \
               deployOSSAlternatives=${{ github.event.inputs.deploy_oss }} \
-            --name "gov-deploy-$(date +%Y%m%d-%H%M%S)"
+            --name "$DEPLOY_NAME"
 
       - name: Verify Deployment
         run: |

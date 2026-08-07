@@ -281,26 +281,29 @@ Two exceptions:
 `loom-guardrails.yml`) fails the build if a new hand-rolled retry loop appears
 **in a workflow it can see**.
 
-> **Two limits on that sentence, both measured on this branch (#3017).**
+> **The two limits #3017 measured are both closed.**
 >
-> **1. Only two workflows use the harness.**
-> `grep -l deploy-retry.mjs .github/workflows/*.yml` returns
-> `deploy-fiab-commercial.yml` and `full-app-deploy-commercial.yml` — and
-> nothing else. `grep -c deploy-retry .github/workflows/deploy-fiab-gcch.yml`
-> returns **0**. Classification, bounded retry, `--remediate` and the
-> `deploy-failure.json` artifact are **Azure Commercial only**. On Gov you
-> classify by hand, from this page.
+> **1. The harness now runs on every boundary's deploy workflow (merged, not
+> deployed — Gov runs owed on Actions).** `deploy-fiab-gcch.yml`,
+> `deploy-fiab-gcc.yml`, `deploy-fiab-il5.yml` and `deploy-gov.yml` each wrap
+> their provisioning mutation (`az deployment sub create` / `azd provision` /
+> `redeploy-gov.sh`) in `deploy-retry.mjs` with the classified
+> `deploy-failure.json` artifact — the artifact their failure notifiers were
+> already reading, which nothing on those workflows produced before. The
+> caller-guard `scripts/ci/__tests__/gov-deploy-retry-wiring.test.mjs` is
+> LINE-anchored on the `-- ` handoff (a block-level check stayed green while
+> one branch of a shared run block ran bare — measured on that exact mutant)
+> and goes red if any of them is unwrapped.
 >
-> **2. The guard is scoped by filename, not by behaviour.**
-> `check-deploy-failure-handling.mjs:71` selects files with
-> `/(^|[-_])(deploy|build|roll|rollback)/i`. Workflows that mutate Azure but
-> whose names do not contain those words are invisible to it — including **13
-> `gov-provision-*` workflows**. Spot-checked: `gov-provision-aisearch.yml`
-> runs `az deployment group create`; `gov-provision-maps.yml` runs
-> `az acr build`. On a broad definition of "mutates Azure" the split is 24 in
-> scope / 36 out. This is the same shape as a name-based security guard that
-> misses the routes it was written to cover: where the guard is the only
-> control, a filename filter is not a control.
+> **2. The guard scopes by BEHAVIOUR (fixed in #3018, commit b625e03c).**
+> `scopeOf()` in `check-deploy-failure-handling.mjs` decides on what the
+> workflow DOES — an `az` command is treated as mutating unless provably
+> read-only or CLI-local, repo shell scripts a workflow invokes are followed,
+> and the filename pattern survives only as an OR arm. `assertDiscoveryHealthy`
+> ratchets against scope collapse: the run fails if the behavioural arm ever
+> stops contributing workflows beyond the filename arm. Current measurement:
+> 60 workflows in scope — 27 by name, 33 by behaviour, `gov-provision-*`
+> included.
 
 ```bash
 node scripts/ci/deploy-retry.mjs \
@@ -485,12 +488,13 @@ done
 retryable, and hand back a concrete remediation. Measured against this branch:
 
 **R4 — which cloud this was verified against.** The classifier and the retry
-harness are exercised by their own corpus-pinned suites and by the two
-Commercial workflows that invoke them; the classifications below are therefore
-**verified on Azure Commercial**. **No part of the failure engine has been
-exercised on Azure Government** — Gov deploys do not call it at all (#3017). The
-ARM codes and class boundaries are boundary-independent and remain usable for
-manual triage on Gov; the *automation* is not present there.
+harness are exercised by their own corpus-pinned suites and by the Commercial
+workflows that invoke them; the classifications below are therefore **verified
+on Azure Commercial**. The Gov deploy workflows now invoke the same harness
+(#3017 — merged, not deployed), but **no Gov run has exercised it yet**: Gov
+validation runs via GitHub Actions only and is owed once Actions dispatches
+thaw. Until a Gov run is observed, the Gov wiring is declared untested — never
+implied working.
 
 | Capability | State |
 |---|---|
@@ -498,10 +502,10 @@ manual triage on Gov; the *automation* is not present there.
 | Bounded, classified retry on `az deployment sub create` | **Implemented, Commercial only** — `deploy-fiab-commercial.yml` runs it under `deploy-retry.mjs --step "az deployment sub create (…)"` |
 | Classified retry on the Container Apps roll | **Implemented, Commercial only** — `full-app-deploy-commercial.yml`, `--step "az containerapp update (…)"` |
 | Classified retry on `az acr build` | **Implemented, Commercial only** — `full-app-deploy-commercial.yml`, `--step "az acr build (…)"`. A deterministic quota denial is now attempted **once** instead of three times |
-| **Any classified retry on a Gov deploy path** | **Not implemented (#3017).** `deploy-fiab-gcch.yml` never invokes `deploy-retry.mjs`; `deploy-fiab-il5.yml` and `gov-build-images.yml` have never run at all. GCC-High's three most recent runs all ended `failure` (2026-08-01/02/03) |
-| **The guard that would catch a hand-rolled retry loop, on Gov** | **Not effective (#3017).** `check-deploy-failure-handling.mjs` selects files by filename; 13 `gov-provision-*` workflows that mutate Azure are out of scope |
+| **Classified retry on the Gov deploy paths** | **Wired (#3017 — merged, not deployed; first Gov run owed on Actions).** `deploy-fiab-gcch.yml`, `deploy-fiab-gcc.yml`, `deploy-fiab-il5.yml` and `deploy-gov.yml` wrap their provisioning mutations in `deploy-retry.mjs` and produce the `deploy-failure.json` their notifiers read. Guard: `gov-deploy-retry-wiring.test.mjs` (line-anchored on the `-- ` handoff). GCC-High's three most recent runs before the wiring all ended `failure` (2026-08-01/02/03); `deploy-fiab-il5.yml` and `gov-build-images.yml` have still never executed |
+| **The guard that would catch a hand-rolled retry loop, on Gov** | **Effective (fixed in #3018).** `check-deploy-failure-handling.mjs` scopes by behaviour (an Azure-mutating `az` command, directly or via a repo shell script) with the filename pattern as an OR arm and an anti-collapse ratchet; 60 workflows in scope, `gov-provision-*` included |
 | Quota preflight before the image build | **Not wired** into the build workflow. The Console wizard runs one; the workflow does not |
-| Day-0 adoption fitness before any resource is created | **Not wired (#3014).** `lib/deploy/fitness.ts` exists and is unit-tested; no production caller. An unusable adopted resource still fails mid-deploy |
+| Day-0 adoption fitness before any resource is created | **Gate wired, evaluator not (#3014 — merged, not deployed).** `POST /api/setup/deploy` calls `assertPlanIsDeployable()` before any tier; a plan with an `unusable`/`unknown` verdict is refused pre-submit. `evaluateFitness` still has no production producer, so an adoption nobody evaluated passes un-checked |
 | Platform self-remediation | **Partial.** `--remediate` registers a missing resource provider and retries once, and reads the namespace out of the message rather than guessing. Role grants, private endpoints and CIDR re-planning are **not** automated. On the **local-CLI** path nothing is auto-registered — `lib/setup/deploy-preflight.ts` only emits the `az provider register` commands |
 | Failure notification to a watched target | **Implemented** — one dedicated OPEN issue per failing workflow (`deploy-notify-failure.mjs`), guarded against a regression to a hard-coded number |
 | Estate-drift signal on `/admin/readiness` | **Not implemented on this branch** — no live-SHA or commits-behind indicator exists in the Console. Tracked separately (#3000) |

@@ -16,24 +16,23 @@ Related: [Bring your own services](../bring-your-own-services.md)
 
 ## 0. Two scanners exist. Only one has a coverage ledger.
 
-Everything on this page describes **`POST /api/deploy/discovery`**
-(`lib/setup/estate-scan.ts`) — the scanner with the three-step coverage
-establishment, real `$skipToken` paging and the per-subscription ledger.
+Everything on this page describes the shared honest scan engine — the
+three-step coverage establishment, real `$top`/`$skipToken` paging,
+`allowPartialScopes`, and the per-subscription ledger. Three routes now run on
+it (**#3015 — merged, not deployed until the next roll**):
 
-The Console's `/setup` → *Scan & choose* step calls a **different** route,
-`POST /api/setup/scan-services`, which does not have any of that
-(**#3015**):
-
-| | `/api/deploy/discovery` | `/api/setup/scan-services` (the wizard) |
+| Route | Engine | Scope |
 |---|---|---|
-| Page-size key | `$top` (correct) | `top` — a **silent no-op**; the 1000-row default is returned by coincidence |
-| Paging | `$skipToken` loop | none — silently truncated past the first page |
-| `allowPartialScopes` | set | not set |
-| Coverage ledger | per requested subscription | none; the counter counts subscriptions that produced a *match* |
+| `POST /api/deploy/discovery` | `lib/deploy/discovery-scanner` | explicit subscription list (consented) |
+| `POST /api/setup/estate-scan` (wizard *Analysis scope → Reuse or deploy*) | `lib/setup/estate-scan` (shares `COVERAGE_QUERY` with the discovery scanner) | explicit subscription list (consented) |
+| `GET /api/setup/discover-services` (wizard *Scan & choose* / networking panel) | `lib/deploy/discovery-scanner` — the SAME module as `/api/deploy/discovery` | everything the identity can see |
 
-**If you are scanning anything larger than a small estate, or across more than a
-couple of subscriptions, use `/api/deploy/discovery` or the CLI** — not the
-wizard step — until #3015 closes. The rest of this page assumes the former.
+The previous wizard-side scanners are gone: `GET /api/setup/scan-services`
+(sent the no-op `top` key, no paging, no ledger, zero UI callers) is deleted,
+and `discover-services` no longer runs its own raw Resource Graph query — it
+delegates to the discovery scanner and reports `subscriptionsScanned` from the
+LEDGER (subscriptions genuinely read), never from matched rows. Its response
+now carries `coverage`, `ledger`, and `truncatedBy` alongside the service rows.
 
 ---
 
@@ -285,11 +284,18 @@ worse than explaining why.
   an existing resource is *usable* — SKU, region, reachability from the Console
   subnet, and the RBAC the deploy identity holds or can grant — belongs to the
   deployment plan's validation step.
-  **That validation step is written but not wired (#3014):**
-  `lib/deploy/fitness.ts` implements all five criteria and exports a blocking
-  `assertPlanIsDeployable()`, and nothing outside its own unit test calls it. So
-  today nothing evaluates fitness — not discovery, and not the plan. An
-  unusable adopted resource surfaces as an ARM error mid-deploy.
+  **The blocking gate is now wired; the evaluator is not (#3014, merged, not
+  deployed):** `POST /api/setup/deploy` calls `assertPlanIsDeployable()` before
+  ANY deploy tier fires — a plan whose adopt decision carries an `unusable` or
+  `unknown` fitness verdict is refused with 422 and the observed blocking
+  checks, and structurally incoherent plans (adopt of a create-only service, a
+  second tenant-singleton, a missing coordinate) are refused with 400. What
+  still has no production producer is `evaluateFitness()` itself: no route yet
+  reads the live resource and attaches a verdict to the plan, so an adoption
+  nobody evaluated passes the gate un-checked (deliberately — refusing every
+  un-evaluated adoption would dead-end brownfield). Until the evaluator lands,
+  run the checks in §Step 4 of the brownfield walkthrough by hand for anything
+  you adopt.
 
 ---
 

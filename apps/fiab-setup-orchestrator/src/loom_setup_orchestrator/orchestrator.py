@@ -174,6 +174,12 @@ def _deploy_parameters(req: Any) -> dict[str, dict[str, Any]]:
     vanity = _get(req, "vanity_domain")
     if vanity:
         params["vanityDomain"] = {"value": vanity}
+    adopt = _get(req, "adopt")
+    if adopt:
+        # #3016 — the operator's adopt-or-create bag. Before this the request
+        # field was silently dropped (extra="ignore") and every orchestrator
+        # deploy provisioned duplicates beside the resources chosen for reuse.
+        params["adopt"] = {"value": adopt}
     return params
 
 
@@ -235,6 +241,11 @@ def _attach_parameters(req: Any) -> dict[str, dict[str, Any]]:
             val = _get(req, snake)
         if val is not None:
             params[field] = {"value": val}
+    adopt = _get(req, "adopt")
+    if adopt:
+        # #3016 — same bag, attach path (an attached DLZ can reuse ADX/Event
+        # Hubs/etc. exactly like a tenant install can).
+        params["adopt"] = {"value": adopt}
     return params
 
 
