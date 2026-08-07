@@ -1334,6 +1334,30 @@
         "LIKELY ROOT CAUSE from D7: full-app-deploy's concurrency group was keyed on inputs.region||'auto', so two runs landed in different groups and RACED for the same ACR firewall lease — one run's re-lock could be undone by the other's open. D7 made the group a constant, which should prevent recurrence, but the re-lock step still has no verify-after-write and would still report success on a no-op.",
         "SECURITY: this left the Commercial ACR publicly reachable for an unknown window while CI reported green."
       ]
+    },
+    {
+      "id": "C25",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 98,
+      "status": "doing",
+      "title": "LIVE AUTO-BIND VIOLATION the operator hit in production: 'Admin access required … Set LOOM_TENANT_ADMIN_OID … on the loom-console container app'. The gate was closed for EVERYONE — neither env var existed on the console at all",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "ROOT CAUSE CHAIN (measured): admin-plane/main.bicep:4438 sets LOOM_TENANT_ADMIN_GROUP_ID from loomTenantAdminGroupId, :4446 sets LOOM_TENANT_ADMIN_OID from effectiveTenantAdminOid (main.bicep:1813 = loomTenantAdminOid OR (hasRealAdminGroup ? '' : deployer().objectId)). params/commercial.bicepparam:171-172 read them from LOOM_TENANT_ADMIN_GROUP_ID / LOOM_TENANT_ADMIN_OID, falling back to adminEntraGroupId which reads LOOM_ADMIN_ENTRA_GROUP_ID. deploy-fiab-commercial.yml SUPPLIES NONE OF THE THREE (grep = 0 hits) -> all resolve '' -> unusable admin gate shipped.",
+        "RULE VIOLATIONS: auto-bind-by-default §5 ('Set LOOM_X as the terminal user-facing state is a violation — the value must be produced by the deploy') and ux-baseline G2 (a gate needs an inline Fix-it + gate-registry entry, never a paragraph telling the user to edit a container app).",
+        "ORCHESTRATOR STOPGAP (hand-set, WILL be reverted by the next deploy): set LOOM_TENANT_ADMIN_GROUP_ID=716f5ec5 (the real 'Loom Admins' Entra group, operator already a member) and LOOM_TENANT_ADMIN_OID=866a2e12 on loom-console. Console verified Succeeded/Running, root 200, /api/auth/me 401.",
+        "DIAGNOSTIC TRAP WORTH KEEPING: `az` default account was the operator's HOUSE GAROFALO tenant (c3b702e5) while the estate is in limitlessdata.ai (d1fc0498). The first OID pulled (d91dc3a3, fgarofalo@housegarofalo.com) was the WRONG identity and would have granted nothing while looking correct. Correct OID is 866a2e12 in the limitlessdata tenant. ALWAYS confirm the tenant before binding an identity.",
+        "a real Entra group EXISTS — 'Loom Admins' 716f5ec5 — so the platform had everything it needed to self-bind and instead shipped a config instruction."
+      ]
     }
   ],
   "operator_queue": [
