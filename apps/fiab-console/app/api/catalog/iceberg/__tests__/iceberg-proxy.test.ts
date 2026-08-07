@@ -42,10 +42,34 @@ vi.mock('@/lib/azure/arm-credential', () => ({
 }));
 
 // ── upstream fetch double ──────────────────────────────────────────────────
+//
+// TWO upstream hops are modelled, because the real catalog needs both (F1):
+//
+//   1. POST /api/1.0/unity-control/auth/tokens — exchange the Console's Entra
+//      token for a SERVER-MINTED internal token.
+//   2. the actual /api/2.1/unity-catalog/iceberg/… call, carrying that internal
+//      token.
+//
+// Modelling only hop 2 is what let the original bug ship. This file's
+// "sends the server-minted bearer upstream" test asserted
+// `Bearer tok-api://app-client-id/.default` — the RAW Entra token straight from
+// the credential double — so it passed against code that never exchanged at all,
+// while the live catalog answered every such call 403. The fixture modelled the
+// CODE, not the server. It now models the server.
+const upstreamAll: Array<{ url: string; init: any }> = [];
+/** Catalog hops only — the exchange is infrastructure, not the assertion target. */
 const upstream: Array<{ url: string; init: any }> = [];
+const INTERNAL_TOKEN = 'internal-minted-token';
 let respond: () => Response = () => new Response('{}', { status: 200 });
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
-  fetchWithTimeout: async (url: string, init: any) => { upstream.push({ url, init }); return respond(); },
+  fetchWithTimeout: async (url: string, init: any) => {
+    upstreamAll.push({ url, init });
+    if (String(url).includes('/api/1.0/unity-control/auth/tokens')) {
+      return new Response(JSON.stringify({ access_token: INTERNAL_TOKEN }), { status: 200 });
+    }
+    upstream.push({ url, init });
+    return respond();
+  },
 }));
 
 const BASE = 'https://iceberg-catalog.internal.example.net';
@@ -64,6 +88,7 @@ function req(url: string, init: RequestInit = {}) {
 
 beforeEach(() => {
   upstream.length = 0;
+  upstreamAll.length = 0;
   auditRows.length = 0;
   respond = () => new Response('{}', { status: 200 });
   sessionValue = { claims: { oid: 'oid-1', upn: 'analyst@contoso.com', tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 };
@@ -137,8 +162,26 @@ describe('Entra auth injection', () => {
     }));
     expect(res.status).toBe(200);
     expect(upstream).toHaveLength(1);
-    expect(upstream[0].init.headers.authorization).toBe('Bearer tok-api://app-client-id/.default');
+    // The INTERNAL token from the exchange — not the raw Entra token, which the
+    // catalog's AuthDecorator answers 403 (measured live: HTTP 403 in ~307ms,
+    // warm and reproducible, before this exchange was wired).
+    expect(upstream[0].init.headers.authorization).toBe(`Bearer ${INTERNAL_TOKEN}`);
+    expect(upstream[0].init.headers.authorization).not.toContain('tok-api://');
     expect(upstream[0].init.headers.authorization).not.toContain('loom_pat_caller_secret');
+  });
+
+  it('exchanges the Entra token at THIS catalog, not at LOOM_UNITY_URL', async () => {
+    // iceberg-catalog and loom-unity are separate Container Apps with separate
+    // databases and separate minted-token state, so a token minted by one is not
+    // honoured by the other. Exchanging at the wrong base fails closed upstream.
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal.example.net';
+    respond = () => new Response(JSON.stringify({ namespaces: [['gold']] }), { status: 200 });
+    const { GET } = await import('../namespaces/route');
+    await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
+    const exchange = upstreamAll.find((h) => String(h.url).includes('/auth/tokens'));
+    expect(exchange).toBeDefined();
+    expect(exchange!.url).toBe(`${BASE}/api/1.0/unity-control/auth/tokens`);
+    delete process.env.LOOM_UNITY_URL;
   });
 
   it('returns the namespaces in both spec (levels) and human (dotted) form', async () => {

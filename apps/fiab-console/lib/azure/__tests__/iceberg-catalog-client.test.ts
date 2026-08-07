@@ -31,10 +31,22 @@ vi.mock('@/lib/azure/arm-credential', () => ({
 }));
 
 // ── fetch double ───────────────────────────────────────────────────────────
-const calls: Array<{ url: string; init: any }> = [];
+//
+// Models BOTH upstream hops (F1): the token EXCHANGE that turns the Console's
+// Entra token into a server-minted internal token, and the catalog call that
+// carries it. Modelling only the second hop is what let the 403 ship — these
+// tests used to assert `Bearer tok-for-api://…/.default`, i.e. the raw Entra
+// token straight from the credential double, which the live catalog rejects.
+const calls: Array<{ url: string; init: any }> = [];      // catalog hops only
+const allCalls: Array<{ url: string; init: any }> = [];   // every hop
+const INTERNAL_TOKEN = 'internal-minted-token';
 let nextResponse: () => Response = () => new Response('{}', { status: 200 });
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
   fetchWithTimeout: async (url: string, init: any) => {
+    allCalls.push({ url, init });
+    if (String(url).includes('/api/1.0/unity-control/auth/tokens')) {
+      return new Response(JSON.stringify({ access_token: INTERNAL_TOKEN }), { status: 200 });
+    }
     calls.push({ url, init });
     return nextResponse();
   },
@@ -57,12 +69,17 @@ import {
   namespaceToDotted,
   registerTable,
 } from '../iceberg-catalog-client';
+import { resetUcTokenExchangeCache } from '../uc-token-exchange';
 
 const SEP = String.fromCharCode(0x1f);
 const BASE = 'https://iceberg-catalog.internal.example.net';
 
 beforeEach(() => {
   calls.length = 0;
+  allCalls.length = 0;
+  // Process-wide minted-token cache: without this a later test reuses the
+  // token an earlier one minted and never fires the exchange it asserts on.
+  resetUcTokenExchangeCache();
   created.length = 0;
   emitted.length = 0;
   getTokenMock.mockClear();
@@ -147,10 +164,25 @@ describe('namespace + table encoding (Iceberg REST spec)', () => {
 });
 
 describe('Entra auth injection on the upstream hop', () => {
-  it('acquires a REAL token for the deployment app audience', async () => {
+  it('acquires a REAL token for the deployment app audience, then EXCHANGES it', async () => {
     const h = await icebergAuthHeader();
     expect(getTokenMock).toHaveBeenCalledWith('api://app-client-id/.default');
-    expect(h.authorization).toBe('Bearer tok-for-api://app-client-id/.default');
+    // The internal token, not the Entra one. The catalog's AuthDecorator rejects
+    // any bearer whose `iss` is not its own `internal` issuer — measured live as
+    // HTTP 403 in ~307ms, warm and reproducible, before this exchange existed.
+    expect(h.authorization).toBe(`Bearer ${INTERNAL_TOKEN}`);
+    expect(h.authorization).not.toContain('tok-for-');
+  });
+
+  it('exchanges at THIS catalog, not at LOOM_UNITY_URL', async () => {
+    // Separate Container Apps, separate databases, separate minted-token state:
+    // a token minted by loom-unity is not honoured by iceberg-catalog.
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal.example.net';
+    await icebergAuthHeader();
+    const exchange = allCalls.find((c) => String(c.url).includes('/auth/tokens'));
+    expect(exchange).toBeDefined();
+    expect(exchange!.url).toBe(`${icebergCatalogBase()}/api/1.0/unity-control/auth/tokens`);
+    delete process.env.LOOM_UNITY_URL;
   });
 
   it('honours an explicit audience override', async () => {
@@ -175,7 +207,7 @@ describe('Entra auth injection on the upstream hop', () => {
     await getCatalogConfig();
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain('/v1/config?warehouse=loom');
-    expect(calls[0].init.headers.authorization).toBe('Bearer tok-for-api://app-client-id/.default');
+    expect(calls[0].init.headers.authorization).toBe(`Bearer ${INTERNAL_TOKEN}`);
   });
 });
 

@@ -24,7 +24,12 @@ export default defineConfig({
   reporter: [['list'], ['json', { outputFile: 'test-results/uat/report.json' }]],
   outputDir: 'test-results/uat/artifacts',
   use: {
-    baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+    // Default is the VANITY URL, which is live. The previous default,
+    // `loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`, answers 404 on every path
+    // (measured 2026-08-07) — a dead host as the fallback means a local run with
+    // no LOOM_URL silently walks nothing and reports whatever a 404 page yields.
+    // CI is unaffected either way: loom-ui-verify always exports LOOM_URL.
+    baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://csa-loom.limitlessdata.ai',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     // 30s, not 15s: actionTimeout also caps page.request.* API calls, and the
@@ -361,6 +366,29 @@ export default defineConfig({
         storageState: 'e2e/.auth/loom-state.json',
         viewport: { width: 1600, height: 1000 },
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // F1 — the external-engine federation deep dive (Iceberg REST Catalog +
+      // Trino + Unity). Drives the live federation data path AND the browser
+      // surfaces, and writes measured timings to
+      // test-results/receipts/external-engine-federation-timings.json.
+      //
+      // Retries for the same reason route-smoke carries them: the engines are
+      // scale-to-zero Container Apps, so the FIRST call of a run can cold-start
+      // for tens of seconds while later calls answer in ~200ms. Without retries
+      // an intermittent cold-start timeout is indistinguishable from a real
+      // regression — which is exactly the ambiguity that gets "fixed" by
+      // wrapping a step in continue-on-error and reporting nothing.
+      name: 'external-engine-federation',
+      testDir: './e2e',
+      testMatch: /external-engine-federation\.spec\.ts/,
+      dependencies: ['mint'],
+      retries: 2,
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1000 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://csa-loom.limitlessdata.ai',
       },
     },
   ],

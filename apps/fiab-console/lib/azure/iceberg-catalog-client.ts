@@ -200,19 +200,42 @@ export function ircUrl(subPath: string, query?: Record<string, string | undefine
 }
 
 /**
- * The Entra bearer injected on the upstream hop. Real token acquisition through
- * the shared ACA-first UAMI credential chain (`uamiArmCredential`), scoped to
- * the catalog's audience:
+ * The bearer injected on the upstream hop.
+ *
+ * A pre-shared bearer (`LOOM_ICEBERG_CATALOG_TOKEN`, injected via Key Vault
+ * secretRef) takes precedence for a UC OSS server configured with static-token
+ * auth.
+ *
+ * Otherwise: mint an Entra token through the shared ACA-first UAMI credential
+ * chain (`uamiArmCredential`), scoped to the catalog's audience —
  *
  *   LOOM_ICEBERG_CATALOG_AUDIENCE (explicit), else
  *   api://<LOOM_MSAL_CLIENT_ID>/.default (the deployment's own app registration)
  *
- * A pre-shared bearer (`LOOM_ICEBERG_CATALOG_TOKEN`, injected via Key Vault
- * secretRef) takes precedence for a UC OSS server configured with static-token
- * auth. When NEITHER is resolvable the hop still proceeds unauthenticated — the
+ * — and then **exchange it** for a server-minted internal token, which is what
+ * actually goes on the wire.
+ *
+ * That exchange is not optional (F1). The Iceberg REST Catalog is the loom-unity
+ * image, whose AuthDecorator rejects any bearer whose `iss` is not its own
+ * `internal` issuer — so presenting the raw Entra token is answered **403 even
+ * with a byte-exact audience**. That is exactly what the live Commercial console
+ * did: `GET /api/catalog/iceberg/namespaces` returned
+ * `{"error":"Iceberg REST Catalog returned HTTP 403"}` in ~307ms, warm and
+ * reproducible, while the sibling Unity path — which has done the exchange since
+ * #2679 — worked. The helper existed; this caller had never adopted it.
+ *
+ * The exchange is performed against THIS catalog's base, not `LOOM_UNITY_URL`:
+ * `iceberg-catalog` and `loom-unity` are separate Container Apps with separate
+ * databases and separate minted-token state, so a token minted by one is not
+ * honoured by the other.
+ *
+ * When no audience is resolvable the hop still proceeds unauthenticated — the
  * catalog has internal ingress and the VNet is the perimeter (identical posture
  * to the sibling loom-unity / loom-onelake internal services) — but the failure
- * is logged so it is never silent.
+ * is logged so it is never silent. A FAILED EXCHANGE, by contrast, throws: the
+ * fallback of retrying with the raw Entra token would either 403 opaquely or —
+ * far worse — succeed against a server running with authorization disabled, and
+ * so hide the very misconfiguration it should surface.
  */
 export async function icebergAuthHeader(): Promise<Record<string, string>> {
   const preShared = (process.env.LOOM_ICEBERG_CATALOG_TOKEN || '').trim();
@@ -222,14 +245,19 @@ export async function icebergAuthHeader(): Promise<Record<string, string>> {
     || (process.env.LOOM_MSAL_CLIENT_ID ? `api://${process.env.LOOM_MSAL_CLIENT_ID}/.default` : '');
   if (!audience) return {};
 
+  let entraToken: string | undefined;
   try {
-    const token = await uamiArmCredential().getToken(audience);
-    if (token?.token) return { authorization: `Bearer ${token.token}` };
+    entraToken = (await uamiArmCredential().getToken(audience))?.token;
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn('[iceberg-catalog] Entra token for %s unavailable: %s', audience, (e as Error)?.message || e);
+    return {};
   }
-  return {};
+  if (!entraToken) return {};
+
+  const { exchangeForInternalUcToken } = await import('@/lib/azure/uc-token-exchange');
+  const internal = await exchangeForInternalUcToken(entraToken, icebergCatalogBase());
+  return { authorization: `Bearer ${internal}` };
 }
 
 /**
