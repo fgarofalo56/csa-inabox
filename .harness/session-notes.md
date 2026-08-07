@@ -1,102 +1,86 @@
 # FINISHLINE session notes
 
-## Session 1 — 2026-08-06/07 (initializer → Wave 0/1/2 → Actions incident → merge queue)
+## Session 1 — 2026-08-06/07
 
-### What is merged to main
+### MERGED TO MAIN: 17 PRs
 
-| PR | What |
-|---|---|
-| #3050 | ledger seed (39 AUDIT rows → PIV tasks) |
-| #3045 | release 0.88.1 (standing approval) |
-| #3059 | Wave-0 ledger update |
-| **#3055** | **D9 — loom-uat CVE-2025-68121 root fix** (vite ^7; unblocks `full-app-deploy-commercial`, measured at 13 consecutive failures / 47 days undeployed) |
-| **#3054** | **D1 — risingwave probe caps + netns port-seal scoping** (app Running live for the first time ever) |
+D9 (loom-uat CVE) · D1 (risingwave probe + netns port-seal) · D4-D6 (brownfield
+idempotency) · D13 (workflow hygiene + guards) · C7 ×2 (workspace wizard +
+register truth) · C14 (14 parity docs, 9 editor specs) · **C19 (editor
+DATA-LOSS fix)** · C1 (apex Phase-E artifacts) · P2-DOCS (docs currency + D17) ·
+E2-E4 (corpus-wide BM25) · D15 (honest day-one scoring) · D3 (AcrPull
+sequencing) · D2 (privatelink zone + unity) · ledger ×2 · release 0.88.1.
 
-`#3072` is release-please 0.88.2, cut from the above.
+**D10 (#3062) is the last queue PR** — green except the known main-branch evals
+gate, awaiting final checks.
 
-### THE INCIDENT (shaped most of this session)
+### DEPLOYMENT TRUTH (the number that matters)
 
-GitHub "Incident with Actions", opened 15:22Z. Its 20:34Z update is the load-bearing
-detail: **webhooks throttled to ~15%**, so pushes and PRs often never created runs
-at all. Separately the Actions **API surface was load-shed** (`actions/runs` 403,
-run-cancel 502) while PR/GraphQL APIs worked. Recovery began ~23:13Z.
+Estate advanced `f534d87c` → **`a6dc9e58`** during the session (auto-roll works).
 
-**Do not mistake absent checks for passing checks.** Nine PRs had ZERO check runs;
-they were repaired by close+reopen. If a future incident throttles webhooks, that
-re-trigger is mandatory.
+- **LIVE:** D9, D1.
+- **MERGED, NOT DEPLOYED:** the other ~12, including the C19 data-loss fix.
+- `full-app-deploy-commercial` run **31143181962** dispatched with
+  **`region=centralus` EXPLICIT** — the input defaults to `eastus2` (#3029) and
+  D7 hasn't landed. **Any dispatch must pass region until D7 merges.**
+  `skip_supply_chain` deliberately NOT used.
 
-**Blockers removed by the orchestrator:**
-- **Disabled 3 permanently-failing workflows** — `copilot-auto-fix.yml`,
-  `csa-loom-spark-livy-probe.yml`, `csa-loom-spark-probe2.yml`. Invalid YAML means
-  GitHub records a failed run on EVERY push (it must parse each file to decide
-  triggering) — 24 today. **#3061 fixes all three; re-enable with
-  `gh workflow enable <file>` once it lands.** All three are dispatch/label-gated,
-  so no scheduled monitoring was lost. `copilot-auto-fix` has NEVER executed, so its
-  5-layer defense-in-depth is untested — watch its first labelled run.
-  `csa-loom-spark-probe2.yml` differs from the livy probe by ONE line (`name:`) →
-  retire candidate (OP-16).
-- Cancelled 4 non-essential queued runs to free constrained capacity.
+### THE BIG PICTURE FOR FEDERATION (operator's live question)
 
-### EVERY post-recovery CI failure was a real guard catching a real gap
+`iceberg-catalog`, `loom-trino`, `loom-unity` are all **Succeeded/Running** on
+internal ingress. The console still holds the placeholder
+`LOOM_ICEBERG_CATALOG_URL=https://0.0.0.0:3000/...` and has **no `LOOM_TRINO_*`**.
+main's bicep ALREADY emits the right values (D2 moved it in-orchestrator) — so
+this is merged-not-deployed and lights up on the next **admin-plane deploy**.
 
-None flaky, none incident debris:
-- **route-toolkit** boy-scout ratchet ×4 — #3064/#3051 cleared with mutation-verified
-  TOUCH_EXEMPT; #3062 MIGRATED cleanly; #3068 handed back.
-- **deploy-paths-coverage** (#3067) — `full-app-deploy-commercial` now deploys from
-  the new mirror manifest but its WATCHED entry doesn't watch those paths. A mirror
-  change could go undeployed unnoticed. *This program's target class.*
-- **file-size monolith-creep** (#3069) — real split requested, not an allowlist entry.
-- **vitest failure-taxonomy** (#3058) — the new `capacity` retryable class trips a
-  deliberation gate. Extend the exhaustive set WITH justification; never soften
-  deep-equal to `.includes()`.
-- **deploy-template-sync** (#3054/#3052/#3057) — compiled ARM artifact not
-  regenerated, caught AFTER reviewers passed those PRs.
+**Do NOT hand-wire it with `az containerapp update`** — the bicep comment names
+that as the anti-pattern the next deploy silently reverts.
 
-### C22 — found by mutation, then INDEPENDENTLY CORROBORATED
+- **Audience registered 2026-08-07:** `api://5c59f3f3-e26d-4122-a707-a04e21ff5255`
+  added to `CSA Loom Console (kv-loom-k6mvh5sm6z7do)` (`identifierUris` was `[]`).
+  Console root 200 and `/api/auth/me` 401 verified after — sign-in intact.
+- **Blocker: D7** (safe deploy inputs). `deploy-fiab-commercial` still defaults
+  `keep_resources=false` (tears down the admin RG, #3028) and `region=eastus2`
+  (#3029). **OP-13 is blocked by D7, not just operator availability.**
 
-While justifying a TOUCH_EXEMPT I claimed `check-route-guards` protected the
-workspaces route. It does not: its remit is authorization on routes taking an `[id]`
-from the URL, so on a **collection** route you can delete the 401 entirely and it
-stays GREEN. The D10 agent reproduced this independently (auth removed → contract
-test 5/5 red, route-guards 0 violations across 1424 routes). **Admin/collection
-routes have no CI control on their 401/403.** Task C22.
+### NEW DIE-HARD RULE — `.claude/rules/cloud-parity.md`
 
-### Evals-gate circularity (governs merge order)
+Operator, 2026-08-07: *"parallel support offering the same capabilities and
+features no matter the cloud."* A Commercial-only capability is **INCOMPLETE**,
+not "Commercial-first". Load-bearing: **Unity Catalog is not in MAG**, so Loom
+Unity + Iceberg/Trino federation IS the Gov catalog story. "That service isn't
+in Gov" is the START of the design problem — supply the Azure-native/OSS
+equivalent.
 
-"Run + gate Copilot quality evals" is a required check firing on docs/PRPs/content
-changes. It is legitimately RED until **#3053 (E1 judge)** and **#3069 (E2 surfaces)**
-land — and it currently blocks **#3057, #3061, #3065, #3066, #3070**. So:
+### IN FLIGHT
 
-**MERGE ORDER: #3053 → #3069 → everything else.**
+- **D7** — safe deploy inputs + mutation-proved refusal guards (gates federation).
+- **Gov parity lane** — re-briefed under cloud-parity; capability-by-capability
+  Commercial↔Gov, store-cutover verdict, sequenced dispatch plan.
+- **Deploy run 31143181962** — queued behind this session's own CI fan-out.
 
-### Open PRs (13)
+### OPERATOR QUEUE (highest leverage first)
 
-3053 E1 · 3057 D2 · 3058 D4-D6 · 3061 D13 · 3062 D10 · 3064+3065 C7 · 3066 C1 ·
-3067 D14 · 3068 C3 · 3069 E2-E4 · 3070 P2-DOCS · 3071 C14 · 3073 C19 · 3072 release
+1. **#2330** Gov SP UAA grant on the Gov admin RG — needs rights a workflow
+   can't self-grant; several Gov items unblock behind it.
+2. **#2643** Gov unity auth DISABLED live (anonymous read+mutate since 07-15) —
+   needs a 3.5-4.5h attended window, or say the word for an interim IP-restrict.
+3. **Function App teardown** — 7 apps billing while executing nothing
+   (FunctionExecutionCount sum=0/13d). Duplicate timers already disabled by the
+   orchestrator; DELETION needs explicit approval.
+4. **svc-postgres** default-ON vs policy-accepted opt-in (cost call).
+5. **D6 screenshots** (0/159) and the **Esri license**.
 
-### Owed after the queue drains
+### DO-NOT-REPEAT (measured this session)
 
-1. `full-app-deploy-commercial` dispatch (D9's V4 — closes #3024/#3036).
-2. **C13 first**: `loom-ui-verify` has been red since 2026-08-04, so EVERY V3 receipt
-   in this program is blocked. Anything closed on a G1 basis since 08-04 lacks its
-   stated evidence.
-3. An admin-plane deploy (C3's bicep half, D14's s3-gateway default-ON, D2's console
-   `LOOM_UNITY_*` wiring).
-4. Re-enable the 3 disabled workflows once #3061 lands.
-
-### Operator queue — 19 items in `state.json.operator_queue`
-
-Highest leverage: **OP-13** (attended D4-D6 proving deploy, with the #3056
-token-overwrite watch) · **OP-1** (#2643 Gov unity auth still DISABLED live) ·
-**OP-19** (disable the 2 enabled Function timers duplicating live ACA crons — cheap
-double-execution mitigation; plus 7 Function Apps billing while executing nothing) ·
-**OP-6/#2330** (Gov SP UAA grant) · **OP-18** (#2970 must be re-titled — its stated
-hypothesis is falsified) · **OP-16** (3 D13 decisions).
-
-### Hazards confirmed this session
-
-Never `git stash`. Every agent in its OWN worktree. `git show <ref>:<path>` needs
-`MSYS_NO_PATHCONV=1`. `json.load` needs `encoding='utf-8'`. Junctions: `cmd //c mklink`
-is mangled — use PowerShell `New-Item -ItemType Junction`. Direct push to main is
-rule-blocked. Never run a `--family=` codemod (scope creep); use `--file=`.
-`--admin` ONLY to drain strict BEHIND-staleness on a PR whose own checks are green.
+- Absent checks are NOT passing checks — a webhook-throttled incident silently
+  creates zero runs; re-trigger with close+reopen.
+- `--admin` ONLY to drain strict BEHIND-staleness on a PR whose OWN checks are
+  green, then WATCH main. The evals-gate clearance was justified by it failing on
+  main across 3 SHAs BEFORE any queued PR existed — not a precedent.
+- Compiled artifacts (`deploy-templates/main.json`, `route-inventory.md`) are
+  REGENERATED on conflict, never hand-merged. A hand-merge silently dropped a
+  sibling's fix in one measured case.
+- Never run a `--family=` codemod (scope creep); use `--file=`.
+- Gov: **never local az**, Actions only.
+- Junctions: `cmd //c mklink` is mangled — use PowerShell `New-Item -ItemType Junction`.
