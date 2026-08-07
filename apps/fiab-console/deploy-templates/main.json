@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "2416356310974926866"
+      "templateHash": "17426501164799059627"
     }
   },
   "definitions": {
@@ -2492,7 +2492,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "13735293191531275744"
+              "templateHash": "7813418010961374580"
             }
           },
           "definitions": {
@@ -18660,7 +18660,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "6055778454588031400"
+                      "templateHash": "3314731975484587412"
                     }
                   },
                   "parameters": {
@@ -18847,7 +18847,8 @@
                   },
                   "variables": {
                     "sqlHostSuffix": "[environment().suffixes.sqlServerHostname]",
-                    "privateDnsZoneName": "[format('privatelink.postgres{0}', variables('sqlHostSuffix'))]",
+                    "pgHostSuffix": "[if(equals(variables('sqlHostSuffix'), '.database.windows.net'), '.database.azure.com', variables('sqlHostSuffix'))]",
+                    "privateDnsZoneName": "[format('privatelink.postgres{0}', variables('pgHostSuffix'))]",
                     "peVnetId": "[join(take(split(parameters('privateEndpointSubnetId'), '/'), 9), '/')]",
                     "createDnsZone": "[empty(parameters('privateDnsZoneId'))]",
                     "dnsVnetIds": "[union(createArray(variables('peVnetId')), parameters('additionalDnsVnetIds'))]",
@@ -20694,7 +20695,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "9645367335115885357"
+                      "templateHash": "7468890824330012830"
                     }
                   },
                   "parameters": {
@@ -20860,7 +20861,8 @@
                   },
                   "variables": {
                     "sqlHostSuffix": "[environment().suffixes.sqlServerHostname]",
-                    "privateDnsZoneName": "[format('privatelink.postgres{0}', variables('sqlHostSuffix'))]",
+                    "pgHostSuffix": "[if(equals(variables('sqlHostSuffix'), '.database.windows.net'), '.database.azure.com', variables('sqlHostSuffix'))]",
+                    "privateDnsZoneName": "[format('privatelink.postgres{0}', variables('pgHostSuffix'))]",
                     "peVnetId": "[join(take(split(parameters('privateEndpointSubnetId'), '/'), 9), '/')]",
                     "createDnsZone": "[empty(parameters('privateDnsZoneId'))]",
                     "dnsVnetIds": "[union(createArray(variables('peVnetId')), parameters('additionalDnsVnetIds'))]"

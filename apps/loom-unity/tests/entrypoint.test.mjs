@@ -54,6 +54,13 @@ test('LU-1: the DEFAULT Postgres path is PASSWORDLESS — plugin + sslmode, no p
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /org\.postgresql\.Driver/);
   assert.match(r.stdout, /hibernate\.connection\.username=uami-loom-unity/);
+  // BOTH spellings, mandatorily (finishline D2, root-caused live on Commercial):
+  // Hibernate reads `.username`; upstream JCasbinAuthorizer reads `.user`
+  // verbatim to build its casbin JDBCAdapter. Rendering only `.username` made
+  // the authorizer connect as user=null (the OS user, no such role on the
+  // Entra-only server) and the boot died with the cause-swallowed
+  // "Problem initializing authorizer."
+  assert.match(r.stdout, /hibernate\.connection\.user=uami-loom-unity/);
   assert.match(r.stdout, /sslmode=require/);
   assert.match(
     r.stdout,

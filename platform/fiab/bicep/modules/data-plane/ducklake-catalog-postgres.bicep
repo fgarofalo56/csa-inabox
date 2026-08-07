@@ -172,11 +172,25 @@ param complianceTags object = {}
 // The Postgres data-plane suffix differs per cloud and so does the private-link
 // zone name. environment().suffixes.sqlServerHostname is the ARM-provided
 // per-cloud SQL/DB hostname suffix ('.database.windows.net' /
-// '.database.usgovcloudapi.net'); the flexible-server privatelink zone is
-// 'privatelink.postgres' + that same suffix. Nothing hard-coded on a code path
-// (identical derivation to data-plane/loom-unity-postgres.bicep).
+// '.database.usgovcloudapi.net'). The PG suffix does NOT equal the SQL suffix
+// in Commercial: PostgreSQL flexible server is '.database.azure.com', so the
+// documented privatelink zone is privatelink.postgres.database.azure.com
+// (learn.microsoft.com/azure/private-link/private-endpoint-dns#commercial);
+// deriving from the SQL suffix alone produced
+// privatelink.postgres.database.windows.net — a zone the platform never
+// resolves through, which is the empty fossil zone on the live Commercial
+// estate (#3039). Sovereign suffixes coincide and pass through unchanged.
+// This matters beyond DuckLake itself: the orchestrator hands THIS module's
+// zone to data-plane/loom-unity-postgres.bicep (zone-collision contract), so a
+// wrong name here breaks Loom Unity's DB resolution too.
+// (Identical derivation to data-plane/loom-unity-postgres.bicep.)
 var sqlHostSuffix = environment().suffixes.sqlServerHostname
-var privateDnsZoneName = 'privatelink.postgres${sqlHostSuffix}'
+// The '.database.windows.net' literal below is a COMPARISON key (detecting the
+// Commercial/GCC SQL suffix), not a hardcoded endpoint — the emitted value
+// still derives from environment().suffixes. Linter can't tell the difference.
+#disable-next-line no-hardcoded-env-urls
+var pgHostSuffix = sqlHostSuffix == '.database.windows.net' ? '.database.azure.com' : sqlHostSuffix
+var privateDnsZoneName = 'privatelink.postgres${pgHostSuffix}'
 
 // VNet that owns the private-endpoint subnet:
 //   /subscriptions/S/resourceGroups/RG/providers/Microsoft.Network/virtualNetworks/V/subnets/SUB

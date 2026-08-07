@@ -151,12 +151,31 @@ param complianceTags object = {}
 // Commercial/GCC, postgres.database.usgovcloudapi.net in GCC-High/IL5) and so
 // does the private-link zone name. environment().suffixes.sqlServerHostname is
 // the ARM-provided per-cloud SQL/DB hostname suffix ('.database.windows.net' /
-// '.database.usgovcloudapi.net'); the Postgres flexible-server privatelink zone
-// is 'privatelink.postgres' + the same second-level suffix. Nothing is
-// hard-coded on a code path (mirrors admin-plane/main.bicep's
-// LOOM_POSTGRES_AAD_SCOPE derivation).
+// '.database.usgovcloudapi.net').
+//
+// The PG suffix does NOT equal the SQL suffix in Commercial: SQL Server is
+// '.database.windows.net' while PostgreSQL flexible server is
+// '.database.azure.com', so the documented privatelink zone is
+// privatelink.postgres.database.azure.com (learn.microsoft.com/azure/
+// private-link/private-endpoint-dns#commercial). In Azure Government and
+// Azure China the two suffixes coincide ('.database.usgovcloudapi.net' /
+// '.database.chinacloudapi.cn'), which is why the earlier derivation —
+// 'privatelink.postgres' + sqlServerHostname — was right in Gov and WRONG in
+// Commercial: it produced privatelink.postgres.database.windows.net, a zone
+// name the platform never resolves through, so the PE zone group wrote records
+// nothing ever queried and the catalog's JDBC hostname could not resolve. The
+// live Commercial estate carries exactly that fossil (an empty
+// privatelink.postgres.database.windows.net zone + hub-VNet link, #3039), and
+// lib/azure/pe-subresource-groups.ts has carried the correct per-cloud mapping
+// all along. Map ONLY the Commercial special case; every sovereign suffix
+// passes through unchanged.
 var sqlHostSuffix = environment().suffixes.sqlServerHostname // '.database.windows.net' | '.database.usgovcloudapi.net'
-var privateDnsZoneName = 'privatelink.postgres${sqlHostSuffix}'
+// The '.database.windows.net' literal below is a COMPARISON key (detecting the
+// Commercial/GCC SQL suffix), not a hardcoded endpoint — the emitted value
+// still derives from environment().suffixes. Linter can't tell the difference.
+#disable-next-line no-hardcoded-env-urls
+var pgHostSuffix = sqlHostSuffix == '.database.windows.net' ? '.database.azure.com' : sqlHostSuffix
+var privateDnsZoneName = 'privatelink.postgres${pgHostSuffix}'
 
 // VNet that owns the private-endpoint subnet:
 //   /subscriptions/S/resourceGroups/RG/providers/Microsoft.Network/virtualNetworks/V/subnets/SUB
