@@ -39,7 +39,6 @@
     "loom-drift-check.yml": 6,
     "loom-parity-autopilot.yml": 1,
     "loom-roll-and-validate.yml": 1,
-    "loom-ui-verify.yml": 1,
     "publish-ghcr-images.yml": 2,
     "release-please.yml": 2,
     "slsa-provenance.yml": 1,
