@@ -192,7 +192,7 @@ This is the **brownfield class**. Most of these mean *something already exists*
 | `PrivateDnsZoneAlreadyExists` | The `privatelink.*` zone exists — almost always a re-deploy after a partial failure | Delete the conflicting zone (`az network private-dns zone delete -n <zone> -g <rg>`) or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter.** An earlier version of this runbook claimed one; it has never existed |
 | `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c-no-adoption-path-exists-today) |
 | `StorageAccountAlreadyTaken` | Storage account names are globally unique | Change the deployment name prefix |
-| `RoleAssignmentExists` | Re-deploy over existing grants | Re-run with `skip_role_grants=true`, or delete the conflicting assignment |
+| `RoleAssignmentExists` | Re-deploy over existing grants. ARM enforces uniqueness on the **(scope, principalId, roleDefinitionId) triple**, not on the assignment name — so an assignment created under any other name blocks the template's deterministic `guid()` name forever | Delete the conflicting assignment and let the template recreate it under its own name. **See [Identifying a `RoleAssignmentExists` blocker](#identifying-a-roleassignmentexists-blocker) below — three distinct causes, three different judgements.** `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled — a workaround, not a fix |
 | `InvalidTemplateDeployment` on Container Apps in IL4/IL5 | Container Apps is not available at that impact level | Set `containerPlatform = 'aks'` in the parameter file |
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | Phase 1 ran with `deployAppsEnabled=true` against an **empty** ACR | Re-run phase 1 with `deployAppsEnabled=false`, then run the image phase. See [Greenfield](greenfield.md#the-shape-of-a-greenfield-deploy) |
 | `ResourceGroupNotFound` early in the app-deploy workflow | The workflow's `region` input does not match the region the estate is in, so it resolved `rg-csa-loom-admin-<wrong-region>` | Pass `-f region=<your-region>` explicitly |
@@ -201,11 +201,65 @@ This is the **brownfield class**. Most of these mean *something already exists*
 
 ---
 
+### Identifying a `RoleAssignmentExists` blocker
+
+Three separate blockers were cleared from centralus on 2026-08-07 (#3038) and
+they had **three different causes**. Never delete a role assignment you have not
+positively identified — but equally, do not assume `skip_role_grants=true`.
+
+**Step 1 — put the dashes back.** ARM prints the existing id with the dashes
+**stripped**. Searching the literal 32-char string returns EMPTY from every
+`az role assignment list`, which reads as "already gone, message is stale" and
+is wrong. Re-insert the 8-4-4-4-12 dashes:
+`fb246cf1ed234179a4737413534056b8` → `fb246cf1-ed23-4179-a473-7413534056b8`.
+
+**Step 2 — search the whole subscription, not the resource group.** A grant
+scoped to a *resource* (an ACA job, an ACR, a namespace) is invisible to
+`az role assignment list -g <rg> --include-inherited`; `--include-inherited`
+shows the RG and what it inherits from ABOVE, never child-resource scopes. Use:
+
+```bash
+az role assignment list --all \
+  --query "[?name=='<dashed-guid>'].{role:roleDefinitionName,principalId:principalId,scope:scope,createdOn:createdOn,createdBy:createdBy}" -o json
+```
+
+**Step 3 — read `createdBy`. It is the discriminator.** Compare it against the
+creator of the bulk of the estate's assignments (the deployment service
+principal):
+
+```bash
+az role assignment list --all --assignee <principalId> --query "[].createdBy" -o tsv | sort | uniq -c | sort -rn
+```
+
+| `createdBy` | What it means | Judgement |
+|---|---|---|
+| The **deployment SP** (the dominant creator) | A *template* made it, under an **older `guid()` seed**. A later commit changed the seed, so the template now computes a different name for the same triple and can never create it. This is a genuine orphan | **Safe to delete.** Zero net permission change — the template recreates the identical grant under its current name on the same run. The centralus case was AcrPull for the MCP UAMI on the ACR, re-seeded from the UAMI resource id to literal constants |
+| **Anything else** (a user, another SP) | Hand-made via `az role assignment create`, which mints a **random** guid and takes the triple | Delete **only after** confirming a bicep module grants that exact (scope, principal, role). Two centralus blockers were this: Console UAMI → Website Contributor → admin RG (2026-07-07), and Console UAMI → Contributor → the `loom-copilot-evaluator` ACA job (2026-07-28). Both matched a module exactly, so both were zero-net-permission deletes |
+
+**Do not hand-grant roles that a module already grants.** The remediation
+strings in the console name a role so an operator can *understand* a gate — they
+are not an instruction to run `az role assignment create`. A hand-grant takes the
+triple and hard-blocks the deploy until someone deletes it.
+
+**Not every hand-made grant is a blocker.** On centralus, seven hand-made grants
+to the Console UAMI survived a clean deploy untouched, because no module wants
+those triples. Deleting them because they *look* irregular would have silently
+removed working permissions. Only delete what ARM has named.
+
+**Known gap.** `scripts/ci/check-role-assignment-determinism.mjs` catches
+non-deterministic names (D1) and two declarations colliding on one triple within
+the template (D2). It cannot see a seed **renamed across commits** — the case in
+row 1 above — because that is a diff against deployed state, not a property of
+the current tree. Changing an existing assignment's `guid()` seed orphans every
+already-deployed copy; treat it as a breaking change.
+
+---
+
 ## defect
 
-**Signals:** `InvalidTemplate`, `BadRequest` against Loom's own template, any
-`scripts/csa-loom/*` or `scripts/ci/*` exiting non-zero for a reason not covered
-above.
+**Signals:** `InvalidTemplate`, `BadRequest` against Loom's own template,
+`FirewallPolicyUpdateFailed`, any `scripts/csa-loom/*` or `scripts/ci/*` exiting
+non-zero for a reason not covered above.
 
 **Not your problem to fix.** Open an issue with the label `csa-loom` +
 `csa-bug`, and attach:
@@ -214,6 +268,50 @@ above.
 az deployment operation sub list --name <deployment-name> \
   --query "[?properties.provisioningState=='Failed']" -o json
 ```
+
+### `FirewallPolicyUpdateFailed` — a deploy-ordering race, not a firewall fault
+
+```
+Put on Firewall Policy fwpol-csa-loom-<region> Failed with 1 faulted referenced firewalls
+```
+
+**Fixed 2026-08-07 (#3038). If you see this on a current template, it is a new
+concurrent hub-VNet writer and it is a defect — file it.**
+
+The message accuses the firewall, and the firewall is almost always innocent.
+On centralus it read `provisioningState: Succeeded`, allocated (one
+ipConfiguration with subnet + public IP), Standard tier, matching the policy's
+Standard tier — healthy by every measure. "Faulted" was **transient**.
+
+The cause was ordering. `firewallPolicy` carried no `dependsOn`, so ARM
+scheduled it in the first parallel wave — concurrently with the hub VNet PUT.
+The hub VNet declares `AzureFirewallSubnet` inline, so re-PUTing the VNet
+transiently faults the firewall attached to that subnet, and the concurrent
+policy push aborts. `network.bicep` now serializes the policy behind
+`subnetNsgAttach` + `bastion`, giving
+hub subnets → bastion → policy → firewall.
+
+**Confirm it is this, in one command** — the two operations will share a start
+timestamp:
+
+```bash
+az deployment operation group list -g rg-csa-loom-admin-<region> --name network \
+  --query "[?properties.targetResource.resourceName=='vnet-csa-loom-hub-<region>' || properties.targetResource.resourceName=='fwpol-csa-loom-<region>'].{ts:properties.timestamp,dur:properties.duration,state:properties.provisioningState,res:properties.targetResource.resourceName}" -o table
+```
+
+Two things this failure taught, both of which cost diagnosis time:
+
+- **A hand-run `az network firewall policy update` SUCCEEDS from the same
+  "broken" state**, because at rest there is no concurrent VNet writer. That
+  makes the bug look non-deterministic and makes a manual "fix" look like it
+  worked — the next deploy fails identically. Do not read a successful manual
+  PUT as evidence the estate is healed.
+- **`firewallPolicyReconcile` does not cover this.** It is wired from
+  `skipRoleGrants`, so a normal brownfield deploy with role grants ON still
+  takes the re-PUT path and still races.
+
+A `provisioningState: Failed` policy with zero rule collection groups is the
+residue of this failure, not a second problem. The serialized PUT heals it.
 
 ---
 

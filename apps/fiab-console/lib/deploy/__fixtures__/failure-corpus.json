@@ -192,6 +192,18 @@
       "source": "synthesised from the two run-31100384405 leaves; guards the precedence rule for the new class",
       "input": "InvalidTemplate: Unable to process template language expressions.\nCapacityNotAvailable: Capacity is not available in this region/zone. Please retry after some time.",
       "expect": { "class": "defect", "signalId": "defect.invalid-template", "retryable": false }
+    },
+    {
+      "name": "defect — FirewallPolicyUpdateFailed, verbatim ARM leaf (classified UNKNOWN before #3038, which is what correctly refused the retry)",
+      "source": "deploy-fiab-commercial run 31196922481, nested 'network' deployment, 2026-08-07; captured from az deployment operation group list -g rg-csa-loom-admin-centralus --name network",
+      "input": "FirewallPolicyUpdateFailed: Put on Firewall Policy fwpol-csa-loom-centralus Failed with 1 faulted referenced firewalls",
+      "expect": { "class": "defect", "signalId": "defect.firewall-policy-update-race", "retryable": false }
+    },
+    {
+      "name": "config — ContainerAppSecretInUse, verbatim ARM leaf (classified UNKNOWN before #3038); blocks app-deployments, which is what emits the federation env vars",
+      "source": "deploy-fiab-commercial run 31202584780, nested 'app-deployments' deployment, 2026-08-07",
+      "input": "ContainerAppSecretInUse: Container App 'loom-console' has an active revision referencing a secret you are trying to delete. Please add secrets: loom-internal-token,airflow-admin-password,loom-dataverse-client-secret,cosmos-vcore-conn or deactive the revisions: loom-console--0000593 referencing this secret.",
+      "expect": { "class": "config", "signalId": "config.container-app-secret-in-use", "retryable": false }
     }
   ]
 }
