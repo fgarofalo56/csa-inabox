@@ -17,7 +17,9 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Badge, Body1, Caption1, Spinner, Subtitle2, makeStyles, tokens,
+  Badge, Body1, Button, Caption1, Spinner, Subtitle2,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Database20Regular, TableSimple20Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
@@ -120,6 +122,29 @@ export function DucklakeCatalogEditor({ item, id }: { item: FabricItemType; id: 
 
         {q.isLoading && <Spinner size="small" label="Reading the DuckLake catalog…" labelPosition="after" />}
 
+        {/* Silent-failure fix (FINISHLINE C14) — the same defect apex A3 fixed in
+            s3-gateway-editor.tsx, which was never propagated to this sibling.
+            `fetchCatalog` THROWS on !res.ok / json.ok !== true / transport
+            failure, and this component rendered only isLoading + the data
+            branches — so a 500/403/network failure fell through to the
+            "Reading the DuckLake catalog…" line below and sat there forever with
+            no error and no retry. An unreadable catalog must never be rendered
+            as an unfinished read (deploy-integrity.md R7: if the code does not
+            know, the message says it does not know). */}
+        {q.isError && (
+          <MessageBar intent="error" layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>Could not read the DuckLake catalog</MessageBarTitle>
+              {(q.error as Error)?.message
+                || 'The request failed before /api/ducklake/catalog answered (network or timeout).'}{' '}
+              The Iceberg REST Catalog and every other editor are unaffected.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button size="small" onClick={() => void q.refetch()}>Retry</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
+
         {/* Honest gate — unconfigured store OR the DuckDB tier missing. Warning,
             not an error, so a freshly opened item is never red (ux-baseline). */}
         {data?.gate && (
@@ -155,7 +180,9 @@ export function DucklakeCatalogEditor({ item, id }: { item: FabricItemType; id: 
           </>
         )}
 
-        {!q.isLoading && !data && (
+        {/* Only claim "still reading" when that is actually true — never when the
+            read already failed (q.isError owns that case above). */}
+        {!q.isLoading && !q.isError && !data && (
           <Body1>Reading the DuckLake catalog…</Body1>
         )}
       </div>
