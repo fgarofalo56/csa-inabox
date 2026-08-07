@@ -137,6 +137,7 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/gcc.bicepparam \
             --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
+            --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
             ${CSA_LOOM_TOPOLOGY:+--parameters topology="$CSA_LOOM_TOPOLOGY"} \
             ${CSA_LOOM_TARGET_SUBSCRIPTION:+--parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"}
 
@@ -168,6 +169,7 @@ jobs:
               --template-file "$GITHUB_WORKSPACE/platform/fiab/bicep/main.bicep" \
               --parameters "$GITHUB_WORKSPACE/platform/fiab/bicep/params/gcc.bicepparam" \
               --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
+              --parameters loomTenantAdminGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }} \
               --parameters topology="$CSA_LOOM_TOPOLOGY" \
               --parameters targetSubscriptionId="$CSA_LOOM_TARGET_SUBSCRIPTION"
           else

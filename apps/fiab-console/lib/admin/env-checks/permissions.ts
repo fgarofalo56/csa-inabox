@@ -27,8 +27,18 @@ export const PERMISSIONS_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'bootstrap-admin', category: 'permissions', title: 'Bootstrap tenant admin', severity: 'critical',
     anyOf: [['LOOM_TENANT_ADMIN_OID', 'LOOM_TENANT_ADMIN_GROUP_ID']],
-    remediation: 'Set LOOM_TENANT_ADMIN_OID to your Entra user OID (or LOOM_TENANT_ADMIN_GROUP_ID to a group you are in) — deploy params loomTenantAdminOid / loomTenantAdminGroupId. Members bypass the feature-permission gate with full Admin; this is how the first admin gets in before any grants exist and fixes the "Access denied (403)" on /admin/permissions.',
+    // #3090 — this is a DEPLOY-PRODUCED binding, never an operator chore. When
+    // it reads unconfigured the DEPLOYMENT is defective: on 2026-08-07 the live
+    // Commercial console had both values empty because the .bicepparam fallback
+    // `readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)`
+    // resolved adminEntraGroupId at bicep COMPILE time (never from the
+    // `--parameters adminEntraGroupId=…` override), so it compiled to an
+    // explicit ''. /admin/*, the onboarding queue and every requireTenantAdmin
+    // route were then 403 for EVERY user. Note the Fix-it below is only usable
+    // by someone who ALREADY holds admin.env-config at Admin — a locked-out
+    // tenant cannot self-serve, which is exactly why the deploy must produce it.
+    remediation: 'The deploy sets this: loomTenantAdminGroupId (from the FIAB_ADMIN_GROUP_ID repo variable/secret) and optionally loomTenantAdminOid, rendered onto the console as LOOM_TENANT_ADMIN_GROUP_ID / LOOM_TENANT_ADMIN_OID. If it reads unconfigured, the deploy did not supply a binding — re-run the deploy lane rather than hand-editing the container app (auto-bind-by-default.md §5). Members of the bound group bypass the feature-permission gate with full Admin; that is how the first admin gets in before any grants exist. Existing admins delegate further access at /admin/permissions.',
     docs: '/admin/permissions',
-    provisionedBy: 'main.bicep (params loomTenantAdminOid / loomTenantAdminGroupId) → admin-plane apps[] env',
+    provisionedBy: 'main.bicep (params loomTenantAdminOid / loomTenantAdminGroupId) → admin-plane apps[] env; supplied by every deploy lane and asserted by scripts/ci/check-tenant-admin-binding.mjs',
   },
 ];

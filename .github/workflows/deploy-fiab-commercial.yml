@@ -83,7 +83,11 @@ on:
         type: string
         required: true
       tenant_admin_oid:
-        description: 'Bootstrap tenant admin — your Entra USER object id (az ad signed-in-user show --query id). Members bypass the feature-permission gate so the first human admin can open /admin/*. Empty → the deploying principal becomes the bootstrap admin (deployer().objectId), or set the FIAB_ADMIN_GROUP_ID secret for a group.'
+        description: 'Bootstrap tenant admin — your Entra USER object id (az ad signed-in-user show --query id). Members bypass the feature-permission gate so the first human admin can open /admin/*. Optional: the admin GROUP below (repo variable FIAB_ADMIN_GROUP_ID) already binds the console by default.'
+        type: string
+        required: false
+      tenant_admin_group_id:
+        description: 'Bootstrap tenant admin GROUP — an Entra security-group object id whose members bypass the feature-permission gate (az ad group show --group "<name>" --query id). Empty → the FIAB_ADMIN_GROUP_ID repo secret, else the repo variable of the same name. This is the DEFAULT binding; supplying it here is only needed to point a deploy at a different group (brownfield, deploy-integrity.md R5).'
         type: string
         required: false
       deployment_mode:
@@ -576,8 +580,18 @@ jobs:
       - name: Compose deployment arguments (ONE source for what-if and apply)
         id: params
         env:
-          ADMIN_ENTRA_GROUP_ID: ${{ secrets.FIAB_ADMIN_GROUP_ID }}
+          # The admin GROUP object id. `secrets.` first (so an org/environment
+          # secret still wins), then `vars.` — a group object id is an
+          # IDENTIFIER, not a credential, and the repo already carries
+          # LOOM_AUTOMATION_OID / LOOM_CONSOLE_UAMI_PRINCIPAL as plain
+          # variables. Before #3090 this read `secrets.FIAB_ADMIN_GROUP_ID`
+          # ALONE and that secret HAS NEVER EXISTED in this repo (`gh secret
+          # list` shows only FIAB_GOV_ADMIN_GROUP_ID), so every Commercial
+          # deploy passed adminEntraGroupId='' — measured on
+          # csa-loom-ci-31210378858.
+          ADMIN_ENTRA_GROUP_ID: ${{ secrets.FIAB_ADMIN_GROUP_ID || vars.FIAB_ADMIN_GROUP_ID }}
           INPUT_TENANT_ADMIN_OID: ${{ inputs.tenant_admin_oid }}
+          INPUT_TENANT_ADMIN_GROUP_ID: ${{ inputs.tenant_admin_group_id }}
           DEPLOY_SUB: ${{ steps.topology_guard.outputs.deploy_sub }}
           PURVIEW_ENABLED: ${{ steps.topology_guard.outputs.purview_enabled }}
           AZURE_MAPS_ENABLED: ${{ steps.topology_guard.outputs.azure_maps_enabled }}
@@ -622,9 +636,47 @@ jobs:
           add --parameters "existingVpnGatewayName=$EXISTING_VPN_GATEWAY_NAME"
           add --parameters "apimGatewayDnsLinkName=$APIM_DNS_LINK_NAME"
           add --parameters "adminEntraGroupId=$ADMIN_ENTRA_GROUP_ID"
+          # ── BOOTSTRAP ADMIN BINDING (auto-bind-by-default.md §5) ───────────
+          # loomTenantAdminGroupId MUST be passed EXPLICITLY. It cannot be left
+          # to params/commercial.bicepparam, whose expression
+          #     readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
+          # resolves `adminEntraGroupId` to the PARAM FILE's OWN value at bicep
+          # COMPILE time — i.e. readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID','')
+          # — and NOT to the `--parameters adminEntraGroupId=…` override on the
+          # line above. Proven with `az bicep build-params` on an unset env:
+          # the compiled paramfile emits loomTenantAdminGroupId='' as an
+          # EXPLICIT value, which then beats the CLI override for the OTHER
+          # parameter. Result before #3090: the console shipped with BOTH
+          # LOOM_TENANT_ADMIN_GROUP_ID and LOOM_TENANT_ADMIN_OID empty and the
+          # admin gate shut for EVERYONE — the live 2026-08-07 defect.
+          #
+          # The env var is exported as well so the paramfile's own
+          # readEnvironmentVariable resolves to the same value rather than to
+          # a silently different one (the two must never disagree).
+          TENANT_ADMIN_GROUP="${INPUT_TENANT_ADMIN_GROUP_ID:-$ADMIN_ENTRA_GROUP_ID}"
+          add --parameters "loomTenantAdminGroupId=$TENANT_ADMIN_GROUP"
           if [ -n "${INPUT_TENANT_ADMIN_OID:-}" ]; then
             add --parameters "loomTenantAdminOid=$INPUT_TENANT_ADMIN_OID"
           fi
+          # Fail CLOSED. A console rendered with no bootstrap-admin binding has
+          # an admin gate that no one can pass — /admin/*, the onboarding queue,
+          # Purview/DLP/label policy and every requireTenantAdmin route 403 for
+          # every user, with no in-product way out (the gate Fix-it itself
+          # needs admin.env-config at Admin). Shipping that is worse than not
+          # shipping: refuse rather than deploy an unusable console. Only
+          # asserted when apps are actually being rendered.
+          if [ "${DEPLOY_APPS_ENABLED}" = "true" ] \
+             && [ -z "${TENANT_ADMIN_GROUP}" ] && [ -z "${INPUT_TENANT_ADMIN_OID:-}" ]; then
+            echo "::error::No bootstrap tenant-admin binding could be resolved, and this run renders the Container Apps (deployAppsEnabled=true). loom-console would come up with LOOM_TENANT_ADMIN_GROUP_ID and LOOM_TENANT_ADMIN_OID both empty, which shuts /admin/* for EVERY user with no in-product remedy. Set the FIAB_ADMIN_GROUP_ID repo variable (or secret) to your Loom admin security-group object id — 'az ad group show --group \"Loom Admins\" --query id -o tsv' — or dispatch this workflow with tenant_admin_group_id / tenant_admin_oid. Refusing."
+            exit 1
+          fi
+          echo "::notice::Bootstrap admin binding: group=$([ -n "$TENANT_ADMIN_GROUP" ] && echo present || echo absent), oid=$([ -n "${INPUT_TENANT_ADMIN_OID:-}" ] && echo present || echo absent). Values redacted."
+          # Keep the paramfile's OWN readEnvironmentVariable in agreement with
+          # the explicit override above, so `az bicep build-params` on this
+          # checkout (and the documented by-hand `-p params/commercial.bicepparam`
+          # path in docs/fiab) resolves to the same binding rather than ''.
+          echo "LOOM_ADMIN_ENTRA_GROUP_ID=$ADMIN_ENTRA_GROUP_ID" >> "$GITHUB_ENV"
+          echo "LOOM_TENANT_ADMIN_GROUP_ID=$TENANT_ADMIN_GROUP"  >> "$GITHUB_ENV"
           add --parameters "loomVanityDomain=$CSA_LOOM_VANITY_DOMAIN"
           if [ -n "${CSA_LOOM_TOPOLOGY:-}" ]; then
             add --parameters "topology=$CSA_LOOM_TOPOLOGY"

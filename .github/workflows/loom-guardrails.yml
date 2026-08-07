@@ -281,6 +281,25 @@ jobs:
       - name: appimagetags-coverage (every boundary's param bag carries every plainly-read image tag)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-appimagetags-coverage.mjs
+      # The SAME class of defect as appimagetags-coverage — a param file that
+      # compiles clean and deploys an unusable product — but on the identity
+      # side, and this one was LIVE. On 2026-08-07 the operator opened the
+      # onboarding queue and was told to "Set LOOM_TENANT_ADMIN_OID … on the
+      # loom-console container app": auto-bind-by-default.md §5 verbatim. The
+      # live console had BOTH bootstrap bindings empty, so /admin/*, the
+      # onboarding queue and every requireTenantAdmin route were 403 for EVERY
+      # user, with no in-product way out — the gate's own Fix-it needs
+      # admin.env-config at Admin, which a locked-out user cannot hold.
+      # Three defects stacked: the `readEnvironmentVariable('…', adminEntraGroupId)`
+      # compile-time trap (a paramfile reference NEVER sees a --parameters
+      # override, so it emitted an explicit ''), the Gov param files never
+      # declaring the parameter at all, and `secrets.FIAB_ADMIN_GROUP_ID` never
+      # having existed. Nothing measured any of it.
+      - name: tenant-admin-binding (every lane supplies a bootstrap admin — auto-bind §5)
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/ci/check-tenant-admin-binding.mjs --selftest
+          node scripts/ci/check-tenant-admin-binding.mjs
       # deploy-staleness (above) says the reconcile has not RUN. This says that
       # when it does run, it cannot destroy, duplicate or re-image the estate:
       # no destructive step on the schedule, one image repository per
