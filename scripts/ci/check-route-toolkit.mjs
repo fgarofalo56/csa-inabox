@@ -462,6 +462,35 @@ const TOUCH_EXEMPT = new Map([
   ['apps/fiab-console/app/api/items/notebook/[id]/runs/[runId]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
   ['apps/fiab-console/app/api/items/synapse-notebook/[id]/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
   ['apps/fiab-console/app/api/workspaces/[id]/scm/route.ts', '#2947: one-line assertOwner→authorizeItemWorkspace authz swap; getSession→401 prologue untouched; codemod reports 0 handlers (no exact 401 guard)'],
+  // #3090 (FINISHLINE L-DEPLOY) touched these two ONLY to correct a user-facing
+  // remediation STRING inside an ALREADY-EXISTING 403 response body. The live
+  // 2026-08-07 defect was that Loom told the operator to "Set
+  // LOOM_TENANT_ADMIN_OID … on the loom-console container app" — a value the
+  // DEPLOY must produce (auto-bind-by-default.md §5), not a user chore. The
+  // diff on both files is a string literal plus two response fields (`code`,
+  // `gateId`); NO auth logic is touched — the prologues (getSession →
+  // isTenantAdmin / requireTenantAdmin) are byte-identical.
+  //
+  // The codemod CANNOT be run to check: scripts/codemods/migrate-route-toolkit.mjs
+  // requires the `typescript` module, and this worktree has no node_modules
+  // (installing at a worktree root corrupts the main checkout). Hand-migrating
+  // two admin auth prologues inside a message-only fix is unrelated churn with
+  // real 403-regression risk on tenant-wide surfaces, for zero security gain.
+  //
+  // COMPENSATING CONTROLS — stated honestly, they DIFFER between the two:
+  //   admin/workspaces  VERIFIED. admin-routes.test.ts pins both
+  //                     'GET 403 when the caller is not a tenant admin'
+  //                     (asserting status 403 AND error==='forbidden', which
+  //                     this change preserves) and 'GET 401 when
+  //                     unauthenticated'. Deleting the prologue fails a
+  //                     merge-blocking test.
+  //   admin/dspm-ai     NONE. That route has NO __tests__ directory at all, so
+  //                     nothing pins its 401/403 — this is a real gap, recorded
+  //                     rather than papered over. It is unchanged by #3090
+  //                     (the gap predates it) and is tracked as a follow-up:
+  //                     add a route-level 401/403 contract test.
+  ['apps/fiab-console/app/api/admin/workspaces/route.ts', '#3090: 403 remediation-string fix only (auto-bind §5); auth prologue byte-identical; 401 AND 403 both pinned by app/api/admin/__tests__/admin-routes.test.ts'],
+  ['apps/fiab-console/app/api/admin/dspm-ai/route.ts', '#3090: 403 remediation-string fix only (auto-bind §5); auth prologue byte-identical; NO route-level auth test exists for this route (pre-existing gap, follow-up owed)'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
