@@ -240,6 +240,14 @@
       "grantHint": "az role assignment delete --ids /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Authorization/roleAssignments/<existing-guid-from-the-message>"
     },
     {
+      "id": "config.container-app-secret-in-use",
+      "class": "config",
+      "anyOf": ["containerappsecretinuse", "active revision referencing a secret you are trying to delete"],
+      "observed": "Measured on deploy-fiab-commercial run 31202584780 (centralus, 2026-08-07). The template's secret list for loom-console no longer declared four secrets the ACTIVE revision still referenced (loom-internal-token, airflow-admin-password, loom-dataverse-client-secret, cosmos-vcore-conn), and ARM refuses to delete a secret an active revision uses. Two contributors: a rename (the live app carries airflow-admin-password while the template now declares loom-airflow-admin-password, so they are different secrets and the old one is orphaned), and secrets that are conditional on runtime-resolved values, which makes the declared set vary between runs of the SAME template. Deterministic given the estate, so config rather than transient.",
+      "remediationKind": "not-remediable",
+      "remediation": "The template would delete a Container App secret that the currently-active revision still references. This blocks app-deployments, which is the module that emits LOOM_ICEBERG_CATALOG_URL, the LOOM_TRINO_* family and LOOM_UNITY_URL - so federation stays on its placeholder until it is resolved. Read the message: it names both the secrets and the pinning revision. Confirm the real shape before changing anything - `az containerapp show -g <rg> -n loom-console --query properties.configuration.secrets[].name` versus `az containerapp revision show -g <rg> -n loom-console --revision <pinning-revision> --query \"properties.template.containers[0].env[?secretRef!=null].secretRef\"`. If a live secret name has no counterpart in the template, it was RENAMED and the old one is orphaned. Do NOT 'fix' this by deactivating the revision when activeRevisionsMode is Single and it is the only active revision - that is the sign-in path, and this repo has already had one MSAL production outage. The durable fix is in the template: keep declaring the secrets that exist, or make the declared set deterministic rather than conditional on runtime-resolved values. Refs #3038."
+    },
+    {
       "id": "config.vnet-range-in-use",
       "class": "config",
       "anyOf": ["vnetaddressrangeinuse", "address space", "overlaps with"],
