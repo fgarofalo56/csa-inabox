@@ -192,12 +192,66 @@ This is the **brownfield class**. Most of these mean *something already exists*
 | `PrivateDnsZoneAlreadyExists` | The `privatelink.*` zone exists — almost always a re-deploy after a partial failure | Delete the conflicting zone (`az network private-dns zone delete -n <zone> -g <rg>`) or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter.** An earlier version of this runbook claimed one; it has never existed |
 | `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c-no-adoption-path-exists-today) |
 | `StorageAccountAlreadyTaken` | Storage account names are globally unique | Change the deployment name prefix |
-| `RoleAssignmentExists` | Re-deploy over existing grants. ARM enforces uniqueness on the **(scope, principalId, roleDefinitionId) triple**, not on the assignment name — so an assignment created under any other name blocks the template's deterministic `guid()` name forever | Delete the conflicting assignment and let the template recreate it under its own name. **Two traps, both measured on centralus 2026-08-07 (#3038):** (1) ARM prints the existing id with the **dashes stripped** — searching the literal 32-char string returns EMPTY from every `az role assignment list`; re-insert the 8-4-4-4-12 dashes first. (2) Check `createdOn` before assuming a seed change — the centralus blocker was **hand-made a month earlier** by `az role assignment create` (which mints a random guid), not orphaned by a rename. Identify the principal/role/scope and confirm it is the same grant the template makes before deleting anything. `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled — a workaround, not a fix |
+| `RoleAssignmentExists` | Re-deploy over existing grants. ARM enforces uniqueness on the **(scope, principalId, roleDefinitionId) triple**, not on the assignment name — so an assignment created under any other name blocks the template's deterministic `guid()` name forever | Delete the conflicting assignment and let the template recreate it under its own name. **See [Identifying a `RoleAssignmentExists` blocker](#identifying-a-roleassignmentexists-blocker) below — three distinct causes, three different judgements.** `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled — a workaround, not a fix |
 | `InvalidTemplateDeployment` on Container Apps in IL4/IL5 | Container Apps is not available at that impact level | Set `containerPlatform = 'aks'` in the parameter file |
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | Phase 1 ran with `deployAppsEnabled=true` against an **empty** ACR | Re-run phase 1 with `deployAppsEnabled=false`, then run the image phase. See [Greenfield](greenfield.md#the-shape-of-a-greenfield-deploy) |
 | `ResourceGroupNotFound` early in the app-deploy workflow | The workflow's `region` input does not match the region the estate is in, so it resolved `rg-csa-loom-admin-<wrong-region>` | Pass `-f region=<your-region>` explicitly |
 | `ResourceGroupNotFound` on a multi-subscription DLZ | A sub-scoped deployment cannot create a resource group in a **remote** subscription | Pre-create the spoke resource groups: `bash scripts/csa-loom/bootstrap-dlz-rgs.sh` |
 | `RequestDisallowedByPolicy` (often wrapped in Purview RP error `21010`) | A tenant/MG Azure Policy denies a field value the deployment (or an RP's **managed** resource) would carry. The message JSON names the restricted field, the required values, and the exact `policyAssignmentId` | Deterministic — never retry. For the Purview managed-storage case specifically, the template complies by default (`catalog.bicep` `purviewManagedResourcesPublicNetworkAccess=Disabled`) — verify the run used a current template. Anything else: quote the assignment named in the message to whoever owns that policy, or supply a compliant value. `scripts/csa-loom/preflight-policy-restrictions.mjs` names visible restrictions before the deploy; the authoritative check is the what-if/validate RP preflight |
+
+---
+
+### Identifying a `RoleAssignmentExists` blocker
+
+Three separate blockers were cleared from centralus on 2026-08-07 (#3038) and
+they had **three different causes**. Never delete a role assignment you have not
+positively identified — but equally, do not assume `skip_role_grants=true`.
+
+**Step 1 — put the dashes back.** ARM prints the existing id with the dashes
+**stripped**. Searching the literal 32-char string returns EMPTY from every
+`az role assignment list`, which reads as "already gone, message is stale" and
+is wrong. Re-insert the 8-4-4-4-12 dashes:
+`fb246cf1ed234179a4737413534056b8` → `fb246cf1-ed23-4179-a473-7413534056b8`.
+
+**Step 2 — search the whole subscription, not the resource group.** A grant
+scoped to a *resource* (an ACA job, an ACR, a namespace) is invisible to
+`az role assignment list -g <rg> --include-inherited`; `--include-inherited`
+shows the RG and what it inherits from ABOVE, never child-resource scopes. Use:
+
+```bash
+az role assignment list --all \
+  --query "[?name=='<dashed-guid>'].{role:roleDefinitionName,principalId:principalId,scope:scope,createdOn:createdOn,createdBy:createdBy}" -o json
+```
+
+**Step 3 — read `createdBy`. It is the discriminator.** Compare it against the
+creator of the bulk of the estate's assignments (the deployment service
+principal):
+
+```bash
+az role assignment list --all --assignee <principalId> --query "[].createdBy" -o tsv | sort | uniq -c | sort -rn
+```
+
+| `createdBy` | What it means | Judgement |
+|---|---|---|
+| The **deployment SP** (the dominant creator) | A *template* made it, under an **older `guid()` seed**. A later commit changed the seed, so the template now computes a different name for the same triple and can never create it. This is a genuine orphan | **Safe to delete.** Zero net permission change — the template recreates the identical grant under its current name on the same run. The centralus case was AcrPull for the MCP UAMI on the ACR, re-seeded from the UAMI resource id to literal constants |
+| **Anything else** (a user, another SP) | Hand-made via `az role assignment create`, which mints a **random** guid and takes the triple | Delete **only after** confirming a bicep module grants that exact (scope, principal, role). Two centralus blockers were this: Console UAMI → Website Contributor → admin RG (2026-07-07), and Console UAMI → Contributor → the `loom-copilot-evaluator` ACA job (2026-07-28). Both matched a module exactly, so both were zero-net-permission deletes |
+
+**Do not hand-grant roles that a module already grants.** The remediation
+strings in the console name a role so an operator can *understand* a gate — they
+are not an instruction to run `az role assignment create`. A hand-grant takes the
+triple and hard-blocks the deploy until someone deletes it.
+
+**Not every hand-made grant is a blocker.** On centralus, seven hand-made grants
+to the Console UAMI survived a clean deploy untouched, because no module wants
+those triples. Deleting them because they *look* irregular would have silently
+removed working permissions. Only delete what ARM has named.
+
+**Known gap.** `scripts/ci/check-role-assignment-determinism.mjs` catches
+non-deterministic names (D1) and two declarations colliding on one triple within
+the template (D2). It cannot see a seed **renamed across commits** — the case in
+row 1 above — because that is a diff against deployed state, not a property of
+the current tree. Changing an existing assignment's `guid()` seed orphans every
+already-deployed copy; treat it as a breaking change.
 
 ---
 
