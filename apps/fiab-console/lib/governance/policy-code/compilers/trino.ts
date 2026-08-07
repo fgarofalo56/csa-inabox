@@ -254,6 +254,32 @@ export interface TrinoCompileOptions {
 export const TRINO_SESSION_USER_DEFAULT = 'loom-console';
 export const TRINO_DEFAULT_CATALOG = 'iceberg';
 
+/**
+ * The deployment-derived compile options, resolved from the environment in ONE
+ * place.
+ *
+ * Every consumer of a compiled Trino artifact must use this. The publish path
+ * (`reconcilePolicyCode`) and the serve path (the engine-rules route) compile
+ * the SAME policy set and their outputs are compared by content hash, so an
+ * option present on one side and absent on the other makes them disagree
+ * permanently — the enforcement receipt can never converge, and worse, the
+ * engine ends up governing a different table than the document an admin
+ * inspects claims.
+ *
+ * That is not hypothetical: reconcile once built `{ ucVariant, tenantId }` by
+ * hand and dropped `trinoDefaultCatalog`, so under a non-default
+ * `LOOM_TRINO_ICEBERG_CATALOG` a 2-part `sales.orders` resource compiled to
+ * `iceberg.sales.orders` on the publish side and `lake.sales.orders` on the
+ * serve side. A hand-copied option literal is exactly the shape that drifts;
+ * a shared reader cannot.
+ */
+export function trinoCompileOptionsFromEnv(): Required<Pick<TrinoCompileOptions, never>> & TrinoCompileOptions {
+  return {
+    trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
+    trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The compiler
 // ---------------------------------------------------------------------------

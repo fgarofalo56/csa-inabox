@@ -126,3 +126,78 @@ describe('LU-7 trinoEnforcementStatus — the receipt can read enforcing', () =>
     expect(s.enforcingVersion).toBe('deadbeef');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LU-7 — the PUBLISH side and the SERVE side must compile the SAME document.
+//
+// Fixing the version hash was not enough on its own: the two sides also have to
+// receive the same compile options. `reconcilePolicyCode` built
+// `{ ucVariant, tenantId }` and dropped `trinoDefaultCatalog`, while the
+// engine-rules route passed `LOOM_TRINO_ICEBERG_CATALOG`. A 2-part
+// `schema.table` resource resolves against that catalog, so under a non-default
+// lake name the publisher compiled `iceberg.sales.orders` and the engine was
+// served `lake.sales.orders`:
+//
+//   * the versions could never converge  -> permanent `stale`, never `applied`,
+//     and the hedged detail resolves to the false "cannot reach the Console";
+//   * WORSE, the engine governed `lake.sales.orders` while the document an
+//     admin inspects claimed `iceberg.sales.orders` — the control and its
+//     receipt describing different tables.
+//
+// No bicep module sets the knob today, so the default deployment was unaffected
+// — which is precisely why it would have sat there undetected. These pin the
+// option set, not just the hash.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('LU-7 compile options — publish and serve must not diverge', () => {
+  /** A deliberately 2-PART resource: it resolves against the lake catalog. */
+  const twoPartSet = normalizePolicyCodeSet({
+    apiVersion: 'loom.governance/v1',
+    name: 'two-part',
+    statements: [{
+      id: 's1',
+      principals: [{ kind: 'user', id: 'u1', name: 'alice@contoso.com' }],
+      resources: [{ backend: 'trino', object: 'sales.orders' }],
+      actions: ['read'],
+    }],
+  });
+
+  const versionFor = (opts: { trinoDefaultCatalog?: string; trinoSessionUser?: string }, catalogs?: any[]) =>
+    rulesVersion(buildTrinoRulesDocument(compileTrino(twoPartSet, opts), catalogs ? { ...opts, catalogs } : opts));
+
+  it('publish and serve agree under a NON-DEFAULT lake catalog with a 2-part resource', () => {
+    const lake = 'lake';
+    // Publish side: reconcile, no engine catalog list available.
+    const publishVersion = versionFor({ trinoDefaultCatalog: lake });
+    // Serve side: the route, WITH the engine's reported catalog list.
+    const serveVersion = versionFor({ trinoDefaultCatalog: lake }, [
+      { name: 'system', allow: 'read-only' },
+      { name: 'memory', allow: 'all' },
+      { name: lake, allow: 'read-only' },
+    ]);
+    expect(serveVersion).toBe(publishVersion);
+  });
+
+  it('DIVERGES when the lake catalog is dropped on one side (the bug, pinned)', () => {
+    // This is the failure the fix prevents: same policy, different catalog
+    // option => different document => a receipt that can never converge.
+    const withLake = versionFor({ trinoDefaultCatalog: 'lake' });
+    const withoutLake = versionFor({});
+    expect(withLake).not.toBe(withoutLake);
+  });
+
+  it('resolves the 2-part resource against the DEPLOYMENT lake, not the code default', () => {
+    const doc = buildTrinoRulesDocument(compileTrino(twoPartSet, { trinoDefaultCatalog: 'lake' }), {});
+    const rule = doc.tables.find((r) => r.user === '^alice@contoso\\.com$')!;
+    expect(rule.catalog).toBe('^lake$');
+    // The document an admin inspects must name the table the engine governs.
+    expect(rule.catalog).not.toBe('^iceberg$');
+  });
+
+  it('the session user reaches the impersonation rule from the same option set', () => {
+    const doc = buildTrinoRulesDocument(
+      compileTrino(twoPartSet, { trinoDefaultCatalog: 'lake' }),
+      { trinoSessionUser: 'svc-loom', trinoDefaultCatalog: 'lake' },
+    );
+    expect(doc.impersonation[0].original_user).toBe('^svc-loom$');
+  });
+});

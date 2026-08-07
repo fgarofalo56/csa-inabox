@@ -119,7 +119,26 @@ export async function reconcilePolicyCode(
   } catch {
     /* default databricks */
   }
-  const compileOpts: CompileOptions = { ucVariant, tenantId: opts.tenantId };
+  // Backend-resolution options for the one-pass compile. The Trino half comes
+  // from the SHARED reader (`trinoCompileOptionsFromEnv`) that the engine-rules
+  // route also uses — never a hand-copied literal.
+  //
+  // `trinoDefaultCatalog` is the sharp edge: a 2-part `schema.table` resource
+  // resolves against the deployment's lake catalog, so omitting it here made
+  // reconcile compile `iceberg.sales.orders` (the code default) while the route
+  // — reading LOOM_TRINO_ICEBERG_CATALOG — served `lake.sales.orders`. That
+  // re-armed the version divergence the enforcement receipt exists to detect
+  // (permanent `stale`, never `applied`, and the hedged detail resolving to the
+  // false "the engine cannot reach the Console" claim), AND it meant the engine
+  // governed one table while the document an admin inspects named another. The
+  // knob is optional and no bicep module sets it today, which is exactly why it
+  // would have sat there undetected.
+  const { trinoCompileOptionsFromEnv } = await import('./compilers/trino');
+  const compileOpts: CompileOptions = {
+    ucVariant,
+    tenantId: opts.tenantId,
+    ...trinoCompileOptionsFromEnv(),
+  };
   const compiled = compileAll(set, compileOpts);
 
   const snapshot = await loadSnapshot(opts.tenantId);
@@ -326,7 +345,7 @@ async function reconcileTrino(
     resolveTrinoGroupMemberships,
     trinoEnforcementStatus,
   } = await import('./trino-engine-rules');
-  const { buildTrinoRulesDocument, rulesVersion } = await import('./compilers/trino');
+  const { buildTrinoRulesDocument, rulesVersion, trinoCompileOptionsFromEnv } = await import('./compilers/trino');
 
   let published: Awaited<ReturnType<typeof readTrinoEngineRules>> = null;
   try {
@@ -343,8 +362,7 @@ async function reconcileTrino(
   // `true` here would suppress the very warning that tells an operator their
   // group-keyed denies and masks are inert.
   const docOptions = {
-    trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
-    trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
+    ...trinoCompileOptionsFromEnv(),
     trinoGroupProvider: Boolean(published?.groupFile?.trim()),
   };
 

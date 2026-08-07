@@ -114,6 +114,28 @@ successfully every refresh interval — a cause the code never established
 version means "this is the policy the engine is enforcing", and a catalog
 appearing or disappearing is correctly not a policy change.
 
+**Why both sides read their compile options from ONE function.** Excluding
+`catalogs` from the hash was necessary but not sufficient. Reconcile also built
+its option object by hand (`{ ucVariant, tenantId }`) and dropped
+`trinoDefaultCatalog`, so under a non-default `LOOM_TRINO_ICEBERG_CATALOG` a
+2-part `sales.orders` resource compiled to `iceberg.sales.orders` on the publish
+side and `lake.sales.orders` on the serve side — the same permanent divergence,
+re-armed at the CALL SITE rather than in the compiler, plus a worse symptom: the
+engine governing one table while the document an admin inspects names another.
+`trinoCompileOptionsFromEnv()` is now the single reader both sides consume, so
+the drift is not expressible. A pure "the hashes agree" test cannot catch that
+class — it feeds both sides the same options by construction — so the regression
+drives the real `reconcilePolicyCode` and compares what it actually published.
+
+**A limit of the merge, stated honestly.** Contributions are merged per
+(principal, table) selector, so multiple filters on the SAME selector all apply
+(AND). Two DIFFERENT selectors that both carry filters — a `user` rule and a
+`group` rule the same caller matches — are still resolved by Trino's
+first-match-wins, so only the first applies, and which one is first depends on
+authoring order within the narrowed block. That is inherent to Trino's
+file-based access control, not introduced here, but it is a real edge an author
+should know about: prefer expressing a caller's constraints on one selector.
+
 **Why "published" is not "enforced".** Persisting a rules document is a write.
 The reconcile receipt reports `drift` with the honest reason until the engine
 has actually fetched the published version, and only a confirmed fetch reports
@@ -236,3 +258,35 @@ could never read `enforcing` — and no unit test covered the publish/fetch pair
 because each side was tested alone. The regression above now closes that by
 asserting the two producers agree, which is the property a live run would have
 exposed. Absent evidence is not neutral, and it was treated as such.
+
+---
+
+## 6. Known follow-ups (tracked, NOT silently deferred)
+
+Each of these was found by security review, is non-blocking on the default
+shipped posture, and is scoped to a follow-up PR rather than expanding this one:
+
+1. **Reconcile-path group-provider signal is inverted (fail-SAFE).** On the
+   reconcile path the observed `trinoGroupProvider` reaches
+   `buildTrinoRulesDocument`, which does not read it, while the artifact comes
+   from `compileAll(...)` where the option is undefined → always `false`. Effect:
+   the reconcile-path artifact permanently warns that a group rule "will not
+   match" **even when a group file is published**. Same "asserts a state the
+   code did not establish" class as the R7 defect, but in the conservative
+   direction — it over-warns, never under-warns. The engine-rules route (the
+   path that actually serves the engine) is correctly wired.
+2. **The STORED rego carries no catalog floor.** `publishTrinoEngineRules`
+   calls `buildTrinoRego` without a catalog list, so the persisted artifact
+   self-discloses "carries NO catalog floor". `access-control.name=opa` is not
+   the shipped posture, so this is artifact hygiene rather than an enforcement
+   gap. Related: `additionalImpersonatedUsers` is honoured by the file document,
+   ignored by the rego, and passed by no call site — wire it or remove it.
+3. **`storedRules.catalogs = []` now has a test** (added with the compile-option
+   regression) — previously the one unwitnessed part of the version fix.
+4. **`schemas: [{ owner: true }]`** is the most permissive line in the document
+   and deserves its reason stated inline: pre-LU-7 there was no `schemas`
+   section at all, and per the Trino docs "if no rules are provided at all, then
+   access is granted", so this is equivalent to the prior posture rather than a
+   widening; table-level ownership still comes from the `tables` rules, where
+   the per-governed-table catch-all denies it.
+

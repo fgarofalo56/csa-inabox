@@ -59,7 +59,7 @@ import { isValidInternalToken, INTERNAL_TOKEN_HEADER } from '@/lib/auth/internal
 import { logSafeError } from '@/lib/util/log-safe';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { loadPolicySet } from '@/lib/governance/policy-code/store';
-import { compileTrino, buildTrinoRulesDocument, rulesVersion } from '@/lib/governance/policy-code/compilers/trino';
+import { compileTrino, buildTrinoRulesDocument, rulesVersion, trinoCompileOptionsFromEnv } from '@/lib/governance/policy-code/compilers/trino';
 import {
   readTrinoEngineRules,
   recordTrinoEngineFetch,
@@ -142,8 +142,9 @@ async function serve(
   // the compiler treats the group provider as live.
   const publishedDoc = await readTrinoEngineRules(tenantId).catch(() => null);
   const docOptions = {
-    trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
-    trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
+    // The SHARED reader — the publish path (reconcile) uses the identical one,
+    // so the two sides cannot compile different documents from one policy set.
+    ...trinoCompileOptionsFromEnv(),
     trinoGroupProvider: Boolean(publishedDoc?.groupFile?.trim()),
     catalogs: parseCatalogs(req),
   };
