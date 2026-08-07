@@ -36,6 +36,53 @@ only the automatic membership reconcile is gated. Everything else is day-one-ON.
 Zero ❌. Real backends throughout (no mock arrays). Owed: live minted-session
 browser E2E receipt (no browser available this session).
 
+## How the review lifecycle behaves
+
+### What happens to undecided items when a review expires
+
+A campaign can opt into **auto-revoke** by setting `autoRevokeOnExpiry`. When
+the campaign closes — whether an admin closes it or the hourly sweep closes it
+past its deadline — `closeCampaign` selects every still-pending item and
+auto-revokes it through a real `revokeAssignment`. Undecided therefore means
+revoked, not silently retained. A campaign **without** auto-revoke simply
+closes and leaves the undecided grants in place, so auto-revoke is the setting
+that decides whether expiry is fail-closed or fail-open. Either way the close
+seals a signed evidence record naming every auto-revocation with reason
+`auto-close`.
+
+### Are recurring access reviews supported
+
+Yes — a campaign carries a **cadence** (`cadenceDays`, picked from
+30/60/90/180/365) plus a due date; `nextDueDate` rolls the cadence forward to
+schedule the next cycle, and the hourly review sweep closes any campaign past
+its deadline.
+
+### What the graph-group-sync gate is, and what works without it
+
+`graph-group-sync` is the sole day-one gate on this surface and it is strictly
+**opt-in**: set `LOOM_GRAPH_GROUP_SYNC_ENABLED=true` and grant the Console UAMI
+read-only Graph `Group.Read.All` + `GroupMember.Read.All`. The gate covers
+exactly one behaviour — the automatic reconcile of Entra **group membership**
+into grants and revocations.
+
+Everything else on the surface works without the gate and is on by default:
+review campaigns, reviewer attest/revoke decisions, bulk decisions,
+delegation, auto-revoke on expiry, cadence/recurring reviews, the overdue
+sweep, signed evidence records, leaver revoke-all, and request-access from a
+403. Group-targeted access packages stay requestable directly while the gate
+is off; only the membership reconcile stops. The gate is registered in
+`lib/gates/registry.ts` and shown on `/admin/gates`.
+
+### Can a user request access straight from a 403
+
+Yes. Any surface that returns a 403 access-gate renders the shared
+`RequestAccessInline` control, which asks
+`GET /api/access-packages?resourceRef=…` for the qualifying **access package**
+entries for that exact resource and submits the request from the gate itself.
+The user never has to leave the blocked surface to go and find the right
+access package, and an admin may raise the same access package request on
+someone else's behalf via `onBehalfOf`.
+
 ## Signed evidence record (loom-apex B-N19c′)
 
 Entra ID Governance keeps a review's decision history for audit; Loom's
