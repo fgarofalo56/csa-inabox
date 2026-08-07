@@ -1358,7 +1358,29 @@
       "e5_progress": "loom-docs-reindex dispatched and COMPLETED SUCCESS (run 31141310514). That workflow POSTs then POLLS for durable cross-replica freshness.state==='fresh' and FAILS on timeout, so the index is provably fresh — which WEAKENS the stale-index hypothesis. Scoped eval re-run dispatched on the three zero-hit-rate surfaces (rbac,eventstream,health): run 31141847825. If hit-rate is STILL 0.00 against a fresh index, the fault is the eval-probe auth path (#3056 token-rotation class), NOT the index.",
       "estate_truth_2026-08-07T03:30Z": "18 commits merged tonight; estate at f534d87c and 11 commits BEHIND main = MERGED, NOT DEPLOYED (deploy-integrity R2) — including the C19 data-loss fix. Deploy paths at dispatch time: full-app-deploy-commercial FAILED 08-06 02:37 (i.e. BEFORE D9's CVE fix merged — that fix is what unblocks it); deploy-fiab-commercial FAILED 08-06 12:12; csa-loom-post-deploy-bootstrap last success 2026-07-19 (18 days stale).",
       "full_app_deploy_dispatch": "Dispatched run 31143181962 with region=centralus tag=v0.1 enable_apps_after=true. REGION PASSED EXPLICITLY because the workflow's `region` input DEFAULTS TO eastus2 while the estate is centralus — this is exactly the #3029 trap in the audit ('omitted region silently targets eastus2'). D7 (safe-by-default inputs) is still TODO, so ANY dispatch of this workflow must pass region explicitly until D7 lands. skip_supply_chain deliberately NOT used — D9's fix should make the Trivy CRITICAL gate pass legitimately; using the emergency valve would ship unverified images.",
-      "op13_blocked_by_d7": "OP-13's attended deploy-fiab-commercial is blocked by D7 landing, not only by operator availability: #3028 keep_resources=false default TEARS DOWN the admin RG and #3029 region defaults to eastus2. Do not dispatch deploy-fiab until D7's safe-by-default inputs + refusal guards are merged."
+      "op13_blocked_by_d7": "OP-13's attended deploy-fiab-commercial is blocked by D7 landing, not only by operator availability: #3028 keep_resources=false default TEARS DOWN the admin RG and #3029 region defaults to eastus2. Do not dispatch deploy-fiab until D7's safe-by-default inputs + refusal guards are merged.",
+      "deployment_truth_2026-08-07T03:30Z": {
+        "estate_sha": "a6dc9e58 (stamp 20260807T022325Z) — ADVANCED from f534d87c during the session",
+        "LIVE_AND_DEPLOYED": [
+          "D9 f534d87c loom-uat CVE root fix",
+          "D1 a6dc9e58 risingwave probe caps + netns port-seal"
+        ],
+        "MERGED_NOT_DEPLOYED_12": [
+          "D2 5e9f48f8 privatelink zone",
+          "D3 3f9525cf AcrPull sequencing",
+          "D15 5f1226bd honest scoring",
+          "E2-E4 65aa7976 corpus-wide BM25",
+          "C19 16fc52f7 EDITOR DATA-LOSS FIX",
+          "P2-DOCS 9f95b050",
+          "C1 961ed613",
+          "C14 32019221",
+          "C7 7b09d9b1 + 5b9deeaa",
+          "D13 6a8242bf workflow hygiene",
+          "D4-D6 2efff5b1 brownfield"
+        ],
+        "note": "The auto-roll (loom-roll-and-validate) IS working — it carried the estate to a6dc9e58 at 02:56Z — but it lags and the 03:19Z run was SKIPPED. full-app-deploy-commercial run 31143181962 (dispatched with explicit region=centralus) is QUEUED behind the CI fan-out from this session's own 17 merges; that run is what builds the images and rolls the rest.",
+        "correction": "An earlier read of '0 in progress / 25 queued' as a stall was WRONG — GitHub is fully operational and the oldest queued run was only ~16min old. The queue is self-inflicted by the merge burst and is draining."
+      }
     },
     "state_at_2026-08-06T21:25Z": "GitHub incident 'Incident with Actions' OPEN since 15:22Z. GitHub's own 20:34Z update: WEBHOOKS THROTTLED TO ~15% — 'many events such as pushes and PRs' never trigger runs. Actions API surface is being LOAD-SHED (actions/runs 403s, run cancel 502s) while PR/GraphQL APIs work normally. Core rate limit is HEALTHY (4868/5000) — the 403s are service-side shedding, not our quota.",
     "CORRECTION": "Earlier assumption that the backlog 'will drain on its own' is WRONG for the re-pushed PRs. Runs created at 17:04Z are queued and will drain. But pushes made during the throttle window (the D1/D2/D3 template regens) had their webhooks DROPPED — those check runs were never created and never will be. Those PRs MUST be explicitly re-triggered (empty commit, or close+reopen) once Actions recovers. Do not mistake 'zero checks' for 'checks passed'.",
