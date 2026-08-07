@@ -29,8 +29,7 @@
  * optional LOOM_FEEDBACK_GITHUB_TOKEN is used only to raise the rate limit.
  */
 import { NextResponse } from 'next/server';
-import { withSession } from '@/lib/api/route-toolkit';
-import { enforceCapability } from '@/lib/auth/feature-gate';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { readBuildMarker } from '@/lib/updates/current-version';
 import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
@@ -164,11 +163,17 @@ async function computeDeployStatus(): Promise<DeployStatusReport> {
  * (401), enforceCapability answers "may this session do admin work" (403).
  * Byte-compatible 401 — `apiUnauthorized()` is `{ok:false,error:'unauthenticated'}`
  * at 401, exactly what `enforceCapability(null, …)` returned before.
+ *
+ * C22 (#3088) — now `withCapability`, which composes those two into ONE
+ * non-discardable wrapper. Same 401, same 403 body (the wrapper returns
+ * enforceCapability's response unchanged), same capability id and role. The
+ * reason for the change is that the previous shape put the entire
+ * authorization in a line the caller could delete —
+ * `const capGate = await enforceCapability(…); if (capGate) return capGate;` —
+ * and deleting it left every CI guard green. As an argument to the wrapper the
+ * handler cannot run unless the gate allowed it.
  */
-export const GET = withSession(async (_req, { session }) => {
-  const capGate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (capGate) return capGate;
-
+export const GET = withCapability('admin.env-config', 'Admin', async (_req, _ctx) => {
   // Up to 9 upstream calls; unauthenticated GitHub allows 60/hour per egress IP.
   // A 10-minute TTL keeps a busy readiness page well inside that budget while
   // still turning the banner red within one refresh of a lane breaking.

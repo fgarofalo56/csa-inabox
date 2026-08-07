@@ -128,15 +128,19 @@ jobs:
           DIGEST=$(az acr repository show -n "$ACR" --image "loom-unity:v0.1" --query digest -o tsv | tr -d '\r')
           if [ -z "${DIGEST:-}" ]; then
             echo "::error::loom-unity:v0.1 is NOT resolvable in $ACR after the build. That is the exact tag gcc-high/il5.bicepparam pull, so deploying now would point this estate at a missing image. Refusing."
-            bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
             exit 1
           fi
           echo "::notice::loom-unity:v0.1 -> $DIGEST (the tag the Gov bicepparams pull)"
-          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
 
       - name: Release the ACR firewall lease (always)
         if: always()
-        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+        # C24 (#3088): NO `|| true`. `release` now VERIFIES the registry is
+        # publicNetworkAccess=Disabled + defaultAction=Deny before reporting
+        # success, and exits non-zero when it cannot confirm that. Discarding
+        # the result restores the measured defect: a green re-lock step over a
+        # publicly reachable registry. If this step goes red, read the exact
+        # remediation the script prints — the registry may be OPEN.
+        run: bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
 
       - name: Deploy the OSS Unity Catalog Container App (loom-unity-app.bicep)
         if: ${{ inputs.skip_unity != 'true' }}

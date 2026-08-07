@@ -97,16 +97,70 @@ ARM tags have no compare-and-swap, so `acquire` does
 both write; last write wins; each re-reads, so at most one sees itself. Backoff
 is jittered (15–30 s) so claimants de-synchronize.
 
+## The re-lock is VERIFIED (C24, 2026-08-07)
+
+`release` and `sweep` do not merely *issue* the re-lock — they read the registry
+back and **exit non-zero when they cannot confirm** `publicNetworkAccess=Disabled`
++ `networkRuleSet.defaultAction=Deny`.
+
+That was not always true, and the gap was measured. After run `31143181962` the
+`full-app-deploy-commercial` job **"Re-lock ACR (private endpoint only)"
+concluded SUCCESS** while `az acr show` read `publicNetworkAccess=Enabled` /
+`defaultAction=Allow` on **three probes across a minute** — well past the
+documented 30–90 s propagation window. The Commercial ACR was publicly reachable
+for an unknown period with CI green, and a human re-locked it by hand. The cause
+was `_lease_close_firewall` ending both `az acr update` calls in `|| true` with
+no read-back: the function returned 0 whether or not either write landed.
+
+(The reason the registry diverged in the first place — `full-app-deploy`'s
+concurrency group keyed on `inputs.region || 'auto'`, so two runs landed in
+different groups and raced for the same lease — was fixed separately. It is not
+what made the incident *invisible*. A step that writes and never reads back
+reports success on a no-op forever, whatever the cause.)
+
+What the close does now, mirroring `kv-firewall-window.sh kvw_close`:
+
+1. write `--default-action Deny`, then `--public-network-enabled false`
+   (write errors are **captured**, not discarded — they become the remediation
+   hint if the verify also fails, but they are not themselves the verdict:
+   another process may have locked it already, in which case a failed write plus
+   a clean read is a **pass**);
+2. read the registry back;
+3. on "still open" or "unreadable", retry up to `LOOM_ACR_CLOSE_ATTEMPTS` times
+   with `LOOM_ACR_CLOSE_RETRY_SECONDS` between — 6 × 20 s by default, past the
+   30–90 s propagation window;
+4. on exhaustion, **fail closed** with the observed state and the exact
+   hand-remediation command.
+
+"Unreadable" and "open" are distinct outcomes and neither is ever reported as
+"locked" — per `deploy-integrity.md` R7, a message must not assert something the
+code did not establish.
+
+**Do not append `|| true` to `release` or `sweep`.** That is the whole defect:
+the script can only fail loudly if its caller lets it. Fourteen call sites across
+nine workflows did exactly that and were fixed alongside this;
+`scripts/ci/__tests__/acr-firewall-lease-close.test.mjs` fails the build if one
+comes back.
+
+A read-only `verify` subcommand is available for a workflow that wants to assert
+posture without touching the lease:
+
+```bash
+scripts/csa-loom/acr-firewall-lease.sh verify --acr acrloomk6mvh5sm6z7do
+# exit 0 = locked, 1 = state unreadable, 2 = publicly reachable
+```
+
 ## Failure modes
 
 | Scenario | What happens |
 | --- | --- |
-| **Holder finishes normally** | `release` sees `owner == me`, re-locks, clears the lease tags. |
+| **Holder finishes normally** | `release` sees `owner == me`, re-locks, **verifies the locked state**, then clears the lease tags. |
+| **Re-lock does not take** (write rejected, ARM lag beyond the budget, another process re-opening) | `release` retries within its bounded budget, then **exits non-zero** naming the observed `publicNetworkAccess` / `defaultAction` and the exact `az acr update` to run by hand. The lease tags are deliberately **left in place** so the registry is not advertised as unowned while it is still open — the sweeper then sees an open registry with a holder it can probe. |
 | **Holder is CANCELLED** (the #2603 case) | Its cleanup still runs. If it is still the recorded holder, it re-locks correctly. If the next run already took the lease, `release` sees a **live foreign holder**, logs a `::warning::` naming that holder, and **does not touch the firewall** — the in-flight push survives. |
 | **Holder CRASHES** (runner killed, cleanup job never runs) | The registry stays open with a live lease. The sweeper probes the holder's GitHub run status; once it is no longer `in_progress/queued/waiting/requested/pending`, the sweeper re-locks **immediately** without waiting out the TTL. If the run status is unreadable, the lease expires after `LOOM_ACR_LEASE_TTL_MINUTES` (default 75; 120–180 for the long build/deploy paths) and the next sweep re-locks. Worst-case public exposure: one sweeper interval (15 min) when the run status is readable, TTL + 15 min otherwise. |
 | **Two runs race for the claim** | Both write the owner tag; last write wins; both read back twice and only the tag's actual owner proceeds. The loser backs off with jitter and retries until its bounded deadline. In the pathological case where tag propagation exceeds both settles and both believe they won, invariant 2 still holds — both merely *open* (idempotent, and both are pushing), and only the process the tag names will ever *close*. |
 | **Claim goes STALE** (holder gone, lease expired) | The next `acquire` takes it over with a `::warning::` naming the dead holder and how long ago it expired. If legitimate work routinely exceeds the TTL, raise `LOOM_ACR_LEASE_TTL_MINUTES` rather than letting takeovers happen. |
-| **Non-holder releases with NO live holder** | Re-locks anyway. Nobody is protected by leaving it open. |
+| **Non-holder releases with NO live holder** | Re-locks anyway (and verifies it). Nobody is protected by leaving it open. |
 | **Registry opened by something unwired** (manual `az acr update`, a call site added later) | The sweeper finds it open with no lease and re-locks within 15 minutes, emitting a `::error::` that names the registry and points here. To hold it open deliberately, take a lease: `acr-firewall-lease.sh acquire --acr <acr> --owner manual:<you>`. |
 | **Identity cannot write tags** | `acquire` emits a `::error::` naming the missing `Microsoft.Resources/tags/write` permission (grant **Tag Contributor** on the registry) and then, under the default `LOOM_ACR_LEASE_FALLBACK=legacy`, proceeds **unleased** — pre-#2603 behavior, still fail-closed but not race-free. An unleased process still *reads* the lease, so it refuses to open behind, or close under, a live foreign holder. Set `LOOM_ACR_LEASE_FALLBACK=fail` to make this fatal instead. |
 | **Sweeper itself is parked** (`LOOM_ACR_SWEEPER_DISABLED=true`) | It logs a `::warning::` on every scheduled run saying a registry left open by a crashed build will not be re-locked until the variable is cleared. |
@@ -135,6 +189,8 @@ Tunables (env):
 | `LOOM_ACR_LEASE_WAIT_MINUTES` | `25` | bounded acquire wait before failing loudly. `5` for the roll's verify step so a roll never sits behind a 2-hour build lease. |
 | `LOOM_ACR_LEASE_SETTLE_SECONDS` | `6` | tag read-back settle between claim confirmations. |
 | `LOOM_ACR_LEASE_OPEN_SECONDS` | `35` | firewall-rule propagation wait after opening. |
+| `LOOM_ACR_CLOSE_ATTEMPTS` | `6` | verified-close attempts before failing closed (C24). |
+| `LOOM_ACR_CLOSE_RETRY_SECONDS` | `20` | wait between close attempts. 6 × 20 = 120 s, past the documented 30–90 s ACR propagation window. |
 | `LOOM_ACR_LEASE_FALLBACK` | `legacy` | `legacy` \| `fail` — behavior when tags are unwritable. |
 | `LOOM_ACR_LEASE_OWNER` | derived | override the holder id. |
 

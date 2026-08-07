@@ -253,7 +253,7 @@ jobs:
         if: always()
         run: |
           if [ -n "${ACR:-}" ]; then
-            bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
+            bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR"
           fi
 
       - name: Stop after the image phase
@@ -395,7 +395,6 @@ jobs:
               echo "::notice::preflight ok — $ACR_LOGIN/$IMG:$IMAGE_TAG -> $D"
             fi
           done
-          bash scripts/csa-loom/acr-firewall-lease.sh release --acr "$ACR" || true
           exit $RC
 
       - name: Deploy loom-migrate + wire LOOM_MIGRATE_URL

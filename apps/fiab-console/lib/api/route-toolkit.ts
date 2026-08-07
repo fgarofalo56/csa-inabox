@@ -10,6 +10,8 @@
  *   - `… ; const gate = requireTenantAdmin(s); if (gate) return gate` → withTenantAdmin
  *   - `… ; const denied = await denyIfNoDlzAccess(s, pane);
  *      if (denied) return denied`                                  → withDlzAccess
+ *   - `… ; const gate = await enforceCapability(s, cap, role);
+ *      if (gate) return gate`                                      → withCapability
  *
  * They COMPOSE with — never replace — the response helpers in ./respond
  * (`apiOk` / `apiError` / `apiUnauthorized` / `apiNotFound` / `apiServerError` /
@@ -32,7 +34,7 @@ import type { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { requireTenantAdmin, enforceCapability, type FeatureRole } from '@/lib/auth/feature-gate';
 import { denyIfNoDlzAccess, type DlzPane } from '@/lib/auth/dlz-gate';
 import { apiUnauthorized, apiNotFound, apiServerError } from './respond';
 import { backendGateResponse, type GateEnvelopeOpts } from './gate-envelope';
@@ -191,6 +193,55 @@ export function withDlzAccess<P = Record<string, string>>(
   return withSession<P>(async (req, sctx) => {
     const denied = await denyIfNoDlzAccess(sctx.session, pane);
     if (denied) return denied;
+    return handler(req, sctx);
+  });
+}
+
+/**
+ * Require a signed-in session AND a feature-permission capability (C22 /
+ * #3088). Composes on `withSession` (401 first), then runs the exact
+ * `enforceCapability(session, capabilityId, requiredRole)` check from
+ * `@/lib/auth/feature-gate` — when it returns a response (the canonical 403
+ * envelope with its two-way remediation text) that response is returned
+ * unchanged, so adopting the wrapper leaves a route's authorization + error
+ * bodies byte-compatible with the hand-rolled
+ * `const gate = await enforceCapability(s, cap, role); if (gate) return gate;`
+ * idiom.
+ *
+ * WHY THIS WRAPPER EXISTS, beyond tidiness. `enforceCapability` returns
+ * `NextResponse | null`: the authorization is the CALLER's `if (gate) return
+ * gate;`. Delete that one line and the route is open while the
+ * `enforceCapability` call — and therefore the name every text-matching
+ * checker searches for — stays in the file. Measured 2026-08-07 on
+ * `app/api/setup/deploy/route.ts`: check-route-guards, check-route-toolkit and
+ * check-credential-route-authz were all still green with the branch removed.
+ *
+ * This wrapper removes the returned value a caller can drop. The handler is an
+ * ARGUMENT to the gate, so there is no way to keep the wrapper and skip the
+ * check — deleting the wrapper deletes the call, which the checkers do see.
+ *
+ * (`scripts/ci/check-route-guards.mjs` also now fails any route that discards a
+ * gate result, so the hand-rolled form stays safe. This is the shape to reach
+ * for in NEW code.)
+ *
+ *   export const POST = withCapability('admin.deploy-dlz', 'Admin',
+ *     async (req, { session, params }) => { … },
+ *   );
+ *
+ * It nests with `withBackendGate` exactly like the other wrappers:
+ *
+ *   export const GET = withCapability('admin.env-config', 'Admin',
+ *     withBackendGate('svc-cosmos', async (req, { session }) => { … }),
+ *   );
+ */
+export function withCapability<P = Record<string, string>>(
+  capabilityId: string,
+  requiredRole: FeatureRole,
+  handler: SessionHandler<P>,
+): RouteHandler<P> {
+  return withSession<P>(async (req, sctx) => {
+    const gate = await enforceCapability(sctx.session, capabilityId, requiredRole);
+    if (gate) return gate;
     return handler(req, sctx);
   });
 }

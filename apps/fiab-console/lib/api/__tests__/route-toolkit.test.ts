@@ -8,13 +8,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: vi.fn() }));
 vi.mock('@/lib/gates/registry', () => ({ getGate: vi.fn(), gateStatus: vi.fn() }));
-vi.mock('@/lib/auth/feature-gate', () => ({ requireTenantAdmin: vi.fn() }));
+vi.mock('@/lib/auth/feature-gate', () => ({ requireTenantAdmin: vi.fn(), enforceCapability: vi.fn() }));
 vi.mock('@/lib/auth/dlz-gate', () => ({ denyIfNoDlzAccess: vi.fn() }));
 
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { gateStatus, getGate } from '@/lib/gates/registry';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { requireTenantAdmin, enforceCapability } from '@/lib/auth/feature-gate';
 import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { NextResponse } from 'next/server';
 import { apiOk } from '../respond';
@@ -24,6 +24,7 @@ import {
   withBackendGate,
   withTenantAdmin,
   withDlzAccess,
+  withCapability,
 } from '../route-toolkit';
 
 const req = {} as any;
@@ -164,6 +165,57 @@ describe('withDlzAccess (R1)', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, oid: 'user-1' });
     expect(denyIfNoDlzAccess).toHaveBeenCalledWith(SESSION, 'monitoring');
+  });
+});
+
+/**
+ * C22 (#3088) — `withCapability` is the NON-DISCARDABLE form of the idiom that
+ * left /api/setup/deploy open with every CI guard green: `const gate = await
+ * enforceCapability(…); if (gate) return gate;` puts the whole authorization in
+ * one deletable line. These pin that the wrapper is byte-compatible with that
+ * idiom — same 401, the enforceCapability 403 returned UNCHANGED, the same
+ * (capabilityId, requiredRole) threaded through — so the routes converted to it
+ * authorize identically for legitimate and illegitimate callers alike.
+ */
+describe('withCapability (C22)', () => {
+  it('401s with no session and never runs the capability check or the handler', async () => {
+    (getSession as any).mockReturnValue(null);
+    const handler = vi.fn();
+    const res = await withCapability('admin.env-config', 'Admin', handler)(req, ctx({}));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ ok: false, error: 'unauthenticated' });
+    expect(enforceCapability).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('returns the enforceCapability 403 UNCHANGED and never runs the handler', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    const forbidden = NextResponse.json(
+      { ok: false, error: 'forbidden', capability: 'admin.env-config', requiredRole: 'Admin' },
+      { status: 403 },
+    );
+    (enforceCapability as any).mockResolvedValue(forbidden);
+    const handler = vi.fn();
+    const res = await withCapability('admin.env-config', 'Admin', handler)(req, ctx({}));
+    expect(res).toBe(forbidden); // the SAME object — no re-wrapping, no body drift
+    expect(res.status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('threads the exact capability id + required role through to the gate', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    (enforceCapability as any).mockResolvedValue(null);
+    await withCapability('admin.deploy-dlz', 'Contributor', async () => apiOk({}))(req, ctx({}));
+    expect(enforceCapability).toHaveBeenCalledWith(SESSION, 'admin.deploy-dlz', 'Contributor');
+  });
+
+  it('runs the handler with session + params when the caller holds the capability', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    (enforceCapability as any).mockResolvedValue(null);
+    const handler = vi.fn(async (_r, { session, params }) => apiOk({ oid: session.claims.oid, id: params.id }));
+    const res = await withCapability<{ id: string }>('admin.env-config', 'Admin', handler)(req, ctx({ id: 'svc-adx' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, oid: 'user-1', id: 'svc-adx' });
   });
 });
 

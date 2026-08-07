@@ -11,6 +11,67 @@
  *   pass any id.  (This is exactly the security-roles cross-tenant read that
  *   shipped and was fixed by threading `loadOwnedItem`.)
  *
+ * ------------------------------------------------------------------------
+ * WHAT THIS CHECKER ACTUALLY DETECTS — and what it does NOT.
+ * (#3088 / FINISHLINE C22. The previous header OVERCLAIMED; that overclaim
+ * was itself the bug, so this section is normative.)
+ *
+ * TWO INDEPENDENT CHECKS RUN HERE:
+ *
+ *   CHECK 1 — GATE CONSUMPTION (scripts/ci/_gate-consumption.mjs).
+ *     Every call to a returned-value guard must have its answer CONSUMED in a
+ *     decision position. This runs over EVERY route — allowlisted ones too —
+ *     because "this route needs no per-resource authorization" never licenses
+ *     "call a gate and throw its answer away".
+ *
+ *     This exists because CHECK 2 is, and can only be, a NAME search. On
+ *     2026-08-07 `if (gate) return gate;` was deleted from `app/api/setup/
+ *     deploy/route.ts` — the route that submits SUBSCRIPTION-SCOPED ARM
+ *     deployments — leaving the `enforceCapability` call in place. Measured:
+ *     this checker printed `violations: 0`; so did check-route-toolkit and
+ *     check-credential-route-authz. Authorization was fully defeated and every
+ *     merge-blocking control in the repo was green, because ENFORCEMENT is a
+ *     returned value the caller can silently discard while the NAME stays.
+ *
+ *     Same class as #2977 below, where `assertOwner` survived only as a word
+ *     in a COMMENT. That was fixed for one symbol; the class stayed live for
+ *     `enforceCapability`, `requireTenantAdmin`, `denyIfNoDlzAccess`,
+ *     `pdpCheck`, `authorizeItemWorkspace`, `authorizeWorkspace` and
+ *     `requireWorkspace` — all seven share the `NextResponse | null` contract
+ *     and all seven are covered now.
+ *
+ *   CHECK 2 — GUARD PRESENCE (GUARD_SIGNAL_RE, below).
+ *     A route in scope must reference at least one authorization signal. This
+ *     is a NAME search and is honestly labelled as one. It is strengthened
+ *     two ways: matching runs on comment/string-STRIPPED source (so a name in
+ *     prose can never satisfy it — the #2977 mechanism, closed for every
+ *     symbol at once), and every returned-value signal it accepts is
+ *     simultaneously policed by CHECK 1, so "the name is present" now implies
+ *     "the answer changes the response".
+ *
+ * WHAT IS STILL NOT PROVEN HERE (stated so no one reads more into a green run
+ * than it earns):
+ *   - That the capability id / required role / workspace is the RIGHT one.
+ *     Consumption proves a decision is acted on, not that the decision is
+ *     correct. Reviews and per-route contract tests own that.
+ *   - `claims.oid` / `claims.tid` as a signal only proves the caller identity
+ *     appears in the file. A route that forwards `session.claims.oid` as a
+ *     header (app/api/setup/deploy does, as `x-loom-caller-oid`) satisfies it
+ *     without authorizing anything. Such routes are held up by their gate
+ *     under CHECK 1, not by this signal.
+ *   - Routes with NO session call at all are SKIPPED, not passed — see
+ *     GETSESSION_RE. A route is only policed if it looks like it does auth.
+ *     Exactly ONE route in the tree is skipped for that reason today:
+ *     `app/api/embed/query/route.ts`, which deliberately does not call
+ *     getSession() because the embed TOKEN is the credential (verified
+ *     server-side, carrying the owner oid the governed query is scoped to).
+ *     It used to land in the remit only because its own header comment says
+ *     "this route intentionally does NOT call `getSession()`" — the comment
+ *     matched where no code did. That is #2977 in miniature and it is why the
+ *     count is stated here: if a SECOND route ever drops out of the remit,
+ *     `scanned` moves and someone has to explain why.
+ * ------------------------------------------------------------------------
+ *
  * SCOPE (the directories where this hole class lives):
  *   - apps/fiab-console/app/api/items/[type]/[id]/**\/route.ts
  *       the GENERIC per-item handlers — they operate on ANY Cosmos-owned
@@ -37,7 +98,7 @@
  *
  * WHAT COUNTS AS AUTHORIZED (any one of these signals in the handler file):
  *   - a named owner/tenant/admin guard:
- *       loadOwnedItem, updateOwnedItem, deleteOwnedItem, assertOwner,
+ *       loadOwnedItem, updateOwnedItem, deleteOwnedItem,
  *       authorizeWorkspace, requireWorkspace, requireTenantAdmin,
  *       isTenantAdmin, isTenantAdminTier, requireDomainRole, enforceCapability
  *   - the caller identity threaded into the data access:
@@ -56,11 +117,13 @@
  *   endpoint. Add the repo-relative path to ALLOWLIST with a one-line reason.
  *   Prefer FIXING the route (thread `loadOwnedItem` / an admin gate) over
  *   allowlisting — allowlisting an ownable resource re-opens the hole.
+ *   NOTE an allowlist entry does NOT exempt a route from CHECK 1.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { findDiscardedGateResults, stripCommentsAndStrings, RETURNED_VALUE_GATES } from './_gate-consumption.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -93,15 +156,15 @@ const GUARD_SIGNAL_RE = new RegExp(
     // satisfy it — the specific way `assertOwner` lied above. The wrapper itself
     // is verified structurally by `assertGuardWrappersAreReal()` below, so
     // hollowing it out fails this checker instead of silently disarming it.
-    'authorizeNotebookItem\\s*\\(',
+    'authorizeNotebookItem(?:<[^()]*>)?\\s*\\(',
     // #2996/#2997 - the databricks-job and databricks-pipeline guard wrappers.
     // Matched AS CALLS (trailing open-paren) for the same reason
     // `authorizeNotebookItem` is: a {@link ...} in a comment must never satisfy a
     // guard signal, which is exactly how `assertOwner` lied. Both are verified
     // structurally by `assertGuardWrappersAreReal()` below, so hollowing either
     // one out fails this checker instead of silently disarming it.
-    'authorizeDatabricksJobItem\\s*\\(',
-    'authorizeDatabricksPipelineItem\\s*\\(',
+    'authorizeDatabricksJobItem(?:<[^()]*>)?\\s*\\(',
+    'authorizeDatabricksPipelineItem(?:<[^()]*>)?\\s*\\(',
     // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
     // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
     // route that threads one of them is owner-scoped even without a literal
@@ -130,6 +193,13 @@ const GUARD_SIGNAL_RE = new RegExp(
     // denyIfNoDlzAccess check internally, so a route that adopts either is
     // authorized the same as its hand-rolled equivalent.
     'withTenantAdmin', 'withDlzAccess',
+    // C22 (#3088): `withCapability(capabilityId, role, handler)` runs the exact
+    // `enforceCapability` check and returns its 401/403 response unchanged. It
+    // is the NON-DISCARDABLE form of the idiom this checker was blind to: with
+    // the wrapper there is no returned value for a caller to drop, so the
+    // handler cannot run unauthorized while the name stays in the file. Its
+    // substance is verified by assertGuardWrappersAreReal() below.
+    'withCapability',
     // Item-level ACL resolver (rel-T87): resolveItemAccessByOid chains owner →
     // workspace ACL → per-item grant under the tid boundary (lib/auth/item-access.ts),
     // so a route threading it is fully authorized (not a bare session).
@@ -148,7 +218,16 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // directly OR routes through the WS-D1 toolkit wrappers (which call getSession
 // internally). Including the wrappers keeps toolkit-adopted routes IN scope so
 // the checker still verifies their guard rather than silently skipping them.
-const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)\s*\(/;
+//
+// C22 (#3088) — `(?:<[^()]*>)?` is NOT cosmetic. 104 routes call the wrappers
+// with an explicit type argument (`withSession<{ id: string }>(…)`), which the
+// bare `\s*\(` form does not match. They were nonetheless counted as
+// session-based because their HEADER COMMENTS say "Route-toolkit: withSession
+// (R1/R3)" — a space before the paren, so the comment matched where the code
+// did not. That is #2977 again, verbatim: a control passing on prose. Now that
+// matching runs on comment-stripped source the prose is gone, so the pattern
+// has to match the real call.
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)(?:<[^()]*>)?\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
@@ -813,6 +892,19 @@ function rel(f) {
   return path.relative(REPO_ROOT, f).split(path.sep).join('/');
 }
 
+/** How many returned-value gate CALLS a file makes (comment/string-stripped, so
+ *  a name in prose is not counted). Printed so a run that silently stops seeing
+ *  gates — the "measures nothing" failure mode — is visible as the number
+ *  collapsing, not as a quiet green. */
+function countGateCalls(raw) {
+  const code = stripCommentsAndStrings(raw);
+  let n = 0;
+  for (const g of RETURNED_VALUE_GATES) {
+    n += (code.match(new RegExp(`\\b${g}(?:<[^()]*>)?\\s*\\(`, 'g')) || []).length;
+  }
+  return n;
+}
+
 /** A flagged route is intentionally session-only when it's on the per-route
  *  ALLOWLIST, OR under an ALLOWLIST_PREFIXES class — but a NOW_GUARDED route
  *  (a fixed per-tenant hole) is NEVER allowlisted, so if its owner-check ever
@@ -863,6 +955,36 @@ const GUARD_WRAPPERS = [
     ),
     mustCall: ['getSession\\s*\\(', 'authorizeItemWorkspace\\s*\\('],
   },
+  // C22 (#3088) — the route-toolkit wrappers are guard signals too, and they
+  // are the SAME hazard one level up: a route adopting `withTenantAdmin` is
+  // authorized only while that wrapper still runs its gate. Hollow any of them
+  // out and every consumer route silently loses its authorization while still
+  // matching GUARD_SIGNAL_RE. They are declared with `export function`, not
+  // `export async function`, so the export shape is checked accordingly.
+  {
+    name: 'withTenantAdmin',
+    file: path.join(CONSOLE_ROOT, 'lib', 'api', 'route-toolkit.ts'),
+    exportKind: 'function',
+    mustCall: ['requireTenantAdmin\\s*\\('],
+  },
+  {
+    name: 'withDlzAccess',
+    file: path.join(CONSOLE_ROOT, 'lib', 'api', 'route-toolkit.ts'),
+    exportKind: 'function',
+    mustCall: ['denyIfNoDlzAccess\\s*\\('],
+  },
+  {
+    name: 'withCapability',
+    file: path.join(CONSOLE_ROOT, 'lib', 'api', 'route-toolkit.ts'),
+    exportKind: 'function',
+    mustCall: ['enforceCapability\\s*\\('],
+  },
+  {
+    name: 'withWorkspaceOwner',
+    file: path.join(CONSOLE_ROOT, 'lib', 'api', 'route-toolkit.ts'),
+    exportKind: 'function',
+    mustCall: ['loadOwnedItem\\s*\\('],
+  },
 ];
 
 function assertGuardWrappersAreReal() {
@@ -872,8 +994,13 @@ function assertGuardWrappersAreReal() {
       bad.push(`${w.name}: module missing (${rel(w.file)}) — routes delegating to it are unguarded`);
       continue;
     }
-    const src = fs.readFileSync(w.file, 'utf8');
-    if (!new RegExp(`export\\s+async\\s+function\\s+${w.name}\\b`).test(src)) {
+    // Comment/string-stripped: a wrapper whose gate call survives only in its
+    // own doc comment is exactly the #2977 lie, one level up.
+    const src = stripCommentsAndStrings(fs.readFileSync(w.file, 'utf8'));
+    const exportRe = w.exportKind === 'function'
+      ? new RegExp(`export\\s+function\\s+${w.name}\\b`)
+      : new RegExp(`export\\s+async\\s+function\\s+${w.name}\\b`);
+    if (!exportRe.test(src)) {
       bad.push(`${w.name}: not exported from ${rel(w.file)}`);
       continue;
     }
@@ -881,6 +1008,23 @@ function assertGuardWrappersAreReal() {
       if (!new RegExp(must).test(src)) {
         bad.push(`${w.name}: no longer calls /${must}/ — the wrapper no longer authorizes`);
       }
+    }
+  }
+  // A wrapper's OWN gate result must be consumed — a wrapper that calls its gate
+  // and drops the answer is the C22 defect hiding behind a signal this checker
+  // treats as structural. Scanned ONCE PER FILE and reported against the file,
+  // not against each wrapper declared in it: attributing an `enforceCapability`
+  // discard to `withTenantAdmin` (which does not call it) would be an error
+  // message asserting something the code never established — deploy-integrity
+  // R7, the same class as the "the tag does not exist" incident.
+  for (const file of [...new Set(GUARD_WRAPPERS.map((w) => w.file))]) {
+    if (!fs.existsSync(file)) continue;
+    for (const d of findDiscardedGateResults(fs.readFileSync(file, 'utf8'))) {
+      bad.push(
+        `${rel(file)}:${d.line} — ${d.gate} is called and ${d.reason}. ` +
+        'A wrapper that runs its check and ignores the answer authorizes nothing, ' +
+        'while every route that adopts it still matches GUARD_SIGNAL_RE.',
+      );
     }
   }
   if (bad.length) {
@@ -900,26 +1044,64 @@ function main() {
   const seen = new Set();
   const uniqueFiles = files.filter((f) => (seen.has(f) ? false : (seen.add(f), true)));
   const violations = [];
+  // CHECK 1 — a gate whose answer is discarded. Collected over EVERY route,
+  // including allowlisted ones: "no per-resource authorization is needed here"
+  // never licenses "call a gate and ignore what it said".
+  const discarded = [];
   let scanned = 0;
   let allowlistedHits = 0;
+  let gateCalls = 0;
 
   for (const f of uniqueFiles) {
-    const src = fs.readFileSync(f, 'utf8');
+    const raw = fs.readFileSync(f, 'utf8');
+    const r = rel(f);
+
+    const dropped = findDiscardedGateResults(raw);
+    if (dropped.length) discarded.push({ route: r, hits: dropped });
+    gateCalls += countGateCalls(raw);
+
+    // CHECK 2 — presence. Matching runs on comment/string-STRIPPED source so a
+    // guard name surviving in prose (the #2977 mechanism) satisfies nothing.
+    const src = stripCommentsAndStrings(raw);
     const hasMutating = MUTATING_EXPORT_RE.test(src);
     const hasGet = GET_EXPORT_RE.test(src);
     if (!hasMutating && !hasGet) continue; // no data surface to guard
     if (!GETSESSION_RE.test(src)) continue; // not session-based; out of this check's remit
     scanned++;
     if (GUARD_SIGNAL_RE.test(src)) continue; // authorized (owner/tenant/admin check present)
-    const r = rel(f);
     if (isAllowed(r)) { allowlistedHits++; continue; } // intentional shared/session/self route
     violations.push(r);
   }
 
   console.log(`[route-guards] scanned ${scanned} session-based routes across app/api`);
   console.log(`[route-guards] allowlisted intentional routes hit: ${allowlistedHits} (${ALLOWLIST.size} per-route + ${ALLOWLIST_PREFIXES.length} class prefixes)`);
+  console.log(`[route-guards] returned-value gate calls checked for consumption: ${gateCalls} (${RETURNED_VALUE_GATES.join(', ')})`);
+  console.log(`[route-guards] gates whose answer is DISCARDED: ${discarded.length}`);
   console.log(`[route-guards] violations: ${violations.length}`);
+
+  let failed = false;
+
+  if (discarded.length) {
+    failed = true;
+    console.error('\n[route-guards] FAIL — these routes CALL an authorization gate and then');
+    console.error('THROW ITS ANSWER AWAY. The call runs, the name is present, and the caller');
+    console.error('is never rejected — the exact shape that left /api/setup/deploy (subscription-');
+    console.error('scoped ARM deployments) open with every CI guard green on 2026-08-07.');
+    for (const d of discarded) {
+      console.error(`  - ${d.route}`);
+      for (const h of d.hits) console.error(`      :${h.line} ${h.gate} — ${h.reason}`);
+    }
+    console.error('\nFix: short-circuit on the result —');
+    console.error('  const gate = await enforceCapability(session, cap, role);');
+    console.error('  if (gate) return gate;');
+    console.error('or adopt the NON-DISCARDABLE wrapper, which removes the returned value');
+    console.error('a caller can drop:');
+    console.error("  export const POST = withCapability(cap, 'Admin', async (req, { session }) => { … });");
+    console.error('(withCapability / withTenantAdmin / withDlzAccess — lib/api/route-toolkit.ts)');
+  }
+
   if (violations.length) {
+    failed = true;
     console.error('\n[route-guards] FAIL — these routes are gated only by getSession() with no');
     console.error('owner/tenant/admin authorization (potential cross-tenant access):');
     for (const v of violations) console.error(`  - ${v}`);
@@ -928,9 +1110,11 @@ function main() {
     console.error('caller is authorized against the specific resource. If the route legitimately');
     console.error('needs no per-resource check (shared Azure backend resolved by type, or a self/');
     console.error('public endpoint), add it to ALLOWLIST in scripts/ci/check-route-guards.mjs with a reason.');
-    process.exit(1);
   }
-  console.log('[route-guards] OK — every session-based item/admin route is authorized or allowlisted.');
+
+  if (failed) process.exit(1);
+  console.log('[route-guards] OK — every session-based item/admin route is authorized or allowlisted,');
+  console.log('[route-guards] and every authorization gate that is called has its answer acted on.');
   process.exit(0);
 }
 

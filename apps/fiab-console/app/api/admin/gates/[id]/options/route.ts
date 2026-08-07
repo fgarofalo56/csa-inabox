@@ -19,8 +19,7 @@
  * free-text input with the registry valueHint for those.
  */
 import { NextResponse } from 'next/server';
-import { enforceCapability } from '@/lib/auth/feature-gate';
-import { withSession } from '@/lib/api/route-toolkit';
+import { withCapability } from '@/lib/api/route-toolkit';
 import { apiNotFound, apiError } from '@/lib/api/respond';
 import { getGate, type GateOptionsLoader } from '@/lib/gates/registry';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
@@ -170,10 +169,19 @@ async function loadOptions(
   return out;
 }
 
-export const GET = withSession<{ id: string }>(async (_req, { session, params }) => {
-  const capGate = await enforceCapability(session, 'admin.env-config', 'Admin');
-  if (capGate) return capGate;
-
+/**
+ * C22 (#3088) — `withCapability` composes withSession (401) + enforceCapability
+ * (403) into ONE non-discardable wrapper. Same capability id, same required
+ * role, same response bodies as the previous
+ * `const capGate = await enforceCapability(…); if (capGate) return capGate;`
+ * prologue — the wrapper returns enforceCapability's response unchanged. The
+ * point of the change is that the old shape put the ENTIRE authorization in one
+ * deletable line, and deleting it left check-route-guards, check-route-toolkit
+ * and check-credential-route-authz all green (measured 2026-08-07 on
+ * /api/setup/deploy). A handler passed AS AN ARGUMENT to the gate cannot run
+ * unless the gate allowed it.
+ */
+export const GET = withCapability<{ id: string }>('admin.env-config', 'Admin', async (_req, { params }) => {
   const { id } = params;
   const gate = getGate(id);
   if (!gate) return apiNotFound(`unknown gate id '${id}'`);
