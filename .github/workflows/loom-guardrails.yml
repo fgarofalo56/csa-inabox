@@ -77,6 +77,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bff-errors.mjs
       - name: editor-read-failure-honesty (a failed read must never look like empty content — C19 data loss)
+        if: ${{ !cancelled() }}
         run: node scripts/ci/check-editor-read-failure-honesty.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
@@ -245,6 +246,24 @@ jobs:
       - name: deploy-template-sync (the compiled ARM template that SHIPS must match its bicep — #2945)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-template-sync.mjs
+      # CLOUD PARITY (.claude/rules/cloud-parity.md). A .bicepparam object
+      # assignment REPLACES the template default — it does not merge — and
+      # main.bicep forwards `appImageTags` to admin-plane VERBATIM. So a param
+      # file that omits a key the template dereferences with a plain `.` makes
+      # that boundary's ARM deployment abort on "the language expression
+      # property '<key>' doesn't exist" BEFORE a single resource is touched.
+      # Measured 2026-08-06: il5, commercial-full and tenant-dmlz were each
+      # missing the same five keys, i.e. the entire IL5 boundary AND the
+      # from-scratch path no-vaporware.md names ("-p params/commercial-full")
+      # could not deploy, while the live Commercial lane was fine because
+      # params/commercial.bicepparam happens to carry them. Nothing measured it:
+      # `bicep build-params` type-checks the file in isolation and appImageTags
+      # is an untyped `object`, so the omission is invisible until ARM evaluates
+      # it in a real deployment. This derives the required key set from the
+      # SHIPPED artifact, so it tracks the template instead of a stale list.
+      - name: appimagetags-coverage (every boundary's param bag carries every plainly-read image tag)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-appimagetags-coverage.mjs
       # deploy-staleness (above) says the reconcile has not RUN. This says that
       # when it does run, it cannot destroy, duplicate or re-image the estate:
       # no destructive step on the schedule, one image repository per
