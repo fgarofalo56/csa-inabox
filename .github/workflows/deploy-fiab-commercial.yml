@@ -376,9 +376,17 @@ jobs:
           if [ -z "${HUB_KV_ID:-}" ] || [ "$HUB_KV_ID" = "null" ]; then
             HUB_KV_ID=$(az keyvault list -g "$HUB_RG" --query "[0].id" -o tsv 2>/dev/null || true)
           fi
-          echo "hub_acr_login=${HUB_ACR_LOGIN:-}" >> "$GITHUB_OUTPUT"
-          echo "hub_cae_id=${HUB_CAE_ID:-}"       >> "$GITHUB_OUTPUT"
-          echo "hub_kv_id=${HUB_KV_ID:-}"         >> "$GITHUB_OUTPUT"
+          # Grouped redirect rather than three individual `echo … >> "$GITHUB_OUTPUT"`
+          # lines: that pattern trips SC2129 and the actionlint ratchet is a
+          # merge-blocker. (Note the wording — a comment line must not BEGIN with
+          # the word "shellcheck" after the hash, because shellcheck reads that as
+          # a malformed directive and raises SC1072/SC1073. Same trap the install
+          # step in loom-guardrails.yml documents.)
+          {
+            echo "hub_acr_login=${HUB_ACR_LOGIN:-}"
+            echo "hub_cae_id=${HUB_CAE_ID:-}"
+            echo "hub_kv_id=${HUB_KV_ID:-}"
+          } >> "$GITHUB_OUTPUT"
           echo "::notice::Hub coords — sub=$HUB_SUB vnet=$HUB_VNET_ID uami=$HUB_UAMI_NAME ($HUB_UAMI_PRINCIPAL)"
           if [ -n "${HUB_ACR_LOGIN:-}" ] && [ -n "${HUB_CAE_ID:-}" ]; then
             echo "::notice::Hub workload coords present — the hub-side S3 gateway (#2682) will deploy from $HUB_ACR_LOGIN."
@@ -450,11 +458,20 @@ jobs:
           HUB_PARAMS=""
           if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
             HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
-            # #2682 — only appended when discovered, so a pre-#2682 hub still attaches.
-            [ -n "${{ steps.hubcoords.outputs.hub_acr_login }}" ] && HUB_PARAMS="$HUB_PARAMS hubAcrLoginServer=${{ steps.hubcoords.outputs.hub_acr_login }}"
-            [ -n "${{ steps.hubcoords.outputs.hub_cae_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubCaeId=${{ steps.hubcoords.outputs.hub_cae_id }}"
-            [ -n "${{ steps.hubcoords.outputs.hub_kv_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubKeyVaultId=${{ steps.hubcoords.outputs.hub_kv_id }}"
-            true
+            # #2682 — the hub ACR / CAE / Key Vault coordinates for the hub-side
+            # S3 gateway. Appended ONLY when discovery found them, so a hub whose
+            # topologyManifest predates #2682 still attaches (the gateway is then
+            # skipped and honest-gates — never a public-registry fallback, the
+            # module has no such branch). Written as `if` blocks rather than
+            # `[ -n x ] && VAR=…`: the && form is an SC2015 trap and its exit
+            # status leaks into the step under `set -e`, which is why it needed a
+            # trailing `true`. An if-block needs no such crutch.
+            HUB_ACR="${{ steps.hubcoords.outputs.hub_acr_login }}"
+            HUB_CAE="${{ steps.hubcoords.outputs.hub_cae_id }}"
+            HUB_KV="${{ steps.hubcoords.outputs.hub_kv_id }}"
+            if [ -n "$HUB_ACR" ]; then HUB_PARAMS="$HUB_PARAMS hubAcrLoginServer=$HUB_ACR"; fi
+            if [ -n "$HUB_CAE" ]; then HUB_PARAMS="$HUB_PARAMS hubCaeId=$HUB_CAE"; fi
+            if [ -n "$HUB_KV" ]; then HUB_PARAMS="$HUB_PARAMS hubKeyVaultId=$HUB_KV"; fi
           fi
           az deployment sub what-if \
             --name csa-loom-ci-${{ github.run_id }} \
@@ -626,11 +643,20 @@ jobs:
           HUB_PARAMS=""
           if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
             HUB_PARAMS="hubAdminSubscriptionId=${{ steps.hubcoords.outputs.hub_admin_sub }} hubVnetId=${{ steps.hubcoords.outputs.hub_vnet_id }} hubConsolePrincipalId=${{ steps.hubcoords.outputs.hub_uami_principal }} hubConsoleUamiName=${{ steps.hubcoords.outputs.hub_uami_name }} hubConsoleUamiAppId=${{ steps.hubcoords.outputs.hub_uami_client }} hubConsoleUamiId=${{ steps.hubcoords.outputs.hub_uami_id }}"
-            # #2682 — only appended when discovered, so a pre-#2682 hub still attaches.
-            [ -n "${{ steps.hubcoords.outputs.hub_acr_login }}" ] && HUB_PARAMS="$HUB_PARAMS hubAcrLoginServer=${{ steps.hubcoords.outputs.hub_acr_login }}"
-            [ -n "${{ steps.hubcoords.outputs.hub_cae_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubCaeId=${{ steps.hubcoords.outputs.hub_cae_id }}"
-            [ -n "${{ steps.hubcoords.outputs.hub_kv_id }}" ] && HUB_PARAMS="$HUB_PARAMS hubKeyVaultId=${{ steps.hubcoords.outputs.hub_kv_id }}"
-            true
+            # #2682 — the hub ACR / CAE / Key Vault coordinates for the hub-side
+            # S3 gateway. Appended ONLY when discovery found them, so a hub whose
+            # topologyManifest predates #2682 still attaches (the gateway is then
+            # skipped and honest-gates — never a public-registry fallback, the
+            # module has no such branch). Written as `if` blocks rather than
+            # `[ -n x ] && VAR=…`: the && form is an SC2015 trap and its exit
+            # status leaks into the step under `set -e`, which is why it needed a
+            # trailing `true`. An if-block needs no such crutch.
+            HUB_ACR="${{ steps.hubcoords.outputs.hub_acr_login }}"
+            HUB_CAE="${{ steps.hubcoords.outputs.hub_cae_id }}"
+            HUB_KV="${{ steps.hubcoords.outputs.hub_kv_id }}"
+            if [ -n "$HUB_ACR" ]; then HUB_PARAMS="$HUB_PARAMS hubAcrLoginServer=$HUB_ACR"; fi
+            if [ -n "$HUB_CAE" ]; then HUB_PARAMS="$HUB_PARAMS hubCaeId=$HUB_CAE"; fi
+            if [ -n "$HUB_KV" ]; then HUB_PARAMS="$HUB_PARAMS hubKeyVaultId=$HUB_KV"; fi
           fi
           # RETRY WITH CLASSIFICATION + PLATFORM REMEDIATION (deploy-integrity R6).
           #
