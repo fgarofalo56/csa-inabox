@@ -221,3 +221,63 @@ test('a template-literal INTERPOLATION is code and is still analyzed', () => {
   const out = stripCommentsAndStrings('const s = `x ${await enforceCapability(a, b)} y`;');
   assert.match(out, /enforceCapability\(a, b\)/);
 });
+
+test('REGEX LITERALS are lexed — an odd number of quotes must not eat the file', () => {
+  // apps/fiab-console/app/api/items/dataflow/profile/route.ts:176 carries
+  // `/^"((?:[^"]|"")*)"$/` — FIVE quote characters. Treated as code, the 5th
+  // opens a string state that blanked 40+ lines including that route's
+  // getSession() and its `export async function POST`, silently dropping the
+  // route from the checker's remit. Blanked code is invisible code.
+  const src = [
+    'function parseMStr(tok) {',
+    '  const m = tok.trim().match(/^"((?:[^"]|"")*)"$/);',
+    '  return m ? m[1].replace(/""/g, \'"\') : undefined;',
+    '}',
+    'export async function POST(req) {',
+    '  const session = getSession();',
+    '  const gate = await enforceCapability(session, "admin.x", "Admin");',
+    '  if (gate) return gate;',
+    '  return NextResponse.json({ ok: true });',
+    '}',
+  ].join('\n');
+  const out = stripCommentsAndStrings(src);
+  assert.match(out, /export async function POST/, 'the handler export must survive');
+  assert.match(out, /getSession\(\)/, 'the session call must survive');
+  assert.match(out, /enforceCapability\(session,/, 'the gate call must survive');
+  assert.deepEqual(findDiscardedGateResults(src), [], 'and the consumed gate must not be flagged');
+});
+
+test('`return /re/` is a REGEX, not division — the keyword must survive the space', () => {
+  // `prevWord` used to be cleared by the whitespace AFTER `return`, so
+  // `return /[",\n]/.test(s)` lexed as division and the `"` inside the character
+  // class opened a runaway string state.
+  const out = stripCommentsAndStrings('function f(s) { return /[",\\n]/.test(s); }\nconst x = getSession();');
+  assert.match(out, /const x = getSession\(\);/, 'code after the regex must survive');
+});
+
+test('division is NOT mistaken for a regex literal', () => {
+  const out = stripCommentsAndStrings('const ratio = total / count; const y = getSession();');
+  assert.match(out, /const ratio = total \/ count;/);
+  assert.match(out, /getSession\(\)/);
+});
+
+test('keepStrings:true blanks comments ONLY — string data survives', () => {
+  // GATE_RE (`'not_configured'`) and BACKEND_IMPORT_RE (`from '@/lib/azure/…'`)
+  // legitimately match string literals: that is data the route really carries,
+  // not prose about it. Blanking strings for those signals took the route
+  // inventory's "Gated (backend config)" count from 531 to 308 — a 42% phantom
+  // drop in a security-adjacent table.
+  const src = [
+    "// prose mentioning not_configured and @/lib/azure/adf-client",
+    "import { runPipeline } from '@/lib/azure/adf-client';",
+    "const err = { code: 'not_configured' };",
+  ].join('\n');
+  const kept = stripCommentsAndStrings(src, { keepStrings: true });
+  assert.match(kept, /'@\/lib\/azure\/adf-client'/, 'import specifiers must survive');
+  assert.match(kept, /'not_configured'/, 'error codes must survive');
+  assert.doesNotMatch(kept.split('\n')[0], /not_configured|adf-client/, 'but the COMMENT must not');
+
+  const stripped = stripCommentsAndStrings(src);
+  assert.doesNotMatch(stripped, /not_configured/, 'default mode still blanks strings');
+  assert.equal(kept.length, src.length, 'length is preserved in both modes');
+});

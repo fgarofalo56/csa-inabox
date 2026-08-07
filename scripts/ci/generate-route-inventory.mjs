@@ -22,6 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stripCommentsAndStrings } from './_gate-consumption.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -55,8 +56,15 @@ const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
  * under-reports protection is not merely noisy — it trains readers to ignore
  * the `public` column, which is the column that matters. `[^(]*` rather than
  * `[^>]*` so nested generics (`<Foo<Bar>>`) still match.
+ *
+ * C22 (#3088): check-route-guards.mjs had the SAME bug and had NOT learned this
+ * lesson — its `GETSESSION_RE` was still the bare `\s*\(` form, so the 104
+ * routes calling `withSession<{ id: string }>(…)` were in its remit only via
+ * their header COMMENTS ("Route-toolkit: withSession (R1/R3)"). Fixed there
+ * too; the note is left here because this file caught it first and the checker
+ * did not, which is the whole argument for keeping the two in lockstep.
  */
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*(?:<[^(]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)\s*(?:<[^(]*>)?\s*\(|authorize(?:NotebookItem|DatabricksJobItem|DatabricksPipelineItem)\s*(?:<[^(]*>)?\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -94,6 +102,12 @@ const ADMIN_RE = new RegExp([
   // withTenantAdmin runs requireTenantAdmin internally; withDlzAccess runs
   // denyIfNoDlzAccess (tenant-admin-or-domain-admin) internally.
   'withTenantAdmin', 'withDlzAccess',
+  // C22 (#3088): withCapability runs enforceCapability internally — the
+  // NON-DISCARDABLE form of `const gate = await enforceCapability(…);
+  // if (gate) return gate;`, whose branch could be deleted while the name (and
+  // therefore this classification) survived. Its substance is asserted by
+  // check-route-guards.assertGuardWrappersAreReal().
+  'withCapability',
 ].join('|'));
 
 const GATE_RE = /ConfigGate\s*\(|withBackendGate\s*\(|apiHonestGateError\s*\(|backendGateResponse\s*\(|gateStatus\s*\(|assertFabricFamilyAvailable|not_configured|not configured/;
@@ -131,13 +145,26 @@ function relApi(f) {
   return path.relative(API_ROOT, f).split(path.sep).join('/');
 }
 
-function classify(src, relPath) {
+function classify(raw, relPath) {
+  // C22 (#3088): classify the AUTH signals from CODE, not from prose. Every one
+  // is a NAME, and a name survives in a comment long after the code is gone —
+  // that is #2977, which this file's own OWNER_RE note records for
+  // `assertOwner`. Removing `assertOwner` fixed one symbol; stripping comments
+  // and string literals closes the mechanism for all of them at once.
+  const src = stripCommentsAndStrings(raw);
+  // …but GATE_RE and BACKEND_IMPORT_RE legitimately match STRING LITERALS —
+  // `code: 'not_configured'` and `from '@/lib/azure/adf-client'` are data the
+  // route really carries, not prose about it. They get comments-only stripping.
+  // MEASURED: blanking strings for these took "Gated (backend config)" from 531
+  // to 308 by erasing every `'not_configured'` — a 42% phantom drop in a
+  // security-adjacent table. A comment is never code; a string sometimes is.
+  const dataSrc = stripCommentsAndStrings(raw, { keepStrings: true });
   const methods = METHOD_ORDER.filter((m) => METHOD_RES[m].test(src));
   const isAdminPath = relPath.startsWith('admin/');
   const hasSession = SESSION_RE.test(src);
   const hasOwner = OWNER_RE.test(src);
   const hasAdmin = ADMIN_RE.test(src) || isAdminPath;
-  const gated = GATE_RE.test(src);
+  const gated = GATE_RE.test(dataSrc);
 
   let scope;
   if (hasAdmin) scope = 'admin';
@@ -146,7 +173,7 @@ function classify(src, relPath) {
   else scope = 'public';
 
   const backends = [...new Set(
-    [...src.matchAll(BACKEND_IMPORT_RE)].map((m) => BACKEND_LABEL[m[1]]).filter(Boolean),
+    [...dataSrc.matchAll(BACKEND_IMPORT_RE)].map((m) => BACKEND_LABEL[m[1]]).filter(Boolean),
   )].sort();
 
   const area = relPath.split('/')[0] || '(root)';

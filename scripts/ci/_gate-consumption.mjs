@@ -97,8 +97,22 @@ export const RETURNED_VALUE_GATES = [
  * call inside it stops being counted. A stripper that eats code is a checker
  * that measures nothing, which is the failure mode this whole change exists to
  * end. Pinned by the "regex literal containing quotes" tests.
+ *
+ * @param {string} src
+ * @param {{keepStrings?: boolean}} [opts]
+ *   `keepStrings: true` blanks ONLY comments (and regex literals, which are
+ *   still not code you can search for identifiers in). Use it when the signal
+ *   you are matching legitimately LIVES in a string literal — an import
+ *   specifier (`from '@/lib/azure/adf-client'`) or an error code
+ *   (`code: 'not_configured'`) is data the code really carries. The distinction
+ *   is the honest one: a comment is NEVER code, whereas a string literal
+ *   sometimes is exactly the thing being looked for. Blanking strings for those
+ *   signals silently collapses their counts — measured while wiring this into
+ *   generate-route-inventory.mjs, where it took "Gated (backend config)" from
+ *   531 to 308 by erasing every `'not_configured'`.
  */
-export function stripCommentsAndStrings(src) {
+export function stripCommentsAndStrings(src, opts = {}) {
+  const keepStrings = opts.keepStrings === true;
   const out = Array.from(src);
   const n = src.length;
   let i = 0;
@@ -149,9 +163,9 @@ export function stripCommentsAndStrings(src) {
         prevWord = '';
         continue;
       }
-      if (c === "'") { state = 3; out[i] = ' '; i++; prevSignificant = ')'; prevWord = ''; continue; }
-      if (c === '"') { state = 4; out[i] = ' '; i++; prevSignificant = ')'; prevWord = ''; continue; }
-      if (c === '`') { state = 5; out[i] = ' '; i++; prevSignificant = ')'; prevWord = ''; continue; }
+      if (c === "'") { state = 3; if (!keepStrings) out[i] = ' '; i++; prevSignificant = ')'; prevWord = ''; continue; }
+      if (c === '"') { state = 4; if (!keepStrings) out[i] = ' '; i++; prevSignificant = ')'; prevWord = ''; continue; }
+      if (c === '`') { state = 5; if (!keepStrings) out[i] = ' '; i++; prevSignificant = ')'; prevWord = ''; continue; }
       if (!/\s/.test(c)) {
         if (/[\w$]/.test(c)) {
           // Building an identifier. `prevWord` must survive the WHITESPACE that
@@ -168,13 +182,25 @@ export function stripCommentsAndStrings(src) {
     }
     if (state === 3 || state === 4) {
       const quote = state === 3 ? "'" : '"';
-      if (c === '\\') { if (out[i] !== '\n') out[i] = ' '; if (out[i + 1] !== undefined && out[i + 1] !== '\n') out[i + 1] = ' '; i += 2; continue; }
-      if (c === quote) { out[i] = ' '; state = 0; i++; continue; }
-      if (c !== '\n') out[i] = ' ';
+      if (c === '\\') {
+        if (!keepStrings) {
+          if (out[i] !== '\n') out[i] = ' ';
+          if (out[i + 1] !== undefined && out[i + 1] !== '\n') out[i + 1] = ' ';
+        }
+        i += 2; continue;
+      }
+      if (c === quote) { if (!keepStrings) out[i] = ' '; state = 0; i++; continue; }
+      if (!keepStrings && c !== '\n') out[i] = ' ';
       i++; continue;
     }
     if (state === 5) {
-      if (c === '\\') { if (out[i] !== '\n') out[i] = ' '; if (out[i + 1] !== undefined && out[i + 1] !== '\n') out[i + 1] = ' '; i += 2; continue; }
+      if (c === '\\') {
+        if (!keepStrings) {
+          if (out[i] !== '\n') out[i] = ' ';
+          if (out[i + 1] !== undefined && out[i + 1] !== '\n') out[i + 1] = ' ';
+        }
+        i += 2; continue;
+      }
       if (c === '$' && d === '{') {
         // Interpolations are CODE — leave them intact so a guard call inside a
         // template can still be seen. Track depth to find the closing brace.
@@ -188,8 +214,8 @@ export function stripCommentsAndStrings(src) {
         }
         i++; continue;
       }
-      if (c === '`') { out[i] = ' '; state = 0; i++; continue; }
-      if (c !== '\n') out[i] = ' ';
+      if (c === '`') { if (!keepStrings) out[i] = ' '; state = 0; i++; continue; }
+      if (!keepStrings && c !== '\n') out[i] = ' ';
       i++; continue;
     }
   }
