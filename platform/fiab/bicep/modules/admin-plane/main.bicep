@@ -865,6 +865,31 @@ var trinoConsoleAudience = trinoAuthPosture == 'entra' ? 'api://${trinoAudienceC
 // catalog exists yet, so this is never a day-one gate).
 var trinoCatalogPolicy = string(loomBackends.?trinoCatalogPolicy ?? '')
 
+// ── LU-7 engine-compiled ABAC — the governance PULL wiring ───────────────────
+// #2678 gave the engine a catalog floor and gave the BFF a per-caller catalog
+// grant table. Neither knows anything about Loom's GOVERNANCE: a federated query
+// got whatever row/column policy the source system happened to enforce.
+//
+// LU-7 compiles the SAME policy-as-code set that already drives Synapse / Unity
+// Catalog / ADX into a Trino file-based access-control document (table grants,
+// explicit denies, ROW FILTERS, COLUMN MASKS, plus the impersonation rule that
+// lets the BFF present the signed-in principal) and the engine PULLS it from the
+// Console on a refresh loop. That is why this is a URL the DEPLOY produces and
+// not a value anyone types (.claude/rules/auto-bind-by-default.md §5): a policy
+// edit in the Console reaches the engine within one refresh period with no
+// redeploy, no image rebuild, and no operator step.
+//
+// The engine reaches the Console over the Container Apps Environment's internal
+// name resolution (`http://loom-console`) — the same hop the setup-orchestrator
+// and MAF callbacks already use — so the document never leaves the VNet.
+//
+// The pull is authenticated with a DEDICATED deterministic secret rather than
+// the shared LOOM_INTERNAL_TOKEN, for the same reason rel-T10/B3 split the IQ
+// MCP and CI tokens out: a leak of one internal path must not open the others.
+// Delivered to BOTH apps as an ACA secretRef, so it is a literal nowhere.
+var loomTrinoPolicyToken = guid(loomGeneratedSecretSeed, 'loom-trino-policy-token-v1')
+var trinoPolicyRulesUrl = trinoEngineActive ? 'http://loom-console/api/governance/policy-code/engine-rules' : ''
+
 // ── M1 loom-migrate estate-assessment reader — DEFAULT-ON deploy toggle ───────
 // Backs LOOM_MIGRATE_URL (/admin/migrate + the audited /api/migrate/assess).
 // Until 2026-07-28 data-plane/loom-migrate-aca.bicep was an out-of-band
@@ -4142,6 +4167,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // per-app delivery assertion, which is the whole point of that check:
             // the name WAS present in bicep, just on the wrong app.
             { name: 'LOOM_TRINO_SESSION_USER', value: trinoEngineActive ? trinoEngine!.outputs.mappedSessionUser : '' }
+            // LU-7 — the SAME engine-rules URL the loom-trino app is given. The
+            // Console reads it for two things: it is the endpoint it SERVES (the
+            // engine pulls from here), and its presence is how the BFF knows the
+            // engine is being served a document that carries the impersonation
+            // rule, so `X-Trino-User` may carry the signed-in principal and the
+            // engine's own per-caller table rules can match
+            // (lib/azure/trino-client.ts `trinoImpersonationEnabled()`). Empty →
+            // the BFF keeps sending the mapped session user exactly as before.
+            { name: 'LOOM_TRINO_POLICY_URL', value: trinoPolicyRulesUrl }
+            // The dedicated pull secret. A secretRef, never a literal — and a
+            // DIFFERENT value from LOOM_INTERNAL_TOKEN so a leak of one internal
+            // trust path does not open the engine-rules endpoint.
+            { name: 'LOOM_TRINO_POLICY_TOKEN', secretRef: 'loom-trino-policy-token' }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
@@ -5549,6 +5587,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
           ] : [],
+          // LU-7 — the DEDICATED secret the loom-trino engine presents when it
+          // pulls its governance-compiled authorization from
+          // /api/governance/policy-code/engine-rules. Same deterministic value
+          // the engine app is given, and a DIFFERENT value from the shared
+          // internal token so a leak of one internal path does not open this
+          // one. Always emitted (not gated on trinoEngineActive) so the Console
+          // can serve + verify the endpoint even in a revision where the engine
+          // is temporarily disabled — the route still fails closed for anyone
+          // who does not hold the secret.
+          [
+            { name: 'loom-trino-policy-token', value: loomTrinoPolicyToken }
+          ],
           // Dedicated IQ MCP external-agent Bearer secret (distinct value).
           loomIqMcpEnabled ? [
             { name: 'loom-iq-mcp-token', value: loomIqMcpToken }
@@ -6126,6 +6176,12 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // system access control rendered from the wired catalogs). Opt out with
     // loomBackends.trinoAccessControl='none' (audited SECURITY WARNING).
     accessControl: string(loomBackends.?trinoAccessControl ?? 'file') == 'none' ? 'none' : 'file'
+    // LU-7 — the engine pulls its governance-compiled authorization from the
+    // Console. Both halves are deploy-produced; with the URL wired the engine
+    // enforces Loom's row filters / column masks / table grants itself instead
+    // of trusting whatever the federated source happened to apply.
+    policyRulesUrl: trinoPolicyRulesUrl
+    policyRulesToken: loomTrinoPolicyToken
     complianceTags: complianceTags
   }
 }

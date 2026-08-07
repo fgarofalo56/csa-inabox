@@ -223,6 +223,10 @@ done
 log "catalogs: $(ls -1 "$CATALOG_DIR" | tr '\n' ' ')"
 
 # ── Emit the deny-by-default access control (rendered from the catalogs above) ─
+# This is the LOCAL FLOOR and it is written FIRST, unconditionally, so the engine
+# always has a valid, restrictive rules file even if every network call below
+# fails. The governance fetch (LU-7) then OVERWRITES this file with the richer
+# Loom-compiled document; if it cannot, this floor is what stays in force.
 if [ "$ACCESS_CONTROL_MODE" = "none" ]; then
   rm -f "$RULES_TMP"
   log "SECURITY WARNING: LOOM_TRINO_ACCESS_CONTROL=none — engine catalog authorization is DISABLED (Trino AllowAll). Any authenticated caller can query EVERY catalog. This is an explicit opt-out of the deny-by-default engine floor; the BFF still enforces per-caller catalog authorization."
@@ -242,8 +246,120 @@ else
   cat > "$CONFIG_DIR/access-control.properties" <<EOF
 access-control.name=file
 security.config-file=${RULES_FILE}
+security.refresh-period=${LOOM_TRINO_POLICY_REFRESH_SECONDS:-60}s
 EOF
   log "engine authorization: file-based system access control ENABLED (deny-by-default); rules -> ${RULES_FILE}"
+fi
+
+# ── LU-7: GOVERNANCE-COMPILED ENGINE AUTHORIZATION ───────────────────────────
+# Everything above is the deployment's own floor: which catalogs exist and
+# whether they are readable. It knows NOTHING about Loom's governance, so before
+# LU-7 a federated query's row/column policy was whatever the source system
+# happened to enforce — the engine trusted itself.
+#
+# LOOM_TRINO_POLICY_URL points at the Console's engine-rules endpoint, which
+# compiles the SAME policy-as-code set that already drives Synapse / Unity
+# Catalog / ADX into a Trino file-based access-control document: table grants,
+# explicit denies, ROW FILTERS and COLUMN MASKS, plus the impersonation rule
+# that lets the BFF present the signed-in Loom user so those rules match a REAL
+# principal instead of the collapsed session user. The document the Console
+# returns CARRIES the catalog floor above (the engine sends its own catalog list
+# with the request), so overwriting the file never widens catalog reachability.
+#
+# The fetch happens HERE, not in Trino, for one reason: Trino's
+# `security.config-file` accepts an HTTP URL but issues a plain GET with no way
+# to attach a credential, and this document names group ids, table names and row
+# predicates. So the entrypoint does the AUTHENTICATED fetch (the shared
+# deployment token in a HEADER — never in the URL, because Trino logs the
+# configured URI on failure), writes the result to the local rules file, and a
+# background loop repeats it. Trino's own `security.refresh-period` (set above)
+# then re-reads that file, so a policy edit in the Console reaches the engine
+# within one interval with NO redeploy, NO image rebuild and NO operator plumbing.
+#
+# FAIL-CLOSED IN BOTH DIRECTIONS:
+#   * The URL is unset  -> the locally rendered catalog floor stays in force.
+#     Governance simply is not published yet; the engine is not more permissive
+#     than it was.
+#   * The fetch FAILS   -> the last good rules file is kept and the failure is
+#     logged loudly. We never rewrite the file with a partial/empty body, and we
+#     never downgrade to allow-all because the Console was briefly unreachable.
+#   * The body is not a JSON object -> rejected, same as a failure. A truncated
+#     response must not become the authorization policy.
+POLICY_URL="${LOOM_TRINO_POLICY_URL:-}"
+POLICY_TOKEN="${LOOM_TRINO_POLICY_TOKEN:-${LOOM_INTERNAL_TOKEN:-}}"
+POLICY_REFRESH="${LOOM_TRINO_POLICY_REFRESH_SECONDS:-60}"
+GROUP_FILE="$CONFIG_DIR/loom-groups.txt"
+
+# The catalog list this boot actually wired — handed to the Console so the
+# document it returns carries the SAME catalogs `SHOW CATALOGS` will list. The
+# console never guesses the engine's catalog set.
+WIRED_CATALOGS=$(ls -1 "$CATALOG_DIR" 2>/dev/null | sed 's/\.properties$//' | tr '\n' ',' | sed 's/,$//')
+WIRED_CATALOGS="system,${WIRED_CATALOGS}"
+
+fetch_policy() {
+  # $1 = destination file, $2 = format (rules|groups)
+  _dest="$1"; _fmt="$2"
+  _tmp="${_dest}.tmp.$$"
+  _url="${POLICY_URL}?format=${_fmt}&catalogs=${WIRED_CATALOGS}&writable=memory"
+  if ! curl -fsS --max-time 20 \
+        -H "x-loom-internal-token: ${POLICY_TOKEN}" \
+        -H 'accept: application/json' \
+        "$_url" -o "$_tmp"; then
+    rm -f "$_tmp"
+    return 1
+  fi
+  if [ "$_fmt" = "rules" ]; then
+    # Reject anything that is not a JSON object — a proxy error page or a
+    # truncated body must never become the engine's authorization policy.
+    _head=$(head -c 1 "$_tmp" 2>/dev/null || true)
+    if [ "$_head" != "{" ]; then
+      rm -f "$_tmp"
+      return 2
+    fi
+  fi
+  mv -f "$_tmp" "$_dest"
+  return 0
+}
+
+if [ "$ACCESS_CONTROL_MODE" != "none" ] && [ -n "$POLICY_URL" ]; then
+  if [ -z "$POLICY_TOKEN" ]; then
+    log "SECURITY WARNING: LOOM_TRINO_POLICY_URL is set but no LOOM_TRINO_POLICY_TOKEN / LOOM_INTERNAL_TOKEN is present, so the governance-compiled rules CANNOT be fetched (the Console rejects an unauthenticated pull). The engine keeps the locally rendered catalog floor; Loom row/column policy is NOT enforced at the engine."
+  elif ! command -v curl >/dev/null 2>&1; then
+    log "SECURITY WARNING: curl is not present in this image, so the governance-compiled rules cannot be fetched. The engine keeps the locally rendered catalog floor; Loom row/column policy is NOT enforced at the engine."
+  else
+    if fetch_policy "$CONFIG_DIR/access-control-rules.json" rules; then
+      log "governance: fetched Loom-compiled engine rules from the Console (catalogs=${WIRED_CATALOGS})"
+      # Group memberships (file group provider) — needed for group-keyed rules.
+      if fetch_policy "$GROUP_FILE" groups && [ -s "$GROUP_FILE" ]; then
+        cat > "$CONFIG_DIR/group-provider.properties" <<EOF
+group-provider.name=file
+file.group-file=${GROUP_FILE}
+file.refresh-period=${POLICY_REFRESH}s
+EOF
+        log "governance: file group provider enabled ($(wc -l < "$GROUP_FILE" | tr -d ' ') group(s))"
+      else
+        log "governance: no group memberships published; group-keyed rules will not match until the Console reconcile resolves them."
+      fi
+    else
+      log "SECURITY WARNING: could not fetch the governance-compiled engine rules from ${POLICY_URL} (Console unreachable, unauthorized, or a non-JSON body). KEEPING the locally rendered catalog floor — the engine is NOT downgraded to allow-all, but Loom row/column policy is NOT enforced at the engine this boot. The refresh loop will retry."
+    fi
+
+    # Refresh loop — Trino re-reads the rules file on `security.refresh-period`,
+    # so rewriting it in place is what makes a Console policy edit take effect
+    # without a restart. A failed refresh leaves the previous file intact.
+    (
+      while true; do
+        sleep "$POLICY_REFRESH"
+        if fetch_policy "$CONFIG_DIR/access-control-rules.json" rules; then
+          fetch_policy "$GROUP_FILE" groups || true
+        else
+          echo "[loom-trino] governance refresh failed; keeping the rules currently in force"
+        fi
+      done
+    ) &
+  fi
+elif [ "$ACCESS_CONTROL_MODE" != "none" ]; then
+  log "governance: LOOM_TRINO_POLICY_URL is unset — the engine enforces the catalog floor only. Loom row/column policy is enforced at the BFF (lib/azure/trino-authz.ts) but NOT at the engine."
 fi
 
 exec "$@"

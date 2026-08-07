@@ -150,6 +150,22 @@ export function trinoSessionUser(): string {
   return (process.env.LOOM_TRINO_SESSION_USER || 'loom-console').trim() || 'loom-console';
 }
 
+/**
+ * LU-7 — true when this deployment publishes governance-compiled engine rules
+ * to the coordinator (`LOOM_TRINO_POLICY_URL`, wired by admin-plane/main.bicep
+ * alongside the same value on the loom-trino app). That document carries the
+ * `impersonation` rule, so the BFF may present the signed-in Loom principal as
+ * the Trino session user and let the engine enforce per-caller table rules.
+ *
+ * Unset → the engine is running only the catalog floor its entrypoint rendered,
+ * which denies impersonation, so the mapped session user is used exactly as
+ * before. Never assumed: this is a value the DEPLOY produces.
+ */
+export function trinoImpersonationEnabled(): boolean {
+  if ((process.env.LOOM_TRINO_IMPERSONATION || '').trim().toLowerCase() === 'disabled') return false;
+  return Boolean((process.env.LOOM_TRINO_POLICY_URL || '').trim());
+}
+
 /** Base URL of the internal Trino coordinator (no trailing slash, scheme-normalized). */
 export function trinoBase(): string {
   const raw = (process.env.LOOM_TRINO_URL || '').trim().replace(/\/+$/, '');
@@ -249,6 +265,21 @@ function trinoUser(upn: string | undefined): string {
 }
 
 /**
+ * Does this failure mean the coordinator refused to let the mapped session user
+ * become the signed-in caller? Trino reports that as `USER_CANNOT_BE_IMPERSONATED`
+ * (403), and older/edge builds surface it as a plain access-denied naming
+ * impersonation. Matched narrowly so a genuine authorization denial on the DATA
+ * is never retried with a wider identity.
+ */
+function isImpersonationDenial(e: unknown): boolean {
+  if (!(e instanceof TrinoError)) return false;
+  const code = (e.code || '').toUpperCase();
+  if (code === 'USER_CANNOT_BE_IMPERSONATED') return true;
+  const msg = (e.message || '').toLowerCase();
+  return e.status === 403 && msg.includes('impersonat');
+}
+
+/**
  * Per-hop budget for the Trino statement protocol.
  *
  * The default-ON deployment (data-plane/loom-trino-aca.bicep) runs the engine
@@ -310,7 +341,19 @@ async function trinoFetch(
  */
 export async function runTrinoQuery(
   sql: string,
-  opts: { maxRows?: number; actorUpn?: string; catalog?: string; schema?: string; knownCatalogs?: string[] },
+  opts: {
+    maxRows?: number;
+    actorUpn?: string;
+    catalog?: string;
+    schema?: string;
+    knownCatalogs?: string[];
+    /**
+     * LU-7 internal — force the mapped session user instead of impersonating the
+     * signed-in caller. Set only by the self-healing retry when the engine has
+     * not yet loaded the governance rules (and therefore denies impersonation).
+     */
+    forceMappedUser?: boolean;
+  },
 ): Promise<TrinoQueryResult> {
   if (!isTrinoConfigured()) {
     throw new TrinoError(
@@ -342,6 +385,10 @@ export async function runTrinoQuery(
   const started = Date.now();
   const maxRows = Math.max(1, Math.min(opts.maxRows ?? 5_000, 200_000));
   const enforcing = trinoAuthMode() === 'entra';
+  // LU-7 — present the real signed-in principal when the deployment publishes
+  // governance-compiled rules (which carry the impersonation rule that permits
+  // it). `opts.forceMappedUser` is the self-healing retry path below.
+  const impersonate = trinoImpersonationEnabled() && !opts.forceMappedUser;
   const authHeaders = await trinoAuthHeader();
   // ROUND-4 (#2678) — FAIL CLOSED, do not fall through unauthenticated.
   //
@@ -370,10 +417,28 @@ export async function runTrinoQuery(
   const headers: Record<string, string> = {
     'content-type': 'text/plain',
     accept: 'application/json',
-    // With authorization enforced the session user MUST equal the user the JWT
-    // principal maps to (Trino's default access control denies impersonation);
-    // the signed-in principal rides client-info/tags and the audit row.
-    'x-trino-user': enforcing ? trinoSessionUser() : trinoUser(opts.actorUpn),
+    // LU-7 — WHO the engine thinks is asking.
+    //
+    // Historically this was pinned to the mapped session user whenever
+    // authorization was enforcing, because Trino's DEFAULT access control denies
+    // impersonation: the session user had to equal the principal the JWT mapped
+    // to, so the engine could not tell Loom callers apart and per-caller policy
+    // could only live at the BFF.
+    //
+    // The governance-compiled rules document (compilers/trino.ts) emits an
+    // `impersonation` rule permitting exactly the mapped session user to become
+    // any `new_user`, which is what lets us present the REAL signed-in principal
+    // so the engine's own user/group table rules — including row filters and
+    // column masks — evaluate against them. `trinoImpersonationEnabled()` is
+    // true only when this deployment wired the policy URL, i.e. when the engine
+    // is being served that document.
+    //
+    // If the engine has NOT yet fetched it (first boot, Console briefly
+    // unreachable) it is still running the catalog floor, which has no
+    // impersonation rule and would reject the impersonated user. That is a
+    // self-healing condition, not an outage: the statement is retried once with
+    // the mapped session user, and the retry is logged.
+    'x-trino-user': enforcing && !impersonate ? trinoSessionUser() : trinoUser(opts.actorUpn),
     'x-trino-source': 'csa-loom-sql-lab',
     'x-trino-client-info': JSON.stringify({ loomUser: trinoUser(opts.actorUpn) }),
     'x-trino-client-tags': `loom-user=${trinoUser(opts.actorUpn)}`,
@@ -392,7 +457,30 @@ export async function runTrinoQuery(
   let truncated = false;
 
   // POST the statement, then walk the nextUri chain (bounded: 5000 pages).
-  let page = await trinoFetch(`${trinoBase()}/v1/statement`, { method: 'POST', body: sql, headers });
+  let page: TrinoStatementResponse;
+  try {
+    page = await trinoFetch(`${trinoBase()}/v1/statement`, { method: 'POST', body: sql, headers });
+  } catch (e) {
+    // LU-7 self-heal: we asked the engine to accept the signed-in principal as
+    // the session user, and it refused. That means the engine is still running
+    // the catalog floor from its start-up (it has not fetched the
+    // governance-compiled document, which carries the impersonation rule) —
+    // transient by construction, since the entrypoint retries on its refresh
+    // loop. Retry ONCE as the mapped session user so a policy-publication lag
+    // never becomes a query outage, and say so in the log rather than silently
+    // downgrading.
+    if (impersonate && isImpersonationDenial(e)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[trino] the coordinator denied impersonation of %s, so it has not loaded the governance-compiled '
+        + 'rules yet (LOOM_TRINO_POLICY_URL is wired but the engine is still on its start-up catalog floor). '
+        + 'Retrying as the mapped session user; engine-level per-caller policy is NOT in force for this query.',
+        trinoUser(opts.actorUpn),
+      );
+      return runTrinoQuery(sql, { ...opts, forceMappedUser: true });
+    }
+    throw e;
+  }
   const MAX_PAGES = 5_000;
   for (let i = 0; i < MAX_PAGES; i += 1) {
     if (page.error) {

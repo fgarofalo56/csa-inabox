@@ -11,10 +11,11 @@ import type { CompiledArtifact } from './compilers/types';
 import { compileSynapse } from './compilers/synapse';
 import { compileUnityCatalog, type UcCompileOptions } from './compilers/unity-catalog';
 import { compileAdx, type AdxCompileOptions } from './compilers/adx';
+import { compileTrino, type TrinoCompileOptions } from './compilers/trino';
 import { compilePurview } from './compilers/purview';
 import { compileApiScope } from './compilers/api-scope';
 
-export interface CompileOptions extends UcCompileOptions, AdxCompileOptions {}
+export interface CompileOptions extends UcCompileOptions, AdxCompileOptions, TrinoCompileOptions {}
 
 export interface CompileResult {
   validation: PolicyValidation;
@@ -32,6 +33,7 @@ export function compileAll(set: PolicyCodeSet, opts: CompileOptions = {}): Compi
     compileSynapse(set),
     compileUnityCatalog(set, opts),
     compileAdx(set, opts),
+    compileTrino(set, opts),
     compilePurview(set),
     compileApiScope(set),
   ];

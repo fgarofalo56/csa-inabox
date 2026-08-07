@@ -18,12 +18,13 @@
 export const POLICY_CODE_API_VERSION = 'loom.governance/v1';
 
 // ── Backends the DSL compiles to ──────────────────────────────────────────────
-export type PolicyBackend = 'synapse' | 'unity-catalog' | 'adx' | 'purview' | 'api-scope';
+export type PolicyBackend = 'synapse' | 'unity-catalog' | 'adx' | 'trino' | 'purview' | 'api-scope';
 
 export const POLICY_BACKENDS: readonly PolicyBackend[] = [
   'synapse',
   'unity-catalog',
   'adx',
+  'trino',
   'purview',
   'api-scope',
 ] as const;
@@ -32,6 +33,7 @@ export const BACKEND_LABELS: Record<PolicyBackend, string> = {
   synapse: 'Synapse SQL (DENY / RLS)',
   'unity-catalog': 'Unity Catalog (Databricks + OSS-UC)',
   adx: 'Azure Data Explorer (RBAC + RLS)',
+  trino: 'Federated SQL (Trino engine rules / OPA)',
   purview: 'Microsoft Purview (classification / marking)',
   'api-scope': 'API scope gates',
 };
@@ -73,6 +75,7 @@ export interface PolicyResource {
    *   synapse        `schema.table`
    *   unity-catalog  `catalog.schema.table`
    *   adx            `database/table` or just `database`
+   *   trino          `catalog.schema.table` (2-part resolves against the lake catalog)
    *   purview        asset qualifiedName / collection name
    *   api-scope      a route glob, e.g. `/api/items/warehouse/*`
    */
@@ -205,12 +208,12 @@ export function validatePolicyCodeSet(set: PolicyCodeSet): PolicyValidation {
     const backends = new Set(s.resources.map((r) => r.backend));
     // Row filter / column mask only apply where the engine can enforce them.
     if (s.condition?.rowFilter || s.condition?.maskColumns?.length) {
-      const enforceable: PolicyBackend[] = ['synapse', 'unity-catalog', 'adx'];
+      const enforceable: PolicyBackend[] = ['synapse', 'unity-catalog', 'adx', 'trino'];
       const canEnforce = [...backends].some((b) => enforceable.includes(b));
       if (!canEnforce) {
         warnings.push(
           `${tag}: a row filter / column mask is set but no resource targets a backend that enforces it ` +
-            `(synapse / unity-catalog / adx); it will be ignored.`,
+            `(synapse / unity-catalog / adx / trino); it will be ignored.`,
         );
       }
     }
