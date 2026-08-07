@@ -115,6 +115,47 @@ So, when authoring:
   anchor), so a wrong anchor will NOT show up as a hit-rate miss. It shows up
   much later, as an unexplained `productFidelity` collapse.
 
+### Case study — `rbac` (E5, 2026-08-07): facts trapped in table cells
+
+`rbac` sat on the `passRate` floor for weeks, oscillating 0.33 / 0.38 / 0.42
+against a floor of 0.40 — one question deciding the whole gate. Measured
+per-question against the LIVE probe, both scoring channels were failing for the
+**same** reason, and neither was a floor problem:
+
+- **Retrieval missed** (`rbac-004/005/007/009`) because the answer-bearing fact
+  existed only inside a dense parity/glossary **table cell**, which carries none
+  of the question's vocabulary. `rbac-007` ("what happens to undecided items
+  when a review expires") retrieved eight chunks all headed *"What actually
+  happens"* from unrelated `docs/fiab/parity-gap/*` docs — a heading collision
+  beat the real answer, whose gold chunk ranked **1397th**.
+- **Grounding missed** (`rbac-001/010/012`) because retrieval DID return the
+  right document, but the wrong *section* of it — the H1 preamble instead of
+  `## Model` — so the model never saw the roles table and never wrote
+  `Reader`/`Contributor`.
+
+The fix was entirely on the corpus side, and it is the pattern to copy:
+
+1. **State the fact in prose, not only in a table cell.** Tables are for
+   scanning; the retriever and the judge both need a sentence.
+2. **Give each answer its own question-shaped `###` heading.** `chunkMarkdown`
+   breaks sections on H1–H3 and `heading` is a searchable AI Search field, so a
+   heading that restates the question is both a tighter chunk and a ranking
+   signal. Retrieval also admits at most
+   `DEFAULT_MAX_CHUNKS_PER_DOC` (2) chunks per document — so which chunk wins
+   matters more than how many the document has.
+3. **Verify the fact in the code before writing it.** Every sentence added here
+   was checked against `lib/auth/feature-gate.ts`,
+   `lib/access/access-reviews.ts`, and the `principals` / `group-sync` routes.
+
+Offline (`scripts/csa-loom/diagnose-retrieval.mjs --top 8`) that moved `rbac`
+hit-rate@8 from **0.750 → 0.917** (BM25) and **0.333 → 0.917** (substring
+ranker), with every other surface byte-identical — no metric-fitting, and no
+floor was touched. Gold-chunk ranks: `rbac-007` 1397→1, `rbac-009` 2716→1,
+`rbac-012` 2172→1, `rbac-010` 586→1, `rbac-005` 85→3, `rbac-001` 18→1.
+
+**Never lower a floor to clear this.** `eval-floors.json` is ratchet-up-only;
+a surface under its floor is a surface to fix (#2585).
+
 ## Authoring workflow
 
 1. Pick real questions from the surface's traffic/risk (install, gates,

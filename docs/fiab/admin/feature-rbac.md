@@ -8,6 +8,16 @@ request.
 
 ## Model
 
+### How the feature permissions model works
+
+Every grant carries one of exactly three roles: **`Reader`** (view a
+capability), **`Contributor`** (view and edit it), and **`Admin`** (view, edit,
+and grant it to others). `Reader` is the minimum any grant confers —
+`checkCapability` allows the request as soon as one matching row sits at
+`Reader` or above — and `Admin` is the only role that may hand out further
+grants. So a principal holding `Contributor` on `workload.warehouse` can edit
+every warehouse editor but cannot grant anyone else access to it.
+
 | Term         | Meaning                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------ |
 | Capability   | Stable id like `editor.notebook`, `admin.tenant-settings`, `workload.warehouse`.                 |
@@ -19,14 +29,21 @@ request.
 
 Grants on a parent capability propagate to every child. e.g. granting
 `workload.warehouse` covers every warehouse editor (`editor.warehouse`,
-`editor.synapse-dedicated-sql-pool`, ...) automatically.
+`editor.synapse-dedicated-sql-pool`, ...) automatically, because enforcement
+walks the capability's ancestor chain rather than requiring one row per leaf.
 
 ## Storage
 
-Cosmos container `feature-permissions`, partition key `/tenantId`,
-auto-created by the BFF on first access. No bicep change required — the
-cosmos-client's `createIfNotExists` flow provisions the container the
-first time the gate runs.
+### Where feature-permission grants are stored, and what provisioning is needed
+
+Feature-permission grants are stored in the Cosmos container
+**`feature-permissions`**, partition key `/tenantId`. **No provisioning is
+needed**: no bicep change, no deployment script, no operator step — the
+`feature-permissions` container is auto-created by the BFF on first access,
+because the cosmos-client's `createIfNotExists` flow provisions it the first
+time the gate runs.
+
+
 
 ## Tenant-admin bypass
 
@@ -43,22 +60,32 @@ they can grant access from the empty state in `/admin/permissions`.
 
 ## Enforcement
 
-Every BFF route + every admin page calls `enforceCapability(session,
-capabilityId, role)` from `@/lib/auth/feature-gate`. The helper:
+**How a permission check is enforced on a BFF route.** Every BFF route and
+every server-rendered admin page calls `enforceCapability(session,
+capabilityId, role)` from `@/lib/auth/feature-gate` before it does any work.
+The check runs on every request — there is no client-side cache that could
+survive a revoke — and it is a real Cosmos lookup, never an allow-list. The
+helper:
 
-1. Returns 401 when the session is missing.
+1. Returns **401** when the session is missing.
 2. Resolves the caller's principal set: their oid + every group oid in
    the session claims.
 3. Walks the capability's ancestor chain (workload → domain) so parent
    grants are honored.
 4. Runs a single Cosmos point query against `feature-permissions`
    partitioned by tenant.
-5. Returns 403 with a structured `{ error, capability, requiredRole,
+5. Returns **403** with a structured `{ error, capability, requiredRole,
    reason, remediation }` body when no matching grant exists.
+
+So an unauthenticated caller gets a **401** and an authenticated-but-ungranted
+caller gets a **403** — never a silent empty result, and never a 200 with the
+data withheld. A Cosmos error on step 4 also fails closed to **403** rather
+than admitting the request.
 
 The 403 body always carries an actionable remediation. The frontend
 renders that remediation in a Fluent UI MessageBar with `intent="warning"`
 — never silently swallowed.
+
 
 ## Granting access
 
@@ -67,9 +94,13 @@ renders that remediation in a Fluent UI MessageBar with `intent="warning"`
 2. Click a capability. The right pane shows existing grants + the
    **Add grant** button.
 3. The grant dialog opens with a tabbed Entra search (User or Group)
-   that hits `/api/admin/permissions/principals?q=...&kind=...`. The
-   BFF route uses the Console UAMI's Microsoft Graph token (requires
-   `User.Read.All` + `Group.Read.All` app permissions).
+   that hits `/api/admin/permissions/principals?q=...&kind=...`. **What the
+   grant dialog's Entra principal search requires:** the BFF route signs the
+   Graph call with the Console UAMI's Microsoft Graph token, so that UAMI must
+   hold the `User.Read.All` and `Group.Read.All` Graph *application*
+   permissions, admin-consented. `User.Read.All` backs the User tab and
+   `Group.Read.All` backs the Group tab; without `Group.Read.All` the group
+   search returns the honest 503 remediation rather than any results.
 4. Pick a principal, pick a role, click **Grant**. The dialog POSTs to
    `/api/admin/permissions/grants`.
 5. Remove a grant via the inline **Remove** button in any row.
