@@ -51,7 +51,13 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // The hand-rolled marker: an auth-session getSession import (alias-aware).
 const AUTH_SESSION_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\bgetSession\b[^}]*\}\s*from\s*['"]@\/lib\/auth\/session['"]/;
 // Any toolkit wrapper reference = migrated (or composing) — out of the ratchet.
-const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(/;
+// C22 (#3088) adds `withCapability` (the non-discardable enforceCapability
+// form) and `(?:<[^()]*>)?` so an explicit type argument — `withSession<{ id:
+// string }>(…)`, which 104 routes use — is recognized as the CALL it is.
+// Without the type-arg branch those routes matched only via their header
+// COMMENTS ("Route-toolkit: withSession (R1/R3)"), which is #2977's mechanism
+// exactly: a control passing on prose rather than code.
+const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess|Capability)(?:<[^()]*>)?\s*\(/;
 
 // ── Touched-file escape hatch ───────────────────────────────────────────────
 // Paths (repo-relative) a PR may modify WITHOUT migrating, each with a one-line
@@ -83,7 +89,16 @@ const TOUCH_EXEMPT = new Map([
   // this is a collection route (GET list / POST create) with no [id] segment.
   // Deleting the 401 line leaves route-guards green — measured — so the
   // contract test, not route-guards, is what watches this file.
-  ['apps/fiab-console/app/api/workspaces/route.ts', '#3064: BFF field-drop fix (provisionBackingRg was inert); codemod skips both handlers — 401 returned via local err() helper, not the literal guard shape; 401 pinned by create-wizard-contract.test.ts:129'],
+  //
+  // STILL TRUE after C22 (#3088), RE-MEASURED 2026-08-07 rather than assumed:
+  // C22 made check-route-guards fail any route that calls a returned-value gate
+  // and discards the answer, which DID newly pin the sibling env-config entry
+  // below. It does not pin this one, because this route calls no such gate — it
+  // authorizes by threading `session.claims.oid` as the Cosmos partition. Same
+  // deletion, re-run: `[route-guards] gates whose answer is DISCARDED: 0 /
+  // violations: 0`, exit 0. The contract test remains the only thing watching
+  // this 401.
+  ['apps/fiab-console/app/api/workspaces/route.ts', '#3064: BFF field-drop fix (provisionBackingRg was inert); codemod skips both handlers — 401 returned via local err() helper, not the literal guard shape; 401 pinned by create-wizard-contract.test.ts:129 (route-guards still does not cover it — re-measured under #3088)'],
   // FINISHLINE D15 (#3051) touched this route ONLY to carry the new first-class
   // 'opt-in' env status through the response payload (day-one scoring was
   // lying in BOTH directions: policy opt-ins scored unconfigured forever, and
@@ -99,14 +114,37 @@ const TOUCH_EXEMPT = new Map([
   // and PUT additionally runs a PDP check. Replacing a capability gate with a
   // bare signed-in check would be a security REGRESSION, not a migration.
   //
-  // HONEST COVERAGE NOTE (measured, not assumed): nothing currently pins this
-  // route's 401/403 in CI. check-route-guards does NOT cover it — its remit is
-  // authorization on routes that point-read/write by an [id] from the URL, and
-  // this is a collection route; deleting `if (gate) return gate;` leaves
-  // route-guards GREEN (measured). lib/admin/__tests__/env-config.test.ts
-  // exercises the LIB, not the handler. Tracked as a follow-up: add a
-  // route-level 401/403 contract test for this handler.
-  ['apps/fiab-console/app/api/admin/env-config/route.ts', '#3051: opt-in status payload; codemod skips both handlers — prologue is enforceCapability(Admin) (401/403, fails closed), STRICTER than the withSession shape; NO route-level auth test yet (follow-up)'],
+  // HONEST COVERAGE NOTE — SUPERSEDED 2026-08-07 by C22 (#3088). The note below
+  // was accurate when written and is kept because the correction is the point:
+  //
+  //   "nothing currently pins this route's 401/403 in CI. check-route-guards
+  //    does NOT cover it … deleting `if (gate) return gate;` leaves
+  //    route-guards GREEN (measured)."
+  //
+  // That measurement was right, and it was the thread that led to C22. It is no
+  // longer true: check-route-guards now fails any route that calls a
+  // returned-value gate and discards the answer, and this route is one of the
+  // 36 files it watches. RE-MEASURED 2026-08-07 — deleting `if (gate) return
+  // gate;` from the GET handler makes check-route-guards exit 1 with
+  //   apps/fiab-console/app/api/admin/env-config/route.ts
+  //       :52 enforceCapability — result bound to `gate` but never returned/thrown
+  // so the 403 IS pinned in CI now. What is still NOT pinned is the 401 shape
+  // and the choice of capability id / required role — `lib/admin/__tests__/
+  // env-config.test.ts` exercises the LIB, not the handler. A route-level
+  // 401/403 contract test remains a worthwhile follow-up; it is no longer the
+  // only thing standing between this route and a silent authorization loss.
+  //
+  // THE CODEMOD STILL DECLINES BOTH HANDLERS — `--file=app/api/admin/env-config/
+  // route.ts` reports "0 handlers across 0 files; 2 skipped", both
+  // "getSession() without the exact 401 guard", because this prologue is
+  // STRICTER than the one withSession replaces: `enforceCapability(session, CAP,
+  // 'Admin')` returns 401 unauthenticated, 403 without the capability, and
+  // fails closed to 403 on a Cosmos error; PUT additionally runs a PDP check.
+  // Replacing a capability gate with a bare signed-in check would be a security
+  // REGRESSION. The clean migration target is now `withCapability(CAP, 'Admin',
+  // …)` (lib/api/route-toolkit.ts), which composes withSession + the same
+  // enforceCapability call into a form with no returned value to drop.
+  ['apps/fiab-console/app/api/admin/env-config/route.ts', "#3051: opt-in status payload; codemod skips both handlers — prologue is enforceCapability(Admin) (401/403, fails closed), STRICTER than the withSession shape; 403 now PINNED by check-route-guards' gate-consumption check (#3088, re-measured) — route-level 401 contract test still a follow-up"],
   // #2622 touched this route ONLY to swap ten raw `executeStatement(...)` calls
   // for the AUDITED `ucSql(...)` wrapper, so the UC ABAC column-mask + row-filter
   // DDL it issues finally produces a Loom Unity audit row. Same arguments, same
