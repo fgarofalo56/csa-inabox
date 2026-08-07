@@ -145,6 +145,19 @@ param hubVnetCidr = '10.0.0.0/16'
 // Identity (Gov tenant)
 param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
+// Bootstrap tenant admin — who can open /admin/* BEFORE any feature grants
+// exist. Declared HERE (it was absent until #3090, so the bicep default '' was
+// the only possible value and the GCC-High console shipped with the admin gate
+// shut for every user, exactly as Commercial did). deploy-fiab-gcch.yml passes
+// loomTenantAdminGroupId EXPLICITLY on the command line; the environment
+// variable below is what a by-hand `-p params/gcc-high.bicepparam` run reads.
+// It must NOT be written as `readEnvironmentVariable('…', adminEntraGroupId)` —
+// that resolves adminEntraGroupId to THIS FILE's value at compile time, never
+// to a `--parameters adminEntraGroupId=…` override, which is the precise trap
+// that produced the live defect.
+param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', ''))
+param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
+
 // Loom version + image tags
 param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')
 param appImageTags = {

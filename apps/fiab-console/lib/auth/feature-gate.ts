@@ -164,10 +164,15 @@ export function requireTenantAdmin(session: SessionPayload | null): NextResponse
         'This surface administers org-wide / shared-tenant policy (sensitivity labels, ' +
         'DLP, Purview) and is restricted to tenant admins.',
       remediation:
-        'Set LOOM_TENANT_ADMIN_OID to your user OID (or add yourself to ' +
-        'LOOM_TENANT_ADMIN_GROUP_ID) — both are deploy params wired into the Console app ' +
-        'env. Members bypass the gate with full Admin. Alternatively, an existing tenant ' +
-        'admin can grant you access at /admin/permissions.',
+        'Ask an existing tenant admin to grant your account (or a group you belong ' +
+        'to) the Admin role at /admin/permissions. If NO ONE in the tenant can open ' +
+        'that page either, this deployment shipped without a bootstrap-admin ' +
+        'binding — a DEPLOY defect, not a setting to change here: re-run the deploy ' +
+        'supplying loomTenantAdminGroupId (wired from the FIAB_ADMIN_GROUP_ID repo ' +
+        'variable), which is what renders LOOM_TENANT_ADMIN_GROUP_ID on the console. ' +
+        'Per auto-bind-by-default.md §5 the platform produces that value; you are ' +
+        'not expected to set it by hand. See /admin/gates → bootstrap-admin.',
+      gateId: 'bootstrap-admin',
       bootstrapEnv: { oid: 'LOOM_TENANT_ADMIN_OID', group: 'LOOM_TENANT_ADMIN_GROUP_ID' },
     },
     { status: 403 },
@@ -195,14 +200,16 @@ export async function enforceCapability(
       requiredRole,
       reason: r.reason,
       remediation:
-        `Two ways to get access to '${cap?.name || capabilityId}': ` +
-        '(1) Bootstrap admin — set LOOM_TENANT_ADMIN_OID to your user OID, or ' +
-        'LOOM_TENANT_ADMIN_GROUP_ID to an Entra group you are in (these are deploy ' +
-        'params: loomTenantAdminOid / loomTenantAdminGroupId in the bicepparam, wired ' +
-        'into the console app env). Members bypass the gate with full Admin. This is ' +
-        'how the first admin gets in before any grants exist. ' +
-        '(2) Delegated — an existing tenant admin grants your account (or a group you ' +
-        `belong to) at least the ${requiredRole} role at /admin/permissions.`,
+        `Ask an existing tenant admin to grant your account (or a group you belong to) ` +
+        `at least the ${requiredRole} role on '${cap?.name || capabilityId}' at ` +
+        '/admin/permissions. If NO ONE in the tenant can open that page either, this ' +
+        'deployment shipped without a bootstrap-admin binding — a DEPLOY defect, not a ' +
+        'setting to change here: re-run the deploy supplying loomTenantAdminGroupId ' +
+        '(wired from the FIAB_ADMIN_GROUP_ID repo variable), which is what renders ' +
+        'LOOM_TENANT_ADMIN_GROUP_ID on the console. Per auto-bind-by-default.md §5 the ' +
+        'platform produces that value; you are not expected to set it by hand. ' +
+        'See /admin/gates → bootstrap-admin.',
+      gateId: 'bootstrap-admin',
       bootstrapEnv: { oid: 'LOOM_TENANT_ADMIN_OID', group: 'LOOM_TENANT_ADMIN_GROUP_ID' },
     },
     { status: 403 },

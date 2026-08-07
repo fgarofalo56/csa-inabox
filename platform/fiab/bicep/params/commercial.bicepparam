@@ -164,11 +164,23 @@ param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '
 // Permissions, Domains, Security, …) BEFORE any grants exist. Without one of
 // these set, even the deployer gets "Access denied (403)" on /admin/permissions.
 // Set your admin SECURITY-GROUP OID (recommended) and/or a single user OID;
-// members bypass the feature gate with full Admin. The group defaults to the
-// FiaB Admins group above, so setting that one GUID covers both.
+// members bypass the feature gate with full Admin.
 //   az ad signed-in-user show --query id -o tsv          # your user OID
 //   az ad group show --group "<name>" --query id -o tsv  # admin group OID
-param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
+//
+// #3090 — this used to read `readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID',
+// adminEntraGroupId)` and the comment above it claimed "the group defaults to
+// the FiaB Admins group above, so setting that one GUID covers both". That was
+// FALSE for every CI deploy. `adminEntraGroupId` here resolves to THIS FILE's
+// own expression at bicep COMPILE time — readEnvironmentVariable(
+// 'LOOM_ADMIN_ENTRA_GROUP_ID','') — and NOT to the
+// `--parameters adminEntraGroupId=…` override the deploy workflows pass. So the
+// compiled paramfile emitted loomTenantAdminGroupId='' as an EXPLICIT value,
+// the console shipped with both bootstrap bindings empty, and /admin/* was shut
+// for every user. Reading the environment variable directly makes the two
+// sources agree; deploy-fiab-commercial.yml ALSO passes the parameter
+// explicitly so the binding never depends on runner environment alone.
+param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', ''))
 param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 
 // Day-1 service posture (deploy-readiness: everything ON by default / opt-out).

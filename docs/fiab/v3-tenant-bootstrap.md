@@ -325,7 +325,7 @@ var the page names the exact **bicep module + RBAC role** that provisions it.
 |---|---|---|---|---|
 | Identity & session | `SESSION_SECRET`, `LOOM_ENTRA_CLIENT_ID`, `LOOM_ENTRA_TENANT_ID`, `LOOM_UAMI_CLIENT_ID` | `modules/admin-plane/main.bicep` (params loomSessionSecret / loomMsalClientId; uami-console) | Entra app reg + redirect URI (one-time) | set |
 | Data plane (Loom store) | `LOOM_COSMOS_ENDPOINT`, `LOOM_SUBSCRIPTION_ID`, `LOOM_DLZ_RG` / `LOOM_ADMIN_RG` | `modules/landing-zone/main.bicep` (cosmos) → admin-plane apps[] env | Cosmos DB Built-in Data Contributor (UAMI) | set |
-| Permissions | `LOOM_TENANT_ADMIN_OID` / `LOOM_TENANT_ADMIN_GROUP_ID` | `main.bicep` params loomTenantAdminOid / loomTenantAdminGroupId | — (your Entra OID/group) | set |
+| Permissions | `LOOM_TENANT_ADMIN_OID` / `LOOM_TENANT_ADMIN_GROUP_ID` | `main.bicep` params loomTenantAdminOid / loomTenantAdminGroupId | **none — the deploy lane supplies the group** (`FIAB_ADMIN_GROUP_ID`) | set |
 | Azure services | `LOOM_SYNAPSE_WORKSPACE`, `LOOM_KUSTO_CLUSTER_URI`, `LOOM_EVENTHUB_NAMESPACE`, `LOOM_ADLS_ACCOUNT`, `LOOM_AI_SEARCH_SERVICE`, `LOOM_AOAI_ENDPOINT`, `LOOM_LOG_ANALYTICS_RESOURCE_ID`, `LOOM_ADF_FACTORY`, `LOOM_PURVIEW_ACCOUNT` | `modules/landing-zone/*` + `modules/admin-plane/*` per service flag | per-service data-plane role on the UAMI (see each section) | set when its `*Enabled` flag is on |
 | Usage analytics embed (F21) | `LOOM_USAGE_REPORT_KIND`, `LOOM_USAGE_PBI_WORKSPACE_ID`, `LOOM_USAGE_PBI_REPORT_ID`, `LOOM_GRAFANA_USAGE_DASHBOARD_UID`, `LOOM_GRAFANA_ENDPOINT` | `main.bicep` params loomUsageReportKind / loomUsagePbi* / loomGrafanaUsageDashboardUid → `modules/admin-plane/main.bicep` apps[] env | **powerbi:** UAMI = Power BI workspace Member + "SP can use Power BI APIs" tenant setting. **grafana:** Grafana Viewer (UAMI). | KIND = `powerbi` (ids unset → honest gate) — see [§ below](#usage-analytics-embed) |
 | Govern analytics embed (F2) | `LOOM_REPORT_KIND`, `LOOM_GOVERN_PBI_WORKSPACE_ID`, `LOOM_GOVERN_PBI_REPORT_ID`, `LOOM_GRAFANA_DASHBOARD_UID` | `main.bicep` params loomReportKind / loomGovernPbi* / loomGrafanaDashboardUid → admin-plane apps[] env | same as F21 | KIND = `powerbi` (ids unset → honest gate) |
@@ -340,12 +340,70 @@ var the page names the exact **bicep module + RBAC role** that provisions it.
 
 ### Bind the tenant-admin principal (required for admin surfaces) {#bind-tenant-admin}
 
-Set **at least one** of `LOOM_TENANT_ADMIN_OID` (your Entra user object id / oid)
-or `LOOM_TENANT_ADMIN_GROUP_ID` (an Entra security group you belong to) — deploy
-params `loomTenantAdminOid` / `loomTenantAdminGroupId`, wired into the Console app
-env. This binds who Loom treats as a **tenant admin**.
+> **The DEPLOY produces this binding — you do not set it by hand.** Per
+> `.claude/rules/auto-bind-by-default.md` §5, "Set `LOOM_X`" as the terminal
+> user-facing state is a violation. Every deploy lane
+> (`deploy-fiab-commercial`, `deploy-fiab-gcc`, `deploy-fiab-gcch`,
+> `deploy-fiab-il5`) now passes `loomTenantAdminGroupId` **unconditionally** on
+> every `az deployment sub` invocation, sourced from the `FIAB_ADMIN_GROUP_ID`
+> repo secret (falling back to the repo **variable** of the same name) in
+> Commercial, and from `FIAB_GCC_ADMIN_GROUP_ID` / `FIAB_GOV_ADMIN_GROUP_ID` in
+> the Gov lanes. `scripts/ci/check-tenant-admin-binding.mjs` fails CI if any lane
+> stops supplying it. If you are reading this because an admin surface is gated,
+> the deployment is defective — re-run the lane; do not patch the container app.
 
-**This is fail-closed (rel-T14).** Until one of these is set, **no** session is a
+**Greenfield.** Nothing to do: the lane supplies the group. Confirm afterwards on
+`/admin/gates` → **bootstrap-admin**, which must read *configured*.
+
+**Brownfield / a different admin group** (`deploy-integrity.md` R5 — supplied
+values are a first-class input, never an undocumented override): dispatch the
+Commercial lane with **`tenant_admin_group_id`** (an Entra security-group object
+id) and/or **`tenant_admin_oid`** (a single user's object id). Resolve them with:
+
+```bash
+az ad group show --group "Loom Admins" --query id -o tsv   # admin group OID
+az ad signed-in-user show --query id -o tsv                # your user OID
+```
+
+The lane **refuses to deploy** (fails closed) when it is rendering the Container
+Apps (`deployAppsEnabled=true`) and neither a group nor an oid resolves — a
+console with no bootstrap admin has an admin gate **no one in the tenant can
+pass**, and the gate's own Fix-it cannot help because
+`POST /api/admin/gates/[id]/resolve` itself requires `admin.env-config` at Admin.
+
+<details>
+<summary>Why this is called out so loudly (live incident, 2026-08-07)</summary>
+
+The live Commercial console had **both** `LOOM_TENANT_ADMIN_OID` and
+`LOOM_TENANT_ADMIN_GROUP_ID` empty, so `/admin/*`, the sign-in onboarding queue
+and every `requireTenantAdmin` route were 403 for **every** user. Three stacked
+defects, none of them measured by anything:
+
+1. **A `.bicepparam` compile-time trap.** Four param files read
+   `readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)`.
+   In a `.bicepparam`, `adminEntraGroupId` resolves to *that file's own*
+   expression at **bicep compile time** — never to the
+   `--parameters adminEntraGroupId=…` override the workflow passes. So the
+   compiled param file emitted `loomTenantAdminGroupId=''` as an **explicit**
+   value. Reproduce with `az bicep build-params` on an unset environment.
+2. **The Gov param files never declared the parameter at all**, so the bicep
+   default `''` was the only reachable value.
+3. **`secrets.FIAB_ADMIN_GROUP_ID` had never existed** in the repo, so even
+   `adminEntraGroupId` itself was passed empty.
+
+The `deployer().objectId` fallback in `admin-plane/main.bicep` did not rescue it.
+It *does* resolve inside a module (measured: a probe returned a 36-char objectId
+at both top level and in a nested deployment), but on a CI deploy it binds the
+**deploy service principal** — a principal that never signs in — so a non-empty
+value there is still a console no human can administer.
+
+</details>
+
+Members of the bound group bypass every feature gate with full Admin; that is how
+the first admin gets in before any grants exist. They then delegate to others at
+`/admin/permissions`.
+
+**This is fail-closed (rel-T14).** Until one of these is bound, **no** session is a
 tenant admin, and the org-wide admin surfaces gated on the tenant-admin /
 domain-admin tier render an honest "tenant administrator required" gate instead of
 exposing tenant-wide state to every authenticated user:

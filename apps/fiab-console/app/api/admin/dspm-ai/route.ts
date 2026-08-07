@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
         code: 'admin_only',
         reason: 'The DSPM for AI report exposes estate-wide agent label exposure and is restricted to tenant admins.',
         remediation:
-          'Set LOOM_TENANT_ADMIN_OID to your user OID (or add yourself to LOOM_TENANT_ADMIN_GROUP_ID) — both are deploy params wired into the Console app env.',
+          'Ask an existing tenant admin to grant you the Admin role at /admin/permissions. If nobody in the tenant can open that page either, this deployment shipped without a bootstrap-admin binding (deploy parameter loomTenantAdminGroupId, wired from the FIAB_ADMIN_GROUP_ID repo variable) — a deploy defect the platform must fix, not a value for you to set on the container app. See /admin/gates → bootstrap-admin.',
+        gateId: 'bootstrap-admin',
       },
       { status: 403 },
     );

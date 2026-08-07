@@ -194,9 +194,18 @@ export function AccessRequestsPanel() {
         <MessageBar intent="error" layout="multiline">
           <MessageBarBody>
             <MessageBarTitle>Admin access required</MessageBarTitle>
-            The onboarding queue is restricted to tenant admins. Set LOOM_TENANT_ADMIN_OID
-            to your user OID (or add yourself to LOOM_TENANT_ADMIN_GROUP_ID) on the
-            loom-console container app.
+            The onboarding queue is restricted to tenant admins, and your account
+            is not one yet. Ask an existing tenant admin to grant you the Admin
+            role on this capability at <strong>/admin/permissions</strong>.
+            {' '}
+            <strong>If no one in your tenant can open that page either</strong>,
+            this deployment shipped without a bootstrap-admin binding — a deploy
+            defect, not something to configure here. Re-run the deploy with the
+            admin security group supplied (deploy parameter{' '}
+            <code>loomTenantAdminGroupId</code>, wired from the{' '}
+            <code>FIAB_ADMIN_GROUP_ID</code> repo variable); the platform sets
+            the console&apos;s binding itself. See <strong>/admin/gates</strong>{' '}
+            → <em>bootstrap-admin</em> for this deployment&apos;s current state.
           </MessageBarBody>
         </MessageBar>
       )}

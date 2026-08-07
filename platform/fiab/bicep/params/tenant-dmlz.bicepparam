@@ -123,7 +123,11 @@ param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '
 // Feature-Permissions bootstrap admin — members open /admin/* before grants
 // exist. Defaults to the Loom Admins group; set LOOM_TENANT_ADMIN_OID to a
 // specific user OID for a reliable single-user bootstrap.
-param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
+// #3090 — read LOOM_ADMIN_ENTRA_GROUP_ID directly rather than referencing
+// `adminEntraGroupId`. A paramfile reference resolves to THIS FILE's compile-
+// time expression, never to a `--parameters adminEntraGroupId=…` CLI override,
+// so the old form emitted an EXPLICIT '' and shut /admin/* for every user.
+param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', ''))
 param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
 
 // Loom version + image tags
