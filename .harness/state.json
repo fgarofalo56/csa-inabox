@@ -703,9 +703,9 @@
       "id": "C22",
       "lane": "L-PRODUCT-B",
       "wave": 2,
-      "task_order": 35,
+      "task_order": 94,
       "status": "todo",
-      "title": "ROUTE-LEVEL AUTH TESTS MISSING on admin collection routes (found by the orchestrator while clearing the route-toolkit ratchet). Measured: deleting the capability gate from app/api/admin/env-config/route.ts leaves check-route-guards GREEN — route-guards' remit is authorization on [id] routes only, so collection routes (GET list / POST create) have NO CI control on their 401/403. env-config.test.ts covers the LIB, not the handler. Add route-level auth contract tests for admin/collection handlers, and consider widening route-guards' scope",
+      "title": "SECURITY-GUARD DEFECT (mechanism established by D10, corrects two earlier inferences): check-route-guards' GUARD_SIGNAL_RE is PRESENCE-shaped, not ENFORCEMENT-shaped. 22 routes authorize via `const gate = await enforceCapability(...)` + `if (gate) return gate;` — cutting that ONE branch line defeats authorization entirely while the route stays SCANNED, still 'looks' guarded, and the guard stays GREEN. Same class as #2977 (a deleted function's name surviving in a COMMENT kept 34 routes passing), already noted in the guard's own header ~:72 for assertOwner — still live for enforceCapability",
       "depends_on": [],
       "validation": {
         "V1": "pending",
@@ -716,8 +716,13 @@
         "V6": "pending"
       },
       "evidence": [
-        "found by mutation while adding TOUCH_EXEMPT entries for #3064 and #3051 — the exemptions themselves are justified (both prologues are correct, one is STRICTER than withSession), but the mutation exposed that nothing watches them",
-        "GOOD CONTRAST: #3064's workspaces route IS pinned — create-wizard-contract.test.ts:129 goes red on a dropped 401 (mutation-proved). That is the pattern to replicate"
+        "MEASURED by D10 against the real file + 2 mutant shapes (read-only): real → scanned=true signal=true GREEN; shape A (auth wrapper removed entirely) → scanned=FALSE signal=true GREEN — no session call, so the route fails GETSESSION_RE and is SKIPPED before evaluation (a route is only policed if it LOOKS like it does auth); shape B (enforceCapability call KEPT, `if (gate) return gate;` CUT) → scanned=true signal=true GREEN while authorization is fully defeated. Shape B is the real defect",
+        "CORRECTION #1 (mine): I told the operator 'collection routes have no CI control'. Imprecise — they ARE scanned; the control is presence-shaped so it cannot see enforcement being discarded",
+        "CORRECTION #2 (D10's, self-caught): the hypothesis that migrating to withSession drops a route from route-guards' remit is WRONG — GETSESSION_RE:151 already matches with(Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\\(. That hole is closed. D10 nearly reported it as fact; checking the regex is what caught it",
+        "BLAST RADIUS 22 routes: admin/env-config, admin/gates, admin/parity-autopilot(+/run), admin/permissions/{capabilities,grants,principals}, admin/readiness(+/export), deploy/discovery, governance/identities/search, landing-zones, landing-zones/discover, landing-zones/[id]/attach(+/preflight), landing-zones/[id]/services(+/[serviceId]), setup/deploy, setup/deploy-preflight, setup/discover-services, setup/estate-scan, setup/landing-zones/grant",
+        "HIGHEST-RISK TWO: setup/deploy SUBMITS SUBSCRIPTION-SCOPED ARM DEPLOYMENTS (the choke point D10 just wired the fitness gate into); admin/permissions/grants MUTATES the capability grants enforceCapability itself reads",
+        "admin/env-config on the list independently corroborates the #3051 measurement, now with the mechanism attached: the BRANCH is the control, not the call",
+        "PROPOSED FIX (D10): make the signal enforcement-shaped — a withCapability(...) wrapper in the route-toolkit family that CANNOT be discarded, instead of a returned value. Also makes it mechanically detectable, converting 22 discardable branches into a shape the existing toolkit ratchet already polices"
       ]
     },
     {
