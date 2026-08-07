@@ -22,10 +22,9 @@
  * (`no-vaporware.md`). Nothing here is fabricated.
  */
 
-import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
+import { apiOk } from '@/lib/api/respond';
 import {
   runTrinoQuery,
   trinoIcebergCatalog,
@@ -52,10 +51,7 @@ import { listConnections } from '@/lib/azure/connections-store';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiError('unauthenticated', 401);
-
+export const GET = withSession(async (_req, { session }) => {
   const lake = trinoIcebergCatalog();
   const principal: TrinoPrincipal = {
     oid: session.claims.oid,
@@ -149,6 +145,8 @@ export async function GET(_req: NextRequest) {
         gate: `The Trino coordinator could not list its catalogs: ${e.message}`,
       });
     }
-    return apiServerError(e, 'Failed to read the federation catalog inventory');
+    // Anything else is a genuine defect — let the toolkit's apiServerError
+    // envelope handle it rather than dressing it up as a gate.
+    throw e;
   }
-}
+});

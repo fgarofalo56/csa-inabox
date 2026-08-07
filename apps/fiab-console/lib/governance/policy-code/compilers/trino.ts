@@ -61,6 +61,7 @@
  */
 
 import { translateDax, safeIdent } from '@/lib/azure/rls-compiler';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import type { PolicyCodeSet, PolicyPrincipal, PolicyStatement } from '../dsl';
 import { type CompiledArtifact, type CompiledOp, dedupeOps } from './types';
 
@@ -73,9 +74,10 @@ export function trinoIdent(raw: string): string {
   return `"${String(raw).replace(/"/g, '""')}"`;
 }
 
-/** Trino string literal — `'text'`, embedded `'` doubled. */
+/** Trino string literal — `'text'`, embedded `'` doubled by the ONE audited
+ *  escaper (`lib/sql/quoting.ts`), never a local copy of the doubling rule. */
 export function trinoString(raw: string): string {
-  return `'${String(raw).replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(String(raw))}'`;
 }
 
 /** Escape a literal so it is safe inside a Trino access-control regex field. */

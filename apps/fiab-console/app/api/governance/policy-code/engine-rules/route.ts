@@ -53,9 +53,10 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { isValidInternalToken, INTERNAL_TOKEN_HEADER } from '@/lib/auth/internal-token';
+import { logSafeError } from '@/lib/util/log-safe';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { loadPolicySet } from '@/lib/governance/policy-code/store';
 import { compileTrino, buildTrinoRulesDocument, rulesVersion } from '@/lib/governance/policy-code/compilers/trino';
@@ -71,26 +72,18 @@ export const dynamic = 'force-dynamic';
 /** The dedicated secret name; falls back to the shared internal token. */
 const TRINO_POLICY_TOKEN_ENV = 'LOOM_TRINO_POLICY_TOKEN';
 
-type Caller =
-  | { kind: 'engine'; who: string }
-  | { kind: 'admin'; who: string; tenantId: string }
-  | { kind: 'denied' };
-
-function authenticate(req: NextRequest): Caller {
-  // 1. The engine — internal trust token, dedicated secret preferred.
+/**
+ * Is this the ENGINE? It holds the deployment's dedicated pull secret and has
+ * no session. Checked BEFORE the session path so a token-authenticated engine
+ * is never bounced by the tenant-admin gate; a caller with neither lands on
+ * `withTenantAdmin`, which produces the canonical 401/403 envelope.
+ */
+function isEngineCaller(req: NextRequest): boolean {
   const presented =
     req.headers.get(INTERNAL_TOKEN_HEADER)
     || (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim()
     || null;
-  if (presented && isValidInternalToken(presented, TRINO_POLICY_TOKEN_ENV)) {
-    return { kind: 'engine', who: 'loom-trino (internal token)' };
-  }
-  // 2. A tenant admin with a Loom session.
-  const s = getSession();
-  if (s && isTenantAdmin(s)) {
-    return { kind: 'admin', who: s.claims.upn || s.claims.oid, tenantId: s.claims.tid || s.claims.oid };
-  }
-  return { kind: 'denied' };
+  return Boolean(presented) && isValidInternalToken(presented, TRINO_POLICY_TOKEN_ENV);
 }
 
 /**
@@ -120,17 +113,109 @@ function parseCatalogs(req: NextRequest): Array<{ name: string; allow: 'all' | '
     .map((name) => ({ name, allow: writable.has(name) ? ('all' as const) : ('read-only' as const) }));
 }
 
-export async function GET(req: NextRequest) {
-  const caller = authenticate(req);
-  if (caller.kind === 'denied') {
-    return apiError(
-      'unauthenticated — this endpoint serves the Trino engine (internal trust token) and tenant admins only',
-      401,
-    );
+/** Serve the compiled artifacts for one tenant. Shared by both caller paths. */
+async function serve(
+  req: NextRequest,
+  tenantId: string,
+  caller: { kind: 'engine' | 'admin'; who: string },
+): Promise<Response> {
+  const format = (req.nextUrl.searchParams.get('format') || 'rules').trim().toLowerCase();
+
+  // Status is the admin receipt — never served to the engine (it does not need
+  // it, and it would be a needless disclosure).
+  if (format === 'status') {
+    if (caller.kind !== 'admin') return apiError('format=status is for tenant admins', 403);
+    const doc = await readTrinoEngineRules(tenantId);
+    return apiOk({
+      status: trinoEnforcementStatus(doc),
+      published: doc
+        ? { version: doc.version, publishedAt: doc.publishedAt, policySetName: doc.policySetName }
+        : null,
+    });
   }
 
-  const format = (req.nextUrl.searchParams.get('format') || 'rules').trim().toLowerCase();
-  const tenantId = caller.kind === 'admin' ? caller.tenantId : engineTenantId();
+  // Compile fresh from the stored policy set so the engine always receives the
+  // CURRENT policy — a stale publication can never be served as authoritative.
+  const { set } = await loadPolicySet(tenantId);
+  const docOptions = {
+    trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
+    trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
+    trinoGroupProvider: true,
+    catalogs: parseCatalogs(req),
+  };
+  const artifact = compileTrino(set, docOptions);
+
+  if (format === 'rego') {
+    const { buildTrinoRego } = await import('@/lib/governance/policy-code/compilers/trino');
+    return new Response(buildTrinoRego(set, docOptions), {
+      status: 200,
+      headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+    });
+  }
+
+  if (format === 'groups') {
+    // The group file is published by the reconcile loop (it resolves Entra
+    // membership); serving the LAST PUBLISHED value here keeps the engine and
+    // the admin surface reading the same bytes.
+    const published = await readTrinoEngineRules(tenantId);
+    return new Response(published?.groupFile || '', {
+      status: 200,
+      headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+    });
+  }
+
+  const rules = buildTrinoRulesDocument(artifact, docOptions);
+  const version = rulesVersion(rules);
+
+  if (caller.kind === 'engine') {
+    // The receipt. Best-effort: a Cosmos hiccup must never make the engine fall
+    // back to a stale local file, so a stamp failure is logged and the document
+    // is still served.
+    await recordTrinoEngineFetch(tenantId, {
+      at: new Date().toISOString(),
+      version,
+      catalogs: docOptions.catalogs.map((c) => c.name),
+      by: caller.who,
+    }).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('[trino-engine-rules] fetch receipt not recorded: %s', logSafeError(e));
+    });
+  }
+
+  return new Response(JSON.stringify(rules, null, 2), {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-loom-rules-version': version,
+    },
+  });
+}
+
+/**
+ * The tenant-admin path runs through the route toolkit, so its 401/403
+ * envelopes are byte-identical to every other admin surface and cannot drift
+ * (the copy-paste divergence `check-route-guards` exists for).
+ */
+const adminGET = withTenantAdmin(async (req, { session }) => {
+  const tenantId = session.claims.tid || session.claims.oid;
+  try {
+    return await serve(req as NextRequest, tenantId, {
+      kind: 'admin',
+      who: session.claims.upn || session.claims.oid,
+    });
+  } catch (e) {
+    return apiServerError(e, 'Failed to compile the Trino engine rules');
+  }
+});
+
+export async function GET(req: NextRequest, ctx: any) {
+  if (!isEngineCaller(req)) {
+    // No engine token → the session path decides (and rejects) with the
+    // canonical envelope. `isTenantAdmin` is referenced by the toolkit wrapper.
+    return adminGET(req, ctx);
+  }
+  const tenantId = engineTenantId();
   if (!tenantId) {
     return apiError(
       'The deployment tenant could not be resolved (LOOM_ENTRA_TENANT_ID / AZURE_TENANT_ID are unset), so the '
@@ -138,73 +223,13 @@ export async function GET(req: NextRequest) {
       503,
     );
   }
-
   try {
-    // Status is the admin receipt — never served to the engine (it does not
-    // need it, and it would be a needless disclosure).
-    if (format === 'status') {
-      if (caller.kind !== 'admin') return apiError('format=status is for tenant admins', 403);
-      const doc = await readTrinoEngineRules(tenantId);
-      return apiOk({ status: trinoEnforcementStatus(doc), published: doc ? { version: doc.version, publishedAt: doc.publishedAt, policySetName: doc.policySetName } : null });
-    }
-
-    // Compile fresh from the stored policy set so the engine always receives the
-    // CURRENT policy — a stale publication can never be served as authoritative.
-    const { set } = await loadPolicySet(tenantId);
-    const docOptions = {
-      trinoSessionUser: (process.env.LOOM_TRINO_SESSION_USER || '').trim() || undefined,
-      trinoDefaultCatalog: (process.env.LOOM_TRINO_ICEBERG_CATALOG || '').trim() || undefined,
-      trinoGroupProvider: true,
-      catalogs: parseCatalogs(req),
-    };
-    const artifact = compileTrino(set, docOptions);
-
-    if (format === 'rego') {
-      const { buildTrinoRego } = await import('@/lib/governance/policy-code/compilers/trino');
-      return new Response(buildTrinoRego(set, docOptions), {
-        status: 200,
-        headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-      });
-    }
-
-    if (format === 'groups') {
-      // The group file is published by the reconcile loop (it resolves Entra
-      // membership); serving the LAST PUBLISHED value here keeps the engine and
-      // the admin surface reading the same bytes.
-      const published = await readTrinoEngineRules(tenantId);
-      return new Response(published?.groupFile || '', {
-        status: 200,
-        headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
-      });
-    }
-
-    const rules = buildTrinoRulesDocument(artifact, docOptions);
-    const version = rulesVersion(rules);
-
-    if (caller.kind === 'engine') {
-      // The receipt. Best-effort: a Cosmos hiccup must never make the engine
-      // fall back to a stale local file, so a stamp failure is logged and the
-      // document is still served.
-      await recordTrinoEngineFetch(tenantId, {
-        at: new Date().toISOString(),
-        version,
-        catalogs: docOptions.catalogs.map((c) => c.name),
-        by: caller.who,
-      }).catch((e) => {
-        // eslint-disable-next-line no-console
-        console.warn('[trino-engine-rules] fetch receipt not recorded: %s', (e as Error)?.message || e);
-      });
-    }
-
-    return new Response(JSON.stringify(rules, null, 2), {
-      status: 200,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-store',
-        'x-loom-rules-version': version,
-      },
-    });
+    return await serve(req, tenantId, { kind: 'engine', who: 'loom-trino (internal token)' });
   } catch (e) {
     return apiServerError(e, 'Failed to compile the Trino engine rules');
   }
 }
+
+// Referenced so the tenant-admin tier this route depends on is explicit at the
+// module level (the toolkit applies it; this keeps the dependency greppable).
+export const REQUIRES_TENANT_ADMIN = isTenantAdmin;

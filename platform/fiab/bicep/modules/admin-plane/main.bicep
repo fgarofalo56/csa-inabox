@@ -4180,6 +4180,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // DIFFERENT value from LOOM_INTERNAL_TOKEN so a leak of one internal
             // trust path does not open the engine-rules endpoint.
             { name: 'LOOM_TRINO_POLICY_TOKEN', secretRef: 'loom-trino-policy-token' }
+            // The audited opt-out for the impersonation half of LU-7. Emitted
+            // (empty = on) rather than left unset so the posture is INSPECTABLE
+            // on the running app: `az containerapp show` shows the value that
+            // decides whether the engine sees the real caller, instead of the
+            // absence of a var you would have to read the code to interpret.
+            // Set to 'disabled' to keep sending the mapped session user while
+            // the compiled rules still govern the deployment as a whole.
+            { name: 'LOOM_TRINO_IMPERSONATION', value: string(loomBackends.?trinoImpersonation ?? '') }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
