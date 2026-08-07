@@ -75,16 +75,16 @@ Open `/setup` → step **Scan & choose**. The wizard queries Resource Graph acro
 the tenant and returns, per service: the candidates it found, a recommendation,
 and the reason Loom wants that service.
 
-> **This is not the scanner with the coverage ledger (#3015).** `/setup` calls
-> `POST /api/setup/scan-services`, which sends `options: { top: 1000 }` — and
-> `top` is a **silent no-op** in Resource Graph; the real key is `$top`. That
-> route has no `$skipToken` paging loop and does not set `allowPartialScopes`,
-> so an estate with more than 1000 matching resources is truncated with nothing
-> in the response to say so, and a subscription you cannot read is dropped
-> silently. The honest scanner — three-step coverage probe, per-subscription
-> ledger, real paging — is `POST /api/deploy/discovery`, described in
+> **The wizard now runs on the SAME scanner as `/api/deploy/discovery`
+> (#3015 — merged, not deployed until the next roll).** `GET
+> /api/setup/discover-services` delegates to `lib/deploy/discovery-scanner`:
+> three-step coverage establishment, real `$top`/`$skipToken` paging,
+> `allowPartialScopes`, and a per-subscription ledger returned alongside the
+> service rows. The scoped *Analysis scope → Reuse or deploy* steps use
+> `POST /api/setup/estate-scan`, which shares the same coverage probe. The old
+> weaker route (`POST /api/setup/scan-services`, the no-op `top` key, no
+> paging, no ledger) is deleted. Details in
 > [Discovery and adoption](discovery-and-adoption.md#2-the-part-that-matters-most-coverage).
-> Use the CLI or that endpoint for anything larger than a small estate.
 
 > **`/setup` no longer redirects away when a hub exists.** An earlier version of
 > this page said it did; that redirect was removed and
@@ -138,12 +138,11 @@ environment variables it emits and what Loom uses each service for, is in
 > `POST /api/deploy/discovery` handles this — it establishes coverage from ARM
 > and a container probe *before* the inventory query, and reports a per
 > subscription status of `scanned` · `no-access` · `truncated`. **The `/setup`
-> wizard's scanner does not** (#3015): its "N subscriptions scanned" counter is
-> derived from subscriptions that produced a *match*, so a subscription with
-> Reader but no adoptable resources is not counted, and one with no Reader looks
-> identical to one with nothing in it. On the wizard path, confirm your
-> subscription list independently (`az account list -o table`) rather than
-> trusting the counter.
+> wizard's scanners now do the same** (#3015 — merged, not deployed until the
+> next roll): `discover-services` runs on the discovery-scanner module and its
+> `subscriptionsScanned` counts subscriptions genuinely READ from the ledger —
+> a subscription with Reader but nothing adoptable counts as scanned, one
+> without Reader is a `no-access` ledger row, and the response says which.
 
 ---
 
@@ -429,20 +428,25 @@ reachability, network posture, and emits the exact
 registry-level (it records an attachment and wires runtime env); it is not the
 day-0 deploy input.
 
-> **The day-0 fitness suite is written but NOT WIRED (#3014).**
-> `apps/fiab-console/lib/deploy/fitness.ts` implements all five criteria below
-> and exports a blocking gate, `assertPlanIsDeployable()`. Its own header says
-> it "runs before a single resource is created". **It does not.** A repo-wide
-> search for `assertPlanIsDeployable`, `evaluateFitness` and
-> `AdoptionNotDeployableError` finds callers in exactly two files: `fitness.ts`
-> and its own unit test. No deploy tier calls it.
+> **The blocking gate is wired; the evaluator is not (#3014 — merged, not
+> deployed until the next roll).** `POST /api/setup/deploy` now calls
+> `assertPlanIsDeployable()` before ANY deploy tier fires: an adopt decision
+> whose fitness verdict is `unusable` or `unknown` is refused with 422 and the
+> observed blocking checks, and a structurally incoherent plan (adopt of a
+> create-only service, a second tenant singleton, a missing coordinate) is
+> refused with 400. The guard test
+> `app/api/setup/__tests__/deploy-fitness-gate.test.ts` goes red if that caller
+> is removed.
 >
-> Do not read the presence of this module — or its passing tests — as
-> protection. Until #3014 wires it, the checks below are **yours to run by
-> hand**, and an unusable adopted resource still fails mid-deploy.
+> What still has **no production producer** is `evaluateFitness()` itself: no
+> route reads the live resource and attaches a verdict to the plan, so an
+> adoption nobody evaluated passes the gate un-checked (deliberate — refusing
+> every un-evaluated adoption before an evaluator exists would dead-end
+> brownfield). Until the evaluator lands, the checks below are **yours to run
+> by hand** for anything you adopt.
 
-The five criteria, as implemented in `fitness.ts` and as they will apply once
-that module is invoked:
+The five criteria, as implemented in `fitness.ts` and as the gate applies them
+when a verdict is present:
 
 | Check | Establishes | Example failure |
 |---|---|---|
@@ -640,62 +644,60 @@ shipped behaviour.
 |---|---|
 | One `adopt` object parameter replacing 36 `existing*` scalars | `main.bicep:504` `param adopt object = {}`; **zero** `^param existing` declarations remain; the template is at **216** params, down from 251 (cap 256) |
 | Adoption always suppresses creation | `main.bicep:567-583`, one `var provision<Svc> = <enableFlag> && adoptMode(adopt, '<key>') == 'create'` per service — the class A / class B split is gone |
-| Every emitter writes the bag, not the scalars | `byo-wizard.sh:364`, `scan-and-deploy.sh`, `app/api/setup/deploy/route.ts:971`, `lib/setup/service-choices-to-params.ts:79` |
+| Every emitter writes the bag, not the scalars | `byo-wizard.sh:364`, `scan-and-deploy.sh`, `lib/setup/adopt-bag.ts` (`deriveAdoptBag`, consumed by every tier of `app/api/setup/deploy/route.ts`), `lib/setup/service-choices-to-params.ts:79` |
 | One adoption catalog, guarded | `lib/deploy/adoption-catalog.ts`; `scripts/ci/check-adoption-catalog-sync.mjs` runs in `loom-guardrails.yml` |
 | `/setup` reachable on an estate that already has a hub | the redirect is removed; `scripts/ci/check-setup-entrypoints.mjs` fails the build if `redirect(` reappears |
-| Failure classification + bounded retry | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs` — **on the Commercial deploy workflows only**, see below |
+| Failure classification + bounded retry | `lib/deploy/failure-taxonomy.json` + `scripts/ci/deploy-retry.mjs` — on the Commercial AND Gov deploy workflows (#3017; the Gov wiring is merged, not deployed — first Gov run owed on Actions). Guard: `scripts/ci/__tests__/gov-deploy-retry-wiring.test.mjs` |
 
-### Open — the deploy still discards your brownfield picks (#3016)
+### Fixed on this branch — the deploy no longer discards your brownfield picks (#3016 — merged, not deployed until the next roll)
 
-The *Scan & choose* step produces a real per-service adopt/create/skip decision.
-`collectAdoptBag()` has **one** call site: the copy-paste `az` command builder.
+The wizard's adopt-or-create plan (and the legacy `serviceChoices` /
+`existing*` fields) now derive ONE adopt bag —
+`lib/setup/adopt-bag.deriveAdoptBag()` — consumed by every tier:
 
 | Deploy tier | Carries your choices? |
 |---|---|
-| User-delegated ARM submit — in-code the "PREFERRED, and now ALWAYS available" tier | **No.** `buildDlzDeploymentParameters()` (`lib/setup/user-arm-deploy.ts:116`) contains zero `adopt`/`existing` references |
-| Setup Orchestrator | **No** — the request model does not declare the field |
-| GitHub workflow dispatch | **No** — not in the dispatch input list |
-| Copy-paste `az` (the HTTP-503 fallback) | **Yes**, `topology=tenant` only |
+| User-delegated ARM submit (the PREFERRED tier) | **Yes** — `buildDlzDeploymentParameters()` emits the bag as the `adopt` ARM parameter |
+| Setup Orchestrator | **Yes** — the POST payload carries an explicit `adopt` field, and the orchestrator's `DeployRequest` declares, validates and threads it |
+| GitHub workflow dispatch | **Refused, honestly** — the deploy workflows declare no input that can carry the bag (the dispatch API 422s undeclared inputs, cap 10), so for a plan with adopt/skip decisions the route SKIPS this tier and falls through to the copy-paste gate rather than dispatch-and-discard. Greenfield still dispatches. Declaring a `plan_json` workflow input re-enables the tier for brownfield (#3016 follow-up) |
+| Copy-paste `az` (the HTTP-503 fallback) | **Yes** — same bag, both topologies |
 
-**Consequence: if the in-product deploy succeeds, your adopt picks are ignored
-and Loom provisions new resources** — including a second Purview attempt, which
-then fails `EnterpriseTenantAlreadyExists`. The tier most likely to run is the
-one that drops the decision, silently. **Until #3016 lands, drive brownfield
-from the CLI (§3a or §3b), not from the wizard.**
+A malformed pick (a non-GUID subscription, a name that would break the CLI
+quoting, an adopt of a service the catalog does not know) is a **400 refusal**,
+never a silent drop. Guard: `app/api/setup/__tests__/deploy-adopt-transport.test.ts`
+pins each tier and goes red if one stops consuming the bag.
 
 ### Open — the rest, precisely
 
-> **Four of these have fixes IN FLIGHT — open pull requests, not merged, not
-> deployed** (checked 2026-08-06). Per `deploy-integrity.md` R2 an in-flight or
-> merged change is **not** a fix until it is live on the estate, so every row
-> below still describes what you will hit today.
+> **These fixes are IN THE TREE but NOT DEPLOYED** (state as of 2026-08-07).
+> Per `deploy-integrity.md` R2 a merged change is **not** a fix until it is live
+> on the estate, so until the next apply every row below still describes what
+> you hit today.
 >
-> | Row | In-flight PR | State on 2026-08-06 |
+> | Was | Landed in | State |
 > |---|---|---|
-> | #3014 fitness gate inert | **#3062** — "wire the four inert deploy-plumbing paths: fitness gate, one scan engine, adopt-bag on every tier, Gov classified retry" | **OPEN** |
-> | #3015 wizard scanner ≠ coverage scanner | **#3062** (same PR) | **OPEN** |
-> | #3016 adopt-bag discarded by every tier but copy-paste | **#3062** (same PR) | **OPEN** |
-> | #3017 no classified retry on Gov | **#3062** (same PR) | **OPEN** |
-> | Purview `RequestDisallowedByPolicy` + APIM/VPN adopt-existing idempotency | **#3058** — "brownfield idempotency — adopt-existing singletons, policy-compliant Purview managed storage, per-ARM-leaf classification" | **OPEN** |
+> | #3014 fitness gate inert | **#3062** — wires `assertPlanIsDeployable()` at the deploy-submit choke point | merged, **not deployed** |
+> | #3015 wizard scanner ≠ coverage scanner | **#3062** — `discover-services` now runs on the shared discovery scanner; the weaker `scan-services` route is deleted | merged, **not deployed** |
+> | #3016 adopt-bag discarded by every tier but copy-paste | **#3062** — one bag, threaded through every tier | merged, **not deployed** |
+> | #3017 no classified retry on Gov | **#3062** — `deploy-retry.mjs` on gcch/gcc/il5/deploy-gov | merged, **not deployed**; no Gov run has exercised it yet |
+> | Purview `RequestDisallowedByPolicy` + APIM/VPN adopt-existing idempotency | **#3058** — adopt-existing singletons, policy-compliant Purview managed storage, per-ARM-leaf classification | merged 2026-08-07, **not deployed** |
 >
-> **Re-check before relying on either state**, in this order — merged is not
+> **Re-check what is actually LIVE before relying on any of it** — merged is not
 > deployed:
 >
 > ```bash
-> gh pr view 3062 --json state,mergedAt
-> gh pr view 3058 --json state,mergedAt
 > curl -s https://<your-console-hostname>/build-marker.txt   # what is actually LIVE
+> git log --oneline <live-sha>..origin/main | wc -l          # how far behind the estate is
 > ```
 >
-> When they land, re-run the "How to re-measure this section" commands below
-> rather than deleting these rows on the strength of a merge.
+> Once an apply lands, re-run the "How to re-measure this section" commands
+> below rather than trusting these rows.
 
 | Gap | Effect | Tracked |
 |---|---|---|
-| Day-0 fitness suite exists but nothing calls it | An unusable adopted resource fails mid-deploy, not before it. The module's own "runs before a single resource is created" comment is untrue | **#3014** (fix in flight: PR #3062) |
-| The wizard's scanner is not the one with the coverage ledger | `/api/setup/scan-services` sends the no-op `options:{top:1000}`, has no `$skipToken` loop and no `allowPartialScopes`: silent truncation past 1000 rows, and an unreadable subscription is indistinguishable from an empty one | **#3015** (fix in flight: PR #3062) |
-| No classified retry on any Gov deploy path | `deploy-fiab-gcch.yml` does not invoke `deploy-retry.mjs` at all; the taxonomy and bounded retry are Commercial-only | **#3017** (fix in flight: PR #3062) |
-| Purview managed storage rejected by tenant policy (`RequestDisallowedByPolicy`); APIM private-DNS re-link `Conflict`; VPN gateway created under a different name than the existing one | A brownfield re-apply fails on ARM leaves that adoption should have suppressed | **#3038** (fix in flight: PR #3058) |
+| `evaluateFitness` has no production producer | The `assertPlanIsDeployable` gate is wired at the deploy submit (see §Step 4), but nothing evaluates a live resource and attaches the verdict — an un-evaluated adoption passes the gate un-checked | **#3014** (follow-up) |
+| GitHub-dispatch tier cannot carry the adopt bag | Brownfield submits fall through to the copy-paste gate when only the dispatch tier is available; needs a `plan_json` input on the deploy workflows | **#3016** (follow-up) |
+| Purview managed storage rejected by tenant policy (`RequestDisallowedByPolicy`); APIM private-DNS re-link `Conflict`; VPN gateway created under a different name than the existing one | A brownfield re-apply fails on ARM leaves that adoption should have suppressed. **Fixed in the tree, NOT yet deployed** — PR #3058 merged 2026-08-07 (adopt-existing singletons + policy-compliant Purview managed storage + per-ARM-leaf classification); it remains what you hit on the estate until the next apply | **#3038** (merged, not deployed) |
 | No networking / Log Analytics / ACR / Key Vault adoption | You cannot bring your own VNet, subnets, DNS zones, firewall, workspace or registry (class C above) | — |
 | `EXISTING_STORAGE` / `_POSTGRES` / `_KEYVAULT` / `_FIREWALL` have no parameter consumer | Setting them does nothing at deploy time | — |
 | `dlz-attach` adoption is unexercised | The parameter file folds all 13 services, but that topology skips the admin plane and no adopt deploy has been run on it | — |
@@ -707,9 +709,9 @@ Every row above is a command, not an opinion. Re-run these before trusting it:
 ```bash
 grep -c '^param existing' platform/fiab/bicep/main.bicep        # expect 0
 grep -c '^param ' platform/fiab/bicep/main.bicep                # expect < 256
-grep -rn 'assertPlanIsDeployable' apps/fiab-console --include=*.ts | grep -v __tests__
-grep -n 'collectAdoptBag' apps/fiab-console/app/api/setup/deploy/route.ts
-grep -c 'deploy-retry' .github/workflows/deploy-fiab-gcch.yml   # expect 0 until #3017
+grep -rn 'assertPlanIsDeployable' apps/fiab-console --include=*.ts | grep -v __tests__   # expect fitness.ts + the deploy route
+grep -n 'deriveAdoptBag' apps/fiab-console/app/api/setup/deploy/route.ts                 # expect the one choke-point call
+grep -c 'deploy-retry' .github/workflows/deploy-fiab-gcch.yml   # expect >0 (#3017)
 ```
 
 ---

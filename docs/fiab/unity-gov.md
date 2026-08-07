@@ -9,6 +9,39 @@
 > **Naming.** The platform is **Loom Unity** — Loom's Unity-Catalog-**compatible**
 > metastore. It is not a Databricks product and is never presented as one.
 
+## Per-cloud status (measured 2026-08-06)
+
+`.claude/rules/cloud-parity.md`: a capability that works in Commercial and not in
+Gov is **incomplete**, not "Commercial-first". This table is the honest state of
+that parity for Loom Unity and the two surfaces that federate against it. Every
+non-parity row names its fix and where it sits in the sequence — none is left as
+"Gov lags".
+
+| Capability | Commercial | Azure Government (GCC-High / IL5) | Fix + sequence |
+|---|---|---|---|
+| Catalog deployed by the orchestrator | ✅ `admin-plane/main.bicep` (default-ON) | ✅ same module, same default — bicep is correct on the Gov path | — |
+| Catalog **image** in the registry | ✅ `full-app-deploy-commercial.yml` | ⚠️ only `gov-build-images.yml` (**never run**) or `gov-uc-purview-wire.yml` | dispatch `gov-build-images` (boundary=gcc-high) |
+| **Persistence** | ✅ `postgres` — durable, backed up, Entra-only (no DB credential anywhere), multi-writer | ❌ `h2-ephemeral` — an EmptyDir that **loses every catalog object on container restart**, forced `maxReplicas: 1` | `loomBackends.postgresStores = 'enabled'` once PG flexible-server quota is confirmed in usgovvirginia. Postgres **is** available in US Gov Virginia / Arizona / Texas per Learn — this is a subscription quota question, not a service gap |
+| **Authorization** | ✅ enforced (Entra, sealed when no audience is pinnable) | ❌ **DISABLED live since the 07-15 image** — anonymous read + mutate + SAS (#2643). Code fixed in #2974 / #3002 | dispatch `gov-uc-purview-wire.yml` (attended, 3.5–4.5 h) |
+| v0.5.1 `#1603` permission-GET fix | ✅ shipped | ⚠️ present in the Dockerfile but **INERT in every shipped Gov image** (#3060) — the classpath patch hit the wrong module | the Dockerfile is fixed at HEAD; a Gov **rebuild** applies it. The build-time assertion fails closed if the override is not first on `server/target/classpath` |
+| Iceberg REST Catalog (`LOOM_ICEBERG_CATALOG_URL`) | ✅ deployed + wired by `admin-plane/main.bicep` | ❌ **no out-of-band Gov workflow deploys it or wires the URL** | only the orchestrated `deploy-fiab-gcch` covers it — that lane has been RED for 16 days and must go green |
+| Federated SQL engine (`LOOM_TRINO_URL`) | ✅ deployed by `admin-plane/main.bicep` | ⚠️ module + params correct; the only out-of-band producer `gov-provision-trino.yml` has **never run**, and its image comes from `gov-provision-dataplane-images.yml` (**never run**) | dispatch the image lane, then Trino or the orchestrated deploy |
+
+**Why this matters more in Gov than in Commercial.** Databricks Unity Catalog has
+no Azure Government endpoint, so a Commercial customer who finds Loom Unity
+degraded still has the managed service to fall back on and a Gov customer does
+not. Loom Unity plus Iceberg/Trino federation **is** the catalog and
+external-engine-federation product for that boundary. Shipping it Commercial-first
+inverts the priority: the boundary with the greatest need would get the least
+product.
+
+**The store cutover, stated precisely.** Because Gov has always run
+`h2-ephemeral`, there is **no durable Gov catalog store to migrate from** — the
+metadata already does not survive a restart. Flipping `postgresStores` therefore
+stands up a **fresh, empty** Postgres; that is correct behaviour, not data loss,
+but any catalog objects created since the last restart are gone and must be
+re-registered. Plan the flip as a cutover with re-registration, not as a migration.
+
 ## Why this exists — the Gov gap
 
 CSA Loom's Unified Catalog talks to **Databricks Unity Catalog** over the
@@ -26,7 +59,22 @@ Databricks dependency (`.claude/rules/no-fabric-dependency.md`,
 **v0.5.0**) as a Loom Container App. It exposes the **same REST API** the Loom
 client already speaks, so the switch is a base-URL + auth change — not a new client.
 
-**Image pin — re-verified 2026-07-28 (LU-1), unchanged at `v0.5.0`.** Upstream cut
+**Image pin — SUPERSEDED 2026-08-04; see `apps/loom-unity/Dockerfile` for the
+current contract.** The paragraph below described the state before the v0.5.1
+overlay existed and is kept only so the reasoning trail is legible. What ships
+now: the base image is still pinned at **v0.5.0** (Docker Hub genuinely never
+published a v0.5.1 image), but stage 2 **overlays the upstream v0.5.1
+`unitycatalog-server` artifact from Maven Central** — upstream's own released
+binary, prepended to the server classpath so its `#1603`-fixed classes win the
+first-match scan. That is the same "packaging, not a fork" seam the Postgres JDBC
+driver already uses. Two consequences worth carrying: (1) the earlier "there is
+nothing to bump to" conclusion checked **only** Docker Hub and was incomplete;
+(2) as of #3060 the overlay was **INERT in every shipped image** — the patch
+targeted the wrong classpath file — so a rebuild is required per cloud, and the
+Dockerfile now asserts the override is first on `server/target/classpath` and
+fails the build if it is not.
+
+**Historical note (pre-overlay), 2026-07-28 (LU-1).** Upstream cut
 GitHub release **v0.5.1** on 2026-07-18 (credential-cache scoping, plus a fix for
 permission **GET** routes returning HTTP 500 when server-side authorization is
 enabled — exactly the LU-2 posture). There is nothing to bump to: Docker Hub

@@ -13,9 +13,9 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1671 |
+| Total routes | 1670 |
 | Public (no session) | 100 |
-| Session-only | 562 |
+| Session-only | 561 |
 | Owner-scoped | 714 |
 | Admin | 295 |
 | Gated (backend config) | 530 |
@@ -2107,7 +2107,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `setup/regions/route.ts` | GET | session-only |  | — |
 | `setup/scan-cosmos/route.ts` | GET | session-only |  | — |
 | `setup/scan-purview/route.ts` | GET | session-only |  | — |
-| `setup/scan-services/route.ts` | GET | session-only |  | — |
 | `setup/scan/route.ts` | GET | session-only |  | — |
 | `setup/subscriptions/route.ts` | GET | owner-scoped |  | — |
 | `setup/tenant-topology/route.ts` | GET | session-only |  | — |

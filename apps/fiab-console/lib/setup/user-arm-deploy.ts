@@ -85,6 +85,14 @@ export interface DlzDeployInputs {
   adminEntraGroupId?: string;
   /** Chargeback cost center → main.bicep `costCenter` (resource tags). */
   costCenter?: string;
+  /**
+   * The unified adopt-or-create bag (#3016) → main.bicep's `adopt` param.
+   * Derived ONCE per submit by `lib/setup/adopt-bag.deriveAdoptBag()`; this
+   * tier previously dropped every reuse decision on the floor — the operator's
+   * "use my existing Purview" never reached ARM and the deploy provisioned a
+   * duplicate. Emitted only when supplied, so a greenfield submit is unchanged.
+   */
+  adopt?: Record<string, unknown>;
 }
 
 /**
@@ -156,6 +164,11 @@ export function buildDlzDeploymentParameters(inp: DlzDeployInputs): ArmParameter
   }
   if (inp.costCenter && inp.costCenter.trim()) {
     p.costCenter = { value: inp.costCenter.trim() };
+  }
+  // #3016 — the adopt bag travels on THIS tier too, not only the copy-paste
+  // fallback. Absent/empty emits nothing (adoptMode() defaults to 'create').
+  if (inp.adopt && Object.keys(inp.adopt).length > 0) {
+    p.adopt = { value: inp.adopt };
   }
   return p;
 }

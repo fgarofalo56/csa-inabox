@@ -200,6 +200,32 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // ── THESE KEYS MUST BE PRESENT (measured 2026-08-06, FINISHLINE L-GOV) ──────
+  // A .bicepparam object assignment REPLACES the template default, it does not
+  // merge — and main.bicep forwards this bag to admin-plane VERBATIM (no union).
+  // admin-plane/main.bicep reads these five with a PLAIN `.` (no `.?`):
+  //   mcpBridge  — inside the UNCONDITIONAL `apps` array literal
+  //   maf / setupOrchestrator / scriptRunner / wrangler — module call sites
+  // The compiled artifact proves it:
+  //   /resources/adminPlane/.../resources/appDeployments
+  //     condition: containerPlatform=='containerApps' && deployAppsEnabled  (BOTH true here)
+  //     .../apps/value[2]/image:
+  //       "[format('loom-mcp-bridge:{0}', parameters('appImageTags').mcpBridge)]"
+  // so an ARM deploy with this file aborts on "property 'mcpBridge' doesn't
+  // exist" before touching a resource. main.bicep's own default carries all five
+  // with a comment recording this exact failure; this file dropped them.
+  //
+  // WHY IT WENT UNNOTICED: the live Commercial lane (deploy-fiab-commercial.yml)
+  // uses params/commercial.bicepparam, which does NOT assign appImageTags and so
+  // inherits the complete default. THIS file is the one no-vaporware.md names as
+  // the canonical FROM-SCRATCH path ("-p params/commercial-full.bicepparam"), so
+  // the greenfield acceptance run was the path that could not work.
+  // Guarded by scripts/ci/check-appimagetags-coverage.mjs.
+  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
+  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')
+  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
+  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
+  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
   // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
   // deploys BY DEFAULT. Same value the module's `?? 'v0.1'` fallback already
   // produced (so this is a no-op against the live estate), stated explicitly so
@@ -221,6 +247,14 @@ param appImageTags = {
   // prerequisite of the apps phase — a missing manifest fails the Container App
   // PUT with MANIFEST_UNKNOWN, not just the feature.
   unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
+  // loom-trino (N7e) — the DEFAULT-ON Federated SQL engine behind SQL Lab's
+  // "Federated SQL (Trino)". Stated explicitly (same value the template's
+  // `appImageTags.?trino ?? 'v0.1'` fallback already produced, so this is a
+  // no-op against the live estate) so the tag is operator-settable HERE the
+  // same way it is in gcc-high / il5 — per .claude/rules/cloud-parity.md the
+  // per-cloud levers must match, not just the per-cloud behaviour.
+  //   producer .github/workflows/full-app-deploy-commercial.yml -> loom-trino:v0.1
+  trino: readEnvironmentVariable('LOOM_TRINO_TAG', 'v0.1')
 }
 
 // MSAL — the app registration + client secret are now PROVISIONED by default
