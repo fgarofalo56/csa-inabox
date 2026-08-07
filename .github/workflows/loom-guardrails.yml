@@ -386,6 +386,7 @@ jobs:
       # manifest. Unfiltered for the same reason as LIC0: the edit that introduces
       # the violation is a bicep or workflow change.
       - name: upstream-image-mirror (MIR0 — ACR mirror + digest pinning, #2682)
+        if: ${{ !cancelled() }}
         run: node scripts/ci/check-upstream-image-mirror.mjs
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         if: ${{ !cancelled() }}
