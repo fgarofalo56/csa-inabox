@@ -13,7 +13,7 @@
     "csa-loom-post-deploy-bootstrap.yml": 32,
     "csa-loom-tutorial-capture.yml": 1,
     "deploy-dbt.yml": 3,
-    "deploy-fiab-commercial.yml": 4,
+    "deploy-fiab-commercial.yml": 3,
     "deploy-fiab-gcc.yml": 11,
     "deploy-fiab-gcch.yml": 13,
     "deploy-fiab-il5.yml": 4,
