@@ -56,6 +56,21 @@ vi.mock('@/lib/auth/obo', () => ({
 
 const SUB = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
+/** The stubbed orchestrator origin, matched by exact HOST — never by prefix.
+ *  `url.startsWith('http://orch.internal')` also matches
+ *  `http://orch.internal.example.com`, which CodeQL flags as
+ *  js/incomplete-url-substring-sanitization (correctly: a test that can be
+ *  satisfied by the wrong origin proves nothing about the right one). */
+const ORCH_HOST = 'orch.internal';
+
+function isOrchestratorCall(url: string): boolean {
+  try {
+    return new URL(url).host === ORCH_HOST;
+  } catch {
+    return false;
+  }
+}
+
 /** A submit body whose plan adopts one resource (the meaningful-bag case). */
 function adoptSubmit() {
   return {
@@ -201,7 +216,7 @@ describe('POST /api/setup/deploy — adopt-bag transport (#3016)', () => {
   it('tier 1 (orchestrator): the POST payload carries an explicit adopt field', async () => {
     process.env.LOOM_SETUP_ORCHESTRATOR_URL = 'http://orch.internal';
     const calls = stubFetch((url) => {
-      if (url.startsWith('http://orch.internal')) {
+      if (isOrchestratorCall(url)) {
         return { body: { deployment_id: 'dep-1', stream_url: '/s' } };
       }
       return armStub(url);
@@ -211,7 +226,7 @@ describe('POST /api/setup/deploy — adopt-bag transport (#3016)', () => {
     const j = await r.json();
     expect(r.status).toBe(202);
     expect(j.deploymentMode).toBe('orchestrator');
-    const orch = calls.find((c) => c.url.startsWith('http://orch.internal'));
+    const orch = calls.find((c) => isOrchestratorCall(c.url));
     expect(orch).toBeDefined();
     // The EXPLICIT field — pydantic extra="ignore" drops anything undeclared,
     // so relying on the raw body spread is exactly how the bag got lost before.
