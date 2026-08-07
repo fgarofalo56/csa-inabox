@@ -1218,6 +1218,27 @@
         "the gate itself behaved WELL here: it refused pass-rate deltas on 4 surfaces for predicate-mismatch (baseline `deterministic` vs this run's `deterministic+grounding+productFidelity`), stating that dropping a conjunct can only raise the rate so a delta would read as improvement regardless of quality. That refusal is the honest-predicate work from #2994 doing its job",
         "DO NOT ratchet floors or interpret any surface's quality from this run until retrieval is restored — the numbers are not measuring what they appear to measure"
       ]
+    },
+    {
+      "id": "C23",
+      "lane": "L-DEPLOY",
+      "wave": 2,
+      "task_order": 34,
+      "status": "todo",
+      "title": "Follow-up flagged by D10 (honestly scoped, NOT implied fixed): planToAdoptBag() in lib/deploy/plan-to-arm.ts is still prototype-bearing. Keys are catalog-filtered via getServiceDef() so no hostile key can become a bag key today, but it wants the same one-line safeRecord() for defence in depth",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "D10 fixed the three client-keyed maps it owned (extra/clean/legacy bag) with safeRecord(); this one is another lane's module and D10 said so rather than reaching across",
+        "the #2657 class root cause: an identifier regex gating extra[ek] ACCEPTS __proto__ because `_` matches \\w — fix structurally with safeRecord(), not by tightening the regex"
+      ]
     }
   ],
   "operator_queue": [
