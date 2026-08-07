@@ -87,6 +87,34 @@ Keep guard phrases **short and unambiguous** (a substring match): prefer
 honest answers that correctly say "Fabric is opt-in". Never put the same
 phrase in both `mustMention` and `mustNotMention` (lint rejects it).
 
+## Point `expectedChunks` at the section that states LOOM's answer
+
+A `docs/fiab/parity/*.md` describes **two products**: a feature-inventory
+section saying what Fabric or the Azure portal does, and a `Loom coverage`
+section saying what CSA Loom actually ships. `lib/copilot/docs-grounding` rule 1
+tells the model to answer a Loom question from the Loom side. **The golden set
+has to agree with that**, or it is asking for one thing and grading another.
+
+Measured failure (2026-08-06, run `31064239486`): 15 of `data-agent.jsonl`'s 18
+rows pointed `expectedChunks` at a **Fabric inventory** anchor while their
+`mustMention` token (`Cosmos`, `cURL`, `LLM-as-judge`, `SELECT`) exists only in
+the Loom coverage table. The surface retrieved its gold document on 90% of
+questions and still scored `passRate` **0.100** with `productFidelityAvg`
+**1.889/5** — the eval had asked for the other product's inventory and the
+`productFidelity` rubric (#2979) correctly hard-failed answers that used it.
+
+So, when authoring:
+
+- Cite the **`Loom coverage` / `Backend per control`** anchor for "what does Loom
+  do" questions. Cite an inventory anchor only when the question is explicitly
+  about the other product.
+- If the Loom-side section does not actually state the fact your `mustMention`
+  demands, that is a **corpus gap**: fix the doc, don't re-point the row at the
+  inventory.
+- Retrieval is scored at DOCUMENT level (`evaluator-core.chunkPath` strips the
+  anchor), so a wrong anchor will NOT show up as a hit-rate miss. It shows up
+  much later, as an unexplained `productFidelity` collapse.
+
 ## Authoring workflow
 
 1. Pick real questions from the surface's traffic/risk (install, gates,

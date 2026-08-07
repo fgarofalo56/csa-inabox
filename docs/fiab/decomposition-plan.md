@@ -262,3 +262,44 @@ format-validation module (no UI). Extract the card sub-sanitizers
 (`sanitizeNumberFormatByField`, `sanitizeFill`, `sanitizeHeaderIcons`, axis/title/
 legend/effects) into `apps/fiab-console/lib/report/report-format-sanitizer.ts` and
 re-import, dropping the ceiling back below 1800 on the next `--update-baseline`.
+
+## DONE (2026-08-06, #2970) — `loom-docs-index.ts` → `loom-docs-corpus.ts`
+
+The first time the E3 guard caught a file crossing 1500 LOC *as it was being
+written* rather than long after, and the first split resolved by extraction
+rather than by an allowlist entry — recorded here as the worked example.
+
+`lib/azure/loom-docs-index.ts` reached **1550 LOC** adding the corpus-wide BM25
+statistics for the AI Search re-rank (#2970). Rather than allowlist it, the file
+was split on a seam that was already there:
+
+| module | concern | LOC |
+|---|---|---|
+| `lib/azure/loom-docs-corpus.ts` | **filesystem + text only** — walk the roots, chunk, summarize source, hash, fingerprint, and accumulate corpus-wide BM25 statistics. No Azure SDK, no network, no credentials. | 435 |
+| `lib/azure/loom-docs-index.ts` | **storage + retrieval** — AI Search + Cosmos backends, the shared BM25 re-rank, `searchDocs`, the freshness manifest, `reindex`. | 1213 |
+
+Why this seam and not another: the dependency runs **one way** (the index imports
+the walker; the walker imports nothing from the index), and the retained half is
+genuinely cohesive — its pieces share the module-private `credential` /
+`SEARCH_API` / `INDEX` / `indexBatch` plumbing, so cutting it further would buy
+lines and cost cohesion. This is the §"Shared method" step-4 extraction (pure
+helpers to their own `.ts` module) applied to a client rather than an editor.
+
+Compatibility was preserved deliberately, so no consumer had to chase the move:
+
+- `DocChunk` is now DECLARED in the corpus module (it is what the walker
+  produces) and **re-exported** from `loom-docs-index`, so
+  `help-copilot-orchestrator.ts`, `tool-citations.ts` and the retrieval tests are
+  untouched.
+- `corpusSourceCount` is re-exported likewise (the health probe and the reindex
+  route import it from the index).
+- `__testInternals` still surfaces `hashContent` / `docKey` / `collectSources` /
+  `enumerateSourceFiles` / `statFingerprint` / `detectRoots` — that object is the
+  test seam every existing suite imports, and moving an implementation is not a
+  reason to make those suites move with it.
+
+No allowlist entry was added; both files sit under the 1500-LOC threshold, so the
+ratchet has nothing new to freeze. Receipts: `check-file-size.mjs` exit 0,
+`tsc -p tsconfig.build.json --noEmit` exit 0, 5717/5717 vitest **exit 0**, and the
+#2970 mutation proof still turns red when `corpusStats` is dropped from the
+`rankChunks` call.

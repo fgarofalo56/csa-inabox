@@ -8,7 +8,7 @@
     "build-fiab-images.yml": 6,
     "console-bluegreen-roll.yml": 2,
     "copilot-auto-merge.yml": 3,
-    "copilot-quality-evals.yml": 8,
+    "copilot-quality-evals.yml": 2,
     "csa-loom-attempt-interactive-grants.yml": 1,
     "csa-loom-post-deploy-bootstrap.yml": 32,
     "csa-loom-tutorial-capture.yml": 1,

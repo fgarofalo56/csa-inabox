@@ -3,26 +3,87 @@
     "owner": "copilot-cost workstream (loom-next-level E3) — fgarofalo",
     "why": "Per-surface Copilot quality floors: a corpus/prompt/router change may never drop a surface below these. Enforced by scripts/csa-loom/check-eval-regression.mjs (E4 workflow + full-app-deploy post-roll run). Mirrors the vitest coverage-floor ratchet convention (commit 14a16d8e): floors move UP only, via a dedicated ratchet PR.",
     "unblock": "Raise: node scripts/csa-loom/ratchet-eval-floors.mjs --write (raise-only, from measured runs). Lowering a floor is NEVER automated — it requires an explicit override commit editing this file with a one-line justification in the PR body.",
-    "note": "PROVISIONAL SEED (2026-07-22): these floors were set BEFORE any eval-run data existed (E2 landed the same day; the first live runs happen post-roll). They are deliberately conservative — low enough that a healthy retrieval+judge path clears them, high enough that a dead data path (0-count retrieval, empty-corpus image) or a mass forbidden-phrase regression fails loudly. The ratchet raises them from measured reality; per the ratchet-up-only convention they never silently go down.",
+    "note": "RATCHETED 2026-08-06 from six MEASURED runs (GitHub Actions copilot-quality-evals 31064239486, 31066313217, 31074296718, 31076441393, 31078960472, 31095470421). Only `retrievalHitRate` moved: it is deterministic and was stable to within a few points across all six, so each floor is (minimum observed − 0.05), capped at 0.95. `groundingAvg` did NOT ratchet — three of the six runs were judge-less (null grounding), so the window's grounding evidence is incomplete. `passRate` did NOT ratchet — the window mixes pass predicates (`deterministic+grounding+productFidelity` vs `deterministic`), and a run that lost the grounding conjunct can only report a HIGHER rate, so raising a floor from it would pin it above what a healthy judged run can clear (#2992). Both refusals are the ratchet working, not a gap. The prior values were a PROVISIONAL SEED (2026-07-22) set before any run data existed. Floors move UP only.",
+    "ratchetBasis": {
+      "2026-08-06": {
+        "metric": "retrievalHitRate",
+        "runs": [31064239486, 31066313217, 31074296718, 31076441393, 31078960472, 31095470421],
+        "rule": "min(observed over the 6-run window) − 0.05 margin, cap 0.95",
+        "notRatcheted": {
+          "groundingAvg": "3 of 6 runs judge-less (null) — incomplete evidence per the E2 cap contract",
+          "passRate": "window mixes pass predicates (#2992) — a dropped conjunct can only raise the rate"
+        }
+      }
+    },
     "metrics": {
       "retrievalHitRate": "0..1 — fraction of questions where >=1 expectedChunks doc surfaced (deterministic; authoritative even judge-less)",
       "groundingAvg": "1..5 LLM-judge grounding average over JUDGED questions only; null in a run = judge deferred (E2 daily cap / no deployment) and is treated as NO-CHANGE by the gate, never a regression",
       "passRate": "0..1 — retrievalHit && mentionPass && !forbiddenHit && (grounding>=4 when judged)"
     },
     "deltaConvention": "EVAL_REGRESSION_DELTA (default 5) is in POINTS: rate metrics compare in percentage points (0.05 = 5 points); groundingAvg maps its 4-wide 1..5 scale onto 0..100 (a 0.2 drop = 5 points).",
-    "lastRatchet": null
+    "lastRatchet": "2026-08-06T21:30:24.881Z"
   },
   "floors": {
-    "help": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "deploy-planner": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "lakehouse": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "kql-database": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "data-agent": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "cost": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "health": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "report": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "rbac": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "eventstream": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true }
+    "help": {
+      "retrievalHitRate": 0.55,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "deploy-planner": {
+      "retrievalHitRate": 0.56,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "lakehouse": {
+      "retrievalHitRate": 0.77,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "kql-database": {
+      "retrievalHitRate": 0.65,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "data-agent": {
+      "retrievalHitRate": 0.83,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "cost": {
+      "retrievalHitRate": 0.95,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "health": {
+      "retrievalHitRate": 0.66,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "report": {
+      "retrievalHitRate": 0.78,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "rbac": {
+      "retrievalHitRate": 0.61,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    },
+    "eventstream": {
+      "retrievalHitRate": 0.52,
+      "groundingAvg": 3,
+      "passRate": 0.4,
+      "provisional": false
+    }
   },
   "_searchMeta": {
     "why": "SRCH1 — per-domain federated-search (/catalog) relevance floors. A ranking/index regression may never drop a domain below these. Enforced by scripts/csa-loom/check-eval-regression.mjs (searchFloors path). Scored hit-rate@k / NDCG@k by the copilot-evaluator searchRelevance mode against the demo-seed showcase items.",
@@ -32,8 +93,16 @@
     }
   },
   "searchFloors": {
-    "catalog": { "searchHitRate": 0.6, "ndcg": 0.5, "provisional": true },
-    "analytics": { "searchHitRate": 0.6, "ndcg": 0.5, "provisional": true }
+    "catalog": {
+      "searchHitRate": 0.6,
+      "ndcg": 0.5,
+      "provisional": true
+    },
+    "analytics": {
+      "searchHitRate": 0.6,
+      "ndcg": 0.5,
+      "provisional": true
+    }
   },
   "_tierMeta": {
     "why": "E6 — tier-router decision floor. The copilot-evaluator tier mode runs the REAL routeTurnTier over the golden content/evals/_tier-labels.jsonl set and scores each decision against its expected tier; tierAccuracy is the fraction the router routes onto the labeled tier. A regression in DEFAULT_TASK_TIER_MAP or the classifyTaskClass heuristics drops accuracy below this floor. Ratchet-up-only, same convention as the copilot + search floors.",
@@ -42,6 +111,9 @@
     }
   },
   "tierFloors": {
-    "router": { "tierAccuracy": 0.85, "provisional": true }
+    "router": {
+      "tierAccuracy": 0.85,
+      "provisional": true
+    }
   }
 }

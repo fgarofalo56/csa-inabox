@@ -19,12 +19,16 @@
  *
  * The corpus is built once on first reindex and persisted in either
  * backend so subsequent BFF replicas don't re-walk the FS.
+ *
+ * SCOPE (2026-08-06, #2970): this module owns STORAGE + RETRIEVAL — the two
+ * backends, the shared BM25 re-rank, `searchDocs`, the freshness manifest and
+ * `reindex`. Turning source files into chunks, hashes and fingerprints is a
+ * separate bounded context and lives in `./loom-docs-corpus` (filesystem + text
+ * only, no Azure surface at all). `DocChunk` is re-exported from here so
+ * existing consumers are unaffected by that split.
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import {
   ChainedTokenCredential,
@@ -35,7 +39,6 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { Container } from '@azure/cosmos';
 
 import { copilotSessionsContainer } from './cosmos-client';
-import { chunkMarkdown, MAX_CHUNK as CHUNKER_MAX_CHUNK } from './docs-chunker';
 import { recordRetrieval } from '@/lib/perf/retrieval-metrics';
 import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import {
@@ -47,27 +50,34 @@ import {
   DEFAULT_MAX_CHUNKS_PER_DOC,
   DEFAULT_SURFACE_BOOST,
   DEFAULT_SOURCE_WEIGHTS,
+  type Bm25CorpusStats,
   type Bm25Index,
 } from './docs-ranker';
+import {
+  collectSources,
+  corpusSourceCount,
+  detectRoots,
+  docKey,
+  docsUrlForPath,
+  enumerateSourceFiles,
+  hashContent,
+  localCorpusStats,
+  resetCorpusStatsCache,
+  setCorpusStatsForTests,
+  statFingerprint,
+  summarizeSource,
+  walkMarkdown,
+  walkSource,
+  type DocChunk,
+  type ManifestFileEntry,
+} from './loom-docs-corpus';
 
 // ---------- Types ----------
 
-export interface DocChunk {
-  /** Stable doc id — `${kind}:${relpath}#${chunkIdx}` */
-  id: string;
-  /** docs / repo / prp / adr */
-  kind: 'docs' | 'repo' | 'prp' | 'adr';
-  /** Relative repo path */
-  path: string;
-  /** Optional H1/H2 heading the chunk lives under */
-  heading?: string;
-  /** Chunk text (~1500 chars) */
-  content: string;
-  /** Optional public URL for citations (preferred over `path`) */
-  url?: string;
-  /** Last-modified ISO timestamp (file mtime) */
-  touchedAt: string;
-}
+// `DocChunk` is produced by the corpus walker, so it is DECLARED in
+// ./loom-docs-corpus and re-exported here — every existing importer of
+// `DocChunk` from this module keeps working unchanged.
+export type { DocChunk };
 
 export interface DocHit extends DocChunk {
   /** 0..1 normalized relevance */
@@ -100,15 +110,6 @@ const MANIFEST_KEY = 'corpus-manifest';
  *  every retrieval query so it never surfaces as a citation. */
 const META_KIND = '__meta__';
 const MANIFEST_VERSION = 1 as const;
-
-/** Per-source-doc index state: the content hash + how many chunks it produced
- *  (chunk ids are deterministic via docKey(kind, path, idx), so we don't store
- *  the id list — we regenerate it to delete orphaned/removed chunks). */
-interface ManifestFileEntry {
-  kind: DocChunk['kind'];
-  hash: string;
-  chunks: number;
-}
 
 interface CorpusManifest {
   version: typeof MANIFEST_VERSION;
@@ -448,9 +449,15 @@ function corpusSignature(chunks: DocChunk[]): string {
   return `${chunks.length}:${sum}:${xor >>> 0}`;
 }
 
-/** Drop the memoised BM25 index (called after a reindex; exported for tests). */
+/**
+ * Drop the memoised BM25 index AND the memoised corpus statistics (called after
+ * a reindex; exported for tests). Both are snapshots of a corpus that has just
+ * changed, so they have to fall together — dropping only one would leave the AI
+ * Search re-rank scoring fresh chunks against stale document frequencies.
+ */
 export function resetDocsRankerCache(): void {
   bm25Cache = null;
+  resetCorpusStatsCache();
 }
 
 function bm25IndexFor(chunks: DocChunk[]): Bm25Index {
@@ -504,7 +511,17 @@ function rankChunks(
   resources: DocChunk[],
   query: string,
   top: number,
-  opts: { bm25: boolean; surfaceTerms?: readonly string[]; sourceWeights: boolean },
+  opts: {
+    bm25: boolean;
+    surfaceTerms?: readonly string[];
+    sourceWeights: boolean;
+    /**
+     * #2970 — corpus-wide BM25 statistics. MUST be supplied when `resources` is
+     * a query-selected subset (the AI Search candidate window); omitted on the
+     * Cosmos path, whose index already covers the whole corpus.
+     */
+    corpusStats?: Bm25CorpusStats | null;
+  },
   buildIndex: (chunks: DocChunk[]) => Bm25Index = buildBm25Index,
 ): DocHit[] {
   if (opts.bm25 === false) {
@@ -521,6 +538,7 @@ function rankChunks(
     surfaceBoost: opts.surfaceTerms?.length ? DEFAULT_SURFACE_BOOST : 0,
     // #2585 P2 — rank published product docs above the engineering ledger.
     sourceWeights: opts.sourceWeights ? DEFAULT_SOURCE_WEIGHTS : null,
+    corpusStats: opts.corpusStats ?? null,
   });
   // Normalise to the 0..1 `DocHit.score` contract (BM25 is unbounded above and
   // only comparable within one result set) — citations and the Copilot tool
@@ -589,17 +607,27 @@ export interface SearchDocsOptions {
  * Pipeline (#2585 P0/P1): over-fetch candidates → rank via BM25 + surface boost
  * + source weighting (`rankChunks`) → cap chunks-per-document → slice to `top`.
  *
- * Backend symmetry (#2929): BOTH paths now decide the final order with the SAME
- * ranker (`rankChunks`). AI Search is used for RECALL only — it returns a WIDE
- * candidate window (`AI_SEARCH_CANDIDATE_WINDOW`) which is then re-ranked by the
- * identical BM25 + surface-boost + source-weight pipeline the Cosmos path uses,
- * so the two backends produce the same ordering for the same candidate
- * documents. The one residual asymmetry: BM25 corpus statistics (IDF, avgdl)
- * are computed over the full corpus on the Cosmos path but over the AI-Search
- * candidate window on the AI Search path. The offline harness
- * (`scripts/csa-loom/measure-retrieval.mjs`) exercises the Cosmos path; per G1
- * the AI Search path's live numbers confirm only after a `loom-docs` reindex +
- * a real `copilot-quality-evals` run.
+ * Backend symmetry (#2929, completed by #2970): BOTH paths decide the final
+ * order with the SAME ranker (`rankChunks`). AI Search is used for RECALL only —
+ * it returns a WIDE candidate window (`AI_SEARCH_CANDIDATE_WINDOW`) which is then
+ * re-ranked by the identical BM25 + surface-boost + source-weight pipeline the
+ * Cosmos path uses, so the two backends produce the same ordering for the same
+ * candidate documents.
+ *
+ * #2929 left ONE asymmetry — BM25 corpus statistics were computed over the full
+ * corpus on the Cosmos path but over the AI-Search candidate window on the AI
+ * Search path — and recorded it as residual. It was not residual: it was the
+ * entire remaining gap. Every candidate in the window matches the query, so
+ * `df/size` approaches 1 for the query's terms and IDF collapses for all of them
+ * at once. Measured over the golden sets at top-8 with a 100-candidate window,
+ * window-local statistics score 0.797 and corpus-wide statistics score 0.889 —
+ * exactly the full-corpus number. `localCorpusStats()` now supplies the
+ * corpus-wide half, so the paths agree on the ranking as well as on the ranker.
+ *
+ * The offline harness (`scripts/csa-loom/measure-retrieval.mjs`) models BOTH
+ * stages under `--stage1`; its full-corpus columns are an UPPER BOUND, not a
+ * live prediction. Per G1 the AI Search path's live numbers confirm only after a
+ * `loom-docs` reindex + a real `copilot-quality-evals` run.
  */
 export async function searchDocs(
   query: string,
@@ -653,7 +681,15 @@ export async function searchDocs(
         // same candidate set.
         const ordered = bm25Enabled
           ? rankChunks(candidates, query, overfetch, {
-              bm25: true, surfaceTerms, sourceWeights: weightSources,
+              bm25: true,
+              surfaceTerms,
+              sourceWeights: weightSources,
+              // #2970 — the candidate window is a query-selected subset, so its
+              // own df/size/avgdl are distorted (every candidate matches the
+              // query). Score with corpus-wide statistics instead; null when no
+              // bundled corpus is reachable, which degrades to the previous
+              // window-local behaviour rather than failing.
+              corpusStats: localCorpusStats(),
             })
           : candidates;
         const hits = finish(ordered);
@@ -675,266 +711,6 @@ export async function searchDocs(
   const backend = hits.length > 0 || !isSearchConfigured() ? 'cosmos' : 'ai-search';
   recordRetrieval({ backend, latencyMs: Date.now() - started, resultCount: hits.length, fallback: fellBack });
   return { hits, backend };
-}
-
-// ---------- Corpus walker ----------
-
-/**
- * Key-safe document id. Azure AI Search document KEYS and Cosmos document IDS
- * both reject '/', '.', '#', ':' (Cosmos also '\\' and '?') — but the natural
- * `${kind}:${relpath}#${idx}` form is full of them, so every AI Search upload
- * batch 400'd ("Invalid document key") and every Cosmos upsert silently failed,
- * leaving the corpus index empty. base64url of the source id is valid for both
- * backends and stays deterministic; the human-readable path lives in `path`.
- */
-function docKey(kind: string, rel: string, idx: number): string {
-  return `${Buffer.from(`${kind}:${rel}`, 'utf-8').toString('base64url')}_${idx}`;
-}
-
-interface RepoRoots {
-  /** Repo root (parent of `apps/`). */
-  repoRoot: string;
-  /** `docs/` */
-  docsRoot: string;
-  /** `apps/fiab-console/lib/` */
-  consoleLibRoot: string;
-  /** `PRPs/completed/csa-loom-pillar/` */
-  prpRoot: string;
-  /** `PRPs/active/` — in-flight PRP folders (AUDIT.md receipts, PRP.md, OPEN-REGISTER) */
-  prpActiveRoot: string;
-  /** `docs/fiab/adr/` */
-  adrRoot: string;
-}
-
-function detectRoots(): RepoRoots {
-  // 1) Production image: the corpus is staged into ./copilot-corpus at build
-  //    time (scripts/csa-loom/stage-copilot-corpus.sh) because the repo-root
-  //    docs/ + PRPs/ are OUTSIDE the apps/fiab-console Docker build context and
-  //    would otherwise never be packaged — leaving the RAG index empty. The
-  //    Dockerfile COPYs this dir next to server.js, so it sits at cwd here.
-  const bundled = path.join(process.cwd(), 'copilot-corpus');
-  if (fs.existsSync(path.join(bundled, 'docs'))) {
-    return {
-      repoRoot: bundled,
-      docsRoot: path.join(bundled, 'docs'),
-      consoleLibRoot: path.join(bundled, 'lib'),
-      prpRoot: path.join(bundled, 'PRPs', 'completed', 'csa-loom-pillar'),
-      prpActiveRoot: path.join(bundled, 'PRPs', 'active'),
-      adrRoot: path.join(bundled, 'docs', 'fiab', 'adr'),
-    };
-  }
-  // 2) Dev / repo checkout: walk up from cwd until we find `mkdocs.yml`.
-  let dir = process.cwd();
-  for (let i = 0; i < 8; i++) {
-    if (fs.existsSync(path.join(dir, 'mkdocs.yml'))) break;
-    dir = path.dirname(dir);
-  }
-  return {
-    repoRoot: dir,
-    docsRoot: path.join(dir, 'docs'),
-    consoleLibRoot: path.join(dir, 'apps', 'fiab-console', 'lib'),
-    prpRoot: path.join(dir, 'PRPs', 'completed', 'csa-loom-pillar'),
-    prpActiveRoot: path.join(dir, 'PRPs', 'active'),
-    adrRoot: path.join(dir, 'docs', 'fiab', 'adr'),
-  };
-}
-
-function walkMarkdown(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  const out: string[] = [];
-  const stack = [dir];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(cur, { withFileTypes: true }); }
-    catch { continue; }
-    for (const e of entries) {
-      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-      const full = path.join(cur, e.name);
-      if (e.isDirectory()) stack.push(full);
-      else if (e.name.endsWith('.md')) out.push(full);
-    }
-  }
-  return out;
-}
-
-function walkSource(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  const out: string[] = [];
-  const stack = [dir];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(cur, { withFileTypes: true }); }
-    catch { continue; }
-    for (const e of entries) {
-      if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === '__tests__') continue;
-      const full = path.join(cur, e.name);
-      if (e.isDirectory()) stack.push(full);
-      else if (e.name.endsWith('.ts') || e.name.endsWith('.tsx')) out.push(full);
-    }
-  }
-  return out;
-}
-
-const MAX_CHUNK = CHUNKER_MAX_CHUNK;
-
-function summarizeSource(filePath: string, text: string): string {
-  // Grab the leading JSDoc / banner comment and exported names — keeps
-  // size sane and high-signal for "where does X live in code?" answers.
-  const lines = text.split(/\r?\n/);
-  let banner = '';
-  if (lines[0]?.startsWith('/**')) {
-    const end = lines.findIndex((l, i) => i > 0 && l.includes('*/'));
-    if (end > 0) {
-      banner = lines.slice(0, end + 1)
-        .map((l) => l.replace(/^\s*\*\s?/, '').replace(/^\/\*\*\s?/, '').replace(/\s*\*\/$/, ''))
-        .join('\n')
-        .trim();
-    }
-  }
-  const exports = lines
-    .map((l) => l.match(/^export\s+(async\s+)?(function|class|interface|type|const)\s+([A-Za-z_][\w]*)/))
-    .filter(Boolean)
-    .map((m) => `${m![2]} ${m![3]}`);
-  const apiRoutes = filePath.includes('/api/')
-    ? lines.filter((l) => /export\s+async\s+function\s+(GET|POST|PATCH|PUT|DELETE)/.test(l))
-        .map((l) => l.replace(/.*function\s+/, '').replace(/\s*\(.*$/, ''))
-    : [];
-  const summary = [
-    banner ? `Module: ${banner}` : '',
-    exports.length ? `Exports: ${exports.join(', ')}` : '',
-    apiRoutes.length ? `HTTP: ${apiRoutes.join(', ')}` : '',
-  ].filter(Boolean).join('\n\n');
-  // Cap source summaries at MAX_CHUNK so the chunk-size invariant holds
-  // across both markdown and code paths.
-  return summary.length > MAX_CHUNK ? summary.slice(0, MAX_CHUNK) : summary;
-}
-
-function docsUrlForPath(relPath: string): string | undefined {
-  // docs/fiab/foo/bar.md → https://docs.../fiab/foo/bar/
-  if (!relPath.startsWith('docs/')) return undefined;
-  const slug = relPath.replace(/^docs\//, '').replace(/\.md$/, '');
-  const base = process.env.LOOM_DOCS_BASE_URL || 'https://docs.csa-loom.local';
-  return `${base.replace(/\/$/, '')}/${slug}/`;
-}
-
-// ---------- Content hashing + source enumeration (WS-G / G1) ----------
-
-/** Stable content hash for a source doc (sha256 hex, 16 bytes → 32 chars). */
-function hashContent(text: string): string {
-  return crypto.createHash('sha256').update(text, 'utf-8').digest('hex').slice(0, 32);
-}
-
-/** A source file the corpus draws from, with its kind + repo-relative path. */
-interface SourceFileRef {
-  abs: string;
-  rel: string;
-  kind: DocChunk['kind'];
-}
-
-/**
- * Enumerate every source file the corpus indexes — markdown docs + repo source
- * summaries — deduped by absolute path, in a deterministic order. Shared by
- * `collectSources` (the builder) and `statFingerprint` (the cheap freshness
- * probe) so both agree on the exact file set.
- */
-function enumerateSourceFiles(roots: RepoRoots): SourceFileRef[] {
-  const refs: SourceFileRef[] = [];
-  const seen = new Set<string>();
-  const rel = (file: string) => path.relative(roots.repoRoot, file).replace(/\\/g, '/');
-  const mdSources: Array<{ root: string; kind: DocChunk['kind'] }> = [
-    { root: path.join(roots.docsRoot, 'fiab'), kind: 'docs' },
-    { root: roots.docsRoot, kind: 'docs' },
-    { root: roots.prpRoot, kind: 'prp' },
-    { root: roots.prpActiveRoot, kind: 'prp' },
-    { root: roots.adrRoot, kind: 'adr' },
-  ];
-  for (const src of mdSources) {
-    for (const file of walkMarkdown(src.root)) {
-      if (seen.has(file)) continue;
-      seen.add(file);
-      refs.push({ abs: file, rel: rel(file), kind: src.kind });
-    }
-  }
-  const repoFiles = [
-    ...walkSource(path.join(roots.consoleLibRoot, 'azure')),
-    ...walkSource(path.join(roots.consoleLibRoot, 'editors')),
-    ...walkSource(path.join(roots.consoleLibRoot, 'components')),
-  ];
-  for (const file of repoFiles) {
-    if (seen.has(file)) continue;
-    seen.add(file);
-    refs.push({ abs: file, rel: rel(file), kind: 'repo' });
-  }
-  return refs;
-}
-
-/** Fast, read-free fingerprint (path:size:mtime) over the enumerated files —
- *  the cheap staleness signal the freshness probe compares to the manifest. */
-function statFingerprint(refs: SourceFileRef[]): string {
-  const parts = refs.map((r) => {
-    try { const s = fs.statSync(r.abs); return `${r.rel}:${s.size}:${Math.floor(s.mtimeMs)}`; }
-    catch { return `${r.rel}:missing`; }
-  }).sort();
-  return hashContent(parts.join('\n'));
-}
-
-interface CollectedCorpus {
-  chunks: DocChunk[];
-  /** path → { kind, content-hash, chunk count } for every indexed file. */
-  files: Record<string, ManifestFileEntry>;
-  statFingerprint: string;
-  contentFingerprint: string;
-}
-
-/**
- * Walk the corpus once, producing the chunk list AND the per-file content-hash
- * map + fingerprints the incremental index (G1) and freshness guard (G2) need.
- * The chunk content is IDENTICAL to what the previous single-purpose walker
- * produced — the hashing is purely additive metadata.
- */
-function collectSources(): CollectedCorpus {
-  const roots = detectRoots();
-  const refs = enumerateSourceFiles(roots);
-  const chunks: DocChunk[] = [];
-  const files: Record<string, ManifestFileEntry> = {};
-
-  for (const ref of refs) {
-    let raw = '';
-    try { raw = fs.readFileSync(ref.abs, 'utf-8'); } catch { continue; }
-    let stat: fs.Stats;
-    try { stat = fs.statSync(ref.abs); } catch { continue; }
-    const touchedAt = stat.mtime.toISOString();
-
-    if (ref.kind === 'repo') {
-      const summary = summarizeSource(ref.abs, raw);
-      if (!summary) continue; // empty summary → nothing to index
-      chunks.push({ id: docKey('repo', ref.rel, 0), kind: 'repo', path: ref.rel, content: summary, touchedAt });
-      files[ref.rel] = { kind: 'repo', hash: hashContent(raw), chunks: 1 };
-      continue;
-    }
-
-    const blocks = chunkMarkdown(raw);
-    if (blocks.length === 0) continue;
-    blocks.forEach((b, idx) => {
-      chunks.push({
-        id: docKey(ref.kind, ref.rel, idx),
-        kind: ref.kind,
-        path: ref.rel,
-        heading: b.heading,
-        content: b.content,
-        url: docsUrlForPath(ref.rel),
-        touchedAt,
-      });
-    });
-    files[ref.rel] = { kind: ref.kind, hash: hashContent(raw), chunks: blocks.length };
-  }
-
-  const contentFingerprint = hashContent(
-    Object.keys(files).sort().map((p) => `${p}:${files[p].hash}`).join('\n'),
-  );
-  return { chunks, files, statFingerprint: statFingerprint(refs), contentFingerprint };
 }
 
 // ---------- Manifest persistence (WS-G / G1 + G2) ----------
@@ -1225,22 +1001,12 @@ export function evaluateFreshness(
 }
 
 /**
- * How many source files the corpus walker can currently SEE — a stat-only
- * enumeration, no file reads, no network. Milliseconds.
- *
- * This is the reindex PREFLIGHT (#2929). `reindex()` returns
- * `ok:false … 'No corpus chunks discovered'` when the walker finds nothing,
- * which is exactly what the live console did on 2026-08-04: the image that
- * routine builds produce ships `copilot-corpus/` holding only `.gitkeep`
- * (only full-app-deploy-commercial.yml ran stage-copilot-corpus.sh), so
- * `detectRoots()` found no bundled corpus, fell through to the dev walk-up for
- * `mkdocs.yml`, found no repo either, and enumerated ZERO files. Checking that
- * BEFORE going async keeps the failure loud and IMMEDIATE (a 502 in ~160ms)
- * instead of burying it behind a poll that can only time out.
+ * The reindex PREFLIGHT (#2929) — how many source files the corpus walker can
+ * currently SEE. Re-exported from ./loom-docs-corpus so the health probe and the
+ * reindex route keep importing it from here; the walk itself lives with the rest
+ * of the filesystem concern.
  */
-export function corpusSourceCount(): number {
-  return enumerateSourceFiles(detectRoots()).length;
-}
+export { corpusSourceCount };
 
 /**
  * Compare the staged/source corpus against what was last indexed. Cheap: a
@@ -1415,6 +1181,10 @@ export async function reindex(opts?: { full?: boolean }): Promise<ReindexResult>
 // ---------- Test-only internals (WS-G) ----------
 // Exposed for unit tests of the pure hash / manifest-diff / collect logic. Not
 // part of the public API; do not import from app code.
+//
+// The corpus-walker half now lives in ./loom-docs-corpus, but it is re-surfaced
+// here UNCHANGED: this object is the test seam every existing suite imports, and
+// moving the implementation is not a reason to make those suites chase it.
 export const __testInternals = {
   hashContent,
   docKey,
@@ -1435,4 +1205,9 @@ export const __testInternals = {
   MANIFEST_SHARD_CHARS,
   MANIFEST_KEY,
   manifestShardKey,
+  // #2970 — point the AI Search path's corpus statistics at a synthetic corpus
+  // so a backend-symmetry test can hold BOTH paths to the same corpus. Pass
+  // `undefined` to restore the real bundled-corpus source.
+  setCorpusStatsForTests,
+  localCorpusStats,
 };

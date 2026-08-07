@@ -222,6 +222,96 @@ export function buildBm25Index(chunks: readonly RankableChunk[]): Bm25Index {
   return { size, avgdl: size > 0 ? total / size : 0, postings, lengths, titles, sources };
 }
 
+// ── Corpus-wide BM25 statistics (#2970) ──────────────────────────────────────
+
+/**
+ * The corpus-wide half of a BM25 score: how many chunks exist, how long the
+ * average one is, and in how many of them each term appears.
+ *
+ * WHY THIS TYPE EXISTS — the measured defect (#2970, 2026-08-06)
+ * -------------------------------------------------------------
+ * `bm25Rank` takes its `size`, `df` and `avgdl` from the {@link Bm25Index} it is
+ * handed. On the Cosmos path that index covers the whole ~50k-chunk corpus, so
+ * those are corpus statistics and the scores are real BM25. On the AI Search
+ * path `loom-docs-index.searchDocs` builds a FRESH index over the per-query
+ * candidate window — and every chunk in that window was selected *because* it
+ * matches the query. So `df/size` approaches 1 for exactly the query's terms and
+ *
+ *     idf = log(1 + (size − df + 0.5) / (df + 0.5))
+ *
+ * collapses toward 0 for all of them at once. The re-ranker loses the ability to
+ * tell a rare, discriminating term from a ubiquitous one — which is the entire
+ * reason BM25 outranks term-presence counting.
+ *
+ * `loom-docs-index.ts` called this "the one residual asymmetry" and moved on.
+ * Measured over the 153 golden rows at top-8 with the two-stage simulation in
+ * `scripts/csa-loom/measure-retrieval.mjs --stage1 100,200,400,800,inf`:
+ *
+ *   stage-2 statistics      w=100   w=200   w=400   w=800   full corpus
+ *   window-local (shipped)  0.797   0.804   0.784   0.850   0.889
+ *   corpus-wide (this fix)  0.889   0.889   0.889   0.889   0.889
+ *
+ * The asymmetry was the whole gap: with corpus-wide statistics a 100-candidate
+ * window scores IDENTICALLY to ranking the entire corpus. Note also that the
+ * window-local row is NOT monotonic in width (400 is worse than 200) — a
+ * ranking whose quality wanders with the candidate count is the signature of
+ * distorted statistics rather than of a recall ceiling.
+ *
+ * Corollary, recorded because it redirects the issue: stage-1 recall was
+ * measured at 0.967@100 and 1.000@800, so #2970's hypothesis — that AI Search's
+ * `queryType:'simple'` / `searchMode:'any'` was losing the gold document before
+ * the re-ranker saw it — is NOT the dominant term. The document was almost
+ * always in the window; the re-rank could not tell it was the right one.
+ *
+ * Per-chunk facts (term frequency, chunk length, title tokens, source class)
+ * stay LOCAL to the window — they are properties of the chunk, identical either
+ * way. Only the three corpus-wide quantities are substituted.
+ */
+export interface Bm25CorpusStats {
+  /** Total chunks in the corpus (NOT in the candidate window). */
+  size: number;
+  /** Mean chunk length in tokens across the corpus. */
+  avgdl: number;
+  /** term → number of corpus chunks containing it. */
+  df: Map<string, number>;
+}
+
+/**
+ * Accumulate corpus-wide statistics one chunk at a time.
+ *
+ * Streaming on purpose: the corpus is ~50k chunks / ~75 MB of text, and
+ * materialising it just to count document frequencies would put that on the heap
+ * of every console replica. The caller walks its source files and feeds chunks
+ * through, holding only the accumulator.
+ */
+export function createCorpusStatsAccumulator(): {
+  add: (chunk: Pick<RankableChunk, 'heading' | 'content'>) => void;
+  finish: () => Bm25CorpusStats;
+} {
+  const df = new Map<string, number>();
+  let size = 0;
+  let total = 0;
+  return {
+    add(chunk) {
+      const toks = tokenize(`${chunk.heading || ''} ${chunk.content}`);
+      size += 1;
+      total += toks.length;
+      for (const t of new Set(toks)) df.set(t, (df.get(t) || 0) + 1);
+    },
+    finish() {
+      return { size, avgdl: size > 0 ? total / size : 0, df };
+    },
+  };
+}
+
+/** Corpus statistics from an in-memory chunk array (tests / offline harness). */
+export function buildCorpusStats(chunks: readonly RankableChunk[]): Bm25CorpusStats {
+  const acc = createCorpusStatsAccumulator();
+  for (const c of chunks) acc.add(c);
+  return acc.finish();
+}
+
+
 /** One scored chunk position from `bm25Rank`. */
 export interface RankedIndexHit {
   /** Position in the array the index was built from. */
@@ -255,6 +345,22 @@ export interface Bm25RankOptions {
    * reference material below published product docs.
    */
   sourceWeights?: Readonly<Record<CorpusSourceClass, number>> | null;
+  /**
+   * #2970 — corpus-wide `size` / `df` / `avgdl` to score with, instead of the
+   * ones derived from `index`.
+   *
+   * Required whenever `index` covers a QUERY-SELECTED SUBSET rather than the
+   * whole corpus (the AI Search candidate window). See {@link Bm25CorpusStats}
+   * for the measurement: substituting these recovers the full-corpus hit-rate
+   * from a 100-candidate window (0.797 → 0.889 over the golden sets).
+   *
+   * DEFAULT undefined = use the index's own statistics, so an un-opted caller
+   * ranks exactly as before this option existed. A term absent from `df` is
+   * treated as `df = 0` (maximally rare) rather than falling back to the local
+   * count — a term the corpus does not know is genuinely discriminating, and
+   * mixing the two statistic sources within one score is what this fixes.
+   */
+  corpusStats?: Bm25CorpusStats | null;
 }
 
 /**
@@ -272,19 +378,24 @@ export function bm25Rank(
   if (top <= 0 || index.size === 0) return [];
   const terms = [...new Set(tokenize(query))];
   if (terms.length === 0) return [];
+  // #2970 — corpus-wide statistics when supplied (the AI Search candidate
+  // window is a query-selected subset, so its own df/size/avgdl are distorted).
+  const stats = opts.corpusStats ?? null;
+  const statSize = stats ? stats.size : index.size;
+  const avgdl = stats ? stats.avgdl : index.avgdl;
   const scores = new Map<number, number>();
   for (const t of terms) {
     const post = index.postings.get(t);
     if (!post) continue;
-    const df = post.length / 2;
+    const df = stats ? (stats.df.get(t) ?? 0) : post.length / 2;
     // Lucene/Robertson IDF: strictly positive for every df, so a term present
     // in more than half the corpus still contributes (weakly) instead of
     // subtracting from the score.
-    const idf = Math.log(1 + (index.size - df + 0.5) / (df + 0.5));
+    const idf = Math.log(1 + (statSize - df + 0.5) / (df + 0.5));
     for (let j = 0; j < post.length; j += 2) {
       const i = post[j];
       const f = post[j + 1];
-      const norm = 1 - BM25_B + BM25_B * (index.avgdl > 0 ? index.lengths[i] / index.avgdl : 1);
+      const norm = 1 - BM25_B + BM25_B * (avgdl > 0 ? index.lengths[i] / avgdl : 1);
       scores.set(i, (scores.get(i) || 0) + idf * ((f * (BM25_K1 + 1)) / (f + BM25_K1 * norm)));
     }
   }
