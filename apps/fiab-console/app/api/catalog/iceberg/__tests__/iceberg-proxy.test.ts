@@ -77,20 +77,33 @@ const BASE = 'https://iceberg-catalog.internal.example.net';
 /**
  * The audit rows for ICEBERG operations only.
  *
- * The token exchange writes its OWN row (`auth.token-exchange`) — deliberately,
- * per LU-3: a successful exchange is the moment the Console acquires catalog
- * authority, and a burst of failed ones is the signature of a disabled Console
- * principal. So the trail legitimately carries MORE than one row per request now,
- * and the `toHaveLength(1)` assertions below are about the iceberg operation,
- * not about the size of the whole trail.
+ * The token exchange writes its OWN row — deliberately, per LU-3: a successful
+ * exchange is the moment the Console acquires catalog authority, and a burst of
+ * failed ones is the signature of a disabled Console principal. So the trail
+ * legitimately carries MORE than one row per request now, and the
+ * `toHaveLength(1)` assertions below are about the ICEBERG operation, not about
+ * the size of the whole trail.
  *
- * It is filtered rather than asserted on because `recordExchange` is
- * deliberately FIRE-AND-FORGET (`void recordExchange(...)`, so audit latency can
- * never fail a catalog call). Its row therefore lands on an unpredictable tick —
- * which is exactly why the un-filtered counts passed locally and failed under CI
- * sharding. Anything asserting on that row would be racing it.
+ * This is a POSITIVE match on `iceberg.*` rather than an exclusion of the
+ * exchange row, and that distinction cost a CI round trip. The exchange row is
+ * written by `recordUnityAccess`, which stores `itemType:'loom-unity'` and
+ * `action:'unity.<operation>'` — it does NOT store the caller's
+ * `operation:'auth.token-exchange'` as `action`. So excluding
+ * `action === 'auth.token-exchange'` matched nothing and filtered nothing.
+ *
+ * A positive match cannot drift that way: every row this file asserts on is
+ * emitted by logIcebergAccess as `iceberg.<noun>.<verb>`, and any future
+ * sibling recorder is excluded by construction rather than by an exclusion list
+ * someone has to remember to extend.
+ *
+ * It must be a filter at all — rather than an assertion — because
+ * `recordExchange` is FIRE-AND-FORGET (`void recordExchange(...)`, so audit
+ * latency can never fail a catalog call). Its row lands on an unpredictable
+ * tick: outside the asserting test under the local run order, inside it under
+ * CI sharding. That is precisely why the un-filtered counts passed locally and
+ * failed in CI.
  */
-const icebergAuditRows = () => auditRows.filter((r) => r.action !== 'auth.token-exchange');
+const icebergAuditRows = () => auditRows.filter((r) => String(r.action || '').startsWith('iceberg.'));
 
 function req(url: string, init: RequestInit = {}) {
   // The route handlers only touch `nextUrl`, `method`, `headers` and `json()`.
