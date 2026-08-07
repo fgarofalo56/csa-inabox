@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "5115184503731555067"
+      "templateHash": "2416356310974926866"
     }
   },
   "definitions": {
@@ -2492,7 +2492,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "10373027056456753093"
+              "templateHash": "13735293191531275744"
             }
           },
           "definitions": {
@@ -20259,6 +20259,7 @@
               "dependsOn": [
                 "containerPlatformModule",
                 "registry",
+                "scriptRunnerAcrPull",
                 "scriptRunnerUami"
               ]
             },
@@ -20461,6 +20462,7 @@
               "dependsOn": [
                 "containerPlatformModule",
                 "registry",
+                "wranglerAcrPull",
                 "wranglerUami"
               ]
             },
