@@ -52,11 +52,38 @@
 8. ✅ Staged-but-unwired modules: `wells-to-kql.ts`, `linguistic-schema.ts` — doc-truth corrected to reflect wiring status in **PR #2025**. (M)
 
 ## P2 — "second halves" of just-shipped features (seams ready)
-- OBO #1922: `SqlAccessModeSection` toggle in report + kql-database editors; user-mode for connection/AAS executors; container-level ADLS routes decision.
-- MANIFEST #1923: swap NOTEBOOK_ATTACHABLE / DATA_AGENT_SOURCEABLE / POWERBI_MODELABLE to manifest reads; install-wizard `provisionable`; catalog badges; DA_SOURCE_TYPES.
+> **Verification pass 2026-08-06 (FINISHLINE C7):** four of the five rows below
+> were DRAINED by #2036 and #2046 and never struck from this register. Because
+> they stayed open here they were re-copied forward into
+> `PRPs/active/finishline/AUDIT-2026-08-06.md` row C7 as outstanding work. Each
+> is now marked with the commit that closed it, so the next audit doesn't
+> resurrect them a third time.
+- ✅ **OBO #1922 — CLOSED** by `e648555b` (#2036). `SqlAccessModeSection` renders in
+  the report Settings dialog (`lib/editors/report/report-settings.tsx:308`) and the
+  KQL database RBAC dialog (`lib/editors/phase3/kql-database-editor.tsx:2350`);
+  user-mode executors landed for AAS (`executeAasQueryPath(…, userExec)`,
+  `app/api/items/report/[id]/query/route.ts:307`) and connections
+  (`supportsUserIdentity` + `executeQueryAsUser`, `lib/azure/report-model-resolver.ts:487`).
+  Non-delegatable connTypes are honest-gated by design. *(The container-level ADLS
+  routes decision is the only residue and is tracked separately.)*
+- ✅ **MANIFEST #1923 — CLOSED** by `e648555b` (#2036). NOTEBOOK_ATTACHABLE /
+  DATA_AGENT_SOURCEABLE / POWERBI_MODELABLE now read the manifest registry
+  (`lib/thread/thread-actions.ts:17-19`). Re-confirmed 2026-08-06: `provisionable`
+  still has **no** UI consumer to swap (it is manifest-internal — `registry.ts:41`),
+  and `DA_SOURCE_TYPES` (`lib/editors/phase4/data-agent-editor.tsx:178`) remains
+  the intentional UI superset, not manifest-derived. Nothing left to swap.
 - Domain designer #1483 Waves 2-4 (ONLY open GitHub issue): deep sub-agency taxonomy; tree/graph designer UX; federated data-mesh sync.
-- Weave Thread edges: DAX / lakehouse-KQL / medallion adapters (`thread-actions.ts:78`).
-- W1 ADX interactive-report connector (forward-compat; Dashboard routing is the honest interim).
+- ✅ **Weave Thread edges — CLOSED** by `edcfaa43` (#2046). DAX / lakehouse→KQL /
+  medallion adapters shipped with real routes: `app/api/thread/analyze-with-dax`,
+  `app/api/thread/materialize-to-kql`, `app/api/thread/promote-medallion`
+  (`lib/thread/thread-actions.ts:583,755`).
+- ✅ **W1 ADX interactive-report connector — CLOSED.** `adx` is a first-class report
+  source, not forward-compat: it is in `REPORT_CONN_TYPES`
+  (`lib/azure/report-model-resolver.ts:179`) with a real executor branch at `:1936`
+  (`makeAdxExecutor`, managed **and** `external_table(...)` tables), wired through
+  the Get Data gallery (`lib/editors/report/get-data-gallery.tsx:161,194`),
+  navigator dialog (`:113`) and storage-mode pane (`:151`). The "Dashboard routing
+  is the honest interim" note is obsolete.
 
 ## P3 — major unbuilt programs (MASTER-ROLLOUT phases; see PRP-AUDIT-2026-07-09 + this audit §A)
 - **CTS memory/skills brain** (CTS-03/06/07/08/11/12/13) — Phase 3's biggest gap; CTS-12 write-guard is Gov-security-critical.
