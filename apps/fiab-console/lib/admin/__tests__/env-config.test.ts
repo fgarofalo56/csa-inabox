@@ -492,10 +492,18 @@ describe('admin/env-config registry', () => {
 
   it('carries optIn from the spec so policy opt-ins score neutral, not "unconfigured forever" (D15)', () => {
     // The opt-in-by-design carve-outs (spec.optIn): the Postgres Flexible
-    // Server cost carve-out, the Power BI Fabric-family backend, and the
-    // s3proxy gateway Preview lab. Before this fix add() dropped the flag, so
-    // these keys read as a permanent "not set" gap on /admin/env-config.
-    for (const k of ['LOOM_POSTGRES_HOST', 'LOOM_BI_BACKEND', 'LOOM_S3_GATEWAY_URL']) {
+    // Server cost carve-out and the Power BI Fabric-family backend. Before this
+    // fix add() dropped the flag, so these keys read as a permanent "not set"
+    // gap on /admin/env-config.
+    //
+    // LOOM_S3_GATEWAY_URL was in this list when D15 landed and has been REMOVED
+    // by D16 (#2682) — see the negative assertion below. It was never a policy
+    // opt-in; it was pulled to opt-in in PR #2640 round 4 because the s3proxy
+    // image was an anonymous docker.io pull. That cause is closed (the image is
+    // digest-pinned and mirrored into the estate ACR), so the gateway is
+    // deployed by default again and asserting optIn here would make the test
+    // certify a defect as intentional.
+    for (const k of ['LOOM_POSTGRES_HOST', 'LOOM_BI_BACKEND']) {
       expect(getEditableEnv(k)?.optIn, k).toBe(true);
     }
     // LOOM_PGVECTOR_HOST is deliberately NOT optIn: first-spec-wins dedupe —
@@ -505,6 +513,16 @@ describe('admin/env-config registry', () => {
     // Normal operator/day-one vars are NOT opt-in.
     expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.optIn).toBeUndefined();
     expect(getEditableEnv('LOOM_SYNAPSE_WORKSPACE')?.optIn).toBeUndefined();
+  });
+
+  it('LOOM_S3_GATEWAY_URL is DEFAULT-ON, never an opt-in (D16 / #2682)', () => {
+    // The regression this locks, at the scoring layer (lib/gates registry.test.ts
+    // locks the same invariant at the gate layer). Restoring `optIn: true` on
+    // svc-s3-gateway would make /admin/env-config exclude the key from the
+    // coverage DENOMINATOR — so a deploy where the gateway never came up would
+    // score as honest 100% instead of showing the gap. That is precisely the
+    // "cosmetic 100%" D15 exists to eliminate, arriving through a different door.
+    expect(getEditableEnv('LOOM_S3_GATEWAY_URL')?.optIn).toBeUndefined();
   });
 
   it("an unset opt-in key reads 'opt-in' — neither configured nor a gap (D15)", () => {
