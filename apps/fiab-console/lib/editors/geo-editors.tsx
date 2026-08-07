@@ -44,6 +44,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { splitAdlsPath, joinAdlsPath, computeGeoBbox, bboxToZoom, bboxLabel, geoFeaturesFromInspectRows } from './_family-utils';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 import { useSharedEditorStyles } from './shared-styles';
+// C19 — shared load-lifecycle + data-loss guard (see use-item-doc-state.tsx).
+import { canPersistItemState, ItemLoadErrorBar, SAVE_REFUSED_UNLOADED, type ItemLoadStatus } from './use-item-doc-state';
 
 /**
  * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
@@ -64,6 +66,14 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  // C19 data-loss guard. This hook already CAPTURED a load error, but two holes
+  // remained: a 200 answer whose `j.ok` was false fell through silently, and
+  // nothing stopped `save()` PATCHing `fallback` over a document it had never
+  // read. `loadStatus` closes both -- see lib/editors/use-item-doc-state.tsx.
+  const [loadStatus, setLoadStatus] = useState<ItemLoadStatus>(!id || id === 'new' ? 'new' : 'loading');
+  const [reloadTick, setReloadTick] = useState(0);
+  const loadStatusRef = useRef<ItemLoadStatus>(!id || id === 'new' ? 'new' : 'loading');
+  const setLoad = useCallback((st: ItemLoadStatus) => { loadStatusRef.current = st; setLoadStatus(st); }, []);
 
   // Replace state via a wrapper that flips dirty=true so the Save button
   // surfaces unsaved edits.
@@ -77,26 +87,44 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
 
   useEffect(() => {
     let cancelled = false;
-    if (!id || id === 'new') { setLoading(false); return; }
+    if (!id || id === 'new') { setLoading(false); setLoad('new'); return; }
     (async () => {
-      setLoading(true); setError(null);
+      setLoading(true); setError(null); setLoad('loading');
       try {
         const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`);
         if (cancelled) return;
-        if (r.status === 404) { setLoading(false); return; }
-        const j = await r.json();
+        // A real 404 means the record genuinely has no stored state -- the read
+        // SUCCEEDED, so there is nothing a later save could destroy.
+        if (r.status === 404) { setLoading(false); setLoad('absent'); return; }
+        const j = await r.json().catch(() => null);
+        if (cancelled) return;
+        if (!r.ok || j?.ok === false) {
+          // R7: report the status we observed, and the server's own reason when
+          // it gave one -- never an invented cause.
+          setError(typeof j?.error === 'string' && j.error ? `${j.error} (HTTP ${r.status})` : `The saved content could not be read (HTTP ${r.status}).`);
+          setLoad('error');
+          return;
+        }
         if (j?.ok && j.item?.state) {
           setState((prev) => ({ ...prev, ...(j.item.state as T) }));
           setSavedAt(j.item.updatedAt || null);
+          setLoad('loaded');
+        } else {
+          setLoad('absent');
         }
-      } catch (e: any) { if (!cancelled) setError(e?.message || String(e)); }
+      } catch (e: any) { if (!cancelled) { setError(e?.message || String(e)); setLoad('error'); } }
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [id, slug]);
+  }, [id, slug, setLoad, reloadTick]);
 
   const save = useCallback(async () => {
     if (!id || id === 'new') { setError('Save requires a real item id — open from the workspace list.'); return false; }
+    // ---- C19 DATA-LOSS GUARD ----
+    // The load is in flight or FAILED, so the stored state is UNKNOWN. Writing
+    // `fallback` over it would destroy the user's real map / dataset config.
+    // Read the ref, not the render snapshot.
+    if (!canPersistItemState(loadStatusRef.current)) { setError(SAVE_REFUSED_UNLOADED); return false; }
     setSaving(true); setError(null);
     try {
       const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`, {
@@ -107,6 +135,8 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
       if (!j?.ok) { setError(j?.error || `HTTP ${r.status}`); return false; }
       setSavedAt(j.item?.updatedAt || new Date().toISOString());
       setDirty(false);
+      // The server now holds what we hold, so later saves are safe.
+      setLoad('loaded');
       return true;
     } catch (e: any) { setError(e?.message || String(e)); return false; }
     finally { setSaving(false); }
@@ -124,15 +154,23 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
-  return { state, setState: update, loading, saving, savedAt, error, dirty, save };
+  return {
+    state, setState: update, loading, saving, savedAt, error, dirty, save,
+    // C19 — explicit load lifecycle. GeoSaveBar binds Save's disabled to
+    // !canSave; save() refuses independently so binding is belt-and-braces.
+    loadStatus, canSave: canPersistItemState(loadStatus),
+    reload: () => setReloadTick((n) => n + 1),
+  };
 }
 
-function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
+function GeoSaveBar({ saving, dirty, savedAt, error, onSave, canSave = true }: {
   saving: boolean; dirty: boolean; savedAt: string | null; error: string | null; onSave: () => void;
+  /** C19 — false while the stored state is unknown (load in flight / failed). */
+  canSave?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalS} 0`, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
-      <Button appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !dirty}>
+      <Button appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !dirty || !canSave}>
         {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
       </Button>
       {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
@@ -261,11 +299,13 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   // the Loom admin console, no rebuild. The raster basemap is fetched through the
   // credential-free /api/maps/static proxy, so no key ever reaches the browser.
   const { mapsEnabled, mapsAccount: configuredMapsAccount } = useMapsConfig();
-  const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
+  const { state, setState, loading, saving, savedAt, error, dirty, save, loadStatus, canSave: loadCanSave, reload } = useGeoItemState<GeoMapState>('geo-map', id, {
     account: configuredMapsAccount, style: 'main', tileLayerUrl: '', overlayGeoJson: GEO_MAP_SAMPLE_OVERLAY,
   });
   const [previewMsg, setPreviewMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
-  const canSave = dirty && !saving;
+  // C19 — `loadCanSave` is false while the stored state is unknown (load in
+  // flight or failed), so a blank/default surface can never be written over it.
+  const canSave = dirty && !saving && loadCanSave;
 
   // Parse the overlay GeoJSON for live SVG rendering.
   const { parsed, parseErr, featureCount } = useMemo(() => {
@@ -353,7 +393,10 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             </>
           )}
           <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}.</Caption1>
-          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
+          {/* C19 — an unreadable item must never look like a fresh empty one, and
+              Save stays blocked until it loads (save() refuses too). */}
+          <ItemLoadErrorBar load={{ status: loadStatus, error, retry: reload }} subject={item.displayName || 'item'} />
+          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} canSave={loadCanSave} />
         </div>
       }
     />
@@ -493,14 +536,16 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
 
 function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
+  const { state, setState, loading, saving, savedAt, error, dirty, save, loadStatus, canSave: loadCanSave, reload } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
     adlsPath: '', geomColumn: 'geometry', format: 'parquet', srid: '4326',
   });
   const lh = useLakehouseContainers();
   const split = splitAdlsPath(state.adlsPath || '');
   const containerAccountUrl = (lh.containers || []).find((c) => c.name === split.container)?.url;
   const detectedFormat = formatFromPath(state.adlsPath || '');
-  const canSave = dirty && !saving;
+  // C19 — `loadCanSave` is false while the stored state is unknown (load in
+  // flight or failed), so a blank/default surface can never be written over it.
+  const canSave = dirty && !saving && loadCanSave;
 
   // Inspect: probe the first row of the dataset via Synapse Serverless
   // OPENROWSET. Real backend (synapse-serverless-sql-pool query route) — the
@@ -729,7 +774,10 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
               </>
             )
           )}
-          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
+          {/* C19 — an unreadable item must never look like a fresh empty one, and
+              Save stays blocked until it loads (save() refuses too). */}
+          <ItemLoadErrorBar load={{ status: loadStatus, error, retry: reload }} subject={item.displayName || 'item'} />
+          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} canSave={loadCanSave} />
         </div>
       }
     />
@@ -985,7 +1033,7 @@ export function GeoPipelineEditor({
 function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
-  const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
+  const { state, setState, loading, saving, savedAt, error, dirty, save, loadStatus, canSave: loadCanSave, reload } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
     adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
   });
   const adf = useAdfPipelines();
@@ -1049,7 +1097,9 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
     } catch (e: any) { setTriggerMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setTriggering(false); }
   }, [id, state.adfPipelineName, dirty, save]);
-  const canSave = dirty && !saving;
+  // C19 — `loadCanSave` is false while the stored state is unknown (load in
+  // flight or failed), so a blank/default surface can never be written over it.
+  const canSave = dirty && !saving && loadCanSave;
   const canTrigger = !!state.adfPipelineName && !triggering;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -1217,7 +1267,10 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
               )}
             </div>
           )}
-          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
+          {/* C19 — an unreadable item must never look like a fresh empty one, and
+              Save stays blocked until it loads (save() refuses too). */}
+          <ItemLoadErrorBar load={{ status: loadStatus, error, retry: reload }} subject={item.displayName || 'item'} />
+          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} canSave={loadCanSave} />
         </div>
       }
     />

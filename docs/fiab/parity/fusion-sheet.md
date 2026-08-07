@@ -54,15 +54,15 @@ The gaps below are UI/chrome gaps, not a fake backend.
 | U2 | Real backend on every control | ✅ | Load `GET /api/cosmos-items/fusion-sheet/:id`; save `PATCH /api/items/fusion-sheet/:id`. Evaluation is intentionally client-side and pure — correct for a formula engine. No mocks. |
 | U3 | Honest gate when infra missing | n/a | No infra dependency — Cosmos only, which is always present. |
 | U4 | Guided `EmptyState` | n/a | A blank grid IS the empty state for a spreadsheet; a launcher card would be wrong here. |
-| U5 | Skeleton / spinner on load | ❌ | No loading state. The `GET` at `:40-49` populates cells on success. |
-| U6 | Error surface is honest | ❌ | `catch { /* keep empty */ }` — a failed or forbidden load renders as an **empty sheet**, indistinguishable from a genuinely empty one. Same `unknown-reported-as-negative` class as `notepad`. Worse here: a user could start typing into what looks like a fresh sheet and then Save, **overwriting real persisted cells with an empty map**. This is the most consequential defect on the surface. |
+| U5 | Skeleton / spinner on load | ✅ | FIXED (C19). Adopts `useItemDocState` (lib/editors/use-item-doc-state.tsx): the load status is explicit (`new`/`loading`/`loaded`/`absent`/`error`), a spinner shows while it is genuinely in flight, and a failure renders an honest Fluent MessageBar naming the OBSERVED status plus a Retry. Save is disabled AND `save()` refuses before issuing any request while the stored content is unknown, so a blank surface can no longer overwrite real content. Pinned by `lib/editors/__tests__/use-item-doc-state.test.tsx` and the editor spec, and by the CI guard `scripts/ci/check-editor-read-failure-honesty.mjs`. |
+| U6 | Error surface is honest | ✅ | Was the most consequential defect on the surface: `catch { /* keep empty */ }` rendered a failed load as an **empty sheet**, and Save then overwrote the real cells with an empty map. FIXED (C19). Adopts `useItemDocState` (lib/editors/use-item-doc-state.tsx): the load status is explicit (`new`/`loading`/`loaded`/`absent`/`error`), a spinner shows while it is genuinely in flight, and a failure renders an honest Fluent MessageBar naming the OBSERVED status plus a Retry. Save is disabled AND `save()` refuses before issuing any request while the stored content is unknown, so a blank surface can no longer overwrite real content. Pinned by `lib/editors/__tests__/use-item-doc-state.test.tsx` and the editor spec, and by the CI guard `scripts/ci/check-editor-read-failure-honesty.mjs`. |
 | U7 | LearnPopover / teaching guidance | ⚠️ | A `<Body1>` line documents the formula syntax inline (`:82`) — genuinely useful and better than nothing — but there is no `LearnPopover` and no `TeachingBanner`. |
 | E1 | `ItemEditorChrome` shell | ❌ | **Not used.** Bare `<div>`. No ribbon, no item-tab strip, no right details panel, no Copilot entry, no command-palette registration. |
 | E2 | Ribbon + contextual groups | ❌ | Consequence of E1. Save is a loose `<Button>`. |
 | E3 | SC-9 command search | ❌ | Consequence of E1. |
 | E4 | SC-2 right details panel | ❌ | Consequence of E1. A sheet has obvious details to show (cell count, error count, last saved) and shows none. |
 | E5 | Per-surface Copilot | ❌ | Consequence of E1. A formula surface is a natural Copilot target ("write me a formula that…") and has no entry. |
-| E6 | Explicit dirty state / unsaved warning | ❌ | Editing mutates `cells`; nothing indicates unsaved changes. Combined with U6 this is how data loss happens. |
+| E6 | Explicit dirty state / unsaved warning | ❌ | Editing mutates `cells`; nothing indicates unsaved changes. The data-loss half of this is closed by U6 (Save is blocked while the stored cells are unknown); the missing *unsaved* affordance itself remains open. |
 | E7 | Undo/redo | ❌ | None. `ux-baseline.md` makes undo/redo a *mandatory canvas standard* and states Loom's richer bar "becomes the standard and every canvas carries it". A grid editor is the archetypal undo surface; a mistyped formula over a populated cell is unrecoverable. |
 | E8 | G3 resizable pane (`SplitPane` + `sizingKey`) | ❌ | Fixed 20×10 grid in a fixed wrapper. No `SplitPane`, no `sizingKey`. |
 | E9 | Keyboard navigation | ❌ | Only `Enter` (commit) and `Escape` (cancel) are handled (`:102`). There is **no arrow-key cell navigation, no Tab-to-next-cell, no type-to-edit** — a user must physically click every cell. For a spreadsheet this is the defining interaction and it is absent. `ux-baseline.md` requires keyboard a11y. |
@@ -90,10 +90,13 @@ No Azure data-plane call is needed or made. No Fabric host is contacted.
 The formula engine is real and tested; the *editor around it* is a prototype.
 Ranked by user impact:
 
-1. **U6 — the silent-load-failure → save-over-real-data path.** A read failure
-   is rendered as an empty sheet, and Save then persists that emptiness. This is
-   a correctness bug, not a polish gap, and should be fixed first regardless of
-   lane priority.
+1. ~~**U6 — the silent-load-failure → save-over-real-data path.**~~ **FIXED
+   (C19, 2026-08-06).** A read failure now renders an honest error MessageBar +
+   Retry, and Save is refused — before any request is issued — while the stored
+   cells are unknown. The editor adopts `useItemDocState`; the guard lives in
+   the primitive so siblings cannot forget it, and
+   `scripts/ci/check-editor-read-failure-honesty.mjs` fails CI if the shape
+   returns (mutation-proved on this very file).
 2. **E9 — no keyboard navigation.** For a spreadsheet this is not a nice-to-have.
 3. **E7 — no undo.** Paired with E9 (click-only editing) it makes the surface
    hostile to real use.
@@ -109,5 +112,7 @@ Ranked by user impact:
   ```
   The walk must specifically attempt: arrow-key navigation (expected to fail),
   undo after a bad edit (expected to fail), and a load against a Cosmos read
-  that 500s (expected to render an empty grid — the U6 defect).
+  that 500s — which since C19 must render "Could not read this fusion sheet"
+  with a Retry, and a DISABLED Save. Confirm no PATCH is issued while that
+  error is on screen.
 - Grades read from source; static evidence only, not a functional grade.

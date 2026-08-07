@@ -312,6 +312,56 @@ message + a remediation. Never a swallowed failure, a blank grid, or a raw stack
 dumped to the user. Per `no-vaporware.md` the BFF returns
 `{ok:false, error}` and the surface renders it.
 
+#### 6.4.1 A FAILED READ IS NOT EMPTY CONTENT (BLOCKING)
+
+**A surface must never render a failed read as empty content, and must never
+save over content it did not successfully read.**
+
+This is the C19 rule and it exists because the softer version of it was not
+enough. Three editors — `fusion-sheet`, `notepad`, `analysis-board` — loaded
+their state inside `catch { /* keep empty */ }`. A 500 / 403 / network blip
+rendered a surface visually identical to a genuinely empty item; the user
+started typing; Save PATCHed that emptiness **over their real persisted
+content**. A transient backend error silently destroyed work, and nothing on
+screen ever said so. The milder form of the same swallow — a perpetual
+"Reading…", a "No tables published", a "Not deployed" badge after the read had
+already failed — is a `deploy-integrity.md` **R7** violation: the surface states
+as fact something it never established.
+
+What every state-bearing surface must do:
+
+1. **Distinguish loaded-empty from failed-to-load IN STATE.** An explicit
+   status, never inferred from "is the state object empty?". A
+   successfully-read brand-new item legitimately has no state, and saving over
+   nothing destroys nothing — so emptiness cannot stand in for failure.
+2. **Refuse to persist while the stored content is unknown.** Disabling the
+   Save button is necessary but NOT sufficient — the save function itself must
+   refuse, before issuing any request, so a programmatic or keyboard path
+   cannot route around the disabled control.
+3. **Say what actually happened.** An honest MessageBar naming the OBSERVED
+   status (or the server's own error string) plus a **Retry**. If the code does
+   not know the cause, the message does not claim one.
+4. **Never make an empty/negative claim on a failed read.** "No blocks yet",
+   "No tables published", "Not deployed", "Synapse Serverless" are all claims;
+   render them only when the read succeeded.
+
+**The primitive:** `apps/fiab-console/lib/editors/use-item-doc-state.tsx` —
+`useItemDocState` (explicit `ItemLoadStatus`, `canSave`, a `save()` that
+refuses) plus `<ItemLoadErrorBar>` for the surface. `phase4/shared.tsx`'s
+`useItemState` and `geo-editors.tsx`'s `useGeoItemState` enforce the identical
+rule via the shared `canPersistItemState`. **Adopt one of them rather than
+hand-rolling a load** — the correct pattern already existed in
+`s3-gateway-editor.tsx` and no sibling adopted it, which is exactly how the bug
+reached three editors.
+
+**Enforced by CI:** `scripts/ci/check-editor-read-failure-honesty.mjs`
+(merge-blocking, in `loom-guardrails.yml`) — RULE 1 forbids a discarded read
+error in a file that can write that state back, RULE 2 forbids a throwing
+`useQuery` fetcher with no error branch, RULE 3 keeps the guard inside the
+primitives themselves. Its per-file ratchet baseline lives in
+`scripts/ci/editor-read-failure-baseline.json`; the surfaces already fixed are
+absent from it and are therefore locked at zero.
+
 ---
 
 ## 7. Capabilities checklist (the review gate)
@@ -363,6 +413,10 @@ the review gate — reviewers reject a surface with unchecked boxes and no gate.
       elements — where the item has identity/policy.
 - [ ] Real backend on every control (`no-vaporware.md`); honest gates only.
 - [ ] LearnPopovers; teaching toast; designed loading/error states.
+- [ ] **A failed read is not empty content (§6.4.1)**: explicit load status,
+      honest error MessageBar + Retry, and a save that REFUSES while the stored
+      content is unknown. Adopt `useItemDocState` / `useItemState` /
+      `useGeoItemState` rather than hand-rolling the load.
 
 ### 7.3 Explorer surfaces (trees)
 

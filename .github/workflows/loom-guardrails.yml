@@ -76,6 +76,8 @@ jobs:
       - name: bff-errors (raw exception text on 500 + raw-envelope helpers)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bff-errors.mjs
+      - name: editor-read-failure-honesty (a failed read must never look like empty content — C19 data loss)
+        run: node scripts/ci/check-editor-read-failure-honesty.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-quadratic-trims.mjs

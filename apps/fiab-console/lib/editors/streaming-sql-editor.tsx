@@ -33,7 +33,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Body1, Button, Caption1, Dropdown, Field, Input, Option, Spinner, Subtitle2,
-  Tab, TabList, MessageBar, MessageBarBody, MessageBarTitle,
+  Tab, TabList, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -254,7 +254,16 @@ export function StreamingSqlEditor({ item, id }: { item: FabricItemType; id: str
   const st = statusQ.data;
   // RisingWave's version() reads "RisingWave <semver> (…)"; show just the semver.
   const versionNum = (String(st?.version || '').match(/\d+\.\d+(\.\d+)?/) || [])[0];
-  const engineBadge = configured ? (versionNum ? `RisingWave ${versionNum}` : 'RisingWave') : 'Not deployed';
+  // C20 (apex-A3 class): `fetchStatus` THROWS on !res.ok / ok!==true /
+  // transport failure and this editor had no error branch, so a failed read
+  // left `st` undefined → `configured` false → the badge asserted "Not
+  // deployed". That is a claim the code never established (deploy-integrity
+  // R7) and it sent the reader to the wrong problem. An unknown status now
+  // says "Status unknown", and the honest error bar below explains why.
+  const statusUnknown = statusQ.isError;
+  const engineBadge = statusUnknown
+    ? 'Status unknown'
+    : configured ? (versionNum ? `RisingWave ${versionNum}` : 'RisingWave') : 'Not deployed';
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} splitKeyPrefix="streaming-sql" main={
@@ -262,7 +271,7 @@ export function StreamingSqlEditor({ item, id }: { item: FabricItemType; id: str
         <div className={s.toolbar}>
           <DataLine20Regular />
           <Subtitle2>Streaming SQL</Subtitle2>
-          <Badge appearance="tint" color={configured ? 'brand' : 'informative'}>{engineBadge}</Badge>
+          <Badge appearance="tint" color={statusUnknown ? 'warning' : configured ? 'brand' : 'informative'}>{engineBadge}</Badge>
           {configured && (
             <Badge appearance="outline">{st?.materializedViews?.length ?? 0} views · {st?.sourceCount ?? 0} sources · {st?.sinkCount ?? 0} sinks</Badge>
           )}
@@ -277,6 +286,24 @@ export function StreamingSqlEditor({ item, id }: { item: FabricItemType; id: str
             }
           />
         </div>
+
+        {/* C20 — the read itself failed, so nothing below can be trusted to
+            describe the tier. Say that, and offer a retry, instead of letting
+            the "Not deployed"/"no views" states speak for an answer we never
+            got. */}
+        {statusQ.isError && (
+          <MessageBar intent="error" layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>Could not read the Streaming SQL status</MessageBarTitle>
+              {(statusQ.error as Error)?.message
+                || 'The request failed before /api/streaming-sql/status answered (network or timeout).'}{' '}
+              This does not mean the tier is undeployed — the read did not complete.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button size="small" onClick={() => void statusQ.refetch()}>Retry</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
 
         {/* Honest gate — the surface renders fully either way (no red on first open). */}
         {st && !configured && st.gate && (
