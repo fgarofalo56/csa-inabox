@@ -53,10 +53,31 @@ az keyvault secret set --vault-name "$KV" --name loom-msal-client-secret --value
 
 # 3. Refresh the Container App secret + roll a revision (KV secretRefs are
 #    resolved at revision activation — a roll is REQUIRED for pickup).
+#
+#    identityref MUST be the user-assigned Console UAMI — the same identity
+#    that already resolves `session-secret` on the live Healthy revision, and
+#    the one bicep + bootstrap-msal-app-reg.sh wire (#3025). It is NOT
+#    `system`: pointing the reference at a system-assigned identity the app
+#    does not use leaves it permanently unresolvable.
+#
+#    If the secret set FAILS, stop and fix that before rolling — do not
+#    proceed with a stale secret. (An earlier revision of this step ended in
+#    `2>/dev/null || true`, which swallowed exactly that failure — in a
+#    recovery procedure. Per deploy-integrity.md R7, never again.)
+UAMI_ID=$(az containerapp show -n loom-console -g "$RG" \
+  --query "keys(identity.userAssignedIdentities)[0]" -o tsv)
 az containerapp secret set -n loom-console -g "$RG" \
-  --secrets "loom-msal-client-secret=keyvaultref:https://$KV.vault.azure.net/secrets/loom-msal-client-secret,identityref:system" 2>/dev/null || true
+  --secrets "loom-msal-client-secret=keyvaultref:https://$KV.vault.azure.net/secrets/loom-msal-client-secret,identityref:$UAMI_ID"
 az containerapp update -n loom-console -g "$RG" \
-  --set-env-vars "LOOM_ROTATION_STAMP=$(date +%s)"   # forces a new revision
+  --set-env-vars "LOOM_MSAL_SECRET_ROTATED=$(date -u +%Y-%m-%dT%H%MZ)"
+#    ^ one call: forces the new revision AND stamps the rotation marker, so
+#    the marker can never again drift from the secret it describes (#3025:
+#    the live marker read 2026-07-19 while the inline secret was the
+#    2026-08-03 credential — a two-rotations-stale marker read during
+#    AADSTS7000215 triage is worse than no marker). The Entra credential
+#    list (`az ad app credential list --id "$APP_ID"`) stays the
+#    AUTHORITATIVE answer; the marker is a hint, written by the same hand
+#    that writes the secret.
 
 # 4. VERIFY sign-in before removing the old credential:
 #    - interactive browser login on the live URL,

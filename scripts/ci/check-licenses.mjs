@@ -23,9 +23,20 @@
  *   4. With `--write [file]`, also (re)generates a THIRD-PARTY-NOTICES.md
  *      attribution file grouped by license.
  *
- * REQUIRES node_modules to be installed (CI installs first). Run locally with a
- * checkout that has `pnpm install`-ed apps/fiab-console. When node_modules is
- * absent it SKIPS (exit 0) with a notice rather than false-failing.
+ * REQUIRES node_modules to be installed (CI installs first — license-scan.yml).
+ * Run locally with a checkout that has `pnpm install`-ed apps/fiab-console.
+ *
+ * CANNOT-RUN IS NOT A PASS (#3027). When node_modules is absent this guard
+ * exits NON-ZERO: it did not inspect a single package, and "I checked and
+ * everything is fine" must never share an exit code with "I could not check".
+ * (It used to print `SKIP` and exit 0 — a compliance control reading green
+ * while measuring nothing, on exactly the tree shape every fresh worktree
+ * has.) A genuine, deliberate skip must be requested EXPLICITLY:
+ *
+ *     LOOM_LICENSE_SCAN_ALLOW_SKIP="<one-line reason>" node scripts/ci/check-licenses.mjs
+ *
+ * which still exits 0 only after printing the reason loudly. Nothing in CI
+ * sets that variable; license-scan.yml installs the tree first instead.
  *
  * HOW TO ADD AN ALLOWLIST ENTRY:
  *   - A new PERMISSIVE / weak-copyleft license the project accepts → add its
@@ -96,14 +107,20 @@ function isAllowed(rawLicense) {
 
 function runLicenseChecker() {
   // Requires node_modules present. Uses npx so the checker need not be a dep.
+  // --excludePrivatePackages: license-checker reports the private workspace
+  // root (@csa-loom/fiab-console) as UNLICENSED regardless of its license
+  // field; it is not a distributed third-party package, so exclude it — the
+  // gate covers the 3rd-party production tree.
+  const args = ['--yes', 'license-checker@25.0.1', '--production', '--json', '--excludePrivatePackages', '--start', APP_DIR];
+  // Windows: `npx` is a .cmd shim, and Node (post CVE-2024-27980) refuses to
+  // spawnSync a .cmd without a shell (`spawnSync npx.cmd EINVAL` — the OTHER
+  // non-result #3027 records). Route through the shell there, quoting the one
+  // argument that can contain spaces (the path).
+  const win = process.platform === 'win32';
   const out = execFileSync(
-    process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    // --excludePrivatePackages: license-checker reports the private workspace
-    // root (@csa-loom/fiab-console) as UNLICENSED regardless of its license
-    // field; it is not a distributed third-party package, so exclude it — the
-    // gate covers the 3rd-party production tree.
-    ['--yes', 'license-checker@25.0.1', '--production', '--json', '--excludePrivatePackages', '--start', APP_DIR],
-    { cwd: REPO_ROOT, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 },
+    win ? 'npx.cmd' : 'npx',
+    win ? args.map((a) => (a === APP_DIR ? `"${a}"` : a)) : args,
+    { cwd: REPO_ROOT, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024, ...(win ? { shell: true } : {}) },
   );
   return JSON.parse(out);
 }
@@ -149,8 +166,25 @@ function main() {
     : path.join(REPO_ROOT, 'THIRD-PARTY-NOTICES.md');
 
   if (!fs.existsSync(path.join(APP_DIR, 'node_modules'))) {
-    log('license-scan: apps/fiab-console/node_modules not found — SKIP (run after pnpm install).');
-    process.exit(0);
+    // #3027: an unmeasurable state is NOT a pass. This guard inspected zero
+    // packages, so it must not exit 0 — any caller treating exit 0 as
+    // "licenses verified" would be wrong on exactly this tree shape (every
+    // fresh worktree). The ONLY way to skip is an explicit opt-in that names
+    // its reason, and even that is printed loudly.
+    const allowSkip = (process.env.LOOM_LICENSE_SCAN_ALLOW_SKIP || '').trim();
+    if (allowSkip) {
+      log(`license-scan: SKIPPED (explicit opt-in): ${allowSkip}`);
+      log('license-scan: NO packages were inspected — this run verified NOTHING about licenses.');
+      process.exit(0);
+    }
+    fail('license-scan: CANNOT RUN — apps/fiab-console/node_modules is not installed.');
+    fail('   This guard inspected zero packages, so it refuses to report success (an');
+    fail('   unmeasurable state is not a pass — #3027). Either:');
+    fail('     - install the tree first:  pnpm install --prod  (in apps/fiab-console), or');
+    fail('     - explicitly skip WITH a reason:');
+    fail('         LOOM_LICENSE_SCAN_ALLOW_SKIP="docs-only change, tree not installed" \\');
+    fail('           node scripts/ci/check-licenses.mjs');
+    process.exit(2);
   }
 
   let pkgs;

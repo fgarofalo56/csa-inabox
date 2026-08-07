@@ -250,9 +250,17 @@ if [ -n "${CONSOLE_APP_NAME:-}" ] && [ -n "${CONSOLE_RG:-}" ]; then
   # Force a new revision so the updated secret value/reference is picked up
   # immediately (a secret-set alone does NOT roll running replicas). Setting the
   # env vars both wires LOOM_MSAL_CLIENT_ID and serves as the revision-roll.
+  #
+  # LOOM_MSAL_SECRET_ROTATED is stamped in the SAME call (#3025): the marker
+  # exists so an AADSTS7000215 triage can see which credential vintage the app
+  # holds, and a marker written by any hand other than the one that writes the
+  # secret WILL drift (measured: the live marker read 2026-07-19 while the
+  # secret was the 2026-08-03 credential). The Entra credential list stays the
+  # authoritative record; this is the hint that must never lie.
+  ROTATED_STAMP="$(date -u +%Y-%m-%dT%H%MZ)"
   az containerapp update -n "${CONSOLE_APP_NAME}" -g "${CONSOLE_RG}" \
-    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" -o none || echo "    WARN: env-var update failed"
-  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} (kvref=${KVREF_OK})"
+    --set-env-vars "LOOM_MSAL_CLIENT_ID=${APP_ID}" "LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME}" "LOOM_MSAL_SECRET_ROTATED=${ROTATED_STAMP}" -o none || echo "    WARN: env-var update failed"
+  echo "    wired LOOM_MSAL_CLIENT_ID=${APP_ID} + LOOM_MSAL_CLIENT_SECRET=secretref:${MSAL_SECRET_NAME} + LOOM_MSAL_SECRET_ROTATED=${ROTATED_STAMP} (kvref=${KVREF_OK})"
 fi
 
 # ---------------------------------------------------------------------
