@@ -27,7 +27,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Button, Caption1, Dropdown, Input, Option, Spinner, Subtitle2, Tab, TabList, Tooltip,
   Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -299,6 +299,26 @@ export default function AdminCatalogPage() {
           </div>
           {q.isLoading ? (
             <Spinner size="tiny" label="Loading catalog…" labelPosition="after" />
+          ) : q.isError ? (
+            /* C20 (apex-A3 class): `fetchOverview` THROWS on !res.ok /
+               ok!==true / transport failure, and this branch used to fall
+               straight through to the EmptyState below — so a 500/403/network
+               failure rendered "No tables published to the catalog yet". That
+               is a FALSE CLAIM about the customer's catalog (deploy-integrity
+               R7: an error must not assert something it did not establish),
+               and it reads as "your publishing is broken" when the truth is
+               "I could not ask". */
+            <MessageBar intent="error" layout="multiline">
+              <MessageBarBody>
+                <MessageBarTitle>Could not read the catalog</MessageBarTitle>
+                {(q.error as Error)?.message
+                  || 'The request failed before /api/catalog/iceberg/overview answered (network or timeout).'}{' '}
+                This says nothing about whether tables are published — the read did not complete.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => void q.refetch()}>Retry</Button>
+              </MessageBarActions>
+            </MessageBar>
           ) : tables.length === 0 ? (
             <EmptyState
               icon={<Layer20Regular />}

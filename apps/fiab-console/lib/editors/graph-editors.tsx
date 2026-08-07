@@ -29,7 +29,7 @@ import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane
  *    surfaces an honest gate.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Caption1, Subtitle2, Badge, Button, Input, Label, Spinner, Switch,
   Tab, TabList, Textarea, Dropdown, Option, Field, Divider, InfoLabel, Tooltip,
@@ -50,6 +50,8 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-directed-graph';
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
 import { useSharedEditorStyles } from './shared-styles';
+// C19 — shared load-lifecycle + data-loss guard (see use-item-doc-state.tsx).
+import { canPersistItemState, ItemLoadErrorBar, SAVE_REFUSED_UNLOADED, type ItemLoadStatus } from './use-item-doc-state';
 import { EditorResultsSplit } from './components/editor-results-split';
 import { useInEditorResultsSplit, SPLIT_FILL_STYLE } from '@/lib/components/editor/editor-split-context';
 
@@ -871,14 +873,39 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const backendLive = LIVE_BACKENDS.has(backend);
 
   // Load persisted spec.
+  //
+  // C19 data-loss class: this read used to be `catch { /* ignore */ }` with an
+  // `r.status === 404` early-return, so a 500/403/network failure left the
+  // DEFAULT spec on screen and `persistSpec()` then PATCHed those defaults over
+  // the user's real index configuration. `specLoad` makes the failure explicit
+  // and gates the save. A genuine 404 stays persistable (nothing to destroy).
+  const [specLoad, setSpecLoad] = useState<ItemLoadStatus>(!id || id === 'new' ? 'new' : 'loading');
+  const specLoadRef = useRef<ItemLoadStatus>(!id || id === 'new' ? 'new' : 'loading');
+  const setSpecLoadStatus = useCallback((st: ItemLoadStatus) => { specLoadRef.current = st; setSpecLoad(st); }, []);
+  const [specLoadError, setSpecLoadError] = useState<string | null>(null);
+  const [specLoadTick, setSpecLoadTick] = useState(0);
   useEffect(() => {
-    if (!id || id === 'new') return;
+    if (!id || id === 'new') { setSpecLoadStatus('new'); return; }
     let cancelled = false;
+    setSpecLoadStatus('loading'); setSpecLoadError(null);
     (async () => {
       try {
         const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`);
-        if (cancelled || r.status === 404) return;
-        const j = await r.json();
+        if (cancelled) return;
+        // A real 404 means the record genuinely has no stored spec — read
+        // SUCCEEDED, nothing to overwrite.
+        if (r.status === 404) { setSpecLoadStatus('absent'); return; }
+        const j = await r.json().catch(() => null);
+        if (cancelled) return;
+        if (!r.ok || j?.ok === false) {
+          setSpecLoadError(
+            (typeof j?.error === 'string' && j.error)
+              ? `${j.error} (HTTP ${r.status})`
+              : `The saved index configuration could not be read (HTTP ${r.status}).`,
+          );
+          setSpecLoadStatus('error');
+          return;
+        }
         if (j?.ok && j.item?.state) {
           const st = j.item.state;
           if (st.backend) setBackend(st.backend);
@@ -887,13 +914,29 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
           if (st.metric) setMetric(st.metric);
           if (st.algorithm) setAlgorithm(st.algorithm);
           setSavedAt(j.item.updatedAt || null);
+          setSpecLoadStatus('loaded');
+        } else {
+          // Read succeeded, record carries no spec yet.
+          setSpecLoadStatus('absent');
         }
-      } catch { /* ignore */ }
+      } catch (e: any) {
+        if (cancelled) return;
+        setSpecLoadError(`The saved index configuration could not be read: ${e?.message || String(e)}`);
+        setSpecLoadStatus('error');
+      }
     })();
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, specLoadTick, setSpecLoadStatus]);
+
+  const canPersistSpec = canPersistItemState(specLoad);
 
   const persistSpec = useCallback(async () => {
+    // C19 DATA-LOSS GUARD — refuse to write the on-screen defaults over a spec
+    // we never managed to read. Checked against the ref so a stale closure
+    // cannot let it through.
+    if (!canPersistItemState(specLoadRef.current)) {
+      return { ok: false, error: SAVE_REFUSED_UNLOADED };
+    }
     setSaving(true);
     try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
     try {
@@ -1029,16 +1072,16 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   // Ctrl+S persists the spec.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!saving) persistSpec(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!saving && canPersistSpec) persistSpec(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [saving, persistSpec]);
+  }, [saving, canPersistSpec, persistSpec]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Index', actions: [
-        { label: saving ? 'Saving…' : 'Save spec', icon: <Save20Regular />, onClick: saving ? undefined : () => persistSpec(), disabled: saving },
+        { label: saving ? 'Saving…' : 'Save spec', icon: <Save20Regular />, onClick: (saving || !canPersistSpec) ? undefined : () => persistSpec(), disabled: saving || !canPersistSpec },
         { label: creating ? 'Creating…' : 'Create index', icon: <Add20Regular />, onClick: creating ? undefined : createIndex, disabled: creating },
         { label: 'Reload schema', icon: <ArrowClockwise20Regular />, onClick: loadSchema, disabled: !backendLive },
       ]},
@@ -1048,7 +1091,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Vector search', icon: <Search20Regular />, onClick: () => setTab('search') },
       ]},
     ]},
-  ], [saving, persistSpec, creating, createIndex, loadSchema, backendLive]);
+  ], [saving, canPersistSpec, persistSpec, creating, createIndex, loadSchema, backendLive]);
   useRegisterRibbonCommands(ribbon, item.slug);
 
   const vectorField = useMemo(() => {
@@ -1062,6 +1105,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       ribbon={ribbon} commandSearch splitKeyPrefix={item.slug}
       leftPanel={
         <div className={s.treePad}>
+          {/* C19 — an unreadable spec must never look like a fresh default one,
+              and Save is blocked until it loads (persistSpec refuses too). */}
+          <ItemLoadErrorBar
+            load={{ status: specLoad, error: specLoadError, retry: () => setSpecLoadTick((n) => n + 1) }}
+            subject="vector index spec"
+          />
           <div className={s.sectionHeader}>
             <Database24Regular className={s.emptyIcon} />
             <Subtitle2>Index spec</Subtitle2>
@@ -1174,7 +1223,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                   <Button appearance="primary" icon={creating ? <Spinner size="tiny" /> : <Add20Regular />} onClick={createIndex} disabled={creating || saving}>
                     {creating ? 'Creating…' : 'Create / update index'}
                   </Button>
-                  <Button icon={<Save20Regular />} onClick={() => persistSpec()} disabled={saving}>{saving ? 'Saving…' : 'Save spec'}</Button>
+                  <Button icon={<Save20Regular />} onClick={() => persistSpec()} disabled={saving || !canPersistSpec}>{saving ? 'Saving…' : 'Save spec'}</Button>
                   <Button icon={<ArrowClockwise20Regular />} onClick={loadSchema} disabled={!backendLive || schemaLoading}>Reload schema</Button>
                 </div>
                 {createResult && (

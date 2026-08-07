@@ -40,8 +40,8 @@ This surface is an **editor** (§7.2) plus the §7.0 universal boxes.
 | U2 | Real backend on every control | ✅ | Load `GET /api/cosmos-items/notepad/:id`; save `PATCH /api/items/notepad/:id`; run `POST /api/items/notepad/:id/run-block` → real ADX. No mock arrays. |
 | U3 | Honest gate surfaced when infra missing | ⚠️ | The run-block response's `gate.remediation` IS surfaced — but only concatenated into a plain `MessageBar intent="warning"` string (`:64`). It is **not** the shared `HonestGate` component, so there is **no inline "Fix it" button** and the gate is **not registered in the gate registry**. Under `ux-baseline.md` **G2** a bare remediation MessageBar "is no longer compliant" — this is a G2 defect, recorded as ⚠️ rather than ❌ only because the remediation text itself is honest and present. |
 | U4 | Guided `EmptyState` (not a bare `<div>`) | ❌ | Empty document renders `<Caption1>No blocks yet — add a heading, text, or KQL query block.</Caption1>` (`:88`). `ux-baseline.md` explicitly forbids "a bare-`<div>` empty state instead of a guided launcher-card `EmptyState`". The `EmptyState` primitive exists at `lib/components/empty-state` and is not imported. |
-| U5 | Skeleton / spinner on load | ❌ | The initial `GET` has **no** loading state at all — the effect at `:40-49` sets blocks on success and swallows every failure with `catch { /* keep empty */ }`. A slow or failing load is visually indistinguishable from an empty document. |
-| U6 | Error surface is honest | ❌ | Same swallow: a 500 / 403 / network failure on load renders as "No blocks yet". This is the `unknown-reported-as-negative` failure class — the surface asserts "empty" when the truth is "I could not read it". |
+| U5 | Skeleton / spinner on load | ✅ | FIXED (C19). Adopts `useItemDocState` (lib/editors/use-item-doc-state.tsx): the load status is explicit (`new`/`loading`/`loaded`/`absent`/`error`), a spinner shows while it is genuinely in flight, and a failure renders an honest Fluent MessageBar naming the OBSERVED status plus a Retry. Save is disabled AND `save()` refuses before issuing any request while the stored content is unknown, so a blank surface can no longer overwrite real content. Pinned by `lib/editors/__tests__/use-item-doc-state.test.tsx` and the editor spec, and by the CI guard `scripts/ci/check-editor-read-failure-honesty.mjs`. |
+| U6 | Error surface is honest | ✅ | Was the `unknown-reported-as-negative` class: a 500 / 403 / network failure rendered "No blocks yet", asserting "empty" when the truth was "I could not read it". The empty caption is now shown ONLY when the read actually succeeded. FIXED (C19). Adopts `useItemDocState` (lib/editors/use-item-doc-state.tsx): the load status is explicit (`new`/`loading`/`loaded`/`absent`/`error`), a spinner shows while it is genuinely in flight, and a failure renders an honest Fluent MessageBar naming the OBSERVED status plus a Retry. Save is disabled AND `save()` refuses before issuing any request while the stored content is unknown, so a blank surface can no longer overwrite real content. Pinned by `lib/editors/__tests__/use-item-doc-state.test.tsx` and the editor spec, and by the CI guard `scripts/ci/check-editor-read-failure-honesty.mjs`. |
 | U7 | LearnPopover / teaching guidance | ❌ | No `TeachingBanner`, no `LearnPopover`. A one-line `<Body1>` description only. Sibling editors (`ai-red-team`, `data-quality`, `synthetic-data`) all carry `TeachingBanner`. |
 | E1 | `ItemEditorChrome` shell | ❌ | **Not used.** The editor returns a bare `<div className={s.wrap}>`. It therefore has **no ribbon, no item-tab strip, no right details panel, no Copilot entry, no command palette registration, no dirty tracking**. Every sibling in this list (`ai-red-team`, `data-contract`, `data-quality`, `synthetic-data`, `feature-table`, `ducklake-catalog`, `s3-gateway`) wraps in `ItemEditorChrome`. This is the single largest gap on the surface. |
 | E2 | Ribbon + contextual command groups | ❌ | Consequence of E1. Save is a loose `<Button>` in an ad-hoc toolbar row. |
@@ -80,13 +80,17 @@ The 10 ❌ rows are all *chrome and state-honesty* gaps, not missing features:
 
 1. **E1 (no `ItemEditorChrome`)** is the root cause of five of the ten — fixing
    it closes E1-E5 in one change.
-2. **U5/U6 (swallowed load failure)** is the one that can mislead: a failed read
-   currently renders as an empty document.
+2. ~~**U5/U6 (swallowed load failure)**~~ **FIXED (C19, 2026-08-06).** A failed
+   read rendered as an empty document, and Save then PATCHed `{blocks:[]}` over
+   the real one. The editor now adopts `useItemDocState`: the "No blocks yet"
+   caption appears ONLY on a successful read, a failure gets an honest
+   MessageBar + Retry, and Save is refused while the stored blocks are unknown.
 3. **U4** (`EmptyState`) and **E7** (`PreviewTable`) are single-import swaps.
 4. **U3** is a `ux-baseline.md` **G2** violation and needs the shared
    `HonestGate` + a gate-registry entry.
 
-Recommended sequencing for the owning lane: E1 → U5/U6 → U4/E7 → U3 → E8 → E12.
+Recommended sequencing for the owning lane: E1 → U4/E7 → U3 → E8 → E12.
+(U5/U6 is closed — see above.)
 
 ## Verification
 

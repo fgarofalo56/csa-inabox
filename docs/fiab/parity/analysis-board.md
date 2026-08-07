@@ -65,8 +65,8 @@ inventory of what a step-based board must do to be useful.
 | U2 | Real backend on every control | built | See the backend table. |
 | U3 | Honest gate when ADX is unconfigured | partial | A 503 from the run route is correctly downgraded to `intent="warning"` with an **"ADX not configured"** title and the route's `gate.remediation` appended (`:105`, `:180`) — deliberate and honest. But it is **not** the shared `HonestGate`, so no inline **Fix it** and no gate-registry entry (**G2**). |
 | U4 | Guided `EmptyState` | **MISSING** | No empty state at all — a board with no steps renders just the Source card and an empty compiled-KQL hint. `EmptyState` is not imported. |
-| U5 | Skeleton / spinner on load | **MISSING** | The initial `GET` (`:62-71`) has no loading state. |
-| U6 | Error surface is honest on load | **MISSING** | `catch { /* keep default */ }` — a failed or forbidden load renders as a **blank new board**. Same unknown-reported-as-negative class as `notepad` and `fusion-sheet`: a subsequent Save would then persist the blank board over the real one. |
+| U5 | Skeleton / spinner on load | ✅ | FIXED (C19). Adopts `useItemDocState` (lib/editors/use-item-doc-state.tsx): the load status is explicit (`new`/`loading`/`loaded`/`absent`/`error`), a spinner shows while it is genuinely in flight, and a failure renders an honest Fluent MessageBar naming the OBSERVED status plus a Retry. Save is disabled AND `save()` refuses before issuing any request while the stored content is unknown, so a blank surface can no longer overwrite real content. Pinned by `lib/editors/__tests__/use-item-doc-state.test.tsx` and the editor spec, and by the CI guard `scripts/ci/check-editor-read-failure-honesty.mjs`. |
+| U6 | Error surface is honest on load | ✅ | Was: `catch { /* keep default */ }` rendered a failed load as a **blank new board**, and a subsequent Save persisted that blank board over the real one. FIXED (C19). Adopts `useItemDocState` (lib/editors/use-item-doc-state.tsx): the load status is explicit (`new`/`loading`/`loaded`/`absent`/`error`), a spinner shows while it is genuinely in flight, and a failure renders an honest Fluent MessageBar naming the OBSERVED status plus a Retry. Save is disabled AND `save()` refuses before issuing any request while the stored content is unknown, so a blank surface can no longer overwrite real content. Pinned by `lib/editors/__tests__/use-item-doc-state.test.tsx` and the editor spec, and by the CI guard `scripts/ci/check-editor-read-failure-honesty.mjs`. |
 | U7 | Teaching guidance / Learn link | **MISSING** | One `<Body1>` line; no `TeachingBanner`, no `LearnPopover`. |
 | E1 | `ItemEditorChrome` shell | **MISSING** | **Not used** — bare `<div>`. No ribbon, no item-tab strip, no right details panel, no Copilot entry, no command-palette registration. |
 | E2-E5 | Ribbon / command search / details panel / Copilot | **MISSING** | All four are consequences of E1. Counted once here as a single row to avoid inflating the total; individually they are four missing bars. |
@@ -107,8 +107,12 @@ What holds it back, in order:
    missing feature, it is the missing *point*: you cannot see what your data
    looked like after step 3, which is the whole reason to build the work as
    steps rather than as one query.
-2. **U6 — silent load failure, blank board, Save overwrites.** Same
-   data-loss-shaped defect as `fusion-sheet`. Fix regardless of lane priority.
+2. ~~**U6 — silent load failure, blank board, Save overwrites.**~~ **FIXED
+   (C19, 2026-08-06)**, together with `fusion-sheet` and `notepad`. The board
+   now adopts `useItemDocState`: a failed read renders "Could not read this
+   analysis board" + Retry, and Save is refused before any request is issued
+   while the stored board is unknown. A 200 `{ok:false}` envelope counts as a
+   failed read too.
 3. **F3 + F22 — everything is free text.** No table browse, no column
    autocomplete, on a surface whose premise is *not typing queries*. Sibling
    editors already have the routes to do this.
@@ -126,6 +130,7 @@ What holds it back, in order:
   ```
   The walk must include: a first-open pass on a freshly created board (confirming
   E9's guided hint, not a red error), a reorder-then-edit pass (E11), and a load
-  against a Cosmos read that 500s (expected to render a blank board — the U6
-  defect).
+  against a Cosmos read that 500s — which since C19 must render "Could not read
+  this analysis board" with a Retry and a DISABLED Save. Confirm no PATCH is
+  issued while that error is on screen.
 - Coverage read from source; static evidence only (`no_scaffold_claims`).

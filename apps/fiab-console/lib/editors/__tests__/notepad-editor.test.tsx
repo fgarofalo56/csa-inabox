@@ -247,32 +247,54 @@ describe('NotepadEditor — persistence contract', () => {
   });
 });
 
-describe('NotepadEditor — DOCUMENTED DEFECT: a failed load looks like an empty document', () => {
+describe('NotepadEditor — FIXED (C19): a failed load is never mistaken for an empty document', () => {
   /**
-   * Asserts the CURRENT behaviour, which is WRONG, and says so.
+   * C14 pinned this as a DOCUMENTED DEFECT: the load was wrapped in
+   * `catch { /* keep empty *\/ }` with no loading state at all, so a 500 / 403 /
+   * network failure rendered "No blocks yet" — identical to a genuinely empty
+   * document — and Save then PATCHed `{blocks:[]}` over the real content.
    *
-   * notepad-editor.tsx:40-49 wraps the load in `catch { /* keep empty *\/ }` and
-   * has no loading state at all. A 500 / 403 / network failure renders "No
-   * blocks yet", identical to a genuinely empty document — and Save then
-   * PATCHes `{blocks:[]}` over the real content.
+   * C19 fixed it with `useItemDocState` (lib/editors/use-item-doc-state.tsx).
+   * The C14 assertions are inverted here, as their comment instructed.
    *
-   * Pinned executably so the defect is not merely prose, and so whoever fixes
-   * it gets a RED test telling them to invert this assertion.
-   *
-   * See docs/fiab/parity/notepad.md rows U5/U6. Same class in fusion-sheet (U6)
-   * and analysis-board (U6); already fixed in s3-gateway (apex A3) and
-   * ducklake-catalog (C14).
+   * See docs/fiab/parity/notepad.md rows U5/U6.
    */
-  it('CURRENT (defective): a 500 on load renders "No blocks yet" with no error surface', async () => {
+  it('renders an honest error MessageBar + Retry, and does NOT claim the document is empty', async () => {
     installFetch({ load: () => new Response('boom', { status: 500 }) as any });
     renderEditor();
 
     await waitFor(() =>
+      expect(screen.getByText('Could not read this notepad')).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/HTTP 500/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    // The "no blocks" caption is a CLAIM about stored content and must not be
+    // made when the read failed — that was the exact mechanism of the harm.
+    expect(
+      screen.queryByText('No blocks yet — add a heading, text, or KQL query block.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('DATA-LOSS GUARD: Save is disabled after a failed load and issues no PATCH', async () => {
+    const calls = installFetch({ load: () => new Response('boom', { status: 500 }) as any });
+    renderEditor();
+
+    await waitFor(() => expect(screen.getByText('Could not read this notepad')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.some((c) => c.init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('still shows the guided-empty caption when the read SUCCEEDS with no blocks', async () => {
+    // loaded-empty and failed-to-load must stay distinguishable in BOTH
+    // directions — the fix must not suppress the genuine empty state.
+    installFetch({ load: withBlocks([]) });
+    renderEditor();
+    await waitFor(() =>
       expect(screen.getByText('No blocks yet — add a heading, text, or KQL query block.')).toBeInTheDocument(),
     );
-    // No error anywhere. When U5/U6 is fixed, invert this to expect an honest
-    // error MessageBar + Retry.
-    expect(screen.queryByText(/could not/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not read this notepad')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

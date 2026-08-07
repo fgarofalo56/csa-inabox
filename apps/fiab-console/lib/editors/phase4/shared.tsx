@@ -109,6 +109,10 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { useSharedEditorStyles } from '../shared-styles';
+// C19 — the load-lifecycle + data-loss-guard primitive. `useItemState` below is
+// the OTHER half of the same contract (it owns its own fetch for legacy
+// reasons); both enforce the identical persistability rule from one place.
+import { canPersistItemState, SAVE_REFUSED_UNLOADED, type ItemLoadStatus } from '../use-item-doc-state';
 
 /**
  * Defensive array coercion for persisted Cosmos state. Legacy / hand-edited /
@@ -411,10 +415,27 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // C19 data-loss guard. `error` alone was NOT enough: it was shared with save
+  // errors and, critically, nothing stopped `save()` from PATCHing the
+  // `fallback` state over a document whose real content had never been read.
+  // A transient 500 on load therefore let the next Save destroy the item — the
+  // same harm C19 fixed in fusion-sheet / notepad / analysis-board, but spread
+  // across the ~25 editors that share this hook.
+  //
+  // `loadStatus` is EXPLICIT (never inferred from "is state empty?") and gates
+  // save. It mirrors lib/editors/use-item-doc-state.tsx's ItemLoadStatus; see
+  // that file for the full rationale and the status table.
+  const [loadStatus, setLoadStatus] = useState<ItemLoadStatus>(
+    !id || id === 'new' ? 'new' : 'loading',
+  );
   // Synchronously-readable copy of the last save error so callers (e.g. publish)
   // can surface the REAL reason right after `await save()` returns false, rather
   // than a generic "Save failed" (React state is stale in the same tick).
   const saveErrorRef = useRef<string | null>(null);
+  // Synchronous mirror of loadStatus — `save()` must read the CURRENT value, not
+  // the render-time snapshot it closed over.
+  const loadStatusRef = useRef<ItemLoadStatus>(!id || id === 'new' ? 'new' : 'loading');
+  const setLoad = useCallback((s: ItemLoadStatus) => { loadStatusRef.current = s; setLoadStatus(s); }, []);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   // The item's parent workspace id — used to SCOPE editor pickers (source
   // dropdowns) to this item's workspace so they never list a sibling
@@ -439,13 +460,14 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     // initial state until the user saves and we have a real id.
     if (!id || id === 'new') {
       setLoading(false);
+      setLoad('new');
       return;
     }
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setLoad('loading');
     try {
       const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
       const j = await r.json();
-      if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
+      if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); setLoad('error'); return; }
       const doc = j as ItemDoc;
       if (doc.workspaceId) setWorkspaceId(doc.workspaceId);
       if (doc.state && typeof doc.state === 'object') {
@@ -455,12 +477,18 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
         // Release the suppression on next tick so user-triggered setState
         // calls after this load() correctly mark dirty.
         queueMicrotask(() => { suppressDirty.current = false; });
+        setLoad('loaded');
+      } else {
+        // Read SUCCEEDED; the record simply carries no state yet. Saving over
+        // nothing destroys nothing, so this is persistable — this is exactly
+        // why "state is empty" can never stand in for "load failed".
+        setLoad('absent');
       }
       setSavedAt(doc.updatedAt || null);
-    } catch (e: any) { setError(e?.message || String(e)); }
+    } catch (e: any) { setError(e?.message || String(e)); setLoad('error'); }
     finally { setLoading(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, id]);
+  }, [slug, id, setLoad]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -469,6 +497,16 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     if (!id || id === 'new') {
       const msg = 'Cannot save: this agent has no id yet (open it from a workspace, or create it first).';
       saveErrorRef.current = msg; setError(msg); setSaving(false);
+      return false;
+    }
+    // ---- THE DATA-LOSS GUARD ----------------------------------------------
+    // The load is in flight or FAILED, so the stored content is UNKNOWN.
+    // Refuse BEFORE issuing the request — a PATCH built from `fallback` would
+    // silently destroy the real document.
+    if (!canPersistItemState(loadStatusRef.current)) {
+      saveErrorRef.current = SAVE_REFUSED_UNLOADED;
+      setError(SAVE_REFUSED_UNLOADED);
+      setSaving(false);
       return false;
     }
     try {
@@ -489,13 +527,16 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       // then-save, deploy-then-save), also clear dirty — the next arg IS
       // the snapshot we just persisted.
       setDirty(false);
+      // A successful write means the server's content is now what we hold, so
+      // a later save is safe even if the original read had been `absent`.
+      setLoad('loaded');
       return true;
     } catch (e: any) {
       const msg = e?.message || String(e);
       saveErrorRef.current = msg; setError(msg); return false;
     }
     finally { setSaving(false); }
-  }, [slug, id, state]);
+  }, [slug, id, state, setLoad]);
 
   /** Synchronous getter for the last save error (valid immediately after save()). */
   const lastSaveError = useCallback(() => saveErrorRef.current, []);
@@ -512,7 +553,14 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
-  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty, lastSaveError, workspaceId };
+  return {
+    state, setState, loading, saving, error, savedAt, save, reload: load, dirty, lastSaveError, workspaceId,
+    // C19 — explicit load lifecycle + the persistability verdict. Editors bind
+    // Save's `disabled` to `!canSave` and render an honest error when
+    // `loadStatus === 'error'`; `save()` refuses independently, so forgetting
+    // to bind cannot reintroduce the data loss.
+    loadStatus, canSave: canPersistItemState(loadStatus),
+  };
 }
 
 function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {

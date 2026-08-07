@@ -29,7 +29,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2, Tab, TabList,
   Dropdown, Option, Field,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -326,9 +326,17 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
   }
 
   const caps = capsQ.data;
-  const engineBadge = caps?.configured
-    ? `DuckDB ${caps.capabilities?.version || ''}`.trim()
-    : 'Synapse Serverless';
+  // C20 (apex-A3 class): `fetchCapabilities` THROWS on !res.ok / ok!==true /
+  // transport failure and this editor had no error branch — so a failed read
+  // left `caps` undefined, the badge asserted "Synapse Serverless" (i.e. "the
+  // DuckDB tier is not deployed"), and neither the gate nor any error rendered.
+  // The engine claim was made without evidence (deploy-integrity R7).
+  const capsUnknown = capsQ.isError;
+  const engineBadge = capsUnknown
+    ? 'Engine unknown'
+    : caps?.configured
+      ? `DuckDB ${caps.capabilities?.version || ''}`.trim()
+      : 'Synapse Serverless';
 
   return (
     <ItemEditorChrome
@@ -341,7 +349,7 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
           <div className={s.toolbar}>
             <Database20Regular />
             <Subtitle2>SQL Lab</Subtitle2>
-            <Badge appearance="tint" color={caps?.configured ? 'brand' : 'informative'}>{engineBadge}</Badge>
+            <Badge appearance="tint" color={capsUnknown ? 'warning' : caps?.configured ? 'brand' : 'informative'}>{engineBadge}</Badge>
             {caps?.capabilities?.extensions?.length ? (
               <Badge appearance="outline">{caps.capabilities.extensions.join(' · ')}</Badge>
             ) : null}
@@ -357,6 +365,24 @@ export function SqlLabEditor({ item, id }: { item: FabricItemType; id: string })
               }
             />
           </div>
+
+          {/* C20 — the capability read failed, so which engine will serve a
+              query is UNKNOWN. Say so rather than letting the default badge
+              imply an answer we never got. Queries still run; the route picks
+              the engine server-side. */}
+          {capsQ.isError && (
+            <MessageBar intent="error" layout="multiline">
+              <MessageBarBody>
+                <MessageBarTitle>Could not read the engine capabilities</MessageBarTitle>
+                {(capsQ.error as Error)?.message
+                  || 'The request failed before /api/duckdb/capabilities answered (network or timeout).'}{' '}
+                This does not mean the DuckDB tier is missing — the read did not complete. Queries still run.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={() => void capsQ.refetch()}>Retry</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
 
           {/* Capability chip / honest gate — the surface renders fully either way. */}
           {caps && !caps.configured && caps.gate && (
