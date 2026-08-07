@@ -74,6 +74,24 @@ vi.mock('@/lib/azure/fetch-with-timeout', () => ({
 
 const BASE = 'https://iceberg-catalog.internal.example.net';
 
+/**
+ * The audit rows for ICEBERG operations only.
+ *
+ * The token exchange writes its OWN row (`auth.token-exchange`) — deliberately,
+ * per LU-3: a successful exchange is the moment the Console acquires catalog
+ * authority, and a burst of failed ones is the signature of a disabled Console
+ * principal. So the trail legitimately carries MORE than one row per request now,
+ * and the `toHaveLength(1)` assertions below are about the iceberg operation,
+ * not about the size of the whole trail.
+ *
+ * It is filtered rather than asserted on because `recordExchange` is
+ * deliberately FIRE-AND-FORGET (`void recordExchange(...)`, so audit latency can
+ * never fail a catalog call). Its row therefore lands on an unpredictable tick —
+ * which is exactly why the un-filtered counts passed locally and failed under CI
+ * sharding. Anything asserting on that row would be racing it.
+ */
+const icebergAuditRows = () => auditRows.filter((r) => r.action !== 'auth.token-exchange');
+
 function req(url: string, init: RequestInit = {}) {
   // The route handlers only touch `nextUrl`, `method`, `headers` and `json()`.
   const u = new URL(url);
@@ -200,11 +218,11 @@ describe('audit rows', () => {
     respond = () => new Response(JSON.stringify({ namespaces: [['gold'], ['silver']] }), { status: 200 });
     const { GET } = await import('../namespaces/route');
     await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].action).toBe('iceberg.namespace.list');
-    expect(auditRows[0].resultCount).toBe(2);
-    expect(auditRows[0].upn).toBe('analyst@contoso.com');
-    expect(auditRows[0].outcome).toBe('success');
+    expect(icebergAuditRows()).toHaveLength(1);
+    expect(icebergAuditRows()[0].action).toBe('iceberg.namespace.list');
+    expect(icebergAuditRows()[0].resultCount).toBe(2);
+    expect(icebergAuditRows()[0].upn).toBe('analyst@contoso.com');
+    expect(icebergAuditRows()[0].outcome).toBe('success');
   });
 
   it('writes ONE aggregated row for a table LIST, scoped to the namespace', async () => {
@@ -216,18 +234,18 @@ describe('audit rows', () => {
     const body = await (await GET(req('https://loom.test/api/catalog/iceberg/tables?namespace=gold'))).json();
     expect(body.tables[0]).toMatchObject({ name: 'orders', namespace: 'gold' });
     expect(body.tables[0].formats).toEqual(['delta', 'iceberg']);
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].action).toBe('iceberg.table.list');
-    expect(auditRows[0].namespace).toBe('gold');
-    expect(auditRows[0].resultCount).toBe(1);
+    expect(icebergAuditRows()).toHaveLength(1);
+    expect(icebergAuditRows()[0].action).toBe('iceberg.table.list');
+    expect(icebergAuditRows()[0].namespace).toBe('gold');
+    expect(icebergAuditRows()[0].resultCount).toBe(1);
   });
 
   it('records the workspace scope when the caller supplies one', async () => {
     respond = () => new Response(JSON.stringify({ 'metadata-location': 'abfss://x/metadata/v1.json' }), { status: 200 });
     const { GET } = await import('../table/route');
     await GET(req('https://loom.test/api/catalog/iceberg/table?namespace=gold&table=orders&workspaceId=ws-7'));
-    expect(auditRows[0].action).toBe('iceberg.table.load');
-    expect(auditRows[0].workspaceId).toBe('ws-7');
+    expect(icebergAuditRows()[0].action).toBe('iceberg.table.load');
+    expect(icebergAuditRows()[0].workspaceId).toBe('ws-7');
   });
 
   it('records a FAILED read so a denied access still leaves evidence', async () => {
@@ -238,9 +256,9 @@ describe('audit rows', () => {
     const { GET } = await import('../tables/route');
     const res = await GET(req('https://loom.test/api/catalog/iceberg/tables?namespace=gold'));
     expect(res.status).toBe(404);
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].outcome).toBe('failure');
-    expect(auditRows[0].summary).toContain('FAILED');
+    expect(icebergAuditRows()).toHaveLength(1);
+    expect(icebergAuditRows()[0].outcome).toBe('failure');
+    expect(icebergAuditRows()[0].summary).toContain('FAILED');
   });
 
   it('audits a register (write) with the table scope', async () => {
@@ -254,8 +272,8 @@ describe('audit rows', () => {
       }),
     }));
     expect(res.status).toBe(200);
-    expect(auditRows[0].action).toBe('iceberg.table.register');
-    expect(auditRows[0].table).toBe('orders');
+    expect(icebergAuditRows()[0].action).toBe('iceberg.table.register');
+    expect(icebergAuditRows()[0].table).toBe('orders');
   });
 });
 
