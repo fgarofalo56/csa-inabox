@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "13974152815327143136"
+      "templateHash": "14676406443018342398"
     }
   },
   "definitions": {
@@ -2518,7 +2518,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "12209773227136901974"
+              "templateHash": "4894245125364400000"
             }
           },
           "definitions": {
@@ -6289,7 +6289,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "18403450237283012915"
+                      "templateHash": "2278007435835095030"
                     }
                   },
                   "parameters": {
@@ -6687,7 +6687,11 @@
                           "tier": "[variables('firewallSku')]"
                         },
                         "threatIntelMode": "Alert"
-                      }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/bastionHosts', format('bastion-csa-loom-{0}', parameters('location')))]",
+                        "subnetNsgAttach"
+                      ]
                     },
                     {
                       "condition": "[parameters('firewallEnabled')]",

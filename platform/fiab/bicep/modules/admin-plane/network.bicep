@@ -426,10 +426,37 @@ var firewallPolicyName = 'fwpol-csa-loom-${location}'
 // re-PUTing a firewall policy re-pushes it to its referenced firewall, which faults
 // the deploy if that firewall is mid-/post-update (FirewallPolicyUpdateFailed:
 // "... Failed with 1 faulted referenced firewalls"). See firewallPolicyReconcile.
+//
+// ORDERING (added 2026-08-07, refs #3038). firewallPolicyReconcile alone did NOT
+// stop the error: runs 31194622139 and 31196922481 both failed here with
+// `FirewallPolicyUpdateFailed: Put on Firewall Policy fwpol-csa-loom-<region>
+// Failed with 1 faulted referenced firewalls` even though the referenced firewall
+// was `Succeeded`, allocated, and Standard-tier at rest. The ARM operation
+// timestamps name the cause — the policy had NO dependsOn at all, so ARM
+// scheduled it in the FIRST parallel wave, concurrently with the hub VNet PUT:
+//
+//   16:35:56.372  PT6.9040S   Succeeded  virtualNetworks   vnet-csa-loom-hub-centralus
+//   16:35:56.372  PT11.6141S  FAILED     firewallPolicies  fwpol-csa-loom-centralus
+//
+// Identical start instant. The hub VNet declares AzureFirewallSubnet inline, so
+// re-PUTing the VNet transiently faults the firewall attached to that subnet; the
+// concurrent policy push then finds its referenced firewall faulted and aborts.
+// That is why a hand-run `az network firewall policy update` SUCCEEDS from the
+// same "broken" state — at rest there is no concurrent VNet writer.
+//
+// The firewall resource below was already serialized behind subnetNsgAttach +
+// bastion; the POLICY was not, and it is the policy that ARM PUTs first. Give it
+// the SAME anchors so the ordering is hub subnets → bastion → policy → firewall,
+// and the policy push only ever runs against a quiescent hub.
 resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = if (firewallEnabled && !firewallPolicyReconcile) {
   name: firewallPolicyName
   location: location
   tags: complianceTags
+  // Serialize behind every hub-subnet writer so the policy push cannot race the
+  // VNet PUT that owns AzureFirewallSubnet (see the header). No cycle: the
+  // firewall depends on this policy, this policy depends only on the subnet/
+  // bastion writers, and bastion already depends on subnetNsgAttach.
+  dependsOn: [ subnetNsgAttach, bastion ]
   properties: {
     sku: { tier: firewallSku }
     threatIntelMode: 'Alert'

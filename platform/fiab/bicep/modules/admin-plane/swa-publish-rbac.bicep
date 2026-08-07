@@ -42,6 +42,36 @@
 // Whether Gov could now use Website Contributor instead of Contributor is a
 // separate question that needs a real Gov deploy to answer — it is NOT settled by
 // this fix, and nothing here depends on the answer.
+//
+// COMMERCIAL centralus, 2026-08-07 (refs #3038) — RoleAssignmentExists, resolved.
+// Runs 31194622139 / 31196922481 both failed here with
+// `RoleAssignmentExists: The role assignment already exists. The ID of the
+// existing role assignment is 2f9290b01a8244fea959b441c49c84cb.` Two things about
+// that message cost real diagnosis time, both recorded so the next person skips it:
+//
+//   1. ARM prints the id with the DASHES STRIPPED. Searching for the literal
+//      `2f9290b01a8244fea959b441c49c84cb` returns EMPTY from every `az role
+//      assignment list`. Re-insert the 8-4-4-4-12 dashes
+//      (`2f9290b0-1a82-44fe-a959-b441c49c84cb`) before looking it up.
+//   2. The blocker was NOT a seed change. `createdOn` was 2026-07-07 — i.e. the
+//      grant was created by hand (`az role assignment create`, which mints a
+//      RANDOM guid) a month BEFORE this module could create it at all, since the
+//      role id above was the non-existent …706ee until 2026-08-03. The hand-made
+//      assignment occupied the (scope, principalId, roleDefinitionId) triple, and
+//      ARM enforces uniqueness on that triple rather than on the name, so this
+//      module's deterministic `guid()` name could never be created beside it.
+//
+// Identified as: Console UAMI (`uami-loom-console-centralus`) → Website
+// Contributor → the admin resource group — byte-for-byte the grant this module
+// makes. Deleting it was therefore a zero-net-permission reconcile: the template
+// recreates the identical grant under its deterministic name on the same deploy.
+//
+// DO NOT hand-grant this role. The remediation strings in the console
+// (lib/admin/env-checks/builders.ts, lib/azure/swa-publish.ts) name the role so
+// an operator can UNDERSTAND the gate — they are not an instruction to run
+// `az role assignment create`. A hand-grant mints a random name, takes the
+// triple, and hard-blocks this module until someone deletes it. Re-run
+// deploy-fiab-commercial instead; this module is the supported grant path.
 // 100% Azure-native (ARM staticSites); no Microsoft Fabric.
 
 targetScope = 'resourceGroup'
