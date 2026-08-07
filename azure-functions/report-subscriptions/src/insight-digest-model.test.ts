@@ -17,13 +17,13 @@ import {
   formatDeltaPct,
   formatMetricValue,
   percentChange,
+  pickInterval,
   rankDeltas,
   renderDigestHtml,
   splitWindowSeries,
   type DigestObservation,
   type MetricSample,
 } from './insight-digest-model';
-import { pickInterval } from './insights-engine';
 
 const TYPE = 'microsoft.documentdb/databaseaccounts';
 const T0 = Date.parse('2026-07-01T00:00:00Z');

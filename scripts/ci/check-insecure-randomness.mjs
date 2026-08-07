@@ -53,7 +53,12 @@ const ROOTS = [
   'apps/fiab-console/lib',
   'apps/fiab-console/app',
   'apps/copilot-maf/src',
-  'apps/fiab-report-subscriptions/src',
+  // The report-subscriptions runtime. Was apps/fiab-report-subscriptions until
+  // 2026-08-07: that tree was an orphaned duplicate (Power-BI-ExportTo
+  // rendering, referenced by no deployer) and was deleted in favour of the
+  // DEPLOYED azure-functions/report-subscriptions ACA job, which now also
+  // carries the B-N19d insight-digest engine.
+  'azure-functions/report-subscriptions/src',
 ];
 const SKIP_DIRS = new Set(['node_modules', '__tests__', '.next', 'dist', 'build', 'copilot-corpus']);
 
@@ -71,7 +76,11 @@ const STATISTICAL_EXEMPT = new Map([
 /**
  * Total permitted `Math.random()` occurrences outside the exempt files.
  *
- * RATCHET — only ever goes DOWN. 160 -> 156: the last CodeQL-reported sites —
+ * RATCHET — only ever goes DOWN. 156 -> 155: retiring the orphaned
+ * apps/fiab-report-subscriptions tree (an undeployed Power-BI-ExportTo
+ * duplicate) removed one `Math.random()` site with it; the replacement scan
+ * root azure-functions/report-subscriptions/src is covered and clean.
+ * 160 -> 156: the last CodeQL-reported sites —
  * two report element ids (randomSuffix) and TWO more sessionIds that the alert
  * list had not surfaced as such: the notebook copilot pane and copilot-maf.
  * 163 -> 160: the three copilot routes deferred
@@ -87,7 +96,7 @@ const STATISTICAL_EXEMPT = new Map([
  * `lib/util/random-id` helpers. That suffix flowed into a Key Vault secret NAME,
  * which is what CodeQL flagged as a "security context" (#513/#527/#531).
  */
-const BASELINE = 156;
+const BASELINE = 155;
 
 /**
  * Strip `//` line comments and block comments before counting.

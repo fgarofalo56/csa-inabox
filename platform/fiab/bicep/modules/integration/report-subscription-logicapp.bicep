@@ -2,10 +2,13 @@
 // Outlook "Send an email (V2)" with a base64 attachment).
 //
 // Azure-native parity for Fabric / Power BI report SUBSCRIPTIONS email delivery
-// (NO Fabric / Power Automate dependency). The fiab-report-subscriptions timer
-// Function renders a report via the Power BI ExportTo REST job, then POSTs the
-// rendered bytes (base64) to this Logic App's HTTP trigger; the Logic App emails
-// the file as an attachment via the Office 365 Outlook connector.
+// (NO Fabric / Power Automate dependency). The report-subscriptions ACA job
+// job renders a report via the Azure-native paginated-report-renderer
+// (LOOM_REPORT_RENDERER_URL — NOT Power BI ExportTo, unavailable in GCC-High),
+// then POSTs the rendered bytes (base64) to this Logic App's HTTP trigger; the
+// Logic App emails the file as an attachment via the Office 365 Outlook
+// connector. B-N19d insight digests POST the same trigger with `bodyHtml` and
+// no attachment.
 //
 // Why a Logic App (not an Action Group): Action Group email receivers send
 // plain-text notifications only and CANNOT carry a file attachment. Delivering

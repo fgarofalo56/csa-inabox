@@ -3,7 +3,7 @@
  *
  * A digest turns Azure Monitor metric movement + fired-alert history over a
  * lookback window into a Copilot-narrated summary that is DELIVERED through the
- * EXISTING C5 report-subscriptions timer Function (apps/fiab-report-subscriptions)
+ * EXISTING C5 report-subscriptions timer Function (azure-functions/report-subscriptions)
  * — the same tick, the same delivery Logic App, the same Cosmos plumbing. There
  * is no second scheduler.
  *
@@ -17,7 +17,7 @@
  *   • `renderDigestHtml`    — the delivered email body.
  *   • `validateDigestInput` — the no-freeform-config validator for the BFF.
  *
- * DELIBERATE PORT: `apps/fiab-report-subscriptions/src/insight-digest-model.ts`
+ * DELIBERATE PORT: `azure-functions/report-subscriptions/src/insight-digest-model.ts`
  * is a narrow copy of the pure helpers below (the Function is a separately
  * deployed artifact with its own package.json — there is no shared workspace
  * package to import from). Both files export `DIGEST_MODEL_VERSION` and both

@@ -12,8 +12,9 @@ import { clientFetch } from '@/lib/client-fetch';
  *   DELETE /api/items/report/[id]/subscriptions/[subId]   (cancel)
  *   GET    /api/items/report/[id]/subscriptions/[subId]/logs  (delivery history)
  *
- * Scheduled delivery is performed by the fiab-report-subscriptions timer
- * Function (real Power BI ExportTo job → ADLS archive → email via Logic App).
+ * Scheduled delivery is performed by the report-subscriptions ACA job
+ * (Azure-native paginated-report-renderer → email via the delivery Logic App —
+ * NOT Power BI ExportTo, which is unavailable in GCC-High).
  * When that Function/Logic App is not deployed the BFF returns a `deliveryGate`
  * which is rendered as an honest warning MessageBar — subscriptions still save.
  *

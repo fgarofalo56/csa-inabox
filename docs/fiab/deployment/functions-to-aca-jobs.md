@@ -168,13 +168,14 @@ remaining** — and of the 5 remaining, only 2 are purely job-shaped.
 
 ### Side findings recorded, not fixed here
 
-* **`apps/fiab-report-subscriptions` is orphaned.** It holds the B-N19d insight
-  digest engine (`insights-engine.ts`, `insight-digest-model.ts`) and is
-  referenced by **no** bicep module, workflow, or script — only by a comment in
-  `report-subscription-logicapp.bicep`. The code that was actually deployed to
-  `func-rptsub-*` was `azure-functions/report-subscriptions` (per the publish
-  step in `csa-loom-post-deploy-bootstrap.yml`). Belongs to the C2 "B-N19d
-  scheduled insight digests" residue.
+* ~~**`apps/fiab-report-subscriptions` is orphaned.**~~ **CLOSED by C2
+  (finishline, PR #3077).** It held the B-N19d insight digest engine
+  (`insights-engine.ts`, `insight-digest-model.ts`) and was referenced by **no**
+  bicep module, workflow, or script — so no scheduled digest had ever run. Its
+  report-delivery half also rendered via **Power BI ExportTo**, violating
+  `no-fabric-dependency.md`. The engine has been ported onto
+  `azure-functions/report-subscriptions` (this job — it now runs a digest pass
+  after the delivery pass in the same execution) and the orphaned tree deleted.
 * **The superseded Function Apps are still deployed.** `func-cpeval-*`,
   `func-secexp-*`, `func-loom-prpt-renderer-*`, `func-csa-loom-mcp`,
   `func-rptsub-*` all have live ACA replacements and are cost + confusion — and

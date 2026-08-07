@@ -12,13 +12,14 @@
  *   POST /api/items/report/[id]/subscriptions
  *          body { workspaceId, format, cron|presetId, recipients[], subject?, itemId? }
  *          Creates a subscription row in Cosmos. Delivery is performed
- *          asynchronously by the fiab-report-subscriptions timer Function — the
+ *          asynchronously by the report-subscriptions ACA job — the
  *          row is stored regardless of whether that Function is deployed yet, so
  *          the operator can configure subscriptions before wiring delivery.
  *
- * [id] is the Power BI report id (groupId-scoped, same as the export/refresh
- * routes). The export itself is performed by the timer Function via the real
- * Power BI ExportTo REST job — no Microsoft Fabric dependency.
+ * [id] is the report id (groupId-scoped, same as the export/refresh routes).
+ * The export itself is performed by the report-subscriptions ACA job via the
+ * Azure-native paginated-report-renderer (LOOM_REPORT_RENDERER_URL) — NOT Power
+ * BI ExportTo, which is unavailable in GCC-High. No Microsoft Fabric dependency.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';

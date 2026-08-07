@@ -673,10 +673,10 @@ export interface AppInstallJob {
  * Power BI report (Azure-native parity with Fabric/Power BI "Subscribe to
  * report" + "Subscriptions"). One row per subscription, partitioned by the
  * reportId so the editor's per-report subscription list hits a single physical
- * partition. The fiab-report-subscriptions timer Function reads `enabled=true`
- * rows, renders the report via the real Power BI ExportTo REST job, and emails
- * the file via the report-subscription Logic App. No Microsoft Fabric
- * dependency — Power BI REST is the Azure-native rendering backend.
+ * partition. The report-subscriptions ACA job reads `enabled=true` rows,
+ * renders the report via the Azure-native paginated-report-renderer
+ * (LOOM_REPORT_RENDERER_URL — NOT Power BI ExportTo, unavailable in GCC-High),
+ * and emails it via the report-subscription Logic App. No Fabric dependency.
  */
 export interface ReportSubscription {
   id: string;                       // 'sub:<uuid>' — partition companion
@@ -1109,9 +1109,9 @@ async function ensure() {
   // the timer Function's per-report reads hit a single physical partition. The
   // delivery log is append-only, PK /subscriptionId. Both created lazily so a
   // fresh environment needs no extra ARM/Bicep step beyond the account+database.
-  // Azure-native parity with Fabric/Power BI report subscriptions — rendering is
-  // the real Power BI ExportTo REST job; delivery is the report-subscription
-  // Logic App. No Microsoft Fabric dependency.
+  // Azure-native parity with Fabric/Power BI report subscriptions — rendering
+  // is the paginated-report-renderer, NOT Power BI ExportTo; delivery is the
+  // report-subscription Logic App. No Microsoft Fabric dependency.
   _reportSubscriptions = await mk('report-subscriptions', '/reportId');
   _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
   _insightDigests = await mk('insight-digests', '/tenantId');  _insightDigestLog = await mk('insight-digest-log', '/digestId');  // B-N19d

@@ -3,7 +3,7 @@
  *
  * Also the CONTRACT test for the deliberate console↔Function port: the golden
  * vectors here are duplicated verbatim in
- * `apps/fiab-report-subscriptions/src/insight-digest-model.test.ts`, and both
+ * `azure-functions/report-subscriptions/src/insight-digest-model.test.ts`, and both
  * suites pin `DIGEST_MODEL_VERSION`. Changing the math on one side without
  * mirroring it fails the other side's suite.
  */

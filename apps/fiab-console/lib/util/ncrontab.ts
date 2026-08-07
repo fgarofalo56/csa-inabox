@@ -3,8 +3,7 @@
  * triggers use (`{second} {minute} {hour} {day} {month} {day-of-week}`).
  *
  * Used by the report-subscription BFF to validate operator-supplied schedules
- * and to present friendly preset labels. The fiab-report-subscriptions timer
- * Function mirrors the matching logic in apps/fiab-report-subscriptions/src/
+ * and to present friendly preset labels. The report-subscriptions ACA job mirrors the matching logic in azure-functions/report-subscriptions/src/
  * cron-match.ts so the UI's "next run" preview agrees with what the Function
  * actually fires.
  *

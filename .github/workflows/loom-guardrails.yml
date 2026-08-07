@@ -487,6 +487,21 @@ jobs:
       - name: 'node:test suites (every suite in the tree — #2856)'
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-node-test-suites.mjs
+      # The step above closed the class for `node:test` and left the vitest half
+      # open. At this step's merge-base EVERY vitest suite under
+      # azure-functions/ was dark — five packages, five spec files, 121
+      # assertions — because each carries its own package.json + node_modules
+      # and no workflow ran them.
+      #
+      # The concrete case: the report-subscriptions delivery payload had drifted
+      # from its Logic App trigger schema (it posted `contentBytes`/`fileName`,
+      # which the workflow does not read). That code had never executed on the
+      # estate, so it emailed nothing and broke nothing — but nothing in CI
+      # could have told us either way, and the spec that now catches it is
+      # worth nothing unless something runs it.
+      - name: 'standalone vitest suites (azure-functions packages no other lane runs)'
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-standalone-vitest-suites.mjs
       # ── the workflow files themselves (refs #3030) ─────────────────────────
       # Every guard above judges the repo. These two judge the WORKFLOWS THAT RUN
       # THE GUARDS. On 2026-08-05 full-app-deploy-commercial.yml — the only
