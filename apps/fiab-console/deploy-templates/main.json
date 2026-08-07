@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4328657014243784232"
+      "templateHash": "12349423357272646043"
     }
   },
   "definitions": {
@@ -2476,7 +2476,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "6874109587147960046"
+              "templateHash": "6692036302390658833"
             }
           },
           "definitions": {
@@ -21735,7 +21735,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.45.15.27210",
-                      "templateHash": "3256477038254457740"
+                      "templateHash": "18419236035665793397"
                     }
                   },
                   "parameters": {
@@ -21757,7 +21757,7 @@
                     "risingwaveConfig": {
                       "type": "object",
                       "metadata": {
-                        "description": "R0 config bag — every setting for the streaming-SQL tier in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake write).\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  loom-risingwave container image (pin an explicit tag, never :latest).\n\nOptional keys:\n  uamiPrincipalId        That identity's PRINCIPAL (object) id — required only when\n                         assignLakeRole is true (it names the role assignment).\n  uamiClientId           That identity's CLIENT id — emitted as AZURE_CLIENT_ID so the\n                         engine picks the RIGHT identity off IMDS when the container has\n                         more than one assigned. Empty => omitted.\n  lakeStorageAccountName DLZ ADLS Gen2 account the streaming sink writes Delta/Iceberg to.\n                         Empty => no LOOM_LAKE_ACCOUNT and no role assignment; the engine\n                         still runs (single-node local state) and the Postgres wire serves.\n                         The lake usually lives in the DLZ resource group, in which case the\n                         orchestrator passes assignLakeRole:false and grants the role from a\n                         DLZ-scoped module instead.\n  frontendPort           Postgres-wire frontend port (default 4566).\n  minReplicas            Default 1 — the streaming tier holds MV state (CANNOT scale to zero:\n                         a stopped replica loses every materialized view and its progress).\n  maxReplicas            Default 1 — single-node RisingWave is not horizontally sharded here.\n  cpu / memory           Container resources (default 2.0 vCPU / 4.0Gi) — the SMALLEST viable\n                         always-on footprint and an ACA-Consumption-legal pair.\n                         ACA Consumption only accepts memory == 2x cpu, so the\n                         previous 2.0/8Gi default was NOT DEPLOYABLE — preflight\n                         rejected it with ContainerAppInvalidResourceTotal. For a\n                         heavier streaming workload use 4.0 vCPU / 8Gi (the next\n                         valid step up, and the profile ceiling), not 2.0/8Gi.\n  stateStore             Optional RW_STATE_STORE override (e.g. hummock+... on ADLS) for a\n                         durable, scaled deployment; empty => single-node local state.\n  dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.\n  assignLakeRole         Default true. Set false to skip the in-module role assignment when\n                         the lake is in another resource group / granted out-of-band.\n  rootPasswordSecretUri  REQUIRED (or the @secure() rootPassword param). Key Vault secret URI\n                         https://<vault>.vault.azure.net/secrets/<name> holding the Postgres-wire\n                         root password. Rendered as a Key-Vault-backed Container Apps SECRET\n                         resolved by uamiId at revision start — the value never enters the\n                         template, the deployment history, or `az containerapp show`. The UAMI\n                         needs \"Key Vault Secrets User\" on that vault.\n  allowedCidrs           Optional ACA ingress IP allow-list (defence-in-depth against the wider\n                         VNet). NOT a substitute for the credential OR the in-image port seal:\n                         every app in a Container Apps environment draws its pod IP from the SAME\n                         infrastructure subnet, so any CIDR that admits the Console also admits\n                         the code-execution apps — and ingress rules only govern the ingress path,\n                         not a direct pod-IP connect. Empty (default) => internal ingress plus the\n                         image's own single-listener seal are the network controls.\n  livenessInitialDelay   Seconds before the first liveness probe (default 150). The engine boots\n                         TWICE — once with every listener on loopback to install the credential\n                         and assert zero routable ports, once serving — so the routable port does\n                         not exist for the first ~15s (measured; see the probe comment). A short\n                         delay would kill the container mid-bootstrap.\n  readinessInitialDelay  Seconds before the first readiness probe (default 30)."
+                        "description": "R0 config bag — every setting for the streaming-SQL tier in ONE typed object (admin-plane/main.bicep is at the ARM 256-param cap, so no new top-level params are added anywhere).\n\nRequired keys:\n  environmentId          Container Apps managed-environment resource id (in-VNet).\n  uamiId                 User-assigned managed identity RESOURCE id (ACR pull + lake write).\n  acrLoginServer         ACR login server, e.g. acrloom.azurecr.io.\n  image                  loom-risingwave container image (pin an explicit tag, never :latest).\n\nOptional keys:\n  uamiPrincipalId        That identity's PRINCIPAL (object) id — required only when\n                         assignLakeRole is true (it names the role assignment).\n  uamiClientId           That identity's CLIENT id — emitted as AZURE_CLIENT_ID so the\n                         engine picks the RIGHT identity off IMDS when the container has\n                         more than one assigned. Empty => omitted.\n  lakeStorageAccountName DLZ ADLS Gen2 account the streaming sink writes Delta/Iceberg to.\n                         Empty => no LOOM_LAKE_ACCOUNT and no role assignment; the engine\n                         still runs (single-node local state) and the Postgres wire serves.\n                         The lake usually lives in the DLZ resource group, in which case the\n                         orchestrator passes assignLakeRole:false and grants the role from a\n                         DLZ-scoped module instead.\n  frontendPort           Postgres-wire frontend port (default 4566).\n  minReplicas            Default 1 — the streaming tier holds MV state (CANNOT scale to zero:\n                         a stopped replica loses every materialized view and its progress).\n  maxReplicas            Default 1 — single-node RisingWave is not horizontally sharded here.\n  cpu / memory           Container resources (default 2.0 vCPU / 4.0Gi) — the SMALLEST viable\n                         always-on footprint and an ACA-Consumption-legal pair.\n                         ACA Consumption only accepts memory == 2x cpu, so the\n                         previous 2.0/8Gi default was NOT DEPLOYABLE — preflight\n                         rejected it with ContainerAppInvalidResourceTotal. For a\n                         heavier streaming workload use 4.0 vCPU / 8Gi (the next\n                         valid step up, and the profile ceiling), not 2.0/8Gi.\n  stateStore             Optional RW_STATE_STORE override (e.g. hummock+... on ADLS) for a\n                         durable, scaled deployment; empty => single-node local state.\n  dataDirectory          Optional RW_DATA_DIRECTORY when stateStore is set.\n  assignLakeRole         Default true. Set false to skip the in-module role assignment when\n                         the lake is in another resource group / granted out-of-band.\n  rootPasswordSecretUri  REQUIRED (or the @secure() rootPassword param). Key Vault secret URI\n                         https://<vault>.vault.azure.net/secrets/<name> holding the Postgres-wire\n                         root password. Rendered as a Key-Vault-backed Container Apps SECRET\n                         resolved by uamiId at revision start — the value never enters the\n                         template, the deployment history, or `az containerapp show`. The UAMI\n                         needs \"Key Vault Secrets User\" on that vault.\n  allowedCidrs           Optional ACA ingress IP allow-list (defence-in-depth against the wider\n                         VNet). NOT a substitute for the credential OR the in-image port seal:\n                         every app in a Container Apps environment draws its pod IP from the SAME\n                         infrastructure subnet, so any CIDR that admits the Console also admits\n                         the code-execution apps — and ingress rules only govern the ingress path,\n                         not a direct pod-IP connect. Empty (default) => internal ingress plus the\n                         image's own single-listener seal are the network controls.\n  livenessInitialDelay   Seconds before the first liveness probe (default 10; CLAMPED to the ACA\n                         cap of 60 — ARM preflight rejects anything higher with\n                         ContainerAppProbeInitialDelaySecondsOutOfRange, which is why the previous\n                         150s default made this module UNDEPLOYABLE). The long sealed bootstrap\n                         (the engine boots TWICE — once with every listener on loopback to install\n                         the credential and assert zero routable ports, once serving, so the\n                         routable port does not exist for the first ~15s measured) is absorbed by\n                         the dedicated STARTUP probe below, which suppresses liveness/readiness\n                         until it succeeds — so this delay no longer needs to cover the boot.\n  readinessInitialDelay  Seconds before the first readiness probe (default 10; clamped to 60 the\n                         same way)."
                       }
                     },
                     "rootPassword": {
@@ -21808,8 +21808,8 @@
                     "rootPasswordInline": "[and(empty(variables('rootPasswordSecretUri')), not(empty(parameters('rootPassword'))))]",
                     "rootAuthConfigured": "[or(variables('rootPasswordFromKeyVault'), variables('rootPasswordInline'))]",
                     "allowedCidrs": "[coalesce(tryGet(parameters('risingwaveConfig'), 'allowedCidrs'), createArray())]",
-                    "livenessInitialDelay": "[int(coalesce(tryGet(parameters('risingwaveConfig'), 'livenessInitialDelay'), 150))]",
-                    "readinessInitialDelay": "[int(coalesce(tryGet(parameters('risingwaveConfig'), 'readinessInitialDelay'), 30))]",
+                    "livenessInitialDelay": "[max(1, min(60, int(coalesce(tryGet(parameters('risingwaveConfig'), 'livenessInitialDelay'), 10))))]",
+                    "readinessInitialDelay": "[max(1, min(60, int(coalesce(tryGet(parameters('risingwaveConfig'), 'readinessInitialDelay'), 10))))]",
                     "tags": "[union(parameters('complianceTags'), createObject('loom-next-level', 'true'))]",
                     "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
                     "lakeEnv": "[if(empty(variables('lakeStorageAccountName')), createArray(), createArray(createObject('name', 'LOOM_LAKE_ACCOUNT', 'value', variables('lakeStorageAccountName'))))]",
@@ -21882,6 +21882,16 @@
                               },
                               "probes": [
                                 {
+                                  "type": "Startup",
+                                  "tcpSocket": {
+                                    "port": "[variables('frontendPort')]"
+                                  },
+                                  "initialDelaySeconds": 10,
+                                  "periodSeconds": 15,
+                                  "timeoutSeconds": 5,
+                                  "failureThreshold": 10
+                                },
+                                {
                                   "type": "Liveness",
                                   "tcpSocket": {
                                     "port": "[variables('frontendPort')]"
@@ -21897,7 +21907,7 @@
                                   },
                                   "initialDelaySeconds": "[variables('readinessInitialDelay')]",
                                   "periodSeconds": 10,
-                                  "failureThreshold": 30
+                                  "failureThreshold": 10
                                 }
                               ]
                             }

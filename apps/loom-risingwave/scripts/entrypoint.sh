@@ -72,11 +72,24 @@
 #      There is no "unauthenticated fallback" branch anywhere below.
 #   2. Phase 1 (SEALED) starts the engine with EVERY listener — including the
 #      wire port — on 127.0.0.1, then ASSERTS THE NEGATIVE: `/proc/net/tcp` and
-#      `/proc/net/tcp6` must show ZERO routable listening sockets. That is the
-#      measurement that proves the per-node loopback options actually took
-#      effect on this binary, and it is taken while nothing at all is reachable
-#      from the pod IP. If any routable listener exists, the engine is killed and
-#      the container exits non-zero.
+#      `/proc/net/tcp6` must show ZERO routable listening sockets OWNED BY THE
+#      ENGINE'S PROCESS TREE. That is the measurement that proves the per-node
+#      loopback options actually took effect on this binary, and it is taken
+#      while nothing of the engine's is reachable from the pod IP. If any
+#      engine-owned routable listener exists, the engine is killed and the
+#      container exits non-zero.
+#      OWNERSHIP SCOPING (2026-08-06, measured live on cae-csa-loom-centralus):
+#      a Container Apps replica SHARES its network namespace with
+#      platform-injected agents — four wildcard listeners (v4 8578/23045 and
+#      two v6 ports) exist in every replica of every app, are not created by
+#      this container, and cannot be removed by it. The original whole-netns
+#      assertion therefore crash-looped on ACA while the engine itself was
+#      correctly loopback-only (the docker measurement modeled the code's
+#      assumption, not the ACA reality). The scan now matches the engine tree's
+#      /proc/<pid>/fd socket inodes against the inode column of
+#      /proc/net/tcp{,6}, so it asserts exactly what the contract promises: the
+#      ENGINE exposes nothing routable. Platform sockets the platform owns are
+#      the platform's posture, not this image's.
 #   3. Still in phase 1, `ALTER USER root PASSWORD '<secret>'` is applied and
 #      then VERIFIED: a password-less connection must be REJECTED and the
 #      configured one ACCEPTED, or the container dies.
@@ -121,6 +134,13 @@ log() { echo "[loom-risingwave] $*" >&2; }
 # is reachable from off-host and therefore routable.
 #
 # LOOM_RW_PROCNET_FILES overrides the input files (used by --selftest only).
+#
+# LOOM_RW_SOCKET_INODES ("<inode> <inode> ...") scopes the scan to sockets OWNED
+# by those inodes — the runtime sets it from the live engine process tree before
+# every assertion (see engine_socket_inodes), because an ACA replica's netns
+# also carries platform-agent sockets this container does not own. When the
+# variable is unset the scan covers the WHOLE namespace — the conservative
+# (over-strict, fail-closed) direction.
 routable_listeners() {
   _files="${LOOM_RW_PROCNET_FILES:-}"
   if [ -z "$_files" ]; then
@@ -129,8 +149,17 @@ routable_listeners() {
     done
   fi
   [ -n "$_files" ] || return 0
+  # /proc/net/tcp{,6} field 10 is the socket inode — the join key to
+  # /proc/<pid>/fd. The filter drops rows whose socket the engine tree does
+  # not hold.
   # shellcheck disable=SC2086
-  awk 'FNR == 1 { next } $4 != "0A" { next } { n = split($2, a, ":"); if (n == 2) print toupper(a[1]) " " toupper(a[2]) }' $_files 2>/dev/null \
+  awk -v inodes="${LOOM_RW_SOCKET_INODES:-}" '
+    BEGIN { n = split(inodes, only, " "); for (i = 1; i <= n; i++) own[only[i]] = 1 }
+    FNR == 1 { next }
+    $4 != "0A" { next }
+    n > 0 && !($10 in own) { next }
+    { m = split($2, a, ":"); if (m == 2) print toupper(a[1]) " " toupper(a[2]) }
+  ' $_files 2>/dev/null \
     | while read -r _addr _hexport; do
         case "$_addr" in
           # 127.0.0.0/8 (v4). The v4 hex is exactly 8 chars and the FIRST octet is
@@ -160,6 +189,44 @@ routable_listeners() {
 # Just the ports, ascending — what the assertions compare against.
 routable_ports() {
   routable_listeners | awk '{ print $2 }' | sort -un
+}
+
+# ── Engine-owned socket enumeration ───────────────────────────────────────────
+# The engine's process tree: ENGINE_PID plus every descendant (the compute node
+# can spawn a JVM connector child), found by a ppid scan of /proc/*/stat. The
+# comm field may contain spaces or parens, so the ppid is read from the SECOND
+# field after the LAST ')' — the only parse the proc(5) format guarantees.
+engine_pids() {
+  _all=" ${ENGINE_PID} "
+  _grew=1
+  while [ "$_grew" -eq 1 ]; do
+    _grew=0
+    for _sf in /proc/[0-9]*/stat; do
+      [ -r "$_sf" ] || continue
+      _line=$(cat "$_sf" 2>/dev/null) || continue
+      _pid=${_line%% *}
+      _rest=${_line##*) }
+      _ppid=$(printf '%s' "$_rest" | awk '{ print $2 }')
+      case "$_all" in *" ${_pid} "*) continue ;; esac
+      case "$_all" in *" ${_ppid} "*) _all="${_all}${_pid} "; _grew=1 ;; esac
+    done
+  done
+  printf '%s\n' "$_all"
+}
+
+# Socket inodes held by the engine tree, space-separated ("socket:[N]" fd links
+# under /proc/<pid>/fd). Empty output means enumeration FAILED or the engine
+# holds no sockets — the assertions treat that as an error, never as "clean",
+# because a vacuous pass is exactly the gate-that-measures-nothing failure mode.
+engine_socket_inodes() {
+  for _p in $(engine_pids); do
+    for _fd in /proc/"$_p"/fd/*; do
+      _tgt=$(readlink "$_fd" 2>/dev/null) || continue
+      case "$_tgt" in
+        'socket:['*']') _i=${_tgt#socket:[}; printf '%s\n' "${_i%]}" ;;
+      esac
+    done
+  done | sort -un | tr '\n' ' ' | sed 's/ *$//'
 }
 
 # ── --selftest: prove the classifier, at build time ───────────────────────────
@@ -192,15 +259,26 @@ EOF
    2: 00000000000000000000000000000000:1A0C 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9
    3: 0D01A8C0FFFF0000000000000000007F:1A0D 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 10
 EOF
-  # Expected routable ports: 0x11D2 = 4562 (v4 wildcard), 0x1652 = 5714 (real
-  # interface address), 0x1A0C = 6668 (v6 wildcard) and 0x1A0D = 6669 (a 32-char
-  # v6 address that merely ENDS in 7F without the ::ffff: prefix — it must not
-  # be mistaken for mapped loopback). Everything else is inside 127.0.0.0/8, is
-  # ::1 / ::ffff:127.x, or is ESTABLISHED rather than LISTEN.
+  # Expected routable ports: 0x11D2 = 4562 (v4 wildcard, inode 2), 0x1652 = 5714
+  # (real interface address, inode 6), 0x1A0C = 6668 (v6 wildcard, inode 9) and
+  # 0x1A0D = 6669 (inode 10 — a 32-char v6 address that merely ENDS in 7F
+  # without the ::ffff: prefix; it must not be mistaken for mapped loopback).
+  # Everything else is inside 127.0.0.0/8, is ::1 / ::ffff:127.x, or is
+  # ESTABLISHED rather than LISTEN.
   LOOM_RW_PROCNET_FILES="$_t/tcp $_t/tcp6"
   export LOOM_RW_PROCNET_FILES
+  # Pass 1 — classifier, whole namespace (no ownership filter).
   _got=$(routable_ports | tr '\n' ',')
   _pretty=$(routable_listeners | sort | tr '\n' ';')
+  # Pass 2 — OWNERSHIP scoping, the ACA case: the netns carries routable
+  # platform sockets (inodes 6 and 10 here) the engine does not own. With the
+  # engine holding only inodes 2 and 9, exactly those two routable ports may
+  # be reported; flagging the unowned ones is the docker-measured bug that
+  # crash-looped every ACA replica on 2026-08-06.
+  LOOM_RW_SOCKET_INODES="2 9"
+  export LOOM_RW_SOCKET_INODES
+  _got_owned=$(routable_ports | tr '\n' ',')
+  unset LOOM_RW_SOCKET_INODES
   unset LOOM_RW_PROCNET_FILES
   rm -rf "$_t"
   if [ "$_got" != "4562,5714,6668,6669," ]; then
@@ -219,7 +297,15 @@ EOF
       exit 1
       ;;
   esac
-  log "selftest passed: 127.0.0.0/8 + ::1 + ::ffff:127.x classified loopback; wildcard and interface addresses classified routable; v4 decoder correct"
+  if [ "$_got_owned" != "4562,6668," ]; then
+    log "SELFTEST FAILED: with LOOM_RW_SOCKET_INODES='2 9' routable_ports returned"
+    log "SELFTEST FAILED: '${_got_owned}', expected '4562,6668,'. The ownership filter is"
+    log "SELFTEST FAILED: broken: too permissive and unowned sockets vanish from the real"
+    log "SELFTEST FAILED: assertions too; too strict and every ACA replica crash-loops on"
+    log "SELFTEST FAILED: the platform's own agent sockets. Refusing to build."
+    exit 1
+  fi
+  log "selftest passed: 127.0.0.0/8 + ::1 + ::ffff:127.x classified loopback; wildcard and interface addresses classified routable; v4 decoder correct; inode ownership filter scopes the scan"
   exit 0
 fi
 
@@ -357,13 +443,24 @@ log "phase 1/2: starting the engine SEALED — frontend, meta, compute, compacto
 start_engine "127.0.0.1:${FRONTEND_PORT}"
 wait_for_sql
 
-# THE MEASUREMENT. Nothing may be reachable from the pod IP right now. If the
-# per-node loopback options did not take effect on this binary (an engine bump
-# that renames a flag, a stale override), this is where it stops — before any
-# routable port has ever existed.
+# THE MEASUREMENT. Nothing of the ENGINE'S may be reachable from the pod IP
+# right now. If the per-node loopback options did not take effect on this
+# binary (an engine bump that renames a flag, a stale override), this is where
+# it stops — before any engine-owned routable port has ever existed. The scan
+# is scoped to the engine tree's socket inodes because an ACA replica's netns
+# also carries platform-agent listeners this container neither created nor can
+# remove (measured live 2026-08-06: the whole-netns scan flagged them and
+# crash-looped every replica while the engine itself was correctly sealed).
+LOOM_RW_SOCKET_INODES=$(engine_socket_inodes)
+export LOOM_RW_SOCKET_INODES
+# The engine just answered SQL, so it certainly holds sockets. An empty inode
+# set therefore means the ENUMERATION is broken (not that the surface is
+# clean) — and an assertion running on an empty set would pass vacuously.
+# Fail closed instead, and say what is actually known (deploy-integrity R7).
+[ -n "$LOOM_RW_SOCKET_INODES" ] || fail "could not enumerate the engine's socket inodes from /proc/${ENGINE_PID}/fd — the port assertions would pass VACUOUSLY, so this is an error, not a clean surface. Refusing to continue."
 SEALED_ROUTABLE=$(routable_ports | tr '\n' ' ' | sed 's/ *$//')
 if [ -n "$SEALED_ROUTABLE" ]; then
-  log "FATAL: the SEALED phase has routable listening ports: ${SEALED_ROUTABLE}"
+  log "FATAL: the SEALED phase has ENGINE-OWNED routable listening ports: ${SEALED_ROUTABLE}"
   routable_listeners | while read -r _a _p; do log "FATAL:   routable listener ${_a}:${_p}"; done
   log "FATAL: every RisingWave listener was supposed to be bound to 127.0.0.1 in"
   log "FATAL: this phase, so a non-loopback socket means the per-node options did"
@@ -374,7 +471,8 @@ if [ -n "$SEALED_ROUTABLE" ]; then
   log "FATAL: from every sibling app in the environment. Refusing to continue."
   fail "sealed-phase port assertion failed."
 fi
-log "verified: ZERO routable listening ports during the sealed phase"
+log "verified: ZERO engine-owned routable listening ports during the sealed phase"
+unset LOOM_RW_SOCKET_INODES
 
 # ── 4. SET THE CREDENTIAL ─────────────────────────────────────────────────────
 # Fed on stdin so the secret never appears in argv or in `ps`. RisingWave stores
@@ -428,23 +526,34 @@ start_engine "0.0.0.0:${FRONTEND_PORT}" "$@"
 # sends on a revision roll / scale-in.
 trap 'kill -TERM "$ENGINE_PID" 2>/dev/null || true' TERM INT HUP
 
-# Wait for the routable wire port to appear, then re-assert the surface.
+# Wait for the routable wire port to appear among the ENGINE'S OWN sockets,
+# then re-assert the surface. The inode set is refreshed every poll (the engine
+# binds sockets as it boots; ENGINE_PID changed at the phase-2 restart).
 SERVE_WAITED=0
 while [ "$SERVE_WAITED" -lt "$SERVE_TIMEOUT" ]; do
   if ! kill -0 "$ENGINE_PID" 2>/dev/null; then
     fail "the engine exited during the serving boot (see the lines above)."
   fi
-  if routable_ports | grep -q "^${FRONTEND_PORT}\$"; then
+  LOOM_RW_SOCKET_INODES=$(engine_socket_inodes)
+  export LOOM_RW_SOCKET_INODES
+  if [ -n "$LOOM_RW_SOCKET_INODES" ] && routable_ports | grep -q "^${FRONTEND_PORT}\$"; then
     break
   fi
   sleep 2
   SERVE_WAITED=$((SERVE_WAITED + 2))
 done
-[ "$SERVE_WAITED" -lt "$SERVE_TIMEOUT" ] || fail "the serving frontend never bound 0.0.0.0:${FRONTEND_PORT} within ${SERVE_TIMEOUT}s."
+if [ "$SERVE_WAITED" -ge "$SERVE_TIMEOUT" ]; then
+  # Two distinct truths, reported distinctly (deploy-integrity R7): an empty
+  # inode set means the ENUMERATION never worked, not that the port is absent.
+  if [ -z "${LOOM_RW_SOCKET_INODES:-}" ]; then
+    fail "could not enumerate the engine's socket inodes within ${SERVE_TIMEOUT}s — whether the serving frontend bound 0.0.0.0:${FRONTEND_PORT} is UNKNOWN. Refusing to serve unverified."
+  fi
+  fail "the serving frontend never bound 0.0.0.0:${FRONTEND_PORT} within ${SERVE_TIMEOUT}s (engine-owned sockets were enumerable throughout)."
+fi
 
 SERVING_EXTRA=$(routable_ports | grep -v "^${FRONTEND_PORT}\$" | tr '\n' ' ' | sed 's/ *$//')
 if [ -n "$SERVING_EXTRA" ]; then
-  log "FATAL: the SERVING phase exposes routable ports beyond the wire port: ${SERVING_EXTRA}"
+  log "FATAL: the SERVING phase exposes ENGINE-OWNED routable ports beyond the wire port: ${SERVING_EXTRA}"
   routable_listeners | while read -r _a _p; do log "FATAL:   routable listener ${_a}:${_p}"; done
   log "FATAL: upstream's meta (5690), dashboard (5691), compute (5688) and"
   log "FATAL: compactor (6660) listeners have NO AUTHENTICATION, and the root"
@@ -454,9 +563,10 @@ if [ -n "$SERVING_EXTRA" ]; then
   log "FATAL: which execute user-supplied code. Refusing to serve."
   fail "serving-phase port assertion failed."
 fi
-log "verified: the ONLY routable listening port is ${FRONTEND_PORT}, and it requires the root credential"
+log "verified: the ONLY engine-owned routable listening port is ${FRONTEND_PORT}, and it requires the root credential"
 routable_listeners | while read -r _a _p; do log "  routable listener: ${_a}:${_p} (Postgres wire, credential-gated)"; done
 log "ready — loom-risingwave is serving an authenticated Postgres wire and nothing else"
+unset LOOM_RW_SOCKET_INODES
 
 # Hold PID 1 for the life of the engine. `wait` returns early when a trapped
 # signal arrives, so loop until the child is genuinely gone.
