@@ -109,6 +109,50 @@ describe('buildDlzDeploymentParameters — tenant', () => {
   });
 });
 
+describe('buildDlzDeploymentParameters — adopt bag (#3016)', () => {
+  const bag = {
+    purview: { mode: 'adopt', target: { name: 'pv-existing', rg: 'rg-data', sub: SUB } },
+    aisearch: { mode: 'create' },
+  };
+
+  it('emits the adopt bag as the `adopt` ARM parameter on the tenant path', () => {
+    const p = buildDlzDeploymentParameters({
+      topology: 'tenant',
+      boundary: 'Commercial',
+      location: 'eastus2',
+      capacitySku: 'F8',
+      domainName: 'finance',
+      adopt: bag,
+    });
+    expect(p.adopt).toEqual({ value: bag });
+  });
+
+  it('emits the adopt bag on the dlz-attach path too', () => {
+    const p = buildDlzDeploymentParameters({
+      topology: 'dlz-attach',
+      boundary: 'Commercial',
+      location: 'eastus2',
+      capacitySku: 'F8',
+      domainName: 'va',
+      targetSubscriptionId: SUB,
+      adopt: bag,
+    });
+    expect(p.adopt).toEqual({ value: bag });
+  });
+
+  it('emits NOTHING for an absent or empty bag (greenfield params unchanged)', () => {
+    const base = {
+      topology: 'tenant' as const,
+      boundary: 'Commercial',
+      location: 'eastus2',
+      capacitySku: 'F8',
+      domainName: 'finance',
+    };
+    expect(buildDlzDeploymentParameters(base).adopt).toBeUndefined();
+    expect(buildDlzDeploymentParameters({ ...base, adopt: {} }).adopt).toBeUndefined();
+  });
+});
+
 describe('resolveDlzTemplateSource', () => {
   it('returns null when the env is unset (→ honest gate)', () => {
     expect(resolveDlzTemplateSource()).toBeNull();

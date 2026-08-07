@@ -77,9 +77,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-bff-errors.mjs
       - name: editor-read-failure-honesty (a failed read must never look like empty content — C19 data loss)
-        # Was missing its `if:` on main, so check-guardrails-observability.mjs
-        # (#3042's meta-guard) was RED on every PR — meaning the one control
-        # that keeps the other guards visible was itself failing. One line.
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-editor-read-failure-honesty.mjs
       - name: quadratic-trims (the two ReDoS trim shapes closed to zero — PR #2677)

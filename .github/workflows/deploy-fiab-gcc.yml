@@ -144,13 +144,24 @@ jobs:
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |
           set -e
+          # RETRY WITH CLASSIFICATION (#3017, deploy-integrity R6): same harness
+          # as Commercial — this ran bare, and the failure notifier below reads
+          # deploy-failure.json, which nothing on this workflow produced.
           if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then
             # dlz-attach: provision the DLZ directly INTO the new target sub,
             # mirroring Commercial. azd would deploy into the logged-in (hub) sub,
             # so the DLZ RG/module (single-arg resourceGroup()) would land in the
             # wrong subscription. az deployment sub create scoped to the target sub
             # makes subscription() resolve to it, per main.bicep's dlz-attach scope.
-            az deployment sub create \
+            node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
+              --class-allow transient,eventual-consistency \
+              --max-attempts 4 --backoff 45 --jitter 0.3 --wall-clock 110m \
+              --step "az deployment sub create (gcc $CSA_LOOM_TOPOLOGY)" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              --remediate \
+              --arm-deployment "csa-loom-gcc-ci-${{ github.run_id }}" --arm-scope sub \
+              --arm-subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
+              -- az deployment sub create \
               --name csa-loom-gcc-ci-${{ github.run_id }} \
               --location "$AZURE_LOCATION" \
               --subscription "$CSA_LOOM_TARGET_SUBSCRIPTION" \
@@ -168,7 +179,15 @@ jobs:
             azd env set CSA_LOOM_TOPOLOGY $CSA_LOOM_TOPOLOGY
             azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
             azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}
-            azd provision --no-prompt
+            # azd names its own nested deployment — no --arm-deployment to drill
+            # into; classification runs on azd's own output. Two attempts only.
+            node "$GITHUB_WORKSPACE/scripts/ci/deploy-retry.mjs" \
+              --class-allow transient,eventual-consistency \
+              --max-attempts 2 --backoff 60 --jitter 0.3 --wall-clock 110m \
+              --step "azd provision (gcc)" \
+              --artifact "$GITHUB_WORKSPACE/deploy-failure.json" \
+              --remediate \
+              -- azd provision --no-prompt
           fi
         working-directory: platform/fiab/azd
 

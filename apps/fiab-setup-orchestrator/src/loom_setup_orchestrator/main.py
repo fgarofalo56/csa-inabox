@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .orchestrator import OrchestratorBase, FoundryOrchestrator, MafOrchestrator
 from .deployment_state import DeploymentStateStore
@@ -93,6 +93,35 @@ class DeployRequest(BaseModel):
     member_group_id: str | None = Field(default=None, alias="memberGroupId")
     cost_center: str | None = Field(default=None, alias="costCenter")
     dlz_rg: str | None = Field(default=None, alias="dlzRg")
+    # The unified adopt-or-create bag (#3016) → main.bicep's `adopt` param.
+    # ``extra="ignore"`` was silently DROPPING this before it was declared, so
+    # every orchestrator-tier deploy discarded the operator's reuse decisions
+    # and provisioned duplicates. Keyed by adoption-catalog service key; each
+    # entry is {"mode": "adopt"|"create"|"skip", "target": {name, rg, sub}, "extra": {}}.
+    adopt: dict[str, Any] | None = Field(default=None, alias="adopt")
+
+    @field_validator("adopt")
+    @classmethod
+    def _validate_adopt(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        """FAIL CLOSED on a malformed bag — deploying something other than what
+        the operator chose is the defect this field exists to remove."""
+        if v is None:
+            return None
+        for key, entry in v.items():
+            if not isinstance(entry, dict):
+                raise ValueError(f"adopt[{key!r}] is not an object")
+            mode = entry.get("mode")
+            if mode not in ("adopt", "create", "skip"):
+                raise ValueError(f"adopt[{key!r}].mode {mode!r} is not adopt|create|skip")
+            target = entry.get("target")
+            if mode == "adopt":
+                if not isinstance(target, dict) or not str(target.get("name") or ""):
+                    raise ValueError(f"adopt[{key!r}] adopts but names no resource")
+                for field_name in ("name", "rg", "sub"):
+                    val = target.get(field_name, "")
+                    if not isinstance(val, str):
+                        raise ValueError(f"adopt[{key!r}].target.{field_name} is not a string")
+        return v
 
 
 class DeployResponse(BaseModel):
