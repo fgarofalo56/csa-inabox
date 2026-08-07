@@ -1194,6 +1194,30 @@
       "evidence": [
         "seeded from C9 sweep 2026-08-06"
       ]
+    },
+    {
+      "id": "E5",
+      "lane": "L-EVALS",
+      "wave": 2,
+      "task_order": 91,
+      "status": "todo",
+      "title": "P1 NEW — EVAL RETRIEVAL COLLAPSE, not a quality failure. Measured on run for #3053 (2026-08-07T01:37Z): eventstream, health and rbac all report hit-rate 0.00 against a 0.50 floor; help 0.40; lakehouse DROPPED 36.7 points in a single run (0.87 → 0.50); deploy-planner -6.6. A 0.00 hit-rate means retrieval returned NOTHING — that is an index/retrieval-path failure, not bad answers. rbac measured 0.667 hit-rate as recently as the artifacts E2 analysed",
+      "depends_on": [],
+      "validation": {
+        "V1": "pending",
+        "V2": "pending",
+        "V3": "pending",
+        "V4": "pending",
+        "V5": "pending",
+        "V6": "pending"
+      },
+      "evidence": [
+        "CONSEQUENCE FOR THE MERGE PLAN: merging E1 (#3053) will NOT turn the evals gate green — the gate is now red for a DIFFERENT reason than the judge cap. The six PRs queued behind that gate stay blocked until this is diagnosed",
+        "leading hypothesis (UNVERIFIED — do not report as cause): the live AI Search index is stale/partially empty relative to the staged corpus. E2-E4 independently recommended dispatching a loom-docs REINDEX before copilot-quality-evals for exactly this reason",
+        "alternative hypothesis to rule out: the eval-probe 401 auth defect (E1's #3056 token-rotation class; E2-E4 noted run 31115406603 returned 401 on every probe and used to CONCLUDE SUCCESS). E4's fail-closed change now makes zero-measured runs fail loudly — so distinguish 'retrieved nothing' from 'could not authenticate' before fixing",
+        "the gate itself behaved WELL here: it refused pass-rate deltas on 4 surfaces for predicate-mismatch (baseline `deterministic` vs this run's `deterministic+grounding+productFidelity`), stating that dropping a conjunct can only raise the rate so a delta would read as improvement regardless of quality. That refusal is the honest-predicate work from #2994 doing its job",
+        "DO NOT ratchet floors or interpret any surface's quality from this run until retrieval is restored — the numbers are not measuring what they appear to measure"
+      ]
     }
   ],
   "operator_queue": [
