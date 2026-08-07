@@ -28,6 +28,7 @@ import {
   run as runShapeGuard,
   WORKFLOW,
 } from '../check-deploy-input-safety.mjs';
+import { parseWorkflowSteps } from '../check-reconcile-safety.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
@@ -374,6 +375,77 @@ test('#3022 MUTANT: the MSAL resolve gated on the trigger again -> the shape gua
     problems.some((p) => /gated on the trigger/.test(p)),
     `expected the MSAL-gating violation, got: ${problems.join(' | ')}`,
   );
+});
+
+// S7 — the shape that slipped past S5. #3067 assembled the dlz-attach hub
+// coordinates into a HUB_PARAMS *variable* inside BOTH az steps: two copies of
+// a parameter list, invisible to a guard that only looks for `--parameters`.
+test('#3067 MUTANT: hub params re-assembled inside the apply step -> the shape guard FAILS', () => {
+  const mutant = YAML.replace(
+    /(          echo "::notice::Applying deployment arguments sha256=)/,
+    '          HUB_PARAMS=""\n' +
+    '          if [ "$CSA_LOOM_TOPOLOGY" = "dlz-attach" ]; then\n' +
+    '            HUB_PARAMS="hubAdminSubscriptionId=$HUB_ADMIN_SUB hubVnetId=$HUB_VNET_ID"\n' +
+    '          fi\n' +
+    '$1',
+  );
+  assert.notEqual(mutant, YAML, 'the mutation did not apply — the test would prove nothing');
+  const problems = checkSteps(mutant);
+  assert.ok(
+    problems.some((p) => /assembles bicep parameter\(s\).*hubAdminSubscriptionId/.test(p)),
+    `expected the second-assembly violation, got: ${problems.join(' | ')}`,
+  );
+});
+
+test('S7 CONTROL: a parameter merely NAMED in a diagnostic is not an assembly', () => {
+  // Several steps legitimately mention a parameter in an ::error:: / ::warning::
+  // string. The real workflow contains four such mentions; if the guard counted
+  // them it would be unusable and would be switched off.
+  const problems = checkSteps(YAML);
+  assert.deepEqual(
+    problems.filter((p) => /assembles bicep parameter/.test(p)), [],
+    'the real workflow must be clean — mentions are not assemblies',
+  );
+});
+
+test('S7 CONTROL: the parameter-name set is derived, and is not empty', () => {
+  // If the extraction regex stops matching, S7 silently watches nothing. The
+  // floor turns that into an error instead.
+  const mutant = YAML.replace(/--parameters "/g, '--parameters $');
+  const problems = checkSteps(mutant);
+  assert.ok(
+    problems.some((p) => /DISCOVERY FLOOR: extracted \d+ bicep parameter name/.test(p)),
+    `expected the extraction floor to fire, got: ${problems.join(' | ')}`,
+  );
+});
+
+test('the dlz-attach hub coordinates are in the ONE composed vector, before the what-if', () => {
+  const steps = parseWorkflowSteps(YAML);
+  const code = (s) => s.body.filter((l) => !/^\s*#/.test(l)).join('\n');
+  const composeIdx = steps.findIndex((s) => code(s).includes('deploy_args_file='));
+  const whatIfIdx = steps.findIndex((s) => /az deployment sub what-if/.test(s.run));
+  const applyIdx = steps.findIndex((s) => /az deployment sub create/.test(s.run));
+
+  assert.ok(composeIdx >= 0 && whatIfIdx >= 0 && applyIdx >= 0);
+  assert.ok(composeIdx < whatIfIdx, 'the arguments must be composed BEFORE the preview');
+  assert.ok(whatIfIdx < applyIdx);
+
+  const compose = code(steps[composeIdx]);
+  for (const p of [
+    'hubAdminSubscriptionId', 'hubVnetId', 'hubConsolePrincipalId', 'hubConsoleUamiName',
+    'hubConsoleUamiAppId', 'hubConsoleUamiId',
+    // #2682 / #3067 — optional, appended only when discovery found them.
+    'hubAcrLoginServer', 'hubCaeId', 'hubKeyVaultId',
+  ]) {
+    assert.match(compose, new RegExp(`--parameters "${p}=`), `${p} is not in the composed vector`);
+  }
+  // The three optional ones keep the SC2015-avoiding `if` form #3067 chose.
+  for (const v of ['HUB_ACR_LOGIN', 'HUB_CAE_ID', 'HUB_KV_ID']) {
+    assert.match(
+      compose, new RegExp(`if \\[ -n "\\$\\{${v}:-\\}" \\]; +then add --parameters`),
+      `${v} must be appended by an if-block, not \`[ -n x ] && …\` (SC2015; its exit status leaks under set -e)`,
+    );
+  }
 });
 
 // ===========================================================================

@@ -200,6 +200,48 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // ── THESE KEYS MUST BE PRESENT (measured 2026-08-06; CORRECTED 2026-08-07) ──
+  // A .bicepparam object assignment REPLACES the template default, it does not
+  // merge — and main.bicep forwards this bag to admin-plane VERBATIM (no union).
+  // admin-plane/main.bicep reads these five with a PLAIN `.` (no `.?`):
+  //   mcpBridge  — inside the `apps` array literal passed to appDeployments
+  //   maf / setupOrchestrator / scriptRunner / wrangler — module call sites
+  // Compiled artifact:
+  //   /resources/adminPlane/.../resources/appDeployments
+  //     condition: and(equals(containerPlatform,'containerApps'), deployAppsEnabled)
+  //     .../apps/value[2]/image:
+  //       "[format('loom-mcp-bridge:{0}', parameters('appImageTags').mcpBridge)]"
+  //
+  // SEVERITY FOR *THIS* FILE: **LATENT — never fired, and cannot fire on either
+  // current invocation.** An earlier revision of this comment claimed the
+  // from-scratch path "could not work". That was WRONG and is corrected here,
+  // because a false cause committed as a comment is exactly deploy-integrity R7.
+  // All five derefs are gated on `deployAppsEnabled`:
+  //   appDeployments      condition above → mcpBridge
+  //   copilotMafActive / scriptRunnerActive / wranglerActive /
+  //   setupOrchestratorActive  (admin-plane L688/691/724/740) → the other four
+  // This file declares `param deployAppsEnabled = true` below, so the keys WOULD
+  // be required by any apps-enabled invocation — but every known invocation
+  // overrides it to false on the command line:
+  //   .github/workflows/bicep-whatif.yml:291     --parameters deployAppsEnabled=false
+  //   .github/workflows/loom-drift-check.yml:147 --parameters deployAppsEnabled=false
+  // and no-vaporware.md's from-scratch PHASE 1 also specifies
+  // `deployAppsEnabled=false` (phase 2 brings the apps up via
+  // full-app-deploy-commercial.yml, and the live lane
+  // deploy-fiab-commercial.yml uses params/commercial.bicepparam, which does not
+  // assign appImageTags at all and so inherits the complete default).
+  // EMPIRICAL: bicep-whatif ran commercial-full SUCCESS on 2026-08-07.
+  //
+  // The keys are stated anyway — a param file that only works because every
+  // caller happens to disable the app tier is one `deployAppsEnabled=true` away
+  // from aborting, and this file's own declaration is already `true`.
+  // Guarded by scripts/ci/check-appimagetags-coverage.mjs.
+  // Guarded by scripts/ci/check-appimagetags-coverage.mjs.
+  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
+  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')
+  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
+  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
+  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
   // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
   // deploys BY DEFAULT. Same value the module's `?? 'v0.1'` fallback already
   // produced (so this is a no-op against the live estate), stated explicitly so
@@ -221,6 +263,14 @@ param appImageTags = {
   // prerequisite of the apps phase — a missing manifest fails the Container App
   // PUT with MANIFEST_UNKNOWN, not just the feature.
   unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
+  // loom-trino (N7e) — the DEFAULT-ON Federated SQL engine behind SQL Lab's
+  // "Federated SQL (Trino)". Stated explicitly (same value the template's
+  // `appImageTags.?trino ?? 'v0.1'` fallback already produced, so this is a
+  // no-op against the live estate) so the tag is operator-settable HERE the
+  // same way it is in gcc-high / il5 — per .claude/rules/cloud-parity.md the
+  // per-cloud levers must match, not just the per-cloud behaviour.
+  //   producer .github/workflows/full-app-deploy-commercial.yml -> loom-trino:v0.1
+  trino: readEnvironmentVariable('LOOM_TRINO_TAG', 'v0.1')
 }
 
 // MSAL — the app registration + client secret are now PROVISIONED by default

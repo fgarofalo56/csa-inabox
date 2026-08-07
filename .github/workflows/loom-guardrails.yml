@@ -246,6 +246,41 @@ jobs:
       - name: deploy-template-sync (the compiled ARM template that SHIPS must match its bicep — #2945)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-deploy-template-sync.mjs
+      # CLOUD PARITY (.claude/rules/cloud-parity.md). A .bicepparam object
+      # assignment REPLACES the template default — it does not merge — and
+      # main.bicep forwards `appImageTags` to admin-plane VERBATIM. So a param
+      # file that omits a key the template dereferences with a plain `.` makes
+      # that boundary's ARM deployment abort on "the language expression
+      # property '<key>' doesn't exist" BEFORE a single resource is touched.
+      #
+      # Measured 2026-08-06, CORRECTED 2026-08-07: il5, commercial-full and
+      # tenant-dmlz were each missing the same five keys. All five derefs are
+      # gated on `deployAppsEnabled` (the appDeployments condition, and
+      # admin-plane L688/691/724/740), so severity differs per file and an
+      # earlier revision of this comment overstated it:
+      #   il5           — declares deployAppsEnabled=true and deploy-fiab-il5.yml
+      #                   passes no override, so it WOULD abort on its first
+      #                   apps-enabled run. Never observed: that lane has NEVER
+      #                   RUN (zero runs).
+      #   tenant-dmlz   — same shape, and no automated caller at all
+      #                   (operator/manual only).
+      #   commercial-full — LATENT, not broken. Every known invocation overrides
+      #                   deployAppsEnabled=false (bicep-whatif.yml:291,
+      #                   loom-drift-check.yml:147), and no-vaporware.md's
+      #                   from-scratch PHASE 1 does too. bicep-whatif ran it
+      #                   SUCCESS on 2026-08-07. The earlier claim that "the
+      #                   from-scratch path could not deploy" was FALSE.
+      # The live Commercial lane was never exposed at all: it uses
+      # params/commercial.bicepparam, which does not assign appImageTags.
+      #
+      # Nothing measured any of it: `bicep build-params` type-checks the file in
+      # isolation and appImageTags is an untyped `object`, so the omission is
+      # invisible until ARM evaluates it in a real deployment. This guard derives
+      # the required key set from the SHIPPED artifact, so it tracks the template
+      # instead of a stale list.
+      - name: appimagetags-coverage (every boundary's param bag carries every plainly-read image tag)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-appimagetags-coverage.mjs
       # deploy-staleness (above) says the reconcile has not RUN. This says that
       # when it does run, it cannot destroy, duplicate or re-image the estate:
       # no destructive step on the schedule, one image repository per
@@ -360,6 +395,17 @@ jobs:
       - name: license-inventory (LIC0 — Python embeds + pinned upstream images)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-license-inventory.mjs
+      # MIR0 is the EGRESS/PROVENANCE half that LIC0 cannot cover: LIC0 is fully
+      # satisfied by an image pulled anonymously from docker.io at runtime, as long
+      # as its SPDX id is permissive and recorded. This asserts the same image is
+      # mirrored into the estate's own ACR, pinned to a manifest DIGEST (a mutable
+      # upstream tag can otherwise swap the bits under a reviewed licence and a
+      # passed CVE scan), and actually imported by BOTH cloud lanes from the one
+      # manifest. Unfiltered for the same reason as LIC0: the edit that introduces
+      # the violation is a bicep or workflow change.
+      - name: upstream-image-mirror (MIR0 — ACR mirror + digest pinning, #2682)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-upstream-image-mirror.mjs
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-assert-acr-image-tags.sh

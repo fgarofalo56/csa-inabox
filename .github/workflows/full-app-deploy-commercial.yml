@@ -332,39 +332,20 @@ jobs:
       # registry. `az acr import` is a server-side registry-to-registry copy, so
       # the ONLY egress to Docker Hub is here (a one-time build-lane import into
       # the ACR the firewall lease has open), NOT from the Container Apps at
-      # runtime. The bicep then pulls <acr>/<repo>:<tag> via the app UAMIs:
-      #   • admin-plane/airflow.bicep        -> <acr>/apache/airflow:<tag>  (live)
-      #   • compute/loom-memory-consolidate-job.bicep -> <acr>/curlimages/curl:<tag>
-      #   • s3proxy is PRE-STAGED for the svc-s3-gateway re-add (#2682 follow-on,
-      #     data-plane/s3-gateway-aca.bicep -> <acr>/s3proxy:3.3.0); harmless to
-      #     hold in ACR until that module returns.
-      # Each repo:tag is reviewed in LIC0 (check-license-inventory.mjs) with a
-      # THIRD_PARTY_LICENSES.md NOTICE row. Keep the --image target byte-identical
-      # to the bicep ref so the mirror and the template stay in lockstep.
+      # runtime. The bicep then pulls <acr>/<repo>:<tag> via the app UAMIs.
+      #
+      # WHAT to mirror is NOT written here any more. Both cloud lanes read the
+      # SINGLE manifest platform/fiab/images/upstream-images.json and import BY
+      # DIGEST, then verify the digest that landed. The old hard-coded array in
+      # this file, the identical array in gov-provision-dataplane-images.yml and
+      # the refs in the bicep modules were three copies of one fact: bump the
+      # bicep ref alone and the ACR never receives that tag, so the Container App
+      # points at an image that does not exist and cannot activate a revision.
+      # scripts/ci/check-upstream-image-mirror.mjs (MIR0) fails the build if a
+      # bicep-pinned ref has no manifest entry or if either lane stops calling
+      # the shared script. LIC0 still reviews each image's LICENCE separately.
       - name: Mirror third-party images into ACR (#2682)
-        run: |
-          set +e
-          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
-          # source (Docker Hub) -> ACR repo:tag (must match the bicep ref exactly).
-          MIRRORS=(
-            "docker.io/apache/airflow:2.10.5-python3.12|apache/airflow:2.10.5-python3.12"
-            "docker.io/andrewgaul/s3proxy:3.3.0|s3proxy:3.3.0"
-            "docker.io/curlimages/curl:8.10.1|curlimages/curl:8.10.1"
-          )
-          rc=0
-          for M in "${MIRRORS[@]}"; do
-            SRC="${M%%|*}"; DST="${M##*|}"
-            echo "Mirroring $SRC -> $ACR_NAME/$DST"
-            # Primary: Docker Hub. Fallback: the MCR Docker Hub mirror (reachable
-            # in every cloud) in case the estate ACR cannot reach docker.io.
-            if ! az acr import -n "$ACR_NAME" --source "$SRC" --image "$DST" --force -o none; then
-              MCR_SRC="mcr.microsoft.com/mirror/docker/${SRC#docker.io/}"
-              echo "::warning::docker.io import failed for $DST; trying $MCR_SRC"
-              az acr import -n "$ACR_NAME" --source "$MCR_SRC" --image "$DST" --force -o none || { echo "::error::could not mirror $DST into $ACR_NAME"; rc=1; }
-            fi
-          done
-          [ "$rc" -eq 0 ] && echo "::notice::third-party images mirrored into $ACR_NAME." || echo "::error::one or more third-party image mirrors FAILED — the deploy will honest-gate on the affected service."
-          exit $rc
+        run: bash scripts/ci/mirror-upstream-images.sh --acr "${{ needs.resolve.outputs.acr_name }}"
 
   build:
     name: Build ${{ matrix.app }} via Docker push

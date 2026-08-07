@@ -207,6 +207,16 @@ param appImageTags = {
   // prerequisite of the apps phase — a missing manifest fails the Container App
   // PUT with MANIFEST_UNKNOWN, not just the feature.
   unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
+  // loom-trino (N7e) — the DEFAULT-ON Federated SQL engine. Together with the
+  // Iceberg REST Catalog (which runs the loom-unity image above) this IS the
+  // external-engine federation product for a boundary with no Databricks Unity
+  // Catalog, so the tag contract matters here more than in Commercial:
+  //   producer .github/workflows/gov-provision-dataplane-images.yml
+  //            image_tag input, default v0.1 -> az acr build --image loom-trino:v0.1
+  //   template <acr>/loom-trino:v0.1  (admin-plane reads appImageTags.?trino ?? 'v0.1')
+  // Stated explicitly so the tag is operator-settable per boundary instead of
+  // being pinned by a fallback with no lever, exactly like duckdb/unity above.
+  trino: readEnvironmentVariable('LOOM_TRINO_TAG', 'v0.1')
 }
 
 // Azure Database for PostgreSQL Flexible Server IS available in Azure

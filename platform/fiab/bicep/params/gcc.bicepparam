@@ -68,6 +68,22 @@ param topology = 'tenant'
 
 // Compute (same as Commercial — GCC runs on Azure public)
 param containerPlatform = 'containerApps'
+// ── KNOWN PARITY GAP — tracked in #3078 (cloud-parity.md R1) ──────────────────
+// This file NEVER sets `deployAppsEnabled`, and main.bicep defaults it to
+// FALSE. So `containerPlatform = 'containerApps'` above buys nothing: with apps
+// disabled the `appDeployments` nested deployment is skipped and the GCC
+// boundary stands up ZERO Container Apps — no loom-console, no loom-unity, no
+// loom-trino, no iceberg-catalog. Every other apps-enabled boundary
+// (commercial-full, gcc-high, il5, tenant-dmlz) sets it `= true`.
+//
+// NOT flipped here on purpose: there is no GCC image producer. gov-build-images
+// covers gcc-high / il5 only, and full-app-deploy-commercial targets the
+// Commercial estate — so setting this true would turn deploy-fiab-gcc.yml from
+// a passing-but-empty deploy into one that fails every Container App PUT with
+// MANIFEST_UNKNOWN. The fix is a GCC image lane (or an explicit decision to mark
+// GCC unsupported), which is what #3078 tracks with an owner and a target.
+// Measured 2026-08-06 (FINISHLINE L-GOV); disclosed rather than silently left.
+// param deployAppsEnabled = true   // ← enable together with a GCC image lane (#3078)
 // Setup Orchestrator — on by default (Container Apps boundary). The Console UAMI
 // gets Contributor on the target sub so the Setup Wizard's Deploy runs the real
 // subscription-scoped ARM deployment. LOOM_SETUP_TEMPLATE_URI = published main.json.

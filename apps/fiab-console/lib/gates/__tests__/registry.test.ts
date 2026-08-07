@@ -129,27 +129,65 @@ describe('gate live status (evalEnv-backed)', () => {
   });
 
   it('reports OPT-IN (not blocked) for a spec.optIn=true gate when unset', () => {
-    // issue #2753. The subject used to be svc-loom-trino, which carried the
-    // optIn flag as the AKS carve-out. That carve-out is GONE — the engine
-    // moved to a scale-to-zero Container App the orchestrator deploys by
-    // default — so this now exercises svc-s3-gateway, which is genuinely still
-    // opt-in (an operator-deployed s3proxy). Repointing rather than deleting
-    // keeps the opt-in STATUS PATH under test; deleting it would have quietly
-    // removed the only coverage of that branch.
-    delete process.env.LOOM_S3_GATEWAY_URL;
-    const st = gateStatus('svc-s3-gateway')!;
-    expect(st.status).toBe('opt-in');
-    expect(st.status).not.toBe('blocked');
-    expect(st.missing).toContain('LOOM_S3_GATEWAY_URL');
+    // issue #2753. The subject has been REPOINTED twice, each time because the
+    // previous subject stopped being opt-in — which is the point: this test
+    // guards the opt-in STATUS PATH, so it must always be aimed at a gate that
+    // is genuinely opt-in BY POLICY, never at one that is opt-in because
+    // something else is broken.
+    //   1. svc-loom-trino — the AKS carve-out; retired when the engine moved to
+    //      a scale-to-zero Container App the orchestrator deploys by default.
+    //   2. svc-s3-gateway — WRONG SUBJECT in hindsight. It was never opt-in by
+    //      policy; it was pulled to opt-in in PR #2640 round 4 solely because its
+    //      image was an anonymous docker.io pull. #2682 mirrored the image into
+    //      the estate ACR and the gateway is default-ON again (FINISHLINE D16),
+    //      so pointing an "opt-in by design" test at it made the test assert a
+    //      defect was intentional.
+    //   3. svc-postgres — opt-in by POLICY: a Postgres Flexible Server carries
+    //      real standing cost, its absence removes no capability (vector search
+    //      is served by Azure AI Search), and it is off by default in the
+    //      orchestrator. That is a durable reason, not a symptom.
+    const prevHost = process.env.LOOM_POSTGRES_HOST;
+    const prevPg = process.env.LOOM_PGVECTOR_HOST;
+    delete process.env.LOOM_POSTGRES_HOST;
+    delete process.env.LOOM_PGVECTOR_HOST;
+    try {
+      const st = gateStatus('svc-postgres')!;
+      expect(st.status).toBe('opt-in');
+      expect(st.status).not.toBe('blocked');
+    } finally {
+      if (prevHost !== undefined) process.env.LOOM_POSTGRES_HOST = prevHost;
+      if (prevPg !== undefined) process.env.LOOM_PGVECTOR_HOST = prevPg;
+    }
   });
 
   it('an opt-in gate flips to configured once its var is set', () => {
-    process.env.LOOM_S3_GATEWAY_URL = 'https://s3proxy.internal.example';
+    const prevPg = process.env.LOOM_PGVECTOR_HOST;
+    process.env.LOOM_POSTGRES_HOST = 'pg-loom.postgres.database.azure.com';
+    delete process.env.LOOM_PGVECTOR_HOST;
     try {
-      const st = gateStatus('svc-s3-gateway')!;
+      const st = gateStatus('svc-postgres')!;
       expect(st.status).toBe('configured');
     } finally {
-      delete process.env.LOOM_S3_GATEWAY_URL;
+      delete process.env.LOOM_POSTGRES_HOST;
+      if (prevPg !== undefined) process.env.LOOM_PGVECTOR_HOST = prevPg;
+    }
+  });
+
+  it('svc-s3-gateway is DEFAULT-ON: unset reads as blocked, not opt-in (#2682/D16)', () => {
+    // The regression this locks: restoring `optIn: true` on svc-s3-gateway would
+    // once again make a deploy defect (the gateway did not come up) read as a
+    // neutral operator choice on /admin/gates, which is exactly how the
+    // default-ON violation stayed invisible. Now the image is ACR-mirrored there
+    // is no legitimate reason for the gateway to be absent, so absence must read
+    // as something to fix.
+    const prev = process.env.LOOM_S3_GATEWAY_URL;
+    delete process.env.LOOM_S3_GATEWAY_URL;
+    try {
+      const st = gateStatus('svc-s3-gateway')!;
+      expect(st.status).not.toBe('opt-in');
+      expect(st.missing).toContain('LOOM_S3_GATEWAY_URL');
+    } finally {
+      if (prev !== undefined) process.env.LOOM_S3_GATEWAY_URL = prev;
     }
   });
 

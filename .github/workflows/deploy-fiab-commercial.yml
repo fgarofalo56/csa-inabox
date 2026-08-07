@@ -374,6 +374,15 @@ jobs:
             HUB_UAMI_CLIENT=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiAppId',''))" 2>/dev/null || true)
             HUB_UAMI_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiResourceId',''))" 2>/dev/null || true)
             HUB_UAMI_NAME=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('consoleUamiName',''))" 2>/dev/null || true)
+            # #2682 — hub ACR / Container Apps env / Key Vault. Needed by any
+            # dlz-attach workload that runs a container ON THE HUB (today the
+            # S3-compatible ADLS gateway). main.bicep records all three in
+            # topologyManifest.hub; before this they were recorded and read by
+            # nobody, so the gateway's image resolved to an anonymous docker.io
+            # pull on every shipped lane (PR #2640 round 4).
+            HUB_ACR_LOGIN=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('acrLoginServer',''))" 2>/dev/null || true)
+            HUB_CAE_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('caeId',''))" 2>/dev/null || true)
+            HUB_KV_ID=$(echo "$MANIFEST" | python3 -c "import sys,json;print(json.load(sys.stdin).get('keyVaultId',''))" 2>/dev/null || true)
           fi
           # (2) Live-query fallback for anything the manifest didn't supply.
           if [ -z "${HUB_VNET_ID:-}" ] || [ "$HUB_VNET_ID" = "null" ]; then
@@ -400,7 +409,38 @@ jobs:
           echo "hub_uami_client=$HUB_UAMI_CLIENT"       >> "$GITHUB_OUTPUT"
           echo "hub_uami_id=$HUB_UAMI_ID"        >> "$GITHUB_OUTPUT"
           echo "hub_uami_name=$HUB_UAMI_NAME"    >> "$GITHUB_OUTPUT"
+          # #2682 — live-query fallback for the three hub-side workload coordinates
+          # when the manifest predates them. These are NOT part of the hard-fail
+          # check above on purpose: a hub whose manifest predates #2682 must still
+          # be attachable. Empty simply means the hub-side S3 gateway is skipped
+          # and its surface honest-gates — never a silent public-registry pull,
+          # because s3-gateway-aca.bicep REQUIRES an acrLoginServer.
+          if [ -z "${HUB_ACR_LOGIN:-}" ] || [ "$HUB_ACR_LOGIN" = "null" ]; then
+            HUB_ACR_LOGIN=$(az acr list -g "$HUB_RG" --query "[0].loginServer" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${HUB_CAE_ID:-}" ] || [ "$HUB_CAE_ID" = "null" ]; then
+            HUB_CAE_ID=$(az containerapp env list -g "$HUB_RG" --query "[0].id" -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${HUB_KV_ID:-}" ] || [ "$HUB_KV_ID" = "null" ]; then
+            HUB_KV_ID=$(az keyvault list -g "$HUB_RG" --query "[0].id" -o tsv 2>/dev/null || true)
+          fi
+          # Grouped redirect rather than three individual `echo … >> "$GITHUB_OUTPUT"`
+          # lines: that pattern trips SC2129 and the actionlint ratchet is a
+          # merge-blocker. (Note the wording — a comment line must not BEGIN with
+          # the word "shellcheck" after the hash, because shellcheck reads that as
+          # a malformed directive and raises SC1072/SC1073. Same trap the install
+          # step in loom-guardrails.yml documents.)
+          {
+            echo "hub_acr_login=${HUB_ACR_LOGIN:-}"
+            echo "hub_cae_id=${HUB_CAE_ID:-}"
+            echo "hub_kv_id=${HUB_KV_ID:-}"
+          } >> "$GITHUB_OUTPUT"
           echo "::notice::Hub coords — sub=$HUB_SUB vnet=$HUB_VNET_ID uami=$HUB_UAMI_NAME ($HUB_UAMI_PRINCIPAL)"
+          if [ -n "${HUB_ACR_LOGIN:-}" ] && [ -n "${HUB_CAE_ID:-}" ]; then
+            echo "::notice::Hub workload coords present — the hub-side S3 gateway (#2682) will deploy from $HUB_ACR_LOGIN."
+          else
+            echo "::warning::Hub ACR/CAE coordinate not discovered (acr='${HUB_ACR_LOGIN:-}', cae='${HUB_CAE_ID:-}'). The hub-side S3 gateway will be SKIPPED and svc-s3-gateway will honest-gate. This is not a public-registry fallback — the module has none."
+          fi
 
       # ── BROWNFIELD RECONCILE DISCOVERY (D4, run 31100384405 — deploy-integrity R5) ──
       # Azure permits exactly ONE Vpn-type gateway per VNet and ONE private-DNS
@@ -553,6 +593,13 @@ jobs:
           HUB_UAMI_NAME: ${{ steps.hubcoords.outputs.hub_uami_name }}
           HUB_UAMI_CLIENT: ${{ steps.hubcoords.outputs.hub_uami_client }}
           HUB_UAMI_ID: ${{ steps.hubcoords.outputs.hub_uami_id }}
+          # #2682 / #3067 — hub workload coordinates for the hub-side S3 gateway.
+          # Empty is a legitimate answer (a hub whose topologyManifest predates
+          # #2682); the composition below omits the parameter rather than
+          # passing an empty one, and svc-s3-gateway honest-gates.
+          HUB_ACR_LOGIN: ${{ steps.hubcoords.outputs.hub_acr_login }}
+          HUB_CAE_ID: ${{ steps.hubcoords.outputs.hub_cae_id }}
+          HUB_KV_ID: ${{ steps.hubcoords.outputs.hub_kv_id }}
         run: |
           set -euo pipefail
           DEPLOY_NAME="csa-loom-ci-${{ github.run_id }}"
@@ -587,12 +634,33 @@ jobs:
             add --parameters "attachDomainName=$CSA_LOOM_DLZ_DOMAIN_NAMES"
           fi
           if [ "${CSA_LOOM_TOPOLOGY:-}" = "dlz-attach" ]; then
+            # dlz-attach: the cross-sub hub coordinates discovered above, so the
+            # hub-side peering + hub-console-env modules (and the DLZ RBAC
+            # grants) target the HUB sub, not the deployment (DLZ) sub.
             add --parameters "hubAdminSubscriptionId=$HUB_ADMIN_SUB"
             add --parameters "hubVnetId=$HUB_VNET_ID"
             add --parameters "hubConsolePrincipalId=$HUB_UAMI_PRINCIPAL"
             add --parameters "hubConsoleUamiName=$HUB_UAMI_NAME"
             add --parameters "hubConsoleUamiAppId=$HUB_UAMI_CLIENT"
             add --parameters "hubConsoleUamiId=$HUB_UAMI_ID"
+            # #2682 — the hub ACR / CAE / Key Vault coordinates for the hub-side
+            # S3 gateway. Appended ONLY when discovery found them, so a hub whose
+            # topologyManifest predates #2682 still attaches (the gateway is then
+            # skipped and honest-gates — never a public-registry fallback, the
+            # module has no such branch). Written as `if` blocks rather than
+            # `[ -n x ] && …`: the && form is an SC2015 trap and its exit status
+            # leaks into the step under `set -e`, which is why it needed a
+            # trailing `true`. An if-block needs no such crutch.
+            #
+            # They live HERE, in the ONE composition, and not in the two az
+            # commands (refs #3022). #3067 added them to the what-if AND the
+            # apply as two hand-maintained copies — which is the shape that let
+            # `--subscription` drift between preview and apply in the first
+            # place. Composed once, they are covered by the sha256 both commands
+            # re-assert, so the preview provably includes them.
+            if [ -n "${HUB_ACR_LOGIN:-}" ]; then add --parameters "hubAcrLoginServer=$HUB_ACR_LOGIN"; fi
+            if [ -n "${HUB_CAE_ID:-}" ];    then add --parameters "hubCaeId=$HUB_CAE_ID"; fi
+            if [ -n "${HUB_KV_ID:-}" ];     then add --parameters "hubKeyVaultId=$HUB_KV_ID"; fi
           fi
 
           SHA=$(sha256sum "$ARGS_FILE" | cut -d' ' -f1)

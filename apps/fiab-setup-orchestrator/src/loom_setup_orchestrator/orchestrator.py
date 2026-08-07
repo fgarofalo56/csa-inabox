@@ -200,6 +200,16 @@ _HUB_COORDINATE_FIELDS = (
     "hubConsoleUamiAppId",
     "hubConsoleUamiId",
     "hubActivatorPrincipalId",
+    # #2682 — hub ACR / Container Apps environment / Key Vault coordinates. A
+    # dlz-attach pass needs all three to stand up a hub-side workload (today the
+    # S3-compatible ADLS gateway) that pulls its image from the estate's OWN
+    # registry rather than a public one, and writes the Key Vault secrets its
+    # documentation tells operators to read. Their absence here was one of the
+    # five layers that left `hubCoordinates.acrLoginServer` permanently empty and
+    # made the gateway fall back to an anonymous docker.io pull (PR #2640 round 4).
+    "hubAcrLoginServer",
+    "hubCaeId",
+    "hubKeyVaultId",
 )
 
 

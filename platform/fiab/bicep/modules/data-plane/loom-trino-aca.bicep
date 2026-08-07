@@ -151,6 +151,16 @@ param sessionUser string = 'loom-console'
 ])
 param accessControl string = 'file'
 
+@description('LU-7 — the Console engine-rules endpoint the engine PULLS its governance-compiled authorization from (https://<console>/api/governance/policy-code/engine-rules). apps/loom-trino/docker-entrypoint.sh fetches it (authenticated, token in a header) at boot and on a refresh loop, writes the result to the local rules file, and Trino re-reads it on security.refresh-period — so a policy edit in the Console reaches the engine with NO redeploy and NO image rebuild. Produced by the DEPLOY, never typed by an operator (.claude/rules/auto-bind-by-default.md). EMPTY is fail-closed, not fail-open: the engine keeps the locally rendered catalog floor and logs that Loom row/column policy is not enforced at the engine.')
+param policyRulesUrl string = ''
+
+@description('LU-7 — the shared deployment trust token the engine presents to the Console engine-rules endpoint (the same deterministic value the Console holds as LOOM_TRINO_POLICY_TOKEN / LOOM_INTERNAL_TOKEN). Delivered as an ACA secretRef so it is never a literal env value. Empty => the engine cannot fetch and says so; it never falls back to an unauthenticated pull.')
+@secure()
+param policyRulesToken string = ''
+
+@description('LU-7 — how often (seconds) the engine re-fetches the governance rules AND how often Trino re-reads the rules file (security.refresh-period). 60s means a policy change is enforced within a minute.')
+param policyRefreshSeconds int = 60
+
 // The lake READ grant is NOT created here. It lives in loom-trino-lake-rbac.bicep
 // and is deployed at the LAKE account's own resource-group scope — this module is
 // invoked in the ADMIN RG, where the lake account does not exist.
@@ -173,6 +183,24 @@ var trinoExtraEnv = [for e in items(extraEnv): {
   name: e.key
   value: string(e.value)
 }]
+
+// LU-7 — the governance-rules pull. The token rides an ACA secret so it is never
+// a literal in the template, the ARM deployment history, or `az containerapp
+// show`. Both halves must be present: a URL with no token would make the engine
+// attempt a pull the Console correctly rejects.
+var policyPullActive = !empty(policyRulesUrl) && !empty(policyRulesToken)
+var policySecrets = policyPullActive ? [
+  { name: 'loom-trino-policy-token', value: policyRulesToken }
+] : []
+var policyEnv = policyPullActive ? [
+  { name: 'LOOM_TRINO_POLICY_URL', value: policyRulesUrl }
+  { name: 'LOOM_TRINO_POLICY_TOKEN', secretRef: 'loom-trino-policy-token' }
+  { name: 'LOOM_TRINO_POLICY_REFRESH_SECONDS', value: string(policyRefreshSeconds) }
+] : [
+  // Not merely omitted — stated. The refresh period still drives Trino's own
+  // re-read of the local rules file, so it is always emitted.
+  { name: 'LOOM_TRINO_POLICY_REFRESH_SECONDS', value: string(policyRefreshSeconds) }
+]
 
 // ── Auth derivation ─────────────────────────────────────────────────────────
 // Sovereign-safe: the JWKS host comes from the ACTIVE cloud's login endpoint,
@@ -222,7 +250,7 @@ resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
           identity: uamiId
         }
       ]
-      secrets: trinoSecrets
+      secrets: concat(trinoSecrets, policySecrets)
     }
     template: {
       containers: [
@@ -254,6 +282,7 @@ resource trino 'Microsoft.App/containerApps@2025-02-02-preview' = {
             empty(appInsightsConnectionString) ? [] : [
               { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
             ],
+            policyEnv,
             trinoExtraEnv,
             trinoSecretEnv
           )

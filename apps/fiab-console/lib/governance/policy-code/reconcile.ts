@@ -119,7 +119,26 @@ export async function reconcilePolicyCode(
   } catch {
     /* default databricks */
   }
-  const compileOpts: CompileOptions = { ucVariant, tenantId: opts.tenantId };
+  // Backend-resolution options for the one-pass compile. The Trino half comes
+  // from the SHARED reader (`trinoCompileOptionsFromEnv`) that the engine-rules
+  // route also uses — never a hand-copied literal.
+  //
+  // `trinoDefaultCatalog` is the sharp edge: a 2-part `schema.table` resource
+  // resolves against the deployment's lake catalog, so omitting it here made
+  // reconcile compile `iceberg.sales.orders` (the code default) while the route
+  // — reading LOOM_TRINO_ICEBERG_CATALOG — served `lake.sales.orders`. That
+  // re-armed the version divergence the enforcement receipt exists to detect
+  // (permanent `stale`, never `applied`, and the hedged detail resolving to the
+  // false "the engine cannot reach the Console" claim), AND it meant the engine
+  // governed one table while the document an admin inspects named another. The
+  // knob is optional and no bicep module sets it today, which is exactly why it
+  // would have sat there undetected.
+  const { trinoCompileOptionsFromEnv } = await import('./compilers/trino');
+  const compileOpts: CompileOptions = {
+    ucVariant,
+    tenantId: opts.tenantId,
+    ...trinoCompileOptionsFromEnv(),
+  };
   const compiled = compileAll(set, compileOpts);
 
   const snapshot = await loadSnapshot(opts.tenantId);
@@ -134,7 +153,7 @@ export async function reconcilePolicyCode(
     const priorOps = prior[artifact.backend] || [];
     if (!artifact.applicable && priorOps.length === 0) continue;
 
-    const receipt = await reconcileBackend(artifact, priorOps, opts, at);
+    const receipt = await reconcileBackend(set, artifact, priorOps, opts, at);
     receipts.push(receipt.receipt);
     if (opts.apply && receipt.receipt.status !== 'gated') {
       newApplied[artifact.backend] = receipt.nowApplied;
@@ -161,6 +180,7 @@ export async function reconcilePolicyCode(
 
 // ── Per-backend reconcile ─────────────────────────────────────────────────────
 async function reconcileBackend(
+  set: PolicyCodeSet,
   artifact: CompiledArtifact,
   priorOps: CompiledOp[],
   opts: ReconcileOptions,
@@ -181,6 +201,12 @@ async function reconcileBackend(
   // api-scope is a whole-doc registry — special-cased (no per-op backend call).
   if (artifact.backend === 'api-scope') {
     return reconcileApiScope(artifact, opts, base);
+  }
+  // trino is a whole-DOCUMENT publication the engine PULLS — special-cased for
+  // the same reason, plus its "applied" claim is gated on an engine fetch
+  // receipt rather than on the write succeeding (deploy-integrity R2).
+  if (artifact.backend === 'trino') {
+    return reconcileTrino(set, artifact, opts, base);
   }
 
   // Config gate — honest, names the missing env var.
@@ -291,6 +317,106 @@ async function reconcileApiScope(
 }
 
 // ── Honest config gates ───────────────────────────────────────────────────────
+
+/**
+ * LU-7 — Trino engine authorization: compile the policy set to the file-based
+ * access-control document (plus the equivalent OPA module and the group file),
+ * publish it, and report what the ENGINE is actually enforcing.
+ *
+ * The "applied" claim is deliberately conservative. Persisting the document is
+ * a WRITE, not an enforcement change — the engine pulls on its refresh period.
+ * So a publish whose version the engine has not yet fetched reports `drift`
+ * with the honest reason, and only a confirmed engine fetch of the published
+ * version reports `converged`/`applied` (deploy-integrity.md R2 applied to a
+ * control plane rather than a deploy).
+ */
+async function reconcileTrino(
+  set: PolicyCodeSet,
+  artifact: CompiledArtifact,
+  opts: ReconcileOptions,
+  base: BackendReconcileReceipt,
+): Promise<{ receipt: BackendReconcileReceipt; nowApplied: CompiledOp[] }> {
+  const gate = await backendGate('trino');
+  if (gate) return { receipt: { ...base, status: 'gated', gate }, nowApplied: [] };
+
+  const {
+    publishTrinoEngineRules,
+    readTrinoEngineRules,
+    resolveTrinoGroupMemberships,
+    trinoEnforcementStatus,
+  } = await import('./trino-engine-rules');
+  const { buildTrinoRulesDocument, rulesVersion, trinoCompileOptionsFromEnv } = await import('./compilers/trino');
+
+  let published: Awaited<ReturnType<typeof readTrinoEngineRules>> = null;
+  try {
+    published = await readTrinoEngineRules(opts.tenantId);
+  } catch (e: any) {
+    return {
+      receipt: { ...base, status: 'gated', gate: `Could not read the published Trino rules document: ${String(e?.message || e).slice(0, 160)}` },
+      nowApplied: [],
+    };
+  }
+
+  // OBSERVED, never asserted. The engine can only resolve a caller's groups
+  // when a group file with actual members has been published; hardcoding
+  // `true` here would suppress the very warning that tells an operator their
+  // group-keyed denies and masks are inert.
+  const docOptions = {
+    ...trinoCompileOptionsFromEnv(),
+    trinoGroupProvider: Boolean(published?.groupFile?.trim()),
+  };
+
+  const desiredVersion = rulesVersion(buildTrinoRulesDocument(artifact, docOptions));
+  const status = trinoEnforcementStatus(published);
+  const inSyncDoc = published?.version === desiredVersion;
+  base.inSync = inSyncDoc ? artifact.ops.length : 0;
+  base.drift = inSyncDoc && status.state === 'enforcing' ? 0 : artifact.ops.length || 1;
+
+  if (!opts.apply) {
+    if (base.drift > 0) {
+      base.status = 'drift';
+      base.detail.push(
+        inSyncDoc
+          ? `rules version ${desiredVersion} is published but not yet enforced — ${status.detail}`
+          : `rules version ${desiredVersion} differs from the published ${published?.version ?? '(none)'}`,
+      );
+    }
+    return { receipt: base, nowApplied: artifact.ops };
+  }
+
+  const { memberships, warnings } = await resolveTrinoGroupMemberships(set);
+  warnings.forEach((w) => base.detail.push(w));
+
+  try {
+    const doc = await publishTrinoEngineRules({
+      set,
+      artifact,
+      tenantId: opts.tenantId,
+      publishedBy: opts.updatedBy,
+      memberships,
+      docOptions,
+    });
+    const after = trinoEnforcementStatus(doc);
+    base.applied = inSyncDoc ? 0 : artifact.ops.length;
+    if (after.state === 'enforcing') {
+      base.status = base.applied ? 'applied' : 'converged';
+      base.detail.push(after.detail);
+    } else {
+      // Published, NOT yet enforced. Never report this as applied.
+      base.status = 'drift';
+      base.drift = artifact.ops.length || 1;
+      base.detail.push(
+        `published rules version ${doc.version}; NOT yet enforced by the engine — ${after.detail}`,
+      );
+    }
+  } catch (e: any) {
+    base.status = 'partial';
+    base.errors = 1;
+    base.detail.push(`publish Trino engine rules failed: ${String(e?.message || e).slice(0, 160)}`);
+  }
+  return { receipt: base, nowApplied: artifact.ops };
+}
+
 async function backendGate(backend: PolicyBackend): Promise<string | null> {
   switch (backend) {
     case 'synapse':
@@ -332,6 +458,25 @@ async function backendGate(backend: PolicyBackend): Promise<string | null> {
         return isPurviewConfigured() ? null : 'Microsoft Purview is not configured — set LOOM_PURVIEW_ACCOUNT to apply classifications/markings.';
       } catch (e: any) {
         return `Purview client unavailable: ${String(e?.message || e).slice(0, 120)}`;
+      }
+    }
+    case 'trino': {
+      try {
+        const { trinoConfigGate, isTrinoSealed } = await import('@/lib/azure/trino-client');
+        const g = trinoConfigGate();
+        if (g) {
+          return 'The Federated SQL (Trino) engine is not present in this environment (LOOM_TRINO_URL is unset), '
+            + 'so engine-level rules have nothing to enforce them. It is DEFAULT-ON — re-run the admin-plane '
+            + 'deployment, which stands up data-plane/loom-trino-aca.bicep and wires this var.';
+        }
+        if (isTrinoSealed()) {
+          return 'The Trino engine is deployed SEALED (JWT audience pinned to the sentinel), so it accepts no '
+            + 'caller and no query can be governed. Run the sign-in bootstrap so an Entra app registration '
+            + 'exists, then redeploy with LOOM_MSAL_CLIENT_ID set. Rules still compile and publish.';
+        }
+        return null;
+      } catch (e: any) {
+        return `Trino client unavailable: ${String(e?.message || e).slice(0, 120)}`;
       }
     }
     default:

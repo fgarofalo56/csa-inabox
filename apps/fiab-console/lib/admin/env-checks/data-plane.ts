@@ -303,23 +303,44 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
       fallbackNote: 'DuckLake is an Apache-2.0 catalog format; the metadata store is an in-boundary Azure Database for PostgreSQL and the query engine is the in-boundary DuckDB tier — no SaaS catalog is in the path, so the lab runs disconnected in an IL5 / air-gapped enclave. Preview.',
     },
   },
-  // ── N8 lab 3 — S3-compatible ADLS gateway (Preview) ──
-  //    Opt-in: expose an S3-compatible endpoint over ADLS for s3://-native OSS
-  //    clients. The MinIO gateway path is DROPPED (AGPL + deprecated); the
-  //    permissive path is an operator-deployed Apache-2.0 s3proxy in front of
-  //    ADLS. Unset → the surface documents that N1's IRC + ADLS SDK path already
-  //    covers most external-engine access without a gateway.
+  // ── N8 lab 3 — S3-compatible ADLS gateway. DEFAULT-ON (#2682 / FINISHLINE D16) ──
+  //    Expose an S3-compatible endpoint over ADLS for s3://-native OSS clients.
+  //    The MinIO gateway path is DROPPED (AGPL + deprecated); the permissive path
+  //    is Apache-2.0 s3proxy, deployed BY THE PLATFORM.
+  //
+  //    WHY THIS SPEC CHANGED. The gateway was designed default-ON, then pulled to
+  //    `optIn: true` in PR #2640 round 4 because its image resolved to an
+  //    anonymous docker.io pull on every shipped lane. The image problem was real;
+  //    the opt-in was never a policy decision, and it left this spec contradicting
+  //    ITSELF — core.ts's VALUE_HINT described a bicep-wired internal endpoint
+  //    ("bicep-wired; unset only when the apps tier is off") while the spec here
+  //    told operators to go deploy a gateway out-of-band. An opt-in whose only
+  //    cause is a defect elsewhere is a standing violation of the default-ON rule
+  //    (`loom_default_on_opt_out`) and of auto-bind-by-default §5 (infra
+  //    prerequisites are DEPLOYED, not requested).
+  //
+  //    The image cause is closed: the upstream coordinate is digest-pinned in
+  //    platform/fiab/images/upstream-images.json, mirrored into each cloud's own
+  //    ACR by scripts/ci/mirror-upstream-images.sh, and
+  //    data-plane/s3-gateway-aca.bicep REQUIRES an acrLoginServer — it has no
+  //    public-pull branch left. So the opt-in is removed here.
+  //
+  //    NOT `optionalDefault`: an unset value is not a fully-functional posture
+  //    with a safe built-in default, it means the gateway did not deploy. It stays
+  //    `severity: 'optional'` + `warnOnMiss` because the N1 Iceberg REST Catalog +
+  //    native ADLS/abfss path already give external engines governed access, so a
+  //    missing gateway degrades one access shape rather than breaking the lake.
   {
     id: 'svc-s3-gateway', category: 'data-plane', title: 'S3-compatible ADLS gateway (Apache-2.0 s3proxy) — Preview', severity: 'optional',
-    required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true, optIn: true,
+    required: ['LOOM_S3_GATEWAY_URL'], warnOnMiss: true,
     remediation:
-      'Set LOOM_S3_GATEWAY_URL to the internal-ingress endpoint of an S3-compatible gateway placed in front of your ADLS Gen2 (an operator-deployed Apache-2.0 s3proxy — the AGPL-licensed MinIO gateway path is NOT used). This lets s3://-native OSS clients (Trino, Spark, DuckDB with the s3 extension) address the lake with an S3 API. In most cases you do NOT need a gateway: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data — deploy the gateway only for clients that speak S3 exclusively. Unset → the S3 gateway editor renders a guided empty state documenting the IRC/ADLS path and honest-gates the connection panel; nothing else changes. No Microsoft Fabric.',
+      'LOOM_S3_GATEWAY_URL is emitted by the deploy — the Apache-2.0 s3proxy Container App (data-plane/s3-gateway-aca.bicep) is deployed by DEFAULT in front of the deployment\'s own ADLS Gen2, internal ingress only, read-only by default, minReplicas 0 so it bills nothing at idle. It is stood up by whichever pass owns the lake: modules/admin-plane/main.bicep when a lake is bound at admin-plane time (single-sub), otherwise the dlz-attach pass (platform/fiab/bicep/main.bicep dlzAttachS3Gateway), which also patches this var onto the already-running Console. Unset therefore means one of: the orchestrator has not been re-run since this shipped; the s3proxy image is not in this ACR (run the cloud\'s image lane — full-app-deploy-commercial.yml or gov-provision-dataplane-images.yml — which mirrors it in BY DIGEST from platform/fiab/images/upstream-images.json); a dlz-attach run that carried no hub ACR / Container Apps environment coordinate; or a non-Container-Apps boundary. Nothing else is affected: the N1 Iceberg REST Catalog (LOOM_ICEBERG_CATALOG_URL) plus the native ADLS/abfss path already give external engines governed, audited access to the same data, so only s3://-exclusive clients (Trino, Spark, DuckDB with the s3 extension, boto3) need this face. The S3 wire credential pair is mirrored into Key Vault as loom-s3-gateway-access-key / loom-s3-gateway-secret-key. The gateway is NEVER public (external:false). No Microsoft Fabric.',
     docs: 'https://github.com/gaul/s3proxy',
-    provisionedBy: 'operator-deployed Apache-2.0 s3proxy Container App in front of ADLS Gen2 (out-of-band; the N1 IRC + ADLS SDK path is the default and needs no gateway). LOOM_S3_GATEWAY_URL set on the Console app.',
-    role: 'The s3proxy instance carries its own UAMI (Storage Blob Data Reader/Contributor on the lake as needed); the Console only reads the endpoint URL to render connect info.',
+    provisionedBy: 'modules/admin-plane/main.bicep → modules/data-plane/s3-gateway-aca.bicep (default-ON when a lake is bound), else platform/fiab/bicep/main.bicep dlzAttachS3Gateway on the dlz-attach pass → LOOM_S3_GATEWAY_URL on the Console app. The s3proxy image is pulled from the deployment\'s OWN ACR (digest-pinned mirror; the module has no public-registry branch).',
+    role: 'The gateway runs as its OWN least-privilege identity (uami-loom-s3gw-<region>) holding Storage Blob Data READER on the lake — granted by data-plane/s3-gateway-lake-rbac.bicep — not as the Console UAMI. The Console UAMI is used only as the ACR pull credential and reads the endpoint URL to render connect info.',
     availability: {
       commercial: 'ga', gccHigh: 'ga', il5: 'ga',
-      fallbackNote: 's3proxy is Apache-2.0 and runs in-boundary on the deployment\'s own Container Apps environment; no AGPL MinIO and no SaaS object gateway is in the path, so an IL5 / air-gapped enclave can still expose an S3 face over its own ADLS. Preview.',
+      fallbackNote: 's3proxy is Apache-2.0 and runs in-boundary on the deployment\'s own Container Apps environment from the deployment\'s own ACR mirror; no AGPL MinIO, no SaaS object gateway and no public-registry pull is in the path, so an IL5 / air-gapped enclave can still expose an S3 face over its own ADLS. Preview.',
     },
   },
   // ── M1 — estate assessment reader (the inbound-migration on-ramp) ──

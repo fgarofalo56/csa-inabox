@@ -278,9 +278,10 @@ export function checkSteps(yaml) {
   }
 
   // ---- S6 MSAL resolution precedes composition ---------------------------
-  // Matched against the RAW step body, not `s.run`: the resolver is invoked
+  // ---- S6 MSAL resolution precedes composition ---------------------------
+  // Matched against the step CODE (comments stripped): the resolver is invoked
   // inside a command substitution (`CID="$(bash …)"`), and executableRun()
-  // blanks quoted strings, so the reference is invisible there.
+  // blanks quoted strings, so the reference is invisible in `s.run`.
   const msalIdx = idxOf((s) => /resolve-msal-client-id\.sh/.test(code(s)));
   if (msalIdx < 0) {
     problems.push(
@@ -303,6 +304,54 @@ export function checkSteps(yaml) {
         'A whatif-only run then compiles the paramfile with the variable UNSET while the apply compiles ' +
         'it SET — the preview is of a different template (#3022). It is read-only; it must run always.',
       );
+    }
+  }
+
+  // ---- S7 no bicep parameter is assembled outside the composition --------
+  //
+  // S5 catches a step that restates `--parameters`. This catches the shape that
+  // slipped past it: #3067 assembled the dlz-attach hub coordinates into a
+  // HUB_PARAMS *variable* inside BOTH the what-if and the apply — two
+  // hand-maintained copies of a parameter list, which is precisely how
+  // `--subscription` came to differ between preview and apply (#3022). Those
+  // two copies happened to be identical. Nothing made them so.
+  //
+  // The name set is DERIVED from the composition step, so it cannot go stale:
+  // add a parameter there and this guard starts watching it automatically.
+  //
+  // The search skips `echo`/`printf` lines. Several steps NAME a parameter in a
+  // diagnostic — `::error::… (hubVnetId='…')`, `… For topology=dlz-attach that
+  // is expected …` — and a mention is not an assembly. It cannot be done by
+  // blanking quoted strings the way executableRun() does, because the shape
+  // being hunted (`HUB_PARAMS="hubAdminSubscriptionId=… hubVnetId=…"`) lives
+  // INSIDE quotes too; the honest discriminator is that an `echo` produces
+  // output and assigns nothing.
+  if (composeIdx >= 0) {
+    const unique = [...new Set(
+      [...code(steps[composeIdx]).matchAll(/--parameters\s+"([A-Za-z][A-Za-z0-9]*)=/g)].map((m) => m[1]),
+    )];
+    if (unique.length < 10) {
+      problems.push(
+        `DISCOVERY FLOOR: extracted ${unique.length} bicep parameter name(s) from the composition step, ` +
+        'expected >= 10. The extraction regex stopped matching, so the "assembled nowhere else" check ' +
+        'is measuring nothing.',
+      );
+    }
+    const assembly = (s) => s.body
+      .filter((l) => !/^\s*#/.test(l) && !/^\s*(echo|printf)\s/.test(l))
+      .join('\n');
+    for (let i = 0; i < steps.length; i++) {
+      if (i === composeIdx) continue;
+      const body = assembly(steps[i]);
+      const leaked = unique.filter((n) => new RegExp(`\\b${n}=`).test(body));
+      if (leaked.length) {
+        problems.push(
+          `step "${steps[i].name}" (line ${steps[i].startLine}) assembles bicep parameter(s) ` +
+          `${leaked.join(', ')} outside the composition step. There must be exactly ONE place the ` +
+          'deployment arguments are built — a second one is a copy that can drift from the set the ' +
+          'what-if previewed, and the sha256 assertion cannot see it (#3022, #3067).',
+        );
+      }
     }
   }
 

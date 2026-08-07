@@ -865,6 +865,31 @@ var trinoConsoleAudience = trinoAuthPosture == 'entra' ? 'api://${trinoAudienceC
 // catalog exists yet, so this is never a day-one gate).
 var trinoCatalogPolicy = string(loomBackends.?trinoCatalogPolicy ?? '')
 
+// ── LU-7 engine-compiled ABAC — the governance PULL wiring ───────────────────
+// #2678 gave the engine a catalog floor and gave the BFF a per-caller catalog
+// grant table. Neither knows anything about Loom's GOVERNANCE: a federated query
+// got whatever row/column policy the source system happened to enforce.
+//
+// LU-7 compiles the SAME policy-as-code set that already drives Synapse / Unity
+// Catalog / ADX into a Trino file-based access-control document (table grants,
+// explicit denies, ROW FILTERS, COLUMN MASKS, plus the impersonation rule that
+// lets the BFF present the signed-in principal) and the engine PULLS it from the
+// Console on a refresh loop. That is why this is a URL the DEPLOY produces and
+// not a value anyone types (.claude/rules/auto-bind-by-default.md §5): a policy
+// edit in the Console reaches the engine within one refresh period with no
+// redeploy, no image rebuild, and no operator step.
+//
+// The engine reaches the Console over the Container Apps Environment's internal
+// name resolution (`http://loom-console`) — the same hop the setup-orchestrator
+// and MAF callbacks already use — so the document never leaves the VNet.
+//
+// The pull is authenticated with a DEDICATED deterministic secret rather than
+// the shared LOOM_INTERNAL_TOKEN, for the same reason rel-T10/B3 split the IQ
+// MCP and CI tokens out: a leak of one internal path must not open the others.
+// Delivered to BOTH apps as an ACA secretRef, so it is a literal nowhere.
+var loomTrinoPolicyToken = guid(loomGeneratedSecretSeed, 'loom-trino-policy-token-v1')
+var trinoPolicyRulesUrl = trinoEngineActive ? 'http://loom-console/api/governance/policy-code/engine-rules' : ''
+
 // ── M1 loom-migrate estate-assessment reader — DEFAULT-ON deploy toggle ───────
 // Backs LOOM_MIGRATE_URL (/admin/migrate + the audited /api/migrate/assess).
 // Until 2026-07-28 data-plane/loom-migrate-aca.bicep was an out-of-band
@@ -924,7 +949,35 @@ var mapsTileServerActive = mapsTileServerEnabled && containerPlatform == 'contai
 // still renders + honest-gates on LOOM_AIRFLOW_ENDPOINT. A per-item BYO webserver
 // URL remains an opt-in override regardless.
 var airflowHostEnabled = true
-var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
+// CLOUD PARITY (.claude/rules/cloud-parity.md) — `postgresQuotaAvailable` used to
+// gate THREE unrelated Postgres consumers with one switch: this Airflow host, the
+// DuckLake catalog store, and LU-1's Loom Unity catalog store. Both Gov
+// bicepparams pin it false (params/gcc-high.bicepparam, params/il5.bicepparam),
+// and the REASON they pin it false is entirely about THIS host — its metadata
+// Postgres is invoked with `privateEndpointsEnabled: false`, i.e.
+// publicNetworkAccess=Enabled plus an AllowAllAzureServicesAndResourcesWithinAzureIps
+// firewall rule, which is a documented Commercial carve-out and an unreviewed
+// posture in a sovereign boundary.
+//
+// The collateral damage was the whole point of the Gov product: Databricks Unity
+// Catalog does not exist in Azure Government, so Loom Unity IS the Gov catalog —
+// and it was being denied its durable, backed-up, Entra-only Postgres store
+// because a DIFFERENT service's network posture had not been reviewed. Commercial
+// got `persistenceBackend: 'postgres'`; Gov got `'h2-ephemeral'`, an EmptyDir that
+// loses every catalog object on container restart and is forced to maxReplicas 1.
+// Same feature name, materially lesser product, in the boundary that needs it most.
+//
+// So the switch is split. `airflowPostgres` gates THIS host; `postgresStores`
+// gates the two catalog stores (kept together on purpose — see the zone-collision
+// contract on loomUnityPostgres below, which requires
+// loomUnityPostgresActive ⊆ ducklakeCatalogActive). Both default to
+// `postgresQuotaAvailable`, so this change is a NO-OP on every existing estate;
+// it only makes the Gov catalog's durable store reachable without dragging the
+// Airflow host along. Rides the existing loomBackends bag because both main.bicep
+// (251/256) and this module are at the hard ARM 256-parameter cap.
+var airflowPostgresOverride = toLower(string(loomBackends.?airflowPostgres ?? ''))
+var airflowPostgresAllowed = airflowPostgresOverride == 'enabled' ? true : (airflowPostgresOverride == 'disabled' ? false : postgresQuotaAvailable)
+var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && airflowPostgresAllowed
 
 // Airflow admin (+ Postgres + REST Basic-auth) password. UNPREDICTABLE — derived
 // from loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>),
@@ -965,7 +1018,18 @@ var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airf
 // a permanent charge, not an idle one. Default-ON must be free-at-idle; this is
 // how it becomes free BEFORE the app tier exists too.
 var ducklakeCatalogEnabled = true
-var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
+// See the airflowPostgres block above. `postgresStores` gates the DuckLake
+// catalog store AND (below) LU-1's Loom Unity store as ONE unit — the
+// zone-collision contract on loomUnityPostgres requires
+// loomUnityPostgresActive ⊆ ducklakeCatalogActive, so they must flip together.
+// Default = postgresQuotaAvailable ⇒ no behaviour change on any existing estate.
+// A Gov boundary with confirmed Microsoft.DBforPostgreSQL/flexibleServers quota
+// sets `observabilityConfig.backendOverrides = { postgresStores: 'enabled' }`
+// and gets the SAME durable catalog Commercial has, with the Airflow host still
+// off (its own key still resolves to postgresQuotaAvailable=false).
+var postgresStoresOverride = toLower(string(loomBackends.?postgresStores ?? ''))
+var postgresStoresAllowed = postgresStoresOverride == 'enabled' ? true : (postgresStoresOverride == 'disabled' ? false : postgresQuotaAvailable)
+var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresStoresAllowed
 
 // DuckLake Postgres administrator password. UNPREDICTABLE — derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
@@ -975,29 +1039,41 @@ var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'cont
 var ducklakePgPassword = 'Dl7${uniqueString(loomGeneratedSecretSeed, 'loom-ducklake-pg-v1')}!Qz'
 var ducklakeCatalogUrlSecretName = 'loom-ducklake-catalog-url'
 
-// ── N8 lab 3 — S3-compatible ADLS gateway: NOT DEPLOYED FROM HERE ────────────
-// ROUND-4 SPLIT (PR #2640). The default-ON s3proxy gateway was pulled out of
-// this PR and moved to a follow-up. It is NOT a "we ran out of time" deferral —
-// the surface had two unfixed supply-chain/documentation defects that could not
-// be closed at template level:
-//   1. The only shipped lane on which the gateway could ever deploy is the
-//      dlz-attach pass (this module's branch needed a lake bound at admin-plane
-//      time, which no shipped bicepparam produces), and on that lane the image
-//      resolved to an anonymous `docker.io/andrewgaul/s3proxy:3.3.0` pull: the
-//      hub-ACR coordinate arrives only in `hubCoordinates`, and NO producer of
-//      dlz-attach parameters passes that object (deploy-fiab-*.yml pass flat
-//      `hub*` params; the orchestrator's `_HUB_COORDINATE_FIELDS` and the BFF's
-//      `HUB_COORD_PARAM` have no acrLoginServer key; write-tenant-topology.sh
-//      never captures one). A third-party image pulled from the internet is not
-//      acceptable in a federal estate and is unpullable in an air-gapped one.
-//   2. On that same lane `keyVaultId` was empty, so the two Key Vault secrets
-//      the tutorial/editor tell an operator to read (loom-s3-gateway-access-key
-//      / -secret-key) were never created — a documented step that cannot be
-//      performed.
-// The follow-up closes both together: mirror the image into every cloud's ACR,
-// thread the ACR + Key Vault coordinates through the hub-coordinate chain end to
-// end, and only then re-enable. Until then `LOOM_S3_GATEWAY_URL` stays on the
-// check-env-sync allowlist and the editor honest-gates, exactly as before.
+// ── N8 lab 3 — S3-compatible ADLS gateway: DEFAULT-ON again (#2682 / D16) ─────
+// HISTORY, kept because it is the reason this is not a plain feature flag. The
+// gateway was designed default-ON, then PULLED to opt-in in PR #2640 round 4 for
+// two reasons, both now closed:
+//   1. SUPPLY CHAIN. The image resolved to an anonymous
+//      `docker.io/andrewgaul/s3proxy:3.3.0` pull on every shipped lane, because
+//      the ACR coordinate arrived only via `hubCoordinates` and no producer of
+//      dlz-attach parameters passed one. CLOSED: the upstream coordinate now
+//      lives in platform/fiab/images/upstream-images.json, is imported BY DIGEST
+//      into each cloud's ACR by scripts/ci/mirror-upstream-images.sh, and
+//      data-plane/s3-gateway-aca.bicep REQUIRES `acrLoginServer` — it has no
+//      public-pull branch left to fall into. Both this admin-plane call and the
+//      dlz-attach call in platform/fiab/bicep/main.bicep supply it.
+//   2. THE DOCUMENTED KEY VAULT SECRETS DID NOT EXIST on the lane that could
+//      deploy (`keyVaultId: ''`), while the tutorial, the editor's connect
+//      snippet and the Admin env-check all told operators to read
+//      loom-s3-gateway-access-key / -secret-key. CLOSED: both call sites now
+//      pass a real Key Vault.
+//
+// The opt-in posture that survived in the meantime was a standing violation of
+// the default-ON die-hard rule (`loom_default_on_opt_out` / auto-bind-by-default
+// §5: infra prerequisites are DEPLOYED, not requested) — and the env-check spec
+// had drifted into contradicting its own VALUE_HINT, which described a
+// bicep-wired URL while the spec carried `optIn: true`. Restored here.
+//
+// `!empty(loomStorageAccount)` is a REAL condition, not a stub: a proxy with no
+// account to front would be a wired URL that 404s every bucket (no-vaporware).
+// On tenant topology this module leaves loomStorageAccount EMPTY because no DLZ
+// exists yet — so on that path the gateway is deployed by the **dlz-attach pass**
+// instead (platform/fiab/bicep/main.bicep `dlzAttachS3Gateway`, which also
+// patches LOOM_S3_GATEWAY_URL onto the already-running Console). Container Apps
+// only (an AKS boundary deploys this workload via the cluster GitOps path) and
+// only once the apps tier is on.
+var s3GatewayEnabled = true
+var s3GatewayActive = s3GatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && !empty(loomStorageAccount)
 
 // ── N2b/N3 — loom-duckdb serving tier (default-ON) ────────────────────────────
 // The engine that runs DuckLake's `ATTACH 'ducklake:postgres:<dsn>'` and every
@@ -1034,15 +1110,16 @@ var loomUnityEnabled = (loomBackends.?unity ?? 'enabled') != 'disabled'
 var loomUnityActive = loomUnityEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 // PERSISTENCE. The durable store is an Entra-only, private-endpoint-only
 // Postgres Flexible Server (data-plane/loom-unity-postgres.bicep). Where the
-// sovereign Postgres quota gate trips (gcc-high/il5 .bicepparam default
-// `postgresQuotaAvailable=false`) we deploy the catalog ANYWAY on an EmptyDir H2
+// sovereign Postgres store gate trips (`postgresStores` — gcc-high/il5
+// .bicepparam default `postgresQuotaAvailable=false`, which that key inherits)
+// we deploy the catalog ANYWAY on an EmptyDir H2
 // store — `dbEphemeral: true`, byte-identical to what gov-uc-purview-wire.yml
 // has been deploying on Gov since 2026-07-15. That is a FUNCTIONAL catalog whose
 // metadata does not survive a restart; it is NOT the H2-on-Azure-Files variant,
 // which CrashLoopBackOffs on Gov because the CIFS mount blocks container start.
 // Skipping the catalog entirely on the one cloud that has no Databricks Unity
 // Catalog endpoint would have been the worse trade.
-var loomUnityPostgresActive = loomUnityActive && postgresQuotaAvailable
+var loomUnityPostgresActive = loomUnityActive && postgresStoresAllowed
 // loom-risingwave Postgres-wire root password. Same construction and the same
 // reasoning as airflowAdminPassword above: UNPREDICTABLE, derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
@@ -4049,6 +4126,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // tab still writes Delta<->Iceberg dual metadata into the lake and
             // every catalog surface honest-gates with a Fix-it.
             { name: 'LOOM_ICEBERG_CATALOG_URL', value: icebergCatalogUrl }
+            // N8 lab 3 — the S3-compatible face over the governed lake. DEFAULT-ON
+            // (#2682 / D16): the s3proxy Container App is deployed in this same
+            // pass from the ACR-mirrored image, so the value is produced BY THE
+            // DEPLOY rather than left as a "set LOOM_S3_GATEWAY_URL" instruction
+            // (auto-bind-by-default.md §5). Empty on this lane only when no lake
+            // is bound at admin-plane time (tenant topology) — the dlz-attach
+            // pass then deploys the gateway and patches this same var onto the
+            // running Console via hub-console-dlz-env.
+            { name: 'LOOM_S3_GATEWAY_URL', value: s3GatewayActive ? s3Gateway!.outputs.internalEndpoint : '' }
             // N7e — the Federated SQL (Trino) engine behind SQL Lab. DEFAULT-ON:
             // data-plane/loom-trino-aca.bicep deploys a scale-to-zero,
             // internal-ingress single-node Trino, so this URL is wired by the
@@ -4081,6 +4167,27 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // per-app delivery assertion, which is the whole point of that check:
             // the name WAS present in bicep, just on the wrong app.
             { name: 'LOOM_TRINO_SESSION_USER', value: trinoEngineActive ? trinoEngine!.outputs.mappedSessionUser : '' }
+            // LU-7 — the SAME engine-rules URL the loom-trino app is given. The
+            // Console reads it for two things: it is the endpoint it SERVES (the
+            // engine pulls from here), and its presence is how the BFF knows the
+            // engine is being served a document that carries the impersonation
+            // rule, so `X-Trino-User` may carry the signed-in principal and the
+            // engine's own per-caller table rules can match
+            // (lib/azure/trino-client.ts `trinoImpersonationEnabled()`). Empty →
+            // the BFF keeps sending the mapped session user exactly as before.
+            { name: 'LOOM_TRINO_POLICY_URL', value: trinoPolicyRulesUrl }
+            // The dedicated pull secret. A secretRef, never a literal — and a
+            // DIFFERENT value from LOOM_INTERNAL_TOKEN so a leak of one internal
+            // trust path does not open the engine-rules endpoint.
+            { name: 'LOOM_TRINO_POLICY_TOKEN', secretRef: 'loom-trino-policy-token' }
+            // The audited opt-out for the impersonation half of LU-7. Emitted
+            // (empty = on) rather than left unset so the posture is INSPECTABLE
+            // on the running app: `az containerapp show` shows the value that
+            // decides whether the engine sees the real caller, instead of the
+            // absence of a var you would have to read the code to interpret.
+            // Set to 'disabled' to keep sending the mapped session user while
+            // the compiled rules still govern the deployment as a whole.
+            { name: 'LOOM_TRINO_IMPERSONATION', value: string(loomBackends.?trinoImpersonation ?? '') }
             // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
             // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
             // against this managed host by default — NO Fabric capacity / ADF
@@ -5488,6 +5595,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
           ] : [],
+          // LU-7 — the DEDICATED secret the loom-trino engine presents when it
+          // pulls its governance-compiled authorization from
+          // /api/governance/policy-code/engine-rules. Same deterministic value
+          // the engine app is given, and a DIFFERENT value from the shared
+          // internal token so a leak of one internal path does not open this
+          // one. Always emitted (not gated on trinoEngineActive) so the Console
+          // can serve + verify the endpoint even in a revision where the engine
+          // is temporarily disabled — the route still fails closed for anyone
+          // who does not hold the secret.
+          [
+            { name: 'loom-trino-policy-token', value: loomTrinoPolicyToken }
+          ],
           // Dedicated IQ MCP external-agent Bearer secret (distinct value).
           loomIqMcpEnabled ? [
             { name: 'loom-iq-mcp-token', value: loomIqMcpToken }
@@ -5955,6 +6074,63 @@ module icebergCatalog '../data-plane/iceberg-catalog-aca.bicep' = if (icebergCat
 }
 
 // =====================================================================
+// N8 lab 3 — S3-compatible ADLS gateway (DEFAULT-ON, gate svc-s3-gateway).
+//
+// Apache-2.0 s3proxy in front of the deployment's own ADLS Gen2 so s3://-native
+// OSS clients (Trino, Spark, DuckDB's httpfs/s3 extension) can address the lake
+// with an S3 API. Internal ingress only; read-only by default; minReplicas 0 so
+// default-ON is also $0-at-idle. The AGPL MinIO gateway path is NOT used.
+//
+// IDENTITY: the proxy does NOT run as the Console UAMI. The module creates its
+// own `uami-loom-s3gw-<location>` and that identity — which holds ONLY Storage
+// Blob Data READER, granted by `s3GatewayLakeRbac` below at the lake's own RG
+// scope — is what AZURE_CLIENT_ID selects for the storage data plane. The
+// Console UAMI is passed in solely as the ACR pull credential. Running a Java
+// proxy that parses attacker-influenced S3 signatures and XML as the Console
+// identity (Blob Data CONTRIBUTOR + Key Vault Secrets User + Network Contributor
+// + AKS Cluster Admin) was the wrong blast radius.
+//
+// IMAGE (#2682 / D14): pulled from the deployment's OWN ACR — the module
+// composes `${acrLoginServer}/s3proxy:3.3.0` and has no public-registry branch.
+// The upstream coordinate + its pinned manifest digest live in
+// platform/fiab/images/upstream-images.json; scripts/ci/mirror-upstream-images.sh
+// imports it BY DIGEST into the Commercial ACR (full-app-deploy-commercial.yml)
+// and the Gov ACR (gov-provision-dataplane-images.yml).
+// =====================================================================
+module s3Gateway '../data-plane/s3-gateway-aca.bicep' = if (s3GatewayActive) {
+  name: 'loom-s3-gateway'
+  params: {
+    location: location
+    s3GatewayConfig: {
+      environmentId: containerPlatformModule.outputs.caeId
+      // ACR pull credential ONLY — the storage data plane runs as the module's
+      // own dedicated Storage-Blob-Data-Reader identity.
+      uamiId: identity.outputs.uamiConsoleId
+      lakeStorageAccountName: loomStorageAccount
+      acrLoginServer: registry.outputs.acrLoginServer
+    }
+    // The two Key Vault secrets the tutorial / editor connect-snippet /
+    // Admin env-check tell an operator to read. Passing a REAL vault here is
+    // half of what #2640 round 4 found missing (the other half was the ACR).
+    keyVaultId: keyvault.outputs.keyVaultId
+    complianceTags: complianceTags
+  }
+}
+
+// Least-privilege lake grant for the gateway's dedicated identity. Scoped to
+// the DLZ RG — the lake is NOT in the admin RG — exactly like labelRbacGrants /
+// azureConnectionsRbac / orgVisualsRbac.
+module s3GatewayLakeRbac '../data-plane/s3-gateway-lake-rbac.bicep' = if (s3GatewayActive && !skipRoleGrants) {
+  name: 'loom-s3-gateway-lake-rbac'
+  scope: resourceGroup(loomDlzRg)
+  params: {
+    storageAccountName: loomStorageAccount
+    principalId: s3Gateway!.outputs.storageUamiPrincipalId
+    assignRole: !skipRoleGrants
+  }
+}
+
+// =====================================================================
 // N7e — loom-trino: the Federated SQL engine behind SQL Lab, DEFAULT-ON.
 //
 // Single-node Trino OSS (Apache-2.0) as a scale-to-zero, INTERNAL-ingress
@@ -6008,6 +6184,12 @@ module trinoEngine '../data-plane/loom-trino-aca.bicep' = if (trinoEngineActive)
     // system access control rendered from the wired catalogs). Opt out with
     // loomBackends.trinoAccessControl='none' (audited SECURITY WARNING).
     accessControl: string(loomBackends.?trinoAccessControl ?? 'file') == 'none' ? 'none' : 'file'
+    // LU-7 — the engine pulls its governance-compiled authorization from the
+    // Console. Both halves are deploy-produced; with the URL wired the engine
+    // enforces Loom's row filters / column masks / table grants itself instead
+    // of trusting whatever the federated source happened to apply.
+    policyRulesUrl: trinoPolicyRulesUrl
+    policyRulesToken: loomTrinoPolicyToken
     complianceTags: complianceTags
   }
 }
@@ -6343,8 +6525,10 @@ module loomUnityPostgres '../data-plane/loom-unity-postgres.bicep' = if (loomUni
     // same VNet, and the DuckLake store already created + linked one on the hub.
     // CONSUME it. `loomUnityPostgresActive` is a strict subset of
     // `ducklakeCatalogActive` (both require containerApps + deployAppsEnabled +
-    // postgresQuotaAvailable, and ducklakeCatalogEnabled is an unconditional
-    // true), so whenever this module deploys, that output exists.
+    // postgresStoresAllowed — the SAME derived gate, which is exactly why the
+    // Airflow split above gave Airflow its own key and left these two sharing
+    // one, and ducklakeCatalogEnabled is an unconditional true), so whenever
+    // this module deploys, that output exists.
     privateDnsZoneId: ducklakeCatalogActive ? ducklakeCatalog!.outputs.privateDnsZoneId : ''
     unityPrincipalId: loomUnityUami!.properties.principalId
     unityPrincipalName: loomUnityUami!.name
@@ -7178,6 +7362,13 @@ output catalogEndpoint string = catalogPrimary == 'purview'
       : 'https://atlas-csa-loom.${location}.aks.csa-loom.internal')
 
 output keyVaultUri string = keyvault.outputs.keyVaultUri
+
+// The hub Key Vault RESOURCE ID. Emitted (alongside acrLoginServer + caeId) so a
+// later dlz-attach pass can deploy a hub-side workload that must WRITE a secret
+// an operator is documented to read — the s3-gateway wire-credential pair is the
+// worked example (#2682). The uri alone is not enough: modules take a vault
+// resource id to scope a nested `Microsoft.KeyVault/vaults/secrets` resource.
+output keyVaultId string = keyvault.outputs.keyVaultId
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output acrLoginServer string = registry.outputs.acrLoginServer
 

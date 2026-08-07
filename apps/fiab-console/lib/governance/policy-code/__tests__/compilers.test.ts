@@ -122,8 +122,10 @@ describe('one-pass compileAll (WS-10.2 acceptance)', () => {
     expect(res.compiledBackends.length).toBeGreaterThanOrEqual(4);
     expect(res.compiledBackends).toEqual(expect.arrayContaining(['synapse', 'unity-catalog', 'adx', 'purview', 'api-scope']));
     expect(res.totalOps).toBeGreaterThan(0);
-    // every artifact is present (5 backends), applicable ones have ops.
-    expect(res.artifacts).toHaveLength(5);
+    // every artifact is present (6 backends since LU-7 added `trino`),
+    // applicable ones have ops.
+    expect(res.artifacts).toHaveLength(6);
+    expect(res.artifacts.map((a) => a.backend)).toContain('trino');
   });
 
   it('the finance set compiles to synapse + unity-catalog + adx in one pass', () => {

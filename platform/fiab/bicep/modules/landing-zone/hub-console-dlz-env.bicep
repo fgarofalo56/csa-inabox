@@ -58,6 +58,9 @@ param dlzServiceBusNamespace string = ''
 @description('DLZ dedicated Event Grid custom-topic NAME → presence flag for re-pointing LOOM_EVENTGRID_RG / LOOM_EVENTGRID_SUB at the attached DLZ (the event-grid-topic navigator is RG-scoped). Empty when no dedicated topic is provisioned (the var set is skipped; LOOM_DLZ_RG re-point still covers the business topic).')
 param dlzEventGridTopic string = ''
 
+@description('Internal endpoint of the S3-compatible ADLS gateway deployed by the dlz-attach pass onto the HUB Container Apps environment, fronting THIS attached DLZ\'s lake (#2682 / D16). Sets LOOM_S3_GATEWAY_URL on the already-running hub Console so the svc-s3-gateway gate clears without a Console redeploy — the value is produced BY THE DEPLOY, never asked for (auto-bind-by-default.md §5). Empty when no lake/ACR coordinate was available; the var is then skipped and the editor honest-gates, which is the correct behaviour.')
+param dlzS3GatewayUrl string = ''
+
 @description('Compliance tags.')
 param complianceTags object
 
@@ -172,6 +175,7 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'ADF_NAME', value: dlzAdfFactoryName }
       { name: 'SERVICEBUS_NS', value: dlzServiceBusNamespace }
       { name: 'EVENTGRID_TOPIC', value: dlzEventGridTopic }
+      { name: 'S3_GATEWAY_URL', value: dlzS3GatewayUrl }
     ]
     scriptContent: '''
 set -euo pipefail
@@ -274,6 +278,16 @@ if [ -n "$EVENTGRID_TOPIC" ]; then
   if [ -n "$DLZ_SUB" ]; then
     SET_ARGS+=( "LOOM_EVENTGRID_SUB=$DLZ_SUB" )
   fi
+fi
+
+# S3-compatible ADLS gateway (#2682 / D16). The dlz-attach pass deploys the
+# s3proxy Container App onto the HUB CAE fronting THIS DLZ's lake, so the URL is
+# known only here — the hub Console was built before the DLZ existed. Setting it
+# additively is what makes the gate clear day one without a Console redeploy.
+# Empty => the gateway was skipped (no ACR/CAE coordinate) and the editor
+# honest-gates; we skip the var rather than blank it.
+if [ -n "$S3_GATEWAY_URL" ]; then
+  SET_ARGS+=( "LOOM_S3_GATEWAY_URL=$S3_GATEWAY_URL" )
 fi
 
 echo "  set-env-vars: ${SET_ARGS[*]}"
