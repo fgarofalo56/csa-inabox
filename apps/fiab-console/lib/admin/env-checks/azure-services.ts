@@ -33,9 +33,9 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-report-subscriptions', category: 'azure-services', title: 'Report-subscription scheduled delivery', severity: 'optional',
     required: ['LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', 'LOOM_SUBSCRIPTION_LOGIC_APP_NAME'], warnOnMiss: true,
-    remediation: 'Scheduled report delivery needs the report-subscriptions timer Function (LOOM_REPORT_SUBSCRIPTIONS_FUNCTION) + the delivery Logic App (LOOM_SUBSCRIPTION_LOGIC_APP_NAME). Deploy admin-plane/main.bicep with reportSubscriptionsEnabled=true (report-subscriptions-function.bicep + integration/report-subscription-logicapp.bicep), then authorize the Logic App\'s Office 365 connection in the portal. Subscriptions save to Cosmos regardless and begin delivering once the Function is live. No Microsoft Fabric required.',
-    provisionedBy: 'modules/admin-plane/report-subscriptions-function.bicep + modules/integration/report-subscription-logicapp.bicep (reportSubscriptionsEnabled) → apps[] env',
-    role: 'Function reads Cosmos (report-subscriptions) as the Console UAMI; Logic App uses an authorized Office 365 connection to deliver',
+    remediation: 'Scheduled report delivery needs the report-subscriptions delivery job (LOOM_REPORT_SUBSCRIPTIONS_FUNCTION, set by bicep to the loom-report-subscriptions Container App Job name) + the delivery Logic App (LOOM_SUBSCRIPTION_LOGIC_APP_NAME). Deploy admin-plane/main.bicep with reportSubscriptionsEnabled=true (report-subscriptions-job.bicep + integration/report-subscription-logicapp.bicep), dispatch deploy-report-subscriptions.yml to build the job image, then authorize the Logic App\'s Office 365 connection in the portal. Subscriptions save to Cosmos regardless and begin delivering once the job is live. No Microsoft Fabric required.',
+    provisionedBy: 'modules/admin-plane/report-subscriptions-job.bicep + modules/integration/report-subscription-logicapp.bicep (reportSubscriptionsEnabled) → apps[] env',
+    role: 'The delivery job reads Cosmos (report-subscriptions) as the Console UAMI; Logic App uses an authorized Office 365 connection to deliver',
   },
   {
     id: 'svc-adls', category: 'azure-services', title: 'ADLS Gen2 (lakehouse / Bronze)', severity: 'recommended',

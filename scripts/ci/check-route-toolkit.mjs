@@ -169,6 +169,42 @@ const TOUCH_EXEMPT = new Map([
   ['apps/fiab-console/app/api/items/aip-logic/[id]/publish/route.ts', '#2657: one-line safeRecord fix; codemod skips (no exact-401 prologue)'],
   ['apps/fiab-console/app/api/items/report/[id]/data-source/route.ts', '#2657: one-line safeRecord fix; codemod skips (no exact-401 prologue)'],
   ['apps/fiab-console/app/api/workspaces/bulk-delete/route.ts', '#2657: one-line safeRecord fix; codemod skips (no exact-401 prologue)'],
+  // FINISHLINE C3 (#3068) touched this route for PROSE ONLY. B-FN C3 replaced
+  // the report-subscriptions Y1 Function with the loom-report-subscriptions
+  // Container App Job and DELETED report-subscriptions-function.bicep, so this
+  // file's doc comment and its user-facing `deliveryGate()` remediation string
+  // both named a bicep module that no longer exists. The diff is two comment
+  // lines and one string literal. No identifier, no control flow, no env-var
+  // name changed (LOOM_REPORT_SUBSCRIPTIONS_FUNCTION deliberately keeps its
+  // historical name — the BFF, the svc-report-subscriptions env-check and
+  // post-deploy bootstrap all read it as a presence flag). The auth prologue is
+  // UNTOUCHED: both handlers keep `const s = getSession(); if (!s) return unauth();`.
+  //
+  // THE CODEMOD DECLINES BOTH HANDLERS — `--file=app/api/items/report/[id]/subscriptions/route.ts`
+  // reports verbatim "SKIPPED (GET: getSession() without the exact 401 guard)"
+  // and "SKIPPED (POST: getSession() without the exact 401 guard)", i.e.
+  // "APPLIED: 0 handlers across 0 files; 2 skipped" — the 401 is returned
+  // through this file's local `unauth()` helper rather than the literal shape
+  // withSession replaces. Running --apply left the working tree byte-identical.
+  //
+  // WHAT PINS THE AUTH — MEASURED, AND THE ANSWER IS "NOT CI":
+  // check-route-guards does NOT go red. Mutation: both `if (!s) return unauth();`
+  // lines deleted; check-route-guards re-run; result IDENTICAL to baseline —
+  // "scanned 1426 session-based routes, violations: 0", exit 0. Restored after.
+  // This route DOES have an [id] segment and IS in route-guards' scope
+  // (app/api/items/<type>/[id]/**), and it is NOT allowlisted — it is green
+  // because it genuinely satisfies what that guard measures, which is
+  // AUTHORIZATION and not authentication: every Cosmos access is scoped
+  // `c.createdBy = @o` with `@o = s.claims.oid`. Deleting the 401 does not
+  // change that posture, so the guard cannot see it. No test imports this route
+  // either. So: nothing in CI would catch a dropped 401 here.
+  // Not a cross-tenant hole regardless — both handlers dereference
+  // `s.claims.oid` (GET in the query parameters, POST in the row it builds
+  // BEFORE `items.create`), so an absent session null-derefs and fails closed
+  // rather than reading or writing another user's rows. That is an accident of
+  // the code shape, not a control, and it is recorded here as an observation
+  // rather than offered as coverage.
+  ['apps/fiab-console/app/api/items/report/[id]/subscriptions/route.ts', '#3068: prose-only fix (doc comment + deliveryGate remediation string named the deleted report-subscriptions-function.bicep); auth prologue untouched; codemod reports 0 handlers, 2 skipped (401 via local unauth() helper); check-route-guards MEASURED green on a deleted-401 mutant, so nothing in CI pins it'],
   // #2772 touched this route ONLY to swap a broken secret-name regex
   // (/password|secret|key$/i — the anchor bound to the last alternative, so
   // sslKeyPem/privateKeyPem leaked to Cosmos in plaintext) for the tested
