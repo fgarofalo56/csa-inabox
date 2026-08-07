@@ -78,6 +78,10 @@ export function normalizeRuns(json) {
     questions: numOrNull(d.totals?.questions ?? d.questions),
     rowsAttempted: numOrNull(d.totals?.rowsAttempted ?? d.rowsAttempted),
     probeErrors: d.totals?.probeErrors ?? d.probeErrors ?? null,
+    // #3083 — the errored rows, named. Present only on receipts written by an
+    // evaluator that carries the field; `null` on older ones, which the gate
+    // treats as "not stated" rather than "none".
+    probeFailures: d.totals?.probeFailures ?? d.probeFailures ?? null,
     retrievalHitRate: numOrNull(d.totals?.retrievalHitRate ?? d.retrievalHitRate),
     groundingAvg: numOrNull(d.totals?.groundingAvg ?? d.groundingAvg),
     passRate: numOrNull(d.totals?.passRate ?? d.passRate),
@@ -280,6 +284,15 @@ const JUDGE_REMEDIATION =
   'LOOM_AOAI_MINI_DEPLOYMENT → LOOM_AOAI_DEPLOYMENT) and confirm the daily cap ' +
   '(LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 5000 judged Q/day) is not already spent for this UTC day.';
 
+/** #3083 — the exact remediation for a run that measured only SOME of its rows. */
+const PARTIAL_REMEDIATION =
+  'This is a MEASUREMENT failure, not a quality one — re-run once the cause is cleared rather than reading the ' +
+  'number. The usual cause is an Azure OpenAI 429 on the shared chat deployment when several eval sweeps run at ' +
+  'once; the evaluator now retries each row with backoff honouring Retry-After ' +
+  '(LOOM_COPILOT_EVAL_PROBE_ATTEMPTS/_BUDGET_MS) and copilot-quality-evals serialises sweeps estate-wide, so a ' +
+  'persistent partial means the deployment is genuinely under-provisioned, or the probe is failing for the ' +
+  'non-transient reason named in the statuses above.';
+
 /**
  * Split Cosmos `eval-run` docs into {latest, previous} normalized maps —
  * per surface, the newest run and the one before it (by startedAt).
@@ -373,6 +386,59 @@ export function evaluateGate(current, floorsDoc, opts = {}) {
       rows.push(row);
       continue;
     }
+
+    // #3083 — PARTIAL MEASUREMENT. The branch above catches a surface that
+    // scored NOTHING; this catches the far more dangerous case it left open: a
+    // surface that scored SOME of its rows.
+    //
+    // Measured 2026-08-07: an AOAI 429 became a causeless HTTP 500, the
+    // evaluator dropped the row, and every rate below was then computed over
+    // whatever survived. `rbac: pass-rate 0.38` was 3 of 8, not 5 of 12. A
+    // green main run measured 123 of 153 rows. The arithmetic is the whole
+    // problem — the denominator moved, so LOSING rows can RAISE the rate, and
+    // the gate's verdict became a function of how heavily the estate was loaded
+    // rather than of product quality.
+    //
+    // This is the same refusal as the #2992 predicate mismatch and for the same
+    // reason: a rate over 8 rows and a floor over 12 are NOT the same quantity,
+    // and the honest move is to decline the comparison, loudly, with the
+    // counts. It is UNCONDITIONAL — not gated on --strict-missing — because a
+    // survivor-rate is not a weaker measurement of quality, it is a
+    // measurement of something else. `--strict-missing` decides how to treat an
+    // ABSENT surface; it has never had any bearing on a present-but-partial one
+    // (that path did not exist before this fix), so nothing is being tightened
+    // out from under it.
+    const attempted = Number.isFinite(cur.rowsAttempted) ? cur.rowsAttempted : null;
+    if (attempted !== null && cur.questions < attempted) {
+      const lost = attempted - cur.questions;
+      row.status = 'fail';
+      row.partialMeasurement = {
+        measured: cur.questions,
+        attempted,
+        lost,
+        probeErrors: cur.probeErrors ?? null,
+        probeFailures: Array.isArray(cur.probeFailures) ? cur.probeFailures : null,
+      };
+      const errs =
+        cur.probeErrors && Object.keys(cur.probeErrors).length
+          ? ` eval-probe failures by status: ${JSON.stringify(cur.probeErrors)}.`
+          : '';
+      const named = Array.isArray(cur.probeFailures) && cur.probeFailures.length
+        ? ` Errored row(s): ${cur.probeFailures
+            .slice(0, 8)
+            .map((f) => `${f.questionId}@${f.status}x${f.attempts ?? '?'}`)
+            .join(', ')}${cur.probeFailures.length > 8 ? ', …' : ''}.`
+        : '';
+      failures.push(
+        `${surface}: only ${cur.questions} of ${attempted} golden row(s) were MEASURED (${lost} lost after the ` +
+        `evaluator's bounded probe retries) — every rate for this surface is computed over the SURVIVORS, so it is ` +
+        `not the quantity its floor is expressed in and losing rows can RAISE it. Refusing to score a partial run.` +
+        `${errs}${named} ${PARTIAL_REMEDIATION}`,
+      );
+      rows.push(row);
+      continue;
+    }
+
     if (!floor) {
       row.status = 'no-floor';
       notes.push(`${surface}: no floor yet — add one via the ratchet once runs accumulate`);
@@ -514,11 +580,23 @@ export function renderMarkdown(report, meta = {}) {
     // Not scored in this run (absent, or present with zero questions — #2798).
     // NEVER print a rate for these: a rendered "0.00" is what got four
     // never-measured surfaces triaged as a retrieval outage.
-    const unscored = row.status === 'missing' || row.notMeasured;
-    const label = row.notMeasured ? 'not measured' : 'not run';
-    const q = unscored
-      ? (Number.isFinite(row.rowsAttempted) ? `0/${row.rowsAttempted}` : '—')
-      : (cellQuestions(row) ?? '—');
+    //
+    // #3083 extends the same rule to a PARTIALLY measured surface. Its rates
+    // exist but are computed over the survivors, so printing them under the
+    // `Pass-rate` header would repeat the exact defect: a number under a header
+    // that does not describe it.
+    const partial = row.partialMeasurement ?? null;
+    const unscored = row.status === 'missing' || row.notMeasured || !!partial;
+    const label = partial
+      ? `partial — not comparable`
+      : row.notMeasured
+        ? 'not measured'
+        : 'not run';
+    const q = partial
+      ? `**${partial.measured}/${partial.attempted}**`
+      : unscored
+        ? (Number.isFinite(row.rowsAttempted) ? `0/${row.rowsAttempted}` : '—')
+        : (cellQuestions(row) ?? '—');
     lines.push(
       `| ${row.surface} | ${q} | ${unscored ? label : cell('retrievalHitRate')} | ` +
       `${unscored ? '—' : cell('groundingAvg')} | ${unscored ? '—' : cell('passRate')} | ` +
@@ -527,6 +605,24 @@ export function renderMarkdown(report, meta = {}) {
   }
   // #2992 — the predicate ledger. A silently-absent delta is a smaller version
   // of the same defect, so every refusal is stated with both sides named.
+  const partials = report.rows.filter((r) => r.partialMeasurement);
+  if (partials.length) {
+    lines.push('', '### Partial measurement — rates NOT comparable (#3083)', '');
+    lines.push(
+      'These surfaces scored only some of their golden rows. Every rate they report is computed over the',
+      'SURVIVING rows, so it is not the quantity the floor is expressed in — and losing rows can RAISE it.',
+      'The gate refuses to score them rather than comparing unlike quantities.',
+      '',
+    );
+    for (const r of partials) {
+      const p = r.partialMeasurement;
+      const errs = p.probeErrors && Object.keys(p.probeErrors).length ? ` probe failures by status \`${JSON.stringify(p.probeErrors)}\`;` : '';
+      const named = Array.isArray(p.probeFailures) && p.probeFailures.length
+        ? ` errored rows: ${p.probeFailures.slice(0, 8).map((f) => `\`${f.questionId}\`(${f.status}×${f.attempts ?? '?'})`).join(', ')}${p.probeFailures.length > 8 ? ', …' : ''}`
+        : '';
+      lines.push(`- ❌ \`${r.surface}\` — **${p.measured} of ${p.attempted}** row(s) measured, ${p.lost} lost.${errs}${named}`);
+    }
+  }
   const degraded = report.rows.filter((r) => r.metrics?.passRate?.verdict === 'degraded-predicate');
   const refused = report.rows.filter((r) => r.metrics?.passRate?.verdict === 'delta-refused');
   if (degraded.length || refused.length) {
@@ -604,8 +700,7 @@ export function attachQuestions(report, current) {
   for (const row of report.rows) {
     const cur = current.get(row.surface);
     if (cur && Number.isFinite(cur.questions)) row.questions = cur.questions;
-    if (cur && Number.isFinite(cur.rowsAttempted)) row.rowsAttempted = cur.rowsAttempted;
-    // #2979 — display-only carry-through for the parity-inversion channel.
+    if (cur && Number.isFinite(cur.rowsAttempted)) row.rowsAttempted = cur.rowsAttempted;    // #2979 — display-only carry-through for the parity-inversion channel.
     if (cur && Number.isFinite(cur.judged)) row.judged = cur.judged;
     if (cur && Number.isFinite(cur.productFidelityAvg)) row.productFidelityAvg = cur.productFidelityAvg;
     if (cur && Number.isFinite(cur.productFidelityJudged)) row.productFidelityJudged = cur.productFidelityJudged;

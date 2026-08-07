@@ -39,7 +39,7 @@
  */
 
 import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
-import { sendWithAoaiRetry } from './aoai-retry';
+import { sendWithAoaiRetry, parseRetryAfterMs } from './aoai-retry';
 import {
   resolveAoaiTarget,
   aoaiToken,
@@ -88,12 +88,40 @@ function chatUrl(target: AoaiTarget | AoaiCallTarget): string {
  * read). Distinguished from a transport/connection failure so the M4 APIM→direct
  * fallback does NOT retry a real API error (a 400/404/5xx from the model), only a
  * genuine "gateway unreachable" outage.
+ *
+ * #3083 — `status` and `retryAfterSeconds` are STRUCTURED fields, not just
+ * prose in `message`. Before this the only record of "AOAI said 429" was the
+ * substring `AOAI 429:` inside the message, so every caller that wanted to
+ * distinguish a throttle from a defect had to regex-parse an error string —
+ * and the one caller that mattered (the eval probe) did not, collapsing a
+ * throttle into a causeless HTTP 500. An error that knows its cause and hides
+ * it in prose is the deploy-integrity R7 defect in miniature.
+ *
+ * `retryAfterSeconds` is the server's own `Retry-After` (RFC 9110 delta-seconds
+ * or HTTP-date, normalised to seconds) when it sent one, so a caller can honour
+ * it instead of guessing.
  */
-class AoaiResponseError extends Error {
-  constructor(message: string) {
+export class AoaiResponseError extends Error {
+  /** Upstream HTTP status AOAI actually returned (never inferred). */
+  readonly status?: number;
+  /** Server-supplied `Retry-After`, in seconds, when present. */
+  readonly retryAfterSeconds?: number;
+  constructor(message: string, status?: number, retryAfterSeconds?: number) {
     super(message);
     this.name = 'AoaiResponseError';
+    if (Number.isFinite(status)) this.status = status;
+    if (Number.isFinite(retryAfterSeconds)) this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+/**
+ * Normalise a `Retry-After` response header to whole seconds, or `undefined`
+ * when absent/malformed. Reuses the RFC 9110 parser the retry policy already
+ * ships (delta-seconds AND HTTP-date), so the two never disagree.
+ */
+function retryAfterSecondsOf(res: Response): number | undefined {
+  const ms = parseRetryAfterMs(res.headers?.get?.('retry-after'));
+  return ms === undefined ? undefined : Math.ceil(ms / 1000);
 }
 
 /**
@@ -429,11 +457,11 @@ export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
     if (res.status === 400) {
       const t = await res.text();
       if (isUnsupportedSamplingParam(t)) res = await sendWithAoaiRetry(() => send(false), { label: 'chat' });
-      else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`);
+      else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`, 400);
     }
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+      throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`, res.status, retryAfterSecondsOf(res));
     }
     const j = await res.json();
     // N13 — attribute the REAL usage the response reported (never an invented
@@ -484,11 +512,11 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
     if (res.status === 400) {
       const t = await res.text();
       if (isUnsupportedSamplingParam(t)) res = await sendWithAoaiRetry(() => send(false), { label: 'chat-json' });
-      else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`);
+      else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`, 400);
     }
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+      throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`, res.status, retryAfterSecondsOf(res));
     }
     const j = await res.json();
     // N13 — attribute the REAL usage the response reported.
@@ -564,12 +592,12 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
       if (isUnsupportedSamplingParam(t)) {
         res = await sendWithAoaiRetry(() => send(false), { label: 'chat-raw' });
       } else {
-        throw new AoaiResponseError(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+        throw new AoaiResponseError(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`, 400);
       }
     }
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      throw new AoaiResponseError(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
+      throw new AoaiResponseError(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`, res.status, retryAfterSecondsOf(res));
     }
     const j = await res.json();
     // N13 — attribute the REAL usage (the tool loop's every hop is metered).
@@ -647,11 +675,12 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
       throw new AoaiResponseError(
         `Azure OpenAI embeddings deployment "${deployment}" not found. Deploy a text-embedding model ` +
           `(e.g. text-embedding-3-large) on the Foundry hub and set LOOM_AOAI_EMBED_DEPLOYMENT. ${t.slice(0, 200)}`,
+        404,
       );
     }
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      throw new AoaiResponseError(`AOAI embeddings ${res.status}: ${t.slice(0, 300)}`);
+      throw new AoaiResponseError(`AOAI embeddings ${res.status}: ${t.slice(0, 300)}`, res.status, retryAfterSecondsOf(res));
     }
     const j: any = await res.json();
     const rows: any[] = Array.isArray(j?.data) ? j.data : [];
@@ -714,11 +743,11 @@ export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
     if (res.status === 400) {
       const t = await res.text();
       if (isUnsupportedSamplingParam(t)) res = await sendWithAoaiRetry(() => send(false), { label: 'stream' });
-      else throw new AoaiResponseError(`AOAI stream 400: ${t.slice(0, 300)}`);
+      else throw new AoaiResponseError(`AOAI stream 400: ${t.slice(0, 300)}`, 400);
     }
     if (!res.ok || !res.body) {
       const t = await res.text().catch(() => '');
-      throw new AoaiResponseError(`AOAI stream ${res.status}: ${t.slice(0, 300)}`);
+      throw new AoaiResponseError(`AOAI stream ${res.status}: ${t.slice(0, 300)}`, res.status, retryAfterSecondsOf(res));
     }
     return res;
   });

@@ -846,6 +846,187 @@ export interface RunTotals {
    * instead of forcing the next triage to infer it.
    */
   probeErrors?: Record<string, number>;
+  /**
+   * #3083 — the ERRORED ROWS themselves, one entry per golden row that never
+   * produced a score after its bounded retries were exhausted. `probeErrors`
+   * is a histogram; this names WHICH questions were lost, with what status and
+   * after how many attempts.
+   *
+   * The rows are recorded here rather than pushed into `results` on purpose: a
+   * throttled row is NOT a failed answer, and scoring it as one would falsify
+   * the retrieval and pass rates in the opposite direction. It is an absence,
+   * and the gate must treat `questions < rowsAttempted` as "this run did not
+   * measure the surface", never as "the surface scored X over what survived".
+   */
+  probeFailures?: { questionId: string; status: number; upstreamStatus: number | null; attempts: number; message: string }[];
+}
+
+/** One golden row that never produced a score (#3083). */
+export interface ProbeFailureRow {
+  questionId: string;
+  /** The probe's HTTP status (0 = transport/decode failure with no status). */
+  status: number;
+  /** What the console said its own upstream returned, when it said. */
+  upstreamStatus: number | null;
+  /** How many probe attempts were made before giving up (>= 1). */
+  attempts: number;
+  message: string;
+}
+
+/**
+ * Probe statuses worth another attempt (#3083).
+ *
+ * Mirrors `AOAI_RETRYABLE_STATUSES` in the console's `aoai-retry` — one policy
+ * across the estate — plus `502`, which is the status the eval-probe now
+ * returns for a NON-throttle upstream AOAI failure it has classified as
+ * transient.
+ *
+ * Deliberately EXCLUDES every other 4xx: a `401` (bad internal token), `403`,
+ * `404` and `503 no_aoai` are deterministic configuration states. Retrying
+ * them is pure latency and would mask exactly the misconfiguration that run
+ * 31115406603 hid — every surface came back `401` and the gate went green.
+ */
+export const RETRYABLE_PROBE_STATUSES: readonly number[] = [429, 500, 502, 503, 504];
+
+/**
+ * Parse an RFC 9110 `Retry-After` header to milliseconds — delta-seconds or an
+ * HTTP-date. Returns `null` for a missing / malformed / negative value so the
+ * caller falls back to its own backoff instead of INVENTING a delay.
+ *
+ * Mirrors `apps/fiab-console/lib/azure/aoai-retry.parseRetryAfterMs`, and lives
+ * here (the pure core) rather than beside the Cosmos/Identity clients so it is
+ * testable without the Azure SDK — this package ships as its own container
+ * image and its SDK deps are not in the console's workspace tree.
+ */
+export function parseRetryAfterHeaderMs(value: string | null | undefined, nowMs = Date.now()): number | null {
+  const raw = (value ?? '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const secs = Number(raw);
+    return Number.isFinite(secs) ? secs * 1000 : null;
+  }
+  // `Date.parse` happily parses '-5' and '1.5' into real dates; a genuine
+  // HTTP-date always carries a weekday/month name, so require a letter before
+  // trusting it — otherwise garbage becomes "retry immediately".
+  if (!/[a-z]/i.test(raw)) return null;
+  const at = Date.parse(raw);
+  return Number.isNaN(at) ? null : Math.max(0, at - nowMs);
+}
+
+/**
+ * True when a probe failure is worth another attempt. `503` is retryable ONLY
+ * when it is NOT the honest `no_aoai` config gate — the caller passes the
+ * envelope `code` so this never has to guess from prose.
+ */
+export function isRetryableProbeFailure(status: number, code?: string | null): boolean {
+  if (code === 'no_aoai') return false;
+  return RETRYABLE_PROBE_STATUSES.includes(status);
+}
+
+/**
+ * The delay before probe attempt `attempt + 1` (#3083).
+ *
+ * Server guidance wins: a `Retry-After` the console forwarded from AOAI is
+ * authoritative, clamped by `maxDelayMs` so a hostile or garbage header cannot
+ * stall a 45-minute job. Otherwise full-jitter exponential backoff
+ * (`random() * min(maxDelay, base * 2^(attempt-1))`) — the AWS-style policy the
+ * console already uses, so a fleet throttled at the same instant does not retry
+ * in lockstep and re-throttle itself.
+ *
+ * Pure and injectable: `random` is a parameter so the policy is unit-testable
+ * without sleeping or mocking the clock.
+ */
+export function probeRetryDelayMs(opts: {
+  attempt: number;
+  retryAfterMs?: number | null;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  random?: () => number;
+}): number {
+  const base = opts.baseDelayMs ?? 1_000;
+  const max = opts.maxDelayMs ?? 30_000;
+  const rnd = opts.random ?? Math.random;
+  if (opts.retryAfterMs !== null && opts.retryAfterMs !== undefined && Number.isFinite(opts.retryAfterMs)) {
+    return Math.max(0, Math.min(max, opts.retryAfterMs));
+  }
+  const ceiling = Math.min(max, base * 2 ** Math.max(0, opts.attempt - 1));
+  return Math.floor(rnd() * ceiling);
+}
+
+/** Tunables for {@link withProbeRetry}. All bounded; none optional in effect. */
+export interface ProbeRetryPolicy {
+  /** Total attempts including the first (1 = no retry). */
+  maxAttempts: number;
+  /** First backoff step in ms, doubled per attempt before jitter. */
+  baseDelayMs: number;
+  /** Ceiling for ONE sleep, including a server-supplied Retry-After. */
+  maxDelayMs: number;
+  /** Ceiling for the SUM of all sleeps for one row. */
+  budgetMs: number;
+}
+
+/**
+ * Run one probe with bounded retries, then FAIL CLOSED (#3083, R6).
+ *
+ * A retry that cannot fail is forbidden: this makes at most `maxAttempts`
+ * attempts, sleeps at most `budgetMs` in total, and on exhaustion RE-THROWS the
+ * last error (with `attempts` attached) so the caller records the row as an
+ * ERROR. It never swallows a failure and never returns a partial result.
+ *
+ * Only genuinely transient statuses are retried; a 401/403/404/`no_aoai` fails
+ * on the FIRST attempt, so a misconfiguration surfaces immediately instead of
+ * being smeared across three sleeps.
+ *
+ * Pure over its injected `probe`, `sleep` and `random` — the whole loop is
+ * unit-testable without a network or a clock.
+ */
+export async function withProbeRetry<T>(
+  probe: () => Promise<T>,
+  policy: ProbeRetryPolicy,
+  deps: {
+    sleep?: (ms: number) => Promise<void>;
+    random?: () => number;
+    onRetry?: (info: { attempt: number; status: number; upstreamStatus: number | null; delayMs: number; serverGuided: boolean }) => void;
+  } = {},
+): Promise<{ value: T; attempts: number }> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const maxAttempts = Math.max(1, policy.maxAttempts);
+  let spentMs = 0;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return { value: await probe(), attempts: attempt };
+    } catch (e: any) {
+      const status = Number.isFinite(e?.status) ? Number(e.status) : 0;
+      const code = typeof e?.code === 'string' ? e.code : null;
+      const retryAfterMs = Number.isFinite(e?.retryAfterMs) ? Number(e.retryAfterMs) : null;
+      if (attempt >= maxAttempts || !isRetryableProbeFailure(status, code)) {
+        // Attach how hard we tried so the ERROR row can say it.
+        if (e && typeof e === 'object') e.attempts = attempt;
+        throw e;
+      }
+      const delayMs = probeRetryDelayMs({
+        attempt,
+        retryAfterMs,
+        baseDelayMs: policy.baseDelayMs,
+        maxDelayMs: policy.maxDelayMs,
+        random: deps.random,
+      });
+      if (spentMs + delayMs > policy.budgetMs) {
+        // Sleep budget exhausted — fail closed rather than sleeping past it.
+        if (e && typeof e === 'object') e.attempts = attempt;
+        throw e;
+      }
+      deps.onRetry?.({
+        attempt,
+        status,
+        upstreamStatus: Number.isFinite(e?.upstreamStatus) ? Number(e.upstreamStatus) : null,
+        delayMs,
+        serverGuided: retryAfterMs !== null,
+      });
+      spentMs += delayMs;
+      await sleep(delayMs);
+    }
+  }
 }
 
 /** Count per-question backends into the run rollup (`{}` when none reported). */
@@ -868,12 +1049,13 @@ export function rollupBackends(results: Pick<EvalResult, 'backend'>[]): Record<s
  */
 export function rollupRun(
   results: EvalResult[],
-  probe?: { attempted?: number; errors?: Record<string, number> },
+  probe?: { attempted?: number; errors?: Record<string, number>; failures?: ProbeFailureRow[] },
 ): RunTotals {
   const n = results.length;
-  const probeInfo: Pick<RunTotals, 'rowsAttempted' | 'probeErrors'> = {};
+  const probeInfo: Pick<RunTotals, 'rowsAttempted' | 'probeErrors' | 'probeFailures'> = {};
   if (probe?.attempted !== undefined) probeInfo.rowsAttempted = probe.attempted;
   if (probe?.errors && Object.keys(probe.errors).length) probeInfo.probeErrors = { ...probe.errors };
+  if (probe?.failures && probe.failures.length) probeInfo.probeFailures = probe.failures.map((f) => ({ ...f }));
   if (n === 0) {
     return {
       questions: 0, retrievalHitRate: 0, mrrAvg: 0, groundingAvg: null,

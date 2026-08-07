@@ -227,6 +227,18 @@ if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_S
 console.log(`check-eval-regression: source = ${source}`);
 for (const row of report.rows) {
   const m = row.metrics;
+  // #3083 — a partially measured surface has rates, but they are over the
+  // survivors. Print the counts, never the numbers: a rate whose denominator
+  // moved is not the metric its label names.
+  if (row.partialMeasurement) {
+    const p = row.partialMeasurement;
+    console.log(
+      `  ${row.status.padEnd(8)} ${row.surface}: PARTIAL — ${p.measured}/${p.attempted} row(s) measured ` +
+        `(${p.lost} lost${p.probeErrors ? `, probe errors ${JSON.stringify(p.probeErrors)}` : ''}); ` +
+        'rates NOT reported (they would be computed over the survivors)',
+    );
+    continue;
+  }
   const fmt = (k) => {
     if (!m[k]) return '—';
     // #2992 — never print a degraded rate under the pass-rate label.
@@ -261,6 +273,20 @@ if (totalFailures > 0) {
       `rows (${degraded.map((r) => r.surface).join(', ')}). This is a JUDGE failure, not a quality regression: ` +
       'their deterministic-only rates are reported as `deterministicPassRate` and were neither floor-checked nor ' +
       'compared against the judged baseline.',
+    );
+  }
+  // #3083 — same class, different cause: a partial run measured less, it did
+  // not score worse. Say so explicitly so nobody triages a throttle as a
+  // quality regression (which is exactly what happened to `rbac 0.38` = 3/8).
+  const partial = report.rows.filter((r) => r.partialMeasurement);
+  if (partial.length > 0) {
+    const totMeasured = partial.reduce((a, r) => a + r.partialMeasurement.measured, 0);
+    const totAttempted = partial.reduce((a, r) => a + r.partialMeasurement.attempted, 0);
+    console.error(
+      `check-eval-regression: ${partial.length} surface(s) were only PARTIALLY measured ` +
+      `(${totMeasured}/${totAttempted} rows across them: ${partial.map((r) => `${r.surface} ${r.partialMeasurement.measured}/${r.partialMeasurement.attempted}`).join(', ')}). ` +
+      'This is a MEASUREMENT failure, not a quality regression — their rates were computed over the surviving rows ' +
+      'and were therefore NOT floor-checked and NOT compared against the baseline. Do NOT lower a floor in response.',
     );
   }
   console.error(

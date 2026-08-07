@@ -24,8 +24,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isValidInternalToken, INTERNAL_TOKEN_HEADER } from '@/lib/auth/internal-token';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
+import { logSafe } from '@/lib/util/log-safe';
 import { searchDocs, DEFAULT_DOC_RETRIEVAL_TOP } from '@/lib/azure/loom-docs-index';
 import { aoaiChat, NoAoaiDeploymentError } from '@/lib/azure/aoai-chat-client';
+import { classifyAoaiFailure, describeAoaiFailure } from '@/lib/azure/aoai-failure-class';
 import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
 import { routeTurnTier } from '@/lib/foundry/model-tier-router';
 import { buildGroundedDocsMessages, EVIDENCE_CHARS } from '@/lib/copilot/docs-grounding';
@@ -49,7 +51,20 @@ function authed(req: NextRequest): boolean {
   return isValidInternalToken(bearer || null) || isValidInternalToken(header);
 }
 
-/** The staged corpus manifest (stage-copilot-corpus.sh) — image or repo checkout. */
+/**
+ * The staged corpus manifest (stage-copilot-corpus.sh) — image or repo checkout.
+ *
+ * #3085 — the field names must match what `stage-copilot-corpus.sh` actually
+ * writes: `sourceCommit` and `fileCount`. This read `commit`/`corpusCommit` and
+ * `total`, none of which the script has ever emitted, so the route returned
+ * `corpusCommit: ''` on EVERY call — and `run-evals.ts` turned that into
+ * `corpusCommit: 'unknown'` on every `eval-run` doc ever written. The corpus
+ * provenance the receipt claimed to carry was empty the whole time, which is
+ * why the divergence in #3085 was invisible. Measured against run 31197101702,
+ * where the new provenance step reported `unresolved`.
+ *
+ * The legacy keys are still accepted so an older staged tree keeps working.
+ */
 function readCorpusManifest(): { corpusCommit: string; corpusTotal?: number } | null {
   const candidates = [
     path.join(process.cwd(), 'copilot-corpus', '.corpus-manifest.json'),
@@ -59,7 +74,10 @@ function readCorpusManifest(): { corpusCommit: string; corpusTotal?: number } | 
     try {
       if (!fs.existsSync(p)) continue;
       const j = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      return { corpusCommit: String(j.commit || j.corpusCommit || ''), corpusTotal: Number(j.total ?? 0) || undefined };
+      return {
+        corpusCommit: String(j.sourceCommit || j.commit || j.corpusCommit || ''),
+        corpusTotal: Number(j.fileCount ?? j.total ?? 0) || undefined,
+      };
     } catch {
       /* fall through */
     }
@@ -129,7 +147,50 @@ export async function POST(req: NextRequest) {
         { code: 'no_aoai' },
       );
     }
-    return apiServerError(e, 'eval probe failed', 'eval_probe_failed');
+    // #3083 / deploy-integrity R7 — an AOAI 429 used to become
+    // `500 {"error":"eval probe failed","code":"eval_probe_failed"}`: a status
+    // the evaluator does not retry, and a string that asserts nothing the code
+    // established. A throttle, a missing deployment and a genuine bug were the
+    // same response. The evaluator therefore DROPPED the row, and the gate
+    // computed pass-rates over the survivors — measured 2026-08-07: 84 of 153
+    // rows lost at peak, `rbac 0.38` was 3 of 8.
+    //
+    // Now: whatever the upstream actually said is surfaced with its own status
+    // and a `code` that names the cause. A 429 stays a 429 (with Retry-After
+    // when the server sent one) so the caller can honour it; a non-429 upstream
+    // failure is a 502 that NAMES the upstream status rather than impersonating
+    // it (a bare 401 here would be indistinguishable from a bad internal
+    // token). Only a failure with no structured status reaches the 500 — and
+    // that message SAYS the cause is not known.
+    const cls = classifyAoaiFailure(e);
+    if (cls.known) {
+      const status = cls.code === 'aoai_throttled' ? 429 : 502;
+      const res = apiError(describeAoaiFailure(cls, e), status, {
+        code: cls.code,
+        upstreamStatus: cls.status,
+        retryable: cls.retryable,
+        ...(cls.retryAfterSeconds !== null ? { retryAfterSeconds: cls.retryAfterSeconds } : {}),
+      });
+      // Honour the server's own guidance where it gave one — the evaluator's
+      // probe retry reads this header before falling back to its own backoff.
+      if (cls.retryAfterSeconds !== null) res.headers.set('retry-after', String(cls.retryAfterSeconds));
+      // Not `apiServerError`: the raw error still belongs in the log, and this
+      // path deliberately bypasses it (the public message here is honest and
+      // safe — it carries only a status and the upstream's own text).
+      // eslint-disable-next-line no-console
+      console.error(
+        '[eval-probe] upstream AOAI failure:',
+        logSafe(`status=${cls.status} code=${cls.code} ${e instanceof Error ? e.stack || e.message : String(e)}`, 4000),
+      );
+      return res;
+    }
+    return apiServerError(
+      e,
+      'eval probe failed for a reason this route could NOT classify — the error carried no upstream status, so ' +
+        'whether the cause was retrieval, the model, or this route is NOT established here. See the server log. ' +
+        'This is not a quality result.',
+      'eval_probe_unclassified',
+    );
   }
 }
 

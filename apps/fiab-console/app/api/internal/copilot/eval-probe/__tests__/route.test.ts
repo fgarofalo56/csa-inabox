@@ -14,6 +14,9 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
 
 const { NoAoaiDeploymentErrorMock, searchDocsMock, aoaiChatMock, resolveTargetMock } = vi.hoisted(() => {
   class NoAoaiDeploymentErrorMock extends Error {
@@ -40,6 +43,29 @@ vi.mock('@/lib/azure/copilot-orchestrator', () => ({ resolveAoaiTarget: resolveT
 import { POST, GET, EVIDENCE_CHARS } from '../route';
 
 const TOKEN = 'test-internal-token';
+
+const getReq = () =>
+  new NextRequest('http://localhost/api/internal/copilot/eval-probe', {
+    headers: { 'x-loom-internal-token': TOKEN },
+  });
+
+/**
+ * Write a real `.corpus-manifest.json` at the path the route looks in
+ * (`<cwd>/copilot-corpus/`), run `fn`, then restore. Exercises the actual
+ * fs read rather than a mocked one.
+ */
+async function withStagedManifest(manifest: unknown, fn: () => Promise<void>): Promise<void> {
+  const cwd = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'loom-corpus-'));
+  fs.mkdirSync(nodePath.join(cwd, 'copilot-corpus'), { recursive: true });
+  fs.writeFileSync(nodePath.join(cwd, 'copilot-corpus', '.corpus-manifest.json'), JSON.stringify(manifest));
+  const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+  try {
+    await fn();
+  } finally {
+    spy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
 
 function post(body: unknown, token?: string): NextRequest {
   return new NextRequest('http://localhost/api/internal/copilot/eval-probe', {
@@ -171,6 +197,98 @@ describe('POST probe', () => {
   });
 });
 
+/**
+ * #3083 / deploy-integrity R7 — the probe must not assert a cause it did not
+ * establish, and it must not launder a THROTTLE into a defect.
+ *
+ * Measured 2026-08-07: `aoaiChat` threw on an AOAI 429, this route returned
+ * `500 {"error":"eval probe failed","code":"eval_probe_failed"}`, and the
+ * evaluator — seeing an unretryable 500 — silently dropped the row. Pass-rates
+ * were then computed over the survivors, so `rbac 0.38` was 3 of 8 and a green
+ * main run measured 123 of 153.
+ */
+describe('upstream AOAI failures are surfaced with their cause (#3083)', () => {
+  /** The shape `AoaiResponseError` carries since #3083. */
+  const aoaiError = (message: string, status?: number, retryAfterSeconds?: number) =>
+    Object.assign(new Error(message), { name: 'AoaiResponseError', status, retryAfterSeconds });
+
+  it('a 429 stays a 429 — never a causeless 500', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 429: {"code":"rate_limit_exceeded"}', 429, 8));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(429);
+    const j: any = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('aoai_throttled');
+    expect(j.upstreamStatus).toBe(429);
+    expect(j.retryable).toBe(true);
+    // The message NAMES the cause instead of the old 'eval probe failed'.
+    expect(j.error).toContain('THROTTLED');
+    expect(j.error).toContain('429');
+    expect(j.error).not.toContain('eval probe failed');
+  });
+
+  it('honours Retry-After — echoed as a header AND a field', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 429: throttled', 429, 8));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.headers.get('retry-after')).toBe('8');
+    expect((await res.json()).retryAfterSeconds).toBe(8);
+  });
+
+  it('omits Retry-After when the server sent none (never invents a delay)', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 429: throttled', 429));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.headers.get('retry-after')).toBeNull();
+    expect((await res.json()).retryAfterSeconds).toBeUndefined();
+  });
+
+  it('a 503 from AOAI becomes a 502 that NAMES the upstream status (not an impersonation)', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 503: overloaded', 503));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(502);
+    const j: any = await res.json();
+    expect(j.code).toBe('aoai_upstream_error');
+    expect(j.upstreamStatus).toBe(503);
+    expect(j.retryable).toBe(true);
+  });
+
+  it('a 401 from AOAI is reported as NON-retryable, and never as our own 401', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 401: bad token', 401));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    // 401 here would be indistinguishable from "bad internal token".
+    expect(res.status).toBe(502);
+    const j: any = await res.json();
+    expect(j.code).toBe('aoai_request_error');
+    expect(j.upstreamStatus).toBe(401);
+    expect(j.retryable).toBe(false);
+  });
+
+  it('an error with NO status says the cause is NOT KNOWN — it does not guess one', async () => {
+    aoaiChatMock.mockRejectedValue(new Error('socket hang up'));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(500);
+    const j: any = await res.json();
+    expect(j.code).toBe('eval_probe_unclassified');
+    expect(j.error).toContain('could NOT classify');
+    expect(j.error).toContain('NOT established');
+    expect(j.upstreamStatus).toBeUndefined();
+  });
+
+  it('does NOT infer a status from prose — a message containing "429" is still unknown', async () => {
+    // R7: inferring a cause from an error string is the defect, not the fix.
+    aoaiChatMock.mockRejectedValue(new Error('retrieval returned 429 documents'));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe('eval_probe_unclassified');
+  });
+
+  it('a retrieval failure is NOT laundered into an AOAI verdict', async () => {
+    searchDocsMock.mockRejectedValue(new Error('AI Search index missing'));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe('eval_probe_unclassified');
+  });
+});
+
 describe('GET manifest probe', () => {
   it('401 without a token, 200 with', async () => {
     const bare = new NextRequest('http://localhost/api/internal/copilot/eval-probe');
@@ -184,5 +302,38 @@ describe('GET manifest probe', () => {
     expect(j.ok).toBe(true);
     expect(j.ready).toBe(true);
     expect(typeof j.corpusCommit).toBe('string');
+  });
+
+  /**
+   * #3085 — measured on run 31197101702: the new corpus-provenance step
+   * reported `unresolved`, because this route read `commit`/`corpusCommit`/
+   * `total` while `stage-copilot-corpus.sh:78` writes **`sourceCommit`** and
+   * **`fileCount`**. The route therefore returned `corpusCommit: ''` on every
+   * call, and `run-evals.ts` wrote `corpusCommit: 'unknown'` onto every
+   * `eval-run` doc — so the corpus provenance the receipt claimed to carry was
+   * empty the whole time, which is precisely why #3085's divergence was
+   * invisible.
+   *
+   * The fixture is the REAL shape the script emits, not the shape the code
+   * wanted (csa_loom_fixtures_that_model_the_code).
+   */
+  it('reads the field names stage-copilot-corpus.sh ACTUALLY writes', async () => {
+    // A REAL manifest on a REAL disk, in the shape the script emits — not a
+    // hand-built object shaped like what the code expected
+    // (csa_loom_fixtures_that_model_the_code: run the real producer's format,
+    // compare byte-for-byte).
+    await withStagedManifest({ sourceCommit: 'abc123def456', fileCount: 2587, files: {} }, async () => {
+      const j: any = await (await GET(getReq())).json();
+      expect(j.corpusCommit).toBe('abc123def456');
+      expect(j.corpusTotal).toBe(2587);
+    });
+  });
+
+  it('still accepts a legacy manifest that used `commit` / `total`', async () => {
+    await withStagedManifest({ commit: 'legacy99', total: 7 }, async () => {
+      const j: any = await (await GET(getReq())).json();
+      expect(j.corpusCommit).toBe('legacy99');
+      expect(j.corpusTotal).toBe(7);
+    });
   });
 });

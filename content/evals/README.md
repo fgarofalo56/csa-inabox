@@ -156,6 +156,89 @@ floor was touched. Gold-chunk ranks: `rbac-007` 1397→1, `rbac-009` 2716→1,
 **Never lower a floor to clear this.** `eval-floors.json` is ratchet-up-only;
 a surface under its floor is a surface to fix (#2585).
 
+## Every row must be MEASURED, or the run is refused (#3083)
+
+A rate is a fraction, and **the denominator is part of the claim.** These sets
+are scored per row; if some rows never produce a score, the surface's rates are
+computed over whatever survived — a different quantity from the one its floor is
+expressed in, and one that *losing rows can RAISE*.
+
+### What went wrong (measured 2026-08-07)
+
+`POST /api/internal/copilot/eval-probe` runs one real Copilot turn. Under load
+Azure OpenAI returned **429 `rate_limit_exceeded`** on the shared `gpt-4o-mini`
+in `centralus`. The route's catch-all collapsed that into
+`500 {"error":"eval probe failed","code":"eval_probe_failed"}` — a status the
+evaluator does not retry, and a string asserting nothing the code established
+(deploy-integrity **R7**). The evaluator counted the status and `continue`d, so
+the row vanished from the denominator.
+
+Consequences:
+
+| Reported | Actually |
+|---|---|
+| `rbac: pass-rate 0.38 BELOW floor 0.40` → triaged as a quality regression | **3 of 8** rows. It was a throttle. |
+| a **passing** `main` run | measured **123 of 153** rows |
+
+The drop rate tracked estate load exactly — 0/153 at 08:07, 30/153 at 09:53,
+84/153 at 15:01 — because eleven eval runs fired in 71 minutes during a parallel
+merge burst. The gate's verdict was a function of **how many lanes were
+building**, not of product quality.
+
+### The four properties that now hold
+
+1. **The probe does not lie.** An AOAI 429 is surfaced as **429**
+   `code: aoai_throttled` with `upstreamStatus` and, when the server sent one,
+   `Retry-After` (header *and* `retryAfterSeconds`). A non-429 upstream failure
+   is a **502** that *names* the upstream status rather than impersonating it. A
+   failure carrying **no** structured status returns
+   `code: eval_probe_unclassified` and a message that says the cause is **not
+   known** — it is never inferred from prose.
+2. **Bounded retry, then fail closed.** The evaluator retries `429/500/502/503/504`
+   with full-jitter backoff honouring `Retry-After`, and **never** retries a
+   `401/403/404` or the honest `no_aoai` gate (retrying a misconfiguration just
+   makes it slower). On exhaustion it re-throws — a retry that cannot fail is
+   forbidden (**R6**).
+3. **A lost row is recorded as an ERROR and POISONS the run.** The row is *not*
+   scored as a failed answer (that would falsify the rates downward just as
+   dropping it falsifies them upward). It goes into `totals.probeFailures` with
+   its id, status and attempt count, and `check-eval-regression.mjs`
+   **fails any surface where `questions < rowsAttempted`**, printing
+   `8/12` instead of a rate. This refusal is *unconditional* — not gated on
+   `--strict-missing` — for the same reason as the #2992 predicate-mismatch
+   refusal: a rate over 8 rows and a floor over 12 are not the same quantity.
+4. **Sweeps are serialised estate-wide.** `cancel-in-progress` only dedupes
+   within a branch, so `copilot-quality-evals` carries a second, repo-wide
+   concurrency group (`copilot-quality-evals-estate`), the workflow refuses to
+   start a second sweep while one is in flight, and the evaluator paces its rows.
+
+### Reading a partial-run failure
+
+`N of M golden row(s) were MEASURED` is a **measurement** failure, not a quality
+one. **Do not lower a floor in response** — `eval-floors.json` is ratchet-up-only
+and nothing about product quality was established. Clear the cause and re-run.
+
+Knobs (all default-ON; each is an opt-**out**):
+
+| Env | Default | Effect |
+|---|---|---|
+| `LOOM_COPILOT_EVAL_PROBE_ATTEMPTS` | `4` | total probe attempts per row |
+| `LOOM_COPILOT_EVAL_PROBE_BASE_MS` | `1000` | first backoff step |
+| `LOOM_COPILOT_EVAL_PROBE_MAX_DELAY_MS` | `30000` | ceiling for one sleep (clamps a hostile `Retry-After`) |
+| `LOOM_COPILOT_EVAL_PROBE_BUDGET_MS` | `60000` | ceiling for the SUM of one row's sleeps |
+| `LOOM_COPILOT_EVAL_ROW_DELAY_MS` | `200` | inter-row pacing (~30s over a 153-row pass) |
+
+### What this gate still cannot see (#3085)
+
+`copilot-quality-evals` is path-triggered on `docs/**`, `PRPs/**` and
+`content/evals/**`, and **it cannot measure them**: the console indexes the
+corpus baked into its image (`apps/fiab-console/Dockerfile:139`), while the
+workflow's staging step never leaves the runner. A corpus PR is therefore scored
+against the **deployed** corpus. The run now prints a *Corpus provenance* block
+naming the commit under test and the commit the console served, and says plainly
+when they differ — so a verdict on a corpus PR is never read as a verdict on the
+corpus. Making the run score the checkout's corpus is tracked in **#3085**.
+
 ## Authoring workflow
 
 1. Pick real questions from the surface's traffic/risk (install, gates,

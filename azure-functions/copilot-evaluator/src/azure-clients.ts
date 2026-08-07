@@ -35,7 +35,7 @@ import type { LoomCloud } from '../../../apps/fiab-console/lib/azure/cloud-endpo
 import type {
   EvalResult, JudgeScores, ProbeResult, RetrievedExcerpt, RunTotals, SearchResult, SearchRunTotals, TierConfusion,
 } from './evaluator-core';
-import { parseJudge } from './evaluator-core';
+import { parseJudge, parseRetryAfterHeaderMs } from './evaluator-core';
 
 const cred = new DefaultAzureCredential();
 
@@ -77,10 +77,34 @@ export interface ProbeRequest {
 export class ProbeError extends Error {
   /** HTTP status, or 0 for a transport/decode failure that never got one. */
   readonly status: number;
-  constructor(message: string, status: number) {
+  /**
+   * #3083 — the status the CONSOLE reported its own upstream (AOAI) returned,
+   * when it named one (`upstreamStatus` in the probe's error envelope). The
+   * probe's own `status` and this can differ: a throttled Copilot turn is a
+   * `429` probe status with `upstreamStatus: 429`, while a non-throttle
+   * upstream failure is a `502` probe status naming e.g. `503` upstream.
+   * `null` when the probe did not say.
+   */
+  readonly upstreamStatus: number | null;
+  /**
+   * #3083 — `Retry-After` in milliseconds, from the response header or the
+   * envelope's `retryAfterSeconds`. `null` when the server sent none, in which
+   * case the caller uses its own bounded backoff rather than guessing a delay.
+   */
+  readonly retryAfterMs: number | null;
+  /** The probe's stable error `code` when it sent one (e.g. `no_aoai`). */
+  readonly code: string | null;
+  constructor(
+    message: string,
+    status: number,
+    opts: { upstreamStatus?: number | null; retryAfterMs?: number | null; code?: string | null } = {},
+  ) {
     super(message);
     this.name = 'ProbeError';
     this.status = status;
+    this.upstreamStatus = Number.isFinite(opts.upstreamStatus as number) ? (opts.upstreamStatus as number) : null;
+    this.retryAfterMs = Number.isFinite(opts.retryAfterMs as number) ? (opts.retryAfterMs as number) : null;
+    this.code = typeof opts.code === 'string' && opts.code ? opts.code : null;
   }
 }
 
@@ -106,7 +130,32 @@ export async function probeConsole(
     headers: { 'content-type': 'application/json', [INTERNAL_TOKEN_HEADER]: internalToken },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new ProbeError(`eval-probe ${res.status}: ${(await res.text()).slice(0, 300)}`, res.status);
+  if (!res.ok) {
+    const text = (await res.text()).slice(0, 600);
+    // #3083 — lift the console's OWN classification out of the envelope
+    // (`{code, upstreamStatus, retryAfterSeconds}`) so the caller can tell a
+    // throttle from a defect WITHOUT parsing prose, and can honour the
+    // server's Retry-After. A body that carries none of these yields nulls —
+    // "not stated", never a guess.
+    let upstreamStatus: number | null = null;
+    let code: string | null = null;
+    let retryAfterMs = parseRetryAfterHeaderMs(res.headers?.get?.('retry-after'));
+    try {
+      const env: any = JSON.parse(text);
+      if (Number.isFinite(env?.upstreamStatus)) upstreamStatus = Number(env.upstreamStatus);
+      if (typeof env?.code === 'string' && env.code) code = env.code;
+      if (retryAfterMs === null && Number.isFinite(env?.retryAfterSeconds)) {
+        retryAfterMs = Number(env.retryAfterSeconds) * 1000;
+      }
+    } catch {
+      /* a non-JSON error body is fine — the status alone still classifies it */
+    }
+    throw new ProbeError(`eval-probe ${res.status}: ${text.slice(0, 300)}`, res.status, {
+      upstreamStatus,
+      retryAfterMs,
+      code,
+    });
+  }
   const j: any = await res.json();
   if (!j?.ok) throw new ProbeError(`eval-probe returned ok:false — ${String(j?.error || '').slice(0, 200)}`, 0);
   const chunks: any[] = Array.isArray(j.retrievedChunks) ? j.retrievedChunks : [];
