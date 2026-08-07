@@ -163,6 +163,29 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // ── THESE KEYS MUST BE PRESENT (cloud-parity blocker, measured 2026-08-06) ──
+  // A .bicepparam object assignment REPLACES the template default, it does not
+  // merge with it. admin-plane/main.bicep dereferences these five with a PLAIN
+  // `.` (no `.?` safe-access):
+  //   appImageTags.mcpBridge        — inside the UNCONDITIONAL `apps` array
+  //                                   literal, so it is evaluated on EVERY
+  //                                   deploy regardless of any module condition
+  //   appImageTags.maf              — copilot/maf.bicep call site
+  //   appImageTags.setupOrchestrator— setup-orchestrator.bicep call site
+  //   appImageTags.scriptRunner     — script-runner-app.bicep call site
+  //   appImageTags.wrangler         — integration/wrangler.bicep call site
+  // Omitting them fails template EVALUATION ("property 'mcpBridge' doesn't
+  // exist") and aborts the whole nested deployment before a single resource is
+  // touched — i.e. the IL5 boundary could not deploy at all, while GCC-High
+  // (which carries the keys) could. params/gcc-high.bicepparam has documented
+  // this hazard since PR #2640; this file never picked the keys up.
+  // script-runner + wrangler are boundary-gated OFF here, so their tags are
+  // placeholders that are never pulled — they still have to EXIST.
+  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
+  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')
+  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
+  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
+  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
   // loom-duckdb — the N2b/N3 DuckDB serving tier admin-plane/main.bicep now
   // deploys BY DEFAULT (duckdbTierActive). STATED EXPLICITLY rather than left to
   // the module's `?? 'v0.1'` fallback because this is the tag the IL5 TEMPLATE
@@ -199,6 +222,16 @@ param appImageTags = {
   // prerequisite of the apps phase — a missing manifest fails the Container App
   // PUT with MANIFEST_UNKNOWN, not just the feature.
   unity: readEnvironmentVariable('LOOM_UNITY_TAG', 'v0.1')
+  // loom-trino (N7e) — the DEFAULT-ON Federated SQL engine. Together with the
+  // Iceberg REST Catalog (which runs the loom-unity image above) this IS the
+  // external-engine federation product for a boundary with no Databricks Unity
+  // Catalog, so the tag contract matters here more than in Commercial:
+  //   producer .github/workflows/gov-provision-dataplane-images.yml
+  //            image_tag input, default v0.1 -> az acr build --image loom-trino:v0.1
+  //   template <acr>/loom-trino:v0.1  (admin-plane reads appImageTags.?trino ?? 'v0.1')
+  // Stated explicitly so the tag is operator-settable per boundary instead of
+  // being pinned by a fallback with no lever, exactly like duckdb/unity above.
+  trino: readEnvironmentVariable('LOOM_TRINO_TAG', 'v0.1')
 }
 
 // MSAL — IL5 tenant client id+secret via env (don't commit)

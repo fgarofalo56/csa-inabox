@@ -924,7 +924,35 @@ var mapsTileServerActive = mapsTileServerEnabled && containerPlatform == 'contai
 // still renders + honest-gates on LOOM_AIRFLOW_ENDPOINT. A per-item BYO webserver
 // URL remains an opt-in override regardless.
 var airflowHostEnabled = true
-var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
+// CLOUD PARITY (.claude/rules/cloud-parity.md) — `postgresQuotaAvailable` used to
+// gate THREE unrelated Postgres consumers with one switch: this Airflow host, the
+// DuckLake catalog store, and LU-1's Loom Unity catalog store. Both Gov
+// bicepparams pin it false (params/gcc-high.bicepparam, params/il5.bicepparam),
+// and the REASON they pin it false is entirely about THIS host — its metadata
+// Postgres is invoked with `privateEndpointsEnabled: false`, i.e.
+// publicNetworkAccess=Enabled plus an AllowAllAzureServicesAndResourcesWithinAzureIps
+// firewall rule, which is a documented Commercial carve-out and an unreviewed
+// posture in a sovereign boundary.
+//
+// The collateral damage was the whole point of the Gov product: Databricks Unity
+// Catalog does not exist in Azure Government, so Loom Unity IS the Gov catalog —
+// and it was being denied its durable, backed-up, Entra-only Postgres store
+// because a DIFFERENT service's network posture had not been reviewed. Commercial
+// got `persistenceBackend: 'postgres'`; Gov got `'h2-ephemeral'`, an EmptyDir that
+// loses every catalog object on container restart and is forced to maxReplicas 1.
+// Same feature name, materially lesser product, in the boundary that needs it most.
+//
+// So the switch is split. `airflowPostgres` gates THIS host; `postgresStores`
+// gates the two catalog stores (kept together on purpose — see the zone-collision
+// contract on loomUnityPostgres below, which requires
+// loomUnityPostgresActive ⊆ ducklakeCatalogActive). Both default to
+// `postgresQuotaAvailable`, so this change is a NO-OP on every existing estate;
+// it only makes the Gov catalog's durable store reachable without dragging the
+// Airflow host along. Rides the existing loomBackends bag because both main.bicep
+// (251/256) and this module are at the hard ARM 256-parameter cap.
+var airflowPostgresOverride = toLower(string(loomBackends.?airflowPostgres ?? ''))
+var airflowPostgresAllowed = airflowPostgresOverride == 'enabled' ? true : (airflowPostgresOverride == 'disabled' ? false : postgresQuotaAvailable)
+var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && airflowPostgresAllowed
 
 // Airflow admin (+ Postgres + REST Basic-auth) password. UNPREDICTABLE — derived
 // from loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>),
@@ -965,7 +993,18 @@ var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airf
 // a permanent charge, not an idle one. Default-ON must be free-at-idle; this is
 // how it becomes free BEFORE the app tier exists too.
 var ducklakeCatalogEnabled = true
-var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
+// See the airflowPostgres block above. `postgresStores` gates the DuckLake
+// catalog store AND (below) LU-1's Loom Unity store as ONE unit — the
+// zone-collision contract on loomUnityPostgres requires
+// loomUnityPostgresActive ⊆ ducklakeCatalogActive, so they must flip together.
+// Default = postgresQuotaAvailable ⇒ no behaviour change on any existing estate.
+// A Gov boundary with confirmed Microsoft.DBforPostgreSQL/flexibleServers quota
+// sets `observabilityConfig.backendOverrides = { postgresStores: 'enabled' }`
+// and gets the SAME durable catalog Commercial has, with the Airflow host still
+// off (its own key still resolves to postgresQuotaAvailable=false).
+var postgresStoresOverride = toLower(string(loomBackends.?postgresStores ?? ''))
+var postgresStoresAllowed = postgresStoresOverride == 'enabled' ? true : (postgresStoresOverride == 'disabled' ? false : postgresQuotaAvailable)
+var ducklakeCatalogActive = ducklakeCatalogEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresStoresAllowed
 
 // DuckLake Postgres administrator password. UNPREDICTABLE — derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
@@ -1034,15 +1073,16 @@ var loomUnityEnabled = (loomBackends.?unity ?? 'enabled') != 'disabled'
 var loomUnityActive = loomUnityEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 // PERSISTENCE. The durable store is an Entra-only, private-endpoint-only
 // Postgres Flexible Server (data-plane/loom-unity-postgres.bicep). Where the
-// sovereign Postgres quota gate trips (gcc-high/il5 .bicepparam default
-// `postgresQuotaAvailable=false`) we deploy the catalog ANYWAY on an EmptyDir H2
+// sovereign Postgres store gate trips (`postgresStores` — gcc-high/il5
+// .bicepparam default `postgresQuotaAvailable=false`, which that key inherits)
+// we deploy the catalog ANYWAY on an EmptyDir H2
 // store — `dbEphemeral: true`, byte-identical to what gov-uc-purview-wire.yml
 // has been deploying on Gov since 2026-07-15. That is a FUNCTIONAL catalog whose
 // metadata does not survive a restart; it is NOT the H2-on-Azure-Files variant,
 // which CrashLoopBackOffs on Gov because the CIFS mount blocks container start.
 // Skipping the catalog entirely on the one cloud that has no Databricks Unity
 // Catalog endpoint would have been the worse trade.
-var loomUnityPostgresActive = loomUnityActive && postgresQuotaAvailable
+var loomUnityPostgresActive = loomUnityActive && postgresStoresAllowed
 // loom-risingwave Postgres-wire root password. Same construction and the same
 // reasoning as airflowAdminPassword above: UNPREDICTABLE, derived from
 // loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>).
@@ -6343,8 +6383,10 @@ module loomUnityPostgres '../data-plane/loom-unity-postgres.bicep' = if (loomUni
     // same VNet, and the DuckLake store already created + linked one on the hub.
     // CONSUME it. `loomUnityPostgresActive` is a strict subset of
     // `ducklakeCatalogActive` (both require containerApps + deployAppsEnabled +
-    // postgresQuotaAvailable, and ducklakeCatalogEnabled is an unconditional
-    // true), so whenever this module deploys, that output exists.
+    // postgresStoresAllowed — the SAME derived gate, which is exactly why the
+    // Airflow split above gave Airflow its own key and left these two sharing
+    // one, and ducklakeCatalogEnabled is an unconditional true), so whenever
+    // this module deploys, that output exists.
     privateDnsZoneId: ducklakeCatalogActive ? ducklakeCatalog!.outputs.privateDnsZoneId : ''
     unityPrincipalId: loomUnityUami!.properties.principalId
     unityPrincipalName: loomUnityUami!.name

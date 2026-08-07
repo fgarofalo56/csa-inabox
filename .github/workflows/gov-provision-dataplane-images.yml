@@ -227,18 +227,24 @@ jobs:
         continue-on-error: true
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-duckdb:$TAG"
+            "loom-duckdb:$TAG" "loom-trino:$TAG"
 
       # Apply mode: HARD GATE. The next step deploys a Container App and the one
       # after it `az containerapp update`s the LIVE loom-console. Neither may run
       # against a tag that does not exist — a Container App pointing at a missing
       # image cannot activate a revision, and the surrounding deployment fails
       # while it is also re-PUTting live apps. Fail loudly, before anything moves.
+      #
+      # loom-trino is asserted alongside loom-duckdb because THIS lane builds it
+      # (step "Build loom-trino on the Gov ACR") and admin-plane/main.bicep pulls
+      # <acr>/loom-trino:<appImageTags.trino> on the Gov boundaries. `az acr build`
+      # exiting 0 is NOT proof the tag resolves — the same gap that shipped a Gov
+      # template pointing at a tag nothing produced (see the TAG CONTRACT header).
       - name: Image preflight — assert every referenced tag exists (BLOCKING)
         if: ${{ inputs.apply == 'true' }}
         run: |
           bash scripts/ci/assert-acr-image-tags.sh --acr "$ACR" --rg "$RG" --lease \
-            "loom-duckdb:$TAG"
+            "loom-duckdb:$TAG" "loom-trino:$TAG"
 
       - name: What-if the loom-duckdb Container App (never touches other resources)
         run: |

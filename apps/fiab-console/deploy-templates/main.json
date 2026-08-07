@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "17426501164799059627"
+      "templateHash": "9124851148073645651"
     }
   },
   "definitions": {
@@ -2492,7 +2492,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7813418010961374580"
+              "templateHash": "8436027406329445296"
             }
           },
           "definitions": {
@@ -4917,18 +4917,22 @@
             "mapsTileServerEnabled": "[or(equals(parameters('boundary'), 'GCC-High'), equals(parameters('boundary'), 'IL5'))]",
             "mapsTileServerActive": "[and(and(variables('mapsTileServerEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "airflowHostEnabled": true,
-            "airflowHostActive": "[and(and(and(variables('airflowHostEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), parameters('postgresQuotaAvailable'))]",
+            "airflowPostgresOverride": "[toLower(string(coalesce(tryGet(parameters('loomBackends'), 'airflowPostgres'), '')))]",
+            "airflowPostgresAllowed": "[if(equals(variables('airflowPostgresOverride'), 'enabled'), true(), if(equals(variables('airflowPostgresOverride'), 'disabled'), false(), parameters('postgresQuotaAvailable')))]",
+            "airflowHostActive": "[and(and(and(variables('airflowHostEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), variables('airflowPostgresAllowed'))]",
             "airflowAdminPassword": "[format('Af7{0}!Qz', uniqueString(parameters('loomGeneratedSecretSeed'), 'loom-airflow-admin-v1'))]",
             "airflowWebserverSecretKey": "[uniqueString(parameters('loomGeneratedSecretSeed'), 'loom-airflow-wsk-v1')]",
             "ducklakeCatalogEnabled": true,
-            "ducklakeCatalogActive": "[and(and(and(variables('ducklakeCatalogEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), parameters('postgresQuotaAvailable'))]",
+            "postgresStoresOverride": "[toLower(string(coalesce(tryGet(parameters('loomBackends'), 'postgresStores'), '')))]",
+            "postgresStoresAllowed": "[if(equals(variables('postgresStoresOverride'), 'enabled'), true(), if(equals(variables('postgresStoresOverride'), 'disabled'), false(), parameters('postgresQuotaAvailable')))]",
+            "ducklakeCatalogActive": "[and(and(and(variables('ducklakeCatalogEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled')), variables('postgresStoresAllowed'))]",
             "ducklakePgPassword": "[format('Dl7{0}!Qz', uniqueString(parameters('loomGeneratedSecretSeed'), 'loom-ducklake-pg-v1'))]",
             "ducklakeCatalogUrlSecretName": "loom-ducklake-catalog-url",
             "duckdbTierEnabled": true,
             "duckdbTierActive": "[and(and(variables('duckdbTierEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
             "loomUnityEnabled": "[not(equals(coalesce(tryGet(parameters('loomBackends'), 'unity'), 'enabled'), 'disabled'))]",
             "loomUnityActive": "[and(and(variables('loomUnityEnabled'), equals(parameters('containerPlatform'), 'containerApps')), parameters('deployAppsEnabled'))]",
-            "loomUnityPostgresActive": "[and(variables('loomUnityActive'), parameters('postgresQuotaAvailable'))]",
+            "loomUnityPostgresActive": "[and(variables('loomUnityActive'), variables('postgresStoresAllowed'))]",
             "risingwaveRootPasswordSecretName": "loom-risingwave-root-password",
             "risingwaveRootPassword": "[format('Rw7{0}!Qz', uniqueString(parameters('loomGeneratedSecretSeed'), 'loom-risingwave-root-v1'))]",
             "deSynapseEnabled": "[coalesce(tryGet(parameters('byoExisting'), 'deSynapse'), true())]",

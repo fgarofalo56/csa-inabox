@@ -35,6 +35,10 @@ on:
         description: 'Keep resources up after provision AND run the post-deploy bootstrap (Gov day-one: MSAL app-reg, Synapse SQL grants, Purview roles, Databricks SCIM, Spark PE). Skips teardown. Use for a real GCC-High install; leave false for the nightly validate-and-teardown ring.'
         type: boolean
         default: false
+      allow_existing_hub:
+        description: 'topology=tenant only: bypass the "hub already exists in target sub" guard to idempotently reconcile/retry an existing or partially-deployed Gov hub. Does NOT stamp a second Console — the incremental deploy reconciles the existing admin RG. Leave false for first-run installs. (Cloud parity: deploy-fiab-commercial.yml has had this since audit-t157; the Gov lanes did not, so once a Gov hub existed this workflow could never succeed again.)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -140,6 +144,9 @@ jobs:
       # subscription via target_subscription.
       - name: Topology guard
         id: topology_guard
+        env:
+          INPUT_ALLOW_EXISTING_HUB: ${{ inputs.allow_existing_hub }}
+          TRIGGER: ${{ github.event_name }}
         run: |
           set -e
           TOPOLOGY="${CSA_LOOM_TOPOLOGY:-tenant}"
@@ -154,10 +161,42 @@ jobs:
             # blocked by an old hub still running elsewhere as a UAT ring
             # (audit-t156 D3/Q10). Still blocks an accidental double-stamp into
             # the same sub.
+            #
+            # FAIL CLOSED ON UNKNOWN (deploy-integrity.md R6/R7). The previous
+            # form ended `2>/dev/null || echo "0"`, which converted an auth
+            # failure, a missing resource-graph extension or a throttle into the
+            # string "0" — i.e. "no hub exists" — and let a FIRST-RUN tenant
+            # stamp proceed against a subscription that might already hold one.
+            # An unreadable estate is UNKNOWN, and UNKNOWN must refuse, not guess.
             SCOPE_SUB=$(az account show --query id -o tsv)
-            EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>/dev/null || echo "0")
-            if [ "${EXISTING:-0}" != "0" ]; then
-              echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub — use topology=dlz-attach with target_subscription."; exit 1
+            if ! EXISTING=$(az graph query ${SCOPE_SUB:+--subscriptions "$SCOPE_SUB"} -q "ResourceContainers | where type == 'microsoft.resources/subscriptions/resourcegroups' | where name startswith 'rg-csa-loom-admin-' | project name" --query "data | length(@)" -o tsv 2>&1 | tr -d '\r'); then
+              echo "::error::Could NOT read the target subscription to determine whether a CSA Loom hub already exists, so the answer is UNKNOWN — not 'none'. Refusing rather than risk stamping a second Console. Resolve the read (Reader on the subscription for the Gov deploy SP, and the resource-graph CLI extension) and re-run. Detail: ${EXISTING:-<no output>}"
+              exit 1
+            fi
+            case "$EXISTING" in
+              ''|*[!0-9]*)
+                echo "::error::The hub-existence probe returned a non-numeric result (${EXISTING:-<empty>}), so whether a hub exists is UNVERIFIED. Refusing."; exit 1 ;;
+            esac
+            if [ "$EXISTING" != "0" ]; then
+              # CLOUD PARITY (.claude/rules/cloud-parity.md) + deploy-integrity R4:
+              # brownfield must be a first-class path in BOTH clouds.
+              # deploy-fiab-commercial.yml has carried `allow_existing_hub` since
+              # audit-t157, and lets its SCHEDULED reconcile through on the
+              # trigger — "the scheduled reconcile, whose whole purpose is to run
+              # against the existing hub". The Gov lanes had NEITHER, so once the
+              # Gov hub existed this workflow could never succeed again: measured
+              # 2026-08-03 (run 30815034083) failing on exactly this line, and RED
+              # on its 10:00 UTC cron every day for 16 days. That is not a broken
+              # deploy — the guard was right — it is a MISSING brownfield path,
+              # and it blocks the only lane that deploys the Gov Iceberg REST
+              # catalog and wires LOOM_ICEBERG_CATALOG_URL.
+              if [ "${INPUT_ALLOW_EXISTING_HUB:-false}" = "true" ]; then
+                echo "::notice::A CSA Loom hub already exists in this subscription ($EXISTING rg-csa-loom-admin-* RG) and allow_existing_hub=true — reconciling the EXISTING admin RG incrementally. No second Console is stamped."
+              elif [ "$TRIGGER" = "schedule" ]; then
+                echo "::notice::Scheduled reconcile against the existing Gov hub ($EXISTING rg-csa-loom-admin-* RG) — proceeding incrementally, as deploy-fiab-commercial.yml does on its schedule. An operator DISPATCH against an existing hub still requires allow_existing_hub=true."
+              else
+                echo "::error::A CSA Loom hub already exists in the target subscription (found $EXISTING rg-csa-loom-admin-* RG). A second Console cannot be stamped into the same sub. To reconcile/retry the EXISTING hub, re-dispatch with allow_existing_hub=true. To add a NEW landing zone, use topology=dlz-attach with target_subscription."; exit 1
+              fi
             fi
           fi
 
