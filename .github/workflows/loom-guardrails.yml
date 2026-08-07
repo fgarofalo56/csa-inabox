@@ -377,6 +377,17 @@ jobs:
       - name: license-inventory (LIC0 — Python embeds + pinned upstream images)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-license-inventory.mjs
+      # MIR0 is the EGRESS/PROVENANCE half that LIC0 cannot cover: LIC0 is fully
+      # satisfied by an image pulled anonymously from docker.io at runtime, as long
+      # as its SPDX id is permissive and recorded. This asserts the same image is
+      # mirrored into the estate's own ACR, pinned to a manifest DIGEST (a mutable
+      # upstream tag can otherwise swap the bits under a reviewed licence and a
+      # passed CVE scan), and actually imported by BOTH cloud lanes from the one
+      # manifest. Unfiltered for the same reason as LIC0: the edit that introduces
+      # the violation is a bicep or workflow change.
+      - name: upstream-image-mirror (MIR0 — ACR mirror + digest pinning, #2682)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-upstream-image-mirror.mjs
       - name: image-preflight self-test (assert-acr-image-tags — PR #2640)
         if: ${{ !cancelled() }}
         run: bash scripts/ci/test-assert-acr-image-tags.sh

@@ -419,8 +419,15 @@ export interface EnvSpec {
    * must never read as a red misconfiguration (issue #2753). Deliberately
    * explicit, NOT inferred from severity:'optional' — most optional gates are
    * "not deployed yet", a real blocker to fix; only a handful (the Trino AKS
-   * carve-out, the s3proxy gateway) are opt-in-by-design. cloud-unavailable
-   * still outranks it. */
+   * carve-out) are opt-in-by-design. cloud-unavailable still outranks it.
+   *
+   * The s3proxy gateway used to be listed here and is NOT any more (#2682 /
+   * FINISHLINE D16): its opt-in was never a design decision, it was a symptom of
+   * the image being an anonymous docker.io pull. Now that the image is mirrored
+   * into the estate ACR the gateway is deployed by default, so marking it opt-in
+   * would be the spec lying about the deploy. Adding a gate here is a POLICY
+   * decision (cost or a genuinely non-default engine) and must be justified in
+   * the spec's own comment — never a workaround for a defect elsewhere. */
   optIn?: boolean;
   /** The bicep module (+ the param / line that emits it) that wires every var in
    * this spec on a push-button deploy. Surfaced on /admin/env-config so an unset

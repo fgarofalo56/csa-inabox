@@ -35,6 +35,26 @@ export interface TenantTopology {
   hubConsoleUamiAppId?: string;
   hubConsoleUamiId?: string;
   hubActivatorPrincipalId?: string;
+  /**
+   * #2682 — the hub's ACR login server, Container Apps managed-environment id,
+   * and Key Vault resource id.
+   *
+   * A dlz-attach pass needs all three to stand up a hub-side workload (today the
+   * S3-compatible ADLS gateway) that pulls its image from the estate's OWN
+   * registry rather than a public one, and writes the Key Vault secrets its
+   * documentation tells operators to read. `main.bicep` records them in
+   * `topologyManifest.hub`; `write-tenant-topology.sh` captures them here, and
+   * {@link HUB_COORDINATE_KEYS} forwards them to the orchestrator / BFF, which
+   * map them onto the `hubAcrLoginServer` / `hubCaeId` / `hubKeyVaultId` params.
+   *
+   * Optional like every other coordinate: a hub deployed before #2682 has none
+   * of them, and must still be attachable. Absent simply means the hub-side
+   * gateway is skipped and its surface honest-gates — never a silent fallback to
+   * a public registry, because the bicep module has no such branch.
+   */
+  hubAcrLoginServer?: string;
+  hubCaeId?: string;
+  hubKeyVaultId?: string;
   updatedAt?: string;
   /**
    * Where these coordinates came from. `cosmos` = the post-deploy bootstrap
@@ -76,6 +96,16 @@ export const HUB_COORDINATE_KEYS = [
   'hubConsoleUamiAppId',
   'hubConsoleUamiId',
   'hubActivatorPrincipalId',
+  // #2682 — the hub ACR / Container Apps environment / Key Vault coordinates. A
+  // dlz-attach pass needs all three to stand up a hub-side workload (today the
+  // S3-compatible ADLS gateway) that pulls from the estate's OWN registry rather
+  // than a public one, and writes the Key Vault secrets its documentation tells
+  // operators to read. Their absence from this list was one of the five layers
+  // that made `hubCoordinates.acrLoginServer` permanently empty, so the gateway's
+  // image silently resolved to docker.io (PR #2640 round 4).
+  'hubAcrLoginServer',
+  'hubCaeId',
+  'hubKeyVaultId',
 ] as const;
 
 /**

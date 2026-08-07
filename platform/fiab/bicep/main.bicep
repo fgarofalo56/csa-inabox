@@ -309,6 +309,15 @@ param hubAdxClusterPrincipalId string = ''
 @description('dlz-attach: existing hub catalog (Purview/OneLake) endpoint.')
 param hubCatalogEndpoint string = ''
 
+@description('dlz-attach: login server of the EXISTING hub ACR (e.g. <name>.azurecr.io). Required for any dlz-attach workload that runs a container ON THE HUB\'s Container Apps environment — today the S3-compatible ADLS gateway (#2682). Every deploy-path image is pulled from the estate\'s own registry, never a public one, so a hub-side Container App with no ACR coordinate simply cannot be deployed rather than falling back to Docker Hub. Discovered by deploy-fiab-*.yml alongside the other hub coordinates, or supplied via hubCoordinates.acrLoginServer (the tenant deploy\'s topologyManifest.hub.acrLoginServer). Empty => the hub-side gateway is SKIPPED and the svc-s3-gateway surface honest-gates; the lake itself is unaffected.')
+param hubAcrLoginServer string = ''
+
+@description('dlz-attach: resource id of the EXISTING hub Container Apps managed environment. Required alongside hubAcrLoginServer for any dlz-attach workload that runs a container ON THE HUB (today the S3-compatible ADLS gateway, #2682). Supplied via hubCoordinates.caeId (the tenant deploy\'s topologyManifest.hub.caeId) or explicitly. Empty => the hub-side gateway is SKIPPED and the surface honest-gates.')
+param hubCaeId string = ''
+
+@description('dlz-attach: resource id of the EXISTING hub Key Vault. Required for hub-side dlz-attach workloads that must WRITE a secret an operator is documented to read — today the S3 gateway wire-credential pair (loom-s3-gateway-access-key / -secret-key), whose absence was half of why the gateway was withdrawn in PR #2640 round 4. Supplied via hubCoordinates.keyVaultId (the tenant deploy\'s topologyManifest.hub.keyVaultId) or explicitly. Empty => no secrets are written and the gateway surfaces its connect info from the container spec only.')
+param hubKeyVaultId string = ''
+
 @description('dlz-attach: existing hub AI Services / AOAI account name (for notebook AI RBAC).')
 param hubAiServicesAccountName string = ''
 
@@ -1586,6 +1595,30 @@ var effHubConsoleUamiName = !empty(hubConsoleUamiName) ? hubConsoleUamiName : hu
 var effHubConsoleUamiAppId = !empty(hubConsoleUamiAppId) ? hubConsoleUamiAppId : hub.consoleUamiAppId
 var effHubConsoleUamiId = !empty(hubConsoleUamiId) ? hubConsoleUamiId : hub.consoleUamiResourceId
 var effHubCatalogEndpoint = !empty(hubCatalogEndpoint) ? hubCatalogEndpoint : hub.catalogEndpoint
+// #2682 — the hub ACR + Key Vault coordinates, threaded end to end at last. The
+// round-4 review of PR #2640 found these were read from `hubCoordinates` by the
+// (then-withdrawn) dlz-attach S3 gateway while NO producer of dlz-attach
+// parameters passed them, so the image silently resolved to an anonymous
+// docker.io pull and the documented Key Vault secrets were never created. Both
+// now follow the same prefer-explicit-param-then-hubCoordinates shape as every
+// other hub coordinate above, and BOTH producers supply them:
+// deploy-fiab-*.yml discover them from the hub RG, and the Console/orchestrator
+// path reads them out of the Cosmos tenant-topology doc (HUB_COORDINATE_KEYS ->
+// HUB_COORD_PARAM / _HUB_COORDINATE_FIELDS), which write-tenant-topology.sh
+// captures from topologyManifest.hub.
+var effHubAcrLoginServer = !empty(hubAcrLoginServer) ? hubAcrLoginServer : string(hubCoordinates.?acrLoginServer ?? '')
+var effHubKeyVaultId = !empty(hubKeyVaultId) ? hubKeyVaultId : string(hubCoordinates.?keyVaultId ?? '')
+var effHubCaeId = !empty(hubCaeId) ? hubCaeId : string(hubCoordinates.?caeId ?? '')
+
+// Start-of-deployment-computable guard for the hub-side S3 gateway (same rule as
+// dlzAttachHasHubConsoleUami: an `if` condition may not fold in adminPlane
+// outputs). Reads ONLY dlz-attach input params. All three coordinates are
+// required and there is no fallback: without the ACR the module cannot pull an
+// image from anywhere (by design, #2682), and without the CAE there is nowhere
+// to run it. Missing => SKIP and let the surface honest-gate, which is honest;
+// silently pulling from Docker Hub is what this replaces.
+var dlzAttachHasHubAcr = !empty(hubAcrLoginServer) || !empty(string(hubCoordinates.?acrLoginServer ?? ''))
+var dlzAttachHasHubCae = !empty(hubCaeId) || !empty(string(hubCoordinates.?caeId ?? ''))
 
 // ── dlz-attach cross-sub integration (hub-side peering + hub-console env) ──────
 // Hub subscription id for the cross-sub modules below. Prefer the explicit param,
@@ -2074,7 +2107,73 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     // (service disabled) => the var is skipped and the editor honest-gates.
     dlzServiceBusNamespace: dlzAttach!.outputs.serviceBusNamespaceName
     dlzEventGridTopic: dlzAttach!.outputs.eventGridTopicName
+    // #2682 / D16 — the S3 gateway this pass just stood up on the hub CAE over
+    // THIS DLZ's lake. Patched additively so svc-s3-gateway clears without a
+    // Console redeploy. Empty when the gateway was skipped for a missing hub
+    // ACR/CAE coordinate (the var is then not set and the editor honest-gates).
+    dlzS3GatewayUrl: (dlzAttachHasHubAcr && dlzAttachHasHubCae) ? dlzAttachS3Gateway!.outputs.internalEndpoint : ''
     complianceTags: complianceTags
+  }
+}
+// =====================================================================
+// dlz-attach — S3-compatible ADLS gateway on the HUB, fronting THIS DLZ's lake.
+// DEFAULT-ON (#2682 / FINISHLINE D16).
+//
+// WHY IT LIVES ON THIS LANE. `modules/admin-plane/main.bicep` also deploys the
+// gateway, but only when a lake is bound at admin-plane time (single-sub). On
+// every shipped bicepparam `topology='tenant'`, so no DLZ exists yet when the
+// admin plane runs and the lake arrives HERE. This is therefore the lane that
+// makes the gateway default-ON for the canonical customer sequence
+// (tenant deploy -> dlz-attach per domain).
+//
+// WHY IT WAS WITHDRAWN AND WHAT CHANGED. In PR #2640 round 4 this same module
+// call resolved its image to `docker.io/andrewgaul/s3proxy:3.3.0` with
+// `registries: []` — an anonymous third-party pull into a federal estate,
+// unpullable in an air-gapped one — because it read `hubCoordinates.acrLoginServer`
+// and NO producer of dlz-attach parameters passed that object. It also passed
+// `keyVaultId: ''`, so the two Key Vault secrets the tutorial and the editor's
+// connect snippet tell operators to read were never created. Both are closed:
+// the hub ACR + Key Vault + CAE coordinates are now first-class params threaded
+// by every producer (deploy-fiab-*.yml discovery, write-tenant-topology.sh ->
+// HUB_COORDINATE_KEYS -> HUB_COORD_PARAM / _HUB_COORDINATE_FIELDS), the image
+// is composed from the ACR with no public-registry branch left in the module,
+// and the image itself is mirrored BY DIGEST from
+// platform/fiab/images/upstream-images.json.
+//
+// SCOPE: the hub admin RG — the Container App runs on the HUB's CAE (that is
+// where the Console that consumes it lives, and the CAE is a hub resource). The
+// least-privilege lake grant is applied separately at the DLZ RG below.
+// =====================================================================
+module dlzAttachS3Gateway 'modules/data-plane/s3-gateway-aca.bicep' = if (topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami && dlzAttachHasHubAcr && dlzAttachHasHubCae) {
+  name: 'dlz-attach-s3-gateway-${attachDomainName}'
+  scope: resourceGroup(effHubSubscriptionId, adminPlaneRgName)
+  params: {
+    location: location
+    // <=32 chars, DNS-label safe. Domain-suffixed so attaching a second DLZ
+    // stands up its own gateway rather than silently re-pointing the first.
+    name: take('loom-s3-gateway-${attachDomainName}', 32)
+    s3GatewayConfig: {
+      environmentId: effHubCaeId
+      // ACR pull credential ONLY — the storage data plane runs as the module's
+      // own dedicated Storage-Blob-Data-Reader identity.
+      uamiId: effHubConsoleUamiId
+      lakeStorageAccountName: dlzAttach!.outputs.storageAccountName
+      acrLoginServer: effHubAcrLoginServer
+    }
+    keyVaultId: effHubKeyVaultId
+    complianceTags: complianceTags
+  }
+}
+
+// Least-privilege lake grant for the gateway's dedicated identity, at the
+// ATTACHED DLZ's RG scope (the lake is there; the gateway is on the hub).
+module dlzAttachS3GatewayLakeRbac 'modules/data-plane/s3-gateway-lake-rbac.bicep' = if (topology == 'dlz-attach' && containerPlatform == 'containerApps' && dlzAttachHasHubConsoleUami && dlzAttachHasHubAcr && dlzAttachHasHubCae && !skipRoleGrants) {
+  name: 'dlz-attach-s3-gateway-lake-rbac-${attachDomainName}'
+  scope: resourceGroup('rg-csa-loom-dlz-${attachDomainName}-${location}')
+  params: {
+    storageAccountName: dlzAttach!.outputs.storageAccountName
+    principalId: dlzAttachS3Gateway!.outputs.storageUamiPrincipalId
+    assignRole: !skipRoleGrants
   }
 }
 
@@ -2643,22 +2742,24 @@ output topologyManifest object = {
     activatorPrincipalId: hub.activatorPrincipalId
     catalogEndpoint: hub.catalogEndpoint
     aiServicesAccountName: hub.aiServicesAccountName
-    // The hub's ACR login server + Container Apps environment id. Emitted so a
-    // later dlz-attach pass can deploy a workload INTO THE HUB pulling from the
-    // hub's own registry instead of a public one.
+    // The hub's ACR login server, Container Apps environment id, and Key Vault
+    // id. A later dlz-attach pass uses all three to deploy a workload INTO THE
+    // HUB pulling from the hub's own registry instead of a public one, and to
+    // write the secrets that workload's documentation tells operators to read.
     //
-    // NOTHING CONSUMES THESE YET, and that is the point of recording it here:
-    // the round-4 review of PR #2640 found that the (now-withdrawn) dlz-attach
-    // S3 gateway read `hubCoordinates.acrLoginServer`, which is EMPTY on every
-    // shipped lane — no dlz-attach parameter producer passes a `hubCoordinates`
-    // object at all (deploy-fiab-*.yml pass flat hub* params; the Setup
-    // Orchestrator's `_HUB_COORDINATE_FIELDS`, the BFF's `HUB_COORD_PARAM` and
-    // scripts/csa-loom/write-tenant-topology.sh have no such key) — so the image
-    // silently fell back to docker.io. Any future hub-side dlz-attach workload
-    // MUST first thread these two through that chain end to end; emitting them
-    // in the manifest is step one, not the whole chain.
+    // THESE ARE NOW CONSUMED END TO END (#2682 / FINISHLINE D14+D16). Emitting
+    // them here used to be "step one" of a chain nothing else implemented: the
+    // round-4 review of PR #2640 found the (then-withdrawn) dlz-attach S3 gateway
+    // reading `hubCoordinates.acrLoginServer` while no producer passed a
+    // hubCoordinates object at all, so the image silently fell back to docker.io.
+    // The chain is complete now — write-tenant-topology.sh captures these into
+    // the Cosmos tenant-topology doc, HUB_COORDINATE_KEYS forwards them,
+    // HUB_COORD_PARAM (BFF) and _HUB_COORDINATE_FIELDS (orchestrator) map them to
+    // the hubAcrLoginServer / hubCaeId / hubKeyVaultId params, and
+    // deploy-fiab-*.yml discover them directly from the hub RG for the CLI lane.
     acrLoginServer: deployAdminPlane ? adminPlane!.outputs.acrLoginServer : string(hubCoordinates.?acrLoginServer ?? '')
     caeId: deployAdminPlane ? adminPlane!.outputs.caeId : string(hubCoordinates.?caeId ?? '')
+    keyVaultId: deployAdminPlane ? adminPlane!.outputs.keyVaultId : string(hubCoordinates.?keyVaultId ?? '')
   }
   consoleUrl: deployAdminPlane ? adminPlane!.outputs.consoleUrl : string(hubCoordinates.?consoleUrl ?? '')
   // Domain landing zones this deployment provisioned.

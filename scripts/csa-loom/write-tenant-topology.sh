@@ -63,6 +63,24 @@ def out(name, default=""):
     v = outputs.get(name)
     return (v or {}).get("value", default) if isinstance(v, dict) else default
 
+
+def _manifest_hub(key, default=""):
+    """Read a hub coordinate out of the `topologyManifest` output's `hub` object.
+
+    main.bicep records the hub ACR / CAE / Key Vault coordinates ONLY inside
+    topologyManifest.hub — there is no flat top-level output for them — so a
+    reader that only knows out() cannot see them. That gap is why #2682 exists:
+    the coordinates were emitted and then captured by nothing, so every
+    dlz-attach consumer read an empty string and fell back to a public registry.
+    """
+    manifest = out("topologyManifest", {})
+    if not isinstance(manifest, dict):
+        return default
+    hub = manifest.get("hub") or {}
+    if not isinstance(hub, dict):
+        return default
+    return hub.get(key) or default
+
 doc = {
     "id": "tenant-topology",
     "tenantId": os.environ["TENANT_ID"],
@@ -82,6 +100,17 @@ doc = {
     "hubConsoleUamiAppId": out("hubConsoleUamiAppId"),
     "hubConsoleUamiId": out("hubConsoleUamiId"),
     "hubActivatorPrincipalId": out("hubActivatorPrincipalId"),
+    # #2682 — the hub ACR / Container Apps environment / Key Vault coordinates.
+    # A dlz-attach pass needs all three to stand up a hub-side workload that pulls
+    # from the estate's own registry instead of a public one and writes the
+    # secrets its documentation tells operators to read (today: the S3-compatible
+    # ADLS gateway). These are read out of the tenant deploy's topologyManifest
+    # output, which is where main.bicep records them; they used to be emitted
+    # there and captured NOWHERE, which is precisely why the gateway's image
+    # silently resolved to docker.io (PR #2640 round 4).
+    "hubAcrLoginServer": out("hubAcrLoginServer") or _manifest_hub("acrLoginServer"),
+    "hubCaeId": out("hubCaeId") or _manifest_hub("caeId"),
+    "hubKeyVaultId": out("hubKeyVaultId") or _manifest_hub("keyVaultId"),
 }
 
 try:

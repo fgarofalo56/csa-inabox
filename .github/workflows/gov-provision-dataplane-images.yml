@@ -180,39 +180,21 @@ jobs:
       # registry. `az acr import` is a server-side copy under the SAME firewall
       # lease the build above holds, so the ONLY Docker Hub egress is this
       # one-time import into the ACR — never from a running Gov Container App.
-      # The bicep then pulls <acr>/<repo>:<tag> via the app UAMIs:
-      #   • admin-plane/airflow.bicep        -> <acr>/apache/airflow:<tag>
-      #                                         (deployed once postgresQuotaAvailable flips)
-      #   • compute/loom-memory-consolidate-job.bicep -> <acr>/curlimages/curl:<tag>
-      #   • s3proxy is PRE-STAGED for the svc-s3-gateway re-add (#2682 follow-on,
-      #     data-plane/s3-gateway-aca.bicep -> <acr>/s3proxy:3.3.0).
-      # Keep each --image target byte-identical to the bicep ref. Each repo:tag
-      # is reviewed in LIC0 with a THIRD_PARTY_LICENSES.md NOTICE row.
+      # The bicep then pulls <acr>/<repo>:<tag> via the app UAMIs.
+      #
+      # WHAT to mirror lives in ONE place for BOTH clouds:
+      # platform/fiab/images/upstream-images.json, imported BY DIGEST and then
+      # digest-verified. This lane and full-app-deploy-commercial.yml run the
+      # identical implementation (scripts/ci/mirror-upstream-images.sh), so Gov
+      # can no longer drift behind Commercial — which it silently could while
+      # each workflow carried its own hard-coded array.
       - name: Mirror third-party images into the Gov ACR (#2682)
         if: ${{ inputs.apply == 'true' }}
         run: |
-          set +e
+          set -uo pipefail
           # Reuse the firewall lease held from the build step (released below).
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
-          MIRRORS=(
-            "docker.io/apache/airflow:2.10.5-python3.12|apache/airflow:2.10.5-python3.12"
-            "docker.io/andrewgaul/s3proxy:3.3.0|s3proxy:3.3.0"
-            "docker.io/curlimages/curl:8.10.1|curlimages/curl:8.10.1"
-          )
-          rc=0
-          for M in "${MIRRORS[@]}"; do
-            SRC="${M%%|*}"; DST="${M##*|}"
-            echo "Mirroring $SRC -> $ACR/$DST"
-            # Primary: Docker Hub (server-side ACR import). Fallback: the MCR
-            # Docker Hub mirror, reachable from every sovereign cloud, for an
-            # estate ACR that cannot egress to docker.io.
-            if ! az acr import -n "$ACR" --source "$SRC" --image "$DST" --force -o none; then
-              MCR_SRC="mcr.microsoft.com/mirror/docker/${SRC#docker.io/}"
-              echo "::warning::docker.io import failed for $DST; trying $MCR_SRC"
-              az acr import -n "$ACR" --source "$MCR_SRC" --image "$DST" --force -o none || { echo "::error::could not mirror $DST into $ACR — the affected sovereign service will honest-gate"; rc=1; }
-            fi
-          done
-          [ "$rc" -eq 0 ] && echo "::notice::third-party images mirrored into $ACR." || exit 1
+          bash scripts/ci/mirror-upstream-images.sh --acr "$ACR"
 
       - name: Release the ACR firewall lease (always)
         if: always()
