@@ -633,20 +633,26 @@
       "lane": "L-PRODUCT-A",
       "wave": 2,
       "task_order": 55,
-      "status": "todo",
-      "title": "BLOCKER FOR ALL V3 RECEIPTS: loom-ui-verify last green 2026-08-04T01:02:35Z — all 3 dispatches on 08-06 FAILED ('Failed to resolve action download info: Service Unavailable'; one hung 79min then cancelled). Anything closed on a G1 basis since 08-04 LACKS its stated evidence. Repair the verify harness, then re-run the owed receipts across every lane",
+      "status": "review",
+      "title": "loom-ui-verify REPAIRED and mutation-proved. ROOT CAUSE: MSYS path conversion turned --route into 'C:/Program Files/Git/admin/migrate' BEFORE gh sent it; new URL(route,baseUrl) then parsed 'C:' as a URL SCHEME, discarded baseUrl and navigated to c:/Program%20Files/...",
       "depends_on": [],
       "validation": {
-        "V1": "pending",
-        "V2": "pending",
-        "V3": "pending",
-        "V4": "pending",
-        "V5": "pending",
-        "V6": "pending"
+        "V1": "n/a: no route changed",
+        "V2": "n/a",
+        "V3": "GREEN run 31152925117 — dispatched WITHOUT MSYS_NO_PATHCONV so the corruption reproduced naturally: repaired 'C:/Program Files/Git/admin/readiness' -> '/admin/readiness'; verify 3 passed, publish-version 7 passed, receipt HTTP 200 light+dark + traces",
+        "V4": "MUTATION run 31153978510 — target_route=/admin/c13-mutation-route-does-not-exist -> RED with 'ESTABLISHED: the console answered, with status 404'; verify and publish-version PASSED on that run so the red is scoped to the deliberate break. RESTORE run 31154536559 green. A second UNPLANNED red (31153433367) from a genuine live 503 is independent evidence it is not stuck-green",
+        "V5": "harness capabilities + limits documented for F1",
+        "V6": "n/a"
       },
       "evidence": [
-        "found by C1 while attempting the Phase-E click-walk",
-        "partly Actions-incident-driven; confirm whether it is fully external before declaring it fixed"
+        "PR #3076 MERGED (c786bf66); main's CI after: Loom Guardrails, Test Suite, Validate & Scan all SUCCESS",
+        "THE DAMAGE WAS THE DIAGNOSIS, NOT THE ABORTED NAVIGATION (R7): the catch block printed the SAME THREE 'likely causes' for every nav failure — VPN not connected / private-link / LOOM_URL wrong — none established, ALL THREE FALSE (verify had passed against that same console seconds earlier). That is why a bad argument read as a networking outage for three days. classifyNavFailure() now replaces the blanket triad and unrecognised errors print NOT ESTABLISHED",
+        "GATE THAT COULD NOT FAIL, fixed: HTTP status was CAPTURED AND NEVER ASSERTED ON — a 404 previously produced a screenshot, a trace and 'RECEIPT OK'. HTTP >= 400 now fails the receipt (exit 4)",
+        "PREMISE PARTLY CORRECTED: the three 08-04 runs were NOT a harness break — `verify` PASSED in all three. They failed the OPTIONAL aoai-target-resolution project on a REAL PRODUCT DEFECT: /copilot renders NEITHER the Ready badge NOR the honest AOAI gate. Still unfixed. And run 30934907635 was a 20m job timeout that GitHub renders as 'cancelled', which reads like a human cancel",
+        "queue-watchdog job added: timeout-minutes only starts once a runner PICKS UP the job, so a 79-minute queue wait was unbounded; now fails closed naming the KEDA/ACA runner",
+        "F1 VERDICT — the harness CAN carry the federation deep-dive and direct Playwright would be WORSE (it would need the P2S VPN, lose the OIDC->KV session-mint path, and lose artifact retention). Use a spec in apps/fiab-console/e2e/ + a project in playwright.config.ts (dependencies:['mint'], retries:2), dispatched with -f extra_projects=<name> — NOT -f target_route, which captures one route with no interaction. Established pattern: unity-audit-exit-receipt.spec.ts, delta-sharing-protocol.spec.ts",
+        "TWO LIMITS F1 MUST BUDGET FOR: (1) it CANNOT be tested from a branch — the OIDC federated credential is scoped to ref:refs/heads/main ONLY (AADSTS700213, run 31147711081), so F1's spec must MERGE before it can ever run; (2) ~7 min/run on a single in-VNet runner, so runs serialize",
+        "narrow-width: a visual-narrow project (900x1200) exists but only runs visual-regression.spec.ts — F1 must set its own viewport or extend that spec"
       ]
     },
     {
