@@ -237,6 +237,76 @@ Then open the Console in a browser and confirm:
 
 ---
 
+## The clean-subscription acceptance run
+
+`no-vaporware.md` requires a periodic **teardown + one-button redeploy in a clean
+subscription**, Commercial *and* Gov, as the recurring proof that the from-scratch
+path still works. `deploy-integrity.md` R4 requires greenfield and brownfield to be
+proven independently. This section is that **procedure**.
+
+> ### ⚠ Status: NOT RUN
+>
+> **No clean-subscription acceptance run has been executed for this revision.**
+> As of 2026-08-06 the most recent successful subscription-level infra deploy on
+> the Commercial estate predates the current `main` by a wide margin, and the Gov
+> lane has never had a green from-scratch run (see the verification table at the
+> top of this page).
+>
+> This is an **operator-gated** activity — it consumes a real subscription, real
+> quota and real spend, and the teardown leg is destructive. It is tracked in the
+> FINISHLINE operator queue. Nothing below should be read as a claim that it has
+> happened; the run's own receipts are the only thing that can say that.
+
+### Before you start
+
+| Prerequisite | Why |
+|---|---|
+| A subscription with **no** `rg-csa-loom-*` resource groups and no adoptable Loom services | Otherwise you are testing brownfield, not greenfield — and the two prove nothing about each other |
+| Owner + User Access Administrator on it | The deploy writes role assignments |
+| Quota confirmed in the target region: Databricks Premium, Container Apps, the ACR-task VM family, Azure OpenAI | Quota failures are deterministic — a retry cannot fix one |
+| A Global Administrator available for phase 3 | Admin consent for the MSAL app registration |
+| An agreed teardown decision **before** you begin | `keep_resources=false` in `full` mode deletes every `rg-csa-loom-*` in the subscription |
+
+### The run
+
+1. **Phases 0 → 4 exactly as documented above**, unmodified. If a step needs a
+   change to succeed, that change is the finding — record it, do not silently
+   apply it. Per R4 the customer must never have to troubleshoot a deployment.
+2. **Record per phase:** the deployment name, start/end time, the exact command
+   or `gh workflow run` dispatch, and its outcome. A phase that succeeded with a
+   manual intervention is a **failure of that phase** for acceptance purposes.
+3. **Acceptance checks — all must pass, in a browser, not by `curl`:**
+
+   | Check | Bar |
+   |---|---|
+   | Sign-in | Completes (proves phase 3 landed) |
+   | `/admin/readiness` | 10/10 workloads, **0 blocked** |
+   | `/admin/gates` | 0 blocked; opt-ins **only** where policy-accepted |
+   | `/admin/env-config` | Honest 100% — no `derived`-but-unset counted as configured |
+   | Every catalog editor | Renders and executes its primary action against the fresh backing, **or** shows its documented honest gate. Anything else is recorded as vaporware and the surface leaves the catalog until fixed |
+   | Container apps | All `Succeeded/Running` on current revisions |
+
+4. **Teardown**, if the subscription is disposable: re-dispatch in `full` mode
+   with `keep_resources=false`, then confirm no `rg-csa-loom-*` remains
+   (`az group list --query "[?starts_with(name,'rg-csa-loom')].name" -o tsv`).
+5. **Publish the receipts** — run URLs, the readiness/gates/env-config screenshots,
+   and the per-editor verdict — against the tracking item. Per
+   `deploy-integrity.md` R2 the run is not "done" on a green workflow; it is done
+   on the observed estate.
+
+### Azure Government
+
+Identical in shape, and **Actions-only** — there is no local-CLI Gov path. Use
+`deploy-fiab-gcch.yml` (`run_mode=full`, `topology=tenant`,
+`keep_resources=true`) plus `gov-build-images.yml` for the image phase, and
+verify with `gov-verify-facts.yml` + `gov-gates.yml`. Compare the result against
+the recorded **Gov readiness ceiling**, not against Commercial — the Gov ceiling
+is infrastructure-bound and legitimately lower. Note that both
+`gov-build-images.yml` and `deploy-fiab-il5.yml` have **never been executed**, so
+a Gov acceptance run is also the first run of those lanes.
+
+---
+
 ## Status: what this page does not yet cover
 
 `deploy-integrity.md` R8 requires the docs and the deploy to agree. The
@@ -355,6 +425,67 @@ Commercial.
 Key Vault, the Container Apps Environment, and the Azure Firewall instance are
 **always created new** — they are never adopted, for reasons documented in
 [Brownfield → what is not adoptable](brownfield.md#what-loom-will-not-adopt-and-why).
+
+### Resource-group layout and naming
+
+Loom's resource-group names are a **contract**, not a convention: bicep modules
+resolve cross-scope references by constructing these strings, so renaming a
+resource group out of band breaks the next deploy. Measured from
+`platform/fiab/bicep/main.bicep` on 2026-08-06:
+
+| Resource group | Name pattern | Where it is constructed |
+|---|---|---|
+| Admin Plane (hub) | `rg-csa-loom-admin-<location>` | `main.bicep:1063` — overridable **only** on a hub-attach, via `hubCoordinates.adminPlaneRgName`, when `deployAdminPlane` is false |
+| Data Landing Zone (named domain) | `rg-csa-loom-dlz-<domain>-<location>` | `main.bicep:1598`, and every cross-scope `resourceGroup(subId, …)` reference (`:1734`, `:1795`, `:1829`, `:1847`) |
+| Data Landing Zone (single-sub) | `rg-csa-loom-dlz-single-<location>` | `main.bicep:1604`, `:1614` |
+| DLZ being attached (`dlz-attach`) | `rg-csa-loom-dlz-<attachDomainName>-<location>` | `main.bicep:1870`, `:1877` |
+
+`<location>` is the Azure region short name (`centralus`, `eastus2`, …) and
+`<domain>` is the landing-zone domain name you supply — so a two-domain
+Commercial estate in `eastus2` has `rg-csa-loom-admin-eastus2`,
+`rg-csa-loom-dlz-finance-eastus2` and `rg-csa-loom-dlz-hr-eastus2`.
+
+> **The teardown step keys off this prefix.** `deploy-fiab-commercial.yml` in
+> `full` mode with `keep_resources=false` enumerates `rg-csa-loom-*` **across the
+> subscription** and deletes every match. Anything you name with that prefix is
+> in the blast radius; anything Loom needs that you name differently is outside
+> the deploy's reach.
+
+**Tags.** Every resource group carries the `complianceTags` object
+(`main.bicep:346`, applied at `:1090`, `:1616`, `:1872` and threaded into the
+admin-plane and DLZ modules). It is a **required parameter with no default** —
+each boundary parameter file supplies it. Commercial
+(`params/commercial-full.bicepparam:377`):
+
+```bicep
+param complianceTags = {
+  Environment: 'Commercial'
+  CSA_Loom: 'true'
+  FedRAMP_Level: 'High'
+  Data_Classification: 'Standard'
+}
+```
+
+Edit that block to add your own CAF tags (cost centre, owner, application) —
+they propagate to every resource group the deploy creates.
+
+> #### Not implemented: the CAF function-RG split (t169)
+>
+> A planned re-layout — `docs/fiab/prp/audit-wave13b-deploy-unblock.md` item
+> **t169** — would split the admin mega-RG into function resource groups
+> (`rg-loom-console` / `-network` / `-shared-data` / `-governance` /
+> `-observability` / `-ai`) with per-DLZ tiers (`-core` / `-compute` / `-storage`
+> / `-streaming`) and CAF naming + tags on each.
+>
+> **It is not built.** Measured 2026-08-06:
+> `grep -rn "rg-loom-console\|rg-loom-network\|rg-loom-shared-data\|rg-loom-governance\|rg-loom-observability"`
+> across `**/*.bicep` and `**/*.md` returns **one** hit — the plan item itself.
+> The admin plane is one resource group and each DLZ is one resource group, as
+> tabulated above.
+>
+> This is stated so you size RBAC and policy scoping against what deploys today.
+> If your governance model needs finer resource-group boundaries, that constraint
+> is real and current; t169 is tracked as forward work (FINISHLINE `C11`).
 
 ---
 

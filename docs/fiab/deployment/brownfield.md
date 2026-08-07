@@ -297,30 +297,43 @@ az deployment sub create \
   --parameters deployAppsEnabled=false \
 ```
 
-`EXISTING_*` coverage per parameter file — **measured** by counting the
+`EXISTING_*` coverage per parameter file — **re-measured 2026-08-06** by counting
 `readEnvironmentVariable('EXISTING_…')` occurrences and the distinct services
-folded into `legacyAdoptFromEnv` in each file on this branch:
+folded into `legacyAdoptFromEnv` in each file on `main`:
 
 | Parameter file | `EXISTING_*` reads | Services foldable into `adopt` |
 |---|---|---|
-| `commercial-full.bicepparam` | 60 | 13 |
-| `commercial.bicepparam` | 60 | 13 |
-| `gcc.bicepparam` | 61 | 13 |
-| `gcc-high.bicepparam` | 60 | 13 |
-| `il5.bicepparam` | 59 | 13 |
-| `tenant-dmlz.bicepparam` | 58 | 13 |
-| `dlz-attach.bicepparam` | 58 | 13 |
+| `commercial-full.bicepparam` | 57 | 13 |
+| `commercial.bicepparam` | 58 | 13 |
+| `gcc.bicepparam` | 58 | 13 |
+| `gcc-high.bicepparam` | 57 | 13 |
+| `il5.bicepparam` | 57 | 13 |
+| `tenant-dmlz.bicepparam` | 57 | 13 |
+| `dlz-attach.bicepparam` | 57 | 13 |
+
+> **Re-measure these rather than trusting them.** The counts published on
+> 2026-08-05 were 60 / 60 / 61 / 60 / 59 / 58 / 58 — every one drifted within a
+> day of the files being touched, which is exactly why the command is printed
+> here instead of only the number:
+>
+> ```bash
+> cd platform/fiab/bicep/params
+> grep -o "readEnvironmentVariable('EXISTING_" commercial-full.bicepparam | wc -l
+> ```
+>
+> The **13** is the number that carries meaning; the raw read count varies with
+> incidental formatting (some services take `_RG` / `_SUB` / extra suffixes).
 
 > **This table changed shape, and an earlier version of it was wrong.** Before
 > the `adopt` bag each file carried a different, hand-maintained subset (the
-> counts published here were 35 / 32 / 36 / 35 / 34 / 30 / **0**). Every file
+> counts published then were 35 / 32 / 36 / 35 / 34 / 30 / **0**). Every file
 > now folds the **same** 13 services through the shared `legacyAdoptFromEnv`
 > block, so the counts differ only by incidental formatting.
 >
-> **`dlz-attach.bicepparam` is no longer "0".** It declares `param adopt` and
-> folds the same 13 services (`dlz-attach.bicepparam:147,162`). An earlier
-> version of this page said the add-a-landing-zone path "cannot adopt anything
-> at deploy time"; that is now false as a statement about the parameter file.
+> **`dlz-attach.bicepparam` is no longer "0".** It declares `param adopt`
+> (`:162`) and folds the same 13 services through `legacyAdoptFromEnv` (`:147`).
+> An earlier version of this page said the add-a-landing-zone path "cannot adopt
+> anything at deploy time"; that is false as a statement about the parameter file.
 > **What has *not* been established is whether the `dlz-attach` topology
 > honours each entry** — that topology skips the admin plane, and the
 > `provision<Svc>` vars gate admin-plane modules. No `dlz-attach` adopt deploy
@@ -554,10 +567,22 @@ group, a **second Console cannot be stamped into it**. Two supported moves:
 > `deploy_apps_enabled` also defaults `false`, so without it no Container Apps
 > are created.
 
-`dlz-attach` cannot adopt any service at deploy time —
-`dlz-attach.bicepparam` reads zero `EXISTING_*` variables. Adopt on that path
-using the day-2 attach wizard (`/admin/landing-zones` → *Attach existing
-service*) after the DLZ exists.
+`dlz-attach` **can** carry adopt decisions in its parameter file —
+`dlz-attach.bicepparam` declares `param adopt` (`:162`) and folds the same 13
+services through `legacyAdoptFromEnv` (`:147`). What is **not** established is
+whether that topology honours them: it skips the admin plane, and the
+`provision<Svc>` gates guard admin-plane modules. **No `dlz-attach` adopt deploy
+has been run.** Until one is, treat adoption on that path as *untested*, and use
+the day-2 attach wizard (`/admin/landing-zones` → *Attach existing service*)
+after the DLZ exists.
+
+> An earlier revision of this page said flatly that "`dlz-attach` cannot adopt
+> any service at deploy time — `dlz-attach.bicepparam` reads zero `EXISTING_*`
+> variables." That was false (the file contains 57 such reads) **and it
+> contradicted [§3a](#3a-environment-variables--the-stock-parameter-file-the-supported-path)
+> of this same page**, which had already corrected it. Recorded here because a
+> doc that disagrees with itself is worse than one that is merely out of date —
+> a reader has no way to tell which half to trust.
 
 ---
 
@@ -640,11 +665,37 @@ from the CLI (§3a or §3b), not from the wizard.**
 
 ### Open — the rest, precisely
 
+> **Four of these have fixes IN FLIGHT — open pull requests, not merged, not
+> deployed** (checked 2026-08-06). Per `deploy-integrity.md` R2 an in-flight or
+> merged change is **not** a fix until it is live on the estate, so every row
+> below still describes what you will hit today.
+>
+> | Row | In-flight PR | State on 2026-08-06 |
+> |---|---|---|
+> | #3014 fitness gate inert | **#3062** — "wire the four inert deploy-plumbing paths: fitness gate, one scan engine, adopt-bag on every tier, Gov classified retry" | **OPEN** |
+> | #3015 wizard scanner ≠ coverage scanner | **#3062** (same PR) | **OPEN** |
+> | #3016 adopt-bag discarded by every tier but copy-paste | **#3062** (same PR) | **OPEN** |
+> | #3017 no classified retry on Gov | **#3062** (same PR) | **OPEN** |
+> | Purview `RequestDisallowedByPolicy` + APIM/VPN adopt-existing idempotency | **#3058** — "brownfield idempotency — adopt-existing singletons, policy-compliant Purview managed storage, per-ARM-leaf classification" | **OPEN** |
+>
+> **Re-check before relying on either state**, in this order — merged is not
+> deployed:
+>
+> ```bash
+> gh pr view 3062 --json state,mergedAt
+> gh pr view 3058 --json state,mergedAt
+> curl -s https://<your-console-hostname>/build-marker.txt   # what is actually LIVE
+> ```
+>
+> When they land, re-run the "How to re-measure this section" commands below
+> rather than deleting these rows on the strength of a merge.
+
 | Gap | Effect | Tracked |
 |---|---|---|
-| Day-0 fitness suite exists but nothing calls it | An unusable adopted resource fails mid-deploy, not before it. The module's own "runs before a single resource is created" comment is untrue | **#3014** |
-| The wizard's scanner is not the one with the coverage ledger | `/api/setup/scan-services` sends the no-op `options:{top:1000}`, has no `$skipToken` loop and no `allowPartialScopes`: silent truncation past 1000 rows, and an unreadable subscription is indistinguishable from an empty one | **#3015** |
-| No classified retry on any Gov deploy path | `deploy-fiab-gcch.yml` does not invoke `deploy-retry.mjs` at all; the taxonomy and bounded retry are Commercial-only | **#3017** |
+| Day-0 fitness suite exists but nothing calls it | An unusable adopted resource fails mid-deploy, not before it. The module's own "runs before a single resource is created" comment is untrue | **#3014** (fix in flight: PR #3062) |
+| The wizard's scanner is not the one with the coverage ledger | `/api/setup/scan-services` sends the no-op `options:{top:1000}`, has no `$skipToken` loop and no `allowPartialScopes`: silent truncation past 1000 rows, and an unreadable subscription is indistinguishable from an empty one | **#3015** (fix in flight: PR #3062) |
+| No classified retry on any Gov deploy path | `deploy-fiab-gcch.yml` does not invoke `deploy-retry.mjs` at all; the taxonomy and bounded retry are Commercial-only | **#3017** (fix in flight: PR #3062) |
+| Purview managed storage rejected by tenant policy (`RequestDisallowedByPolicy`); APIM private-DNS re-link `Conflict`; VPN gateway created under a different name than the existing one | A brownfield re-apply fails on ARM leaves that adoption should have suppressed | **#3038** (fix in flight: PR #3058) |
 | No networking / Log Analytics / ACR / Key Vault adoption | You cannot bring your own VNet, subnets, DNS zones, firewall, workspace or registry (class C above) | — |
 | `EXISTING_STORAGE` / `_POSTGRES` / `_KEYVAULT` / `_FIREWALL` have no parameter consumer | Setting them does nothing at deploy time | — |
 | `dlz-attach` adoption is unexercised | The parameter file folds all 13 services, but that topology skips the admin plane and no adopt deploy has been run on it | — |

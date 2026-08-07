@@ -1,8 +1,28 @@
 # PRP — CSA Loom VS Code extension (`loom-vscode`)
 
 **Title:** One extension, one sign-in, one tree — a CSA Loom developer surface in VS Code that meets or beats the Microsoft Fabric VS Code extension family
-**Date:** 2026-08-03
-**Status:** proposed (spec time — every parity row below is ❌ by construction; nothing is built yet)
+**Date:** 2026-08-03 · **Status re-verified 2026-08-06**
+**Status:** **SHIPPED (Phases 1–5 landed; distribution/marketplace publish outstanding).** ~~proposed (spec time — every parity row below is ❌ by construction; nothing is built yet)~~
+
+> ### ⚠ Header corrected 2026-08-06 — this PRP said "nothing is built yet"; it is built
+>
+> Measured against the tree, not against this document:
+>
+> | Claim | Measured truth | Evidence |
+> |---|---|---|
+> | "nothing is built yet" | **The extension exists and is substantial** | `apps/loom-vscode/` — **62** TypeScript source files under `src/`, plus `test/`, `media/`, `build.mjs`, `vitest.config.ts` |
+> | no packaged extension | `name: loom-vscode`, `publisher: csa-loom`, `version: 0.1.0` | `apps/loom-vscode/package.json` |
+> | no commands | **100** `"command":` entries contributed | `apps/loom-vscode/package.json` |
+> | phases unbuilt | Phases through **5** are in the changelog with real routes named | `apps/loom-vscode/CHANGELOG.md` — Git/ALM (W9/W10) over `/api/git-integration/{status,commit,pull,resolve}`; Spark job definitions (J1–J6) over `…/[id]`, `…/files`, `…/submit`, `…/runs` |
+>
+> Parity docs exist for the shipped surfaces: `docs/fiab/parity/loom-vscode.md`,
+> `loom-vscode-git-alm.md`, `loom-vscode-spark-job-definition.md`.
+>
+> **Every ❌ in the parity inventory below is therefore suspect.** Re-measure a row
+> against `apps/loom-vscode/src/**` before treating it as forward work. What has
+> NOT been established here is a live in-editor E2E receipt (`ux-baseline.md` G1)
+> or a marketplace publish — those remain owed.
+
 **Domain:** Developer platform / client tooling. Commercial **and** Government.
 **Related:** `apps/loom-cli` (`@csa-loom/cli`), `apps/loom-sdk` (`@csa-loom/sdk`), `PRPs/active/next-waves/PRP-databricks-parity.md` (the "Loom App Runtime" ACA pattern), backlog task #58 (developer toolkit).
 

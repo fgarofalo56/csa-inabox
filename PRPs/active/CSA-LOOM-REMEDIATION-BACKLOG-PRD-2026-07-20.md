@@ -2,9 +2,30 @@
 
 - **Date:** 2026-07-20
 - **Author:** PI coding agent (deep-dive synthesis)
-- **Status:** Draft for PRP conversion
+- **Status:** **CONVERTED — superseded 2026-08-06.** This PRD was converted to a
+  validated PRP at [`PRPs/completed/remediation-backlog/PRP.md`](../completed/remediation-backlog/PRP.md),
+  and a re-measurement on 2026-08-06 confirmed the conversion's headline
+  workstreams have shipped (evidence below). It is retained as the **origin
+  document** — read the PRP, not this, for status. ~~Draft for PRP conversion~~
 - **Scope:** Repository-wide remediation plan for gaps, missing features, refactors, and enhancements identified in the deep-dive review
-- **Primary path:** `E:\Repos\GitHub\csa-inabox\PRPs\active\CSA-LOOM-REMEDIATION-BACKLOG-PRD-2026-07-20.md`
+- **Primary path:** `PRPs/active/CSA-LOOM-REMEDIATION-BACKLOG-PRD-2026-07-20.md`
+
+> ### Shipped-since verification (measured against the tree, 2026-08-06)
+>
+> | Item | Measured truth | Evidence |
+> |---|---|---|
+> | **A3** parity-doc staleness detector CI guard | shipped | `scripts/ci/check-parity-doc-freshness.mjs` |
+> | **B3** gates-registry wiring completion | shipped | `apps/fiab-console/lib/gates/registry` |
+> | **D1** route-handler toolkit | shipped | `apps/fiab-console/lib/api/route-toolkit.ts` (+ codemod test) |
+>
+> Companion docs guards that also landed out of WS-A: `check-docs-hygiene.mjs`,
+> `check-docs-deploy-refs.mjs`, `check-learn-doc-registry.mjs`,
+> `check-deploy-staleness.mjs` (all in `scripts/ci/`).
+>
+> **Still open** out of this PRD: **E1/E2 monolith decomposition** — carried
+> forward as FINISHLINE `C4` (`PRPs/active/finishline/AUDIT-2026-08-06.md`), which
+> is the current live register. Do not re-plan from the item list below without
+> checking it against that register first.
 
 ---
 

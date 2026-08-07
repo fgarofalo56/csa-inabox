@@ -139,35 +139,79 @@ parity doc, tutorial with screenshots, demo seed content.
 
 ## Wave plan
 
-- [ ] **W0 — Live parity audit (START HERE):** walk every matrix row against the live
+> **Checkbox hygiene 2026-08-06.** Every wave below was re-measured against the
+> tree (grep the named deliverable, then its call site). **The whole plan was
+> unticked while most of it had shipped.** Boxes are ticked only where every
+> named deliverable resolves; where a wave is substantially delivered with a
+> named residual, it stays unticked and the residual is stated — a half-true tick
+> is worse than none. Companion corrections in
+> [`AUDIT.md`](./AUDIT.md).
+
+- [x] **W0 — Live parity audit (START HERE):** walk every matrix row against the live
       product (minted-session + browser), re-grade ✅/η/❌, produce
       `PRPs/active/foundry-parity/AUDIT.md` gap register with per-row missing-capability
       bullets. Deliverable feeds every later wave. (~1 session)
+      — **DELIVERED.** `AUDIT.md` exists and is the register (re-verified and corrected
+      2026-08-06). Its own *live browser* leg remains folded into the catalog-wide E2E
+      goal (FINISHLINE `C1`).
 - [ ] **W1 — Ontology to A+:** close 2.1–2.8 gaps (interfaces, shared props, object sync
       UX, derived props, action effects/validation, OSDK package E2E, object explorer,
       Vertex overlay, ontology embeddings). Ontology is Foundry's moat — this wave is the
       program's center of gravity. (~2 sessions)
+      — **SUBSTANTIALLY DELIVERED.** Shipped: interfaces + shared property groups
+      (`lib/editors/ontology-model.ts`), object sync UX (WS-4.4,
+      `lib/azure/object-dataset-sync.ts` + `phase4/ontology-sync-panel.tsx`), derived
+      props (WS-4.2, `lib/foundry/derived-properties.ts` + `phase4/ontology-derived-panel.tsx`),
+      object explorer (`phase4/object-explorer-panel.tsx` + `lib/foundry/object-facets.ts`),
+      object views (WS-4.1, `lib/foundry/object-view.ts`), object security (WS-4.3,
+      `lib/foundry/object-security.ts`). **Residual, hence unticked:** ontology
+      **embeddings** (no `ontologyEmbedding` / `ontology-embedding` code anywhere) and
+      OSDK **package** E2E.
 - [ ] **W2 — Contour-class analysis-board item:** path-based boards (filter/join/derive/
       pivot/chart steps) compiling to Synapse-serverless/ADX; save-as-dataset; export to
       report. Canvas per node-kit; step results grid w/ type badges. (~2 sessions)
+      — **DELIVERED in code:** `lib/editors/analysis-board-editor.tsx` +
+      `lib/editors/analysis-board-model.ts`. Unticked pending the wave's own
+      **browser-E2E receipt** (`ux-baseline.md` G1) — the verification bar below is part
+      of the wave, not an afterthought.
 - [ ] **W3 — Workshop/Slate/Quiver depth:** widget-catalog audit vs Workshop, variables/
       events, action forms; rayfin card parity; app-builder docs + 3 walkthrough apps. (~2 sessions)
+      — **Catalogs delivered** (workshop 7→37, rayfin 5→34 incl. tabs child-widget nesting,
+      with a real-rows E2E — see `AUDIT.md`). **Residual:** Workshop multi-page, sections/
+      overlays and conditional visibility (still ❌ in the competitive matrix).
 - [ ] **W4 — Rules + Automate + Approvals + Checkpoints:** rules item (JSON-logic engine
       on ACA), ontology object monitors in activator, approvals framework on action
       types + sensitive admin ops, checkpoint middleware. (~1.5 sessions)
+      — **Approvals, invariants and checkpoints shipped** (recorded in the
+      OPEN-REGISTER 07-20 re-baseline: "Foundry-parity governance suite — Object Explorer,
+      Checkpoints, criteria+lineage, Approvals, Invariants, retention/export").
+      Re-verify the rules item + activator object monitors before ticking.
 - [ ] **W5 — Notepad + Fusion:** live-data documents (block editor w/ embedded
       queries/visuals/objects); OSS spreadsheet engine evaluation (Univer first) + data
       binding; both all-clouds. (~2 sessions)
+      — **DELIVERED in code:** `lib/editors/notepad-editor.tsx`,
+      `lib/editors/fusion-sheet-editor.tsx` + `lib/editors/fusion-sheet-engine.ts`.
+      Unticked pending the browser-E2E receipt and the all-clouds (Gov) pass.
 - [ ] **W6 — Data-eng tail:** dataset version/branch UX, media sets, data-health
       sentinels, Data Connection hub, transforms scaffold + branch CI, code-workspace
       decision. (~1.5 sessions)
+      — Data Connection hub shipped (`/connections`, see `AUDIT.md` batch 3). Dataset
+      version/branch UX and media sets remain the residual (`AUDIT.md` 1.1 / 1.5).
 - [ ] **W7 — AIP tail:** agent ontology-tools, aip-logic block parity, evals-in-CI,
       staged model releases w/ approvals. (~1 session)
+      — **Agent ontology-tools shipped** (`lib/azure/agent-flow-run.ts:96-142`) and
+      **evals-in-CI shipped** (`SpindleEvalsPanel` gates publish). **Residual:** aip-logic
+      block parity (apply-action / semantic-search / loop / tool-call blocks) and the
+      3-pane studio depth.
 - [ ] **W8 — Governance tail + all-clouds pass:** retention/export controls, row-policy
       authoring, scoped tokens; then full Gov browser pass of every new surface. (~1.5 sessions)
+      — Retention/export and row-policy authoring shipped (`AUDIT.md` 6.3 CLOSED; the
+      governance suite in the OPEN-REGISTER re-baseline). **The Gov browser pass has not
+      run** — that is the wave's gating deliverable.
 - [ ] **W9 — Docs/visuals/walkthrough sweep + final grading:** Foundry-track in /learn,
       per-pillar tutorials w/ screenshots, parity docs all zero-❌, final A-grade matrix
       published at docs/fiab/parity/foundry-index.md. (~1 session)
+      — Depends on W0–W8 receipts; not started.
 
 ## Verification bar (every wave)
 

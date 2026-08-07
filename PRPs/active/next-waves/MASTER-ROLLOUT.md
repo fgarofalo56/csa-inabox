@@ -1,5 +1,32 @@
 # CSA Loom — MASTER ROLLOUT (single authoritative phased plan)
 
+> ## ⚠ RE-BASELINE 2026-08-06 — this file is a SEQUENCE, not a status register
+>
+> **For what is still open, read `PRPs/active/finishline/AUDIT-2026-08-06.md`.**
+> That audit swept all 33 open issues, the whole PRP authority chain, the live
+> Commercial estate, Gov workflow history and eval-run truth, and discarded ~200
+> stale checkbox items with evidence. It supersedes the open tails of
+> OPEN-REGISTER-2026-07-12, reconcile, and loom-apex — and therefore of this file.
+>
+> This document keeps exactly one job: **the dependency-correct ORDER** in which
+> unbuilt work should be sequenced. It has never been a reliable statement of
+> what is built — it has now been re-baselined three times (07-09, 07-14, 07-20)
+> for the same reason each time, and this is the fourth.
+>
+> **A concrete measure of the drift, taken 2026-08-06:** the 07-20 warning below
+> flags "~40 listed items have since SHIPPED". Spot-checking the same class of
+> claim across sibling registers on this date found the pattern unchanged — every
+> remaining ❌ in `PRPs/active/foundry-parity/AUDIT.md` had shipped, the
+> competitive audit's top P0 (tier-router) had been wired for weeks while four of
+> its own five documents still called it "a safe no-op", and two PRPs whose code
+> was fully built still carried `Status: proposed`. **Treat every "to build" below
+> as unverified until you grep for it.**
+>
+> The standing operator P1 that sits above phase order — catalog-wide functional
+> E2E (create→publish→RUN→USE per item type) — is **still open and still
+> unmeasured**; it is tracked as FINISHLINE `C1`. See the verdict-table entry in
+> `PRPs/active/OPEN-REGISTER-2026-07-12.md`.
+
 > **⚠ DOC-CURRENCY (2026-07-20):** this plan is a 07-09 snapshot; ~40 listed
 > items have since SHIPPED (loom-apps APP-W1–W6 complete, Foundry-parity
 > governance+greenfield suite, widget catalogs 37/34, compact-v4 canvas,

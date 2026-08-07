@@ -40,9 +40,33 @@ prompt in **[`UNLEASH-KICKOFF.md`](./UNLEASH-KICKOFF.md)** into Claude Code.
 > **Grade legend** (from `no-vaporware.md`): **F** vaporware · **D** stubbed ·
 > **C** functional but rough · **B** production-grade · **A** production-grade +
 > tested · **A+** production-grade + tested + documented + bicep-synced.
-> **Target: every experience A or A+ before the next major release.** Grades
-> marked _TBD_ are filled in by the validation/UAT agent on first pass over each
-> PRP.
+> **Target: every experience A or A+ before the next major release.**
+>
+> ### Why 11 of 12 grades read _TBD_ (2026-08-06)
+>
+> The original note said grades "are filled in by the validation/UAT agent on
+> first pass over each PRP." **That pass has never run for 11 of the 12
+> experiences** — only Data Science (#4) was ever graded, on 2026-07-16.
+>
+> They stay `_TBD_` deliberately. A grade under this rubric is a claim about
+> whether real backends respond and real controls work; per `ux-baseline.md` **G1**
+> only a live in-browser walk with real data establishes that, and `tsc` + vitest +
+> DOM strings explicitly do not. Filling these in from code-reading would produce
+> the precise failure this repo keeps hitting — a green table over an unmeasured
+> estate — and this very directory is where that has now been caught four times
+> (see the re-baseline banner on
+> [`release-audit/fabric-parity.md`](./release-audit/fabric-parity.md)).
+>
+> **What is measured, and where:**
+>
+> | Evidence that exists | Where |
+> |---|---|
+> | Per-surface parity docs with per-control backend attribution and, for some, live E2E receipts | `docs/fiab/parity/*.md` (`ui-parity.md` requires zero ❌ per doc) |
+> | Per-competitor graded matrix, incl. Fabric and Power BI | `PRPs/active/loom-competitive-audit-2026-07-20/PARITY-MATRIX.md` (re-baselined 2026-08-06) |
+> | The catalog-wide functional-E2E sweep that would produce these 12 grades | **NOT DONE** — tracked as FINISHLINE `C1`; see the verdict-table entry in `PRPs/active/OPEN-REGISTER-2026-07-12.md` |
+>
+> **These grades land with the C1 sweep, from its receipts — not before.** Do not
+> populate them from a static read.
 
 ---
 

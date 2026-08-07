@@ -3,6 +3,30 @@
 **Started 2026-07-16 (static repo sweep). Live browser pass: IN PROGRESS.**
 Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / ❌ missing.
 
+> ## ⚠ RE-VERIFIED 2026-08-06 — every ❌ in this file was stale
+>
+> This register's static findings were written 2026-07-16. A re-measurement pass
+> on 2026-08-06 re-ran each ❌ against the tree (grep + read the module, not the
+> plan) and found **all four remaining ❌ rows had shipped since**. Each is
+> corrected in place below with the file that closes it; the original ❌ text is
+> kept struck through so the drift is visible rather than erased.
+>
+> | Row | 07-16 verdict | 08-06 measured truth | Evidence |
+> |---|---|---|---|
+> | **2.6** Object Explorer | ❌ confirmed | ✅ **built** — Foundry-grade instance explorer, not the item tree | `lib/editors/phase4/object-explorer-panel.tsx` (header names "Foundry-parity rows 2.6 + 4.7"): cross-type browse, facets/histograms, type-aware filters, link traversal, saved explorations, full-page mode, over AGE via `/api/items/ontology/[id]/explore` |
+> | **2.2** Object sync | ❌ confirmed | ✅ **built** (WS-4.4) | `lib/azure/object-dataset-sync.ts` — Synapse Serverless/Dedicated → `upsertObjectByPk` (AGE MERGE) → AI Search `loom-object-instances`, progress in Cosmos `object-sync-jobs`; route `app/api/items/ontology/[id]/sync/route.ts`; UX `lib/editors/phase4/ontology-sync-panel.tsx` |
+> | **5.2** agent-flow ontology tools | ❌ confirmed | ✅ **built** (WS-5.1/WS-6) | `lib/azure/agent-flow-run.ts:96-142` — an `ontology-object` tool kind maps to the `ontology` DataAgentSource and resolves instances through the Weave graph (`resolveOntologyObjectForGrounding`) |
+> | **5.4** Evals wiring | ❌ confirmed | ✅ **built** | `lib/editors/palantir/aip-logic-studio-panels.tsx` — `SpindleEvalsPanel`: authored eval cases run against the real block graph with LLM-judge scoring (`POST …/eval`), and the result **gates publish** via the `evalThreshold` / `minPassRate` settings |
+>
+> Two rows the same pass re-verified as **still open** (do not tick these):
+> ontology **proposals / branching** (no `ontologyProposal` / proposal-store /
+> ontology-branch code anywhere in `apps/fiab-console`), and the Workshop
+> multi-page / sections / conditional-visibility depth gap.
+>
+> **This does not constitute a live-browser receipt.** Per `ux-baseline.md` G1
+> these are code-truth corrections; the live pass is still owed and is tracked as
+> the catalog-wide functional E2E goal (FINISHLINE `C1`).
+
 ## Static findings (repo sweep)
 
 ### Ontology (Pillar 2)
@@ -15,11 +39,15 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 - **2.4 Actions — η confirmed.** Action types exist in the model but there are **no
   validation rules, no side effects / webhooks / notifications** on action execution
   (`grep sideEffect|onSuccess|validationRule` → zero hits). W1 item.
-- **2.6 Object Explorer — ❌ confirmed (nuance).** `lib/components/object-explorer.tsx`
+- **2.6 Object Explorer — ✅ BUILT (re-verified 2026-08-06).**
+  ~~❌ confirmed (nuance).~~ `lib/components/object-explorer.tsx`
   is a Fabric-style **item/workspace tree** (431 lines, real data) — NOT a Foundry
-  Object Explorer over ontology **instances** (search/filter/facet/traverse objects,
-  saved explorations). Net-new surface stands, but can mount as a sibling mode of the
-  existing panel + a full-page explorer.
+  Object Explorer over ontology **instances**. That observation was correct; the
+  conclusion is now stale. The Foundry-grade surface **shipped as a separate
+  component**: `lib/editors/phase4/object-explorer-panel.tsx` — cross-type
+  instance browse with facets/histograms, property-type-aware filters, link
+  traversal, saved explorations and a full-page mode, over the Weave AGE store
+  via `/api/items/ontology/[id]/explore`.
 
 ### App building (Pillar 4)
 
@@ -57,9 +85,14 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
   (listDeltaVersions/checkpoints per DESCRIBE HISTORY) exists and powers
   warehouse clone/copy-into/snapshots. Gap narrows to SURFACING: a version-
   history tab + restore action on lakehouse Tables. W6.
-- **5.2 agent-flow — ❌ ontology tools confirmed.** Zero ontology/object
-  references in the agent-flow editor family — agents cannot query objects or
-  invoke actions. W1/W7 anchor item.
+- **5.2 agent-flow — ✅ BUILT (re-verified 2026-08-06).** ~~❌ ontology tools
+  confirmed. Zero ontology/object references in the agent-flow editor family —
+  agents cannot query objects or invoke actions.~~ Shipped as WS-5.1/WS-6:
+  `lib/azure/agent-flow-run.ts:96-142` declares an `ontology-object` tool kind
+  that maps to the `ontology` DataAgentSource and resolves its instances through
+  the Weave ontology graph (`resolveOntologyObjectForGrounding`); the run route
+  executes it for real. Grounding is closed; **invoking write-back actions from a
+  flow is the residual** and stays a W7 item.
 - **1.5 media — η.** Preview route handles TEXT/IMAGE/BINARY as metadata-only
   + download; no inline render, no typed media collections. W6.
 
@@ -79,11 +112,26 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
   `lakehouse/permissions` (`createRlsPolicyWithPredicate`/`createRlsPolicy`),
   `items/[type]/[id]/onelake-security/[role]/rls`, `semantic-model/[id]/roles`,
   and `lakehouse/permissions/rls-test`. Was ❌ at batch-3; built since. W8 done.
-- **2.2 Object sync — ❌ confirmed.** No objectSync/backfill machinery in
-  weave/editors; ontology item API exists (`items/ontology/[id]`) but dataset→
-  object-instance sync UX/pipeline is absent. W1 anchor.
-- **5.4 Evals wiring — ❌ confirmed.** aip-logic editor has zero evaluation
-  references; evals exist as a standalone item only. W7.
+- **2.2 Object sync — ✅ BUILT (re-verified 2026-08-06).** ~~❌ confirmed. No
+  objectSync/backfill machinery in weave/editors; ontology item API exists
+  (`items/ontology/[id]`) but dataset→object-instance sync UX/pipeline is
+  absent.~~ Shipped as WS-4.4: `lib/azure/object-dataset-sync.ts` binds an object
+  type to a Synapse Serverless (Delta) or Dedicated source and backfills rows via
+  `upsertObjectByPk` (idempotent AGE MERGE) into the graph plus an AI Search
+  `loom-object-instances` index, writing progress to the Cosmos
+  `object-sync-jobs` document the UI polls. Route:
+  `app/api/items/ontology/[id]/sync/route.ts`. UX:
+  `lib/editors/phase4/ontology-sync-panel.tsx`. Honest gates on
+  `LOOM_WEAVE_PG_FQDN` / `LOOM_SYNAPSE_WORKSPACE`; AI Search absent degrades to
+  AGE-only with `indexed:false`. **Residual:** scheduled/incremental re-sync (a
+  run is operator-triggered), tracked in FINISHLINE `C4`.
+- **5.4 Evals wiring — ✅ BUILT (re-verified 2026-08-06).** ~~❌ confirmed.
+  aip-logic editor has zero evaluation references; evals exist as a standalone
+  item only.~~ `lib/editors/palantir/aip-logic-studio-panels.tsx` ships
+  `SpindleEvalsPanel`: authored eval cases (inputs + criteria) run against the
+  **real** block graph with LLM-judge scoring (`POST …/eval`), and the result
+  **gates publish** — the panel's own header calls it "the evals-in-CI gate",
+  with `evalThreshold` and `minPassRate` as the settings that bind it.
 
 ## Live browser pass — TODO checklist (next session)
 

@@ -3,8 +3,8 @@
 > **Title:** The Loom developer toolkit — agent Skills, MCP servers, purpose-built agents, CLI/SDK,
 > and templates. One authored source per artifact, two emitters, five MCP servers split by blast
 > radius, and a machine-checked API contract behind all of it.
-> **Date:** 2026-08-03
-> **Status:** proposed
+> **Date:** 2026-08-03 · **Status re-verified 2026-08-06**
+> **Status:** **SHIPPED (toolkit landed; see the verification block below)** ~~proposed~~
 > **Owner:** Loom Platform / Developer Experience
 > **Base commit:** `0be26002` (branch `main`)
 > **Sources consulted — every claim below was read out of the tree at this commit, not recalled:**
@@ -40,6 +40,26 @@
 > receipt; `.claude/rules/ui-parity.md`, `.claude/rules/ux-baseline.md` (G1/G2/G3) for the surfaces
 > this program adds to the Console; `loom_no_freeform_config`, `loom_design_standards`.
 > Dual-cloud (Commercial + Government) mandatory; per-cloud deltas stated in §6, not assumed.
+
+## ⚠ Status header corrected 2026-08-06 — this PRP said "proposed"; the toolkit shipped
+
+Re-measured against the tree on 2026-08-06 (read the directories, not this
+document's plan):
+
+| Artifact | Measured truth | Evidence |
+|---|---|---|
+| Agent Skills package | **shipped** — 11 skills, 4 agents, 4 plugin bundles | `packages/loom-skills/{skills,agents,plugins}` (`loom-lakehouse`, `loom-warehouse`, `loom-eventstream`, `loom-eventhouse-kql`, `loom-data-pipeline`, `loom-activator`, `loom-mirrored-database`, `loom-semantic-model-report`, `loom-search-and-catalog`, `loom-items-bff`, `loom-cloud-endpoints`) |
+| CLI | **shipped** | `apps/loom-cli/src/` — `index.ts`, `commands/`, `client.ts`, `credentials.ts`, `item-types.ts`, … |
+| TypeScript SDK | **shipped** — 8 resources | `apps/loom-sdk/src/resources/{admin,catalog,items,query,runs,thread,tokens,workspaces}.ts` |
+| Python SDK | **shipped** | `sdk/python/csa-loom/` (`pyproject.toml`, `src/`, `scripts/`) |
+| Terraform provider | **shipped** | `sdk/terraform-provider-loom/` (`go.mod`, `internal/`, `examples/`) |
+| VS Code extension | **shipped** (own PRP, also re-headered) | `apps/loom-vscode/` — 62 src files, 100 contributed commands |
+
+**Read every phase/checklist below as a spec of what was built**, not as forward
+work, and re-measure a row before planning from it. What is **not** established
+by the above: live in-product E2E receipts (`ux-baseline.md` G1) and package
+publication — those remain owed. Related memory: `csa_loom_devtoolkit_vscode_complete_2026_08_04`
+(records a deploy-gated confirmation still owed on #2929 reindex).
 
 ---
 
