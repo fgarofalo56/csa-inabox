@@ -255,10 +255,20 @@ jobs:
           # Wait for an in-flight execution (bounded), and REFUSE rather than
           # racing it. A refusal is honest; a second sweep would corrupt both
           # measurements and then be scored as quality.
+          #
+          # NOT `2>/dev/null`: a guard whose probe can fail silently is a guard
+          # that cannot fail — if `az` errored (RBAC, wrong RG) the variable
+          # would be empty and this would wave the run through, which is the
+          # exact defect class this PR exists to remove. Stderr is kept and a
+          # probe failure is FATAL.
           RUNNING=""
           for _ in $(seq 1 60); do
-            RUNNING=$(az containerapp job execution list -g "$RG" -n "$JOB" \
-              --query "[?properties.status=='Running'].name" -o tsv 2>/dev/null | tr -d '\r' | head -n 5)
+            LIST_ERR=$(mktemp)
+            if ! RUNNING=$(az containerapp job execution list -g "$RG" -n "$JOB" \
+                  --query "[?properties.status=='Running'].name" -o tsv 2>"$LIST_ERR" | tr -d '\r' | head -n 5); then
+              echo "::error::could not list $JOB executions, so this run CANNOT establish whether a sweep is already in flight. Refusing to start one blind (#3083). az said: $(tr '\n' ' ' < "$LIST_ERR" | head -c 400)"
+              exit 1
+            fi
             [ -z "$RUNNING" ] && break
             echo "waiting for in-flight $JOB execution(s) to finish: $(echo "$RUNNING" | paste -sd, -)"
             sleep 15
@@ -519,9 +529,16 @@ jobs:
           # IMPLYING it measured the diff. deploy-integrity R7: an error — or a
           # verdict — must not assert something it did not establish. So state
           # both commits, and say plainly when they differ.
+          # NOT `2>/dev/null || echo ""`: this block's whole job is to tell the
+          # truth about which corpus was measured, so it must distinguish "the
+          # console served a different commit" from "I could not ask". Keep
+          # stderr and treat an unresolved answer as UNRESOLVED, never as a
+          # match (deploy-integrity R7).
+          PROV_ERR=$(mktemp)
           SERVED=$(curl -sS -m 30 -H "authorization: Bearer $INTERNAL_TOKEN" \
-            "${CONSOLE_URL%/}/api/internal/copilot/eval-probe" \
-            | jq -r '.corpusCommit // ""' 2>/dev/null || echo "")
+            "${CONSOLE_URL%/}/api/internal/copilot/eval-probe" 2>"$PROV_ERR" \
+            | jq -r 'if .ok == true then (.corpusCommit // "") else "" end' 2>>"$PROV_ERR" || echo "")
+          PROV_MSG=$(tr '\n' ' ' < "$PROV_ERR" | head -c 300)
           {
             echo ""
             echo "### Corpus provenance (#3085)"
@@ -533,7 +550,7 @@ jobs:
             echo ""
           } > corpus-provenance.md
           if [ -z "$SERVED" ]; then
-            MSG="could not read the SERVED corpus commit from the console's eval-probe manifest, so this run cannot say whether it measured the corpus in this checkout. Read the verdict below as being about the deployed estate, not about this diff."
+            MSG="could not read the SERVED corpus commit from the console's eval-probe manifest${PROV_MSG:+ ($PROV_MSG)}, so this run cannot say whether it measured the corpus in this checkout. Read the verdict below as being about the deployed estate, not about this diff."
             echo "::warning::corpus provenance: $MSG"
             echo "> WARNING: $MSG" >> corpus-provenance.md
           elif [ "$SERVED" != "${CHECKOUT_COMMIT:-unknown}" ]; then
