@@ -40,8 +40,10 @@ import {
   buildJudgeMessages,
   computePass,
   rollupRun,
+  withProbeRetry,
   type EvalResult,
   type PassPredicate,
+  type ProbeFailureRow,
   type SearchResult,
   type TierDecisionScore,
 } from './evaluator-core';
@@ -96,7 +98,18 @@ export interface RunSummary {
     /** Golden rows attempted, and probe failures by status (#2798 — see RunTotals). */
     rowsAttempted?: number;
     probeErrors?: Record<string, number>;
+    /** #3083 — the rows that never scored, named individually. */
+    probeFailures?: ProbeFailureRow[];
   }[];
+}
+
+/** Sleep helper (inter-row pacing; the retry loop owns its own). */
+const sleep = (ms: number): Promise<void> => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
+/** Read a non-negative integer env knob, else `fallback`. */
+function envInt(name: string, fallback: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : fallback;
 }
 
 export async function runEvals(
@@ -148,6 +161,23 @@ export async function runEvals(
 
   const manifest = await readCorpusManifest(probeUrl, internalToken).catch(() => null);
   const corpusCommit = manifest?.corpusCommit || 'unknown';
+  // #3083 — bounded probe retry + sweep pacing. Default-ON with code defaults
+  // (no env wiring required); each knob is an opt-OUT, never an opt-in.
+  //   attempts 4 + budget 60s: measured AOAI Retry-After on this estate is 8s,
+  //   so three retries comfortably ride a throttle window without approaching
+  //   the job's 45-minute replicaTimeout even in the worst case.
+  const retryPolicy = {
+    maxAttempts: Math.max(1, envInt('LOOM_COPILOT_EVAL_PROBE_ATTEMPTS', 4)),
+    baseDelayMs: envInt('LOOM_COPILOT_EVAL_PROBE_BASE_MS', 1_000),
+    maxDelayMs: Math.max(1, envInt('LOOM_COPILOT_EVAL_PROBE_MAX_DELAY_MS', 30_000)),
+    budgetMs: envInt('LOOM_COPILOT_EVAL_PROBE_BUDGET_MS', 60_000),
+  };
+  const rowDelayMs = envInt('LOOM_COPILOT_EVAL_ROW_DELAY_MS', 200);
+  context.log(
+    `[copilot-evaluator] probe retry: up to ${retryPolicy.maxAttempts} attempt(s)/row, ` +
+      `backoff base ${retryPolicy.baseDelayMs}ms cap ${retryPolicy.maxDelayMs}ms, sleep budget ${retryPolicy.budgetMs}ms/row, ` +
+      `inter-row pacing ${rowDelayMs}ms.`,
+  );
   const day = judgeLedgerDay();
   let judgedToday = await readJudgedToday(cosmosEndpoint, cosmosDb, day);
   const startedAt = new Date().toISOString();
@@ -163,17 +193,55 @@ export async function runEvals(
     // "retrieval found nothing", and triaged as exactly that. Count the
     // failures by status so the receipt can say which it was.
     const probeErrors: Record<string, number> = {};
+    // #3083: …and NAME the rows, so a partially-measured surface is a listed
+    // set of errors rather than a silently smaller denominator.
+    const probeFailures: ProbeFailureRow[] = [];
 
     for (const row of set.rows) {
       let probe;
       try {
-        probe = await probeConsole(probeUrl, internalToken, { question: row.question, surface: set.surface });
+        const attemptResult = await withProbeRetry(
+          () => probeConsole(probeUrl, internalToken, { question: row.question, surface: set.surface }),
+          retryPolicy,
+          {
+            onRetry: (info) =>
+              context.warn(
+                `[copilot-evaluator] ${set.surface}/${row.id}: eval-probe ${info.status}` +
+                  (info.upstreamStatus !== null ? ` (upstream ${info.upstreamStatus})` : '') +
+                  ` — attempt ${info.attempt}/${retryPolicy.maxAttempts}, retrying in ${info.delayMs}ms` +
+                  (info.serverGuided ? ' (Retry-After)' : ''),
+              ),
+          },
+        );
+        probe = attemptResult.value;
       } catch (e: any) {
-        const status = String(Number.isFinite(e?.status) ? e.status : 0);
-        probeErrors[status] = (probeErrors[status] || 0) + 1;
-        context.error(`[copilot-evaluator] ${set.surface}/${row.id}: eval-probe failed: ${e?.message || e}`);
+        const status = Number.isFinite(e?.status) ? Number(e.status) : 0;
+        const attempts = Number.isFinite(e?.attempts) ? Number(e.attempts) : 1;
+        probeErrors[String(status)] = (probeErrors[String(status)] || 0) + 1;
+        // #3083 — RECORD the row as an error. It is deliberately NOT pushed
+        // into `results`: a throttled row is an absence, not a failed answer,
+        // and scoring it as `pass: false` would falsify the rates downward
+        // exactly as dropping it falsifies them upward. The gate reads
+        // `questions < rowsAttempted` and refuses to compare either way.
+        probeFailures.push({
+          questionId: row.id,
+          status,
+          upstreamStatus: Number.isFinite(e?.upstreamStatus) ? Number(e.upstreamStatus) : null,
+          attempts,
+          message: String(e?.message || e).slice(0, 300),
+        });
+        context.error(
+          `[copilot-evaluator] ${set.surface}/${row.id}: eval-probe FAILED after ${attempts} attempt(s) ` +
+            `(status ${status}) — row recorded as an ERROR, NOT measured: ${e?.message || e}`,
+        );
         continue;
       }
+      // #3083 — pace the sweep. 153 real AOAI turns fired back-to-back against
+      // ONE shared deployment is the burst that produced the 429s in the first
+      // place; a small inter-row delay costs ~30s over a full pass and removes
+      // the self-inflicted share of the throttling. Default-ON, opt-out via
+      // LOOM_COPILOT_EVAL_ROW_DELAY_MS=0.
+      if (rowDelayMs > 0) await sleep(rowDelayMs);
       const { hit, mrr } = scoreRetrieval(row.expectedChunks, probe.probe.retrievedChunks);
       const guards = deterministicGuards(probe.probe.answer, row);
       // #2979 — the deterministic half of the parity-inversion rule: did the
@@ -238,7 +306,7 @@ export async function runEvals(
       });
     }
 
-    const totals = rollupRun(results, { attempted: set.rows.length, errors: probeErrors });
+    const totals = rollupRun(results, { attempted: set.rows.length, errors: probeErrors, failures: probeFailures });
     try {
       await writeResults(cosmosEndpoint, cosmosDb, runId, results);
       await writeRun(cosmosEndpoint, cosmosDb, {
@@ -260,13 +328,18 @@ export async function runEvals(
     const droppedRows = set.rows.length - totals.questions;
     if (droppedRows > 0) {
       // Loud + machine-greppable: a partially/never-measured surface must not
-      // slip out looking like a clean 0.00 (#2798).
+      // slip out looking like a clean 0.00 (#2798) — nor as a pass-rate over
+      // whatever survived (#3083). Both are the same defect: a rate whose
+      // denominator moved without the reader being told.
       context.warn(
         `[copilot-evaluator] ${set.surface}: ${droppedRows}/${set.rows.length} golden row(s) NOT measured — ` +
-          `eval-probe failed by status ${JSON.stringify(probeErrors)}. ` +
+          `eval-probe failed by status ${JSON.stringify(probeErrors)}; ` +
+          `errored row(s): ${JSON.stringify(probeFailures.map((f) => `${f.questionId}@${f.status}x${f.attempts}`))}. ` +
           (totals.questions === 0
             ? 'This surface has NO scores; its 0.00 is "not measured", not "retrieval found nothing".'
-            : 'The reported rates cover only the rows that were measured.'),
+            : `Every rate reported for this surface is computed over the ${totals.questions} SURVIVING row(s), ` +
+              'so it is NOT comparable to a floor expressed over the full set — dropping rows can RAISE it. ' +
+              'The CI gate refuses this run rather than scoring it.'),
       );
     }
     context.log(
@@ -300,6 +373,7 @@ export async function runEvals(
       backends: totals.backends,
       rowsAttempted: totals.rowsAttempted,
       probeErrors: totals.probeErrors,
+      probeFailures: totals.probeFailures,
     });
   }
   return summary;

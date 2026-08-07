@@ -25,6 +25,19 @@ name: copilot-quality-evals
 # (its .corpus-manifest.json 'copied' count is always the full tree here); the
 # nightly schedule runs unconditionally with --strict-missing.
 #
+# WHAT THIS RUN CAN AND CANNOT MEASURE (#3085): the console indexes the corpus
+# BAKED INTO ITS IMAGE, and the staging step here never leaves the runner — so
+# on a docs-only PR the scores are produced against the DEPLOYED corpus, not
+# the diff. Until the checkout's corpus can be shipped to an ephemeral index,
+# the "Corpus provenance" step states both commits and says plainly when they
+# differ, so no one reads a corpus-PR verdict as a verdict on the corpus.
+#
+# CONCURRENCY (#3083): the job carries a SECOND, repo-wide concurrency group so
+# only ONE 153-turn sweep runs estate-wide at a time. Per-ref
+# cancel-in-progress dedupes within a branch only; eleven parallel-lane runs in
+# 71 minutes throttled the shared AOAI deployment, the evaluator dropped the
+# throttled rows, and the gate scored pass-rates over the survivors.
+#
 # Token spend: bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 5000
 # judged Q/day, Cosmos-ledgered cross-replica; raised from 500 on 2026-08-06 —
 # the merge-train's 27–31 full passes/day exhausted 500 by ~05:50 UTC, and a
@@ -95,6 +108,27 @@ jobs:
     name: Run + gate Copilot quality evals
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # #3083 — ESTATE-WIDE serialization, on top of the per-ref supersede above.
+    #
+    # `cancel-in-progress` only dedupes WITHIN a ref, so N branches building at
+    # once fire N concurrent sweeps. Measured 2026-08-07: eleven runs in 71
+    # minutes, each 153 REAL AOAI turns against ONE shared gpt-4o-mini in
+    # centralus. Azure OpenAI throttled, the probe collapsed the 429 into a
+    # causeless 500, the evaluator dropped the row, and the gate's verdict
+    # became a function of how many lanes were building rather than of product
+    # quality — the drop rate tracked load exactly (0/153 at 08:07, 30/153 at
+    # 09:53, 84/153 at 15:01).
+    #
+    # The load was self-inflicted by a parallel merge burst, and a parallel
+    # merge burst is NORMAL here, so this has to hold by construction rather
+    # than by everyone agreeing to be careful. A fixed repo-wide group with
+    # cancel-in-progress:false admits ONE sweep at a time; a second QUEUES.
+    # GitHub keeps at most one pending run per group and cancels an older
+    # pending one — a cancelled check, which is honest, and never a green
+    # verdict over a measurement the throttling corrupted.
+    concurrency:
+      group: copilot-quality-evals-estate
+      cancel-in-progress: false
     # Secrets (Azure SP) are required to reach the Function — fork PRs have
     # none; run only for same-repo events.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -208,6 +242,31 @@ jobs:
           fi
           echo "surfaces: $SURFACES (trigger $TRIGGER)"
           echo '{"ok":false,"surfaces":[]}' > eval-run.json
+
+          # #3083 — do NOT add a second concurrent 153-turn sweep.
+          #
+          # The job-level concurrency group serialises every run of THIS
+          # workflow, but the ACA job carries its OWN nightly Schedule trigger
+          # and can be started manually, so an execution can already be in
+          # flight from outside GitHub's reach. Two sweeps share one gpt-4o-mini
+          # deployment and throttle each other — the measured cause of 84/153
+          # dropped rows.
+          #
+          # Wait for an in-flight execution (bounded), and REFUSE rather than
+          # racing it. A refusal is honest; a second sweep would corrupt both
+          # measurements and then be scored as quality.
+          RUNNING=""
+          for _ in $(seq 1 60); do
+            RUNNING=$(az containerapp job execution list -g "$RG" -n "$JOB" \
+              --query "[?properties.status=='Running'].name" -o tsv 2>/dev/null | tr -d '\r' | head -n 5)
+            [ -z "$RUNNING" ] && break
+            echo "waiting for in-flight $JOB execution(s) to finish: $(echo "$RUNNING" | paste -sd, -)"
+            sleep 15
+          done
+          if [ -n "$RUNNING" ]; then
+            echo "::error::a $JOB execution is STILL running after a 15-minute wait ($(echo "$RUNNING" | paste -sd, -)). Refusing to start a second concurrent 153-question sweep: two sweeps share one AOAI deployment, throttle each other, and produce two partially-measured runs that would then be scored as quality (#3083). Re-run this workflow once the in-flight execution completes."
+            exit 1
+          fi
 
           # Start ONE execution with the run knobs overridden. Unlike the
           # retired HTTP trigger there is no ~230s response ceiling, so a single
@@ -434,6 +493,66 @@ jobs:
             ARGS+=(--strict-missing)
           fi
           node scripts/csa-loom/check-eval-regression.mjs "${ARGS[@]}"
+
+      - name: Corpus provenance — what was TESTED vs what the console SERVED (#3085)
+        # Runs even when the gate failed: a red verdict on a corpus PR is
+        # exactly the case where the reader most needs to know the verdict was
+        # not about their diff.
+        if: always() && steps.func.outputs.found == 'true'
+        env:
+          CONSOLE_URL: ${{ env.LOOM_CONSOLE_URL }}
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+          CHECKOUT_COMMIT: ${{ steps.stage.outputs.corpus_commit }}
+        run: |
+          set -uo pipefail
+          # #3085 — this workflow is PATH-TRIGGERED on docs/**, PRPs/** and
+          # content/evals/**, and it structurally CANNOT measure them: the
+          # console indexes the corpus BAKED INTO ITS IMAGE
+          # (apps/fiab-console/Dockerfile:139), and the staging step above never
+          # leaves the runner. So a docs-only PR is scored against the corpus of
+          # the last built image — the gate can go RED on a corpus fix and GREEN
+          # on a corpus regression.
+          #
+          # Shipping the checkout's corpus to the console for the run (an
+          # ephemeral index) or building a throwaway image is the real fix and
+          # is tracked in #3085. What is NOT acceptable meanwhile is the gate
+          # IMPLYING it measured the diff. deploy-integrity R7: an error — or a
+          # verdict — must not assert something it did not establish. So state
+          # both commits, and say plainly when they differ.
+          SERVED=$(curl -sS -m 30 -H "authorization: Bearer $INTERNAL_TOKEN" \
+            "${CONSOLE_URL%/}/api/internal/copilot/eval-probe" \
+            | jq -r '.corpusCommit // ""' 2>/dev/null || echo "")
+          {
+            echo ""
+            echo "### Corpus provenance (#3085)"
+            echo ""
+            echo "| | commit |"
+            echo "|---|---|"
+            echo "| corpus in THIS checkout (what the diff changes) | \`${CHECKOUT_COMMIT:-unknown}\` |"
+            echo "| corpus the console SERVED to the eval (image-baked) | \`${SERVED:-unresolved}\` |"
+            echo ""
+          } > corpus-provenance.md
+          if [ -z "$SERVED" ]; then
+            MSG="could not read the SERVED corpus commit from the console's eval-probe manifest, so this run cannot say whether it measured the corpus in this checkout. Read the verdict below as being about the deployed estate, not about this diff."
+            echo "::warning::corpus provenance: $MSG"
+            echo "> WARNING: $MSG" >> corpus-provenance.md
+          elif [ "$SERVED" != "${CHECKOUT_COMMIT:-unknown}" ]; then
+            MSG="the console served corpus \`$SERVED\` but this checkout carries \`${CHECKOUT_COMMIT:-unknown}\`. The scores below were produced against the DEPLOYED corpus and are NOT evidence for or against the corpus change in this diff (#3085). A green verdict does not validate it and a red one does not refute it."
+            echo "::warning::corpus provenance: $MSG"
+            echo "> **This eval did NOT measure this diff.** $MSG" >> corpus-provenance.md
+          else
+            echo "::notice::corpus provenance: the console served the same corpus commit this checkout carries ($SERVED) — the verdict below IS about this corpus."
+            echo "> The console served the same corpus commit as this checkout (\`$SERVED\`), so the verdict below IS about this corpus." >> corpus-provenance.md
+          fi
+          echo "" >> corpus-provenance.md
+          # Prepend to the gate summary so the PR comment and the step summary
+          # both carry it, and to the step summary directly when the gate never
+          # produced one.
+          if [ -f eval-summary.md ]; then
+            cat corpus-provenance.md eval-summary.md > eval-summary.tmp && mv eval-summary.tmp eval-summary.md
+          fi
+          [ -n "${GITHUB_STEP_SUMMARY:-}" ] && cat corpus-provenance.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: Upload the run artifact (next run's delta baseline)
         if: always() && steps.func.outputs.found == 'true'

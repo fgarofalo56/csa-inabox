@@ -171,6 +171,98 @@ describe('POST probe', () => {
   });
 });
 
+/**
+ * #3083 / deploy-integrity R7 — the probe must not assert a cause it did not
+ * establish, and it must not launder a THROTTLE into a defect.
+ *
+ * Measured 2026-08-07: `aoaiChat` threw on an AOAI 429, this route returned
+ * `500 {"error":"eval probe failed","code":"eval_probe_failed"}`, and the
+ * evaluator — seeing an unretryable 500 — silently dropped the row. Pass-rates
+ * were then computed over the survivors, so `rbac 0.38` was 3 of 8 and a green
+ * main run measured 123 of 153.
+ */
+describe('upstream AOAI failures are surfaced with their cause (#3083)', () => {
+  /** The shape `AoaiResponseError` carries since #3083. */
+  const aoaiError = (message: string, status?: number, retryAfterSeconds?: number) =>
+    Object.assign(new Error(message), { name: 'AoaiResponseError', status, retryAfterSeconds });
+
+  it('a 429 stays a 429 — never a causeless 500', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 429: {"code":"rate_limit_exceeded"}', 429, 8));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(429);
+    const j: any = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('aoai_throttled');
+    expect(j.upstreamStatus).toBe(429);
+    expect(j.retryable).toBe(true);
+    // The message NAMES the cause instead of the old 'eval probe failed'.
+    expect(j.error).toContain('THROTTLED');
+    expect(j.error).toContain('429');
+    expect(j.error).not.toContain('eval probe failed');
+  });
+
+  it('honours Retry-After — echoed as a header AND a field', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 429: throttled', 429, 8));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.headers.get('retry-after')).toBe('8');
+    expect((await res.json()).retryAfterSeconds).toBe(8);
+  });
+
+  it('omits Retry-After when the server sent none (never invents a delay)', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 429: throttled', 429));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.headers.get('retry-after')).toBeNull();
+    expect((await res.json()).retryAfterSeconds).toBeUndefined();
+  });
+
+  it('a 503 from AOAI becomes a 502 that NAMES the upstream status (not an impersonation)', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 503: overloaded', 503));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(502);
+    const j: any = await res.json();
+    expect(j.code).toBe('aoai_upstream_error');
+    expect(j.upstreamStatus).toBe(503);
+    expect(j.retryable).toBe(true);
+  });
+
+  it('a 401 from AOAI is reported as NON-retryable, and never as our own 401', async () => {
+    aoaiChatMock.mockRejectedValue(aoaiError('AOAI 401: bad token', 401));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    // 401 here would be indistinguishable from "bad internal token".
+    expect(res.status).toBe(502);
+    const j: any = await res.json();
+    expect(j.code).toBe('aoai_request_error');
+    expect(j.upstreamStatus).toBe(401);
+    expect(j.retryable).toBe(false);
+  });
+
+  it('an error with NO status says the cause is NOT KNOWN — it does not guess one', async () => {
+    aoaiChatMock.mockRejectedValue(new Error('socket hang up'));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(500);
+    const j: any = await res.json();
+    expect(j.code).toBe('eval_probe_unclassified');
+    expect(j.error).toContain('could NOT classify');
+    expect(j.error).toContain('NOT established');
+    expect(j.upstreamStatus).toBeUndefined();
+  });
+
+  it('does NOT infer a status from prose — a message containing "429" is still unknown', async () => {
+    // R7: inferring a cause from an error string is the defect, not the fix.
+    aoaiChatMock.mockRejectedValue(new Error('retrieval returned 429 documents'));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe('eval_probe_unclassified');
+  });
+
+  it('a retrieval failure is NOT laundered into an AOAI verdict', async () => {
+    searchDocsMock.mockRejectedValue(new Error('AI Search index missing'));
+    const res = await POST(post({ question: 'q?' }, TOKEN));
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe('eval_probe_unclassified');
+  });
+});
+
 describe('GET manifest probe', () => {
   it('401 without a token, 200 with', async () => {
     const bare = new NextRequest('http://localhost/api/internal/copilot/eval-probe');

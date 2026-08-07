@@ -179,10 +179,11 @@ describe('evaluateGate — zero-question surfaces are NOT MEASURED (#2798)', () 
     expect(r.failures.some((f: string) => f.includes('BELOW the floor'))).toBe(false);
   });
 
-  it('a surface that DID run questions still fails its floor (gate not blanket-disabled)', () => {
-    // kql-database in the real run: 1 question, genuinely 0.00 hit-rate.
+  it('a surface that ran EVERY question still fails its floor (gate not blanket-disabled)', () => {
+    // A genuinely-measured surface: all 15 golden rows scored, 0.00 hit-rate is
+    // a real retrieval result and must still breach the floor.
     const cur = normalizeRuns({
-      surfaces: [{ surface: 'help', questions: 1, rowsAttempted: 15, retrievalHitRate: 0, groundingAvg: 3, passRate: 0 }],
+      surfaces: [{ surface: 'help', questions: 15, rowsAttempted: 15, retrievalHitRate: 0, groundingAvg: 3, passRate: 0 }],
     });
     const r = evaluateGate(cur, floorsDoc);
     expect(r.failures.some((f: string) => f.includes('BELOW the floor'))).toBe(true);
@@ -203,6 +204,98 @@ describe('evaluateGate — zero-question surfaces are NOT MEASURED (#2798)', () 
     expect(line).toContain('not measured');
     expect(line).toContain('0/12');
     expect(line).not.toContain('0.00');
+  });
+});
+
+/**
+ * #3083 — the CORE defect. An AOAI 429 became a causeless HTTP 500, the
+ * evaluator dropped the row, and the gate then computed pass-rates over
+ * whatever survived. `rbac 0.38` was 3 of 8, not 5 of 12; a green main run
+ * measured 123 of 153 rows. Because the DENOMINATOR moves, losing rows can
+ * RAISE the rate — so the gate's verdict tracked estate load, not quality.
+ *
+ * These lock the refusal, and the third one is the mutation proof: it fails if
+ * the partial branch is removed, because the survivor-rate would then be
+ * compared to a floor and reported as a quality verdict.
+ */
+describe('evaluateGate — a PARTIALLY measured surface poisons the run (#3083)', () => {
+  const partial = (surface: string, measured: number, attempted: number, extra: Record<string, unknown> = {}) => ({
+    surface,
+    questions: measured,
+    rowsAttempted: attempted,
+    retrievalHitRate: 0.9,
+    groundingAvg: 4.5,
+    passRate: 0.95,
+    ...extra,
+  });
+
+  it('FAILS the surface when fewer rows were measured than attempted', () => {
+    const cur = normalizeRuns({ surfaces: [partial('cost', 8, 12, { probeErrors: { 429: 4 } })] });
+    const r = evaluateGate(cur, floorsDoc);
+    const row = r.rows.find((x: any) => x.surface === 'cost');
+    expect(row.status).toBe('fail');
+    expect(row.partialMeasurement).toEqual(
+      expect.objectContaining({ measured: 8, attempted: 12, lost: 4 }),
+    );
+  });
+
+  it('states HOW MANY of how many were measured, and why that is not a quality result', () => {
+    const cur = normalizeRuns({
+      surfaces: [
+        partial('cost', 8, 12, {
+          probeErrors: { 429: 4 },
+          probeFailures: [{ questionId: 'cost-003', status: 429, upstreamStatus: 429, attempts: 4 }],
+        }),
+      ],
+    });
+    const f = evaluateGate(cur, floorsDoc).failures.find((x: string) => x.includes('cost'))!;
+    expect(f).toContain('only 8 of 12 golden row(s) were MEASURED');
+    expect(f).toContain('SURVIVORS');
+    expect(f).toContain('can RAISE it');
+    expect(f).toContain('"429":4');
+    expect(f).toContain('cost-003@429x4');
+  });
+
+  // MUTATION PROOF for the arithmetic itself: these survivor-rates are ABOVE
+  // every floor, so under the old logic the run passed clean. The refusal must
+  // not depend on the numbers being bad.
+  it('refuses even when the survivor-rates comfortably CLEAR every floor', () => {
+    const cur = normalizeRuns({ surfaces: [partial('cost', 3, 12, { probeErrors: { 429: 9 } })] });
+    const r = evaluateGate(cur, floorsDoc);
+    expect(r.failures.length).toBeGreaterThan(0);
+    // and never mislabelled as a floor breach — this is a measurement failure
+    expect(r.failures.some((f: string) => f.includes('BELOW the floor'))).toBe(false);
+  });
+
+  it('is UNCONDITIONAL — a partial run fails on a PR run too, not only under --strict-missing', () => {
+    const cur = normalizeRuns({ surfaces: [partial('cost', 11, 12)] });
+    expect(evaluateGate(cur, floorsDoc, { strictMissing: false }).failures.length).toBeGreaterThan(0);
+    expect(evaluateGate(cur, floorsDoc, { strictMissing: true }).failures.length).toBeGreaterThan(0);
+  });
+
+  it('does NOT fire when every attempted row was measured (no false positives)', () => {
+    const cur = normalizeRuns({
+      surfaces: [{ surface: 'cost', questions: 12, rowsAttempted: 12, retrievalHitRate: 0.9, groundingAvg: 4.5, passRate: 0.95 }],
+    });
+    const r = evaluateGate(cur, floorsDoc);
+    expect(r.rows.find((x: any) => x.surface === 'cost').partialMeasurement).toBeUndefined();
+    expect(r.failures.length).toBe(0);
+  });
+
+  it('does NOT fire on a legacy receipt that never carried rowsAttempted', () => {
+    const cur = normalizeRuns({ surfaces: [{ surface: 'cost', questions: 8, retrievalHitRate: 0.9, groundingAvg: 4.5, passRate: 0.95 }] });
+    const r = evaluateGate(cur, floorsDoc);
+    expect(r.rows.find((x: any) => x.surface === 'cost').partialMeasurement).toBeUndefined();
+  });
+
+  it('never PRINTS a survivor-rate under the pass-rate header', () => {
+    const cur = normalizeRuns({ surfaces: [partial('cost', 8, 12, { probeErrors: { 429: 4 } })] });
+    const md = renderMarkdown(attachQuestions(evaluateGate(cur, floorsDoc), cur), {});
+    const line = md.split('\n').find((l: string) => l.startsWith('| cost'))!;
+    expect(line).toContain('8/12');
+    expect(line).toContain('partial');
+    expect(line).not.toContain('0.95');
+    expect(md).toContain('Partial measurement');
   });
 });
 
