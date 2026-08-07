@@ -192,7 +192,7 @@ This is the **brownfield class**. Most of these mean *something already exists*
 | `PrivateDnsZoneAlreadyExists` | The `privatelink.*` zone exists — almost always a re-deploy after a partial failure | Delete the conflicting zone (`az network private-dns zone delete -n <zone> -g <rg>`) or deploy into a clean resource group. **There is no `existingPrivateDnsZones` parameter.** An earlier version of this runbook claimed one; it has never existed |
 | `VnetAddressRangeInUse` | The hub CIDR collides, or the hardcoded `10.100.0.0/16` DLZ spoke CIDR does | Set `hubVnetCidr` to a free `/16`. The spoke CIDR is not settable from the root template today — see [Brownfield class C](brownfield.md#class-c-no-adoption-path-exists-today) |
 | `StorageAccountAlreadyTaken` | Storage account names are globally unique | Change the deployment name prefix |
-| `RoleAssignmentExists` | Re-deploy over existing grants | Re-run with `skip_role_grants=true`, or delete the conflicting assignment |
+| `RoleAssignmentExists` | Re-deploy over existing grants. ARM enforces uniqueness on the **(scope, principalId, roleDefinitionId) triple**, not on the assignment name — so an assignment created under any other name blocks the template's deterministic `guid()` name forever | Delete the conflicting assignment and let the template recreate it under its own name. **Two traps, both measured on centralus 2026-08-07 (#3038):** (1) ARM prints the existing id with the **dashes stripped** — searching the literal 32-char string returns EMPTY from every `az role assignment list`; re-insert the 8-4-4-4-12 dashes first. (2) Check `createdOn` before assuming a seed change — the centralus blocker was **hand-made a month earlier** by `az role assignment create` (which mints a random guid), not orphaned by a rename. Identify the principal/role/scope and confirm it is the same grant the template makes before deleting anything. `skip_role_grants=true` suppresses the symptom and leaves the estate un-reconciled — a workaround, not a fix |
 | `InvalidTemplateDeployment` on Container Apps in IL4/IL5 | Container Apps is not available at that impact level | Set `containerPlatform = 'aks'` in the parameter file |
 | `MANIFEST_UNKNOWN` / image pull failure on a Container App | Phase 1 ran with `deployAppsEnabled=true` against an **empty** ACR | Re-run phase 1 with `deployAppsEnabled=false`, then run the image phase. See [Greenfield](greenfield.md#the-shape-of-a-greenfield-deploy) |
 | `ResourceGroupNotFound` early in the app-deploy workflow | The workflow's `region` input does not match the region the estate is in, so it resolved `rg-csa-loom-admin-<wrong-region>` | Pass `-f region=<your-region>` explicitly |
@@ -203,9 +203,9 @@ This is the **brownfield class**. Most of these mean *something already exists*
 
 ## defect
 
-**Signals:** `InvalidTemplate`, `BadRequest` against Loom's own template, any
-`scripts/csa-loom/*` or `scripts/ci/*` exiting non-zero for a reason not covered
-above.
+**Signals:** `InvalidTemplate`, `BadRequest` against Loom's own template,
+`FirewallPolicyUpdateFailed`, any `scripts/csa-loom/*` or `scripts/ci/*` exiting
+non-zero for a reason not covered above.
 
 **Not your problem to fix.** Open an issue with the label `csa-loom` +
 `csa-bug`, and attach:
@@ -214,6 +214,50 @@ above.
 az deployment operation sub list --name <deployment-name> \
   --query "[?properties.provisioningState=='Failed']" -o json
 ```
+
+### `FirewallPolicyUpdateFailed` — a deploy-ordering race, not a firewall fault
+
+```
+Put on Firewall Policy fwpol-csa-loom-<region> Failed with 1 faulted referenced firewalls
+```
+
+**Fixed 2026-08-07 (#3038). If you see this on a current template, it is a new
+concurrent hub-VNet writer and it is a defect — file it.**
+
+The message accuses the firewall, and the firewall is almost always innocent.
+On centralus it read `provisioningState: Succeeded`, allocated (one
+ipConfiguration with subnet + public IP), Standard tier, matching the policy's
+Standard tier — healthy by every measure. "Faulted" was **transient**.
+
+The cause was ordering. `firewallPolicy` carried no `dependsOn`, so ARM
+scheduled it in the first parallel wave — concurrently with the hub VNet PUT.
+The hub VNet declares `AzureFirewallSubnet` inline, so re-PUTing the VNet
+transiently faults the firewall attached to that subnet, and the concurrent
+policy push aborts. `network.bicep` now serializes the policy behind
+`subnetNsgAttach` + `bastion`, giving
+hub subnets → bastion → policy → firewall.
+
+**Confirm it is this, in one command** — the two operations will share a start
+timestamp:
+
+```bash
+az deployment operation group list -g rg-csa-loom-admin-<region> --name network \
+  --query "[?properties.targetResource.resourceName=='vnet-csa-loom-hub-<region>' || properties.targetResource.resourceName=='fwpol-csa-loom-<region>'].{ts:properties.timestamp,dur:properties.duration,state:properties.provisioningState,res:properties.targetResource.resourceName}" -o table
+```
+
+Two things this failure taught, both of which cost diagnosis time:
+
+- **A hand-run `az network firewall policy update` SUCCEEDS from the same
+  "broken" state**, because at rest there is no concurrent VNet writer. That
+  makes the bug look non-deterministic and makes a manual "fix" look like it
+  worked — the next deploy fails identically. Do not read a successful manual
+  PUT as evidence the estate is healed.
+- **`firewallPolicyReconcile` does not cover this.** It is wired from
+  `skipRoleGrants`, so a normal brownfield deploy with role grants ON still
+  takes the re-PUT path and still races.
+
+A `provisioningState: Failed` policy with zero rule collection groups is the
+residue of this failure, not a second problem. The serialized PUT heals it.
 
 ---
 

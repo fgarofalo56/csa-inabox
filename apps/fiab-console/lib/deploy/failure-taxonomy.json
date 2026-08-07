@@ -149,6 +149,14 @@
       "remediation": "A CSA Loom step passed an empty registry name to `az`. The real failure is upstream, in whatever was supposed to resolve the ACR — read the log ABOVE this error, not this line. Registry coordinates must be DISCOVERED (Resource Graph by tag), never constructed from a region input."
     },
     {
+      "id": "defect.firewall-policy-update-race",
+      "class": "defect",
+      "anyOf": ["firewallpolicyupdatefailed", "faulted referenced firewalls"],
+      "observed": "Measured on deploy-fiab-commercial runs 31194622139 + 31196922481 (centralus, 2026-08-07). The referenced firewall was healthy at rest — Succeeded, allocated, Standard tier matching the policy — so the 'faulted' state was transient. The ARM operation records showed the firewall-policy PUT and the hub VNet PUT sharing an identical start timestamp: the policy carried no dependsOn and was scheduled in the first parallel wave, concurrently with the PUT of the VNet that declares AzureFirewallSubnet. network.bicep now serializes the policy behind subnetNsgAttach + bastion. Before this was understood, the leaf classified as unknown and correctly refused to retry.",
+      "remediationKind": "not-remediable",
+      "remediation": "The firewall policy could not be pushed to a firewall that references it. This is NOT evidence the firewall is broken — verify before assuming either cause. On the one occurrence measured (centralus 2026-08-07) the firewall was healthy and the true cause was a deploy-ordering race against a concurrent hub-VNet write, fixed by serializing the policy behind subnetNsgAttach + bastion in modules/admin-plane/network.bicep. Confirm which case you have: `az network firewall show -g rg-csa-loom-admin-<region> -n fw-csa-loom-<region> --query provisioningState` — if that is Succeeded, look for a concurrent hub writer with `az deployment operation group list -g rg-csa-loom-admin-<region> --name network` and compare start timestamps; two operations sharing a start instant is the race. If the firewall is genuinely Failed, that is a different problem and this remediation does not apply. Do NOT read a successful hand-run `az network firewall policy update` as proof the estate is healed — at rest there is no concurrent writer, so the manual PUT succeeds and the next deploy fails identically. A policy left in Failed state with zero rule collection groups is residue of this failure; a correctly-ordered PUT heals it. On a current template this is a defect (a new concurrent hub-VNet writer) — file it against deploy-integrity, refs #3038."
+    },
+    {
       "id": "permission.authorization-failed",
       "class": "permission",
       "anyOf": ["authorizationfailed", "linkedauthorizationfailed", "does not have authorization to perform action"],
