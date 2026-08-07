@@ -58,6 +58,32 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
+  // FINISHLINE C7 (#3064) touched this route ONLY to stop the BFF silently
+  // DROPPING four of the create-wizard's five fields — the old handler
+  // destructured `{ name, description, capacity, domain }` and discarded
+  // `contacts`, `licenseMode`, `storageAccountId` and `provisionBackingRg`,
+  // which made the `provisionBackingRg` opt-in a dead no-op (the backing RG was
+  // never provisioned on this path even though applyWorkspaceBindings already
+  // accepted and implemented it). The auth prologue is UNTOUCHED: both handlers
+  // keep getSession() → 401.
+  //
+  // THE CODEMOD DECLINES BOTH HANDLERS — `--family=workspaces` reports
+  // "app/api/workspaces/route.ts: SKIPPED (GET: getSession() without the exact
+  // 401 guard)" and the same for POST, because the 401 is returned through this
+  // file's local `err()` helper (a thin apiError wrapper) rather than the
+  // literal shape withSession replaces. Hand-migrating the prologue inside a
+  // data-integrity fix would put real 401-regression risk on the workspace
+  // create path for no security gain.
+  //
+  // COMPENSATING CONTROL (verified, not assumed): the 401 is pinned by
+  // create-wizard-contract.test.ts:129 — `expect((await POST(req({name:'X'})))
+  // .status).toBe(401)` — so a dropped auth prologue fails a merge-blocking
+  // test. NOTE check-route-guards does NOT cover this: its remit is
+  // AUTHORIZATION on routes that point-read/write by an id from the URL, and
+  // this is a collection route (GET list / POST create) with no [id] segment.
+  // Deleting the 401 line leaves route-guards green — measured — so the
+  // contract test, not route-guards, is what watches this file.
+  ['apps/fiab-console/app/api/workspaces/route.ts', '#3064: BFF field-drop fix (provisionBackingRg was inert); codemod skips both handlers — 401 returned via local err() helper, not the literal guard shape; 401 pinned by create-wizard-contract.test.ts:129'],
   // #2622 touched this route ONLY to swap ten raw `executeStatement(...)` calls
   // for the AUDITED `ucSql(...)` wrapper, so the UC ABAC column-mask + row-filter
   // DDL it issues finally produces a Loom Unity audit row. Same arguments, same
