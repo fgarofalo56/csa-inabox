@@ -330,7 +330,7 @@ export const WATCHED = [
   // day-one "Add landing zone" deploy running a template that is not main.
   {
     workflow: 'full-app-deploy-commercial.yml',
-    why: 'Phase 2 of the documented from-scratch Commercial path — the ONLY lane that builds every app image and rolls the Container Apps onto them, and the ONLY producer of loom-wrangler-host / loom-dbt-runner / loom-transform-runner / loom-duckdb / loom-uat. Stale or failing here means a from-scratch deploy CANNOT complete, and the images those five apps run are whatever was last pushed — with no signal anywhere that the path is red.',
+    why: 'Phase 2 of the documented from-scratch Commercial path — the ONLY lane that builds every app image and rolls the Container Apps onto them, and the ONLY producer of loom-wrangler-host / loom-dbt-runner / loom-transform-runner / loom-duckdb / loom-uat. It is also the Commercial half of the #2682 upstream-image mirror. Stale or failing here means a from-scratch deploy CANNOT complete, and the images those five apps run — plus every mirrored third-party image — are whatever was last pushed, with no signal anywhere that the path is red.',
     paths: [
       '.github/workflows/full-app-deploy-commercial.yml',
       'scripts/csa-loom/stage-copilot-corpus.sh',
@@ -340,6 +340,19 @@ export const WATCHED = [
       // proceeds is a deploy source of THIS lane too. check-deploy-paths-coverage
       // caught its absence the moment #3001 landed underneath this entry.
       'scripts/ci/assert-acr-image-tags.sh',
+      // refs #2682 — the upstream-image ACR mirror. BOTH halves are deploy
+      // sources of this lane and BOTH must be watched:
+      //   * the SCRIPT is what the workflow executes (check-deploy-paths-coverage
+      //     detects this one mechanically, and did — it flagged the gap the
+      //     moment the mirror moved out of the inline bash array);
+      //   * the MANIFEST is the data that decides WHAT lands in the ACR. A digest
+      //     or tag bump there changes the deployed bits without touching a single
+      //     line of executable code, so it is invisible to mechanical detection
+      //     and has to be listed by hand. Omitting it would let a mirror bump sit
+      //     undeployed while this entry read green — the exact "cannot ever
+      //     register as drift" hole this file exists to close.
+      'scripts/ci/mirror-upstream-images.sh',
+      'platform/fiab/images/upstream-images.json',
       'apps/fiab-wrangler-host/**',
       'apps/fiab-dbt-runner/**',
       'apps/loom-transform-runner/**',
