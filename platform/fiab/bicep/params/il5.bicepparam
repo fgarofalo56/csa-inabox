@@ -167,18 +167,39 @@ param appImageTags = {
   // A .bicepparam object assignment REPLACES the template default, it does not
   // merge with it. admin-plane/main.bicep dereferences these five with a PLAIN
   // `.` (no `.?` safe-access):
-  //   appImageTags.mcpBridge        — inside the UNCONDITIONAL `apps` array
-  //                                   literal, so it is evaluated on EVERY
-  //                                   deploy regardless of any module condition
+  //   appImageTags.mcpBridge        — inside the `apps` array literal that is
+  //                                   passed as a parameter to the
+  //                                   `appDeployments` nested deployment, whose
+  //                                   condition is
+  //                                   and(containerPlatform=='containerApps',
+  //                                       deployAppsEnabled).
+  //                                   (An earlier revision called this array
+  //                                   "UNCONDITIONAL … evaluated on EVERY deploy
+  //                                   regardless of any module condition". That
+  //                                   was wrong: it is unconditional only
+  //                                   *within* appDeployments, which is itself
+  //                                   gated. Corrected 2026-08-07.)
   //   appImageTags.maf              — copilot/maf.bicep call site
   //   appImageTags.setupOrchestrator— setup-orchestrator.bicep call site
   //   appImageTags.scriptRunner     — script-runner-app.bicep call site
   //   appImageTags.wrangler         — integration/wrangler.bicep call site
   // Omitting them fails template EVALUATION ("property 'mcpBridge' doesn't
   // exist") and aborts the whole nested deployment before a single resource is
-  // touched — i.e. the IL5 boundary could not deploy at all, while GCC-High
-  // (which carries the keys) could. params/gcc-high.bicepparam has documented
-  // this hazard since PR #2640; this file never picked the keys up.
+  // touched.
+  //
+  // SEVERITY FOR *THIS* FILE (corrected 2026-08-07): **would abort on IL5's
+  // first apps-enabled deploy; never empirically observed, because
+  // .github/workflows/deploy-fiab-il5.yml has NEVER RUN (zero runs, measured
+  // 2026-08-07).** All five derefs are gated on `deployAppsEnabled`
+  // (appDeployments' condition; admin-plane L688/691/724/740). This file
+  // declares `param deployAppsEnabled = true` below and deploy-fiab-il5.yml
+  // passes NO override — so unlike commercial-full, whose every caller sets it
+  // false, nothing here disables the app tier. GCC-High carries the keys and so
+  // was never exposed. An earlier revision said "the IL5 boundary could not
+  // deploy at all"; that overstated an untested lane as an observed failure, and
+  // deploy-integrity R7 forbids asserting a cause the code did not establish.
+  // params/gcc-high.bicepparam has documented this hazard since PR #2640;
+  // this file never picked the keys up.
   // script-runner + wrangler are boundary-gated OFF here, so their tags are
   // placeholders that are never pulled — they still have to EXIST.
   mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')

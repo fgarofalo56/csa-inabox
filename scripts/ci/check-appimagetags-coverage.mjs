@@ -3,7 +3,7 @@
  * check-appimagetags-coverage — every boundary's `appImageTags` bag must carry
  * every key the SHIPPED ARM template dereferences UNSAFELY.
  *
- * WHY THIS EXISTS (measured 2026-08-06, FINISHLINE L-GOV).
+ * WHY THIS EXISTS (measured 2026-08-06; severity CORRECTED 2026-08-07).
  * `platform/fiab/bicep/params/il5.bicepparam` assigned an `appImageTags` object
  * that omitted five keys the template reads with a PLAIN `.` — mcpBridge, maf,
  * setupOrchestrator, scriptRunner, wrangler. A `.bicepparam` object assignment
@@ -11,21 +11,37 @@
  * simply missing them, and the compiled template contains:
  *
  *   /resources/adminPlane/properties/template/resources/appDeployments
- *     condition: containerPlatform == 'containerApps' && deployAppsEnabled
+ *     condition: and(equals(containerPlatform,'containerApps'), deployAppsEnabled)
  *     .../parameters/apps/value[2]/image:
  *        "[format('loom-mcp-bridge:{0}', parameters('appImageTags').mcpBridge)]"
  *
- * IL5 sets BOTH condition operands true, so ARM evaluates that expression and
- * fails the whole nested deployment with "The language expression property
- * 'mcpBridge' doesn't exist" — before a single resource is touched. The entire
- * IL5 boundary could not deploy, while GCC-High (whose param file carries the
- * keys, with a comment documenting this exact hazard since PR #2640) could.
+ * ARM then fails the whole nested deployment with "The language expression
+ * property 'mcpBridge' doesn't exist" before a single resource is touched.
  *
- * That is a `.claude/rules/cloud-parity.md` violation of the worst kind: not a
- * feature that behaves differently per cloud, but a boundary that cannot deploy
- * at all — and nothing measured it, because `bicep build-params` type-checks the
- * param file in isolation and `appImageTags` is an untyped `object`, so a
- * missing property is invisible until ARM evaluates it in a real deployment.
+ * SEVERITY IS PER-FILE, AND AN EARLIER VERSION OF THIS HEADER OVERSTATED IT.
+ * All five derefs are gated on `deployAppsEnabled` — the appDeployments
+ * condition above, plus copilotMafActive / scriptRunnerActive / wranglerActive /
+ * setupOrchestratorActive (admin-plane/main.bicep L688/691/724/740). So:
+ *
+ *   il5.bicepparam       declares deployAppsEnabled=true and deploy-fiab-il5.yml
+ *                        passes no override → WOULD abort on its first
+ *                        apps-enabled run. Never observed: that lane has NEVER
+ *                        RUN (zero runs, measured 2026-08-07).
+ *   tenant-dmlz          same shape; no automated caller at all (manual only).
+ *   commercial-full      LATENT, NOT BROKEN. Every known invocation overrides
+ *                        deployAppsEnabled=false — bicep-whatif.yml:291 and
+ *                        loom-drift-check.yml:147 — and no-vaporware.md's
+ *                        from-scratch PHASE 1 specifies it too. bicep-whatif ran
+ *                        this file SUCCESS on 2026-08-07. The earlier claim that
+ *                        "the from-scratch path could not deploy" was FALSE.
+ *   commercial           never exposed — does not assign appImageTags at all.
+ *
+ * The guard's VALUE does not depend on which of those it was: a param file that
+ * only works because every caller happens to disable the app tier is one
+ * `deployAppsEnabled=true` away from aborting, and three of them declare `true`
+ * themselves. Nothing measured any of it, because `bicep build-params`
+ * type-checks the param file in isolation and `appImageTags` is an untyped
+ * `object`, so a missing property is invisible until ARM evaluates it.
  *
  * WHAT IT CHECKS. The required key set is derived from the SHIPPED ARTIFACT
  * (apps/fiab-console/deploy-templates/main.json), not from a hand-maintained
@@ -38,15 +54,25 @@
  * carry every REQUIRED key. A param file that does not assign the bag inherits
  * the template default and is correctly skipped.
  *
- * MUTATION PROOF: delete any required key from any params/*.bicepparam →ing this
- * check goes red naming the file and the key; restore → green.
+ * KEY EXTRACTION IS DEPTH-AWARE (fixed 2026-08-07). The first version matched
+ * `^<ident>:` on every line inside the bag, so a key nested in a sub-object —
+ * `nestedDecoy: { mcpBridge: 'v0.1' }` — counted as a top-level `mcpBridge` and
+ * produced a FALSE PASS. Keys are now accepted only at brace depth 1 relative to
+ * the bag, with string literals and comments skipped so a `{` inside either
+ * cannot shift the depth. Self-tested below via --selftest.
+ *
+ * MUTATION PROOF: delete any required key from any params/*.bicepparam → this
+ * check goes red naming the file and the key; restore → green. Nesting a
+ * required key one level deep also stays red (see --selftest).
  *
  * Usage: node scripts/ci/check-appimagetags-coverage.mjs [repo-root]
+ *        node scripts/ci/check-appimagetags-coverage.mjs --selftest
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 
-const ROOT = resolve(process.argv[2] ?? process.cwd());
+const SELFTEST = process.argv.includes('--selftest');
+const ROOT = resolve((process.argv[2] && process.argv[2] !== '--selftest') ? process.argv[2] : process.cwd());
 const TEMPLATE = join(ROOT, 'apps/fiab-console/deploy-templates/main.json');
 const PARAMS_DIR = join(ROOT, 'platform/fiab/bicep/params');
 
@@ -85,43 +111,140 @@ notes.push(`required (plain deref, ARM throws when absent): ${required.join(', '
 notes.push(`ignored  (tryGet/?? deref, absent is safe):      ${[...safe].sort().join(', ') || '(none)'}`);
 
 /**
- * Extract the keys assigned inside `param appImageTags = { … }` by brace
- * matching, so nested objects and `readEnvironmentVariable(...)` calls with
- * braces in comments cannot confuse it. Returns null when the file does not
- * assign the bag at all (it then inherits the template default — correct).
+ * Extract the keys assigned at the TOP LEVEL of `param appImageTags = { … }`.
+ *
+ * DEPTH-AWARE (2026-08-07). The previous implementation matched `^<ident>:` on
+ * every line inside the bag, so `nestedDecoy: { mcpBridge: 'v0.1' }` registered
+ * a top-level `mcpBridge` that ARM would never see — a FALSE PASS. We now walk
+ * the body character by character, tracking brace depth, and accept a key only
+ * at depth 1 (immediately inside the bag). Single-quoted strings and `//`
+ * comments are skipped so a brace inside either cannot shift the depth.
+ *
+ * Returns null when the file does not assign the bag at all (it then inherits
+ * the template default — correct, and correctly skipped by the caller).
  */
 function extractAssignedKeys(src) {
-  const m = /^\s*param\s+appImageTags\s*=\s*\{/m.exec(src);
+  const m = /^[ \t]*param[ \t]+appImageTags[ \t]*=[ \t]*\{/m.exec(src);
   if (!m) return null;
   const start = src.indexOf('{', m.index);
+
   let depth = 0;
   let end = -1;
-  for (let i = start; i < src.length; i += 1) {
-    const c = src[i];
-    if (c === '{') depth += 1;
-    else if (c === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-    }
-  }
-  if (end === -1) return { unterminated: true, keys: [] };
-  const body = src.slice(start + 1, end);
+  let i = start;
   const keys = [];
-  for (const line of body.split('\n')) {
-    // Skip comment lines so a `// foo: bar` note is never read as a key.
-    const trimmed = line.trim();
-    if (trimmed.startsWith('//')) continue;
-    const km = /^([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(trimmed);
-    if (km) keys.push(km[1]);
+  let pendingIdent = '';
+
+  for (; i < src.length; i += 1) {
+    const c = src[i];
+
+    // Line comment — skip to end of line. (Bicep has no block comments in
+    // .bicepparam bodies we emit, but `/*` would also be skipped by the same
+    // guard if it ever appeared, since we only special-case `//`.)
+    if (c === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      i = nl === -1 ? src.length : nl;
+      pendingIdent = '';
+      continue;
+    }
+
+    // Single-quoted string — bicep's only string form. Braces inside are data.
+    if (c === "'") {
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === "'") break;
+        i += 1;
+      }
+      pendingIdent = '';
+      continue;
+    }
+
+    if (c === '{') {
+      depth += 1;
+      pendingIdent = '';
+      continue;
+    }
+    if (c === '}') {
+      depth -= 1;
+      pendingIdent = '';
+      if (depth === 0) { end = i; break; }
+      continue;
+    }
+
+    // Only depth 1 can contribute a top-level key.
+    if (c === ':' && depth === 1 && pendingIdent) {
+      keys.push(pendingIdent);
+      pendingIdent = '';
+      continue;
+    }
+
+    if (/[A-Za-z0-9_]/.test(c)) {
+      pendingIdent += c;
+      continue;
+    }
+    // Any other character (whitespace, comma, newline, operator) ends the
+    // candidate identifier. A key must be an unbroken ident immediately
+    // followed by ':'.
+    pendingIdent = '';
   }
+
+  if (end === -1) return { unterminated: true, keys: [] };
   return { unterminated: false, keys };
 }
 
-const paramFiles = readdirSync(PARAMS_DIR).filter((f) => f.endsWith('.bicepparam')).sort();
-let assigning = 0;
+// ── SELF-TEST for the depth-aware extractor ──────────────────────────────────
+// Runs on every invocation (it is microseconds and needs no I/O), so the
+// extractor can never silently regress to the line-based version that produced
+// a FALSE PASS on a nested key. `--selftest` runs ONLY these and exits.
+{
+  const cases = [
+    {
+      name: 'flat bag',
+      src: "param appImageTags = {\n  console: 'v1'\n  mcpBridge: 'v0.1'\n}\n",
+      want: ['console', 'mcpBridge'],
+    },
+    {
+      name: 'NESTED key must NOT count (the false-pass the judge found)',
+      src: "param appImageTags = {\n  console: 'v1'\n  nestedDecoy: {\n    mcpBridge: 'v0.1'\n  }\n}\n",
+      want: ['console', 'nestedDecoy'],
+    },
+    {
+      name: 'comment mentioning a key must NOT count',
+      src: "param appImageTags = {\n  // mcpBridge: 'v0.1'  <- documentation only\n  console: 'v1'\n}\n",
+      want: ['console'],
+    },
+    {
+      name: 'brace inside a string must not shift depth',
+      src: "param appImageTags = {\n  console: readEnvironmentVariable('X', '{')\n  mcpBridge: 'v0.1'\n}\n",
+      want: ['console', 'mcpBridge'],
+    },
+    {
+      name: 'no assignment -> null (inherits template default)',
+      src: "param location = 'eastus'\n",
+      want: null,
+    },
+  ];
+  const bad = [];
+  for (const c of cases) {
+    const got = extractAssignedKeys(c.src);
+    const gotKeys = got === null ? null : got.keys;
+    if (JSON.stringify(gotKeys) !== JSON.stringify(c.want)) {
+      bad.push(`${c.name}: expected ${JSON.stringify(c.want)}, got ${JSON.stringify(gotKeys)}`);
+    }
+  }
+  if (bad.length) {
+    console.error('[appimagetags-coverage] SELF-TEST FAILED — the key extractor is wrong, so any');
+    console.error('  PASS it produces is meaningless. Refusing to run the real check.');
+    for (const b of bad) console.error(`  • ${b}`);
+    process.exit(1);
+  }
+  if (SELFTEST) {
+    console.log(`[appimagetags-coverage] SELF-TEST PASS — ${cases.length} extractor cases, including the nested-key false-pass regression.`);
+    process.exit(0);
+  }
+}
+
+const paramFiles = readdirSync(PARAMS_DIR).filter((f) => f.endsWith('.bicepparam')).sort();let assigning = 0;
 
 for (const file of paramFiles) {
   const src = readFileSync(join(PARAMS_DIR, file), 'utf8');

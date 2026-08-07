@@ -135,17 +135,22 @@ param appImageTags = {
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
-  // ── THESE KEYS MUST BE PRESENT (measured 2026-08-06, FINISHLINE L-GOV) ──────
+  // ── THESE KEYS MUST BE PRESENT (measured 2026-08-06; CORRECTED 2026-08-07) ──
   // A .bicepparam object assignment REPLACES the template default, it does not
   // merge — and main.bicep forwards this bag to admin-plane VERBATIM (no union).
   // admin-plane/main.bicep reads these five with a PLAIN `.` (no `.?`), one of
-  // them (mcpBridge) inside the UNCONDITIONAL `apps` array literal, so an ARM
-  // deploy using this file aborts on "The language expression property
-  // 'mcpBridge' doesn't exist" before touching a resource. This topology sets
-  // containerPlatform='containerApps' + deployAppsEnabled=true, so the
-  // appDeployments condition is satisfied and the expression IS evaluated.
-  // main.bicep's own default carries all five with a comment recording this
-  // exact failure mode. Guarded by scripts/ci/check-appimagetags-coverage.mjs.
+  // them (mcpBridge) inside the `apps` array literal passed to appDeployments.
+  //
+  // SEVERITY FOR *THIS* FILE: **would abort on any apps-enabled invocation; no
+  // such invocation has ever been observed.** All five derefs are gated on
+  // `deployAppsEnabled` (appDeployments' condition; admin-plane L688/691/724/740),
+  // and this file declares `param deployAppsEnabled = true` below — so unlike
+  // commercial-full (whose every caller overrides it to false) nothing here
+  // disables the app tier. But this param file has NO automated caller at all:
+  // it is operator/manual-only, so the abort was never empirically observed.
+  // Stated precisely because "was broken" and "would break on first use" are
+  // different claims and only the second is supported (deploy-integrity R7).
+  // Guarded by scripts/ci/check-appimagetags-coverage.mjs.
   mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
   setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')
   maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
