@@ -147,3 +147,93 @@ describe('exchangeForInternalUcToken', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * F1 — the exchange base is now caller-selectable, because the Iceberg REST
+ * Catalog is a SEPARATE Container App from loom-unity, with its own database and
+ * its own minted-token state. A token minted by one is not honoured by the
+ * other, so exchanging at the wrong base fails closed upstream.
+ *
+ * The module header warned that the day this function accepts a caller-supplied
+ * address it becomes a credential-exfiltration primitive (the subject token is a
+ * REAL Entra credential). These tests pin the allow-list that answers that.
+ */
+describe('exchangeForInternalUcToken - explicit base (F1)', () => {
+  const prevUnity = process.env.LOOM_UNITY_URL;
+  const prevIceberg = process.env.LOOM_ICEBERG_CATALOG_URL;
+  const ICEBERG = 'https://iceberg-catalog.internal.example';
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env.LOOM_UNITY_URL = BASE;
+    process.env.LOOM_ICEBERG_CATALOG_URL = ICEBERG;
+    resetUcTokenExchangeCache();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (prevUnity === undefined) delete process.env.LOOM_UNITY_URL;
+    else process.env.LOOM_UNITY_URL = prevUnity;
+    if (prevIceberg === undefined) delete process.env.LOOM_ICEBERG_CATALOG_URL;
+    else process.env.LOOM_ICEBERG_CATALOG_URL = prevIceberg;
+  });
+
+  it('exchanges at the CONFIGURED Iceberg base when one is passed', async () => {
+    fetchMock.mockResolvedValue(ok({ access_token: 'iceberg-internal' }));
+    await expect(exchangeForInternalUcToken('entra-subject', ICEBERG)).resolves.toBe('iceberg-internal');
+    expect(fetchMock.mock.calls[0][0]).toBe(ICEBERG + '/api/1.0/unity-control/auth/tokens');
+  });
+
+  it('keys the cache by BASE, so the two servers never share a minted token', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: 'unity-internal' }))
+      .mockResolvedValueOnce(ok({ access_token: 'iceberg-internal' }));
+    // Same subject token, two different servers -> two exchanges, two tokens.
+    await expect(exchangeForInternalUcToken('same-subject')).resolves.toBe('unity-internal');
+    await expect(exchangeForInternalUcToken('same-subject', ICEBERG)).resolves.toBe('iceberg-internal');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('REFUSES a base this deployment did not configure - the credential never leaves', async () => {
+    fetchMock.mockResolvedValue(ok({ access_token: 'should-never-be-reached' }));
+    await expect(exchangeForInternalUcToken('entra-subject', 'https://attacker.example'))
+      .rejects.toBeInstanceOf(UcTokenExchangeError);
+    // The decisive assertion: no request was issued at all. A rejection that
+    // still POSTed the token would have already leaked it.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('REFUSES an empty base rather than falling through to the default', async () => {
+    fetchMock.mockResolvedValue(ok({ access_token: 'x' }));
+    await expect(exchangeForInternalUcToken('entra-subject', '   '))
+      .rejects.toBeInstanceOf(UcTokenExchangeError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a trailing slash on a configured base (normalized, not rejected)', async () => {
+    fetchMock.mockResolvedValue(ok({ access_token: 'iceberg-internal' }));
+    await expect(exchangeForInternalUcToken('entra-subject', ICEBERG + '///')).resolves.toBe('iceberg-internal');
+    expect(fetchMock.mock.calls[0][0]).toBe(ICEBERG + '/api/1.0/unity-control/auth/tokens');
+  });
+
+  it('invalidate with a base drops only THAT server cached token', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: 'unity-1' }))
+      .mockResolvedValueOnce(ok({ access_token: 'iceberg-1' }))
+      .mockResolvedValueOnce(ok({ access_token: 'iceberg-2' }));
+    await exchangeForInternalUcToken('subj');
+    await exchangeForInternalUcToken('subj', ICEBERG);
+    await invalidateUcInternalToken('subj', ICEBERG);
+    // Iceberg re-exchanges...
+    await expect(exchangeForInternalUcToken('subj', ICEBERG)).resolves.toBe('iceberg-2');
+    // ...while the unity token is still cached (no 4th call).
+    await expect(exchangeForInternalUcToken('subj')).resolves.toBe('unity-1');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('invalidate with an UNCONFIGURED base is a no-op, never a throw', async () => {
+    await expect(invalidateUcInternalToken('subj', 'https://attacker.example')).resolves.toBeUndefined();
+  });
+});

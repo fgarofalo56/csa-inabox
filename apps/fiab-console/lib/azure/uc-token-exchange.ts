@@ -35,6 +35,7 @@
 import { ossUcBase } from '@/lib/azure/uc-backend';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
+
 /**
  * Upstream's token-exchange endpoint (unity-CONTROL, not unity-catalog) and the
  * three form params it expects.
@@ -141,6 +142,42 @@ export class UcTokenExchangeError extends Error {
 }
 
 /**
+ * Validate an explicit exchange base before a credential is sent to it.
+ *
+ * The subject token is a real Entra access token; posting it to an
+ * attacker-chosen address would hand it over. The module header warned that the
+ * day this function accepts a caller-supplied address it needs an allow-list —
+ * this is that allow-list.
+ *
+ * It deliberately does NOT reuse `assertAllowedUcHost`: that one resolves
+ * **Databricks workspace** hostnames and would reject the internal
+ * `iceberg-catalog.…azurecontainerapps.io` FQDN outright. The meaningful
+ * invariant here is narrower and stronger — the base must be one this
+ * DEPLOYMENT ITSELF configured, i.e. byte-equal to `LOOM_ICEBERG_CATALOG_URL`
+ * or `LOOM_UNITY_URL`. A caller cannot widen that set; only a redeploy can.
+ */
+function assertExchangeBase(baseOverride: string): string {
+  const norm = (v: string | undefined) => (v || '').trim().replace(/\/+$/, '');
+  const trimmed = norm(baseOverride);
+  if (!trimmed) throw new UcTokenExchangeError('Token-exchange base URL is empty.');
+
+  const configured = [
+    norm(process.env.LOOM_ICEBERG_CATALOG_URL),
+    norm(process.env.LOOM_UNITY_URL),
+  ].filter(Boolean);
+
+  if (!configured.includes(trimmed)) {
+    // Names the var to set, never echoes a caller-formatted URL back verbatim
+    // into anything that renders.
+    throw new UcTokenExchangeError(
+      'Refusing to send an Entra token to a token-exchange base this deployment did not '
+        + 'configure. The base must equal LOOM_ICEBERG_CATALOG_URL or LOOM_UNITY_URL.',
+    );
+  }
+  return trimmed;
+}
+
+/**
  * A stable, non-reversible cache key for one subject token.
  *
  * Hashed rather than used verbatim so the raw Entra token never becomes a Map
@@ -161,13 +198,23 @@ async function cacheKey(base: string, subjectToken: string): Promise<string> {
  * server has stopped honouring cannot wedge every subsequent request for the
  * rest of the TTL.
  */
-export async function invalidateUcInternalToken(subjectToken: string): Promise<void> {
+export async function invalidateUcInternalToken(subjectToken: string, baseOverride?: string): Promise<void> {
   let base: string;
-  try {
-    base = ossUcBase();
-  } catch {
-    // No configured server => nothing could have been cached under it.
-    return;
+  if (baseOverride) {
+    // Invalidation must not be able to fail closed the way minting does: a
+    // rejected base simply means nothing was ever cached under it.
+    try {
+      base = assertExchangeBase(baseOverride);
+    } catch {
+      return;
+    }
+  } else {
+    try {
+      base = ossUcBase();
+    } catch {
+      // No configured server => nothing could have been cached under it.
+      return;
+    }
   }
   const key = await cacheKey(base, subjectToken);
   cache.delete(key);
@@ -185,11 +232,30 @@ export function resetUcTokenExchangeCache(): void {
  *
  * Returns the internal `access_token`. Throws {@link UcTokenExchangeError} on
  * any failure — never returns the subject token as a fallback.
+ *
+ * `baseOverride` selects WHICH server mints the token. It defaults to the OSS-UC
+ * server (`ossUcBase()`), but the Iceberg REST Catalog is a **separate Container
+ * App running the same image with its own database and its own minted-token
+ * state** — an internal token minted by `loom-unity` is not honoured by
+ * `iceberg-catalog` and vice versa. So the Iceberg client passes its own base
+ * (F1). Folding the base into the cache key (see {@link cacheKey}) keeps the two
+ * servers' tokens from ever being served to each other.
+ *
+ * The base is env-derived, never request-influenced — but this function is now
+ * reachable with a caller-supplied address, which is exactly the condition the
+ * module header warned would turn it into a credential-exfiltration primitive.
+ * So the override is validated by `assertExchangeBase` before any token
+ * leaves the process. A caller cannot widen that allow-list.
  */
-export async function exchangeForInternalUcToken(subjectToken: string): Promise<string> {
+export async function exchangeForInternalUcToken(
+  subjectToken: string,
+  baseOverride?: string,
+): Promise<string> {
   if (!subjectToken) throw new UcTokenExchangeError('No subject token to exchange.');
 
-  const base = ossUcBase();
+  const base = baseOverride
+    ? assertExchangeBase(baseOverride)
+    : ossUcBase();
   const key = await cacheKey(base, subjectToken);
 
   const hit = cache.get(key);

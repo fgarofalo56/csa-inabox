@@ -42,13 +42,68 @@ vi.mock('@/lib/azure/arm-credential', () => ({
 }));
 
 // ── upstream fetch double ──────────────────────────────────────────────────
+//
+// TWO upstream hops are modelled, because the real catalog needs both (F1):
+//
+//   1. POST /api/1.0/unity-control/auth/tokens — exchange the Console's Entra
+//      token for a SERVER-MINTED internal token.
+//   2. the actual /api/2.1/unity-catalog/iceberg/… call, carrying that internal
+//      token.
+//
+// Modelling only hop 2 is what let the original bug ship. This file's
+// "sends the server-minted bearer upstream" test asserted
+// `Bearer tok-api://app-client-id/.default` — the RAW Entra token straight from
+// the credential double — so it passed against code that never exchanged at all,
+// while the live catalog answered every such call 403. The fixture modelled the
+// CODE, not the server. It now models the server.
+const upstreamAll: Array<{ url: string; init: any }> = [];
+/** Catalog hops only — the exchange is infrastructure, not the assertion target. */
 const upstream: Array<{ url: string; init: any }> = [];
+const INTERNAL_TOKEN = 'internal-minted-token';
 let respond: () => Response = () => new Response('{}', { status: 200 });
 vi.mock('@/lib/azure/fetch-with-timeout', () => ({
-  fetchWithTimeout: async (url: string, init: any) => { upstream.push({ url, init }); return respond(); },
+  fetchWithTimeout: async (url: string, init: any) => {
+    upstreamAll.push({ url, init });
+    if (String(url).includes('/api/1.0/unity-control/auth/tokens')) {
+      return new Response(JSON.stringify({ access_token: INTERNAL_TOKEN }), { status: 200 });
+    }
+    upstream.push({ url, init });
+    return respond();
+  },
 }));
 
 const BASE = 'https://iceberg-catalog.internal.example.net';
+
+/**
+ * The audit rows for ICEBERG operations only.
+ *
+ * The token exchange writes its OWN row — deliberately, per LU-3: a successful
+ * exchange is the moment the Console acquires catalog authority, and a burst of
+ * failed ones is the signature of a disabled Console principal. So the trail
+ * legitimately carries MORE than one row per request now, and the
+ * `toHaveLength(1)` assertions below are about the ICEBERG operation, not about
+ * the size of the whole trail.
+ *
+ * This is a POSITIVE match on `iceberg.*` rather than an exclusion of the
+ * exchange row, and that distinction cost a CI round trip. The exchange row is
+ * written by `recordUnityAccess`, which stores `itemType:'loom-unity'` and
+ * `action:'unity.<operation>'` — it does NOT store the caller's
+ * `operation:'auth.token-exchange'` as `action`. So excluding
+ * `action === 'auth.token-exchange'` matched nothing and filtered nothing.
+ *
+ * A positive match cannot drift that way: every row this file asserts on is
+ * emitted by logIcebergAccess as `iceberg.<noun>.<verb>`, and any future
+ * sibling recorder is excluded by construction rather than by an exclusion list
+ * someone has to remember to extend.
+ *
+ * It must be a filter at all — rather than an assertion — because
+ * `recordExchange` is FIRE-AND-FORGET (`void recordExchange(...)`, so audit
+ * latency can never fail a catalog call). Its row lands on an unpredictable
+ * tick: outside the asserting test under the local run order, inside it under
+ * CI sharding. That is precisely why the un-filtered counts passed locally and
+ * failed in CI.
+ */
+const icebergAuditRows = () => auditRows.filter((r) => String(r.action || '').startsWith('iceberg.'));
 
 function req(url: string, init: RequestInit = {}) {
   // The route handlers only touch `nextUrl`, `method`, `headers` and `json()`.
@@ -64,6 +119,7 @@ function req(url: string, init: RequestInit = {}) {
 
 beforeEach(() => {
   upstream.length = 0;
+  upstreamAll.length = 0;
   auditRows.length = 0;
   respond = () => new Response('{}', { status: 200 });
   sessionValue = { claims: { oid: 'oid-1', upn: 'analyst@contoso.com', tid: 'tid-1' }, exp: Date.now() / 1000 + 3600 };
@@ -137,8 +193,26 @@ describe('Entra auth injection', () => {
     }));
     expect(res.status).toBe(200);
     expect(upstream).toHaveLength(1);
-    expect(upstream[0].init.headers.authorization).toBe('Bearer tok-api://app-client-id/.default');
+    // The INTERNAL token from the exchange — not the raw Entra token, which the
+    // catalog's AuthDecorator answers 403 (measured live: HTTP 403 in ~307ms,
+    // warm and reproducible, before this exchange was wired).
+    expect(upstream[0].init.headers.authorization).toBe(`Bearer ${INTERNAL_TOKEN}`);
+    expect(upstream[0].init.headers.authorization).not.toContain('tok-api://');
     expect(upstream[0].init.headers.authorization).not.toContain('loom_pat_caller_secret');
+  });
+
+  it('exchanges the Entra token at THIS catalog, not at LOOM_UNITY_URL', async () => {
+    // iceberg-catalog and loom-unity are separate Container Apps with separate
+    // databases and separate minted-token state, so a token minted by one is not
+    // honoured by the other. Exchanging at the wrong base fails closed upstream.
+    process.env.LOOM_UNITY_URL = 'https://loom-unity.internal.example.net';
+    respond = () => new Response(JSON.stringify({ namespaces: [['gold']] }), { status: 200 });
+    const { GET } = await import('../namespaces/route');
+    await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
+    const exchange = upstreamAll.find((h) => String(h.url).includes('/auth/tokens'));
+    expect(exchange).toBeDefined();
+    expect(exchange!.url).toBe(`${BASE}/api/1.0/unity-control/auth/tokens`);
+    delete process.env.LOOM_UNITY_URL;
   });
 
   it('returns the namespaces in both spec (levels) and human (dotted) form', async () => {
@@ -157,11 +231,11 @@ describe('audit rows', () => {
     respond = () => new Response(JSON.stringify({ namespaces: [['gold'], ['silver']] }), { status: 200 });
     const { GET } = await import('../namespaces/route');
     await GET(req('https://loom.test/api/catalog/iceberg/namespaces'));
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].action).toBe('iceberg.namespace.list');
-    expect(auditRows[0].resultCount).toBe(2);
-    expect(auditRows[0].upn).toBe('analyst@contoso.com');
-    expect(auditRows[0].outcome).toBe('success');
+    expect(icebergAuditRows()).toHaveLength(1);
+    expect(icebergAuditRows()[0].action).toBe('iceberg.namespace.list');
+    expect(icebergAuditRows()[0].resultCount).toBe(2);
+    expect(icebergAuditRows()[0].upn).toBe('analyst@contoso.com');
+    expect(icebergAuditRows()[0].outcome).toBe('success');
   });
 
   it('writes ONE aggregated row for a table LIST, scoped to the namespace', async () => {
@@ -173,18 +247,18 @@ describe('audit rows', () => {
     const body = await (await GET(req('https://loom.test/api/catalog/iceberg/tables?namespace=gold'))).json();
     expect(body.tables[0]).toMatchObject({ name: 'orders', namespace: 'gold' });
     expect(body.tables[0].formats).toEqual(['delta', 'iceberg']);
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].action).toBe('iceberg.table.list');
-    expect(auditRows[0].namespace).toBe('gold');
-    expect(auditRows[0].resultCount).toBe(1);
+    expect(icebergAuditRows()).toHaveLength(1);
+    expect(icebergAuditRows()[0].action).toBe('iceberg.table.list');
+    expect(icebergAuditRows()[0].namespace).toBe('gold');
+    expect(icebergAuditRows()[0].resultCount).toBe(1);
   });
 
   it('records the workspace scope when the caller supplies one', async () => {
     respond = () => new Response(JSON.stringify({ 'metadata-location': 'abfss://x/metadata/v1.json' }), { status: 200 });
     const { GET } = await import('../table/route');
     await GET(req('https://loom.test/api/catalog/iceberg/table?namespace=gold&table=orders&workspaceId=ws-7'));
-    expect(auditRows[0].action).toBe('iceberg.table.load');
-    expect(auditRows[0].workspaceId).toBe('ws-7');
+    expect(icebergAuditRows()[0].action).toBe('iceberg.table.load');
+    expect(icebergAuditRows()[0].workspaceId).toBe('ws-7');
   });
 
   it('records a FAILED read so a denied access still leaves evidence', async () => {
@@ -195,9 +269,9 @@ describe('audit rows', () => {
     const { GET } = await import('../tables/route');
     const res = await GET(req('https://loom.test/api/catalog/iceberg/tables?namespace=gold'));
     expect(res.status).toBe(404);
-    expect(auditRows).toHaveLength(1);
-    expect(auditRows[0].outcome).toBe('failure');
-    expect(auditRows[0].summary).toContain('FAILED');
+    expect(icebergAuditRows()).toHaveLength(1);
+    expect(icebergAuditRows()[0].outcome).toBe('failure');
+    expect(icebergAuditRows()[0].summary).toContain('FAILED');
   });
 
   it('audits a register (write) with the table scope', async () => {
@@ -211,8 +285,8 @@ describe('audit rows', () => {
       }),
     }));
     expect(res.status).toBe(200);
-    expect(auditRows[0].action).toBe('iceberg.table.register');
-    expect(auditRows[0].table).toBe('orders');
+    expect(icebergAuditRows()[0].action).toBe('iceberg.table.register');
+    expect(icebergAuditRows()[0].table).toBe('orders');
   });
 });
 
