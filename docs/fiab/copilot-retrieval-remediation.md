@@ -644,11 +644,18 @@ wanders with the candidate count is distorted statistics, not a recall ceiling.
   corpus statistics while term frequency, chunk length, title tokens and source
   class stay local to the chunk (they are per-chunk facts, identical either way).
   Omitting it is byte-identical to the previous behaviour.
-* `loom-docs-index.localCorpusStats()` — memoised per process, built from the
+* `loom-docs-corpus.localCorpusStats()` — memoised per process, built from the
   corpus BUNDLED IN THE IMAGE (the same tree `collectSources()` walks), which is
   the same corpus the reindex populated the search index from. An unreachable
   corpus yields `null` and an honest degradation to the previous window-local
   ranking — never a crash, never a zero-sized corpus.
+
+That module is new: `loom-docs-index.ts` crossed the 1500-LOC monolith-creep
+guard with this change and was split by bounded context rather than allowlisted —
+`loom-docs-corpus.ts` (filesystem + text only, 435 LOC) vs `loom-docs-index.ts`
+(storage + retrieval, 1213 LOC). `DocChunk` and `corpusSourceCount` are
+re-exported from the index so no consumer moved. See
+`docs/fiab/decomposition-plan.md` §DONE (2026-08-06).
 
 ### 11.4 The harness lied, and that is fixed too
 
