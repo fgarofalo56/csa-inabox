@@ -1236,8 +1236,8 @@
       "lane": "L-EVALS",
       "wave": 2,
       "task_order": 91,
-      "status": "todo",
-      "title": "P1 NEW — EVAL RETRIEVAL COLLAPSE, not a quality failure. Measured on run for #3053 (2026-08-07T01:37Z): eventstream, health and rbac all report hit-rate 0.00 against a 0.50 floor; help 0.40; lakehouse DROPPED 36.7 points in a single run (0.87 → 0.50); deploy-planner -6.6. A 0.00 hit-rate means retrieval returned NOTHING — that is an index/retrieval-path failure, not bad answers. rbac measured 0.667 hit-rate as recently as the artifacts E2 analysed",
+      "status": "review",
+      "title": "EVAL GATE: the verdict is a function of HOW MANY LANES ARE BUILDING, not of quality. Retrieval collapse RESOLVED; 'rbac 0.38' was a PARTIAL run (3/8); rbac genuinely marginal (4/12 vs 5/12 across a 0.40 floor); dominant cause is now #3083",
       "depends_on": [],
       "validation": {
         "V1": "pending",
@@ -1248,11 +1248,15 @@
         "V6": "pending"
       },
       "evidence": [
-        "CONSEQUENCE FOR THE MERGE PLAN: merging E1 (#3053) will NOT turn the evals gate green — the gate is now red for a DIFFERENT reason than the judge cap. The six PRs queued behind that gate stay blocked until this is diagnosed",
-        "leading hypothesis (UNVERIFIED — do not report as cause): the live AI Search index is stale/partially empty relative to the staged corpus. E2-E4 independently recommended dispatching a loom-docs REINDEX before copilot-quality-evals for exactly this reason",
-        "alternative hypothesis to rule out: the eval-probe 401 auth defect (E1's #3056 token-rotation class; E2-E4 noted run 31115406603 returned 401 on every probe and used to CONCLUDE SUCCESS). E4's fail-closed change now makes zero-measured runs fail loudly — so distinguish 'retrieved nothing' from 'could not authenticate' before fixing",
-        "the gate itself behaved WELL here: it refused pass-rate deltas on 4 surfaces for predicate-mismatch (baseline `deterministic` vs this run's `deterministic+grounding+productFidelity`), stating that dropping a conjunct can only raise the rate so a delta would read as improvement regardless of quality. That refusal is the honest-predicate work from #2994 doing its job",
-        "DO NOT ratchet floors or interpret any surface's quality from this run until retrieval is restored — the numbers are not measuring what they appear to measure"
+        "PR #3082 — 3 files: two gold docs + content/evals/README.md. eval-floors.json NOT touched; no question, mustMention guard, or predicate weakened.",
+        "#3083 (NEW, DOMINANT, likely outranks everything under R1): eval-probe converts an AOAI 429 into a CAUSELESS 500 {'error':'eval probe failed'}; the evaluator does not retry and SILENTLY DROPS THE ROW. Drop rate tracked load EXACTLY: 0/153 at 08:07 -> 30/153 at 09:53 -> 84/153 at 15:01. Cause: 11 eval runs in 71 minutes, each 153 real AOAI turns against ONE shared gpt-4o-mini in centralus; cancel-in-progress only dedupes WITHIN a branch. Also an R7 violation (causeless 500). ORCHESTRATOR NOTE: the merge burst from this session's parallel lanes is what produced that stampede — a self-inflicted confounder.",
+        "AUTH-vs-QUALITY determination: QUALITY, and the confounder was NEITHER suggested candidate. Not the #3056 token rotation — the probe authenticated on every call and returned real ai-search answers. Proven from loom-console logs: 'AoaiResponseError: AOAI 429 ... rate_limit_exceeded' after '[aoai-retry] attempt 3/3'.",
+        "rbac ROOT CAUSE (measured per question): answer-bearing facts existed ONLY inside dense table cells. RETRIEVAL MISS (004/005/007/009) — rbac-007's entire top-8 was eight different docs/fiab/parity-gap/* docs all headed 'What actually happens', a HEADING COLLISION; the real answer ranked 1397th. rbac-004 answered with UNITY CATALOG's REST API (wrong product). GROUNDING MISS (001/010/012) — right document, WRONG SECTION: rbac-001 hit at rank 1 but got the H1 preamble, not '## Model', so the model never saw the roles table. DOC-LEVEL SCORING HID THIS INSIDE A 'HIT'.",
+        "rbac-010's answer was CORRECT and still failed on a literal token — the agent fixed the DOC's wording rather than weakening the guard.",
+        "FIX: each fact now stated in prose under a question-shaped ### heading (chunkMarkdown breaks on H1-H3; heading is a searchable field). Every sentence verified against feature-gate.ts, access-reviews.ts and the principals/group-sync routes FIRST.",
+        "BEFORE->AFTER (offline model, diagnose-retrieval --top 8): rbac 0.750->0.917 BM25, 0.333->0.917 substring, EVERY OTHER SURFACE BYTE-IDENTICAL. Gold-chunk ranks: 007 1397->1, 009 2716->1, 012 2172->1, 010 586->1, 005 85->3, 004 13->3, 001 18->1. Live AFTER does NOT exist yet.",
+        "#3085 (STRUCTURAL GATE DEFECT): apps/fiab-console/Dockerfile:139 BAKES the corpus into the image and the workflow's staging step never leaves the runner — so a DOCS-ONLY PR CANNOT INFLUENCE ITS OWN EVAL GATE. The workflow is path-triggered on docs/** yet structurally cannot measure it: it can go RED on a corpus fix and GREEN on a corpus regression.",
+        "#3084 filed: internal docs in the product corpus — excluding them lifts 4 surfaces and regresses none, but that is a MODEL result so it belongs to E3/#2970, not asserted as live."
       ]
     },
     {
