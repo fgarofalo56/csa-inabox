@@ -70,13 +70,62 @@ import {
 export type { EndorsementRung };
 
 /** Securable kinds the overlay can annotate. Mirrors the UC securable set that
- *  both backends implement, plus `column` (Loom-side, keyed on `col:` identity). */
+ *  both backends implement, plus three Loom-side kinds:
+ *
+ *   `column`       — keyed on `col:` identity.
+ *   `vector-index` — LU-12: an Azure AI Search index registered as an OVERLAY
+ *                    securable. A vector index is a derivative of governed
+ *                    tables (it is built by embedding their columns), so the
+ *                    sensitivity of the source has to travel with it — an index
+ *                    that a semantic-search answer is grounded in can leak a
+ *                    classified column just as directly as a SELECT can. AI
+ *                    Search has no Unity Catalog securable of its own, so the
+ *                    overlay IS the governance surface for it, exactly as it is
+ *                    for `column`.
+ *   `metric-view`  — LU-12: the semantic tier's governed metric definition
+ *                    (lib/sql/metric-view-builders.ts), which the Azure-native
+ *                    default compiles onto Synapse rather than a UC object.
+ *                    Certifying / tagging the METRIC — not just the table under
+ *                    it — is what makes "which revenue number is the real one"
+ *                    answerable, and it is what the Copilot NL2SQL path grounds
+ *                    on (lib/azure/data-agent-execute.ts `metric-view`).
+ *
+ *  Both new kinds carry canonical dotted full names ({@link vectorIndexFullName},
+ *  {@link metricViewFullName}) so they flow through the SAME identity, store and
+ *  ABAC machinery as every other securable — no parallel governance model. */
 export type UcSecurableType =
-  | 'catalog' | 'schema' | 'table' | 'volume' | 'function' | 'model' | 'column';
+  | 'catalog' | 'schema' | 'table' | 'volume' | 'function' | 'model' | 'column'
+  | 'vector-index' | 'metric-view';
 
 export const UC_SECURABLE_TYPES: UcSecurableType[] = [
   'catalog', 'schema', 'table', 'volume', 'function', 'model', 'column',
+  'vector-index', 'metric-view',
 ];
+
+/** Reserved first segment for an AI Search vector index's canonical full name. */
+export const VECTOR_INDEX_NAMESPACE = 'aisearch';
+/** Reserved first segment for a metric view's canonical full name. */
+export const METRIC_VIEW_NAMESPACE = 'metrics';
+
+/**
+ * Canonical full name for an AI Search index: `aisearch.<service>.<index>`.
+ *
+ * Three dotted parts on purpose — that is the ONLY shape
+ * {@link normalizeUcIdentity} prefixes `uc:` onto, so a vector-index overlay
+ * joins the unified lineage graph on the same key as a table. A `/`-shaped
+ * `service/index` would be rejected by {@link assertValidFullName} and would
+ * diverge from the lineage identity.
+ */
+export function vectorIndexFullName(service: string, index: string): string {
+  const seg = (s: string) => String(s || '').trim().toLowerCase().replace(/[^\w$]+/g, '_').replace(/^_+|_+$/g, '');
+  return `${VECTOR_INDEX_NAMESPACE}.${seg(service) || 'default'}.${seg(index)}`;
+}
+
+/** Canonical full name for a metric view: `metrics.<schema>.<metric>`. */
+export function metricViewFullName(schema: string, metric: string): string {
+  const seg = (s: string) => String(s || '').trim().toLowerCase().replace(/[^\w$]+/g, '_').replace(/^_+|_+$/g, '');
+  return `${METRIC_VIEW_NAMESPACE}.${seg(schema) || 'default'}.${seg(metric)}`;
+}
 
 /** A tag assignment on a securable. `governed` is DERIVED at write time from the
  *  tenant vocabulary — persisted so a later vocabulary edit cannot silently
@@ -211,11 +260,19 @@ export function overlayIdentity(fullName: string, column?: string): string {
  * catalog, 2 = schema, 3+ = table. Volumes / functions / models are also
  * three-part, so callers that KNOW the kind pass it explicitly; this is only
  * the fallback for a bare name.
+ *
+ * LU-12: the two Loom-side namespaces are also three-part, so they would
+ * otherwise default to `table` and a vector index would be governed as if it
+ * were one — wrong kind on every audit row and on every ABAC decision. Their
+ * reserved first segment resolves them exactly.
  */
 export function defaultSecurableType(fullName: string): UcSecurableType {
   const parts = String(fullName || '').trim().split('.').filter(Boolean);
   if (parts.length <= 1) return 'catalog';
   if (parts.length === 2) return 'schema';
+  const ns = parts[0].toLowerCase();
+  if (ns === VECTOR_INDEX_NAMESPACE) return 'vector-index';
+  if (ns === METRIC_VIEW_NAMESPACE) return 'metric-view';
   return 'table';
 }
 

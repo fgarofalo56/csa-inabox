@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1670 |
+| Total routes | 1672 |
 | Public (no session) | 100 |
 | Session-only | 561 |
 | Owner-scoped | 714 |
-| Admin | 295 |
-| Gated (backend config) | 530 |
+| Admin | 297 |
+| Gated (backend config) | 531 |
 | Areas | 121 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -505,6 +505,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `catalog/search/route.ts` | GET | owner-scoped |  | Purview |
 | `catalog/shortcut/route.ts` | GET POST DELETE | session-only | ● | Purview |
 | `catalog/unity/capabilities/route.ts` | GET | session-only | ● | Databricks |
+| `catalog/unity/foreign-catalogs/route.ts` | GET | admin | ● | — |
 | `catalog/unity/governance/route.ts` | GET POST | admin |  | — |
 | `catalog/unity/governed-tags/route.ts` | GET POST | admin |  | — |
 
@@ -934,6 +935,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `governance/lineage/route.ts` | GET | owner-scoped |  | Cosmos |
 | `governance/pdp-mode/route.ts` | GET | session-only |  | — |
 | `governance/policies/route.ts` | GET POST PUT DELETE | owner-scoped | ● | Cosmos |
+| `governance/policy-code/engine-rules/route.ts` | GET | admin |  | — |
 | `governance/purview/status/route.ts` | GET | session-only | ● | Purview |
 | `governance/scans/register-existing/route.ts` | POST | admin | ● | Purview |
 | `governance/scans/route.ts` | GET POST DELETE | admin |  | Purview |

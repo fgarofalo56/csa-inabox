@@ -23,6 +23,7 @@ import {
   tenantBusinessMetadataName, tenantTypedefPrefix,
   ucColumnIdentity, ucSecurableIdentity, UcOverlayError, validateAttributeValues,
   validateGovernedTagDefs, validateTagAssignment,
+  UC_SECURABLE_TYPES, vectorIndexFullName, metricViewFullName,
   type UcGovernedTagDef,
 } from '../model';
 import { LOOM_BUSINESS_METADATA_NAME } from '@/lib/azure/purview-client';
@@ -422,5 +423,46 @@ describe('isEmptyOverlay / hasPurviewResidue (the delete rule)', () => {
     expect(hasPurviewResidue({ ...base(), purview: { businessMetadataKeys: ['loom_certification'] } })).toBe(false);
     expect(hasPurviewResidue({ ...base(), purview: { classifications: ['Loom_x_pii_yes'] } })).toBe(true);
     expect(hasPurviewResidue({ ...base(), purview: { businessMetadataKeys: ['cost_center'] } })).toBe(true);
+  });
+});
+
+// ── LU-12: vector-index + metric-view overlay securables ─────────────────────
+// A vector index is a DERIVATIVE of governed tables (it embeds their columns),
+// so the source's sensitivity has to travel with it — a semantic-search answer
+// grounded in an index can leak a classified column as directly as a SELECT.
+// AI Search has no Unity Catalog securable, so the overlay IS its governance
+// surface. Before LU-12 the governance route rejected the type outright.
+describe('LU-12 — vector-index / metric-view securables', () => {
+  it('registers both kinds in the securable vocabulary', () => {
+    expect(UC_SECURABLE_TYPES).toContain('vector-index');
+    expect(UC_SECURABLE_TYPES).toContain('metric-view');
+  });
+
+  it('builds a THREE-PART canonical name so the identity joins lineage', () => {
+    const fn = vectorIndexFullName('srch-loom', 'contracts-vec');
+    expect(fn).toBe('aisearch.srch_loom.contracts_vec');
+    // Three dotted parts is the ONLY shape normalizeUcIdentity prefixes `uc:`
+    // onto — a `service/index` form would silently stop joining the graph.
+    expect(normalizeUcIdentity(fn)).toBe(`uc:${fn}`);
+  });
+
+  it('builds a metric-view canonical name in its own namespace', () => {
+    expect(metricViewFullName('Sales', 'Net Revenue')).toBe('metrics.sales.net_revenue');
+  });
+
+  it('resolves the kind from the reserved namespace, not from dotted arity', () => {
+    // Both are three-part, so without the namespace check they would default to
+    // `table` — the wrong kind on every audit row and ABAC decision.
+    expect(defaultSecurableType('aisearch.srch.idx')).toBe('vector-index');
+    expect(defaultSecurableType('metrics.sales.net_revenue')).toBe('metric-view');
+    expect(defaultSecurableType('main.sales.orders')).toBe('table');
+  });
+
+  it('produces names that survive full-name validation', () => {
+    expect(assertValidFullName(vectorIndexFullName('a b/c', 'd?e'))).toBeTruthy();
+  });
+
+  it('is deterministic and lower-cased', () => {
+    expect(vectorIndexFullName('SRCH', 'IDX')).toBe(vectorIndexFullName('srch', 'idx'));
   });
 });

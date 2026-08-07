@@ -42,7 +42,7 @@ import {
   Add24Regular, ArrowSync24Regular, Delete24Regular, Database24Regular,
   Key24Regular, LockClosed24Regular, Share24Regular, CloudArrowUp24Regular,
   CheckmarkCircle24Filled, DismissCircle24Regular, Warning24Regular, Wrench16Regular,
-  ShieldCheckmark24Regular,
+  ShieldCheckmark24Regular, Link24Regular,
 } from '@fluentui/react-icons';
 
 // ============================================================
@@ -184,7 +184,7 @@ function BackendBadge({ cap }: { cap: CapabilitiesPayload | null }) {
 
 export default function UnityCatalogPage() {
   const s = useStyles();
-  const [tab, setTab] = useState<'explore' | 'grants' | 'governance' | 'storage' | 'sharing' | 'capabilities'>('explore');
+  const [tab, setTab] = useState<'explore' | 'grants' | 'governance' | 'storage' | 'federation' | 'sharing' | 'capabilities'>('explore');
   const [cap, setCap] = useState<CapabilitiesPayload | null>(null);
   const [capError, setCapError] = useState<string | null>(null);
 
@@ -273,6 +273,7 @@ export default function UnityCatalogPage() {
         <Tab value="grants" icon={<LockClosed24Regular />}>Grants</Tab>
         <Tab value="governance" icon={<ShieldCheckmark24Regular />}>Governance</Tab>
         <Tab value="storage" icon={<CloudArrowUp24Regular />}>Storage</Tab>
+        <Tab value="federation" icon={<Link24Regular />}>Federation</Tab>
         <Tab value="sharing" icon={<Share24Regular />}>Sharing</Tab>
         <Tab value="capabilities" icon={<Key24Regular />}>Capabilities</Tab>
       </TabList>
@@ -281,6 +282,7 @@ export default function UnityCatalogPage() {
       {tab === 'grants' && <GrantsPane oss={oss} />}
       {tab === 'governance' && <UcGovernancePane oss={oss} />}
       {tab === 'storage' && <StoragePane oss={oss} />}
+      {tab === 'federation' && <FederationPane />}
       {tab === 'sharing' && <SharingPane oss={oss} />}
       {tab === 'capabilities' && <CapabilitiesPane cap={cap} />}
     </CatalogShell>
@@ -1240,6 +1242,178 @@ function SharingPane({ oss }: { oss: boolean }) {
         </>
       )}
     </Section>
+  );
+}
+
+// ============================================================
+// Federation — foreign catalogs (LU-11)
+// ============================================================
+
+interface ForeignCatalogRow {
+  name: string;
+  connector: string;
+  kind: 'builtin' | 'lake' | 'foreign';
+  allowed: boolean;
+  deniedReason?: string;
+}
+interface FederationSourceRow {
+  connectionId: string;
+  name: string;
+  type: string;
+  connector: string | null;
+  host?: string;
+  database?: string;
+  mounted: boolean;
+  mountedAs?: string;
+  unmountableReason?: string;
+}
+interface FederationPayload {
+  ok: boolean;
+  catalogs: ForeignCatalogRow[];
+  sources: FederationSourceRow[];
+  engine: { configured: boolean; authMode: string; lakeCatalog: string; enginePolicy?: boolean };
+  gate?: string;
+}
+
+/**
+ * The federation inventory: every catalog the Trino coordinator ACTUALLY
+ * mounted (read from `system.metadata.catalogs`, never from the config bag),
+ * classified, with this caller's access — plus the registered Loom Connections
+ * that could become foreign catalogs and the ones that cannot, with the reason.
+ */
+function FederationPane() {
+  const s = useStyles();
+  const fedQ = useJson<FederationPayload>();
+  useEffect(() => { fedQ.run('/api/catalog/unity/foreign-catalogs'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const kindBadge = (k: ForeignCatalogRow['kind']) =>
+    k === 'foreign' ? <Badge appearance="tint" color="brand">Foreign</Badge>
+      : k === 'lake' ? <Badge appearance="tint" color="success">Loom lake</Badge>
+        : <Badge appearance="outline" color="informative">Built-in</Badge>;
+
+  const catalogColumns: LoomColumn<ForeignCatalogRow>[] = [
+    {
+      key: 'name', label: 'Catalog', width: 220, filterType: 'text', getValue: (r) => r.name,
+      render: (r) => (
+        <div className={s.cellStack}>
+          <strong>{r.name}</strong>
+          <Caption1 className={s.muted}>{r.connector}</Caption1>
+        </div>
+      ),
+    },
+    {
+      key: 'kind', label: 'Kind', width: 130, filterType: 'select', filterOptions: ['foreign', 'lake', 'builtin'],
+      getValue: (r) => r.kind, render: (r) => kindBadge(r.kind),
+    },
+    {
+      key: 'allowed', label: 'Your access', width: 150, filterType: 'select', filterOptions: ['granted', 'denied'],
+      getValue: (r) => (r.allowed ? 'granted' : 'denied'),
+      render: (r) => (r.allowed
+        ? <Badge appearance="tint" color="success">Queryable</Badge>
+        : <Badge appearance="tint" color="warning">Not granted</Badge>),
+    },
+    {
+      key: 'note', label: 'Notes', getValue: (r) => r.deniedReason || '',
+      render: (r) => <Caption1 className={s.muted}>{r.deniedReason || 'Open to you in SQL Lab.'}</Caption1>,
+    },
+  ];
+
+  const sourceColumns: LoomColumn<FederationSourceRow>[] = [
+    {
+      key: 'name', label: 'Source', width: 220, filterType: 'text', getValue: (r) => r.name,
+      render: (r) => (
+        <div className={s.cellStack}>
+          <strong>{r.name}</strong>
+          <Caption1 className={s.muted}>{[r.host, r.database].filter(Boolean).join(' · ') || r.type}</Caption1>
+        </div>
+      ),
+    },
+    { key: 'type', label: 'Type', width: 160, filterType: 'text', getValue: (r) => r.type, render: (r) => r.type },
+    {
+      key: 'connector', label: 'Trino connector', width: 160, getValue: (r) => r.connector || '—',
+      render: (r) => (r.connector ? <code>{r.connector}</code> : <Caption1 className={s.muted}>—</Caption1>),
+    },
+    {
+      key: 'mounted', label: 'Federated', width: 160, filterType: 'select', filterOptions: ['yes', 'no'],
+      getValue: (r) => (r.mounted ? 'yes' : 'no'),
+      render: (r) => (r.mounted
+        ? <Badge appearance="tint" color="success">as {r.mountedAs}</Badge>
+        : r.connector
+          ? <Badge appearance="outline" color="informative">Available</Badge>
+          : <Badge appearance="outline" color="subtle">Not federatable</Badge>),
+    },
+    {
+      key: 'note', label: 'Notes', getValue: (r) => r.unmountableReason || '',
+      render: (r) => <Caption1 className={s.muted}>{r.unmountableReason || (r.mounted ? 'Queryable in SQL Lab through the Federated SQL engine.' : 'Add to loomBackends.trinoCatalogs to federate it.')}</Caption1>,
+    },
+  ];
+
+  return (
+    <>
+      <Section
+        title="Foreign catalogs"
+        actions={
+          <Button size="small" icon={<ArrowSync24Regular />} onClick={() => fedQ.run('/api/catalog/unity/foreign-catalogs')}>
+            Refresh
+          </Button>
+        }
+      >
+        <Body1 className={s.mutedBlock}>
+          Every catalog the Federated SQL (Trino) coordinator has actually mounted, read live from the
+          engine — not from configuration. <strong>Foreign</strong> catalogs hold data outside the Loom
+          lake and are deny-by-default: wiring a source is not the same as authorizing everyone to read
+          it. Registered sources below are the Linked Services that could be federated.
+        </Body1>
+        {fedQ.data?.engine?.enginePolicy && (
+          <MessageBar intent="success" className={s.mb}>
+            <MessageBarBody>
+              <MessageBarTitle>Loom governance is enforced at the engine</MessageBarTitle>
+              This deployment compiles your policy set into Trino engine rules (table grants, row filters
+              and column masks) that the coordinator pulls and enforces itself — a federated query cannot
+              read past your policy even if it bypasses the Console. Authored in Admin → Policy as code.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {fedQ.gated && <MessageBar intent="warning" className={s.mb}><MessageBarBody>{fedQ.gated}</MessageBarBody></MessageBar>}
+        {fedQ.data?.gate && (
+          <MessageBar intent="warning" className={s.mb}>
+            <MessageBarBody>
+              <MessageBarTitle>The engine could not be read</MessageBarTitle>
+              {fedQ.data.gate}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {fedQ.error && <MessageBar intent="error" className={s.mb}><MessageBarBody>{fedQ.error}</MessageBarBody></MessageBar>}
+        {fedQ.loading ? <Spinner label="Reading the federation inventory…" /> : (
+          <LoomDataTable<ForeignCatalogRow>
+            ariaLabel="Foreign catalogs"
+            columns={catalogColumns}
+            rows={fedQ.data?.catalogs || []}
+            getRowId={(r) => r.name}
+            empty="The engine reported no catalogs."
+          />
+        )}
+      </Section>
+
+      <Section title="Registered sources">
+        <Body1 className={s.mutedBlock}>
+          Loom Connections (Linked Services) joined against the live catalog list. A source marked
+          <strong> Available</strong> has a Trino connector and can be federated declaratively through
+          <code> loomBackends.trinoCatalogs</code> (with its password on a Key Vault secretRef in
+          <code> trinoCatalogSecrets</code>), so the next deploy carries it. A source that cannot be
+          federated says why rather than being silently absent.
+        </Body1>
+        {fedQ.loading ? <Spinner label="Loading sources…" /> : (
+          <LoomDataTable<FederationSourceRow>
+            ariaLabel="Registered federation sources"
+            columns={sourceColumns}
+            rows={fedQ.data?.sources || []}
+            getRowId={(r) => r.connectionId}
+            empty="No Loom Connections registered yet — add one in Manage → Connections."
+          />
+        )}
+      </Section>
+    </>
   );
 }
 
